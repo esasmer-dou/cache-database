@@ -1,33 +1,33 @@
-# Dokuman Haritasi
+# Doküman Haritası
 
-Bu klasor, proje dokumanlarinin Turkce surumlerini tutar.
+Bu klasör, proje dokümanlarının Türkçe sürümlerini tutar.
 
 Kural:
 
-- kokteki veya `docs` altindaki her Markdown dosyasinin Turkce karsiligi `tr` altinda ayni goreli yapida tutulur
-- kok dosya degisirse `tr` altindaki karsiligi da guncellenir
-- yeni modul README'leri icin de `tr/<modul-adi>/README.md` yolu kullanilir
-- `docs` altina yeni teknik dokuman eklenirse `tr/docs` altinda Turkce surumu olusturulur
+- kökteki veya `docs` altındaki her Markdown dosyasının Türkçe karşılığı `tr` altında aynı göreli yapıda tutulur
+- kök dosya değişirse `tr` altındaki karşılığı da güncellenir
+- yeni modül README'leri için de `tr/<modul-adi>/README.md` yolu kullanılır
+- `docs` altına yeni teknik doküman eklenirse `tr/docs` altında Türkçe sürümü oluşturulur
 
-Mevcut eslesmeler:
+Mevcut eşleşmeler:
 
-- Kullanici / genel bakis dokumani:
+- Kullanıcı / genel bakış dokümanı:
   - kaynak: [../README.md](../README.md)
-  - Turkce: [README.md](README.md)
-- Teknik mimari dokumani:
+  - Türkçe: [README.md](README.md)
+- Teknik mimari dokümanı:
   - kaynak: [../docs/architecture.md](../docs/architecture.md)
-  - Turkce: [docs/architecture.md](docs/architecture.md)
+  - Türkçe: [docs/architecture.md](docs/architecture.md)
 - Production test raporu:
   - kaynak: [../docs/production-test-report.md](../docs/production-test-report.md)
-  - Turkce: [docs/production-test-report.md](docs/production-test-report.md)
+  - Türkçe: [docs/production-test-report.md](docs/production-test-report.md)
 - Production readiness raporu:
   - kaynak: [../docs/production-readiness-report.md](../docs/production-readiness-report.md)
-  - Turkce: [docs/production-readiness-report.md](docs/production-readiness-report.md)
-- Production test modulu:
+  - Türkçe: [docs/production-readiness-report.md](docs/production-readiness-report.md)
+- Production test modülü:
   - kaynak: [../cachedb-production-tests/README.md](../cachedb-production-tests/README.md)
-  - Turkce: [cachedb-production-tests/README.md](cachedb-production-tests/README.md)
+  - Türkçe: [cachedb-production-tests/README.md](cachedb-production-tests/README.md)
 
-Ileride karsilastirma, benchmark veya migration dokumanlari eklenirse onerilen yapi:
+İleride karşılaştırma, benchmark veya migration dokümanları eklenirse önerilen yapı:
 
 - `tr/docs/comparison-*.md`
 - `tr/docs/benchmark-*.md`

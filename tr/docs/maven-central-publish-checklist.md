@@ -1,51 +1,51 @@
 # Maven Central Publish Checklist
 
-Ilk Maven Central publication oncesinde bu kontrol listesi kullanilmalidir.
+İlk Maven Central publication öncesinde bu kontrol listesi kullanılmalıdır.
 
 ## Coordinates ve Metadata
 
-- final `groupId`, `artifactId` ve version stratejisi dogrulandi
-- [../../pom.xml](../../pom.xml) icindeki repo URL, SCM URL, issue URL ve CI URL dogrulandi
-- [../../pom.xml](../../pom.xml) icindeki placeholder maintainer identity alanlari dolduruldu
-- lisans secimi netlestirildi
+- final `groupId`, `artifactId` ve version stratejisi doğrulandı
+- [../../pom.xml](../../pom.xml) içindeki repo URL, SCM URL, issue URL ve CI URL doğrulandı
+- [../../pom.xml](../../pom.xml) içindeki placeholder maintainer identity alanları dolduruldu
+- lisans seçimi netleştirildi
 
-## Artifact Sekli
+## Artifact Şekli
 
-- `oss-release` profili temiz build aliyor
-- sources jar uretiliyor
-- javadocs jar uretiliyor
-- signing, gercek key ile CI veya release ortami icinde calisiyor
+- `oss-release` profili temiz build alıyor
+- sources jar üretiliyor
+- javadocs jar üretiliyor
+- signing, gerçek key ile CI veya release ortamı içinde çalışıyor
 
 ## Publishing Setup
 
-- Sonatype Central veya hedef registry hesabi hazir
-- namespace ownership dogrulandi
-- GitHub Actions veya release ortaminda gerekli secret'lar tanimli
+- Sonatype Central veya hedef registry hesabı hazır
+- namespace ownership doğrulandı
+- GitHub Actions veya release ortamında gerekli secret'lar tanımlı
 - release workflow signed artifact publish edebiliyor
 
 ## Versioning
 
-- release versiyonu secildi
-- release commit'te `-SNAPSHOT` kaldirildi
-- [../../CHANGELOG.md](../../CHANGELOG.md) guncellendi
-- docs ve release note icindeki beta/GA metinleri gozden gecirildi
+- release versiyonu seçildi
+- release commit'te `-SNAPSHOT` kaldırıldı
+- [../../CHANGELOG.md](../../CHANGELOG.md) güncellendi
+- docs ve release note içindeki beta/GA metinleri gözden geçirildi
 
-## Kanit
+## Kanıt
 
-- production evidence workflow yesil
-- coordination evidence workflow yesil
-- public-beta readiness workflow yesil
-- performans hassas degisiklikler icin guncel benchmark kaniti mevcut
+- production evidence workflow yeşil
+- coordination evidence workflow yeşil
+- public-beta readiness workflow yeşil
+- performans hassas değişiklikler için güncel benchmark kanıtı mevcut
 
 ## GitHub Release
 
-- release note hazir
-- tag secildi
-- release basligi secildi
-- gerekiyorsa release artifact'lari yuklendi
+- release note hazır
+- tag seçildi
+- release başlığı seçildi
+- gerekiyorsa release artifact'ları yüklendi
 
-## Publish Sonrasi
+## Publish Sonrası
 
-- sifirdan acilan ornek bir projede dependency tuketimi smoke-test edildi
-- temiz Maven cache ile annotation-processor yolu dogrulandi
-- eger release branch akisi kullaniyorsan bir sonraki development versiyonu geri acildi
+- sıfırdan açılan örnek bir projede dependency tüketimi smoke-test edildi
+- temiz Maven cache ile annotation-processor yolu doğrulandı
+- eğer release branch akışı kullanıyorsan bir sonraki development versiyonu geri açıldı

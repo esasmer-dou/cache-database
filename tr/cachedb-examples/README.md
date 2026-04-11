@@ -1,13 +1,13 @@
 # cachedb-examples
 
-Bu modul, `cache-database` icin calistirilabilir ornekler icerir.
+Bu modül, `cache-database` için çalıştırılabilir örnekler içerir.
 
-## Yuk Senaryosu Calisma Alani
+## Yük Senaryosu Çalışma Alanı
 
-Bu calisma alani ayni anda iki yuz acar:
+Bu çalışma alanı aynı anda iki yüz açar:
 
-- veri seed etmek ve yuk profillerini baslatmak icin Bootstrap + AJAX kontrol UI'i
-- backlog, incident, memory ve routing izlemek icin mevcut CacheDB admin dashboard
+- veri seed etmek ve yük profillerini başlatmak için Bootstrap + AJAX kontrol UI'i
+- backlog, incident, memory ve routing izlemek için mevcut CacheDB admin dashboard
 
 Demo domain:
 
@@ -17,7 +17,7 @@ Demo domain:
 - `DemoOrderEntity`
 - `DemoOrderLineEntity`
 
-UI gorunumleri:
+UI görünümleri:
 
 - customers
 - products
@@ -25,7 +25,7 @@ UI gorunumleri:
 - orders
 - order lines
 
-Varsayilan seed hacmi:
+Varsayılan seed hacmi:
 
 - customers: `1,800`
 - products: `1,400`
@@ -34,15 +34,15 @@ Varsayilan seed hacmi:
 - order lines: `54,000`
 - toplam: `65.300`
 
-Bu varsayilan profil, Spring Boot demo icinde daha interaktif kalirken yine de gercege yakin bir e-ticaret dilimi hissi versin diye secildi. Fiziksel hacmin buyuk kismi yine siparis satirlarinda kalir; ama toplam footprint daha kucuk oldugu icin `Seed`, `Clear`, `Fresh Start` ve `LOW / MEDIUM / HIGH` gecisleri tekrarli gozlem kosularinda daha kullanisli kalir.
+Bu varsayılan profil, Spring Boot demo içinde daha interaktif kalırken yine de gerçeğe yakın bir e-ticaret dilimi hissi versin diye seçildi. Fiziksel hacmin büyük kısmı yine sipariş satırlarında kalır; ama toplam footprint daha küçük olduğu için `Seed`, `Clear`, `Fresh Start` ve `LOW / MEDIUM / HIGH` geçişleri tekrarlı gözlem koşularında daha kullanışlı kalır.
 
-Yuk profilleri:
+Yük profilleri:
 
-- `LOW`: gunduz trafigine yakin katalog gezme, tum musteri taramasi ve hafif toplu sepet/urun guncellemesi
-- `MEDIUM`: buyuk katalog okumalari, en cok siparis veren musterinin siparisleri ve dengeli toplu yazmalar
-- `HIGH`: tum musteri taramalari, cok satirli siparis okumalari ve yogun stok/sepet/siparis dalgalari
+- `LOW`: gunduz trafigine yakın katalog gezme, tüm musteri taramasi ve hafif toplu sepet/urun güncellemesi
+- `MEDIUM`: büyük katalog okumalari, en çok siparis veren musterinin siparisleri ve dengeli toplu yazmalar
+- `HIGH`: tüm musteri taramalari, çok satirli siparis okumalari ve yogun stok/sepet/siparis dalgalari
 
-Standalone demo calistirma:
+Standalone demo çalıştırma:
 
 ```powershell
 mvn -q -pl cachedb-examples -am exec:java `
@@ -53,12 +53,12 @@ mvn -q -pl cachedb-examples -am exec:java `
   "-Dcachedb.demo.jdbcPassword=postgresql"
 ```
 
-Varsayilan URL'ler:
+Varsayılan URL'ler:
 
 - demo load UI: `http://127.0.0.1:8090`
 - admin dashboard: `http://127.0.0.1:8080/dashboard`
 
-Spring Boot demo calistirma:
+Spring Boot demo çalıştırma:
 
 ```powershell
 ./tools/ops/demo/run-spring-boot-load-demo.ps1
@@ -71,54 +71,54 @@ Spring Boot URL'leri:
 
 Spring Boot notlari:
 
-- load UI ve admin dashboard ayni uygulama portunu kullanir
-- Spring Boot modunda ikinci bir dahili admin HTTP server acilmaz
-- ayni seed hacmi ve LOW / MEDIUM / HIGH senaryolari yeniden kullanilir
-- agir yuk altinda standalone davranisini korumak icin demo Redis pool varsayilan olarak genisletilir
-- Spring Boot demo icinde foreground repository Redis trafigi ile background worker/admin trafigi ayri pool'lara ayrilir
-- `Start LOW / MEDIUM / HIGH` gizlice seed baslatmaz; veri hazir degilse UI dogrudan hata verir ve once `Seed Demo Data` ister
-- Spring Boot demo artik zero-glue generated registrar discovery kullaniyor; yani explicit `GeneratedCacheBindings.register(...)` cagrisi olmadan binding'ler otomatik kaydolur
+- load UI ve admin dashboard aynı uygulama portunu kullanir
+- Spring Boot modunda ikinci bir dahili admin HTTP server açılmaz
+- aynı seed hacmi ve LOW / MEDIUM / HIGH senaryolari yeniden kullanılir
+- ağır yuk altında standalone davranisini korumak için demo Redis pool varsayılan olarak genişletilir
+- Spring Boot demo içinde foreground repository Redis trafigi ile background worker/admin trafigi ayrı pool'lara ayrilir
+- `Start LOW / MEDIUM / HIGH` gizlice seed başlatmaz; veri hazır değilse UI doğrudan hata verir ve önce `Seed Demo Data` ister
+- Spring Boot demo artık zero-glue generated registrar discovery kullaniyor; yani explicit `GeneratedCacheBindings.register(...)` çağrısi olmadan binding'ler otomatik kaydolur
 
 ## Read-Model Ornegi
 
-Production benzeri relation-heavy ekran deseni icin su ornege bak:
+Production benzeri relation-heavy ekran deseni için şu ornege bak:
 
 - [src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java](src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java)
 
-Bu ornek su yaklasimi gosterir:
+Bu örnek şu yaklasimi gösterir:
 
-- once ozet sorgu
-- sonra acik detail fetch
+- önce özet sorgu
+- sonra açık detail fetch
 - preload gerekiyorsa bile iliskiyi bilincli olarak sinirlama
-- generated binding siniflari ve fluent `QuerySpec.where(...).orderBy(...).limitTo(...)` kullanimi
+- generated binding sınıflari ve fluent `QuerySpec.where(...).orderBy(...).limitTo(...)` kullanımi
 - `DemoOrderEntityCacheBinding.orderSummary(orderRepository)` gibi generated projection helper'lari
 - `DemoOrderEntityCacheBinding.topCustomerOrders(orderSummaryRepository, customerId, 24)` gibi generated named query helper'lari
 - `DemoOrderEntityCacheBinding.orderLinesPreviewRepository(orderRepository, 8)` gibi generated fetch preset helper'lari
 - `UserEntityCacheBinding.usersPage(session, 0, 25)` gibi generated page preset helper'lari
 - `UserEntityCacheBinding.activateUser(session, 41L, "alice")` gibi generated write command helper'lari
-- `UserEntityCacheBinding.using(session).queries().activeUsers(25)` gibi session'a bagli kullanim gruplari
+- `UserEntityCacheBinding.using(session).queries().activeUsers(25)` gibi session'a bağli kullanım gruplari
 - `com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session).users().queries().activeUsers(25)` gibi package seviyesinde domain modulleri
 
-Ornekte sunlar kullanilir:
+Örnekte sunlar kullanılir:
 
 - `FetchPlan.withRelationLimit("orderLines", 8)`
-- buyuk eager object graph yerine ayri summary read model
-- sadece base entity payload yolunu degil projection-specific Redis index'lerini kullanma
-- read-model bakimini foreground write path disina itmek icin `EntityProjection.asyncRefresh()`
+- büyük eager object graph yerine ayrı summary read model
+- sadece base entity payload yolunu değil projection-specific Redis index'lerini kullanma
+- read-model bakimini foreground write path disina itmek için `EntityProjection.asyncRefresh()`
 
-Onemli not:
+Önemli not:
 
-- su anki async projection refresh Redis Stream tabanli durable eventual consistency modelidir
-- production write overhead'ini ve read payload boyutunu dusurmeye yardim eder
-- refresh event'leri process restart sonrasinda kaybolmaz; Redis consumer group uzerinden islenebilir
-- ama henuz poison queue veya replay tooling iceren tam bir projection platformu degildir
+- şu anki async projection refresh Redis Stream tabanli durable eventual consistency modelidir
+- production write overhead'ini ve read payload boyutunu düşurmeye yardim eder
+- refresh event'leri process restart sonrasinda kaybolmaz; Redis consumer group üzerinden islenebilir
+- ama henuz poison queue veya replay tooling iceren tam bir projection platformu değildir
 
-Onerilen akis:
+Önerilen akış:
 
 1. Demo load UI'i ac.
 2. `Seed Demo Data` butonuna bas.
-3. Sirayla `LOW`, sonra `MEDIUM`, sonra `HIGH` yuklerini bas.
-4. Paralelde admin dashboard'u acik tut ve sunlari izle:
+3. Sirayla `LOW`, sonra `MEDIUM`, sonra `HIGH` yüklerini bas.
+4. Paralelde admin dashboard'u açık tut ve sunlari izle:
    - write-behind backlog
    - Redis memory
    - incidents
@@ -128,16 +128,16 @@ Onerilen akis:
 
 Runtime tuning:
 
-- demo Redis baglanti ve pool ayarlari: `cachedb.demo.redis.*`
-- demo PostgreSQL baglanti ayarlari: `cachedb.demo.postgres.*`
-- demo'ya ozel core override: `cachedb.demo.config.*`
+- demo Redis bağlanti ve pool ayarlari: `cachedb.demo.redis.*`
+- demo PostgreSQL bağlanti ayarlari: `cachedb.demo.postgres.*`
+- demo'ya özel core override: `cachedb.demo.config.*`
 - global core override: `cachedb.config.*`
 - demo cache policy ve seed satir sayilari: `cachedb.demo.cache.*`, `cachedb.demo.seed.*`
 - demo view ve stop/error davranisi: `cachedb.demo.view.*`, `cachedb.demo.stop.*`, `cachedb.demo.error.*`
 - demo load profilleri: `cachedb.demo.load.low.*`, `cachedb.demo.load.medium.*`, `cachedb.demo.load.high.*`
 - demo UI worker/refresh kontrolleri: `cachedb.demo.ui.*`
 
-Ornekler:
+Örnekler:
 
 ```powershell
 -Dcachedb.demo.redis.pool.maxTotal=96

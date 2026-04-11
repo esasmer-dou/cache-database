@@ -4,46 +4,46 @@
 
 `GO`
 
-Mevcut build, kanitlanmis kampanya envelope'i icinde production rollout icin onaylandi.
+Mevcut build, kanıtlanmış kampanya envelope'i içinde production rollout için onaylandi.
 
 ## Neden
 
-Daha once blokaj yaratan alanlar artik gecen kanitlarla destekleniyor:
+Daha önce blokaj yaratan alanlar artık geçen kanıtlarla destekleniyor:
 
-| Kanit | Sonuc | Temel gozlemler |
+| Kanıt | Sonuc | Temel gözlemler |
 | --- | --- | --- |
 | Strict heavy production gate | `PASS` | certification `PASS`, `TPS=68.76`, backlog `0`, drain `PASS`, hard rejection `0` |
 | 1h soak | `PASS` | `TPS=63.35`, backlog `0`, `drainCompleted=true`, final health `DEGRADED` |
 | 4h soak | `PASS` | `TPS=63.95`, backlog `0`, `drainCompleted=true`, final health `DEGRADED` |
-| Crash/replay chaos | `PASS` | `3/3` senaryo gecti |
-| Fault injection | `PASS` | `4/4` senaryo gecti |
+| Crash/replay chaos | `PASS` | `3/3` senaryo geçti |
+| Fault injection | `PASS` | `4/4` senaryo geçti |
 
 ## Yorum
 
-Bu kanitlar onceki ana blokajlari kapatiyor:
+Bu kanıtlar önceki ana blokajlari kapatiyor:
 
-- uzun kosu steady-state backlog artik kontrolsuz buyumuyor
-- uzun soak artik `DOWN` ile bitmiyor
-- certification kosularinda drain completion stabil
+- uzun koşu steady-state backlog artık kontrolsuz buyumuyor
+- uzun soak artık `DOWN` ile bitmiyor
+- certification koşularinda drain completion stabil
 - hard producer rejection kalmadi
-- restart, replay, rebuild ve fault recovery akislari gecmeye devam ediyor
+- restart, replay, rebuild ve fault recovery akışlari geçmeye devam ediyor
 
-Sistem, test ettigimiz yuksek baskili e-ticaret rollout profili icin artik kabul edilebilir durumda.
+Sistem, test ettiğimiz yüksek baskili e-ticaret rollout profili için artık kabul edilebilir durumda.
 
 ## Rollout Kapsami
 
-Bu `GO` karari dogru yorumlanmali:
+Bu `GO` karari doğru yorumlanmali:
 
-1. Mevcut certification ve soak senaryolarinin temsil ettigi kampanya tipi workload ailesi icin gecerlidir.
-2. Validation sirasindaki operasyonel durusu varsayar: Redis/PostgreSQL monitoring, aktif alerting ve rollback hazirligi.
-3. Test edilmeyen ve bu envelope'i asan tum olasi workload karisimlarini otomatik olarak sertifikalamaz.
+1. Mevcut certification ve soak senaryolarinin temsil ettiği kampanya tipi workload ailesi için geçerlidir.
+2. Validation sirasindaki operasyonel durusu varsayar: Redis/PostgreSQL monitoring, aktif alerting ve rollback hazırligi.
+3. Test edilmeyen ve bu envelope'i asan tüm olasi workload karisimlarini otomatik olarak sertifikalamaz.
 
-## Onerilen Rollout Yaklasimi
+## Önerilen Rollout Yaklasimi
 
-- Validasyonu yapilmis production profili ve mevcut guardrail'lerle basla.
-- Backlog, memory, DLQ ve recovery metrikleri icin Prometheus alerting aktif kalsin.
+- Validasyonu yapılmis production profili ve mevcut guardrail'lerle başla.
+- Backlog, memory, DLQ ve recovery metrikleri için Prometheus alerting aktif kalsin.
 - Restart/recovery ve production gate raporlarini release artefact'i ile birlikte sakla.
-- Workload karisimi, donanim envelope'i veya persistence policy matrisi anlamli sekilde degisirse gate'i yeniden kos.
+- Workload karisimi, donanim envelope'i veya persistence policy matrisi anlamli şekilde değisirse gate'i yeniden koş.
 
 ## Destekleyici Raporlar
 

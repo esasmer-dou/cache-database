@@ -44,9 +44,13 @@ If you want the fastest path:
         <version>${cachedb.version}</version>
     </dependency>
     <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
         <groupId>org.postgresql</groupId>
         <artifactId>postgresql</artifactId>
-        <version>42.7.4</version>
+        <scope>runtime</scope>
     </dependency>
 </dependencies>
 
@@ -67,6 +71,11 @@ If you want the fastest path:
     </plugins>
 </build>
 ```
+
+Use `spring-boot-starter-jdbc` only if your app does not already bring a `DataSource`
+through something like `spring-boot-starter-data-jpa`. CacheDB's Spring Boot
+starter expects an existing Spring `DataSource`; it does not create JDBC
+auto-configuration by itself.
 
 ### Maven: Plain Java
 

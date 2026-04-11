@@ -1,21 +1,23 @@
 # Getting Started
 
-Bu rehber, `git clone` sonrasinda calisan bir CacheDB uygulamasina giden en
-kisa yoldur.
+Bu rehber, `git clone` sonrasinda çalışan bir CacheDB uygulamasina giden en
+kısa yoldur.
 
-## Yol Secimi
+## Yol Seçimi
 
 Asagidaki iki yoldan birini kullan:
 
-- Spring Boot starter: cogu ekip icin en kolay yol
-- Plain Java bootstrap: bootstrap uzerinde daha fazla kontrol istiyorsan
+- Spring Boot starter: çoğu ekip için en kolay yol
+- Plain Java bootstrap: bootstrap üzerinde daha fazla kontrol istiyorsan
 
 ## 1. Dependency Ekle
 
 ### Spring Boot
 
 Starter runtime parcalarini getirir. `cachedb-annotations` ise entity
-siniflarinin compile-time generation akisina girmesini saglar.
+sınıflarinin compile-time generation akışina girmesini sağlar. Buna ek olarak
+Spring Boot tarafinda bir `DataSource` yolu gerekir; tipik seçim
+`spring-boot-starter-jdbc` olur.
 
 ```xml
 <properties>
@@ -34,9 +36,13 @@ siniflarinin compile-time generation akisina girmesini saglar.
         <version>${cachedb.version}</version>
     </dependency>
     <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
         <groupId>org.postgresql</groupId>
         <artifactId>postgresql</artifactId>
-        <version>42.7.4</version>
+        <scope>runtime</scope>
     </dependency>
 </dependencies>
 
@@ -58,10 +64,14 @@ siniflarinin compile-time generation akisina girmesini saglar.
 </build>
 ```
 
+Uygulama zaten `spring-boot-starter-data-jpa` gibi bir starter ile Spring
+`DataSource` oluşturuyorsa `spring-boot-starter-jdbc` bağımlılığını ikinci kez
+ekleme. CacheDB'nin ihtiyaçi olan şey, `DataSource` bean'inin zaten var olması.
+
 ### Plain Java
 
-Runtime icin starter, entity annotation'lari icin `cachedb-annotations`, code
-generation icin de annotation processor kullan.
+Runtime için starter, entity annotation'lari için `cachedb-annotations`, code
+generation için de annotation processor kullan.
 
 ```xml
 <properties>
@@ -142,9 +152,9 @@ try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
 }
 ```
 
-## 3. Onerilen API Surface Ile Basla
+## 3. Önerilen API Surface Ile Başla
 
-En iyi varsayilan baslangic:
+En iyi varsayılan başlangic:
 
 ```java
 var domain = GeneratedCacheModule.using(session);
@@ -154,22 +164,22 @@ Neden:
 
 - en kolay onboarding yolu
 - compile-time generated helper'lar
-- normal uygulama kodu icin dusuk-overhead surface
-- gerekiyorsa daha alt binding/repository seviyesine net kacis hatti
+- normal uygulama kodu için düşük-overhead surface
+- gerekiyorsa daha alt binding/repository seviyesine net kaçış hattı
 
 ## 4. Kok `.gitignore` Kullan
 
-Repo artik kullanima hazir bir kok [.gitignore](../.gitignore) ile geliyor.
+Repo artık kullanıma hazır bir kok [.gitignore](../.gitignore) ile geliyor.
 Bu dosya sunlari kapsar:
 
 - Maven/Java build output
-- tum modullerdeki `target/` klasorleri
+- tüm modullerdeki `target/` klasorleri
 - IDE dosyalari
 - lokal log ve temp output
-- `tools/tmp` altindaki evidence/log dosyalari
-- lokal secret dosyalari
+- `tools/tmp` altındaki evidence/log dosyalari
+- lokal seçret dosyalari
 
-Eger uygulama reposunda esdeger bir Java/Maven ignore politikasi yoksa bu
+Eğer uygulama reposunda esdeger bir Java/Maven ignore politikasi yoksa bu
 baseline'i kullan.
 
 ## 5. Sonraki Okuma

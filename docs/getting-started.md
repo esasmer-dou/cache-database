@@ -16,7 +16,8 @@ Use one of these:
 
 Add the starter plus the annotations artifact. The starter brings the runtime
 pieces; the annotations artifact lets your entities participate in compile-time
-generation.
+generation. You also need a Spring Boot `DataSource` path, typically through
+`spring-boot-starter-jdbc`.
 
 ```xml
 <properties>
@@ -35,9 +36,13 @@ generation.
         <version>${cachedb.version}</version>
     </dependency>
     <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
         <groupId>org.postgresql</groupId>
         <artifactId>postgresql</artifactId>
-        <version>42.7.4</version>
+        <scope>runtime</scope>
     </dependency>
 </dependencies>
 
@@ -58,6 +63,10 @@ generation.
     </plugins>
 </build>
 ```
+
+If your app already includes `spring-boot-starter-data-jpa` or another starter
+that creates a Spring `DataSource`, do not add `spring-boot-starter-jdbc`
+again. CacheDB just needs the `DataSource` bean to exist.
 
 ### Plain Java
 

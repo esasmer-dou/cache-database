@@ -1,17 +1,17 @@
-# Release Akisi
+# Release Akışı
 
-Her public beta release sonrasinda bu akis kullanilmalidir.
+Her public beta release sonrasında bu akış kullanılmalıdır.
 
-## Onerilen ritim
+## Önerilen ritim
 
-1. mevcut beta release'i yayinla
-2. release asset ve GitHub release sayfasini dogrula
-3. bir sonraki gelistirme dongusunu hemen ac
-4. `main` branch'ini bir sonraki `-SNAPSHOT` surumunde tut
+1. mevcut beta release'i yayınla
+2. release asset ve GitHub release sayfasini doğrula
+3. bir sonraki geliştirme döngüsünü hemen aç
+4. `main` branch'ini bir sonraki `-SNAPSHOT` sürümünde tut
 
-## Sonraki beta dongusunu baslat
+## Sonraki beta döngüsünü başlat
 
-Su komutu calistir:
+Şu komutu çalıştır:
 
 ```powershell
 ./tools/release/start-next-beta-cycle.ps1 `
@@ -20,27 +20,27 @@ Su komutu calistir:
   -CreateReleaseNotesTemplate
 ```
 
-Bu komut sunlari yapar:
+Bu komut şunları yapar:
 
-- root ve modullerdeki `pom.xml` surumlerini gunceller
-- `CHANGELOG.md` icine yeniden `Unreleased` bolumu acar
-- isterse `docs/releases/` altinda bir sonraki release note taslagini olusturur
+- root ve modüllerdeki `pom.xml` sürümlerini günceller
+- `CHANGELOG.md` içine yeniden `Unreleased` bölümü açar
+- isterse `docs/releases/` altında bir sonraki release note taslağını oluşturur
 
-## Onerilen branch akisi
+## Önerilen branch akışı
 
-- `main` branch'i bir sonraki `-SNAPSHOT` surumunde kalir
-- kisa omurlu isler `codex/*` branch'lerinde yapilir
-- beta release tag'i gercekten yayinlamak istedigin commit'ten kesilir
+- `main` branch'i bir sonraki `-SNAPSHOT` sürümünde kalır
+- kısa ömürlü işler `codex/*` branch'lerinde yapılır
+- beta release tag'i gerçekten yayınlamak istediğin commit'ten kesilir
 
-## Sonraki beta kesilmeden once
+## Sonraki beta kesilmeden önce
 
-- production evidence workflow'lerinin yesil oldugunu dogrula
-- coordination smoke sonucunun yesil oldugunu dogrula
-- release note'lari guncelle
-- `CHANGELOG.md` dosyasinin freeze'e hazir oldugunu kontrol et
-- release bundle'in dogru commit'ten yeniden uretildigini dogrula
+- production evidence workflow'lerinin yeşil olduğunu doğrula
+- coordination smoke sonucunun yeşil olduğunu doğrula
+- release note'ları güncelle
+- `CHANGELOG.md` dosyasının freeze'e hazır olduğunu kontrol et
+- release bundle'ın doğru commit'ten yeniden üretildiğini doğrula
 
-## Onemli not
+## Önemli not
 
-Public release sonrasinda `main` branch'ini onceki beta surumunde birakma.
-Bir sonraki donguyu hemen ac ki dependency kullanan ekipler ve dis katkicilar aktif gelistirme hattini gorebilsin.
+Public release sonrasında `main` branch'ini önceki beta sürümünde bırakma.
+Bir sonraki döngüyü hemen aç ki dependency kullanan ekipler ve dış katkıcılar aktif geliştirme hattını görebilsin.

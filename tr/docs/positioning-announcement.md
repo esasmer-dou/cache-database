@@ -1,46 +1,46 @@
-# CacheDB Konumlandirma Taslagi
+# CacheDB Konumlandırma Taslagi
 
-CacheDB, production runtime overhead'i onemseyen ama tum kodu alt seviye altyapi stiline dusurmek istemeyen ekipler icin Redis-first bir persistence kutuphanesidir.
+CacheDB, production runtime overhead'i önemseyen ama tüm kodu alt seviye altyapi stiline düşurmek istemeyen ekipler için Redis-first bir persistence kütüphanesidir.
 
-Kisa hikaye:
+Kısa hikaye:
 
 - Redis-first okuma ve yazma
-- async write-behind ile PostgreSQL kaliciligi
+- async write-behind ile PostgreSQL kalıciligi
 - runtime reflection yerine compile-time generated metadata
-- kolay onboarding icin generated domain ve binding surface
-- gercek hotspot'lar icin olculmus kacis hatlari
+- kolay onboarding için generated domain ve binding surface
+- gerçek hotspot'lar için ölçulmus kaçış hatları
 
-Bu konumlandirmayi guvenilir yapan seyler:
+Bu konumlandırmayi güvenilir yapan şeyler:
 
-- proje, Hibernate/JPA'nin hala daha dogru tercih oldugu yerleri acikca soyluyor
-- generated ergonomi yuzeyleri minimal repository kullanimina karsi benchmark'lanmis durumda
-- relation-agir read pattern'ler sadece anlatiyla degil, ayri bir read-shape benchmark ile destekleniyor
+- proje, Hibernate/JPA'nin hala daha doğru tercih olduğu yerleri açıkça soyluyor
+- generated ergonomi yüzeyleri minimal repository kullanımina karşı benchmark'lanmis durumda
+- relation-ağır read pattern'ler sadece anlatiyla değil, ayrı bir read-shape benchmark ile destekleniyor
 
-Repo icindeki guncel kanitlar:
+Repo içindeki güncel kanıtlar:
 
 - repository recipe benchmark:
-  - generated entity binding, minimal repository'ye gore ortalama yaklasik `+4.84%`
-  - JPA-style domain module, minimal repository'ye gore ortalama yaklasik `+16.83%`
+  - generated entity binding, minimal repository'ye göre ortalama yaklasik `+4.84%`
+  - JPA-style domain module, minimal repository'ye göre ortalama yaklasik `+16.83%`
 - read-shape benchmark:
-  - production'a cikmadan once summary/detail, preview ve full aggregate maliyetlerini gorunur kilar
+  - production'a çıkmadan önce summary/detail, preview ve full aggregate maliyetlerini görünur kilar
 
-Onerilen disa donuk konumlandirma cumlesi:
+Önerilen disa donuk konumlandırma cumlesi:
 
-> CacheDB, Redis-merkezli sistemler icin daha dusuk production overhead, explicit read-model kontrolu ve ekipleri her yerde alt seviye repository koduna zorlamayan ergonomik bir ORM alternatifi sunar.
+> CacheDB, Redis-merkezli sistemler için daha düşük production overhead, explicit read-model kontrolu ve ekipleri her yerde alt seviye repository koduna zorlamayan ergonomik bir ORM alternatifi sunar.
 
-Onerilen guardrail cumlesi:
+Önerilen guardrail cumlesi:
 
-> CacheDB persistence davranisini gizlemeye calismaz. Dusuk-overhead yolunu daha kolay tuketilir hale getirmeye calisir.
+> CacheDB persistence davranisini gizlemeye çalışmaz. Düşük-overhead yolunu daha kolay tüketilir hale getirmeye çalışir.
 
-Onerilen hedef kitle:
+Önerilen hedef kitle:
 
-- sicak read path'i olan urun servisleri
-- Redis'i birinci sinif bagimlilik olarak isleten ekipler
-- projection'dan fayda saglayan dashboard ve liste-agir uygulamalar
-- generated API yuzeyi isteyen ama hotspot kacis hattina da ihtiyac duyan ekipler
+- sıcak read path'i olan urun servisleri
+- Redis'i birinci sınıf bağımlilik olarak isleten ekipler
+- projection'dan fayda sağlayan dashboard ve liste-ağır uygulamalar
+- generated API yüzeyi isteyen ama hotspot kaçış hattına da ihtiyaç duyan ekipler
 
 Uygun olmayan hedef kitle:
 
 - ana yuku SQL join ve iliskisel raporlama olan uygulamalar
-- ORM davranisinin buyuk olcude implicit kalmasini isteyen ekipler
-- Redis'in gercek runtime tasariminin parcasi olmadigi sistemler
+- ORM davranisinin büyük ölçude implicit kalmasini isteyen ekipler
+- Redis'in gerçek runtime tasarıminin parcasi olmadigi sistemler
