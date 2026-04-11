@@ -151,7 +151,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.postgres.url=jdbc:postgresql://127.0.0.1:5432/postgres"
 ```
 
-### Faz 1: Kontrollu Yuk Rampasi
+### Faz 1: Kontrollü Yük Rampası
 
 Amac:
 

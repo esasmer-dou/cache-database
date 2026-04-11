@@ -152,9 +152,9 @@ try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
 }
 ```
 
-## 3. Önerilen API Surface Ile Başla
+## 3. Önerilen API Surface ile Başla
 
-En iyi varsayılan başlangic:
+En iyi varsayılan başlangıç:
 
 ```java
 var domain = GeneratedCacheModule.using(session);
@@ -167,7 +167,7 @@ Neden:
 - normal uygulama kodu için düşük-overhead surface
 - gerekiyorsa daha alt binding/repository seviyesine net kaçış hattı
 
-## 4. Kok `.gitignore` Kullan
+## 4. Kök `.gitignore` Kullan
 
 Repo artık kullanıma hazır bir kok [.gitignore](../.gitignore) ile geliyor.
 Bu dosya sunlari kapsar:

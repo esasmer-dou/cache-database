@@ -142,66 +142,66 @@ cachedb:
     uri: redis://127.0.0.1:6379
 ```
 
-Tam kopyala-yapıstir akışi için [Getting Started](docs/getting-started.md) rehberine bak.
+Tam kopyala-yapıştır akışı için [Getting Started](docs/getting-started.md) rehberine bak.
 
 ## Neden CacheDB
 
 Şu durumlarda CacheDB seç:
 
-- düşük geçikmeli okumalar önemliyse
-- Redis production mimarinin gerçek bir parcasiysa
-- read-model sekli üzerinde explicit kontrol istiyorsan
-- ergonomik bir başlangic yüzeyi ama gerektiğinde daha alt seviyeye inen bir kaçış hattı istiyorsan
+- düşük gecikmeli okumalar önemliyse
+- Redis production mimarisinin gerçek bir parçasıysa
+- read-model şekli üzerinde explicit kontrol istiyorsan
+- ergonomik bir başlangıç yüzeyi ama gerektiğinde daha alt seviyeye inen bir kaçış hattı istiyorsan
 
 ## Neden CacheDB Değil
 
 Şu durumlarda geleneksel JPA/Hibernate benzeri bir stack daha uygun olur:
 
-- uygulamanin ana yukunu SQL join ve iliskisel raporlama tasiyorsa
-- ORM davranisinin büyük ölçude implicit kalmasi bekleniyorsa
-- ekip projection, fetch limit ve relation sekli düşünmek istemiyorsa
-- Redis production mimarisinde gerçek bir bağımlilik değilse
+- uygulamanın ana yükünü SQL join ve ilişkisel raporlama taşıyorsa
+- ORM davranışının büyük ölçüde implicit kalması bekleniyorsa
+- ekip projection, fetch limit ve relation şekli düşünmek istemiyorsa
+- Redis production mimarisinde gerçek bir bağımlılık değilse
 
-Bu ayrim bilerek var. CacheDB, persistence davranisini gizlemek için değil; explicit kontrol ve düşük runtime overhead için optimize edildi.
+Bu ayrım bilerek var. CacheDB, persistence davranışını gizlemek için değil; explicit kontrol ve düşük runtime overhead için optimize edildi.
 
-## Nasil Başlanmali
+## Nasıl Başlanmalı
 
 1. Spring Boot starter veya plain Java bootstrap yolu ile başla.
 2. Varsayılan uygulama surface'i olarak `GeneratedCacheModule.using(session)...` kullan.
-3. Sadece ölçulmus hotspot'lari `*CacheBinding.using(session)...` veya doğrudan repository tarafına indir.
+3. Sadece ölçülmüş hotspot'ları `*CacheBinding.using(session)...` veya doğrudan repository tarafına indir.
 
 Relation-ağır ekranlarda önce projection ve `withRelationLimit(...)` kullan; daha alt repository seviyesine bundan sonra in.
 
-## Hızli Karşılastirma
+## Hızlı Karşılaştırma
 
 | Konu | CacheDB | Geleneksel ORM |
 | --- | --- | --- |
 | Birincil okuma yolu | Redis-first | Database-first |
 | Metadata | Compile-time generated | Genelde runtime reflection + ORM metadata |
-| Varsayılan relation modeli | Explicit fetch plan ve loader | Çoğu zaman implicit lazy/eager graph davranisi |
-| Hotspot stratejisi | Ölçulmus kaçış hattı ile daha alt surface'e inilir | Çoğu zaman ORM soyutlamalari içinde kalinir |
-| En iyi uyum | Düşük geçikmeli servisler, Redis-merkezli sistemler | Iliskisel alanlar, SQL-merkezli uygulamalar |
+| Varsayılan relation modeli | Explicit fetch plan ve loader | Çoğu zaman implicit lazy/eager graph davranışı |
+| Hotspot stratejisi | Ölçülmüş kaçış hattı ile daha alt surface'e inilir | Çoğu zaman ORM soyutlamaları içinde kalınır |
+| En iyi uyum | Düşük gecikmeli servisler, Redis-merkezli sistemler | İlişkisel alanlar, SQL-merkezli uygulamalar |
 
-## Ölçulmus Kanıt
+## Ölçülmüş Kanıt
 
 Buradaki iddia ergonominin bedava olduğu değil.
 
-Buradaki daha dürüst ve daha faydali iddia şu:
+Buradaki daha dürüst ve daha faydalı iddia şu:
 
-- generated ergonomi, minimal repository yolu ile aynı düşük-overhead bandinda kalabiliyor
-- production maliyetinin asil kaynagi hala query sekli, relation hydration, Redis contention ve write-behind baskisi
+- generated ergonomi, minimal repository yolu ile aynı düşük-overhead bandında kalabiliyor
+- production maliyetinin asıl kaynağı hâlâ query şekli, relation hydration, Redis contention ve write-behind baskısı
 
 Son yerel recipe benchmark özeti:
 
-| Surface | Avg ns | p95 ns | Nasil okunmali |
+| Surface | Avg ns | p95 ns | Nasıl okunmalı |
 | --- | ---: | ---: | --- |
-| Generated entity binding | 6005 | 13400 | Bu yerel koşuda ortalamada en hızli yüzey |
-| JPA-style domain module | 8059 | 20300 | Gruplanmis ergonomik surface, makul wrapper maliyeti |
+| Generated entity binding | 6005 | 13400 | Bu yerel koşuda ortalamada en hızlı yüzey |
+| JPA-style domain module | 8059 | 20300 | Gruplanmış ergonomik surface, makul wrapper maliyeti |
 | Minimal repository | 15075 | 9600 | Bu yerel koşuda en düşük p95 |
 
 ![Repository recipe benchmark](../docs/assets/repository-recipe-benchmark.svg)
 
-Bu ölçumde karşılastirilan operasyonlar:
+Bu ölçümde karşılaştırılan operasyonlar:
 
 - `activeCustomers`
 - `customersPage`
@@ -216,24 +216,24 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
   "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.RepositoryRecipeBenchmarkMain"
 ```
 
-Çıkti:
+Çıktı:
 
 - `target/cachedb-prodtest-reports/repository-recipe-comparison.md`
 - `target/cachedb-prodtest-reports/repository-recipe-comparison.json`
 
 Yorum notu:
 
-- bu benchmark yon gösterir; her mikro koşuda aynı wrapper surface'in kazanacagini vaat etmez
-- asil sonuc, generated ergonominin doğrudan repository kullanımiyla aynı büyükluk mertebesinde kalmasidir
+- bu benchmark yön gösterir; her mikro koşuda aynı wrapper surface'in kazanacağını vaat etmez
+- asıl sonuç, generated ergonominin doğrudan repository kullanımıyla aynı büyüklük mertebesinde kalmasıdır
 
-## CacheDB Ile Başlamali Misin?
+## CacheDB ile Başlamalı Mısın?
 
 ```mermaid
 flowchart TD
     A["Düşük gecikmeli okuma ve explicit runtime kontrol önemli mi?"] -->|Evet| B["Redis production'da gerçek bir bağımlılık mı?"]
     A -->|Hayır| C["Geleneksel ORM genelde daha basit varsayılan olur"]
-    B -->|Evet| D["CacheDB ile basla"]
-    B -->|Hayir| E["Geleneksel ORM genelde daha iyi uyum verir"]
+    B -->|Evet| D["CacheDB ile başla"]
+    B -->|Hayır| E["Geleneksel ORM genelde daha iyi uyum verir"]
     D --> F["İlk surface olarak GeneratedCacheModule kullan"]
     F --> G["Liste ekranlarında projection ve relation limit kullan"]
     G --> H["Sadece ölçülmüş hotspot'ları daha alta indir"]
@@ -245,7 +245,7 @@ flowchart TD
 - compile-time generated entity metadata var
 - Redis-first okuma ve yazma yolu var
 - PostgreSQL kalıcılığı async write-behind ile sağlanıyor
-- relation loading ve projection tabanli read-model explicit
+- relation loading ve projection tabanlı read-model explicit
 - hot-data bütçesi ve runtime basıncı için guardrail'lar var
 
 ## Production Recipe Merdiveni
