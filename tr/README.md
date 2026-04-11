@@ -196,7 +196,7 @@ Son yerel recipe benchmark özeti:
 | Surface | Avg ns | p95 ns | Nasıl okunmalı |
 | --- | ---: | ---: | --- |
 | Generated entity binding | 6005 | 13400 | Bu yerel koşuda ortalamada en hızlı yüzey |
-| JPA-style domain module | 8059 | 20300 | Gruplanmış ergonomik surface, makul wrapper maliyeti |
+| JPA-style domain modüle | 8059 | 20300 | Gruplanmış ergonomik surface, makul wrapper maliyeti |
 | Minimal repository | 15075 | 9600 | Bu yerel koşuda en düşük p95 |
 
 ![Repository recipe benchmark](../docs/assets/repository-recipe-benchmark.svg)
@@ -291,7 +291,7 @@ try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
 }
 ```
 
-Önerilen yolda sunlari alirsin:
+Önerilen yolda şunları alirsin:
 
 - production odaklı varsayılanlar
 - split foreground/background Redis pool

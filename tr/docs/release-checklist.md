@@ -24,7 +24,7 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 - `-SNAPSHOT` surumunu hedef release surumune çek
 - [../../CHANGELOG.md](../../CHANGELOG.md) dosyasini güncelle
 - dokümanlardaki public beta vs GA metinlerini kontrol et
-- release sonrasinda [release-flow.md](release-flow.md) üzerinden `main` branch'ini bir sonraki `-SNAPSHOT` surume ac
+- release sonrasında [release-flow.md](release-flow.md) üzerinden `main` branch'ini bir sonraki `-SNAPSHOT` surume ac
 
 ## Kanıt
 

@@ -13,14 +13,14 @@ Kısa hikaye:
 Bu konumlandırmayi güvenilir yapan şeyler:
 
 - proje, Hibernate/JPA'nin hala daha doğru tercih olduğu yerleri açıkça soyluyor
-- generated ergonomi yüzeyleri minimal repository kullanımina karşı benchmark'lanmis durumda
+- generated ergonomi yüzeyleri minimal repository kullanımına karşı benchmark'lanmis durumda
 - relation-ağır read pattern'ler sadece anlatiyla değil, ayrı bir read-shape benchmark ile destekleniyor
 
 Repo içindeki güncel kanıtlar:
 
 - repository recipe benchmark:
   - generated entity binding, minimal repository'ye göre ortalama yaklasik `+4.84%`
-  - JPA-style domain module, minimal repository'ye göre ortalama yaklasik `+16.83%`
+  - JPA-style domain modüle, minimal repository'ye göre ortalama yaklasik `+16.83%`
 - read-shape benchmark:
   - production'a çıkmadan önce summary/detail, preview ve full aggregate maliyetlerini görünur kilar
 
@@ -30,11 +30,11 @@ Repo içindeki güncel kanıtlar:
 
 Önerilen guardrail cumlesi:
 
-> CacheDB persistence davranisini gizlemeye çalışmaz. Düşük-overhead yolunu daha kolay tüketilir hale getirmeye çalışir.
+> CacheDB persistence davranışını gizlemeye çalışmaz. Düşük-overhead yolunu daha kolay tüketilir hale getirmeye çalışir.
 
 Önerilen hedef kitle:
 
-- sıcak read path'i olan urun servisleri
+- sıcak read path'i olan ürün servisleri
 - Redis'i birinci sınıf bağımlilik olarak isleten ekipler
 - projection'dan fayda sağlayan dashboard ve liste-ağır uygulamalar
 - generated API yüzeyi isteyen ama hotspot kaçış hattına da ihtiyaç duyan ekipler
@@ -42,5 +42,5 @@ Repo içindeki güncel kanıtlar:
 Uygun olmayan hedef kitle:
 
 - ana yuku SQL join ve iliskisel raporlama olan uygulamalar
-- ORM davranisinin büyük ölçude implicit kalmasini isteyen ekipler
+- ORM davranışının büyük ölçude implicit kalmasini isteyen ekipler
 - Redis'in gerçek runtime tasarıminin parcasi olmadigi sistemler

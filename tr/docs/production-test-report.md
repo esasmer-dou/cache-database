@@ -1,6 +1,6 @@
 # Production Test Raporu
 
-Bu doküman, `cache-database` e-ticaret DAO modulu için şu ana kadar çalıştırilan production-benzeri smoke test sonuclarini ve bir sonraki full benchmark fazini özetler.
+Bu doküman, `cache-database` e-ticaret DAO modülu için şu ana kadar çalıştırilan production-benzeri smoke test sonuclarini ve bir sonraki full benchmark fazini özetler.
 
 ## Güncel Smoke Sonuclari
 
@@ -22,12 +22,12 @@ Koşulan senaryolar:
 
 Olumlu sinyaller:
 
-- DAO katmanı karisik okuma/yazma trafigini runtime hatasi olmadan isleyebildi.
+- DAO katmanı karisik okuma/yazma trafiğini runtime hatasi olmadan isleyebildi.
 - Redis-first yol hem dengeli hem de yazma ağırlikli trafige cevap verdi.
 - Her iki smoke koşusunda da dead-letter oluşmadi.
-- Production test modulu hem makine-okunur hem de insan-okunur rapor üretti.
+- Production test modülu hem makine-okunur hem de insan-okunur rapor üretti.
 
-Görülen darbohaz:
+Görülen darboğaz:
 
 - Her iki koşu sonunda da anlamli write-behind backlog oluştu.
 - Bu, kısa vadede asil limitin Redis mutation hızi değil, PostgreSQL flush kapasitesi ve drain hızi olduğunu gösteriyor.
@@ -36,7 +36,7 @@ Görülen darbohaz:
 Bugunku yorum:
 
 - Mimari smoke ölçeginde doğru çalışiyor.
-- Patlama trafigi için production hazırligi henuz kanıtlanmış değil.
+- Patlama trafiği için production hazırligi henüz kanıtlanmış değil.
 - Sistem bugunku haliyle aniden kirilmaktan çok, async flush backlog biriktirerek değrade olma egiliminde.
 
 ## Production Öncesi Ana Riskler
@@ -50,31 +50,31 @@ Bugunku yorum:
 3. Hot SKU contention.
    Flash-sale benzeri az sayıda SKU üzerindeki inventory yazmalari geçikmeyi artirabilir ve worker dagilimini bozabilir.
 
-4. Geniş katalog taramasinda cache churn.
+4. Geniş katalog taramasında cache churn.
    Düşük hot-set butcesiyle büyük browse firtinalari Redis verimini azaltip read-through baskisini arttirabilir.
 
 5. Benchmark boslugu.
-   Bugunku doğrulama bilerek kucultulmus smoke testtir. 10k, 25k veya 50k TPS sınıfinda davranis henuz kanıtlanmadi.
+   Bugunku doğrulama bilerek kucultulmus smoke testtir. 10k, 25k veya 50k TPS sınıfinda davranis henüz kanıtlanmadi.
 
 ## Guardrail Alert ve Runbook Seti
 
 Önerilen production alert seti:
 
-| Alert | Warning Tetik | Critical Tetik | Ana Risk | Ilk Operator Aksiyonu |
+| Alert | Warning Tetik | Critical Tetik | Ana Risk | İlk Operator Aksiyonu |
 | --- | --- | --- | --- | --- |
-| `WRITE_BEHIND_BACKLOG` | backlog warning esigini geçer | backlog critical esigini geçer | PostgreSQL drain saturation | producer'lari yavaslat, flush throughput ve drain durumunu kontrol et |
-| `COMPACTION_PENDING_BACKLOG` | pending compaction warning esigini geçer | pending compaction critical esigini geçer | Redis memory buyumesi ve stale flush geçikmesi | compaction worker sağligini ve runtime profile switching'i kontrol et |
+| `WRITE_BEHIND_BACKLOG` | backlog warning eşiğini geçer | backlog critical eşiğini geçer | PostgreSQL drain saturation | producer'lari yavaslat, flush throughput ve drain durumunu kontrol et |
+| `COMPACTION_PENDING_BACKLOG` | pending compaction warning eşiğini geçer | pending compaction critical eşiğini geçer | Redis memory büyümesi ve stale flush geçikmesi | compaction worker sağligini ve runtime profile switching'i kontrol et |
 | `REDIS_MEMORY_PRESSURE` | used memory warning butcesini geçer | used memory critical butcesini geçer | Redis eviction baskisi ve değraded serving | daha sert guardrail profile'a geç, hot-set/page-cache butcelerini daralt |
-| `REDIS_HARD_REJECTIONS` | yok | herhangi bir rejected write | bounded-memory korumasi yazılari düşuruyor | kampanya trafigini azalt ve drain kapasitesini geri kazan |
+| `REDIS_HARD_REJECTIONS` | yok | herhangi bir rejected write | bounded-memory korumasi yazılari düşuruyor | kampanya trafiğini azalt ve drain kapasitesini geri kazan |
 | `QUERY_INDEX_DEGRADED` | namespace değraded isaretlenir | değraded namespace SLA içinde rebuild edilmez | full-scan fallback nedeniyle query latency artar | query-index rebuild tetikle ve hard-limit baskisinin bittigini doğrula |
-| `TOMBSTONE_BUILDUP` | tombstone sayisi delete baseline üstunde buyur | tombstone TTL ile bosalmiyor | delete ağırlikli churn veya drain lag | delete trafigini, stale resurrection korumasini ve TTL cleanup'i kontrol et |
+| `TOMBSTONE_BUILDUP` | tombstone sayisi delete baseline üstunde buyur | tombstone TTL ile bosalmiyor | delete ağırlikli churn veya drain lag | delete trafiğini, stale resurrection korumasini ve TTL cleanup'i kontrol et |
 
 Önerilen operator runbook:
 
 1. Backlog ve memory birlikte yukseliyorsa önce Redis sizing değil PostgreSQL drain kapasitesini supheli kabul et.
-2. Hard rejection görülurse önce kritik olmayan kampanya trafigini kis; sistem bounded memory korumasi için availability'den feragat ediyor olabilir.
+2. Hard rejection görülurse önce kritik olmayan kampanya trafiğini kis; sistem bounded memory korumasi için availability'den feragat ediyor olabilir.
 3. Bir namespace değraded query-index modundaysa hard-limit baskisinin düştugunu doğrula ve `/api/query-index/rebuild` tetikle.
-4. Pressure düştukten sonra tombstone yüksek kalmaya devam ediyorsa delete ağırlikli is yüklerini, write-behind drain'i ve tombstone TTL ayarlarini incele.
+4. Pressure düştukten sonra tombstone yüksek kalmaya devam ediyorsa delete ağırlikli is yüklerini, write-behind drain'i ve tombstone TTL ayarlarıni incele.
 5. Throughput kazanmak için tombstone'u kapatma; bu stale resurrection riskini geri getirir.
 
 ## Admin Metrics Export
@@ -94,18 +94,18 @@ Buradan şu metrik aileleri alinabilir:
 - Redis used memory, peak memory, compaction pending, payload count ve hard rejection sayilari
 - runtime profile etiketi ve switch sayisi
 
-Bu sayede production alerting yalnızca dashboard'a bağli kalmadan Prometheus tarafına da tasinabilir.
+Bu sayede production alerting yalnızca dashboard'a bağlı kalmadan Prometheus tarafına da tasinabilir.
 
 ## Production Certification Runner
 
-Production test modulu artık certification giriş noktası da iceriyor:
+Production test modülu artık certification giriş noktası da iceriyor:
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.ProductionCertificationMain"
 ```
 
-Certification raporu sunlari birlestirir:
+Certification raporu şunları birlestirir:
 
 - representative benchmark koşusu
 - gerçek Redis/PostgreSQL yigininda restart/recover doğrulamasi
@@ -139,7 +139,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.postgres.url=jdbc:postgresql://127.0.0.1:5432/postgres"
 ```
 
-Tam ölçek suite şu an browse ağırlikli, checkout ağırlikli, contention, cache-thrash ve backpressure karakterli sekiz farklı `50k TPS` senaryo icerir.
+Tam ölçek suite şu an browse ağırlikli, checkout ağırlikli, contention, cache-thrash ve backpressure karakterli sekiz farklı `50k TPS` senaryo içerir.
 
 Ayrıca kademeli ölçek koşusu için ayrı bir giriş noktası vardir:
 
@@ -203,7 +203,7 @@ Başari kriterleri:
 
 Amac:
 
-- katalog ağırlikli donemlerde Redis hot-set ve page-cache davranisini görmek
+- katalog ağırlikli donemlerde Redis hot-set ve page-cache davranışını görmek
 
 Önerilen senaryo:
 
@@ -213,8 +213,8 @@ Amac:
 
 - hot-set eviction hızi
 - page cache hit orani
-- planner learned-stat buyumesi
-- Redis bellek kullanımi
+- planner learned-stat büyümesi
+- Redis bellek kullanımı
 
 Başari kriterleri:
 
@@ -226,9 +226,9 @@ Başari kriterleri:
 
 Amac:
 
-- sistemi konfor alaninin disina itince recovery davranisini doğrulamak
+- sistemi konfor alaninin dışına itince recovery davranışını doğrulamak
 
-Önerilen kirma testleri:
+Önerilen kırma testleri:
 
 - write-behind worker sayisini `1`e düşurmek
 - batch size'i agresif şekilde kucultmek
@@ -245,7 +245,7 @@ Beklenen çıktular:
 
 ## Production Gate Önerisi
 
-Gerçek bir e-ticaret kampanya yolu için DAO katmanına production-ready denmeden önce sunlar sağlanmali:
+Gerçek bir e-ticaret kampanya yolu için DAO katmanına production-ready denmeden önce şunlar sağlanmali:
 
 - birden fazla ölçekte sustained burst testleri koşulmus olmali
 - write-behind drain süresi ölçülüp kabul edilmiş olmalı

@@ -18,7 +18,7 @@ Cevap, projenin birinci önceliğiyle uyumlu kalmalıdır:
 - ekip relation loading, projection ve hot path konusunda explicit olmayı kabul ediyorsa
 - production overhead, sade startup ve kaçış hattı önemliyse
 
-Şu durumlarda Hibernate/JPA tarafinda kal:
+Şu durumlarda Hibernate/JPA tarafında kal:
 
 - uygulamanın ana okuma modeli ağır biçimde ilişkisel join'lere dayanıyorsa
 - ekip explicit runtime kontrolden çok saydam ORM davranışı istiyorsa
@@ -51,15 +51,15 @@ Bu nedenle CacheDB şu gözle değerlendirilmelidir:
 | Metadata modeli | Compile-time generated | Genelde runtime reflection ve ORM metadata |
 | Varsayılan felsefe | Explicit kontrol | Saydam soyutlama |
 | Relation loading | Explicit `FetchPlan`, loader, projection | Çoğu zaman implicit lazy/eager graph davranisi |
-| Hotspot kaçış hattı | Binding veya doğrudan repository'ye inebilirsin | Çoğu zaman ORM içinde kalinir veya custom SQL yazılir |
+| Hotspot kaçış hattı | Binding veya doğrudan repository'ye inebilirsin | Çoğu zaman ORM içinde kalınır veya custom SQL yazılır |
 | En iyi uyum | Düşük geçikmeli servisler, read-ağır API'ler, Redis-merkezli sistemler | Iliskisel alanlar, SQL-merkezli sistemler, join-ağır uygulamalar |
 | Runtime overhead hedefi | Çok düşük | Genelde kabul edilebilir, ama birincil tasarım hedefi değil |
 
-## CacheDB En Çok Nerede Guclu
+## CacheDB En Çok Nerede Güçlü
 
 CacheDB şu alanlarda guclu bir uyum verir:
 
-- sıcak read path'i olan urun servisleri
+- sıcak read path'i olan ürün servisleri
 - projection kullanan dashboard ve liste-ağır uygulamalar
 - Redis'i zaten production'da birinci sınıf bağımlilik olarak isleten sistemler
 - reflection-ağır runtime davranis istemeyen ama generated ergonomi isteyen ekipler
@@ -69,7 +69,7 @@ CacheDB şu alanlarda guclu bir uyum verir:
 
 Ekip şu şeyleri istiyorsa CacheDB daha kötü bir uyum verir:
 
-- read-model seklini büyük oranda gizleyen bir ORM
+- read-model şeklini büyük oranda gizleyen bir ORM
 - ekranları varsayılan olarak geniş relational join ile kurmak
 - payload boyutunu düşünmeden otomatik graph traversal beklemek
 - temel uygulama paterni olarak ağır iliskisel raporlama
@@ -80,16 +80,16 @@ Bu mesaji açık vermek zayiflik değil; konumlandırmayi daha güvenilir hale g
 
 ## Production Ekipleri Neyi Beklemeli
 
-Bir ekip CacheDB'yi doğru kullanirsa production resmi genelde söyle olur:
+Bir ekip CacheDB'yi doğru kullanırsa production resmi genelde söyle olur:
 
-- varsayılan is kodu generated domain veya binding surface kullanir
+- varsayılan is kodu generated domain veya binding surface kullanır
 - sıcak path'ler projection ve explicit fetch limit ile kurulur
 - global sorted/range ekranları, geniş multi-sort entity query yerine projection'a özel ranked alan kullanır
 - bu ranked alanlar `rankedBy(...)` ile tanımlanir; boylece projection repository top-window fast path kullanabilir
 - sadece kanıtlanmış hotspot'lar doğrudan repository'ye iner
-- foreground repository trafigi background worker/admin trafiginden ayrilir
+- foreground repository trafiği background worker/admin trafiğinden ayrılır
 
-Bir ekip CacheDB'yi kötü kullanirsa sorun genelde söyle görünur:
+Bir ekip CacheDB'yi kötü kullanırsa sorun genelde söyle görünur:
 
 - liste ekranlarında geniş aggregate hydrate eder
 - Redis'i sihirli ve bedava sanir
@@ -118,7 +118,7 @@ Bunu ekipler için varsayılan kural seti gibi kullan:
 
 | Ekip veya yuk tipi | Önerilen surface |
 | --- | --- |
-| Normal urun servis kodu | `GeneratedCacheModule.using(session)...` |
+| Normal ürün servis kodu | `GeneratedCacheModule.using(session)...` |
 | Explicit sıcak endpoint'ler | `*CacheBinding.using(session)...` |
 | Worker, replay, recovery, infra kodu | doğrudan `EntityRepository` / `ProjectionRepository` |
 | Relation-ağır liste veya dashboard okumasi | projection + `withRelationLimit(...)` |
@@ -129,7 +129,7 @@ Bu repo içindeki recipe benchmark bilerek dar kapsamli.
 
 Kanıtledigi şey şu:
 
-- generated ergonomi, doğrudan repository kullanımiyla aynı düşük-overhead bandinda kalabiliyor
+- generated ergonomi, doğrudan repository kullanımıyla aynı düşük-overhead bandinda kalabiliyor
 
 Kanıtlemadigi şey ise şu:
 
@@ -145,7 +145,7 @@ Son recipe benchmark özeti:
 
 - `Generated entity binding`: güncel yerel koşuda ortalamada en hızli
 - `Minimal repository`: güncel yerel koşuda en düşük p95
-- `JPA-style domain module`: gruplanmis ergonomik surface, makul wrapper maliyeti
+- `JPA-style domain modüle`: gruplanmis ergonomik surface, makul wrapper maliyeti
 
 Buradaki asil sonuc:
 

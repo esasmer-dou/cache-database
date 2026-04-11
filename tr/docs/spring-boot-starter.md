@@ -125,7 +125,7 @@ Spring Boot starter artık tipik çok pod senaryosunu varsayılan olarak daha g�
 - consumer name'lere otomatik olarak pod-unique `instanceId` soneki eklenir
 - cleanup/report/history benzeri singleton loop'lar Redis leader lease ile tek pod'da aktif tutulur
 
-Varsayılan `instanceId` çözme sirasi:
+Varsayılan `instanceId` çözme sırası:
 
 1. `cachedb.runtime.instance-id`
 2. `CACHE_DB_INSTANCE_ID`
@@ -274,16 +274,16 @@ Yani ikinci bir public admin portu açılmaz. Uygulamanin host ve port'u neyse a
 Notlar:
 
 - `cachedb-spring-boot-starter`, JDBC starter yerine geçmez.
-- Spring tarafinda yine bir `DataSource` gerekir.
+- Spring tarafında yine bir `DataSource` gerekir.
 - `JedisPooled` bean'i yoksa starter bunu `cachedb.redis.uri` değerinden oluşturur.
 - Eski `cachedb.redis-uri` alias'i geriye uyumluluk için çalışmaya devam eder.
 - `cachedb.profile` şu değerleri kabul eder: `default`, `development`, `production`, `benchmark`, `memory-constrained`, `minimal-overhead`.
-- generated package registrar'lari `ServiceLoader` ile otomatik kesfedilir; normal Spring Boot yolunda entity binding'leri için elle `register(...)` çağrısi gerekmez
+- generated package registrar'lari `ServiceLoader` ile otomatik kesfedilir; normal Spring Boot yolunda entity binding'leri için elle `register(...)` çağrısı gerekmez
 - tamamen manuel binding registration istiyorsan `cachedb.registration.enabled=false` kullanabilirsin
 - `cachedb.runtime.append-instance-id-to-consumer-names=true` çok pod'lu güvenli varsayılandir; consumer group'lari ortak birakir ama consumer adlarıni pod-unique yapar
-- `cachedb.runtime.leader-lease-enabled=true` cleanup/report/history loop'larini Redis leader lease altina alir; boylece her pod aynı singleton isi koşmaz
+- `cachedb.runtime.leader-lease-enabled=true` cleanup/report/history loop'larini Redis leader lease altına alir; boylece her pod aynı singleton isi koşmaz
 
-## Ilk Çalışan Düz Java Ornegi
+## İlk Çalışan Düz Java Örneği
 
 ```java
 JedisPooled jedis = new JedisPooled("redis://127.0.0.1:6379");
@@ -304,10 +304,10 @@ Bu kurulum şu katmanlari acmis olur:
 
 Asagidaki durumlarda tam `CacheDatabaseConfig.builder()` yoluna inmek mantiklidir:
 
-- schema bootstrap davranisini değistireceksen
+- schema bootstrap davranışını değistireceksen
 - write-behind detaylarini el ile ayarlayacaksan
-- guardrail ayarlarini özel yapacaksan
-- page cache veya projection refresh davranisini ince ayarlayacaksan
+- guardrail ayarlarıni özel yapacaksan
+- page cache veya projection refresh davranışını ince ayarlayacaksan
 
 ## ORM Benzeri Query ve Fetch Ergonomisi
 
@@ -379,7 +379,7 @@ Relation ağır ekranlarda önerilen desen:
 
 ## Minimal Overhead Modu
 
-CacheDB'yi gömülü kütüphane gibi kullaniyor ve admin UI ya da admin telemetrisine ihtiyaçin yoksa, açık bir minimal-overhead profili kullanman daha doğru olur.
+CacheDB'yi gömülü kütüphane gibi kullanıyor ve admin UI ya da admin telemetrisine ihtiyaçin yoksa, açık bir minimal-overhead profili kullanman daha doğru olur.
 
 Düz Java:
 
@@ -416,7 +416,7 @@ Semeru JDK 21 ile aldigimiz odaklı benchmark sonucu:
 
 Bu ölçum tam uygulama benchmark'i değil; admin kapali modda ek admin thread açılmadigini ve aktif collector yolunun no-op yola göre daha fazla heap tuttugunu gösteren hedefli bir doğrulamadir.
 
-## Ilk Çalışan Spring Boot Ornegi
+## İlk Çalışan Spring Boot Örneği
 
 ```java
 @SpringBootApplication
@@ -464,8 +464,8 @@ Spring Boot starter artık split Redis pool yapısini varsayılan üretim reçet
 
 Varsayılan davranis:
 
-- repository veri yolu `cachedb.redis.pool.*` havuzunu kullanir
-- worker/admin/telemetry arka plan yolu `cachedb.redis.background.pool.*` havuzunu kullanir
+- repository veri yolu `cachedb.redis.pool.*` havuzunu kullanır
+- worker/admin/telemetry arka plan yolu `cachedb.redis.background.pool.*` havuzunu kullanır
 - background Redis URI ayarlanmazsa foreground URI kullanılir
 
 Varsayılan pool boyutlari:
@@ -496,12 +496,12 @@ cachedb:
 
 Neden önemli:
 
-- repository okumalari write-behind/recovery/admin trafigiyle aynı havuzda birikmez
+- repository okumaları write-behind/recovery/admin trafiğiyle aynı havuzda birikmez
 - karisik yuk altında p95 okuma geçikmesi daha stabil olur
-- foreground SLA ile background bakim trafigi daha temiz ayrisir
+- foreground SLA ile background bakim trafiği daha temiz ayrisir
 - worker stream read komutlari foreground ile aynı kısa read timeout'u kullanmaz; bu da blocking Redis komutlarinda sahte `SocketTimeoutException: Read timed out` gürültüsunu azaltir
 
-Eski tek-pool davranisini istiyorsan:
+Eski tek-pool davranışını istiyorsan:
 
 ```yaml
 cachedb:
@@ -584,7 +584,7 @@ CacheDatabaseConfigCustomizer cacheDatabaseConfigCustomizer() {
 
 Bu yol, Boot autoconfiguration'i korurken config'i ihtiyaça göre sertlestirmek için kullanılir.
 
-Projection refresh ornegi:
+Projection refresh örneği:
 
 ```java
 @Bean
@@ -600,7 +600,7 @@ CacheDatabaseConfigCustomizer cacheDatabaseProjectionCustomizer() {
 }
 ```
 
-Bu yol, durable Redis Stream tabanli projection refresh davranisini sadece `-Dcachedb.config.projectionRefresh.*` flag'lerine bağli kalmadan Spring Boot içinden kurmak istediginde kullanılir.
+Bu yol, durable Redis Stream tabanlı projection refresh davranışını sadece `-Dcachedb.config.projectionRefresh.*` flag'lerine bağlı kalmadan Spring Boot içinden kurmak istediginde kullanılir.
 
 Operasyonel yüzeyler:
 
@@ -619,10 +619,10 @@ Relation-heavy ekranlarda büyük eager graph yüklemek yerine `summary query + 
 
 Doğru desen:
 
-1. siparisleri `orderLines` yüklemeden özet olarak sorgula
+1. siparişleri `orderLines` yüklemeden özet olarak sorgula
 2. listeyi özet alanlarla render et
 3. detay gerekince ayrıca yükle
-4. preload istiyorsan bile `FetchPlan.withRelationLimit(...)` ile iliskiyi sinirla
+4. preload istiyorsan bile `FetchPlan.withRelationLimit(...)` ile ilişkiyi sinirla
 
 Örnek:
 
@@ -640,7 +640,7 @@ List<DemoOrderReadModelPatterns.OrderLinePreviewReadModel> nextPage =
         readPatterns.loadRemainingOrderLines(orderId, 12, 50);
 ```
 
-Sinirli preload ornegi:
+Sinirli preload örneği:
 
 ```java
 DemoOrderEntity order = orderRepository
@@ -649,7 +649,7 @@ DemoOrderEntity order = orderRepository
         .orElseThrow();
 ```
 
-Projection repository ornegi:
+Projection repository örneği:
 
 ```java
 ProjectionRepository<DemoOrderReadModelPatterns.OrderLinePreviewReadModel, Long> linePreviewRepository =
@@ -660,16 +660,16 @@ Projection-specific index ve refresh:
 
 - her projection kendi Redis namespace'i ve query index seti ile çalışir
 - projection cache isindiginda okuma tarafi tam base entity payload decode etmek zorunda kalmaz
-- `EntityProjection.asyncRefresh()` projection bakimini foreground write path disina iter
-- async refresh artık Redis Stream tabanli durable worker ile çalışir
-- refresh event'leri process restart sonrasinda kaybolmaz; Redis consumer group üzerinden birden fazla uygulama node'u tarafından islenebilir
-- model tasarım geregi hala eventual consistency tabanlidir
-- ama henuz poison queue, replay tooling veya ayrik admin telemetrisi olan tam bir projection platformu değildir
-- entity içindeki statik bir metoda `@CacheProjectionDefinition` koyarsan generated binding tarafinda `DemoOrderEntityCacheBinding.orderSummary(...)` gibi projection helper'lari oluşur
+- `EntityProjection.asyncRefresh()` projection bakimini foreground write path dışına iter
+- async refresh artık Redis Stream tabanlı durable worker ile çalışir
+- refresh event'leri process restart sonrasında kaybolmaz; Redis consumer group üzerinden birden fazla uygulama node'u tarafından işlenebilir
+- model tasarım geregi hala eventual consistency tabanlıdir
+- ama henüz poison queue, replay tooling veya ayrik admin telemetrisi olan tam bir projection platformu değildir
+- entity içindeki statik bir metoda `@CacheProjectionDefinition` koyarsan generated binding tarafında `DemoOrderEntityCacheBinding.orderSummary(...)` gibi projection helper'ları oluşur
 - entity içindeki statik bir metoda `@CacheNamedQuery` koyarsan aynı generated binding hem entity repository hem projection repository için query helper üretir
-- entity içindeki statik bir metoda `@CacheFetchPreset` koyarsan generated binding `withFetchPlan(...)` glue kodu yazmadan preview/detail repository helper'lari üretir
-- entity içindeki statik bir metoda `@CachePagePreset` koyarsan generated binding `new PageWindow(...)` glue kodu yazmadan reuse edilebilir page/window helper'lari üretir
-- entity içindeki statik bir metoda `@CacheSaveCommand` veya `@CacheDeleteCommand` koyarsan generated binding compile-time write command helper'lari üretir
+- entity içindeki statik bir metoda `@CacheFetchPreset` koyarsan generated binding `withFetchPlan(...)` glue kodu yazmadan preview/detail repository helper'ları üretir
+- entity içindeki statik bir metoda `@CachePagePreset` koyarsan generated binding `new PageWindow(...)` glue kodu yazmadan reuse edilebilir page/window helper'ları üretir
+- entity içindeki statik bir metoda `@CacheSaveCommand` veya `@CacheDeleteCommand` koyarsan generated binding compile-time write command helper'ları üretir
 
 Örnek:
 
@@ -695,13 +695,13 @@ Referans örnek:
 
 - [DemoOrderReadModelPatterns.java](../../cachedb-examples/src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java)
 
-Production tarafinda neden önemli:
+Production tarafında neden önemli:
 
 - Redis key/value okuma hızli olsa bile relation-heavy query yine aday filtreleme, decode, sort ve object graph materialization maliyeti oder
-- pahali kisim genellikle tek bir `GET` değil, ne kadar büyük graph hydrate ettiğindir
+- pahalı kisim genellikle tek bir `GET` değil, ne kadar büyük graph hydrate ettiğindir
 - daha küçük summary query'ler p95'i gerçek repository hot path'e daha yakın tutar
 
-Projection refresh tuning ayarlari `cachedb.config.projectionRefresh.*` altındadir.
+Projection refresh tuning ayarları `cachedb.config.projectionRefresh.*` altındadir.
 
 En kritik varsayılanlar:
 
@@ -718,9 +718,9 @@ Tam tablo için:
 
 ## Önerilen Sonraki Adim
 
-Starter'i bağladiktan sonra tipik sonraki adimlar sunlardir:
+Starter'i bağladiktan sonra tipik sonraki adimlar şunlardir:
 
 - entity ve relation loader'larini kaydetmek
-- pahali liste akışlari için page loader tanımlamak
-- admin explain UI ile fetch planlarini doğrulamak
+- pahalı liste akışları için page loader tanımlamak
+- admin explain UI ile fetch planlarıni doğrulamak
 - `/cachedb-admin` üzerinden admin UI erisimini kontrol etmek

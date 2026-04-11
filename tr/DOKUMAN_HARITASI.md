@@ -6,7 +6,7 @@ Kural:
 
 - kökteki veya `docs` altındaki her Markdown dosyasının Türkçe karşılığı `tr` altında aynı göreli yapıda tutulur
 - kök dosya değişirse `tr` altındaki karşılığı da güncellenir
-- yeni modül README'leri için de `tr/<modul-adi>/README.md` yolu kullanılır
+- yeni modül README'leri için de `tr/<modül-adi>/README.md` yolu kullanılır
 - `docs` altına yeni teknik doküman eklenirse `tr/docs` altında Türkçe sürümü oluşturulur
 
 Mevcut eşleşmeler:

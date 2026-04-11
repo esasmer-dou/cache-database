@@ -71,13 +71,13 @@ düşük tutarken güçlü bir ORM-benzeri geliştirici deneyimi sunmaktır.
 - global sorted business ekranları için ranked projection desteği
 - production evidence workflow'ları ve multi-instance coordination smoke kapsamı
 
-### Public beta kapsami
+### Public beta kapsamı
 
 CacheDB, public beta kullanımı için hazırdır; ancak henüz "koşulsuz GA" seviyesinde duyurulmamalıdır.
 
 Buradaki temel tasarım ilkesi explicit read-model shape yaklaşımıdır:
 
-- önce generated module/binding surface ile başla
+- önce generated modüle/binding surface ile başla
 - relation-ağır liste ekranlarında projection ve relation limit kullan
 - global sorted/range-driven görünümlerde ranked projection kullan
 - yalnızca ölçülmüş hotspot'ları doğrudan repository seviyesine indir

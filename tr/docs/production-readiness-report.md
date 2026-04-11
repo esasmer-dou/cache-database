@@ -4,26 +4,26 @@ Bu rapor, `cache-database` projesinin mevcut guclu yonlerini, zayifliklarini, ri
 
 ## Karşılastirmali Değerlendirme
 
-| Alan | Guclu Yonler | Zayif Yonler | Risk |
+| Alan | Güçlü Yonler | Zayif Yonler | Risk |
 | --- | --- | --- | --- |
 | Mimari | Redis-first, PostgreSQL-backed model net ve tutarli | Klasik ORM'e göre operasyonel modeli daha karmasik | Takimlar sistemin gerçekten sundugundan daha guclu consistency varsayabilir |
-| Doğruluk | Tombstone, stale-skip, latest-state vs exact-sequence semantik ayrimi, DLQ/replay/rebuild akışlari, crash/replay chaos kapsami ve bounded fault-injection senaryolari var | Exhaustive crash ve cross-node yaris testleri henuz sinirli | Uzun süreli contention altında nadir edge-case'ler yine de çıkabilir |
-| Redis boundedness | Guardrail, hard-limit, shedding, runtime profile switching ve değraded fallback var | Uzun soak testlerinde bounded davranis henuz kanıtli değil | PostgreSQL drain geri kalirsa uzun overload altında Redis yine baski görebilir |
+| Doğruluk | Tombstone, stale-skip, latest-state vs exact-sequence semantik ayrımı, DLQ/replay/rebuild akışları, crash/replay chaos kapsamı ve bounded fault-injection senaryoları var | Exhaustive crash ve cross-node yarış testleri henüz sinirli | Uzun süreli contention altında nadir edge-case'ler yine de çıkabilir |
+| Redis boundedness | Guardrail, hard-limit, shedding, runtime profile switching ve değraded fallback var | Uzun soak testlerinde bounded davranis henüz kanıtli değil | PostgreSQL drain geri kalirsa uzun overload altında Redis yine baski görebilir |
 | Query katmanı | Redis index, explain plan, learned stats, değraded full-scan fallback ve rebuild/recover yolu var | Tam SQL planner veya relational optimizer değil | Değraded modda text/relation ağır query'lerde latency sert artabilir |
-| Operability | Admin HTTP, dashboard, incidents, diagnostics, Prometheus export, rebuild endpoint ve certification raporu var | Dış monitoring ve on-call akışlari halen hafif | Net SOP olmadan operator replay/rebuild tarafinda hata yapabilir |
-| Performans | Batching, coalescing, sharding, compaction ve bulk flush çalışmalari yapıldi | Drain completion halen ana darbohaz | Kampanya burst'lerinde backlog ve tail latency yine buyuyebilir |
+| Operability | Admin HTTP, dashboard, incidents, diagnostics, Prometheus export, rebuild endpoint ve certification raporu var | Dış monitoring ve on-call akışları hâlen hafif | Net SOP olmadan operatör replay/rebuild tarafında hata yapabilir |
+| Performans | Batching, coalescing, sharding, compaction ve bulk flush çalışmaları yapıldı | Drain completion hâlen ana darboğaz | Kampanya burst'lerinde backlog ve tail latency yine büyüyebilir |
 | Urunlesme | Starter profilleri ve schema bootstrap artık var | Public API ve migration hikayesi hala erken asamada | Dış kullanıcılar güvenli rollout için ek araca ihtiyaç duyabilir |
 
 ## Faz Bazli Güncel Durum
 
 | Faz | Durum | Tamamlananlar | Production'i Bloke Edenler |
 | --- | --- | --- | --- |
-| Faz 1: Correctness hardening | Kismi | tombstone, stale skip, semantics matrisi, recovery akışlari, rebuild/recover, crash/replay chaos suite, fault-injection suite | daha geniş crash/replay/restart yaris matrisi ve daha sert fault injection |
-| Faz 2: Redis boundedness | Kismi | guardrail, hard cap, shedding, runtime profile switching | sustained pressure altında uzun soak kanıti |
-| Faz 3: Drain capacity | Kismi | batching, sharding, coalescing, copy/bulk path, entity-aware flush policy | gerçek burst profillerinde sustained drain completion |
+| Faz 1: Correctness hardening | Kısmi | tombstone, stale skip, semantics matrisi, recovery akışları, rebuild/recover, crash/replay chaos suite, fault-injection suite | daha geniş crash/replay/restart yarış matrisi ve daha sert fault injection |
+| Faz 2: Redis boundedness | Kısmi | guardrail, hard cap, shedding, runtime profile switching | sustained pressure altında uzun soak kanıti |
+| Faz 3: Drain capacity | Kısmi | batching, sharding, coalescing, copy/bulk path, entity-aware flush policy | gerçek burst profillerinde sustained drain completion |
 | Faz 4: Operability/SRE | Iyi | admin HTTP, dashboard, Prometheus scrape, incidents, runbook | dış alerting ve incident drill tarafini tamamlamak |
-| Faz 5: Production certification | Kismi | certification runner ve representative gate raporu | daha uzun süreli certification ve fault-injection kanıti |
-| Faz 6: Developer productization | Kismi | schema bootstrap, starter profile, generated binding, Türkçe/Ingilizce dokümanlar | migration tooling ve stabil public API garantileri |
+| Faz 5: Production certification | Kısmi | certification runner ve representative gate raporu | daha uzun süreli certification ve fault-injection kanıti |
+| Faz 6: Developer productization | Kısmi | schema bootstrap, starter profile, generated binding, Türkçe/Ingilizce dokümanlar | migration tooling ve stabil public API garantileri |
 
 ## Son Gate Durumu
 
@@ -51,26 +51,26 @@ Ek doğrulanmis kanıt:
 
 | Öncelik | Is Kalemi | Neden Önemli |
 | --- | --- | --- |
-| 1 | Hedef donanimda sustained drain benchmark | Mevcut ana darbohaz halen PostgreSQL drain capacity |
+| 1 | Hedef donanımda sustained drain benchmark | Mevcut ana darboğaz hâlen PostgreSQL drain capacity |
 | 2 | Memory boundedness için soak test | Guardrail var ama uzun koşu kanıti eksik |
-| 3 | Restart/crash/replay yaris suite'i | Production güveni recovery altındaki doğruluga bağli |
-| 4 | External monitoring entegrasyonu | Prometheus scrape var ama üç uca alert routing henuz yok |
-| 5 | Migration/schema lifecycle tooling | Güvenli schema hikayesi olmadan urunlesme eksik kalir |
+| 3 | Restart/crash/replay yarış suite'i | Production güveni recovery altındaki doğruluga bağlı |
+| 4 | External monitoring entegrasyonu | Prometheus scrape var ama üç uca alert routing henüz yok |
+| 5 | Migration/schema lifecycle tooling | Güvenli schema hikayesi olmadan ürünlesme eksik kalir |
 
 ## Önerilen Sonraki Teslimat Plani
 
-| Asama | Hedef | Çıktilar |
+| Aşama | Hedef | Çıktilar |
 | --- | --- | --- |
-| Asama A | Bounded davranisi kanıtlamak | 1h ve 4h soak koşulari, memory envelope raporu, guardrail trend grafikleri |
-| Asama B | Recovery doğrulugunu kanıtlamak | restart/rejoin crash suite, replay ordering suite, production recovery runbook drill |
-| Asama C | Sustained throughput'u kanıtlamak | hedef donanimda drain benchmark, PG tuning raporu, backlog slope analizi |
-| Asama D | Urun yüzeyini sertlestirmek | migration bootstrap araci, profil dokümani, stabil API notlari, onboarding rehberi |
+| Aşama A | Bounded davranisi kanıtlamak | 1h ve 4h soak koşulari, memory envelope raporu, guardrail trend grafikleri |
+| Aşama B | Recovery doğrulugunu kanıtlamak | restart/rejoin crash suite, replay ordering suite, production recovery runbook drill |
+| Aşama C | Sustained throughput'u kanıtlamak | hedef donanimda drain benchmark, PG tuning raporu, backlog slope analizi |
+| Aşama D | Urun yüzeyini sertlestirmek | migration bootstrap araci, profil dokümani, stabil API notları, onboarding rehberi |
 
 ## Yüksek Sinyalli Çekirdek Test Matrisi
 
 - kampanya tetikli browse yüklenmeleri ve checkout burst'leri
-- write-behind backlog buyumesi ve producer backpressure
-- PostgreSQL yavaslamasi veya geçici outage ile replay recovery
+- write-behind backlog büyümesi ve producer backpressure
+- PostgreSQL yavaşlaması veya geçici outage ile replay recovery
 - restart, crash ve replay correctness
 - memory ve drain davranisi için 1h ve 4h soak boundedness
 
@@ -86,7 +86,7 @@ Ek doğrulanmis kanıt:
 - starter profile katalog endpoint'i: `/api/profiles`
 - monitoring triage endpoint'i: `/api/triage`
 - servis durum endpoint'i: `/api/services`
-- alert-routing endpoint'i: `/api/alert-routing` escalation seviyesi, delivery sayaçlari ve fallback görünurlugu ile
+- alert-routing endpoint'i: `/api/alert-routing` escalation seviyesi, delivery sayaçlari ve fallback görünürlüğü ile
 - alert-routing history endpoint'i: `/api/alert-routing/history`
 - incident severity trend endpoint'i: `/api/incident-severity/history`
 - top failing signals endpoint'i: `/api/failing-signals`
@@ -103,7 +103,7 @@ Ek doğrulanmis kanıt:
 - production gate ladder rapor üreticisi
 - 1h ve 4h soak tanımlari için production soak plan rapor üreticisi
 
-Admin dashboard artık Bootstrap tabanli AJAX refresh kontrolu, manuel refresh, pause/resume, interval seçimi, write-behind backlog, Redis memory ve dead-letter buyumesi için server-side history ile beslenen trend grafikleri, kanal bazli alert-route trend/geçmis panelleri ve operasyonel alert-delivery istatistik kartlari da sunuyor.
+Admin dashboard artık Bootstrap tabanlı AJAX refresh kontrolu, manuel refresh, pause/resume, interval seçimi, write-behind backlog, Redis memory ve dead-letter büyümesi için server-side history ile beslenen trend grafikleri, kanal bazlı alert-route trend/geçmis panelleri ve operasyonel alert-delivery istatistik kartlari da sunuyor.
 
 ## Özet Hukum
 

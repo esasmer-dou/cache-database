@@ -64,7 +64,7 @@ flowchart TD
 | Package-level domain wrapper istemeyen ama generated helper isteyen ekipler | `*CacheBinding.using(session)...` | Biraz daha explicit, hala generated, hala düşük ceremony | Çok düşük | Tekil endpoint latency-hassas hale gelince daha alta in |
 | Bilinen sıcak read/write endpoint'leri, batch işleri, infra servisleri | doğrudan `EntityRepository` / `ProjectionRepository` | En küçük wrapper yüzeyi ve tam kontrol | En düşük | Sadece kanıtlanmış hotspotlarda burada kal |
 | Relation-ağır okuma ekranları | generated binding veya minimal repository + projection + relation limit | Ergonomiyi korurken geniş object graph maliyetini düşürür | Düşük ile çok düşük arası | Summary/detail hâlâ hedefi tutmazsa minimal repository'ye in |
-| İç admin/reporting akışları | generated module veya binding | Geliştirici hızı genelde nanosaniye kazancından daha değerlidir | Düşük | Çoğu durumda daha alta inmek gerekmez |
+| İç admin/reporting akışları | generated modüle veya binding | Geliştirici hızı genelde nanosaniye kazancından daha değerlidir | Düşük | Çoğu durumda daha alta inmek gerekmez |
 | Replay/recovery/worker kodu | minimal repository | Operasyonel kodun explicit ve tahmin edilebilir kalması daha iyi | En düşük | Genelde ekstra soyutlama gerekmez |
 
 ## Resmi Öneri Merdiveni
@@ -109,7 +109,7 @@ Local not:
 
 Resmi recipe benchmark şu üç CacheDB kullanım stilini aynı repository yolu üzerinde karşılaştırır:
 
-- `JPA-style domain module`
+- `JPA-style domain modüle`
 - `Generated entity binding`
 - `Minimal repository`
 
@@ -135,13 +135,13 @@ Generated-surface cache iyilestirmesinden sonraki son yerel ölçum özetimiz:
 
 - `Generated entity binding`: güncel yerel koşuda ortalamada en hızli
 - `Minimal repository`: güncel yerel koşuda en düşük p95
-- `JPA-style domain module`: gruplanmis ergonomik surface, makul wrapper maliyeti
+- `JPA-style domain modüle`: gruplanmis ergonomik surface, makul wrapper maliyeti
 
 Buradaki asil çıkarim:
 
 - ergonomik surface'ler sifir maliyetli değil
-- ama maliyetleri doğrudan repository kullanımiyla aynı düşük-overhead bandinda kaliyor; bu yuzden çoğu is kodunu minimal-repository stiline zorlamaya gerek yok
-- production latency'nin asil suruculeri hala query sekli, relation hydration, Redis contention ve write-behind baskisi
+- ama maliyetleri doğrudan repository kullanımıyla aynı düşük-overhead bandinda kaliyor; bu yuzden çoğu is kodunu minimal-repository stiline zorlamaya gerek yok
+- production latency'nin asil suruculeri hala query şekli, relation hydration, Redis contention ve write-behind baskisi
 
 ## Ekip Tipine Göre Hızli Tavsiye
 
@@ -152,7 +152,7 @@ Buradaki asil çıkarim:
 Bu yol sana:
 
 - en rahat onboarding deneyimini
-- Spring Boot tarafinda zero-glue startup'i
+- Spring Boot tarafında zero-glue startup'i
 - compile-time generated ergonomiyi
 - normal production API'ler için yeterince düşük wrapper maliyetini
 
@@ -160,7 +160,7 @@ birlikte verir.
 
 ### Birkac sıcak endpoint'i olan ekipler
 
-Kodun büyük kısmını generated domain module üzerinde bırak, sadece ölçülmüş hotspot'i `*CacheBinding.using(session)...` tarafına çek.
+Kodun büyük kısmını generated domain modüle üzerinde bırak, sadece ölçülmüş hotspot'i `*CacheBinding.using(session)...` tarafına çek.
 
 Bu genelde en iyi orta noktadir, çünkü:
 
@@ -174,8 +174,8 @@ Doğrudan `EntityRepository` / `ProjectionRepository` kullan.
 
 Bu yol şu durumlarda daha doğru:
 
-- kod urun endpoint'inden çok operasyonel akış ise
-- helper ergonomisinden çok açıklik gerekiyorsa
+- kod ürün endpoint'inden çok operasyonel akış ise
+- helper ergonomisinden çok açıklık gerekiyorsa
 - replay, repair veya batch mantiginda en küçük abstraction yüzeyi isteniyorsa
 
 ## JPA/Hibernate'ten Geçis Yolu
@@ -222,7 +222,7 @@ Neden bu varsayılan:
 
 - tek bir ekran veya API latency-hassas olduysa
 - hala generated helper kullanmak istiyorsan
-- package-level module'den biraz daha explicit olmak istiyorsan
+- package-level modüle'den biraz daha explicit olmak istiyorsan
 
 Önerilen surface:
 
@@ -242,7 +242,7 @@ Neden:
 Şu durumda kullan:
 
 - order summary, preview line veya dashboard row benzeri ekranların varsa
-- full entity hydration pahaliya mal oluyorsa
+- full entity hydration pahalıya mal oluyorsa
 - ekran ilk boyamada tüm aggregate'i istemiyorsa
 
 Önerilen pattern:
@@ -266,7 +266,7 @@ EntityRepository<DemoOrderEntity, Long> previewRepository =
         DemoOrderEntityCacheBinding.using(session).fetches().orderLinesPreview(8);
 ```
 
-Eğer ekran tüm veri kümesi üstunde "line count'a göre en büyük siparisler, sonra revenue" gibi bir global sıralama istiyorsa, tam entity query'yi daha da zorlamaya çalışma. Projection'e özel rank alani ekle ve bu projection'i tek sorted index ile query et.
+Eğer ekran tüm veri kümesi üstunde "line count'a göre en büyük siparişler, sonra revenue" gibi bir global sıralama istiyorsa, tam entity query'yi daha da zorlamaya çalışma. Projection'e özel rank alani ekle ve bu projection'i tek sorted index ile query et.
 
 Neden:
 
@@ -301,38 +301,38 @@ List<UserEntity> activeUsers = userRepository.query(
 Neden:
 
 - en küçük abstraction yüzeyi
-- allocation, limit ve query sekli üzerinde en net kontrol
+- allocation, limit ve query şekli üzerinde en net kontrol
 
 Bedeli:
 
 - daha fazla ceremony
 - uygulama kodunda daha fazla tekrarlayan query/fetch glue
 
-## Production Guardrail'lari
+## Production Guardrail'ları
 
 Hangi recipe'yi seçersen seç, production için şu varsayılanlar hala önerilen yoldur:
 
-- foreground repository Redis trafigi ile background worker/admin Redis trafigini ayir
+- foreground repository Redis trafiği ile background worker/admin Redis trafiğini ayır
 - liste ekranları ve dashboard'larda projection kullan
 - eager geniş relation yerine summary query + explicit detail fetch kullan
 - preview ekranlarında `withRelationLimit(...)` kullan
-- global sorted/range liste ekranlarıni projection-first ele al; is sirasi önemliyse pre-ranked projection alani tercih et
+- global sorted/range liste ekranlarını projection-first ele al; iş sırası önemliyse pre-ranked projection alanı tercih et
 - generated ergonomiyi normal kod için koru, minimal repository stilini sadece ölçülmüş hotspot'lara sakla
-- admin UI'yi ikincil düşün; sistemin ana runtime path'ini sekillendirmemeli, sadece gözlemlemeli
+- admin UI'yi ikincil düşün; sistemin ana runtime path'ini şekillendirmemeli, sadece gözlemlemeli
 
-## Production'da Kacinilmasi Gerekenler
+## Production'da Kaçınılması Gerekenler
 
-Şu pattern'lerden kacin:
+Şu pattern'lerden kaçın:
 
 - her liste endpoint'inde tam aggregate hydration
-- ilk query içinde yuzlerce relation child'i tek seferde çekmek
-- foreground repository trafigi ile background worker'lari aynı Redis pool'da toplamak
+- ilk query içinde yüzlerce relation child'ı tek seferde çekmek
+- foreground repository trafiği ile background worker'ları aynı Redis pool'da toplamak
 - ölçmek yerine tüm kodu doğrudan minimal repository stiline indirmek
-- Redis latency'yi sadece Redis'in kendisiyle açıklamaya çalışmak; çoğu zaman asil maliyet query sekli ve hydration olur
+- Redis latency'yi sadece Redis'in kendisiyle açıklamaya çalışmak; çoğu zaman asıl maliyet query şekli ve hydration olur
 
 ## Spring Boot Recipe
 
-Çoğu production servis için şu başlangic iyidir:
+Çoğu production servis için şu başlangıç iyidir:
 
 ```yaml
 cachedb:
@@ -344,7 +344,7 @@ cachedb:
       enabled: true
 ```
 
-Sonra generated registrar'lar entity'leri otomatik register etsin ve servis kodunda generated module veya binding surface kullanılsin.
+Sonra generated registrar'lar entity'leri otomatik register etsin ve servis kodunda generated modüle veya binding surface kullanılsin.
 
 ## Çok Pod'lu Kubernetes Recipe
 
@@ -353,7 +353,7 @@ Birden fazla application pod aynı Redis ve aynı PostgreSQL'e bağlandiginda ş
 - consumer group'lari pod'lar arasinda ortak birak
 - CacheDB'nin consumer adlarına otomatik instance id eklemesine izin ver
 - cleanup/report/history benzeri singleton loop'lar için Redis leader lease'i açık tut
-- worker thread ve flush parallelism değerlerini pod bazli değil, cluster toplami olarak hesapla
+- worker thread ve flush parallelism değerlerini pod bazlı değil, cluster toplami olarak hesapla
 - Redis'i koordinasyon katmanının kritik bağımlılığı olarak düşün ve durability/failover ile çalıştır
 
 Önerilen başlangic:
@@ -371,12 +371,12 @@ cachedb:
     leader-lease-enabled: true
 ```
 
-Bu varsayılanla artık sunlar olur:
+Bu varsayılanla artık şunlar olur:
 
 - write-behind, DLQ replay, projection refresh ve incident-delivery DLQ worker'lari ortak consumer group üzerinden yatay ölçeklenmeye devam eder
 - consumer adları çözulmus instance id sayesinde otomatik olarak pod-unique olur
 - cleanup/report/history loop'lari Redis lease ile singleton kalir
-- pod düşmesi tek başına veri kaybi anlamina gelmez; pending stream isi başka pod tarafından claim edilebilir
+- pod düşmesi tek başına veri kaybı anlamina gelmez; pending stream isi başka pod tarafından claim edilebilir
 
 Değismeyen şeyler:
 
@@ -391,7 +391,7 @@ Bir engineering playbook'a hızlica kopyalanacak kısa production kural seti ist
 - varsayılan uygulama kodu: `GeneratedCacheModule.using(session)...`
 - sıcak endpoint kaçış hattı: `*CacheBinding.using(session)...`
 - worker ve replay kodu: doğrudan repository
-- liste ve dashboard okumalari: önce projection, sonra gerekirse tam aggregate
+- liste ve dashboard okumaları: önce projection, sonra gerekirse tam aggregate
 - relation preview ekranları: her zaman `withRelationLimit(...)` düşün
 - daha alt seviyeye ancak profiling sonucu in
 

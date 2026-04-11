@@ -26,7 +26,7 @@ Bu kanıtlar önceki ana blokajlari kapatiyor:
 - uzun soak artık `DOWN` ile bitmiyor
 - certification koşularinda drain completion stabil
 - hard producer rejection kalmadi
-- restart, replay, rebuild ve fault recovery akışlari geçmeye devam ediyor
+- restart, replay, rebuild ve fault recovery akışları geçmeye devam ediyor
 
 Sistem, test ettiğimiz yüksek baskili e-ticaret rollout profili için artık kabul edilebilir durumda.
 
@@ -34,8 +34,8 @@ Sistem, test ettiğimiz yüksek baskili e-ticaret rollout profili için artık k
 
 Bu `GO` karari doğru yorumlanmali:
 
-1. Mevcut certification ve soak senaryolarinin temsil ettiği kampanya tipi workload ailesi için geçerlidir.
-2. Validation sirasindaki operasyonel durusu varsayar: Redis/PostgreSQL monitoring, aktif alerting ve rollback hazırligi.
+1. Mevcut certification ve soak senaryolarınin temsil ettiği kampanya tipi workload ailesi için geçerlidir.
+2. Validation sırasındaki operasyonel durusu varsayar: Redis/PostgreSQL monitoring, aktif alerting ve rollback hazırligi.
 3. Test edilmeyen ve bu envelope'i asan tüm olasi workload karisimlarini otomatik olarak sertifikalamaz.
 
 ## Önerilen Rollout Yaklasimi
@@ -43,7 +43,7 @@ Bu `GO` karari doğru yorumlanmali:
 - Validasyonu yapılmis production profili ve mevcut guardrail'lerle başla.
 - Backlog, memory, DLQ ve recovery metrikleri için Prometheus alerting aktif kalsin.
 - Restart/recovery ve production gate raporlarini release artefact'i ile birlikte sakla.
-- Workload karisimi, donanim envelope'i veya persistence policy matrisi anlamli şekilde değisirse gate'i yeniden koş.
+- Workload karışımı, donanim envelope'i veya persistence policy matrisi anlamli şekilde değisirse gate'i yeniden koş.
 
 ## Destekleyici Raporlar
 

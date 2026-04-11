@@ -1,6 +1,6 @@
 # Getting Started
 
-Bu rehber, `git clone` sonrasinda çalışan bir CacheDB uygulamasina giden en
+Bu rehber, `git clone` sonrasında çalışan bir CacheDB uygulamasina giden en
 kısa yoldur.
 
 ## Yol Seçimi
@@ -16,7 +16,7 @@ Asagidaki iki yoldan birini kullan:
 
 Starter runtime parcalarini getirir. `cachedb-annotations` ise entity
 sınıflarinin compile-time generation akışina girmesini sağlar. Buna ek olarak
-Spring Boot tarafinda bir `DataSource` yolu gerekir; tipik seçim
+Spring Boot tarafında bir `DataSource` yolu gerekir; tipik seçim
 `spring-boot-starter-jdbc` olur.
 
 ```xml
@@ -170,14 +170,14 @@ Neden:
 ## 4. Kök `.gitignore` Kullan
 
 Repo artık kullanıma hazır bir kok [.gitignore](../.gitignore) ile geliyor.
-Bu dosya sunlari kapsar:
+Bu dosya şunları kapsar:
 
 - Maven/Java build output
-- tüm modullerdeki `target/` klasorleri
-- IDE dosyalari
+- tüm modüllerdeki `target/` klasorleri
+- IDE dosyaları
 - lokal log ve temp output
-- `tools/tmp` altındaki evidence/log dosyalari
-- lokal seçret dosyalari
+- `tools/tmp` altındaki evidence/log dosyaları
+- lokal seçret dosyaları
 
 Eğer uygulama reposunda esdeger bir Java/Maven ignore politikasi yoksa bu
 baseline'i kullan.
