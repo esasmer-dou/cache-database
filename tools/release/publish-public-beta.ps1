@@ -158,7 +158,7 @@ function Invoke-GitHubApiCurl {
         )
         if ($null -ne $Body) {
             $bodyFile = Join-Path ([System.IO.Path]::GetTempPath()) ("cachedb-api-body-" + [System.Guid]::NewGuid().ToString("N") + ".json")
-            [System.IO.File]::WriteAllText($bodyFile, $Body, [System.Text.Encoding]::UTF8)
+            [System.IO.File]::WriteAllText($bodyFile, $Body, [System.Text.UTF8Encoding]::new($false))
             $args += @("-H", "Content-Type: $ContentType", "--data-binary", "@$bodyFile")
         }
         $args += $Url
