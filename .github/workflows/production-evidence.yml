@@ -1,0 +1,140 @@
+name: Production Evidence
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/production-evidence.yml"
+      - "cachedb-core/**"
+      - "cachedb-annotations/**"
+      - "cachedb-processor/**"
+      - "cachedb-storage-redis/**"
+      - "cachedb-storage-postgres/**"
+      - "cachedb-starter/**"
+      - "cachedb-spring-boot-starter/**"
+      - "cachedb-examples/**"
+      - "cachedb-production-tests/**"
+      - "tools/ci/**"
+      - "tools/ops/cluster/**"
+      - "docs/**"
+      - "tr/docs/**"
+      - "pom.xml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - ".github/workflows/production-evidence.yml"
+      - "cachedb-core/**"
+      - "cachedb-annotations/**"
+      - "cachedb-processor/**"
+      - "cachedb-storage-redis/**"
+      - "cachedb-storage-postgres/**"
+      - "cachedb-starter/**"
+      - "cachedb-spring-boot-starter/**"
+      - "cachedb-examples/**"
+      - "cachedb-production-tests/**"
+      - "tools/ci/**"
+      - "tools/ops/cluster/**"
+      - "docs/**"
+      - "tr/docs/**"
+      - "pom.xml"
+
+jobs:
+  production-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run production smoke and benchmark evidence
+        shell: pwsh
+        run: ./tools/ci/run-production-evidence.ps1
+
+      - name: Build evidence summary
+        shell: pwsh
+        run: ./tools/ci/write-production-evidence-summary.ps1 -OutputPath ./target/cachedb-prodtest-reports/production-evidence-summary.md
+
+      - name: Publish workflow summary
+        shell: pwsh
+        run: Get-Content ./target/cachedb-prodtest-reports/production-evidence-summary.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload production evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-evidence
+          path: |
+            target/cachedb-prodtest-reports/**
+            cachedb-production-tests/target/cachedb-prodtest-reports/**
+            cachedb-production-tests/target/surefire-reports/**
+          if-no-files-found: error
+          retention-days: 14
+
+  coordination-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      redis:
+        image: bitnami/redis:7.2
+        env:
+          REDIS_PASSWORD: welcome1
+          ALLOW_EMPTY_PASSWORD: "no"
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli -a welcome1 ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgresql
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run multi-instance coordination smoke
+        shell: pwsh
+        run: ./tools/ci/run-multi-instance-coordination-evidence.ps1 -MavenExecutable mvn
+
+      - name: Publish coordination summary
+        shell: pwsh
+        run: Get-Content ./target/cachedb-prodtest-reports/multi-instance-coordination-smoke.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload coordination evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coordination-evidence
+          path: |
+            target/cachedb-prodtest-reports/multi-instance-coordination-smoke.*
+            cachedb-production-tests/target/surefire-reports/**
+          if-no-files-found: error
+          retention-days: 14

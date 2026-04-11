@@ -1,0 +1,32 @@
+server:
+  port: ${cachedb.demo.ui.port:8090}
+  address: ${cachedb.demo.bindHost:0.0.0.0}
+
+spring:
+  datasource:
+    url: ${cachedb.demo.jdbcUrl:jdbc:postgresql://127.0.0.1:55432/postgres}
+    username: ${cachedb.demo.jdbcUser:postgres}
+    password: ${cachedb.demo.jdbcPassword:postgresql}
+
+cachedb:
+  enabled: true
+  redis-uri: ${cachedb.demo.redisUri:redis://default:welcome1@127.0.0.1:56379/15}
+  demo:
+    redis:
+      uri: ${cachedb.demo.redis.uri:${cachedb.demo.redisUri:redis://default:welcome1@127.0.0.1:56379/15}}
+      pool:
+        maxTotal: ${CACHEDB_DEMO_REDIS_POOL_MAX_TOTAL:320}
+        maxIdle: ${CACHEDB_DEMO_REDIS_POOL_MAX_IDLE:96}
+        minIdle: ${CACHEDB_DEMO_REDIS_POOL_MIN_IDLE:24}
+        maxWaitMillis: ${CACHEDB_DEMO_REDIS_POOL_MAX_WAIT_MILLIS:30000}
+      background:
+        pool:
+          maxTotal: ${CACHEDB_DEMO_REDIS_BACKGROUND_POOL_MAX_TOTAL:96}
+          maxIdle: ${CACHEDB_DEMO_REDIS_BACKGROUND_POOL_MAX_IDLE:32}
+          minIdle: ${CACHEDB_DEMO_REDIS_BACKGROUND_POOL_MIN_IDLE:8}
+          maxWaitMillis: ${CACHEDB_DEMO_REDIS_BACKGROUND_POOL_MAX_WAIT_MILLIS:30000}
+  admin:
+    enabled: true
+    base-path: /cachedb-admin
+    dashboard-enabled: true
+    title: CacheDB Operations Console

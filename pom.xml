@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cache-database</artifactId>
+    <version>0.1.0-beta.1</version>
+    <packaging>pom</packaging>
+
+    <name>cache-database</name>
+    <description>Redis-first, write-behind, PostgreSQL-backed persistence library focused on low runtime overhead</description>
+    <url>${cachedb.release.projectUrl}</url>
+    <inceptionYear>2026</inceptionYear>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>${cachedb.release.developerId}</id>
+            <name>${cachedb.release.developerName}</name>
+            <organization>${cachedb.release.developerOrganization}</organization>
+            <organizationUrl>${cachedb.release.projectUrl}</organizationUrl>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>${cachedb.release.scmConnection}</connection>
+        <developerConnection>${cachedb.release.scmDeveloperConnection}</developerConnection>
+        <url>${cachedb.release.projectUrl}</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>${cachedb.release.issueUrl}</url>
+    </issueManagement>
+
+    <ciManagement>
+        <system>GitHub Actions</system>
+        <url>${cachedb.release.ciUrl}</url>
+    </ciManagement>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <jedis.version>5.2.0</jedis.version>
+        <postgresql.version>42.7.4</postgresql.version>
+        <spring.boot.version>3.3.5</spring.boot.version>
+        <maven.source.plugin.version>3.3.1</maven.source.plugin.version>
+        <maven.javadoc.plugin.version>3.7.0</maven.javadoc.plugin.version>
+        <maven.gpg.plugin.version>3.2.4</maven.gpg.plugin.version>
+        <maven.deploy.plugin.version>3.1.2</maven.deploy.plugin.version>
+        <gpg.skip>true</gpg.skip>
+        <!-- Replace maintainer identity fields before the first public release. -->
+        <cachedb.release.projectUrl>https://github.com/esasmer-dou/cache-database</cachedb.release.projectUrl>
+        <cachedb.release.scmConnection>scm:git:https://github.com/esasmer-dou/cache-database.git</cachedb.release.scmConnection>
+        <cachedb.release.scmDeveloperConnection>scm:git:git@github.com:esasmer-dou/cache-database.git</cachedb.release.scmDeveloperConnection>
+        <cachedb.release.issueUrl>https://github.com/esasmer-dou/cache-database/issues</cachedb.release.issueUrl>
+        <cachedb.release.ciUrl>https://github.com/esasmer-dou/cache-database/actions</cachedb.release.ciUrl>
+        <cachedb.release.developerId>esasmer-dou</cachedb.release.developerId>
+        <cachedb.release.developerName>esasmer-dou</cachedb.release.developerName>
+        <cachedb.release.developerOrganization>esasmer-dou</cachedb.release.developerOrganization>
+    </properties>
+
+    <modules>
+        <module>cachedb-annotations</module>
+        <module>cachedb-processor</module>
+        <module>cachedb-core</module>
+        <module>cachedb-storage-redis</module>
+        <module>cachedb-storage-postgres</module>
+        <module>cachedb-starter</module>
+        <module>cachedb-spring-boot-starter</module>
+        <module>cachedb-examples</module>
+        <module>cachedb-integration-tests</module>
+        <module>cachedb-production-tests</module>
+    </modules>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.11.0</version>
+                    <configuration>
+                        <release>${maven.compiler.release}</release>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-source-plugin</artifactId>
+                    <version>${maven.source.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <version>${maven.javadoc.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-gpg-plugin</artifactId>
+                    <version>${maven.gpg.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-deploy-plugin</artifactId>
+                    <version>${maven.deploy.plugin.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>oss-release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                                <configuration>
+                                    <source>${maven.compiler.release}</source>
+                                    <show>package</show>
+                                    <failOnError>false</failOnError>
+                                    <doclint>none</doclint>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>${gpg.skip}</skip>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

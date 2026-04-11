@@ -1,0 +1,57 @@
+# Maven / Java build output
+target/
+**/target/
+out/
+build/
+*.class
+*.jar
+*.war
+*.ear
+
+# IDE files
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.factorypath
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs and temp output
+*.log
+*.log.*
+hs_err_pid*
+replay_pid*
+tools/tmp/
+tools/out/
+
+# Test, benchmark, and generated evidence output
+coverage/
+reports/
+surefire-reports/
+failsafe-reports/
+test-output/
+
+# Local environment / secrets
+.env
+.env.*
+*.secret
+*.secrets
+secrets/
+
+# Local runtime state
+tmp/
+temp/
+*.pid
+*.lock
+
+# Codex / local automation
+.codex/
+
+# Local Windows path artifact accidentally created in this workspace
+%SystemDrive%/
