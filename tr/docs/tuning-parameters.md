@@ -1,13 +1,13 @@
 # Tuning Parametreleri
 
-Bu doküman, artık kod değistirmeden ayarlanabilen runtime parametrelerini toplar.
+Bu doküman, artık kod değiştirmeden ayarlanabilen runtime parametrelerini toplar.
 
-Iki katman vardir:
+İki katman vardır:
 
 - Redis ve PostgreSQL istemci/bootstrap tuning ayarları
-- write-behind, guardrail, admin, index, schema bootstrap ve cache davranisi için `CacheDatabaseConfig` override'ları
+- write-behind, guardrail, admin, index, schema bootstrap ve cache davranışı için `CacheDatabaseConfig` override'ları
 
-Bir property set edilmezse, asagidaki tabloda yazan varsayılan değer kullanılir.
+Bir property set edilmezse, aşağıdaki tabloda yazan varsayılan değer kullanılır.
 
 ## Prefix Modeli
 
@@ -190,8 +190,8 @@ Operasyonel notlar:
 | `cachedb.config.writeBehind.deadLetterMaxLength` | `10000` | Write-behind DLQ stream trim hedefi. |
 | `cachedb.config.writeBehind.deadLetterStreamKey` | `cachedb:stream:write-behind:dlq` | Write-behind DLQ stream key'i. |
 | `cachedb.config.writeBehind.compactionMaxLength` | `10000` | Compaction stream trim hedefi. |
-| `cachedb.config.writeBehind.retryOverrides` | bos | Entity bazlı retry override. Format asagida. |
-| `cachedb.config.writeBehind.entityFlushPolicies` | bos | Entity bazlı PostgreSQL flush policy. Format asagida. |
+| `cachedb.config.writeBehind.retryOverrides` | bos | Entity bazlı retry override. Format aşağıda. |
+| `cachedb.config.writeBehind.entityFlushPolicies` | bos | Entity bazlı PostgreSQL flush policy. Format aşağıda. |
 
 ### Resource Limits ve Default Cache Policy
 
@@ -328,8 +328,8 @@ Operasyonel notlar:
 | `cachedb.config.redisGuardrail.tombstoneTtlSeconds` | `86400` | Tombstone TTL süresi. |
 | `cachedb.config.redisGuardrail.autoRecoverDegradedIndexesEnabled` | `true` | Pressure düştugunde değraded index'leri otomatik rebuild eder. |
 | `cachedb.config.redisGuardrail.degradedIndexRebuildCooldownMillis` | `30000` | Yeni rebuild denemesi için cooldown. |
-| `cachedb.config.redisGuardrail.entityPolicies` | bos | Namespace bazlı hard-limit shedding policy. Format asagida. |
-| `cachedb.config.redisGuardrail.queryPolicies` | bos | Query-class bazlı shedding policy. Format asagida. |
+| `cachedb.config.redisGuardrail.entityPolicies` | bos | Namespace bazlı hard-limit shedding policy. Format aşağıda. |
+| `cachedb.config.redisGuardrail.queryPolicies` | bos | Query-class bazlı shedding policy. Format aşağıda. |
 
 ### Dead-Letter Recovery
 
@@ -361,7 +361,7 @@ Operasyonel notlar:
 | `cachedb.config.deadLetterRecovery.deadLetterMaxLength` | `10000` | DLQ stream max length. |
 | `cachedb.config.deadLetterRecovery.reconciliationMaxLength` | `10000` | Reconciliation stream max length. |
 | `cachedb.config.deadLetterRecovery.archiveMaxLength` | `10000` | Archive stream max length. |
-| `cachedb.config.deadLetterRecovery.retryOverrides` | bos | Entity bazlı replay retry override. Format asagida. |
+| `cachedb.config.deadLetterRecovery.retryOverrides` | bos | Entity bazlı replay retry override. Format aşağıda. |
 
 ### Admin Monitoring, Reporting, HTTP ve Schema Bootstrap
 

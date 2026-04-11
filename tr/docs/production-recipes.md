@@ -272,7 +272,7 @@ Neden:
 
 - ilk okumada geniş object graph oluşmasini engeller
 - Redis payload ve decode maliyetini düşurur
-- uygulama ekibi için API dogal kalir
+- uygulama ekibi için API doğal kalır
 
 Ölçülmüş destek:
 

@@ -1,11 +1,11 @@
 # Getting Started
 
-Bu rehber, `git clone` sonrasında çalışan bir CacheDB uygulamasina giden en
+Bu rehber, `git clone` sonrasında çalışan bir CacheDB uygulamasına giden en
 kısa yoldur.
 
 ## Yol Seçimi
 
-Asagidaki iki yoldan birini kullan:
+Aşağıdaki iki yoldan birini kullan:
 
 - Spring Boot starter: çoğu ekip için en kolay yol
 - Plain Java bootstrap: bootstrap üzerinde daha fazla kontrol istiyorsan
@@ -14,8 +14,8 @@ Asagidaki iki yoldan birini kullan:
 
 ### Spring Boot
 
-Starter runtime parcalarini getirir. `cachedb-annotations` ise entity
-sınıflarinin compile-time generation akışina girmesini sağlar. Buna ek olarak
+Starter runtime parçalarını getirir. `cachedb-annotations` ise entity
+sınıflarının compile-time generation akışına girmesini sağlar. Buna ek olarak
 Spring Boot tarafında bir `DataSource` yolu gerekir; tipik seçim
 `spring-boot-starter-jdbc` olur.
 

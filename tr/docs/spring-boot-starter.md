@@ -302,16 +302,16 @@ Bu kurulum şu katmanlari acmis olur:
 - write-behind worker'lar
 - istenirse standalone admin UI
 
-Asagidaki durumlarda tam `CacheDatabaseConfig.builder()` yoluna inmek mantiklidir:
+Aşağıdaki durumlarda tam `CacheDatabaseConfig.builder()` yoluna inmek mantıklıdır:
 
-- schema bootstrap davranışını değistireceksen
-- write-behind detaylarini el ile ayarlayacaksan
-- guardrail ayarlarıni özel yapacaksan
+- schema bootstrap davranışını değiştireceksen
+- write-behind detaylarını el ile ayarlayacaksan
+- guardrail ayarlarını özel yapacaksan
 - page cache veya projection refresh davranışını ince ayarlayacaksan
 
 ## ORM Benzeri Query ve Fetch Ergonomisi
 
-Public read API artık `QuerySpec.builder()` zorunlulugunu azaltan daha dogal bir akış sunuyor:
+Public read API artık `QuerySpec.builder()` zorunluluğunu azaltan daha doğal bir akış sunuyor:
 
 ```java
 List<OrderEntity> orders = OrderEntityCacheBinding.repository(cacheDatabase)

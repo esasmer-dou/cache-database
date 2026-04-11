@@ -74,7 +74,7 @@ Ekip şu şeyleri istiyorsa CacheDB daha kötü bir uyum verir:
 - payload boyutunu düşünmeden otomatik graph traversal beklemek
 - temel uygulama paterni olarak ağır iliskisel raporlama
 
-Bu tip durumlarda Hibernate/JPA daha dogal arac olabilir.
+Bu tip durumlarda Hibernate/JPA daha doğal araç olabilir.
 
 Bu mesaji açık vermek zayiflik değil; konumlandırmayi daha güvenilir hale getirir.
 
