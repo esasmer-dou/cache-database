@@ -55,7 +55,7 @@ function Get-ContainerText {
 $hot = Get-ContainerJson "/cachedb-admin/api/dashboard/hot"
 $projectionRefresh = Get-ContainerJson "/cachedb-admin/api/projection-refresh"
 $projectionFailures = Get-ContainerJson "/cachedb-admin/api/projection-refresh/failed?limit=5"
-$dashboardHtml = Get-ContainerText "/cachedb-admin/dashboard-v3?lang=en"
+$dashboardHtml = Get-ContainerText "/cachedb-admin?lang=en"
 $logs = Invoke-Docker "logs --tail 120 $containerName"
 
 [pscustomobject]@{

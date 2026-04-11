@@ -84,7 +84,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         server.setExecutor(executor);
         server.createContext("/", this::handleRoot);
         server.createContext("/dashboard", this::handleDashboard);
-        server.createContext("/dashboard-v3", this::handleDashboard);
+        server.createContext("/dashboard-v3", this::handleLegacyDashboard);
         server.createContext("/api/health", this::handleHealth);
         server.createContext("/api/metrics", this::handleMetrics);
         server.createContext("/api/dashboard/hot", this::handleDashboardHot);
@@ -163,7 +163,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String path = exchange.getRequestURI().getPath();
         switch (path) {
             case "/" -> handleRoot(exchange);
-            case "/dashboard", "/dashboard-v3" -> handleDashboard(exchange);
+            case "/dashboard" -> handleDashboard(exchange);
+            case "/dashboard-v3" -> handleLegacyDashboard(exchange);
             case "/api/health" -> handleHealth(exchange);
             case "/api/metrics" -> handleMetrics(exchange);
             case "/api/dashboard/hot" -> handleDashboardHot(exchange);
@@ -228,7 +229,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             return;
         }
         if (config.dashboardEnabled()) {
-            redirect(exchange, "/dashboard");
+            renderDashboardResponse(exchange);
             return;
         }
         sendJson(exchange, 200, "{\"service\":\"cachedb-admin\",\"status\":\"UP\"}");
@@ -239,6 +240,18 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             sendMethodNotAllowed(exchange);
             return;
         }
+        renderDashboardResponse(exchange);
+    }
+
+    private void handleLegacyDashboard(HttpExchange exchange) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        redirect(exchange, appendQuery("/", exchange.getRequestURI().getRawQuery()));
+    }
+
+    private void renderDashboardResponse(HttpExchange exchange) throws IOException {
         if (!config.dashboardEnabled()) {
             sendText(exchange, 404, "text/plain; charset=utf-8", "Dashboard is disabled");
             return;
@@ -1761,18 +1774,24 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             return "";
         }
         String normalized = dashboardPath.trim();
+        while (normalized.endsWith("/") && normalized.length() > 1) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
         if (normalized.endsWith("/dashboard-v3")) {
             return normalized.substring(0, normalized.length() - "/dashboard-v3".length());
         }
         if (normalized.endsWith("/dashboard")) {
             return normalized.substring(0, normalized.length() - "/dashboard".length());
         }
-        return "";
+        if ("/".equals(normalized)) {
+            return "";
+        }
+        return normalized;
     }
 
     private String renderDashboard(String language, String dashboardPath) {
         String title = escapeHtml(uiString("dashboardTitle", config.dashboardTitle()));
-        String effectiveDashboardPath = escapeHtml(dashboardPath == null || dashboardPath.isBlank() ? "/dashboard" : dashboardPath);
+        String effectiveDashboardPath = escapeHtml(dashboardPath == null || dashboardPath.isBlank() ? "/" : dashboardPath);
         String adminBasePath = escapeJs(resolveDashboardBasePath(dashboardPath));
         String bootstrapCssUrl = escapeHtml(uiString("bootstrapCssUrl", "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"));
         String googleFontsUrl = escapeHtml(uiString("fontsUrl", "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"));
@@ -4286,6 +4305,13 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         exchange.getResponseHeaders().add("Location", location);
         exchange.sendResponseHeaders(302, -1);
         exchange.close();
+    }
+
+    private String appendQuery(String path, String rawQuery) {
+        if (rawQuery == null || rawQuery.isBlank()) {
+            return path;
+        }
+        return path + "?" + rawQuery;
     }
 
     private void sendJson(HttpExchange exchange, int statusCode, String body) throws IOException {

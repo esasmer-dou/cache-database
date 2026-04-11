@@ -23,7 +23,7 @@ try {
     }
     Write-Host "Starting Spring Boot load demo with JDK: $javaHome"
     Write-Host "Demo UI: http://127.0.0.1:8090/demo-load"
-    Write-Host "Admin UI: http://127.0.0.1:8090/cachedb-admin/dashboard-v3?lang=tr"
+Write-Host "Admin UI: http://127.0.0.1:8090/cachedb-admin?lang=tr"
     & "$mavenHome\bin\mvn.cmd" `
         "-f" "cachedb-examples/pom.xml" `
         "org.springframework.boot:spring-boot-maven-plugin:3.3.5:run" `

@@ -22,12 +22,21 @@ final class CacheDatabaseAdminPageController {
     }
 
     @GetMapping({"", "/"})
-    public String redirectToDashboard() {
-        return "redirect:" + basePath + "/dashboard";
+    public String dashboardRoot(HttpServletRequest request, Model model) {
+        return renderDashboardPage(request, model);
     }
 
-    @GetMapping({"/dashboard", "/dashboard-v3"})
+    @GetMapping("/dashboard")
     public String dashboard(HttpServletRequest request, Model model) {
+        return renderDashboardPage(request, model);
+    }
+
+    @GetMapping("/dashboard-v3")
+    public String legacyDashboard(HttpServletRequest request) {
+        return "redirect:" + appendQuery(basePath, request.getQueryString());
+    }
+
+    private String renderDashboardPage(HttpServletRequest request, Model model) {
         String language = request.getParameter("lang");
         String requestPath = request.getRequestURI().substring(request.getContextPath().length());
         DashboardTemplateModel page = adminHandler.renderDashboardTemplateModel(language, requestPath);
@@ -35,6 +44,13 @@ final class CacheDatabaseAdminPageController {
         model.addAttribute("bodyMarkup", page.bodyMarkup());
         model.addAttribute("htmlLang", page.language());
         return "cachedb-admin/dashboard";
+    }
+
+    private String appendQuery(String path, String queryString) {
+        if (queryString == null || queryString.isBlank()) {
+            return path;
+        }
+        return path + "?" + queryString;
     }
 
     private String normalizeBasePath(String configuredBasePath) {

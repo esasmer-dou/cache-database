@@ -67,7 +67,7 @@ Run Spring Boot demo:
 Spring Boot URLs:
 
 - demo load UI: `http://127.0.0.1:8090/demo-load`
-- admin dashboard: `http://127.0.0.1:8090/cachedb-admin/dashboard-v3?lang=tr`
+- admin dashboard: `http://127.0.0.1:8090/cachedb-admin?lang=tr`
 
 Spring Boot notes:
 

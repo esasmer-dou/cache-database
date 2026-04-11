@@ -180,7 +180,7 @@ Bu yol, Spring Boot'un su isleri ustlenmesini istediginde uygundur:
 
 Admin UI varsayilan olarak su taban yolundan acilir:
 
-- `/cachedb-admin/dashboard`
+- `/cachedb-admin`
 
 Yani ikinci bir public admin portu acilmaz. Uygulamanin host ve port'u neyse admin UI da ayni porttan servis edilir.
 
@@ -456,7 +456,7 @@ Bu kurulumla:
 - Spring Boot uygulaman ayni `server.port` uzerinde calismaya devam eder
 - CacheDB admin UI ayni porttan yayinlanir
 - public dashboard URL'i su olur:
-  - `http://127.0.0.1:8080/cachedb-admin/dashboard`
+  - `http://127.0.0.1:8080/cachedb-admin`
 
 ## Uretim Icin Varsayilan Redis Topolojisi
 
@@ -552,12 +552,13 @@ Davranis:
 - dis kullanici Boot uygulamasinin base path'i altindan admin UI'a erisir
 - dashboard icindeki API cagrilari da bu base path'e gore calisir
 - admin route'lari Spring Boot servlet konteyneri icinde dogrudan dispatch edilir
-- `/dashboard` ve `/dashboard-v3` sayfalari Thymeleaf ile render edilir
+- base path'in koku ve `/dashboard` sayfasi Thymeleaf ile render edilir
+- `/dashboard-v3` eski bookmark'lar icin legacy redirect olarak kalir
 - `/api/*` ayni portta native admin servlet tarafindan servis edilir
 
 Varsayilan dis URL'ler:
 
-- dashboard: `/cachedb-admin/dashboard`
+- dashboard: `/cachedb-admin`
 - health JSON: `/cachedb-admin/api/health`
 - metrics JSON: `/cachedb-admin/api/metrics`
 
@@ -722,4 +723,4 @@ Starter'i bagladiktan sonra tipik sonraki adimlar sunlardir:
 - entity ve relation loader'larini kaydetmek
 - pahali liste akislari icin page loader tanimlamak
 - admin explain UI ile fetch planlarini dogrulamak
-- `/cachedb-admin/dashboard` uzerinden admin UI erisimini kontrol etmek
+- `/cachedb-admin` uzerinden admin UI erisimini kontrol etmek

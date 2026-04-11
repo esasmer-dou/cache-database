@@ -82,7 +82,7 @@ $demoResponse = Invoke-ShortProcess `
 
 $adminResponse = Invoke-ShortProcess `
         -FilePath "C:\Windows\System32\curl.exe" `
-        -Arguments '-sS http://127.0.0.1:8090/cachedb-admin/dashboard-v3?lang=tr' `
+        -Arguments '-sS http://127.0.0.1:8090/cachedb-admin?lang=tr' `
         -TimeoutMs 30000
 
 try {

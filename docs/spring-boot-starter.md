@@ -180,7 +180,7 @@ Use this when you want Spring Boot to:
 
 The admin UI is exposed under a base path such as:
 
-- `/cachedb-admin/dashboard`
+- `/cachedb-admin`
 
 This means the UI uses the same host and same port as your Spring Boot app. There is no second public admin port.
 
@@ -457,7 +457,7 @@ With this setup:
 - your Spring Boot app still serves on `server.port`
 - CacheDB admin UI is available on the same port
 - public dashboard URL becomes:
-  - `http://127.0.0.1:8080/cachedb-admin/dashboard`
+  - `http://127.0.0.1:8080/cachedb-admin`
 
 ## Production Redis Topology Default
 
@@ -553,12 +553,13 @@ Behavior:
 - external users access admin pages through the Boot app path
 - dashboard JS resolves its API calls relative to the configured base path
 - admin routes are dispatched inside the Spring Boot servlet container
-- `/dashboard` and `/dashboard-v3` are rendered through Thymeleaf
+- the base path root and `/dashboard` are rendered through Thymeleaf
+- `/dashboard-v3` remains as a legacy redirect for older bookmarks
 - `/api/*` stays on the same port and is served by the native admin servlet
 
 Default external URLs:
 
-- dashboard: `/cachedb-admin/dashboard`
+- dashboard: `/cachedb-admin`
 - health JSON: `/cachedb-admin/api/health`
 - metrics JSON: `/cachedb-admin/api/metrics`
 
@@ -723,4 +724,4 @@ After wiring the starter, the usual next pieces are:
 - register your entities and relation loaders
 - define page loaders for expensive list endpoints
 - verify fetch plans with the admin explain UI
-- confirm the admin UI is reachable from `/cachedb-admin/dashboard`
+- confirm the admin UI is reachable from `/cachedb-admin`

@@ -43,7 +43,7 @@ $demo = Invoke-ExternalProcess `
 
 $admin = Invoke-ExternalProcess `
         -FilePath "C:\Windows\System32\curl.exe" `
-        -Arguments "-sS http://127.0.0.1:8090/cachedb-admin/dashboard-v3?lang=tr" `
+        -Arguments "-sS http://127.0.0.1:8090/cachedb-admin?lang=tr" `
         -WorkingDirectory $repoRoot `
         -TimeoutMs 30000
 
@@ -61,7 +61,7 @@ $containerDemo = Invoke-ExternalProcess `
 
 $containerAdmin = Invoke-ExternalProcess `
         -FilePath $dockerExe `
-        -Arguments 'exec cachedb-spring-load-demo bash -lc "exec 3<>/dev/tcp/127.0.0.1/8090; printf \"GET /cachedb-admin/dashboard-v3?lang=tr HTTP/1.0\r\nHost: localhost\r\n\r\n\" >&3; cat <&3 | head -c 1200"' `
+        -Arguments 'exec cachedb-spring-load-demo bash -lc "exec 3<>/dev/tcp/127.0.0.1/8090; printf \"GET /cachedb-admin?lang=tr HTTP/1.0\r\nHost: localhost\r\n\r\n\" >&3; cat <&3 | head -c 1200"' `
         -WorkingDirectory $repoRoot `
         -TimeoutMs 120000
 

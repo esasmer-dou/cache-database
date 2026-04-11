@@ -37,7 +37,7 @@ public class DemoSpringBootLoadController implements DisposableBean {
         this.tuning = tuning;
         this.actionQueue = new DemoScenarioActionQueue();
         String basePath = normalizeBasePath(springProperties.getAdmin().getBasePath());
-        this.adminDashboardUrl = basePath + "/dashboard-v3?lang=tr";
+        this.adminDashboardUrl = basePath + "?lang=tr";
     }
 
     @GetMapping(value = {"/", "/demo-load"}, produces = MediaType.TEXT_HTML_VALUE)

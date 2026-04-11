@@ -16,6 +16,7 @@ $mavenBuildLog = Join-Path $logDir "mvn-demo-container-build.log"
 $mavenRepackageLog = Join-Path $logDir "mvn-demo-container-repackage.log"
 $dockerBuildLog = Join-Path $logDir "docker-demo-container-build.log"
 $dockerRunLog = Join-Path $logDir "docker-demo-container-run.log"
+$examplesTargetDir = Join-Path $repoRoot "cachedb-examples\target"
 
 function Invoke-ExternalProcess {
     param(
@@ -87,6 +88,33 @@ if ($repackage.ExitCode -ne 0) {
     throw "Spring Boot repackage failed. See $mavenRepackageLog and $($mavenRepackageLog + '.err').`n$($repackage.StdOut)`n$($repackage.StdErr)"
 }
 
+$bootJar = Get-ChildItem -Path $examplesTargetDir -Filter "cachedb-examples-*.jar" |
+        Where-Object {
+            $_.Name -notlike "*.original" -and
+                    $_.Name -notlike "*-sources.jar" -and
+                    $_.Name -notlike "*-javadoc.jar"
+        } |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+
+if ($null -eq $bootJar) {
+    throw "Unable to locate the repackaged Spring Boot jar under $examplesTargetDir"
+}
+
+$dockerfileContent = @"
+FROM ibm-semeru-runtimes:open-21-jre-jammy
+
+WORKDIR /app
+
+COPY cachedb-examples/target/$($bootJar.Name) /app/cachedb-examples.jar
+
+EXPOSE 8090
+
+ENTRYPOINT ["java","-jar","/app/cachedb-examples.jar"]
+"@
+
+[System.IO.File]::WriteAllText($dockerfilePath, $dockerfileContent)
+
 $null = Invoke-ExternalProcess -FilePath $dockerExe -Arguments "rm -f $containerName" -WorkingDirectory $repoRoot -TimeoutMs 120000
 
 $build = Invoke-ExternalProcess `
@@ -115,4 +143,4 @@ if ($run.ExitCode -ne 0) {
 
 Write-Host "Spring Boot load demo container started."
 Write-Host "Demo UI: http://127.0.0.1:8090/demo-load"
-Write-Host "Admin UI: http://127.0.0.1:8090/cachedb-admin/dashboard-v3?lang=tr"
+Write-Host "Admin UI: http://127.0.0.1:8090/cachedb-admin?lang=tr"

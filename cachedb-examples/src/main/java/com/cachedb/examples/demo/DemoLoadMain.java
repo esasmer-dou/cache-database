@@ -157,7 +157,7 @@ public final class DemoLoadMain {
                 ).clearDataOnly(),
                 null
         );
-        String adminDashboardUrl = "http://" + publicHost + ":" + adminPort + "/dashboard-v3?lang=tr";
+        String adminDashboardUrl = "http://" + publicHost + ":" + adminPort + "/?lang=tr";
         DemoScenarioHttpServer demoServer = new DemoScenarioHttpServer(
                 service,
                 bindHost,
