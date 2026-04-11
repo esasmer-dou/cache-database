@@ -45,7 +45,10 @@ For release-facing changes, also use:
 ```powershell
 ./tools/ci/run-production-evidence.ps1
 ./tools/ci/run-multi-instance-coordination-evidence.ps1
+./tools/ci/check-tr-docs.ps1
 ```
+
+If you touch files under `tr/`, run the Turkish docs quality check before opening the PR. It catches common `ı/i`, `ü/u`, `ö/o`, and `ş/s` drift before review.
 
 ## Pull Requests
 

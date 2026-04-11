@@ -60,12 +60,19 @@ jobs:
         shell: pwsh
         run: ./tools/ci/validate-public-beta-readiness.ps1 -SummaryPath ./target/public-beta-readiness-summary.md
 
+      - name: Validate Turkish docs quality
+        shell: pwsh
+        run: ./tools/ci/check-tr-docs.ps1 -SummaryPath ./target/tr-docs-quality-summary.md
+
       - name: Verify OSS release packaging
         run: mvn -B -P oss-release -DskipTests -Dgpg.skip=true package
 
       - name: Publish readiness summary
         shell: pwsh
-        run: Get-Content ./target/public-beta-readiness-summary.md >> $env:GITHUB_STEP_SUMMARY
+        run: |
+          Get-Content ./target/public-beta-readiness-summary.md >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          Get-Content ./target/tr-docs-quality-summary.md >> $env:GITHUB_STEP_SUMMARY
 
       - name: Upload readiness artifacts
         uses: actions/upload-artifact@v4
@@ -73,5 +80,6 @@ jobs:
           name: public-beta-readiness
           path: |
             target/public-beta-readiness-summary.md
+            target/tr-docs-quality-summary.md
           if-no-files-found: error
           retention-days: 14

@@ -23,7 +23,7 @@ Koşulan senaryolar:
 Olumlu sinyaller:
 
 - DAO katmanı karisik okuma/yazma trafiğini runtime hatasi olmadan isleyebildi.
-- Redis-first yol hem dengeli hem de yazma ağırlikli trafige cevap verdi.
+- Redis-first yol hem dengeli hem de yazma ağırlıklı trafiğe cevap verdi.
 - Her iki smoke koşusunda da dead-letter oluşmadi.
 - Production test modülu hem makine-okunur hem de insan-okunur rapor üretti.
 
