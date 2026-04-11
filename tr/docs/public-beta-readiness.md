@@ -5,7 +5,7 @@ halen bloke eden konulari özetler.
 
 ## Public Beta İçin Hazır Olanlar
 
-- çekirdek production hikayesi için ölçulmus runtime kanıti var
+- çekirdek production hikayesi için ölçülmüş runtime kanıtı var
 - multi-instance coordination için resmi smoke ve CI lane mevcut
 - generated ergonomi, minimal repository overhead'ine yakın kaliyor
 - relation-heavy read recipe'leri dokümante ve benchmark'li

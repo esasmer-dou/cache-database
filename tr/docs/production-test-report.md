@@ -186,7 +186,7 @@ Amac:
 - `write-behind-backpressure-breaker`
 - `flash-sale-hot-sku-contention`
 
-Ölçulecekler:
+Ölçülecekler:
 
 - queue length egimi
 - DLQ oluşumu
@@ -209,7 +209,7 @@ Amac:
 
 - `weekend-browse-storm`
 
-Ölçulecekler:
+Ölçülecekler:
 
 - hot-set eviction hızi
 - page cache hit orani
@@ -248,7 +248,7 @@ Beklenen çıktular:
 Gerçek bir e-ticaret kampanya yolu için DAO katmanına production-ready denmeden önce sunlar sağlanmali:
 
 - birden fazla ölçekte sustained burst testleri koşulmus olmali
-- write-behind drain süresi ölçulup kabul edilmis olmali
+- write-behind drain süresi ölçülüp kabul edilmiş olmalı
 - browse storm altında Redis bellek butcesi doğrulanmis olmali
 - DLQ bos kalmalı ya da operasyonel olarak geri alinabilir olmali
 - hot inventory contention güvensiz persistence lag üretmemeli

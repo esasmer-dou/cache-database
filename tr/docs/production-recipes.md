@@ -160,7 +160,7 @@ birlikte verir.
 
 ### Birkac sıcak endpoint'i olan ekipler
 
-Kodun büyük kismini generated domain module üzerinde birak, sadece ölçulmus hotspot'i `*CacheBinding.using(session)...` tarafına çek.
+Kodun büyük kısmını generated domain module üzerinde bırak, sadece ölçülmüş hotspot'i `*CacheBinding.using(session)...` tarafına çek.
 
 Bu genelde en iyi orta noktadir, çünkü:
 
@@ -274,7 +274,7 @@ Neden:
 - Redis payload ve decode maliyetini düşurur
 - uygulama ekibi için API dogal kalir
 
-Ölçulmus destek:
+Ölçülmüş destek:
 
 - summary list, preview list ve full aggregate list materialization maliyetini repo içinde karşılastirmak istiyorsan `cachedb-production-tests` altındaki `ReadShapeBenchmarkMain` yüzeyini kullan
 - ranked projection top-window ile geniş candidate scan farkini repo içinde karşılastirmak istiyorsan `RankedProjectionBenchmarkMain` yüzeyini kullan
@@ -317,7 +317,7 @@ Hangi recipe'yi seçersen seç, production için şu varsayılanlar hala öneril
 - eager geniş relation yerine summary query + explicit detail fetch kullan
 - preview ekranlarında `withRelationLimit(...)` kullan
 - global sorted/range liste ekranlarıni projection-first ele al; is sirasi önemliyse pre-ranked projection alani tercih et
-- generated ergonomiyi normal kod için koru, minimal repository stilini sadece ölçulmus hotspot'lara sakla
+- generated ergonomiyi normal kod için koru, minimal repository stilini sadece ölçülmüş hotspot'lara sakla
 - admin UI'yi ikincil düşün; sistemin ana runtime path'ini sekillendirmemeli, sadece gözlemlemeli
 
 ## Production'da Kacinilmasi Gerekenler

@@ -63,7 +63,7 @@ CacheDB şu alanlarda guclu bir uyum verir:
 - projection kullanan dashboard ve liste-ağır uygulamalar
 - Redis'i zaten production'da birinci sınıf bağımlilik olarak isleten sistemler
 - reflection-ağır runtime davranis istemeyen ama generated ergonomi isteyen ekipler
-- normal kod ile ölçulmus hotspot'lari net ayirmak isteyen servisler
+- normal kod ile ölçülmüş hotspot'ları net ayırmak isteyen servisler
 
 ## Nerede Daha Kötü Bir Uyumluluk Gösterir
 
@@ -107,7 +107,7 @@ Bir ekip JPA/Hibernate'ten geliyorsa şu geçis yolunu izle:
 2. CRUD ve normal servis endpoint'lerini generated surface üzerinde birak
 3. Liste ekranlarıni projection ve summary/detail pattern'ine çek
 4. Preview relation'lara `withRelationLimit(...)` ekle
-5. Sadece ölçulmus hotspot'lari `*CacheBinding.using(session)...` tarafına indir
+5. Sadece ölçülmüş hotspot'ları `*CacheBinding.using(session)...` tarafına indir
 6. Doğrudan repository'yi ancak profiling hala gerekli diyorsa kullan
 
 Bu yol onboarding'i kolay tutarken düşük-overhead hedefini de korur.

@@ -8,7 +8,7 @@ Kısa hikaye:
 - async write-behind ile PostgreSQL kalıciligi
 - runtime reflection yerine compile-time generated metadata
 - kolay onboarding için generated domain ve binding surface
-- gerçek hotspot'lar için ölçulmus kaçış hatları
+- gerçek hotspot'lar için ölçülmüş kaçış hatları
 
 Bu konumlandırmayi güvenilir yapan şeyler:
 
