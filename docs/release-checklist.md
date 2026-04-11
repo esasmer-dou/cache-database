@@ -24,6 +24,7 @@ Use this checklist before the first public beta and for later releases.
 - move from `-SNAPSHOT` to the intended release version
 - update [../CHANGELOG.md](../CHANGELOG.md)
 - confirm public beta vs GA wording in docs
+- after the release, reopen `main` to the next `-SNAPSHOT` version with [release-flow.md](release-flow.md)
 
 ## Evidence
 

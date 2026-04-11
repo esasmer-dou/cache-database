@@ -4,6 +4,20 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple during public beta.
 
+## Unreleased
+
+### Added
+
+- _TBD_
+
+### Changed
+
+- _TBD_
+
+### Fixed
+
+- _TBD_
+
 ## 0.1.0-beta.1 - 2026-04-11
 
 ### Added
