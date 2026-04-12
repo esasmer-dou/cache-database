@@ -28,6 +28,35 @@ It can discover:
 This means the user no longer has to type every table and column name by hand
 before planning a route.
 
+## Interactive Demo Bootstrap
+
+The Spring Boot demo now includes a one-click PostgreSQL migration dataset for
+the planner wizard itself.
+
+From `/cachedb-admin/migration-planner` you can now:
+
+1. create a demo customer/order schema
+2. seed realistic customer and order history
+3. apply explicit PK/FK and supporting indexes
+4. create ready-made SQL views for manual inspection
+5. refresh discovery and continue directly into scaffold, warm, and compare
+
+The prepared demo objects are:
+
+- `cachedb_migration_demo_customers`
+- `cachedb_migration_demo_orders`
+- `cachedb_migration_demo_customer_order_timeline_v`
+- `cachedb_migration_demo_customer_metrics_v`
+- `cachedb_migration_demo_ranked_orders_v`
+
+This makes it easy to rehearse the full route:
+
+- discover
+- scaffold
+- dry-run warm
+- real warm
+- side-by-side compare
+
 ## Where It Lives
 
 On the same admin host and port:

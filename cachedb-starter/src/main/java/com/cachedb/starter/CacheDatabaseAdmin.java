@@ -106,6 +106,7 @@ public final class CacheDatabaseAdmin {
     private final MigrationScaffoldGenerator migrationScaffoldGenerator;
     private final MigrationWarmRunner migrationWarmRunner;
     private final MigrationComparisonRunner migrationComparisonRunner;
+    private volatile MigrationPlannerDemoSupport migrationPlannerDemoSupport;
     private final java.util.function.IntFunction<List<MonitoringHistoryPoint>> monitoringHistorySupplier;
     private final java.util.function.IntFunction<List<AlertRouteHistoryPoint>> alertRouteHistorySupplier;
     private final java.util.function.IntFunction<List<PerformanceHistoryPoint>> performanceHistorySupplier;
@@ -217,6 +218,7 @@ public final class CacheDatabaseAdmin {
                 this.migrationWarmRunner,
                 MigrationComparisonRunner.using(entityRegistry, cacheSession)
         );
+        this.migrationPlannerDemoSupport = null;
         this.monitoringHistorySupplier = monitoringHistorySupplier;
         this.alertRouteHistorySupplier = alertRouteHistorySupplier;
         this.performanceHistorySupplier = performanceHistorySupplier;
@@ -462,6 +464,43 @@ public final class CacheDatabaseAdmin {
 
     public MigrationSchemaDiscovery.Result discoverMigrationSchema() {
         return migrationSchemaDiscovery.discover();
+    }
+
+    public void configureMigrationPlannerDemo(MigrationPlannerDemoSupport support) {
+        this.migrationPlannerDemoSupport = support;
+    }
+
+    public MigrationPlannerDemoSupport.Descriptor migrationPlannerDemoDescriptor() {
+        MigrationPlannerDemoSupport support = migrationPlannerDemoSupport;
+        if (support == null) {
+            return new MigrationPlannerDemoSupport.Descriptor(
+                    false,
+                    "Migration planner demo",
+                    "No migration planner demo dataset is configured for this runtime.",
+                    120,
+                    12,
+                    1500,
+                    MigrationPlanner.Request.defaults()
+            );
+        }
+        return support.descriptor();
+    }
+
+    public MigrationPlannerDemoSupport.BootstrapResult bootstrapMigrationPlannerDemo(MigrationPlannerDemoSupport.BootstrapRequest request) {
+        MigrationPlannerDemoSupport support = migrationPlannerDemoSupport;
+        if (support == null) {
+            throw new IllegalStateException("Migration planner demo bootstrap is not configured for this runtime.");
+        }
+        MigrationPlannerDemoSupport.BootstrapResult result = support.bootstrap(request.normalize());
+        persistDiagnostics(
+                "migration-demo-bootstrap",
+                "root=" + result.rootSurface()
+                        + ", child=" + result.childSurface()
+                        + ", customers=" + result.customerCount()
+                        + ", orders=" + result.orderCount()
+                        + ", hotCustomerOrders=" + result.hottestCustomerOrderCount()
+        );
+        return result;
     }
 
     public MigrationScaffoldGenerator.Result generateMigrationScaffold(MigrationScaffoldGenerator.Request request) {

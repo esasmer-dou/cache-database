@@ -28,6 +28,35 @@ Planlayıcı artık bağlı PostgreSQL şemasını inceleyip sihirbazı etkileş
 Böylece kullanıcı planlamaya başlamadan önce tüm tablo ve kolon adlarını tek
 tek elle girmek zorunda kalmaz.
 
+## Etkileşimli Demo Bootstrap
+
+Spring Boot demo artık planlayıcının kendisi için tek tıkla kurulabilen bir
+PostgreSQL migration veri seti de içeriyor.
+
+`/cachedb-admin/migration-planner` ekranından artık şunları yapabilirsin:
+
+1. demo customer/order şemasını kur
+2. gerçeğe yakın customer ve order tarihçesi seed et
+3. explicit PK/FK ve destekleyici index'leri hazırla
+4. elle SQL incelemesi için hazır view'leri oluştur
+5. discovery'yi yenileyip doğrudan scaffold, warm ve compare adımlarına geç
+
+Hazırlanan demo nesneleri:
+
+- `cachedb_migration_demo_customers`
+- `cachedb_migration_demo_orders`
+- `cachedb_migration_demo_customer_order_timeline_v`
+- `cachedb_migration_demo_customer_metrics_v`
+- `cachedb_migration_demo_ranked_orders_v`
+
+Böylece tam akışı tek ekran üzerinden prova etmek kolaylaşır:
+
+- keşfet
+- scaffold üret
+- dry-run warm çalıştır
+- gerçek warm çalıştır
+- side-by-side compare yap
+
 ## Nerede Açılır
 
 Aynı admin host ve port'u üzerinden:

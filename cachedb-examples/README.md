@@ -68,6 +68,7 @@ Spring Boot URLs:
 
 - demo load UI: `http://127.0.0.1:8090/demo-load`
 - admin dashboard: `http://127.0.0.1:8090/cachedb-admin?lang=tr`
+- migration planner wizard: `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`
 
 Spring Boot notes:
 
@@ -78,6 +79,16 @@ Spring Boot notes:
 - foreground repository Redis traffic and background worker/admin traffic use separate pools in the Spring Boot demo
 - `Start LOW / MEDIUM / HIGH` does not auto-seed; if data is not ready, the UI returns a direct error and asks you to seed first
 - Spring Boot demo now uses zero-glue generated registrar discovery, so bindings are auto-registered without an explicit `GeneratedCacheBindings.register(...)` call
+- the migration planner page can now bootstrap its own PostgreSQL customer/order demo schema with PK/FK, indexes, seeded history, and inspection views
+
+Migration planner demo flow:
+
+1. open `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`
+2. click `Create and seed the demo schema`
+3. review discovered tables plus views
+4. generate scaffold
+5. run dry-run warm, then real warm
+6. run side-by-side compare and download the migration report
 
 ## Read-Model Example
 

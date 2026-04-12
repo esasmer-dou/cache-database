@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-final class MigrationPlanner {
+public final class MigrationPlanner {
 
     Template template(EntityRegistry entityRegistry) {
         ArrayList<EntityOption> entityOptions = new ArrayList<>();
@@ -334,13 +334,13 @@ final class MigrationPlanner {
         return builder.isEmpty() ? "Entity" : builder.toString();
     }
 
-    record Template(
+    public record Template(
             List<EntityOption> entityOptions,
             Request defaults
     ) {
     }
 
-    record EntityOption(
+    public record EntityOption(
             String entityName,
             String tableName,
             String idColumn,
@@ -348,7 +348,7 @@ final class MigrationPlanner {
     ) {
     }
 
-    record Request(
+    public record Request(
             String workloadName,
             String rootTableOrEntity,
             String rootPrimaryKeyColumn,
@@ -373,7 +373,7 @@ final class MigrationPlanner {
             boolean detailLookupIsHot,
             boolean sideBySideComparisonRequired
     ) {
-        static Request defaults() {
+        public static Request defaults() {
             return new Request(
                     "customer-orders",
                     "customer",
@@ -438,7 +438,7 @@ final class MigrationPlanner {
         }
     }
 
-    record Result(
+    public record Result(
             Request request,
             String recommendedSurface,
             boolean projectionRequired,
@@ -466,14 +466,14 @@ final class MigrationPlanner {
     ) {
     }
 
-    record WarmStep(
+    public record WarmStep(
             String title,
             String summary,
             List<String> tasks
     ) {
     }
 
-    record ComparisonCheck(
+    public record ComparisonCheck(
             String title,
             String baseline,
             String target

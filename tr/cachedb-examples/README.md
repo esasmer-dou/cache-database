@@ -68,6 +68,7 @@ Spring Boot URL'leri:
 
 - demo load UI: `http://127.0.0.1:8090/demo-load`
 - admin dashboard: `http://127.0.0.1:8090/cachedb-admin?lang=tr`
+- geçiş planlayıcı sihirbazı: `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`
 
 Spring Boot notları:
 
@@ -78,6 +79,16 @@ Spring Boot notları:
 - Spring Boot demo içinde foreground repository Redis trafiği ile background worker/admin trafiği ayrı pool'lara ayrılır
 - `Start LOW / MEDIUM / HIGH` gizlice seed başlatmaz; veri hazır değilse UI doğrudan hata verir ve önce `Seed Demo Data` ister
 - Spring Boot demo artık zero-glue generated registrar discovery kullanıyor; yani explicit `GeneratedCacheBindings.register(...)` çağrısı olmadan binding'ler otomatik kaydolur
+- geçiş planlayıcı sayfası artık kendi PostgreSQL customer/order demo şemasını PK/FK, index, seed edilmiş tarihçe ve inceleme view'leri ile kurabilir
+
+Geçiş planlayıcı demo akışı:
+
+1. `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr` adresini aç
+2. `Demo şemayı kur ve seed et` düğmesine bas
+3. keşfedilen tablo ve view'leri incele
+4. scaffold üret
+5. önce dry-run warm, sonra gerçek warm çalıştır
+6. side-by-side compare çalıştır ve migration report indir
 
 ## Read-Model Örneği
 

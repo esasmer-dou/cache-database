@@ -11,6 +11,7 @@ import com.reactor.cachedb.core.config.SchemaBootstrapMode;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.examples.demo.DemoBulkSeedBootstrapper;
 import com.reactor.cachedb.examples.demo.DemoEnvironmentResetter;
+import com.reactor.cachedb.examples.demo.DemoMigrationPlannerBootstrapper;
 import com.reactor.cachedb.examples.demo.DemoScenarioService;
 import com.reactor.cachedb.examples.demo.DemoScenarioTuning;
 import com.reactor.cachedb.spring.boot.CacheDbSpringProperties;
@@ -163,6 +164,12 @@ public class DemoSpringBootLoadConfiguration {
         );
         cacheDatabase.start();
         cacheDatabase.admin().applySchemaMigrationPlan();
+        cacheDatabase.admin().configureMigrationPlannerDemo(new DemoMigrationPlannerBootstrapper(
+                dataSource,
+                jedisPooled,
+                cacheDatabase.admin(),
+                config.keyspace().keyPrefix()
+        ));
         return cacheDatabase;
     }
 

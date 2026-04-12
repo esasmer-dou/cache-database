@@ -47,6 +47,12 @@ class MigrationSchemaDiscoveryTest {
                     order_type VARCHAR(32),
                     CONSTRAINT fk_customer_order_customer FOREIGN KEY (customer_id) REFERENCES customer_account(customer_id)
                 )
+                """,
+                """
+                CREATE VIEW customer_order_metrics_v AS
+                SELECT customer_id, COUNT(*) AS order_count
+                FROM customer_order
+                GROUP BY customer_id
                 """
         ));
 
@@ -54,7 +60,7 @@ class MigrationSchemaDiscoveryTest {
 
         MigrationSchemaDiscovery.Result result = discovery.discover();
 
-        assertEquals(2, result.tables().size());
+        assertEquals(3, result.tables().size());
         assertTrue(result.tables().stream().anyMatch(table ->
                 table.tableName().equalsIgnoreCase("customer_account")
                         && table.primaryKeyColumn().equalsIgnoreCase("customer_id")));
@@ -62,6 +68,9 @@ class MigrationSchemaDiscoveryTest {
                 table.tableName().equalsIgnoreCase("customer_order")
                         && table.temporalColumns().stream().anyMatch(column -> column.equalsIgnoreCase("order_date"))
                         && table.foreignKeyColumns().stream().anyMatch(column -> column.equalsIgnoreCase("customer_id"))));
+        assertTrue(result.tables().stream().anyMatch(table ->
+                table.tableName().equalsIgnoreCase("customer_order_metrics_v")
+                        && table.objectType().equalsIgnoreCase("VIEW")));
 
         assertEquals(1, result.routeSuggestions().size());
         MigrationSchemaDiscovery.RouteSuggestion suggestion = result.routeSuggestions().get(0);

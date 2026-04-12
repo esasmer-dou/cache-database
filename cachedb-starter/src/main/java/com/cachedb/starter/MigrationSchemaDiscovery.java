@@ -69,13 +69,14 @@ final class MigrationSchemaDiscovery {
     }
 
     private void loadTables(DatabaseMetaData metaData, String catalog, Map<TableKey, MutableTable> tables) throws SQLException {
-        try (ResultSet resultSet = metaData.getTables(catalog, null, "%", new String[]{"TABLE"})) {
+        try (ResultSet resultSet = metaData.getTables(catalog, null, "%", new String[]{"TABLE", "VIEW"})) {
             while (resultSet.next()) {
                 String schema = resultSet.getString("TABLE_SCHEM");
                 if (isSystemSchema(schema)) {
                     continue;
                 }
                 String tableName = resultSet.getString("TABLE_NAME");
+                String objectType = resultSet.getString("TABLE_TYPE");
                 if (tableName == null || tableName.isBlank()) {
                     continue;
                 }
@@ -83,6 +84,7 @@ final class MigrationSchemaDiscovery {
                 tables.put(key, new MutableTable(
                         schema,
                         tableName,
+                        objectType,
                         qualifiedName(schema, tableName),
                         resolveRegisteredEntityName(schema, tableName)
                 ));
@@ -165,6 +167,9 @@ final class MigrationSchemaDiscovery {
         ArrayList<RouteSuggestion> suggestions = new ArrayList<>();
         MigrationPlanner.Request defaults = MigrationPlanner.Request.defaults();
         for (MutableTable childTable : tables.values()) {
+            if (!childTable.plannable()) {
+                continue;
+            }
             LinkedHashMap<String, List<ImportedKey>> grouped = new LinkedHashMap<>();
             for (ImportedKey importedKey : childTable.importedKeys) {
                 grouped.computeIfAbsent(importedKey.foreignKeyName(), ignored -> new ArrayList<>()).add(importedKey);
@@ -327,6 +332,7 @@ final class MigrationSchemaDiscovery {
     record TableInfo(
             String schemaName,
             String tableName,
+            String objectType,
             String qualifiedTableName,
             String registeredEntityName,
             String primaryKeyColumn,
@@ -382,17 +388,23 @@ final class MigrationSchemaDiscovery {
     private final class MutableTable {
         private final String schemaName;
         private final String tableName;
+        private final String objectType;
         private final String qualifiedTableName;
         private final String registeredEntityName;
         private final LinkedHashMap<String, MutableColumn> columns = new LinkedHashMap<>();
         private final ArrayList<ImportedKey> importedKeys = new ArrayList<>();
         private String primaryKeyColumn = "";
 
-        private MutableTable(String schemaName, String tableName, String qualifiedTableName, String registeredEntityName) {
+        private MutableTable(String schemaName, String tableName, String objectType, String qualifiedTableName, String registeredEntityName) {
             this.schemaName = schemaName == null ? "" : schemaName;
             this.tableName = tableName;
+            this.objectType = objectType == null || objectType.isBlank() ? "TABLE" : objectType;
             this.qualifiedTableName = qualifiedTableName;
             this.registeredEntityName = registeredEntityName == null ? "" : registeredEntityName;
+        }
+
+        private boolean plannable() {
+            return !"VIEW".equalsIgnoreCase(objectType);
         }
 
         private List<String> sortCandidates() {
@@ -449,6 +461,7 @@ final class MigrationSchemaDiscovery {
             return new TableInfo(
                     schemaName,
                     tableName,
+                    objectType,
                     qualifiedTableName,
                     registeredEntityName,
                     primaryKeyColumn,
