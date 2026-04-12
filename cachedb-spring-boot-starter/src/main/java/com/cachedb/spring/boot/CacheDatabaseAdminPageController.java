@@ -43,7 +43,11 @@ final class CacheDatabaseAdminPageController {
         applyNoCache(response);
         String language = request.getParameter("lang");
         String requestPath = request.getRequestURI().substring(request.getContextPath().length());
-        DashboardTemplateModel page = adminHandler.renderMigrationPlannerTemplateModel(language, requestPath);
+        DashboardTemplateModel page = adminHandler.renderMigrationPlannerTemplateModel(
+                language,
+                requestPath,
+                shouldBootstrapDiscovery(request) ? adminHandler.discoverMigrationSchema() : null
+        );
         model.addAttribute("headMarkup", page.headMarkup());
         model.addAttribute("bodyMarkup", page.bodyMarkup());
         model.addAttribute("htmlLang", page.language());
@@ -97,6 +101,11 @@ final class CacheDatabaseAdminPageController {
         });
         builder.queryParam("v", currentVersion);
         return "redirect:" + builder.build(true).toUriString();
+    }
+
+    private boolean shouldBootstrapDiscovery(HttpServletRequest request) {
+        String discover = request.getParameter("discover");
+        return "1".equals(discover) || "true".equalsIgnoreCase(discover);
     }
 
     private String normalizeBasePath(String configuredBasePath) {

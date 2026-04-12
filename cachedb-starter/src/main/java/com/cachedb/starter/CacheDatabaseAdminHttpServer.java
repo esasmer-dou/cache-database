@@ -168,11 +168,19 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     }
 
     public DashboardTemplateModel renderMigrationPlannerTemplateModel(String language, String plannerPath) {
+        return renderMigrationPlannerTemplateModel(language, plannerPath, null);
+    }
+
+    public DashboardTemplateModel renderMigrationPlannerTemplateModel(
+            String language,
+            String plannerPath,
+            MigrationSchemaDiscovery.Result bootstrapDiscovery
+    ) {
         String normalizedLanguage = normalizeDashboardLanguage(language);
         String previousLanguage = dashboardLanguage.get();
         dashboardLanguage.set(normalizedLanguage);
         try {
-            String html = renderMigrationPlanner(normalizedLanguage, plannerPath);
+            String html = renderMigrationPlanner(normalizedLanguage, plannerPath, bootstrapDiscovery);
             return new DashboardTemplateModel(
                     normalizedLanguage,
                     extractBetween(html, "<head>", "</head>"),
@@ -290,10 +298,21 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         }
         Map<String, List<String>> query = parseQuery(exchange.getRequestURI().getRawQuery());
         String language = normalizeDashboardLanguage(first(query, "lang"));
+        boolean bootstrapDiscovery = "1".equals(first(query, "discover"))
+                || "true".equalsIgnoreCase(first(query, "discover"));
         String previousLanguage = dashboardLanguage.get();
         dashboardLanguage.set(language);
         try {
-            sendText(exchange, 200, "text/html; charset=utf-8", renderMigrationPlanner(language, exchange.getRequestURI().getPath()));
+            sendText(
+                    exchange,
+                    200,
+                    "text/html; charset=utf-8",
+                    renderMigrationPlanner(
+                            language,
+                            exchange.getRequestURI().getPath(),
+                            bootstrapDiscovery ? admin.discoverMigrationSchema() : null
+                    )
+            );
         } finally {
             dashboardLanguage.set(previousLanguage);
         }
@@ -769,6 +788,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
 
     public String dashboardInstanceId() {
         return dashboardInstanceId;
+    }
+
+    public MigrationSchemaDiscovery.Result discoverMigrationSchema() {
+        return admin.discoverMigrationSchema();
     }
 
     private void handleMigrationPlannerDiscovery(HttpExchange exchange) throws IOException {
@@ -2413,7 +2436,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         return normalized;
     }
 
-    private String renderMigrationPlanner(String language, String plannerPath) {
+    private String renderMigrationPlanner(
+            String language,
+            String plannerPath,
+            MigrationSchemaDiscovery.Result bootstrapDiscovery
+    ) {
         String normalizedLanguage = normalizeDashboardLanguage(language);
         String title = escapeHtml(uiString("migrationPlanner.pageTitle", localized(normalizedLanguage, "CacheDB Geçiş Planlayıcı", "CacheDB Migration Planner")));
         String basePath = resolveDashboardBasePath(plannerPath);
@@ -2422,6 +2449,17 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "lang=" + normalizedLanguage + "&v=" + dashboardInstanceId
         ));
         String apiBasePath = escapeJs(basePath);
+        String bootstrapDiscoveryJson = bootstrapDiscovery == null ? "null" : renderMigrationSchemaDiscovery(bootstrapDiscovery);
+        String discoveryFallbackAction = escapeHtml(basePath.isBlank() ? "/cachedb-admin/migration-planner" : basePath + "/migration-planner");
+        String bootstrapDiscoveryStatus = escapeHtml(localized(
+                normalizedLanguage,
+                bootstrapDiscovery == null
+                        ? "İstersen önce PostgreSQL şemasını keşfet. Uygun root/child route adaylarını ve tablo kolonlarını burada görebilirsin."
+                        : "Şema keşfi server-side olarak hazırlandı. İstersen önerileri hemen kullanabilir ya da keşfi yeniden çalıştırabilirsin.",
+                bootstrapDiscovery == null
+                        ? "Start by discovering the PostgreSQL schema. You can review root/child route candidates and table columns here before filling the planner."
+                        : "Schema discovery was prepared server-side. You can use the suggestions right away or run discovery again."
+        ));
         String bootstrapCssUrl = escapeHtml(uiString("bootstrapCssUrl", "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"));
         String googleFontsUrl = escapeHtml(uiString("fontsUrl", "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"));
         String subtitle = escapeHtml(localized(
@@ -2553,10 +2591,15 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Demo notları", "Demo notes")) + "</div><div id=\"plannerDemoNotes\"></div>"
                 + "</div></div></div>"
                 + "<div id=\"plannerDiscoveryPanel\" class=\"result-card mb-4\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "0. PostgreSQL Şema Keşfi", "0. PostgreSQL Schema Discovery")) + "</div><div class=\"result-card-body\">"
-                + "<div class=\"planner-actions\"><button id=\"plannerDiscoverAction\" type=\"button\" class=\"btn btn-outline-primary\">" + escapeHtml(localized(normalizedLanguage, "PostgreSQL'den Keşfet", "Discover From PostgreSQL")) + "</button></div>"
-                + "<div id=\"plannerDiscoveryStatus\" class=\"planner-status mt-3\">" + escapeHtml(localized(normalizedLanguage, "İstersen önce PostgreSQL şemasını keşfet. Uygun root/child route adaylarını ve tablo kolonlarını burada görebilirsin.", "Start by discovering the PostgreSQL schema. You can review root/child route candidates and table columns here before filling the planner.")) + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Önerilen route adayları", "Suggested route candidates")) + "</div><div id=\"plannerDiscoverySuggestions\"></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Keşfedilen tablolar", "Discovered tables")) + "</div><div id=\"plannerDiscoveryTables\"></div>"
+                + "<form id=\"plannerDiscoveryFallbackForm\" method=\"get\" action=\"" + discoveryFallbackAction + "\" class=\"planner-actions\">"
+                + "<input type=\"hidden\" name=\"lang\" value=\"" + escapeHtml(normalizedLanguage) + "\">"
+                + "<input type=\"hidden\" name=\"v\" value=\"" + escapeHtml(dashboardInstanceId) + "\">"
+                + "<input type=\"hidden\" name=\"discover\" value=\"true\">"
+                + "<button id=\"plannerDiscoverAction\" type=\"submit\" class=\"btn btn-outline-primary\">" + escapeHtml(localized(normalizedLanguage, "PostgreSQL'den Keşfet", "Discover From PostgreSQL")) + "</button>"
+                + "</form>"
+                + "<div id=\"plannerDiscoveryStatus\" class=\"planner-status mt-3\">" + bootstrapDiscoveryStatus + "</div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Önerilen route adayları", "Suggested route candidates")) + "</div><div id=\"plannerDiscoverySuggestions\">" + renderStaticDiscoverySuggestions(bootstrapDiscovery, normalizedLanguage) + "</div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Keşfedilen tablolar", "Discovered tables")) + "</div><div id=\"plannerDiscoveryTables\">" + renderStaticDiscoveryTables(bootstrapDiscovery, normalizedLanguage) + "</div>"
                 + "</div></div>"
                 + "<form id=\"plannerForm\">"
                 + "<div class=\"planner-form-grid\">"
@@ -2728,6 +2771,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<script>"
                 + "(function(){"
                 + "const apiBase='" + apiBasePath + "';"
+                + "const bootstrapDiscovery=" + bootstrapDiscoveryJson + ";"
                 + "const form=document.getElementById('plannerForm');"
                 + "const status=document.getElementById('plannerStatus');"
                 + "const defaultsButton=document.getElementById('plannerDefaults');"
@@ -2825,7 +2869,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "['rootTableOrEntity','childTableOrEntity'].forEach(function(name){const field=plannerField(name);if(field){field.addEventListener('change',function(){syncDiscoverySelectors();updatePlannerProgress();});}});"
                 + "['sortColumn','sortDirection','rootPrimaryKeyColumn','childPrimaryKeyColumn','relationColumn'].forEach(function(name){const field=plannerField(name);if(field){field.addEventListener('change',function(){updatePlannerProgress();});}});"
                 + "if(demoBootstrapButton){demoBootstrapButton.addEventListener('click',function(){seedDemoSchema().catch(function(){});});}"
-                + "if(discoverButton){discoverButton.addEventListener('click',function(){loadDiscovery(true).catch(function(){});});}"
+                + "if(discoverButton){discoverButton.addEventListener('click',function(event){event.preventDefault();loadDiscovery(true).catch(function(){});});}"
                 + "async function warmExecution(dryRun){const params=serializeForm();params.set('dryRun',dryRun?'true':'false');const startMessage=dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run başlatıldı…", "Dry run started…")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution başlatıldı…", "Warm execution started…")) + "';warmStatus.textContent=startMessage;setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/warm',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderWarmExecution(payload);const doneMessage=payload.dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready.")) + "';warmStatus.textContent=doneMessage;setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ")) + "'+error.message;warmStatus.textContent=message;setStatus(message);}}"
                 + "async function scaffoldGeneration(){const params=serializeForm();const startMessage='" + escapeJs(localized(normalizedLanguage, "Scaffold üretiliyor…", "Generating scaffold…")) + "';if(scaffoldStatus){scaffoldStatus.textContent=startMessage;}setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/scaffold',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderScaffold(payload);const doneMessage='" + escapeJs(localized(normalizedLanguage, "Scaffold hazır. Dosyaları kopyalayıp projene ekleyebilirsin.", "Scaffold ready. You can copy the files into your project.")) + "';if(scaffoldStatus){scaffoldStatus.textContent=doneMessage;}setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Scaffold üretimi başarısız oldu: ", "Scaffold generation failed: ")) + "'+error.message;if(scaffoldStatus){scaffoldStatus.textContent=message;}setStatus(message);}}"
                 + "async function runComparison(){const params=serializeForm();const startMessage='" + escapeJs(localized(normalizedLanguage, "Side-by-side comparison başlatıldı…", "Side-by-side comparison started…")) + "';if(compareStatus){compareStatus.textContent=startMessage;}setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/compare',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderComparison(payload);const doneMessage='" + escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. PostgreSQL ve CacheDB sonuçları yan yana hazır.", "Comparison completed. PostgreSQL and CacheDB results are ready side by side.")) + "';if(compareStatus){compareStatus.textContent=doneMessage;}setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız oldu: ", "Comparison failed: ")) + "'+error.message;if(compareStatus){compareStatus.textContent=message;}setStatus(message);}}"
@@ -2837,10 +2881,119 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "if(compareButton){compareButton.addEventListener('click',function(){runComparison().catch(function(){});});}"
                 + "if(compareReportButton){compareReportButton.addEventListener('click',function(){downloadComparisonReport();});}"
                 + "document.addEventListener('click',function(event){const suggestionButton=event.target.closest('[data-planner-suggestion]');if(suggestionButton){event.preventDefault();applyDiscoverySuggestion(Number(suggestionButton.dataset.plannerSuggestion||-1));return;}const objectButton=event.target.closest('[data-planner-object]');if(objectButton){event.preventDefault();applyDiscoveredObject(Number(objectButton.dataset.plannerObject||-1),objectButton.dataset.plannerRole||'child');}});"
-                + "async function initializePlanner(){applyPlannerMode('beginner');applyRoutePreset(routePresetField&&routePresetField.value||'timeline',true);await loadTemplate();await loadDemoDescriptor();await loadDiscovery(false);updatePlannerProgress();}"
+                + "async function initializePlanner(){applyPlannerMode('beginner');applyRoutePreset(routePresetField&&routePresetField.value||'timeline',true);await loadTemplate();await loadDemoDescriptor();if(bootstrapDiscovery){renderDiscovery(bootstrapDiscovery);setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")) + "');}else{await loadDiscovery(false);}updatePlannerProgress();}"
                 + "initializePlanner().catch(function(){setStatus('" + escapeJs(localized(normalizedLanguage, "Şablon yüklenemedi. Sayfayı yenileyip tekrar dene.", "Could not load the template. Refresh the page and try again.")) + "');setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi yüklenemedi. Sayfayı yenileyip tekrar dene.", "Schema discovery could not be loaded. Refresh the page and try again.")) + "');});"
                 + "})();"
                 + "</script></body></html>";
+    }
+
+    private String renderStaticDiscoverySuggestions(MigrationSchemaDiscovery.Result result, String language) {
+        if (result == null) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (String warning : result.warnings()) {
+            builder.append("<div class=\"planner-warning mb-2\">")
+                    .append(escapeHtml(warning))
+                    .append("</div>");
+        }
+        if (result.routeSuggestions().isEmpty()) {
+            builder.append("<div class=\"planner-empty\">")
+                    .append(escapeHtml(localized(
+                            language,
+                            "Keşiften otomatik route adayı çıkmadı. Yine de aşağıdaki listelerden tablo ve kolon seçerek plan üretebilirsin.",
+                            "No automatic route suggestion came out of discovery. You can still build the plan by choosing tables and columns from the lists below."
+                    )))
+                    .append("</div>");
+            return builder.toString();
+        }
+        for (int index = 0; index < result.routeSuggestions().size(); index++) {
+            MigrationSchemaDiscovery.RouteSuggestion item = result.routeSuggestions().get(index);
+            String surfaces = List.of(item.rootEntityName(), item.rootSurface(), item.childEntityName(), item.childSurface()).stream()
+                    .filter(value -> value != null && !value.isBlank())
+                    .distinct()
+                    .reduce((left, right) -> left + " → " + right)
+                    .orElse("");
+            String sortCandidates = item.sortCandidates().isEmpty() ? "-" : String.join(", ", item.sortCandidates());
+            builder.append("<div class=\"result-check mb-3\"><div class=\"d-flex flex-column flex-lg-row justify-content-between gap-3\"><div><div>");
+            if (item.temporalSortCandidate()) {
+                builder.append("<span class=\"planner-badge\">")
+                        .append(escapeHtml(localized(language, "zamansal sıra", "temporal sort")))
+                        .append("</span>");
+            }
+            if (item.rankedSortCandidate()) {
+                builder.append("<span class=\"planner-badge\">")
+                        .append(escapeHtml(localized(language, "rank adayı", "rank candidate")))
+                        .append("</span>");
+            }
+            builder.append("</div><div class=\"result-step-title\">")
+                    .append(escapeHtml(item.label()))
+                    .append("</div><div class=\"small text-muted mt-1\">")
+                    .append(escapeHtml(item.summary()))
+                    .append("</div><div class=\"small mt-2\">")
+                    .append(escapeHtml(surfaces))
+                    .append("</div><div class=\"small text-muted mt-1\">")
+                    .append(escapeHtml(localized(language, "İlişki", "Relation") + ": " + item.relationColumn()
+                            + " · " + localized(language, "Önerilen sıralama", "Suggested sort") + ": " + item.sortColumn() + " DESC"))
+                    .append("</div><div class=\"small text-muted mt-1\">")
+                    .append(escapeHtml(localized(language, "Alternatif sıralama kolonları", "Alternative sort columns") + ": " + sortCandidates))
+                    .append("</div></div><div><button type=\"button\" class=\"btn btn-sm btn-outline-primary\" data-planner-suggestion=\"")
+                    .append(index)
+                    .append("\">")
+                    .append(escapeHtml(localized(language, "Forma Uygula", "Apply To Form")))
+                    .append("</button></div></div></div>");
+        }
+        return builder.toString();
+    }
+
+    private String renderStaticDiscoveryTables(MigrationSchemaDiscovery.Result result, String language) {
+        if (result == null || result.tables().isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (int index = 0; index < result.tables().size(); index++) {
+            MigrationSchemaDiscovery.TableInfo item = result.tables().get(index);
+            boolean view = "VIEW".equalsIgnoreCase(item.objectType());
+            builder.append("<div class=\"result-check mb-3\"><div class=\"d-flex flex-column flex-lg-row justify-content-between gap-3\"><div><div>")
+                    .append("<span class=\"planner-badge ")
+                    .append(view ? "view" : "")
+                    .append("\">")
+                    .append(escapeHtml(item.objectType()))
+                    .append("</span>");
+            if (item.registeredEntityName() != null && !item.registeredEntityName().isBlank()) {
+                builder.append("<span class=\"planner-badge entity\">")
+                        .append(escapeHtml(localized(language, "entity", "entity") + ": " + item.registeredEntityName()))
+                        .append("</span>");
+            }
+            builder.append("</div><div class=\"result-step-title\">")
+                    .append(escapeHtml(item.qualifiedTableName()))
+                    .append("</div><div class=\"small text-muted mt-1\">")
+                    .append(escapeHtml(localized(language, "PK", "PK") + ": " + defaultString(item.primaryKeyColumn())))
+                    .append(" · ")
+                    .append(escapeHtml(localized(language, "Kolon", "Columns") + ": " + item.columnCount()))
+                    .append(" · ")
+                    .append(escapeHtml(localized(language, "FK", "FK") + ": " + item.importedKeyCount()))
+                    .append("</div></div><div>");
+            if (view) {
+                builder.append("<button type=\"button\" class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"")
+                        .append(index)
+                        .append("\" data-planner-role=\"child\">")
+                        .append(escapeHtml(localized(language, "Çocuk olarak seç", "Use as child")))
+                        .append("</button>");
+            } else {
+                builder.append("<div class=\"d-flex gap-2 flex-wrap\"><button type=\"button\" class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"")
+                        .append(index)
+                        .append("\" data-planner-role=\"root\">")
+                        .append(escapeHtml(localized(language, "Kök seç", "Select root")))
+                        .append("</button><button type=\"button\" class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"")
+                        .append(index)
+                        .append("\" data-planner-role=\"child\">")
+                        .append(escapeHtml(localized(language, "Çocuk seç", "Select child")))
+                        .append("</button></div>");
+            }
+            builder.append("</div></div></div>");
+        }
+        return builder.toString();
     }
 
     private String fieldInput(String name, String label, String placeholder, String extraClass) {

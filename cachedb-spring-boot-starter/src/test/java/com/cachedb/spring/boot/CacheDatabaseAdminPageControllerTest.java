@@ -12,6 +12,8 @@ import org.springframework.ui.ConcurrentModel;
 import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.Statement;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -55,13 +57,38 @@ class CacheDatabaseAdminPageControllerTest {
         }
     }
 
+    @Test
+    void shouldRenderServerSideDiscoveryFallbackWhenRequested() throws Exception {
+        try (TestHarness harness = new TestHarness("page-controller-discovery")) {
+            harness.seedSchema();
+            CacheDatabaseAdminPageController controller = harness.controller();
+
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/cachedb-admin/migration-planner");
+            request.setParameter("lang", "tr");
+            request.setParameter("discover", "true");
+            request.setParameter("v", harness.adminHttpServer().dashboardInstanceId());
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            ConcurrentModel model = new ConcurrentModel();
+
+            String view = controller.migrationPlanner(request, response, model);
+
+            assertEquals("cachedb-admin/dashboard", view);
+            String body = String.valueOf(model.getAttribute("bodyMarkup")).toLowerCase();
+            assertTrue(body.contains("customer_account"));
+            assertTrue(body.contains("customer_order"));
+            assertTrue(body.contains("plannerdiscoveryfallbackform"));
+            assertTrue(body.contains("data-planner-suggestion"));
+        }
+    }
+
     private static final class TestHarness implements AutoCloseable {
         private final CacheDatabase cacheDatabase;
         private final CacheDatabaseAdminHttpServer adminHttpServer;
         private final CacheDatabaseAdminPageController controller;
+        private final DataSource dataSource;
 
         private TestHarness(String schemaName) {
-            DataSource dataSource = newDataSource(schemaName);
+            this.dataSource = newDataSource(schemaName);
             JedisPooled jedis = new JedisPooled("redis://127.0.0.1:6379");
             this.cacheDatabase = new CacheDatabase(jedis, dataSource, CacheDatabaseConfig.defaults());
             this.adminHttpServer = cacheDatabase.adminHttpServer(AdminHttpConfig.builder()
@@ -82,6 +109,31 @@ class CacheDatabaseAdminPageControllerTest {
 
         private CacheDatabaseAdminHttpServer adminHttpServer() {
             return adminHttpServer;
+        }
+
+        private void seedSchema() throws Exception {
+            try (Connection connection = dataSource.getConnection();
+                 Statement statement = connection.createStatement()) {
+                statement.execute("""
+                        CREATE TABLE customer_account (
+                            customer_id BIGINT PRIMARY KEY,
+                            tax_number VARCHAR(32) NOT NULL,
+                            customer_type VARCHAR(24) NOT NULL
+                        )
+                        """);
+                statement.execute("""
+                        CREATE TABLE customer_order (
+                            order_id BIGINT PRIMARY KEY,
+                            customer_id BIGINT NOT NULL,
+                            order_date TIMESTAMP NOT NULL,
+                            order_amount DECIMAL(18, 2) NOT NULL,
+                            currency_code VARCHAR(8) NOT NULL,
+                            order_type VARCHAR(24) NOT NULL,
+                            CONSTRAINT fk_customer_order_customer FOREIGN KEY (customer_id)
+                                REFERENCES customer_account (customer_id)
+                        )
+                        """);
+            }
         }
 
         @Override
