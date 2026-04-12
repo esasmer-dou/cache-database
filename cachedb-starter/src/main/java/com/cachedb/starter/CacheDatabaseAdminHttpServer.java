@@ -2413,7 +2413,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String normalizedLanguage = normalizeDashboardLanguage(language);
         String title = escapeHtml(uiString("migrationPlanner.pageTitle", localized(normalizedLanguage, "CacheDB Geçiş Planlayıcı", "CacheDB Migration Planner")));
         String basePath = resolveDashboardBasePath(plannerPath);
-        String dashboardUrl = escapeHtml(appendQuery(basePath.isBlank() ? "/" : basePath, "lang=" + normalizedLanguage));
+        String dashboardUrl = escapeHtml(appendQuery(
+                basePath.isBlank() ? "/" : basePath,
+                "lang=" + normalizedLanguage + "&v=" + dashboardInstanceId
+        ));
         String apiBasePath = escapeJs(basePath);
         String bootstrapCssUrl = escapeHtml(uiString("bootstrapCssUrl", "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"));
         String googleFontsUrl = escapeHtml(uiString("fontsUrl", "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"));
@@ -2933,7 +2936,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String effectiveDashboardPath = escapeHtml(dashboardPath == null || dashboardPath.isBlank() ? "/" : dashboardPath);
         String dashboardBasePath = resolveDashboardBasePath(dashboardPath);
         String adminBasePath = escapeJs(dashboardBasePath);
-        String migrationPlannerUrl = escapeHtml(appendQuery(dashboardBasePath + "/migration-planner", "lang=" + normalizeDashboardLanguage(language)));
+        String migrationPlannerUrl = escapeHtml(appendQuery(
+                dashboardBasePath + "/migration-planner",
+                "lang=" + normalizeDashboardLanguage(language) + "&v=" + dashboardInstanceId
+        ));
         String bootstrapCssUrl = escapeHtml(uiString("bootstrapCssUrl", "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"));
         String googleFontsUrl = escapeHtml(uiString("fontsUrl", "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"));
         String dashboardThemeCss = uiString(

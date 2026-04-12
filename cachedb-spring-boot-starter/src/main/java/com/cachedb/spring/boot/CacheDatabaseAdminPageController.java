@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 @Controller
 @RequestMapping("${cachedb.admin.base-path:/cachedb-admin}")
@@ -22,17 +23,18 @@ final class CacheDatabaseAdminPageController {
     }
 
     @GetMapping({"", "/"})
-    public String dashboardRoot(HttpServletRequest request, Model model) {
-        return renderDashboardPage(request, model);
+    public String dashboardRoot(HttpServletRequest request, HttpServletResponse response, Model model) {
+        return renderDashboardPage(request, response, model);
     }
 
     @GetMapping("/dashboard")
-    public String dashboard(HttpServletRequest request, Model model) {
-        return renderDashboardPage(request, model);
+    public String dashboard(HttpServletRequest request, HttpServletResponse response, Model model) {
+        return renderDashboardPage(request, response, model);
     }
 
     @GetMapping("/migration-planner")
-    public String migrationPlanner(HttpServletRequest request, Model model) {
+    public String migrationPlanner(HttpServletRequest request, HttpServletResponse response, Model model) {
+        applyNoCache(response);
         String language = request.getParameter("lang");
         String requestPath = request.getRequestURI().substring(request.getContextPath().length());
         DashboardTemplateModel page = adminHandler.renderMigrationPlannerTemplateModel(language, requestPath);
@@ -47,7 +49,8 @@ final class CacheDatabaseAdminPageController {
         return "redirect:" + appendQuery(basePath, request.getQueryString());
     }
 
-    private String renderDashboardPage(HttpServletRequest request, Model model) {
+    private String renderDashboardPage(HttpServletRequest request, HttpServletResponse response, Model model) {
+        applyNoCache(response);
         String language = request.getParameter("lang");
         String requestPath = request.getRequestURI().substring(request.getContextPath().length());
         DashboardTemplateModel page = adminHandler.renderDashboardTemplateModel(language, requestPath);
@@ -76,5 +79,11 @@ final class CacheDatabaseAdminPageController {
             normalized = normalized.substring(0, normalized.length() - 1);
         }
         return normalized;
+    }
+
+    private void applyNoCache(HttpServletResponse response) {
+        response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        response.setHeader("Pragma", "no-cache");
+        response.setDateHeader("Expires", 0);
     }
 }
