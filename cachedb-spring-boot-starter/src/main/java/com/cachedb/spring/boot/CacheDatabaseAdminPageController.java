@@ -6,9 +6,11 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.util.Arrays;
 
 @Controller
 @RequestMapping("${cachedb.admin.base-path:/cachedb-admin}")
@@ -24,16 +26,20 @@ final class CacheDatabaseAdminPageController {
 
     @GetMapping({"", "/"})
     public String dashboardRoot(HttpServletRequest request, HttpServletResponse response, Model model) {
-        return renderDashboardPage(request, response, model);
+        return renderDashboardPage(request, response, model, basePath);
     }
 
     @GetMapping("/dashboard")
     public String dashboard(HttpServletRequest request, HttpServletResponse response, Model model) {
-        return renderDashboardPage(request, response, model);
+        return renderDashboardPage(request, response, model, basePath + "/dashboard");
     }
 
     @GetMapping("/migration-planner")
     public String migrationPlanner(HttpServletRequest request, HttpServletResponse response, Model model) {
+        String redirect = redirectToVersionedPath(request, basePath + "/migration-planner");
+        if (redirect != null) {
+            return redirect;
+        }
         applyNoCache(response);
         String language = request.getParameter("lang");
         String requestPath = request.getRequestURI().substring(request.getContextPath().length());
@@ -49,7 +55,16 @@ final class CacheDatabaseAdminPageController {
         return "redirect:" + appendQuery(basePath, request.getQueryString());
     }
 
-    private String renderDashboardPage(HttpServletRequest request, HttpServletResponse response, Model model) {
+    private String renderDashboardPage(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            Model model,
+            String requestPathForRedirect
+    ) {
+        String redirect = redirectToVersionedPath(request, requestPathForRedirect);
+        if (redirect != null) {
+            return redirect;
+        }
         applyNoCache(response);
         String language = request.getParameter("lang");
         String requestPath = request.getRequestURI().substring(request.getContextPath().length());
@@ -65,6 +80,23 @@ final class CacheDatabaseAdminPageController {
             return path;
         }
         return path + "?" + queryString;
+    }
+
+    private String redirectToVersionedPath(HttpServletRequest request, String path) {
+        String currentVersion = adminHandler.dashboardInstanceId();
+        String requestedVersion = request.getParameter("v");
+        if (currentVersion.equals(requestedVersion)) {
+            return null;
+        }
+        UriComponentsBuilder builder = UriComponentsBuilder.fromPath(path);
+        request.getParameterMap().forEach((name, values) -> {
+            if ("v".equals(name)) {
+                return;
+            }
+            Arrays.stream(values == null ? new String[0] : values).forEach(value -> builder.queryParam(name, value));
+        });
+        builder.queryParam("v", currentVersion);
+        return "redirect:" + builder.build(true).toUriString();
     }
 
     private String normalizeBasePath(String configuredBasePath) {

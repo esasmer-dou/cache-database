@@ -767,6 +767,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         }
     }
 
+    public String dashboardInstanceId() {
+        return dashboardInstanceId;
+    }
+
     private void handleMigrationPlannerDiscovery(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
             sendMethodNotAllowed(exchange);
