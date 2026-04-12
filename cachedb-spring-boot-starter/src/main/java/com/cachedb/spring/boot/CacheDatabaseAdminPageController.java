@@ -31,6 +31,17 @@ final class CacheDatabaseAdminPageController {
         return renderDashboardPage(request, model);
     }
 
+    @GetMapping("/migration-planner")
+    public String migrationPlanner(HttpServletRequest request, Model model) {
+        String language = request.getParameter("lang");
+        String requestPath = request.getRequestURI().substring(request.getContextPath().length());
+        DashboardTemplateModel page = adminHandler.renderMigrationPlannerTemplateModel(language, requestPath);
+        model.addAttribute("headMarkup", page.headMarkup());
+        model.addAttribute("bodyMarkup", page.bodyMarkup());
+        model.addAttribute("htmlLang", page.language());
+        return "cachedb-admin/dashboard";
+    }
+
     @GetMapping("/dashboard-v3")
     public String legacyDashboard(HttpServletRequest request) {
         return "redirect:" + appendQuery(basePath, request.getQueryString());

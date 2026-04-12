@@ -4,6 +4,7 @@ Turkce surum: [tr/README.md](tr/README.md)
 
 Production recipe guide: [docs/production-recipes.md](docs/production-recipes.md)  
 ORM alternative guide: [docs/orm-alternative.md](docs/orm-alternative.md)  
+Migration planner guide: [docs/migration-planner.md](docs/migration-planner.md)  
 Public beta readiness: [docs/public-beta-readiness.md](docs/public-beta-readiness.md)  
 Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
 
@@ -142,6 +143,13 @@ cachedb:
 ```
 
 For the full copy-paste path, see [Getting Started](docs/getting-started.md).
+If you are migrating an existing PostgreSQL + ORM route, also open the
+[Migration Planner](docs/migration-planner.md) in the admin UI. It can now turn
+the route decision into a discovery-driven scaffold, a dry-run or real staging
+warm execution for the Redis hot set, a side-by-side PostgreSQL vs CacheDB
+comparison, and an automatic migration assessment that says whether the route is
+ready, needs review, or still has cutover blockers. It can also inspect
+PostgreSQL tables to seed the planner interactively.
 
 ## Why CacheDB
 

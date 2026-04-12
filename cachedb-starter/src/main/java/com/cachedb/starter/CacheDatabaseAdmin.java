@@ -3,6 +3,7 @@ package com.reactor.cachedb.starter;
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
+import com.reactor.cachedb.core.api.CacheSession;
 import com.reactor.cachedb.core.page.NoOpEntityPageLoader;
 import com.reactor.cachedb.core.queue.AdminDiagnosticsRecord;
 import com.reactor.cachedb.core.queue.AdminAlertRule;
@@ -48,6 +49,7 @@ import redis.clients.jedis.resps.StreamEntry;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import javax.sql.DataSource;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -99,6 +101,11 @@ public final class CacheDatabaseAdmin {
     private final CacheDatabaseConfig cacheDatabaseConfig;
     private final EntityRegistry entityRegistry;
     private final ProductionReportCatalog productionReportCatalog;
+    private final MigrationPlanner migrationPlanner;
+    private final MigrationSchemaDiscovery migrationSchemaDiscovery;
+    private final MigrationScaffoldGenerator migrationScaffoldGenerator;
+    private final MigrationWarmRunner migrationWarmRunner;
+    private final MigrationComparisonRunner migrationComparisonRunner;
     private final java.util.function.IntFunction<List<MonitoringHistoryPoint>> monitoringHistorySupplier;
     private final java.util.function.IntFunction<List<AlertRouteHistoryPoint>> alertRouteHistorySupplier;
     private final java.util.function.IntFunction<List<PerformanceHistoryPoint>> performanceHistorySupplier;
@@ -157,8 +164,10 @@ public final class CacheDatabaseAdmin {
             RedisIndexMaintenance indexMaintenance,
             CacheDatabaseSchemaAdmin schemaAdmin,
             Consumer<AdminIncidentRecord> incidentNotifier,
+            DataSource dataSource,
             CacheDatabaseConfig cacheDatabaseConfig,
             EntityRegistry entityRegistry,
+            CacheSession cacheSession,
             ProductionReportCatalog productionReportCatalog,
             java.util.function.IntFunction<List<MonitoringHistoryPoint>> monitoringHistorySupplier,
             java.util.function.IntFunction<List<AlertRouteHistoryPoint>> alertRouteHistorySupplier,
@@ -198,6 +207,16 @@ public final class CacheDatabaseAdmin {
         this.cacheDatabaseConfig = cacheDatabaseConfig;
         this.entityRegistry = entityRegistry;
         this.productionReportCatalog = productionReportCatalog;
+        this.migrationPlanner = new MigrationPlanner();
+        this.migrationSchemaDiscovery = new MigrationSchemaDiscovery(dataSource, entityRegistry);
+        this.migrationWarmRunner = new MigrationWarmRunner(dataSource, MigrationWarmRunner.using(entityRegistry, cacheSession));
+        this.migrationScaffoldGenerator = new MigrationScaffoldGenerator(this.migrationSchemaDiscovery);
+        this.migrationComparisonRunner = new MigrationComparisonRunner(
+                dataSource,
+                this.migrationSchemaDiscovery,
+                this.migrationWarmRunner,
+                MigrationComparisonRunner.using(entityRegistry, cacheSession)
+        );
         this.monitoringHistorySupplier = monitoringHistorySupplier;
         this.alertRouteHistorySupplier = alertRouteHistorySupplier;
         this.performanceHistorySupplier = performanceHistorySupplier;
@@ -431,6 +450,49 @@ public final class CacheDatabaseAdmin {
 
     public List<ProductionReportSnapshot> productionReports() {
         return productionReportCatalog.latestReports();
+    }
+
+    public MigrationPlanner.Template migrationPlannerTemplate() {
+        return migrationPlanner.template(entityRegistry);
+    }
+
+    public MigrationPlanner.Result planMigration(MigrationPlanner.Request request) {
+        return migrationPlanner.plan(request);
+    }
+
+    public MigrationSchemaDiscovery.Result discoverMigrationSchema() {
+        return migrationSchemaDiscovery.discover();
+    }
+
+    public MigrationScaffoldGenerator.Result generateMigrationScaffold(MigrationScaffoldGenerator.Request request) {
+        return migrationScaffoldGenerator.generate(request);
+    }
+
+    public MigrationWarmRunner.Result warmMigration(MigrationWarmRunner.Request request) {
+        MigrationWarmRunner.Result result = migrationWarmRunner.execute(request);
+        persistDiagnostics(
+                "migration-warm",
+                "child=" + result.childEntityName()
+                        + ", childRows=" + result.childRowsHydrated()
+                        + ", root=" + result.rootEntityName()
+                        + ", rootRows=" + result.rootRowsHydrated()
+                        + ", dryRun=" + result.dryRun()
+        );
+        return result;
+    }
+
+    public MigrationComparisonRunner.Result compareMigration(MigrationComparisonRunner.Request request) {
+        MigrationComparisonRunner.Result result = migrationComparisonRunner.execute(request);
+        persistDiagnostics(
+                "migration-compare",
+                "route=" + result.cacheRouteLabel()
+                        + ", readiness=" + result.assessment().readiness().name()
+                        + ", baselineP95Ns=" + result.baselineMetrics().p95LatencyNanos()
+                        + ", cacheP95Ns=" + result.cacheMetrics().p95LatencyNanos()
+                        + ", exactMatches=" + result.sampleComparisons().stream().filter(MigrationComparisonRunner.SampleComparison::exactMatch).count()
+                        + "/" + result.sampleComparisons().size()
+        );
+        return result;
     }
 
     public EffectiveTuningSnapshot effectiveTuning() {

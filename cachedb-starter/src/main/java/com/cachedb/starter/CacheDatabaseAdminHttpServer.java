@@ -85,6 +85,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         server.createContext("/", this::handleRoot);
         server.createContext("/dashboard", this::handleDashboard);
         server.createContext("/dashboard-v3", this::handleLegacyDashboard);
+        server.createContext("/migration-planner", this::handleMigrationPlanner);
         server.createContext("/api/health", this::handleHealth);
         server.createContext("/api/metrics", this::handleMetrics);
         server.createContext("/api/dashboard/hot", this::handleDashboardHot);
@@ -126,6 +127,12 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         server.createContext("/api/telemetry/reset", this::handleTelemetryReset);
         server.createContext("/api/explain", this::handleExplain);
         server.createContext("/api/explain/note", this::handleExplainNote);
+        server.createContext("/api/migration-planner/template", this::handleMigrationPlannerTemplate);
+        server.createContext("/api/migration-planner/discovery", this::handleMigrationPlannerDiscovery);
+        server.createContext("/api/migration-planner/plan", this::handleMigrationPlannerPlan);
+        server.createContext("/api/migration-planner/warm", this::handleMigrationPlannerWarm);
+        server.createContext("/api/migration-planner/scaffold", this::handleMigrationPlannerScaffold);
+        server.createContext("/api/migration-planner/compare", this::handleMigrationPlannerCompare);
         server.start();
     }
 
@@ -159,12 +166,29 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         }
     }
 
+    public DashboardTemplateModel renderMigrationPlannerTemplateModel(String language, String plannerPath) {
+        String normalizedLanguage = normalizeDashboardLanguage(language);
+        String previousLanguage = dashboardLanguage.get();
+        dashboardLanguage.set(normalizedLanguage);
+        try {
+            String html = renderMigrationPlanner(normalizedLanguage, plannerPath);
+            return new DashboardTemplateModel(
+                    normalizedLanguage,
+                    extractBetween(html, "<head>", "</head>"),
+                    extractBetween(html, "<body>", "</body>")
+            );
+        } finally {
+            dashboardLanguage.set(previousLanguage);
+        }
+    }
+
     private void handleDispatched(HttpExchange exchange) throws IOException {
         String path = exchange.getRequestURI().getPath();
         switch (path) {
             case "/" -> handleRoot(exchange);
             case "/dashboard" -> handleDashboard(exchange);
             case "/dashboard-v3" -> handleLegacyDashboard(exchange);
+            case "/migration-planner" -> handleMigrationPlanner(exchange);
             case "/api/health" -> handleHealth(exchange);
             case "/api/metrics" -> handleMetrics(exchange);
             case "/api/dashboard/hot" -> handleDashboardHot(exchange);
@@ -206,6 +230,12 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             case "/api/telemetry/reset" -> handleTelemetryReset(exchange);
             case "/api/explain" -> handleExplain(exchange);
             case "/api/explain/note" -> handleExplainNote(exchange);
+            case "/api/migration-planner/template" -> handleMigrationPlannerTemplate(exchange);
+            case "/api/migration-planner/discovery" -> handleMigrationPlannerDiscovery(exchange);
+            case "/api/migration-planner/plan" -> handleMigrationPlannerPlan(exchange);
+            case "/api/migration-planner/warm" -> handleMigrationPlannerWarm(exchange);
+            case "/api/migration-planner/scaffold" -> handleMigrationPlannerScaffold(exchange);
+            case "/api/migration-planner/compare" -> handleMigrationPlannerCompare(exchange);
             default -> sendText(exchange, 404, "text/plain; charset=utf-8", "Not found");
         }
     }
@@ -249,6 +279,22 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             return;
         }
         redirect(exchange, appendQuery("/", exchange.getRequestURI().getRawQuery()));
+    }
+
+    private void handleMigrationPlanner(HttpExchange exchange) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        Map<String, List<String>> query = parseQuery(exchange.getRequestURI().getRawQuery());
+        String language = normalizeDashboardLanguage(first(query, "lang"));
+        String previousLanguage = dashboardLanguage.get();
+        dashboardLanguage.set(language);
+        try {
+            sendText(exchange, 200, "text/html; charset=utf-8", renderMigrationPlanner(language, exchange.getRequestURI().getPath()));
+        } finally {
+            dashboardLanguage.set(previousLanguage);
+        }
     }
 
     private void renderDashboardResponse(HttpExchange exchange) throws IOException {
@@ -692,6 +738,82 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         sendJson(exchange, 200, renderExplainNoteResult(record, noteTitleValue));
     }
 
+    private void handleMigrationPlannerTemplate(HttpExchange exchange) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        sendJson(exchange, 200, renderMigrationPlannerTemplate(admin.migrationPlannerTemplate()));
+    }
+
+    private void handleMigrationPlannerDiscovery(HttpExchange exchange) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        try {
+            sendJson(exchange, 200, renderMigrationSchemaDiscovery(admin.discoverMigrationSchema()));
+        } catch (IllegalStateException exception) {
+            sendJson(exchange, 500, "{\"error\":\"" + escapeJson(exception.getMessage()) + "\"}");
+        }
+    }
+
+    private void handleMigrationPlannerPlan(HttpExchange exchange) throws IOException {
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod()) && !"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        Map<String, List<String>> parameters = "POST".equalsIgnoreCase(exchange.getRequestMethod())
+                ? parseFormParameters(exchange)
+                : parseQuery(exchange.getRequestURI().getRawQuery());
+        sendJson(exchange, 200, renderMigrationPlannerResult(admin.planMigration(parseMigrationPlannerRequest(parameters))));
+    }
+
+    private void handleMigrationPlannerWarm(HttpExchange exchange) throws IOException {
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod()) && !"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        Map<String, List<String>> parameters = "POST".equalsIgnoreCase(exchange.getRequestMethod())
+                ? parseFormParameters(exchange)
+                : parseQuery(exchange.getRequestURI().getRawQuery());
+        try {
+            sendJson(exchange, 200, renderMigrationWarmResult(admin.warmMigration(parseMigrationWarmRequest(parameters))));
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            sendJson(exchange, 400, "{\"error\":\"" + escapeJson(exception.getMessage()) + "\"}");
+        }
+    }
+
+    private void handleMigrationPlannerScaffold(HttpExchange exchange) throws IOException {
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod()) && !"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        Map<String, List<String>> parameters = "POST".equalsIgnoreCase(exchange.getRequestMethod())
+                ? parseFormParameters(exchange)
+                : parseQuery(exchange.getRequestURI().getRawQuery());
+        try {
+            sendJson(exchange, 200, renderMigrationScaffoldResult(admin.generateMigrationScaffold(parseMigrationScaffoldRequest(parameters))));
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            sendJson(exchange, 400, "{\"error\":\"" + escapeJson(exception.getMessage()) + "\"}");
+        }
+    }
+
+    private void handleMigrationPlannerCompare(HttpExchange exchange) throws IOException {
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod()) && !"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        Map<String, List<String>> parameters = "POST".equalsIgnoreCase(exchange.getRequestMethod())
+                ? parseFormParameters(exchange)
+                : parseQuery(exchange.getRequestURI().getRawQuery());
+        try {
+            sendJson(exchange, 200, renderMigrationComparisonResult(admin.compareMigration(parseMigrationComparisonRequest(parameters))));
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            sendJson(exchange, 400, "{\"error\":\"" + escapeJson(exception.getMessage()) + "\"}");
+        }
+    }
+
     private QuerySpec parseQuerySpec(Map<String, List<String>> query) {
         QuerySpec.Builder builder = QuerySpec.builder()
                 .offset(parseInt(query.get("offset"), 0))
@@ -715,6 +837,76 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             builder.fetchPlan(FetchPlan.of(includes.toArray(String[]::new)));
         }
         return builder.build();
+    }
+
+    private MigrationPlanner.Request parseMigrationPlannerRequest(Map<String, List<String>> parameters) {
+        return new MigrationPlanner.Request(
+                first(parameters, "workloadName"),
+                first(parameters, "rootTableOrEntity"),
+                first(parameters, "rootPrimaryKeyColumn"),
+                first(parameters, "childTableOrEntity"),
+                first(parameters, "childPrimaryKeyColumn"),
+                first(parameters, "relationColumn"),
+                first(parameters, "sortColumn"),
+                first(parameters, "sortDirection"),
+                parseLong(parameters.get("rootRowCount"), 0L),
+                parseLong(parameters.get("childRowCount"), 0L),
+                parseLong(parameters.get("typicalChildrenPerRoot"), 0L),
+                parseLong(parameters.get("maxChildrenPerRoot"), 0L),
+                parseInt(parameters.get("firstPageSize"), 100),
+                parseInt(parameters.get("hotWindowPerRoot"), 1_000),
+                parseBoolean(parameters.get("listScreen"), true),
+                parseBoolean(parameters.get("firstPaintNeedsFullAggregate"), false),
+                parseBoolean(parameters.get("globalSortedScreen"), false),
+                parseBoolean(parameters.get("thresholdOrRangeScreen"), false),
+                parseBoolean(parameters.get("archiveHistoryRequired"), true),
+                parseBoolean(parameters.get("fullHistoryMustStayHot"), false),
+                parseBoolean(parameters.get("currentOrmUsesEagerLoading"), true),
+                parseBoolean(parameters.get("detailLookupIsHot"), true),
+                parseBoolean(parameters.get("sideBySideComparisonRequired"), true)
+        );
+    }
+
+    private MigrationWarmRunner.Request parseMigrationWarmRequest(Map<String, List<String>> parameters) {
+        return new MigrationWarmRunner.Request(
+                parseMigrationPlannerRequest(parameters),
+                parseBoolean(parameters.get("warmRootRows"), true),
+                parseBoolean(parameters.get("dryRun"), false),
+                parseInt(parameters.get("childFetchSize"), 500),
+                parseInt(parameters.get("rootFetchSize"), 500),
+                parseInt(parameters.get("rootBatchSize"), 250)
+        );
+    }
+
+    private MigrationScaffoldGenerator.Request parseMigrationScaffoldRequest(Map<String, List<String>> parameters) {
+        return new MigrationScaffoldGenerator.Request(
+                parseMigrationPlannerRequest(parameters),
+                first(parameters, "basePackage"),
+                first(parameters, "rootClassName"),
+                first(parameters, "childClassName"),
+                first(parameters, "relationLoaderClassName"),
+                first(parameters, "projectionSupportClassName"),
+                parseBoolean(parameters.get("includeRelationLoader"), true),
+                parseBoolean(parameters.get("includeProjectionSkeleton"), true)
+        );
+    }
+
+    private MigrationComparisonRunner.Request parseMigrationComparisonRequest(Map<String, List<String>> parameters) {
+        return new MigrationComparisonRunner.Request(
+                parseMigrationPlannerRequest(parameters),
+                parseBoolean(parameters.get("warmBeforeCompare"), false),
+                parseBoolean(parameters.get("warmRootRows"), true),
+                parseInt(parameters.get("childFetchSize"), 500),
+                parseInt(parameters.get("rootFetchSize"), 500),
+                parseInt(parameters.get("rootBatchSize"), 250),
+                first(parameters, "comparisonSampleRootId"),
+                parseInt(parameters.get("comparisonSampleRootCount"), 3),
+                parseInt(parameters.get("comparisonWarmupIterations"), 2),
+                parseInt(parameters.get("comparisonMeasuredIterations"), 8),
+                parseInt(parameters.get("comparisonPageSize"), parseInt(parameters.get("firstPageSize"), 100)),
+                first(parameters, "comparisonProjectionName"),
+                first(parameters, "comparisonBaselineSql")
+        );
     }
 
     private QueryFilter parseFilter(String rawFilter) {
@@ -761,6 +953,22 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             values.computeIfAbsent(key, ignored -> new ArrayList<>()).add(value);
         }
         return values;
+    }
+
+    private Map<String, List<String>> parseFormParameters(HttpExchange exchange) throws IOException {
+        String contentType = defaultString(exchange.getRequestHeaders().getFirst("Content-Type")).toLowerCase(Locale.ROOT);
+        if (!contentType.contains("application/x-www-form-urlencoded")) {
+            return parseQuery(readRequestBody(exchange));
+        }
+        return parseQuery(readRequestBody(exchange));
+    }
+
+    private String readRequestBody(HttpExchange exchange) throws IOException {
+        byte[] bytes = exchange.getRequestBody().readAllBytes();
+        if (bytes.length == 0) {
+            return "";
+        }
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 
     private String renderMetrics(ReconciliationMetrics metrics) {
@@ -1636,6 +1844,357 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         return builder.toString();
     }
 
+    private String renderMigrationPlannerTemplate(MigrationPlanner.Template template) {
+        return "{"
+                + "\"entityOptions\":" + renderMigrationPlannerEntityOptions(template.entityOptions()) + ","
+                + "\"defaults\":" + renderMigrationPlannerRequest(template.defaults())
+                + "}";
+    }
+
+    private String renderMigrationSchemaDiscovery(MigrationSchemaDiscovery.Result result) {
+        return "{"
+                + "\"discoveredAt\":\"" + result.discoveredAt() + "\","
+                + "\"tableCount\":" + result.tables().size() + ","
+                + "\"routeSuggestionCount\":" + result.routeSuggestions().size() + ","
+                + "\"warnings\":" + toJsonStringArray(result.warnings()) + ","
+                + "\"tables\":" + renderMigrationSchemaTables(result.tables()) + ","
+                + "\"routeSuggestions\":" + renderMigrationRouteSuggestions(result.routeSuggestions())
+                + "}";
+    }
+
+    private String renderMigrationSchemaTables(List<MigrationSchemaDiscovery.TableInfo> tables) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < tables.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationSchemaDiscovery.TableInfo table = tables.get(index);
+            builder.append("{\"schemaName\":\"").append(escapeJson(table.schemaName())).append("\",")
+                    .append("\"tableName\":\"").append(escapeJson(table.tableName())).append("\",")
+                    .append("\"qualifiedTableName\":\"").append(escapeJson(table.qualifiedTableName())).append("\",")
+                    .append("\"registeredEntityName\":\"").append(escapeJson(table.registeredEntityName())).append("\",")
+                    .append("\"primaryKeyColumn\":\"").append(escapeJson(table.primaryKeyColumn())).append("\",")
+                    .append("\"columnCount\":").append(table.columnCount()).append(',')
+                    .append("\"importedKeyCount\":").append(table.importedKeyCount()).append(',')
+                    .append("\"temporalColumns\":").append(toJsonStringArray(table.temporalColumns())).append(',')
+                    .append("\"foreignKeyColumns\":").append(toJsonStringArray(table.foreignKeyColumns())).append(',')
+                    .append("\"columns\":").append(renderMigrationSchemaColumns(table.columns()))
+                    .append("}");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    private String renderMigrationSchemaColumns(List<MigrationSchemaDiscovery.ColumnInfo> columns) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < columns.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationSchemaDiscovery.ColumnInfo column = columns.get(index);
+            builder.append("{\"name\":\"").append(escapeJson(column.name())).append("\",")
+                    .append("\"jdbcTypeName\":\"").append(escapeJson(column.jdbcTypeName())).append("\",")
+                    .append("\"nullable\":").append(column.nullable()).append(',')
+                    .append("\"primaryKey\":").append(column.primaryKey()).append(',')
+                    .append("\"foreignKey\":").append(column.foreignKey()).append(',')
+                    .append("\"temporal\":").append(column.temporal()).append(',')
+                    .append("\"numeric\":").append(column.numeric())
+                    .append("}");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    private String renderMigrationRouteSuggestions(List<MigrationSchemaDiscovery.RouteSuggestion> suggestions) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < suggestions.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationSchemaDiscovery.RouteSuggestion suggestion = suggestions.get(index);
+            builder.append("{\"label\":\"").append(escapeJson(suggestion.label())).append("\",")
+                    .append("\"summary\":\"").append(escapeJson(suggestion.summary())).append("\",")
+                    .append("\"rootSurface\":\"").append(escapeJson(suggestion.rootSurface())).append("\",")
+                    .append("\"rootEntityName\":\"").append(escapeJson(suggestion.rootEntityName())).append("\",")
+                    .append("\"rootPrimaryKeyColumn\":\"").append(escapeJson(suggestion.rootPrimaryKeyColumn())).append("\",")
+                    .append("\"childSurface\":\"").append(escapeJson(suggestion.childSurface())).append("\",")
+                    .append("\"childEntityName\":\"").append(escapeJson(suggestion.childEntityName())).append("\",")
+                    .append("\"childPrimaryKeyColumn\":\"").append(escapeJson(suggestion.childPrimaryKeyColumn())).append("\",")
+                    .append("\"relationColumn\":\"").append(escapeJson(suggestion.relationColumn())).append("\",")
+                    .append("\"sortColumn\":\"").append(escapeJson(suggestion.sortColumn())).append("\",")
+                    .append("\"sortCandidates\":").append(toJsonStringArray(suggestion.sortCandidates())).append(',')
+                    .append("\"rankedSortCandidate\":").append(suggestion.rankedSortCandidate()).append(',')
+                    .append("\"temporalSortCandidate\":").append(suggestion.temporalSortCandidate()).append(',')
+                    .append("\"plannerRequest\":").append(renderMigrationPlannerRequest(suggestion.plannerRequest()))
+                    .append("}");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    private String renderMigrationPlannerEntityOptions(List<MigrationPlanner.EntityOption> options) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < options.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationPlanner.EntityOption option = options.get(index);
+            builder.append("{\"entityName\":\"").append(escapeJson(option.entityName())).append("\",")
+                    .append("\"tableName\":\"").append(escapeJson(option.tableName())).append("\",")
+                    .append("\"idColumn\":\"").append(escapeJson(option.idColumn())).append("\",")
+                    .append("\"columns\":").append(toJsonStringArray(option.columns()))
+                    .append("}");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    private String renderMigrationPlannerRequest(MigrationPlanner.Request request) {
+        return "{"
+                + "\"workloadName\":\"" + escapeJson(request.workloadName()) + "\","
+                + "\"rootTableOrEntity\":\"" + escapeJson(request.rootTableOrEntity()) + "\","
+                + "\"rootPrimaryKeyColumn\":\"" + escapeJson(request.rootPrimaryKeyColumn()) + "\","
+                + "\"childTableOrEntity\":\"" + escapeJson(request.childTableOrEntity()) + "\","
+                + "\"childPrimaryKeyColumn\":\"" + escapeJson(request.childPrimaryKeyColumn()) + "\","
+                + "\"relationColumn\":\"" + escapeJson(request.relationColumn()) + "\","
+                + "\"sortColumn\":\"" + escapeJson(request.sortColumn()) + "\","
+                + "\"sortDirection\":\"" + escapeJson(request.sortDirection()) + "\","
+                + "\"rootRowCount\":" + request.rootRowCount() + ","
+                + "\"childRowCount\":" + request.childRowCount() + ","
+                + "\"typicalChildrenPerRoot\":" + request.typicalChildrenPerRoot() + ","
+                + "\"maxChildrenPerRoot\":" + request.maxChildrenPerRoot() + ","
+                + "\"firstPageSize\":" + request.firstPageSize() + ","
+                + "\"hotWindowPerRoot\":" + request.hotWindowPerRoot() + ","
+                + "\"listScreen\":" + request.listScreen() + ","
+                + "\"firstPaintNeedsFullAggregate\":" + request.firstPaintNeedsFullAggregate() + ","
+                + "\"globalSortedScreen\":" + request.globalSortedScreen() + ","
+                + "\"thresholdOrRangeScreen\":" + request.thresholdOrRangeScreen() + ","
+                + "\"archiveHistoryRequired\":" + request.archiveHistoryRequired() + ","
+                + "\"fullHistoryMustStayHot\":" + request.fullHistoryMustStayHot() + ","
+                + "\"currentOrmUsesEagerLoading\":" + request.currentOrmUsesEagerLoading() + ","
+                + "\"detailLookupIsHot\":" + request.detailLookupIsHot() + ","
+                + "\"sideBySideComparisonRequired\":" + request.sideBySideComparisonRequired()
+                + "}";
+    }
+
+    private String renderMigrationPlannerResult(MigrationPlanner.Result result) {
+        return "{"
+                + "\"request\":" + renderMigrationPlannerRequest(result.request()) + ","
+                + "\"recommendedSurface\":\"" + escapeJson(result.recommendedSurface()) + "\","
+                + "\"projectionRequired\":" + result.projectionRequired() + ","
+                + "\"rankedProjectionRequired\":" + result.rankedProjectionRequired() + ","
+                + "\"summaryFirstRequired\":" + result.summaryFirstRequired() + ","
+                + "\"boundedRedisWindowRequired\":" + result.boundedRedisWindowRequired() + ","
+                + "\"fullEntityHotWindowRecommended\":" + result.fullEntityHotWindowRecommended() + ","
+                + "\"recommendedHotWindowPerRoot\":" + result.recommendedHotWindowPerRoot() + ","
+                + "\"summaryProjectionName\":\"" + escapeJson(result.summaryProjectionName()) + "\","
+                + "\"previewProjectionName\":\"" + escapeJson(result.previewProjectionName()) + "\","
+                + "\"rankedProjectionName\":\"" + escapeJson(result.rankedProjectionName()) + "\","
+                + "\"rankFieldName\":\"" + escapeJson(result.rankFieldName()) + "\","
+                + "\"redisPlacement\":\"" + escapeJson(result.redisPlacement()) + "\","
+                + "\"postgresPlacement\":\"" + escapeJson(result.postgresPlacement()) + "\","
+                + "\"reasoning\":" + toJsonStringArray(result.reasoning()) + ","
+                + "\"recommendedRedisArtifacts\":" + toJsonStringArray(result.recommendedRedisArtifacts()) + ","
+                + "\"recommendedPostgresArtifacts\":" + toJsonStringArray(result.recommendedPostgresArtifacts()) + ","
+                + "\"recommendedApiShapes\":" + toJsonStringArray(result.recommendedApiShapes()) + ","
+                + "\"warmSteps\":" + renderMigrationWarmSteps(result.warmSteps()) + ","
+                + "\"comparisonChecks\":" + renderMigrationComparisonChecks(result.comparisonChecks()) + ","
+                + "\"warnings\":" + toJsonStringArray(result.warnings()) + ","
+                + "\"sampleWarmSql\":\"" + escapeJson(result.sampleWarmSql()) + "\","
+                + "\"sampleRootWarmSql\":\"" + escapeJson(result.sampleRootWarmSql()) + "\","
+                + "\"comparisonSummary\":\"" + escapeJson(result.comparisonSummary()) + "\""
+                + "}";
+    }
+
+    private String renderMigrationWarmResult(MigrationWarmRunner.Result result) {
+        return "{"
+                + "\"dryRun\":" + result.dryRun() + ","
+                + "\"rootEntityName\":\"" + escapeJson(result.rootEntityName()) + "\","
+                + "\"childEntityName\":\"" + escapeJson(result.childEntityName()) + "\","
+                + "\"childRowsRead\":" + result.childRowsRead() + ","
+                + "\"childRowsHydrated\":" + result.childRowsHydrated() + ","
+                + "\"rootRowsRead\":" + result.rootRowsRead() + ","
+                + "\"rootRowsHydrated\":" + result.rootRowsHydrated() + ","
+                + "\"skippedDeletedRows\":" + result.skippedDeletedRows() + ","
+                + "\"distinctReferencedRootIds\":" + result.distinctReferencedRootIds() + ","
+                + "\"missingReferencedRootIds\":" + result.missingReferencedRootIds() + ","
+                + "\"childWarmSql\":\"" + escapeJson(result.childWarmSql()) + "\","
+                + "\"rootWarmSql\":\"" + escapeJson(result.rootWarmSql()) + "\","
+                + "\"notes\":" + toJsonStringArray(result.notes()) + ","
+                + "\"startedAt\":\"" + result.startedAt() + "\","
+                + "\"completedAt\":\"" + result.completedAt() + "\","
+                + "\"durationMillis\":" + result.durationMillis() + ","
+                + "\"plan\":" + renderMigrationPlannerResult(result.plan())
+                + "}";
+    }
+
+    private String renderMigrationScaffoldResult(MigrationScaffoldGenerator.Result result) {
+        return "{"
+                + "\"request\":" + renderMigrationScaffoldRequest(result.request()) + ","
+                + "\"plan\":" + renderMigrationPlannerResult(result.plan()) + ","
+                + "\"basePackage\":\"" + escapeJson(result.basePackage()) + "\","
+                + "\"fileCount\":" + result.files().size() + ","
+                + "\"files\":" + renderMigrationScaffoldFiles(result.files()) + ","
+                + "\"notes\":" + toJsonStringArray(result.notes()) + ","
+                + "\"warnings\":" + toJsonStringArray(result.warnings())
+                + "}";
+    }
+
+    private String renderMigrationScaffoldRequest(MigrationScaffoldGenerator.Request request) {
+        return "{"
+                + "\"plannerRequest\":" + renderMigrationPlannerRequest(request.plannerRequest()) + ","
+                + "\"basePackage\":\"" + escapeJson(request.basePackage()) + "\","
+                + "\"rootClassName\":\"" + escapeJson(request.rootClassName()) + "\","
+                + "\"childClassName\":\"" + escapeJson(request.childClassName()) + "\","
+                + "\"relationLoaderClassName\":\"" + escapeJson(request.relationLoaderClassName()) + "\","
+                + "\"projectionSupportClassName\":\"" + escapeJson(request.projectionSupportClassName()) + "\","
+                + "\"includeRelationLoader\":" + request.includeRelationLoader() + ","
+                + "\"includeProjectionSkeleton\":" + request.includeProjectionSkeleton()
+                + "}";
+    }
+
+    private String renderMigrationScaffoldFiles(List<MigrationScaffoldGenerator.GeneratedFile> files) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < files.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationScaffoldGenerator.GeneratedFile file = files.get(index);
+            builder.append("{\"fileName\":\"").append(escapeJson(file.fileName())).append("\",")
+                    .append("\"relativePath\":\"").append(escapeJson(file.relativePath())).append("\",")
+                    .append("\"description\":\"").append(escapeJson(file.description())).append("\",")
+                    .append("\"language\":\"").append(escapeJson(file.language())).append("\",")
+                    .append("\"content\":\"").append(escapeJson(file.content())).append("\"}");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    private String renderMigrationComparisonResult(MigrationComparisonRunner.Result result) {
+        MigrationComparisonReportRenderer.Report report = MigrationComparisonReportRenderer.render(result);
+        return "{"
+                + "\"request\":" + renderMigrationComparisonRequest(result.request()) + ","
+                + "\"plan\":" + renderMigrationPlannerResult(result.plan()) + ","
+                + "\"cacheRouteLabel\":\"" + escapeJson(result.cacheRouteLabel()) + "\","
+                + "\"baselineSqlTemplate\":\"" + escapeJson(result.baselineSqlTemplate()) + "\","
+                + "\"warmResult\":" + (result.warmResult() == null ? "null" : renderMigrationWarmResult(result.warmResult())) + ","
+                + "\"baselineMetrics\":" + renderMigrationComparisonMetrics(result.baselineMetrics()) + ","
+                + "\"cacheMetrics\":" + renderMigrationComparisonMetrics(result.cacheMetrics()) + ","
+                + "\"sampleComparisons\":" + renderMigrationComparisonSamples(result.sampleComparisons()) + ","
+                + "\"assessment\":" + renderMigrationComparisonAssessment(result.assessment()) + ","
+                + "\"report\":" + renderMigrationComparisonReport(report) + ","
+                + "\"notes\":" + toJsonStringArray(result.notes()) + ","
+                + "\"warnings\":" + toJsonStringArray(result.warnings()) + ","
+                + "\"startedAt\":\"" + result.startedAt() + "\","
+                + "\"completedAt\":\"" + result.completedAt() + "\","
+                + "\"durationMillis\":" + result.durationMillis()
+                + "}";
+    }
+
+    private String renderMigrationComparisonRequest(MigrationComparisonRunner.Request request) {
+        return "{"
+                + "\"plannerRequest\":" + renderMigrationPlannerRequest(request.plannerRequest()) + ","
+                + "\"warmBeforeCompare\":" + request.warmBeforeCompare() + ","
+                + "\"warmRootRows\":" + request.warmRootRows() + ","
+                + "\"childFetchSize\":" + request.childFetchSize() + ","
+                + "\"rootFetchSize\":" + request.rootFetchSize() + ","
+                + "\"rootBatchSize\":" + request.rootBatchSize() + ","
+                + "\"sampleRootId\":\"" + escapeJson(request.sampleRootId()) + "\","
+                + "\"sampleRootCount\":" + request.sampleRootCount() + ","
+                + "\"warmupIterations\":" + request.warmupIterations() + ","
+                + "\"measuredIterations\":" + request.measuredIterations() + ","
+                + "\"pageSize\":" + request.pageSize() + ","
+                + "\"projectionNameOverride\":\"" + escapeJson(request.projectionNameOverride()) + "\","
+                + "\"baselineSqlOverride\":\"" + escapeJson(request.baselineSqlOverride()) + "\""
+                + "}";
+    }
+
+    private String renderMigrationComparisonMetrics(MigrationComparisonRunner.Metrics metrics) {
+        return "{"
+                + "\"operations\":" + metrics.operations() + ","
+                + "\"averageLatencyNanos\":" + metrics.averageLatencyNanos() + ","
+                + "\"p95LatencyNanos\":" + metrics.p95LatencyNanos() + ","
+                + "\"p99LatencyNanos\":" + metrics.p99LatencyNanos() + ","
+                + "\"averageRowsPerOperation\":" + metrics.averageRowsPerOperation()
+                + "}";
+    }
+
+    private String renderMigrationComparisonSamples(List<MigrationComparisonRunner.SampleComparison> samples) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < samples.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationComparisonRunner.SampleComparison sample = samples.get(index);
+            builder.append("{\"sampleLabel\":\"").append(escapeJson(sample.sampleLabel())).append("\",")
+                    .append("\"baselineRowCount\":").append(sample.baselineRowCount()).append(',')
+                    .append("\"cacheRowCount\":").append(sample.cacheRowCount()).append(',')
+                    .append("\"baselineIds\":").append(toJsonStringArray(sample.baselineIds())).append(',')
+                    .append("\"cacheIds\":").append(toJsonStringArray(sample.cacheIds())).append(',')
+                    .append("\"exactMatch\":").append(sample.exactMatch())
+                    .append("}");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    private String renderMigrationComparisonAssessment(MigrationComparisonAssessment.Result assessment) {
+        return "{"
+                + "\"readiness\":\"" + assessment.readiness().name() + "\","
+                + "\"parityStatus\":\"" + assessment.parityStatus().name() + "\","
+                + "\"performanceStatus\":\"" + assessment.performanceStatus().name() + "\","
+                + "\"routeStatus\":\"" + assessment.routeStatus().name() + "\","
+                + "\"summary\":\"" + escapeJson(assessment.summary()) + "\","
+                + "\"decision\":\"" + escapeJson(assessment.decision()) + "\","
+                + "\"exactMatchCount\":" + assessment.exactMatchCount() + ","
+                + "\"sampleCount\":" + assessment.sampleCount() + ","
+                + "\"exactMatchRatio\":" + assessment.exactMatchRatio() + ","
+                + "\"averageLatencyRatio\":" + assessment.averageLatencyRatio() + ","
+                + "\"p95LatencyRatio\":" + assessment.p95LatencyRatio() + ","
+                + "\"strengths\":" + toJsonStringArray(assessment.strengths()) + ","
+                + "\"blockers\":" + toJsonStringArray(assessment.blockers()) + ","
+                + "\"nextSteps\":" + toJsonStringArray(assessment.nextSteps())
+                + "}";
+    }
+
+    private String renderMigrationComparisonReport(MigrationComparisonReportRenderer.Report report) {
+        return "{"
+                + "\"fileName\":\"" + escapeJson(report.fileName()) + "\","
+                + "\"markdown\":\"" + escapeJson(report.markdown()) + "\""
+                + "}";
+    }
+
+    private String renderMigrationWarmSteps(List<MigrationPlanner.WarmStep> steps) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < steps.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationPlanner.WarmStep step = steps.get(index);
+            builder.append("{\"title\":\"").append(escapeJson(step.title())).append("\",")
+                    .append("\"summary\":\"").append(escapeJson(step.summary())).append("\",")
+                    .append("\"tasks\":").append(toJsonStringArray(step.tasks()))
+                    .append("}");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    private String renderMigrationComparisonChecks(List<MigrationPlanner.ComparisonCheck> checks) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < checks.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationPlanner.ComparisonCheck check = checks.get(index);
+            builder.append("{\"title\":\"").append(escapeJson(check.title())).append("\",")
+                    .append("\"baseline\":\"").append(escapeJson(check.baseline())).append("\",")
+                    .append("\"target\":\"").append(escapeJson(check.target())).append("\"}");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
     private String renderProductionReports(List<ProductionReportSnapshot> reports) {
         StringBuilder builder = new StringBuilder("{\"items\":[");
         for (int index = 0; index < reports.size(); index++) {
@@ -1789,10 +2348,335 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         return normalized;
     }
 
+    private String renderMigrationPlanner(String language, String plannerPath) {
+        String normalizedLanguage = normalizeDashboardLanguage(language);
+        String title = escapeHtml(uiString("migrationPlanner.pageTitle", localized(normalizedLanguage, "CacheDB Geçiş Planlayıcı", "CacheDB Migration Planner")));
+        String basePath = resolveDashboardBasePath(plannerPath);
+        String dashboardUrl = escapeHtml(appendQuery(basePath.isBlank() ? "/" : basePath, "lang=" + normalizedLanguage));
+        String apiBasePath = escapeJs(basePath);
+        String bootstrapCssUrl = escapeHtml(uiString("bootstrapCssUrl", "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"));
+        String googleFontsUrl = escapeHtml(uiString("fontsUrl", "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"));
+        String subtitle = escapeHtml(localized(
+                normalizedLanguage,
+                "Mevcut PostgreSQL/ORM route’unu CacheDB sıcak pencere, projection, warm-up ve karşılaştırma planına dönüştür.",
+                "Turn an existing PostgreSQL/ORM route into a CacheDB hot-window, projection, warm-up, and comparison plan."
+        ));
+        String intro = escapeHtml(localized(
+                normalizedLanguage,
+                "Bu sihirbaz, mevcut ekran şekline göre doğru CacheDB mimarisini seçmene yardım eder. Planı ürettikten sonra staging'de gerçek warm execution çalıştırabilir; doğru sıcak veri sınırını, projection kararını ve karşılaştırma planını birlikte görürsün.",
+                "This wizard helps choose the right CacheDB architecture for an existing screen shape. After generating the plan, it can run a real staging warm execution so you can see the hot-data boundary, projection decision, and comparison plan together."
+        ));
+        String plannerThemeCss = "body{margin:0;background:linear-gradient(180deg,#f7f4ed 0%,#eef2f7 100%);color:#102a43;font-family:'Inter','Segoe UI',system-ui,sans-serif}"
+                + ".planner-shell{max-width:1400px;margin:0 auto;padding:2rem 1.25rem 3rem}"
+                + ".planner-topbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:1.25rem}"
+                + ".planner-back{display:inline-flex;align-items:center;gap:.5rem;padding:.72rem 1rem;border-radius:999px;border:1px solid #cbd7e6;background:#fff;color:#17324d;text-decoration:none;font-weight:700;box-shadow:0 .4rem 1rem rgba(15,23,42,.06)}"
+                + ".planner-hero{padding:1.5rem 1.6rem;border-radius:1.4rem;background:linear-gradient(135deg,#0f2742,#194b84 60%,#2f6fed);color:#fff;box-shadow:0 1.1rem 2.7rem rgba(15,23,42,.18);margin-bottom:1.25rem}"
+                + ".planner-hero h1{font-size:2rem;font-weight:800;margin:0 0 .55rem 0}"
+                + ".planner-hero p{margin:0;color:rgba(255,255,255,.9);max-width:70rem;line-height:1.6}"
+                + ".planner-grid{display:grid;grid-template-columns:minmax(360px,480px) minmax(0,1fr);gap:1rem;align-items:start}"
+                + ".planner-panel{border:1px solid rgba(124,145,168,.24);border-radius:1.25rem;background:rgba(255,255,255,.96);box-shadow:0 .9rem 2rem rgba(15,23,42,.08);overflow:hidden}"
+                + ".planner-panel-header{padding:1rem 1.15rem .25rem 1.15rem;font-size:1rem;font-weight:800;color:#102a43}"
+                + ".planner-panel-sub{padding:0 1.15rem 1rem 1.15rem;color:#52606d;font-size:.9rem;line-height:1.5}"
+                + ".planner-panel-body{padding:0 1.15rem 1.15rem 1.15rem}"
+                + ".planner-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.85rem}"
+                + ".planner-form-grid .full{grid-column:1 / -1}"
+                + ".planner-actions{display:flex;gap:.7rem;flex-wrap:wrap;margin-top:1rem}"
+                + ".planner-chip-row{display:flex;gap:.55rem;flex-wrap:wrap;margin-top:1rem}"
+                + ".planner-chip{display:inline-flex;align-items:center;padding:.38rem .72rem;border-radius:999px;background:#eef4ff;border:1px solid #dbe7ff;color:#1d4ed8;font-size:.8rem;font-weight:700}"
+                + ".planner-status{margin-top:1rem;padding:.8rem .95rem;border-radius:1rem;background:#f8fbff;border:1px solid #dbe7f3;color:#486581;font-size:.88rem;line-height:1.45}"
+                + ".planner-results{display:flex;flex-direction:column;gap:1rem}"
+                + ".result-card{border:1px solid rgba(124,145,168,.24);border-radius:1.2rem;background:#fff;box-shadow:0 .8rem 1.8rem rgba(15,23,42,.07);overflow:hidden}"
+                + ".result-card-header{padding:1rem 1.1rem;border-bottom:1px solid #e4edf5;font-size:.98rem;font-weight:800;color:#102a43;background:linear-gradient(180deg,#fff,#f8fbff)}"
+                + ".result-card-body{padding:1rem 1.1rem}"
+                + ".result-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}"
+                + ".result-metric{padding:.9rem .95rem;border-radius:1rem;background:#f8fafc;border:1px solid #e4edf5}"
+                + ".result-metric-label{font-size:.74rem;letter-spacing:.04em;color:#7b8794;font-weight:800;text-transform:uppercase;margin-bottom:.25rem}"
+                + ".result-metric-value{font-size:1.02rem;font-weight:800;color:#17324d;line-height:1.35}"
+                + ".result-list{margin:0;padding-left:1.15rem;display:flex;flex-direction:column;gap:.45rem;color:#334e68}"
+                + ".result-step{padding:.9rem;border-radius:1rem;background:#f8fbff;border:1px solid #dbe7f3;margin-bottom:.75rem}"
+                + ".result-step:last-child{margin-bottom:0}"
+                + ".result-step-title{font-weight:800;color:#102a43;margin-bottom:.3rem}"
+                + ".result-step-summary{color:#52606d;font-size:.9rem;line-height:1.5;margin-bottom:.55rem}"
+                + ".result-check{padding:.85rem;border-radius:1rem;background:#fff7ed;border:1px solid #fed7aa;margin-bottom:.75rem}"
+                + ".result-check:last-child{margin-bottom:0}"
+                + ".result-pre{margin:0;background:#0f172a;color:#ecf3ff;border-radius:1rem;padding:1rem;overflow:auto;border:1px solid rgba(148,163,184,.18);font-family:'IBM Plex Mono','JetBrains Mono',Consolas,monospace;font-size:.85rem;line-height:1.5}"
+                + ".planner-empty{padding:1.2rem;border-radius:1rem;border:1px dashed #cbd5e1;background:#fff;color:#52606d;line-height:1.6}"
+                + ".planner-warning{padding:.85rem .95rem;border-radius:1rem;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:.88rem;line-height:1.5}"
+                + "@media (max-width: 1100px){.planner-grid{grid-template-columns:1fr}.planner-form-grid{grid-template-columns:1fr}.result-grid{grid-template-columns:1fr}}";
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                + "<title>" + title + "</title>"
+                + "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">"
+                + "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>"
+                + "<link rel=\"stylesheet\" href=\"" + bootstrapCssUrl + "\">"
+                + "<link rel=\"stylesheet\" href=\"" + googleFontsUrl + "\">"
+                + "<style>" + plannerThemeCss + "</style>"
+                + "</head><body>"
+                + "<main class=\"planner-shell\">"
+                + "<div class=\"planner-topbar\"><a class=\"planner-back\" href=\"" + dashboardUrl + "\">"
+                + escapeHtml(localized(normalizedLanguage, "Yönetim paneline dön", "Back to admin dashboard"))
+                + "</a></div>"
+                + "<section class=\"planner-hero\"><h1>" + title + "</h1><p><strong>" + subtitle + "</strong><br>" + intro + "</p></section>"
+                + "<section class=\"planner-grid\">"
+                + "<div class=\"planner-panel\">"
+                + "<div class=\"planner-panel-header\">" + escapeHtml(localized(normalizedLanguage, "1. Mevcut route'u anlat", "1. Describe the current route")) + "</div>"
+                + "<div class=\"planner-panel-sub\">" + escapeHtml(localized(normalizedLanguage, "Bir sıcak ekranı ya da endpoint'i modelle. Sihirbaz, veriyi tamamen Redis'te taşımak yerine hangi kısmın sıcak çalışma seti olması gerektiğini çıkarır.", "Model one hot screen or endpoint. The wizard decides which part should be the hot working set instead of pushing all history into Redis.")) + "</div>"
+                + "<div class=\"planner-panel-body\">"
+                + "<div class=\"result-card mb-4\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "0. PostgreSQL Şema Keşfi", "0. PostgreSQL Schema Discovery")) + "</div><div class=\"result-card-body\">"
+                + "<div class=\"planner-actions\"><button id=\"plannerDiscoverAction\" type=\"button\" class=\"btn btn-outline-primary\">" + escapeHtml(localized(normalizedLanguage, "PostgreSQL'den Keşfet", "Discover From PostgreSQL")) + "</button></div>"
+                + "<div id=\"plannerDiscoveryStatus\" class=\"planner-status mt-3\">" + escapeHtml(localized(normalizedLanguage, "İstersen önce PostgreSQL şemasını keşfet. Uygun root/child route adaylarını ve tablo kolonlarını burada görebilirsin.", "Start by discovering the PostgreSQL schema. You can review root/child route candidates and table columns here before filling the planner.")) + "</div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Önerilen route adayları", "Suggested route candidates")) + "</div><div id=\"plannerDiscoverySuggestions\"></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Keşfedilen tablolar", "Discovered tables")) + "</div><div id=\"plannerDiscoveryTables\"></div>"
+                + "</div></div>"
+                + "<form id=\"plannerForm\">"
+                + "<div class=\"planner-form-grid\">"
+                + fieldInput("workloadName", localized(normalizedLanguage, "İş yükü adı", "Workload name"), "customer-orders", "full")
+                + fieldInput("rootTableOrEntity", localized(normalizedLanguage, "Kök tablo/entity", "Root table/entity"), "customer", "")
+                + fieldInput("rootPrimaryKeyColumn", localized(normalizedLanguage, "Kök PK kolonu", "Root PK column"), "customer_id", "")
+                + fieldInput("childTableOrEntity", localized(normalizedLanguage, "Çocuk tablo/entity", "Child table/entity"), "orders", "")
+                + fieldInput("childPrimaryKeyColumn", localized(normalizedLanguage, "Çocuk PK kolonu", "Child PK column"), "order_id", "")
+                + fieldInput("relationColumn", localized(normalizedLanguage, "İlişki kolonu", "Relation column"), "customer_id", "")
+                + fieldInput("sortColumn", localized(normalizedLanguage, "Liste sıralama kolonu", "List sort column"), "order_date", "")
+                + "<div><label class=\"form-label fw-semibold\">" + escapeHtml(localized(normalizedLanguage, "Sıralama yönü", "Sort direction")) + "</label><select class=\"form-select\" name=\"sortDirection\"><option value=\"DESC\">DESC</option><option value=\"ASC\">ASC</option></select></div>"
+                + fieldInput("rootRowCount", localized(normalizedLanguage, "Kök satır sayısı", "Root row count"), "100000", "")
+                + fieldInput("childRowCount", localized(normalizedLanguage, "Çocuk satır sayısı", "Child row count"), "5000000", "")
+                + fieldInput("typicalChildrenPerRoot", localized(normalizedLanguage, "Tipik çocuk sayısı / kök", "Typical children per root"), "40", "")
+                + fieldInput("maxChildrenPerRoot", localized(normalizedLanguage, "Maks çocuk sayısı / kök", "Max children per root"), "2000", "")
+                + fieldInput("firstPageSize", localized(normalizedLanguage, "İlk sayfa boyutu", "First page size"), "100", "")
+                + fieldInput("hotWindowPerRoot", localized(normalizedLanguage, "İstenen sıcak pencere / kök", "Requested hot window / root"), "1000", "")
+                + checkboxInput("listScreen", localized(normalizedLanguage, "Bu ekran bir liste / timeline ekranı", "This route is a list / timeline screen"), true)
+                + checkboxInput("firstPaintNeedsFullAggregate", localized(normalizedLanguage, "İlk boyamada tam aggregate gerekli", "First paint needs the full aggregate"), false)
+                + checkboxInput("globalSortedScreen", localized(normalizedLanguage, "Global sıralı ekran var", "There is a global sorted screen"), false)
+                + checkboxInput("thresholdOrRangeScreen", localized(normalizedLanguage, "Threshold / range driven ekran var", "There is a threshold / range-driven screen"), false)
+                + checkboxInput("archiveHistoryRequired", localized(normalizedLanguage, "Eski tarihçe archive olarak saklanmalı", "Older history should stay as archive"), true)
+                + checkboxInput("fullHistoryMustStayHot", localized(normalizedLanguage, "Tüm tarihçe Redis'te sıcak kalmalı", "Full history must stay hot in Redis"), false)
+                + checkboxInput("currentOrmUsesEagerLoading", localized(normalizedLanguage, "Mevcut ORM yolu eager-loading ağırlıklı", "Current ORM route is eager-loading heavy"), true)
+                + checkboxInput("detailLookupIsHot", localized(normalizedLanguage, "Tekil detail lookup da sıcak", "Single-item detail lookup is also hot"), true)
+                + checkboxInput("sideBySideComparisonRequired", localized(normalizedLanguage, "Staging'de side-by-side karşılaştırma istiyorum", "I want side-by-side comparison in staging"), true)
+                + checkboxInput("warmRootRows", localized(normalizedLanguage, "Warm sırasında ilgili kök satırları da doldur", "Warm the referenced root rows too"), true)
+                + checkboxInput("dryRun", localized(normalizedLanguage, "Önce dry run yap, Redis'i değiştirme", "Start with a dry run and do not mutate Redis"), false)
+                + "<div class=\"full\"><div class=\"result-card\"><div class=\"result-card-header\">"
+                + escapeHtml(localized(normalizedLanguage, "İsteğe bağlı scaffold ve comparison ayarları", "Optional scaffold and comparison settings"))
+                + "</div><div class=\"result-card-body\"><div class=\"form-grid\">"
+                + fieldInput("basePackage", localized(normalizedLanguage, "Üretilecek package", "Generated package"), "com.example.cachedb.migration", "")
+                + fieldInput("rootClassName", localized(normalizedLanguage, "Kök entity sınıf adı", "Root entity class name"), "CustomerEntity", "")
+                + fieldInput("childClassName", localized(normalizedLanguage, "Çocuk entity sınıf adı", "Child entity class name"), "OrderEntity", "")
+                + fieldInput("relationLoaderClassName", localized(normalizedLanguage, "Relation loader sınıf adı", "Relation loader class name"), "CustomerOrderRelationBatchLoader", "")
+                + fieldInput("projectionSupportClassName", localized(normalizedLanguage, "Projection destek sınıf adı", "Projection support class name"), "CustomerOrderReadModels", "")
+                + fieldInput("comparisonSampleRootId", localized(normalizedLanguage, "Karşılaştırma örnek kök id", "Comparison sample root id"), localized(normalizedLanguage, "Boş bırakırsan sistem seçer", "Leave blank to auto-pick"), "")
+                + fieldInput("comparisonSampleRootCount", localized(normalizedLanguage, "Karşılaştırılacak örnek kök sayısı", "Comparison sample root count"), "3", "")
+                + fieldInput("comparisonPageSize", localized(normalizedLanguage, "Karşılaştırma sayfa boyutu", "Comparison page size"), "100", "")
+                + fieldInput("comparisonWarmupIterations", localized(normalizedLanguage, "Warm-up iterasyonu", "Warm-up iterations"), "2", "")
+                + fieldInput("comparisonMeasuredIterations", localized(normalizedLanguage, "Ölçüm iterasyonu", "Measured iterations"), "8", "")
+                + fieldInput("comparisonProjectionName", localized(normalizedLanguage, "Projection override adı", "Projection override name"), localized(normalizedLanguage, "Opsiyonel", "Optional"), "")
+                + checkboxInput("includeRelationLoader", localized(normalizedLanguage, "Relation loader iskeletini üret", "Generate relation loader skeleton"), true)
+                + checkboxInput("includeProjectionSkeleton", localized(normalizedLanguage, "Projection iskeletini üret", "Generate projection skeleton"), true)
+                + checkboxInput("warmBeforeCompare", localized(normalizedLanguage, "Karşılaştırmadan önce warm çalıştır", "Run warm before comparison"), false)
+                + textareaInput("comparisonBaselineSql", localized(normalizedLanguage, "Baseline SQL override", "Baseline SQL override"), localized(normalizedLanguage, "Varsayılan türetilmiş SQL yerine kullanılır", "Used instead of the derived baseline SQL"), "full")
+                + "</div></div></div></div>"
+                + "</div>"
+                + "<div class=\"planner-chip-row\">"
+                + "<span class=\"planner-chip\">" + escapeHtml(localized(normalizedLanguage, "Amaç: bounded Redis hot set", "Goal: bounded Redis hot set")) + "</span>"
+                + "<span class=\"planner-chip\">" + escapeHtml(localized(normalizedLanguage, "Amaç: projection-first first paint", "Goal: projection-first first paint")) + "</span>"
+                + "<span class=\"planner-chip\">" + escapeHtml(localized(normalizedLanguage, "Amaç: staging comparison", "Goal: staging comparison")) + "</span>"
+                + "</div>"
+                + "<div class=\"planner-actions\"><button type=\"submit\" class=\"btn btn-primary\">" + escapeHtml(localized(normalizedLanguage, "Planı Oluştur", "Generate Plan")) + "</button>"
+                + "<button id=\"plannerDefaults\" type=\"button\" class=\"btn btn-outline-secondary\">" + escapeHtml(localized(normalizedLanguage, "Örnek Değerleri Yükle", "Load Example Defaults")) + "</button></div>"
+                + "<div id=\"plannerStatus\" class=\"planner-status\">" + escapeHtml(localized(normalizedLanguage, "Hazır. Mevcut ekranını anlat ve planı üret.", "Ready. Describe your current route and generate the plan.")) + "</div>"
+                + "</form></div></div>"
+                + "<div class=\"planner-results\">"
+                + "<div id=\"plannerEmpty\" class=\"planner-empty\">" + escapeHtml(localized(normalizedLanguage, "Henüz plan üretilmedi. Bu yüzey sana sıcak pencere sınırını, projection gerekliliğini, warm-up sırasını ve staging karşılaştırma kontrol listesini çıkaracak.", "No plan yet. This surface will produce the hot-window boundary, projection requirement, warm-up sequence, and staging comparison checklist.")) + "</div>"
+                + "<div id=\"plannerResults\" class=\"d-none\">"
+                + "<div class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "2. Hedef mimari kararı", "2. Target architecture decision")) + "</div><div class=\"result-card-body\">"
+                + "<div class=\"result-grid\">"
+                + metricShell("plannerSurface", localized(normalizedLanguage, "Önerilen yüzey", "Recommended surface"))
+                + metricShell("plannerWindow", localized(normalizedLanguage, "Önerilen sıcak pencere", "Recommended hot window"))
+                + metricShell("plannerProjection", localized(normalizedLanguage, "Projection kararı", "Projection decision"))
+                + metricShell("plannerRanking", localized(normalizedLanguage, "Ranked projection", "Ranked projection"))
+                + "</div>"
+                + "<div class=\"row g-3 mt-1\"><div class=\"col-12 col-xl-6\"><div class=\"result-metric\"><div class=\"result-metric-label\">" + escapeHtml(localized(normalizedLanguage, "Redis yerleşimi", "Redis placement")) + "</div><div id=\"plannerRedisPlacement\" class=\"result-metric-value\"></div></div></div>"
+                + "<div class=\"col-12 col-xl-6\"><div class=\"result-metric\"><div class=\"result-metric-label\">" + escapeHtml(localized(normalizedLanguage, "PostgreSQL yerleşimi", "PostgreSQL placement")) + "</div><div id=\"plannerPostgresPlacement\" class=\"result-metric-value\"></div></div></div></div>"
+                + "</div></div>"
+                + resultListCard("plannerReasoningCard", localized(normalizedLanguage, "Neden bu karar çıktı?", "Why this decision?"), "plannerReasoning")
+                + resultListCard("plannerArtifactsCard", localized(normalizedLanguage, "Hangi yüzeyler oluşmalı?", "Which surfaces should exist?"), "plannerRedisArtifacts")
+                + resultListCard("plannerPostgresCard", localized(normalizedLanguage, "PostgreSQL'de ne kalmalı?", "What stays in PostgreSQL?"), "plannerPostgresArtifacts")
+                + resultListCard("plannerApiCard", localized(normalizedLanguage, "Route şekli nasıl olmalı?", "What should the route shape look like?"), "plannerApiShapes")
+                + "<div class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "3. Warm-up planı", "3. Warm-up plan")) + "</div><div class=\"result-card-body\"><div id=\"plannerWarmSteps\"></div></div></div>"
+                + "<div class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "4. Staging karşılaştırma planı", "4. Staging comparison plan")) + "</div><div class=\"result-card-body\"><div id=\"plannerComparisonSummary\" class=\"planner-status mb-3\"></div><div id=\"plannerComparisonChecks\"></div></div></div>"
+                + "<div class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "5. Örnek warm SQL", "5. Sample warm SQL")) + "</div><div class=\"result-card-body\">"
+                + "<div class=\"small text-muted fw-semibold mb-2\">" + escapeHtml(localized(normalizedLanguage, "Çocuk sıcak pencere SQL'i", "Child hot-window SQL")) + "</div><pre id=\"plannerWarmSql\" class=\"result-pre\"></pre>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "İlgili kök satırları için SQL şablonu", "Referenced root SQL template")) + "</div><pre id=\"plannerRootWarmSql\" class=\"result-pre\"></pre>"
+                + "</div></div>"
+                + "<div id=\"plannerWarningsCard\" class=\"result-card d-none\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "Dikkat edilmesi gerekenler", "Things to watch")) + "</div><div class=\"result-card-body\"><div id=\"plannerWarnings\"></div></div></div>"
+                + "<div class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "6. Staging warm execution", "6. Staging warm execution")) + "</div><div class=\"result-card-body\">"
+                + "<div class=\"planner-actions\"><button id=\"plannerWarmAction\" type=\"button\" class=\"btn btn-success\" disabled>" + escapeHtml(localized(normalizedLanguage, "Warm'ı Çalıştır", "Run Warm")) + "</button>"
+                + "<button id=\"plannerWarmPreviewAction\" type=\"button\" class=\"btn btn-outline-secondary\" disabled>" + escapeHtml(localized(normalizedLanguage, "Dry Run Çalıştır", "Run Dry Run")) + "</button></div>"
+                + "<div id=\"plannerWarmStatus\" class=\"planner-status mt-3\">" + escapeHtml(localized(normalizedLanguage, "Önce planı üret. Sonra staging warm çalıştırabilirsin.", "Generate the plan first. Then you can run the staging warm execution.")) + "</div>"
+                + "<div id=\"plannerWarmResults\" class=\"d-none mt-3\">"
+                + "<div class=\"result-grid\">"
+                + metricShell("plannerWarmChildRows", localized(normalizedLanguage, "Çocuk satırları", "Child rows"))
+                + metricShell("plannerWarmRootRows", localized(normalizedLanguage, "Kök satırları", "Root rows"))
+                + metricShell("plannerWarmSkippedRows", localized(normalizedLanguage, "Atlanan silinmiş satırlar", "Skipped deleted rows"))
+                + metricShell("plannerWarmDuration", localized(normalizedLanguage, "Süre", "Duration"))
+                + metricShell("plannerWarmReferencedRoots", localized(normalizedLanguage, "İlgili kök id sayısı", "Referenced root ids"))
+                + metricShell("plannerWarmMissingRoots", localized(normalizedLanguage, "Eksik kök id sayısı", "Missing root ids"))
+                + "</div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Warm notları", "Warm notes")) + "</div><div id=\"plannerWarmNotes\"></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Çalışan çocuk SQL'i", "Executed child SQL")) + "</div><pre id=\"plannerWarmChildSql\" class=\"result-pre\"></pre>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Kök SQL şablonu", "Root SQL template")) + "</div><pre id=\"plannerWarmRootSql\" class=\"result-pre\"></pre>"
+                + "</div></div></div>"
+                + "<div class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "7. Generated CacheDB scaffold", "7. Generated CacheDB scaffold")) + "</div><div class=\"result-card-body\">"
+                + "<div class=\"planner-actions\"><button id=\"plannerScaffoldAction\" type=\"button\" class=\"btn btn-outline-primary\" disabled>" + escapeHtml(localized(normalizedLanguage, "İskeleti Üret", "Generate Scaffold")) + "</button></div>"
+                + "<div id=\"plannerScaffoldStatus\" class=\"planner-status mt-3\">" + escapeHtml(localized(normalizedLanguage, "Planı üretince entity ve binding iskeletlerini bu ekranda görebilirsin.", "After generating the plan, you can preview the entity and binding skeletons here.")) + "</div>"
+                + "<div id=\"plannerScaffoldResults\" class=\"d-none mt-3\">"
+                + "<div class=\"result-grid\">"
+                + metricShell("plannerScaffoldBasePackage", localized(normalizedLanguage, "Base package", "Base package"))
+                + metricShell("plannerScaffoldFileCount", localized(normalizedLanguage, "Üretilen dosya", "Generated files"))
+                + "</div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "İskelet notları", "Scaffold notes")) + "</div><div id=\"plannerScaffoldNotes\"></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Üretilen dosyalar", "Generated files")) + "</div><div id=\"plannerScaffoldFiles\"></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Scaffold uyarıları", "Scaffold warnings")) + "</div><div id=\"plannerScaffoldWarnings\"></div>"
+                + "</div></div></div>"
+                + "<div class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "8. Side-by-side comparison", "8. Side-by-side comparison")) + "</div><div class=\"result-card-body\">"
+                + "<div class=\"planner-actions\"><button id=\"plannerCompareAction\" type=\"button\" class=\"btn btn-outline-dark\" disabled>" + escapeHtml(localized(normalizedLanguage, "Karşılaştırmayı Çalıştır", "Run Comparison")) + "</button>"
+                + "<button id=\"plannerCompareDownloadReportAction\" type=\"button\" class=\"btn btn-outline-secondary\" disabled>" + escapeHtml(localized(normalizedLanguage, "Raporu İndir", "Download Report")) + "</button></div>"
+                + "<div id=\"plannerCompareStatus\" class=\"planner-status mt-3\">" + escapeHtml(localized(normalizedLanguage, "Planı üretince PostgreSQL ve CacheDB route'unu yan yana ölçebilirsin.", "After generating the plan, you can measure the PostgreSQL and CacheDB routes side by side.")) + "</div>"
+                + "<div id=\"plannerCompareResults\" class=\"d-none mt-3\">"
+                + "<div class=\"result-grid\">"
+                + metricShell("plannerCompareRoute", localized(normalizedLanguage, "CacheDB route", "CacheDB route"))
+                + metricShell("plannerCompareExactMatches", localized(normalizedLanguage, "Tam eşleşen örnek", "Exact sample matches"))
+                + metricShell("plannerCompareBaselineAvg", localized(normalizedLanguage, "Baseline ort.", "Baseline avg"))
+                + metricShell("plannerCompareBaselineP95", localized(normalizedLanguage, "Baseline p95", "Baseline p95"))
+                + metricShell("plannerCompareCacheAvg", localized(normalizedLanguage, "Cache avg", "Cache avg"))
+                + metricShell("plannerCompareCacheP95", localized(normalizedLanguage, "Cache p95", "Cache p95"))
+                + "</div>"
+                + "<div class=\"result-card mt-3\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "Geçiş değerlendirmesi", "Migration assessment")) + "</div><div class=\"result-card-body\">"
+                + "<div class=\"result-grid\">"
+                + metricShell("plannerCompareAssessmentStatus", localized(normalizedLanguage, "Geçiş kararı", "Cutover decision"))
+                + metricShell("plannerCompareAssessmentParity", localized(normalizedLanguage, "Veri eşleşmesi", "Data parity"))
+                + metricShell("plannerCompareAssessmentAvgRatio", localized(normalizedLanguage, "Ort. oran", "Avg ratio"))
+                + metricShell("plannerCompareAssessmentP95Ratio", localized(normalizedLanguage, "p95 oran", "p95 ratio"))
+                + "</div>"
+                + "<div id=\"plannerCompareAssessmentSummary\" class=\"planner-status mt-3\"></div>"
+                + "<div id=\"plannerCompareAssessmentDecision\" class=\"small text-muted mt-2\"></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Güçlü sinyaller", "Positive signals")) + "</div><div id=\"plannerCompareAssessmentStrengths\"></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Cutover blokajları", "Cutover blockers")) + "</div><div id=\"plannerCompareAssessmentBlockers\"></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Sonraki adımlar", "Next steps")) + "</div><div id=\"plannerCompareAssessmentNextSteps\"></div>"
+                + "</div></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Baseline SQL", "Baseline SQL")) + "</div><pre id=\"plannerCompareBaselineSql\" class=\"result-pre\"></pre>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Örnek karşılaştırmalar", "Sample comparisons")) + "</div><div id=\"plannerCompareSamples\"></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Karşılaştırma notları", "Comparison notes")) + "</div><div id=\"plannerCompareNotes\"></div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Karşılaştırma uyarıları", "Comparison warnings")) + "</div><div id=\"plannerCompareWarnings\"></div>"
+                + "</div></div></div>"
+                + "</div></div>"
+                + "</section></main>"
+                + "<script>"
+                + "(function(){"
+                + "const apiBase='" + apiBasePath + "';"
+                + "const form=document.getElementById('plannerForm');"
+                + "const status=document.getElementById('plannerStatus');"
+                + "const defaultsButton=document.getElementById('plannerDefaults');"
+                + "const emptyState=document.getElementById('plannerEmpty');"
+                + "const results=document.getElementById('plannerResults');"
+                + "const warmButton=document.getElementById('plannerWarmAction');"
+                + "const warmPreviewButton=document.getElementById('plannerWarmPreviewAction');"
+                + "const warmStatus=document.getElementById('plannerWarmStatus');"
+                + "const warmResults=document.getElementById('plannerWarmResults');"
+                + "const scaffoldButton=document.getElementById('plannerScaffoldAction');"
+                + "const scaffoldStatus=document.getElementById('plannerScaffoldStatus');"
+                + "const scaffoldResults=document.getElementById('plannerScaffoldResults');"
+                + "const compareButton=document.getElementById('plannerCompareAction');"
+                + "const compareReportButton=document.getElementById('plannerCompareDownloadReportAction');"
+                + "const compareStatus=document.getElementById('plannerCompareStatus');"
+                + "const compareResults=document.getElementById('plannerCompareResults');"
+                + "const discoverButton=document.getElementById('plannerDiscoverAction');"
+                + "const discoveryStatus=document.getElementById('plannerDiscoveryStatus');"
+                + "let templateDefaults=null;"
+                + "let discoverySuggestions=[];"
+                + "let lastComparisonResult=null;"
+                + "function escapeHtml(value){return String(value??'').replace(/[&<>\"']/g,function(ch){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'})[ch];});}"
+                + "function setStatus(message){status.textContent=message;}"
+                + "function setDiscoveryStatus(message){if(discoveryStatus){discoveryStatus.textContent=message;}}"
+                + "function formatLatency(nanos){const value=Number(nanos||0);if(!Number.isFinite(value)||value<=0){return '0 ns';}if(value>=1000000){return (value/1000000).toFixed(2)+' ms';}if(value>=1000){return (value/1000).toFixed(2)+' µs';}return String(Math.round(value))+' ns';}"
+                + "async function fetchJson(url,options){const response=await fetch(url,options);const text=await response.text();let payload=null;try{payload=JSON.parse(text);}catch(ignore){}if(!response.ok){throw new Error((payload&&payload.error)||text||'request failed');}return payload||{};}"
+                + "function fillForm(data){Object.entries(data||{}).forEach(function(entry){const name=entry[0];const value=entry[1];const field=form.elements.namedItem(name);if(!field){return;}if(field instanceof RadioNodeList){return;}if(field.type==='checkbox'){field.checked=!!value;}else{field.value=value;}});}"
+                + "function serializeForm(){const params=new URLSearchParams();Array.from(form.elements).forEach(function(field){if(!field.name){return;}if(field.type==='checkbox'){params.set(field.name, field.checked ? 'true' : 'false');return;}params.set(field.name, field.value || '');});return params;}"
+                + "function renderList(targetId, items, emptyMessage){const root=document.getElementById(targetId);const fallback=emptyMessage||'" + escapeJs(localized(normalizedLanguage, "Bu bölüm için ek madde üretilmedi.", "No extra items were generated for this section.")) + "';if(!items||!items.length){root.innerHTML='<div class=\"planner-empty\">' + escapeHtml(fallback) + '</div>';return;}root.innerHTML='<ul class=\"result-list\">'+items.map(function(item){return '<li>'+escapeHtml(item)+'</li>';}).join('')+'</ul>';}"
+                + "function renderWarmSteps(items){const root=document.getElementById('plannerWarmSteps');root.innerHTML=(items||[]).map(function(step,index){return '<div class=\"result-step\"><div class=\"result-step-title\">'+escapeHtml((index+1)+'. '+step.title)+'</div><div class=\"result-step-summary\">'+escapeHtml(step.summary)+'</div><ul class=\"result-list\">'+(step.tasks||[]).map(function(task){return '<li>'+escapeHtml(task)+'</li>';}).join('')+'</ul></div>';}).join('');}"
+                + "function renderComparisonChecks(items){const root=document.getElementById('plannerComparisonChecks');root.innerHTML=(items||[]).map(function(check){return '<div class=\"result-check\"><div class=\"result-step-title\">'+escapeHtml(check.title)+'</div><div class=\"small text-muted mb-2\">'+escapeHtml(check.baseline)+'</div><div class=\"fw-semibold\">'+escapeHtml(check.target)+'</div></div>';}).join('');}"
+                + "function renderWarnings(items){const wrapper=document.getElementById('plannerWarningsCard');const root=document.getElementById('plannerWarnings');if(!items||!items.length){wrapper.classList.add('d-none');root.innerHTML='';return;}wrapper.classList.remove('d-none');root.innerHTML=items.map(function(item){return '<div class=\"planner-warning mb-2\">'+escapeHtml(item)+'</div>';}).join('');}"
+                + "function renderScaffoldFiles(items){const root=document.getElementById('plannerScaffoldFiles');if(!items||!items.length){root.innerHTML='<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Dosya üretilmedi.", "No files were generated.")) + "')+'</div>';return;}root.innerHTML=items.map(function(file){return '<div class=\"result-check mb-3\"><div class=\"result-step-title\">'+escapeHtml(file.fileName)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml((file.relativePath||'')+' · '+(file.description||''))+'</div><pre class=\"result-pre mt-3\">'+escapeHtml(file.content||'')+'</pre></div>';}).join('');}"
+                + "function renderComparisonSamples(items){const root=document.getElementById('plannerCompareSamples');if(!items||!items.length){root.innerHTML='<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Karşılaştırma örneği oluşmadı.", "No comparison samples were produced.")) + "')+'</div>';return;}root.innerHTML=items.map(function(item){const matchLabel=item.exactMatch?'" + escapeJs(localized(normalizedLanguage, "Tam eşleşme", "Exact match")) + "':'" + escapeJs(localized(normalizedLanguage, "Fark var", "Mismatch")) + "';const tone=item.exactMatch?'#147d64':'#b54708';return '<div class=\"result-check mb-3\"><div class=\"d-flex flex-column flex-lg-row justify-content-between gap-3\"><div><div class=\"result-step-title\">'+escapeHtml(item.sampleLabel)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Baseline satır", "Baseline rows")) + ": '+item.baselineRowCount+' · " + escapeJs(localized(normalizedLanguage, "Cache satır", "Cache rows")) + ": '+item.cacheRowCount)+'</div></div><div class=\"fw-semibold\" style=\"color:'+tone+'\">'+escapeHtml(matchLabel)+'</div></div><div class=\"small text-muted mt-3\">" + escapeJs(localized(normalizedLanguage, "Baseline id listesi", "Baseline id list")) + "</div><pre class=\"result-pre\">'+escapeHtml((item.baselineIds||[]).join(', '))+'</pre><div class=\"small text-muted mt-3\">" + escapeJs(localized(normalizedLanguage, "Cache id listesi", "Cache id list")) + "</div><pre class=\"result-pre\">'+escapeHtml((item.cacheIds||[]).join(', '))+'</pre></div>';}).join('');}"
+                + "function formatRatio(value){const numeric=Number(value||0);if(!Number.isFinite(numeric)||numeric<=0){return '-';}return numeric.toFixed(2)+'x';}"
+                + "function formatAssessmentReadiness(value){switch(String(value||'')){case 'READY':return '" + escapeJs(localized(normalizedLanguage, "Hazır", "Ready")) + "';case 'NEEDS_REVIEW':return '" + escapeJs(localized(normalizedLanguage, "Gözden geçir", "Needs review")) + "';case 'NOT_READY':return '" + escapeJs(localized(normalizedLanguage, "Hazır değil", "Not ready")) + "';default:return value||'-';}}"
+                + "function formatAssessmentParity(value){switch(String(value||'')){case 'EXACT':return '" + escapeJs(localized(normalizedLanguage, "Tam eşleşme", "Exact parity")) + "';case 'PARTIAL':return '" + escapeJs(localized(normalizedLanguage, "Kısmi eşleşme", "Partial parity")) + "';case 'MISMATCH':return '" + escapeJs(localized(normalizedLanguage, "Uyumsuz", "Mismatch")) + "';case 'NO_SAMPLES':return '" + escapeJs(localized(normalizedLanguage, "Örnek yok", "No samples")) + "';default:return value||'-';}}"
+                + "function renderDiscovery(result){const suggestionRoot=document.getElementById('plannerDiscoverySuggestions');const tableRoot=document.getElementById('plannerDiscoveryTables');const warnings=result.warnings||[];discoverySuggestions=result.routeSuggestions||[];const warningHtml=warnings.length?warnings.map(function(item){return '<div class=\"planner-warning mb-2\">'+escapeHtml(item)+'</div>';}).join(''):'';if(discoverySuggestions.length){suggestionRoot.innerHTML=warningHtml+discoverySuggestions.map(function(item,index){const surfaces=[item.rootEntityName||item.rootSurface,item.childEntityName||item.childSurface].filter(Boolean).join(' -> ');const sortCandidates=(item.sortCandidates||[]).join(', ');return '<div class=\"result-check mb-3\"><div class=\"d-flex flex-column flex-lg-row justify-content-between gap-3\"><div><div class=\"result-step-title\">'+escapeHtml(item.label)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml(item.summary)+'</div><div class=\"small mt-2\">'+escapeHtml(surfaces||'')+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "İlişki", "Relation")) + ": '+item.relationColumn+' · " + escapeJs(localized(normalizedLanguage, "Önerilen sıralama", "Suggested sort")) + ": '+item.sortColumn+' DESC')+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Alternatif sıralama kolonları", "Alternative sort columns")) + ": '+(sortCandidates||'-'))+'</div></div><div><button type=\"button\" class=\"btn btn-sm btn-outline-primary\" data-planner-suggestion=\"'+index+'\">" + escapeJs(localized(normalizedLanguage, "Forma Uygula", "Apply To Form")) + "</button></div></div></div>';}).join('');}else{suggestionRoot.innerHTML=warningHtml+'<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Keşiften otomatik route adayı çıkmadı. Formu yine elle doldurabilirsin.", "No automatic route suggestion came out of discovery. You can still fill the planner manually.")) + "')+'</div>';}if((result.tables||[]).length){tableRoot.innerHTML=result.tables.map(function(item){const entity=item.registeredEntityName?'" + escapeJs(localized(normalizedLanguage, "Kayıtlı entity", "Registered entity")) + ": '+item.registeredEntityName:'" + escapeJs(localized(normalizedLanguage, "Kayıtlı entity eşleşmesi yok", "No registered entity match")) + "';const temporal=(item.temporalColumns||[]).join(', ');const foreignKeys=(item.foreignKeyColumns||[]).join(', ');return '<div class=\"result-check mb-2\"><div class=\"result-step-title\">'+escapeHtml(item.qualifiedTableName)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml(entity+' · PK: '+(item.primaryKeyColumn||'-')+' · " + escapeJs(localized(normalizedLanguage, "Kolon", "Columns")) + ": '+item.columnCount+' · FK: '+item.importedKeyCount)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Zamansal kolonlar", "Temporal columns")) + ": '+(temporal||'-')+' · FK kolonları: '+(foreignKeys||'-'))+'</div></div>';}).join('');}else{tableRoot.innerHTML='<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Kullanıcı tablosu keşfedilemedi.", "No user tables were discovered.")) + "')+'</div>';}}"
+                + "function applyDiscoverySuggestion(index){const suggestion=discoverySuggestions[index];if(!suggestion||!suggestion.plannerRequest){return;}fillForm(suggestion.plannerRequest);setStatus('" + escapeJs(localized(normalizedLanguage, "Keşif önerisi forma uygulandı. İstersen değerleri inceleyip planı üret.", "Discovery suggestion applied to the form. Review the values if you want, then generate the plan.")) + "');window.scrollTo({top:0,behavior:'smooth'});}"
+                + "async function loadDiscovery(manual){const startMessage=manual?'" + escapeJs(localized(normalizedLanguage, "PostgreSQL şeması yeniden keşfediliyor…", "Refreshing PostgreSQL schema discovery…")) + "':'" + escapeJs(localized(normalizedLanguage, "PostgreSQL şeması inceleniyor…", "Inspecting PostgreSQL schema…")) + "';setDiscoveryStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/discovery');renderDiscovery(payload);setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")) + "');}catch(error){setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi başarısız oldu: ", "Schema discovery failed: ")) + "'+error.message);}}"
+                + "function setMetric(id,value){document.getElementById(id).innerHTML=escapeHtml(value);}"
+                + "function renderPlan(plan){emptyState.classList.add('d-none');results.classList.remove('d-none');warmResults.classList.add('d-none');setMetric('plannerSurface',plan.recommendedSurface);setMetric('plannerWindow',String(plan.recommendedHotWindowPerRoot)+' " + escapeJs(localized(normalizedLanguage, "satır / kök", "rows / root")) + "');setMetric('plannerProjection',plan.projectionRequired ? '" + escapeJs(localized(normalizedLanguage, "Gerekli", "Required")) + " (' + plan.summaryProjectionName + ')' : '" + escapeJs(localized(normalizedLanguage, "İlk aşamada opsiyonel", "Optional at first")) + "');setMetric('plannerRanking',plan.rankedProjectionRequired ? '" + escapeJs(localized(normalizedLanguage, "Gerekli", "Required")) + " (' + (plan.rankedProjectionName || plan.rankFieldName) + ')' : '" + escapeJs(localized(normalizedLanguage, "Gerekli değil", "Not required")) + "');document.getElementById('plannerRedisPlacement').textContent=plan.redisPlacement;document.getElementById('plannerPostgresPlacement').textContent=plan.postgresPlacement;renderList('plannerReasoning',plan.reasoning);renderList('plannerRedisArtifacts',plan.recommendedRedisArtifacts);renderList('plannerPostgresArtifacts',plan.recommendedPostgresArtifacts);renderList('plannerApiShapes',plan.recommendedApiShapes);renderWarmSteps(plan.warmSteps);document.getElementById('plannerComparisonSummary').textContent=plan.comparisonSummary;renderComparisonChecks(plan.comparisonChecks);document.getElementById('plannerWarmSql').textContent=plan.sampleWarmSql||'';document.getElementById('plannerRootWarmSql').textContent=plan.sampleRootWarmSql||'';renderWarnings(plan.warnings);warmButton.disabled=false;warmPreviewButton.disabled=false;if(scaffoldButton){scaffoldButton.disabled=false;}if(compareButton){compareButton.disabled=false;}if(compareReportButton){compareReportButton.disabled=true;}}"
+                + "function renderWarmExecution(result){if(result.plan){renderPlan(result.plan);}warmResults.classList.remove('d-none');setMetric('plannerWarmChildRows',String(result.childRowsHydrated)+' / '+String(result.childRowsRead));setMetric('plannerWarmRootRows',String(result.rootRowsHydrated)+' / '+String(result.rootRowsRead));setMetric('plannerWarmSkippedRows',String(result.skippedDeletedRows));setMetric('plannerWarmDuration',String(result.durationMillis)+' ms');setMetric('plannerWarmReferencedRoots',String(result.distinctReferencedRootIds));setMetric('plannerWarmMissingRoots',String(result.missingReferencedRootIds));renderList('plannerWarmNotes',result.notes);document.getElementById('plannerWarmChildSql').textContent=result.childWarmSql||'';document.getElementById('plannerWarmRootSql').textContent=result.rootWarmSql||'';}"
+                + "function renderScaffold(result){if(result.plan){renderPlan(result.plan);}scaffoldResults.classList.remove('d-none');setMetric('plannerScaffoldBasePackage',result.basePackage||'-');setMetric('plannerScaffoldFileCount',String(result.fileCount||0));renderList('plannerScaffoldNotes',result.notes);renderList('plannerScaffoldWarnings',result.warnings);renderScaffoldFiles(result.files||[]);}"
+                + "function renderComparisonAssessment(assessment){if(!assessment){setMetric('plannerCompareAssessmentStatus','-');setMetric('plannerCompareAssessmentParity','-');setMetric('plannerCompareAssessmentAvgRatio','-');setMetric('plannerCompareAssessmentP95Ratio','-');document.getElementById('plannerCompareAssessmentSummary').textContent='';document.getElementById('plannerCompareAssessmentDecision').textContent='';renderList('plannerCompareAssessmentStrengths',[], '" + escapeJs(localized(normalizedLanguage, "Henüz güçlü sinyal yok.", "No positive signals yet.")) + "');renderList('plannerCompareAssessmentBlockers',[], '" + escapeJs(localized(normalizedLanguage, "Henüz blokaj kaydedilmedi.", "No blockers recorded yet.")) + "');renderList('plannerCompareAssessmentNextSteps',[], '" + escapeJs(localized(normalizedLanguage, "Henüz sonraki adım üretilmedi.", "No next steps generated yet.")) + "');return;}setMetric('plannerCompareAssessmentStatus',formatAssessmentReadiness(assessment.readiness));setMetric('plannerCompareAssessmentParity',formatAssessmentParity(assessment.parityStatus));setMetric('plannerCompareAssessmentAvgRatio',formatRatio(assessment.averageLatencyRatio));setMetric('plannerCompareAssessmentP95Ratio',formatRatio(assessment.p95LatencyRatio));document.getElementById('plannerCompareAssessmentSummary').textContent=assessment.summary||'';document.getElementById('plannerCompareAssessmentDecision').textContent=assessment.decision||'';renderList('plannerCompareAssessmentStrengths',assessment.strengths,'" + escapeJs(localized(normalizedLanguage, "Bu ölçüm turunda öne çıkan güçlü sinyal yok.", "No strong positive signal stood out in this run.")) + "');renderList('plannerCompareAssessmentBlockers',assessment.blockers,'" + escapeJs(localized(normalizedLanguage, "Bu turda doğrudan cutover blokajı görülmedi.", "No direct cutover blocker was found in this run.")) + "');renderList('plannerCompareAssessmentNextSteps',assessment.nextSteps,'" + escapeJs(localized(normalizedLanguage, "Önerilen ek adım üretilmedi.", "No additional next step was generated.")) + "');}"
+                + "function renderComparison(result){lastComparisonResult=result||null;if(result.plan){renderPlan(result.plan);}compareResults.classList.remove('d-none');const exactMatches=(result.sampleComparisons||[]).filter(function(item){return !!item.exactMatch;}).length;setMetric('plannerCompareRoute',result.cacheRouteLabel||'-');setMetric('plannerCompareExactMatches',String(exactMatches)+' / '+String((result.sampleComparisons||[]).length));setMetric('plannerCompareBaselineAvg',formatLatency(result.baselineMetrics&&result.baselineMetrics.averageLatencyNanos));setMetric('plannerCompareBaselineP95',formatLatency(result.baselineMetrics&&result.baselineMetrics.p95LatencyNanos));setMetric('plannerCompareCacheAvg',formatLatency(result.cacheMetrics&&result.cacheMetrics.averageLatencyNanos));setMetric('plannerCompareCacheP95',formatLatency(result.cacheMetrics&&result.cacheMetrics.p95LatencyNanos));renderComparisonAssessment(result.assessment);document.getElementById('plannerCompareBaselineSql').textContent=result.baselineSqlTemplate||'';renderComparisonSamples(result.sampleComparisons||[]);renderList('plannerCompareNotes',result.notes);renderList('plannerCompareWarnings',result.warnings);if(compareReportButton){compareReportButton.disabled=!(result.report&&result.report.markdown);}if(result.warmResult){renderWarmExecution(result.warmResult);}}"
+                + "function downloadComparisonReport(){if(!lastComparisonResult||!lastComparisonResult.report||!lastComparisonResult.report.markdown){setStatus('" + escapeJs(localized(normalizedLanguage, "Önce karşılaştırmayı çalıştırıp raporu üret.", "Run the comparison first to generate the report.")) + "');return;}const fileName=lastComparisonResult.report.fileName||'migration-report.md';const blob=new Blob([lastComparisonResult.report.markdown],{type:'text/markdown;charset=utf-8'});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=fileName;document.body.appendChild(link);link.click();document.body.removeChild(link);window.setTimeout(function(){URL.revokeObjectURL(url);},1000);setStatus('" + escapeJs(localized(normalizedLanguage, "Migration report indirildi.", "Migration report downloaded.")) + "');}"
+                + "async function loadTemplate(){setStatus('" + escapeJs(localized(normalizedLanguage, "Planlayıcı şablonu yükleniyor…", "Loading planner template…")) + "');const payload=await fetchJson(apiBase + '/api/migration-planner/template');templateDefaults=payload.defaults||null;if(templateDefaults){fillForm(templateDefaults);}setStatus('" + escapeJs(localized(normalizedLanguage, "Hazır. Mevcut ekranını anlat ve planı üret.", "Ready. Describe your current route and generate the plan.")) + "');}"
+                + "defaultsButton.addEventListener('click',function(){if(templateDefaults){fillForm(templateDefaults);setStatus('" + escapeJs(localized(normalizedLanguage, "Örnek değerler yeniden yüklendi.", "Example defaults reloaded.")) + "');}});"
+                + "if(discoverButton){discoverButton.addEventListener('click',function(){loadDiscovery(true).catch(function(){});});}"
+                + "async function warmExecution(dryRun){const params=serializeForm();params.set('dryRun',dryRun?'true':'false');const startMessage=dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run başlatıldı…", "Dry run started…")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution başlatıldı…", "Warm execution started…")) + "';warmStatus.textContent=startMessage;setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/warm',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderWarmExecution(payload);const doneMessage=payload.dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready.")) + "';warmStatus.textContent=doneMessage;setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ")) + "'+error.message;warmStatus.textContent=message;setStatus(message);}}"
+                + "async function scaffoldGeneration(){const params=serializeForm();const startMessage='" + escapeJs(localized(normalizedLanguage, "Scaffold üretiliyor…", "Generating scaffold…")) + "';if(scaffoldStatus){scaffoldStatus.textContent=startMessage;}setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/scaffold',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderScaffold(payload);const doneMessage='" + escapeJs(localized(normalizedLanguage, "Scaffold hazır. Dosyaları kopyalayıp projene ekleyebilirsin.", "Scaffold ready. You can copy the files into your project.")) + "';if(scaffoldStatus){scaffoldStatus.textContent=doneMessage;}setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Scaffold üretimi başarısız oldu: ", "Scaffold generation failed: ")) + "'+error.message;if(scaffoldStatus){scaffoldStatus.textContent=message;}setStatus(message);}}"
+                + "async function runComparison(){const params=serializeForm();const startMessage='" + escapeJs(localized(normalizedLanguage, "Side-by-side comparison başlatıldı…", "Side-by-side comparison started…")) + "';if(compareStatus){compareStatus.textContent=startMessage;}setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/compare',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderComparison(payload);const doneMessage='" + escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. PostgreSQL ve CacheDB sonuçları yan yana hazır.", "Comparison completed. PostgreSQL and CacheDB results are ready side by side.")) + "';if(compareStatus){compareStatus.textContent=doneMessage;}setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız oldu: ", "Comparison failed: ")) + "'+error.message;if(compareStatus){compareStatus.textContent=message;}setStatus(message);}}"
+                + "form.addEventListener('submit',async function(event){event.preventDefault();setStatus('" + escapeJs(localized(normalizedLanguage, "Plan üretiliyor…", "Generating plan…")) + "');try{const payload=await fetchJson(apiBase + '/api/migration-planner/plan',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:serializeForm().toString()});renderPlan(payload);setStatus('" + escapeJs(localized(normalizedLanguage, "Plan hazır. İstersen hemen staging warm çalıştırabilirsin.", "Plan ready. You can run the staging warm execution right away.")) + "');warmStatus.textContent='" + escapeJs(localized(normalizedLanguage, "Plan hazır. Dry run ya da gerçek warm seçebilirsin.", "Plan ready. You can choose a dry run or a real warm execution.")) + "';}catch(error){setStatus('" + escapeJs(localized(normalizedLanguage, "Plan üretilemedi. Girişleri kontrol edip tekrar dene.", "Could not generate the plan. Check the inputs and try again.")) + "');warmStatus.textContent='" + escapeJs(localized(normalizedLanguage, "Plan üretimi başarısız oldu.", "Plan generation failed.")) + "';}});"
+                + "warmButton.addEventListener('click',function(){warmExecution(false).catch(function(){});});"
+                + "warmPreviewButton.addEventListener('click',function(){warmExecution(true).catch(function(){});});"
+                + "if(scaffoldButton){scaffoldButton.addEventListener('click',function(){scaffoldGeneration().catch(function(){});});}"
+                + "if(compareButton){compareButton.addEventListener('click',function(){runComparison().catch(function(){});});}"
+                + "if(compareReportButton){compareReportButton.addEventListener('click',function(){downloadComparisonReport();});}"
+                + "document.addEventListener('click',function(event){const suggestionButton=event.target.closest('[data-planner-suggestion]');if(suggestionButton){event.preventDefault();applyDiscoverySuggestion(Number(suggestionButton.dataset.plannerSuggestion||-1));}});"
+                + "async function initializePlanner(){await loadTemplate();await loadDiscovery(false);}"
+                + "initializePlanner().catch(function(){setStatus('" + escapeJs(localized(normalizedLanguage, "Şablon yüklenemedi. Sayfayı yenileyip tekrar dene.", "Could not load the template. Refresh the page and try again.")) + "');setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi yüklenemedi. Sayfayı yenileyip tekrar dene.", "Schema discovery could not be loaded. Refresh the page and try again.")) + "');});"
+                + "})();"
+                + "</script></body></html>";
+    }
+
+    private String fieldInput(String name, String label, String placeholder, String extraClass) {
+        String classSuffix = extraClass == null || extraClass.isBlank() ? "" : " " + extraClass.trim();
+        return "<div class=\"" + classSuffix.trim() + "\"><label class=\"form-label fw-semibold\">" + escapeHtml(label)
+                + "</label><input class=\"form-control\" name=\"" + escapeHtml(name) + "\" placeholder=\""
+                + escapeHtml(placeholder) + "\"></div>";
+    }
+
+    private String textareaInput(String name, String label, String placeholder, String extraClass) {
+        String classSuffix = extraClass == null || extraClass.isBlank() ? "" : " " + extraClass.trim();
+        return "<div class=\"" + classSuffix.trim() + "\"><label class=\"form-label fw-semibold\">" + escapeHtml(label)
+                + "</label><textarea class=\"form-control\" rows=\"4\" name=\"" + escapeHtml(name)
+                + "\" placeholder=\"" + escapeHtml(placeholder) + "\"></textarea></div>";
+    }
+
+    private String checkboxInput(String name, String label, boolean checked) {
+        return "<div class=\"full\"><div class=\"form-check form-switch\">"
+                + "<input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" name=\"" + escapeHtml(name) + "\""
+                + (checked ? " checked" : "") + ">"
+                + "<label class=\"form-check-label\">" + escapeHtml(label) + "</label>"
+                + "</div></div>";
+    }
+
+    private String metricShell(String id, String label) {
+        return "<div class=\"result-metric\"><div class=\"result-metric-label\">" + escapeHtml(label)
+                + "</div><div id=\"" + escapeHtml(id) + "\" class=\"result-metric-value\"></div></div>";
+    }
+
+    private String resultListCard(String id, String title, String listId) {
+        return "<div id=\"" + escapeHtml(id) + "\" class=\"result-card\"><div class=\"result-card-header\">"
+                + escapeHtml(title) + "</div><div class=\"result-card-body\"><div id=\"" + escapeHtml(listId)
+                + "\"></div></div></div>";
+    }
+
     private String renderDashboard(String language, String dashboardPath) {
         String title = escapeHtml(uiString("dashboardTitle", config.dashboardTitle()));
         String effectiveDashboardPath = escapeHtml(dashboardPath == null || dashboardPath.isBlank() ? "/" : dashboardPath);
-        String adminBasePath = escapeJs(resolveDashboardBasePath(dashboardPath));
+        String dashboardBasePath = resolveDashboardBasePath(dashboardPath);
+        String adminBasePath = escapeJs(dashboardBasePath);
+        String migrationPlannerUrl = escapeHtml(appendQuery(dashboardBasePath + "/migration-planner", "lang=" + normalizeDashboardLanguage(language)));
         String bootstrapCssUrl = escapeHtml(uiString("bootstrapCssUrl", "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"));
         String googleFontsUrl = escapeHtml(uiString("fontsUrl", "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"));
         String dashboardThemeCss = uiString(
@@ -2016,6 +2900,14 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String loadingText = escapeHtml(uiString("loadingText", "Loading…"));
         String resetToolsTitle = escapeHtml(uiString("resetToolsTitle", "Admin Reset Tools"));
         String resetTelemetryLabel = escapeHtml(uiString("resetTelemetryLabel", "Reset Telemetry History"));
+        String migrationPlannerTitle = escapeHtml(uiString("migrationPlannerTitle", localized(language, "Geçiş Planlayıcı", "Migration Planner")));
+        String migrationPlannerIntro = escapeHtml(uiString(
+                "migrationPlannerIntro",
+                localized(language,
+                        "Mevcut PostgreSQL/ORM ekranını CacheDB sıcak pencere, projection ve warm plan kararlarına dönüştürür.",
+                        "Turns an existing PostgreSQL/ORM route into CacheDB hot-window, projection, and warm-plan decisions.")
+        ));
+        String migrationPlannerOpenLabel = escapeHtml(uiString("migrationPlannerOpenLabel", localized(language, "Planlayıcıyı Aç", "Open Planner")));
         String resetTelemetryDescription = escapeHtml(uiString(
                 "resetTelemetryDescription",
                 "Diagnostics, incident history, monitoring history, alert route history ve gecikme/performance olcumlerini temizler. Demo entity verisini silmez."
@@ -2372,6 +3264,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<div id=\"telemetryResetStatusTop\" class=\"text-muted\">" + resetTelemetryNotRunYet + "</div>"
                 + "<div id=\"telemetryResetStatus\" class=\"text-muted d-none\">" + resetTelemetryNotRunYet + "</div>"
                 + "</div></div></div>"
+                + "<div class=\"nav-panel compact-panel\"><div class=\"nav-panel-header\">" + migrationPlannerTitle + "</div><div class=\"nav-panel-body\">"
+                + "<div class=\"compact-help\">" + migrationPlannerIntro + "</div>"
+                + "<a class=\"btn btn-outline-primary w-100\" href=\"" + migrationPlannerUrl + "\">" + migrationPlannerOpenLabel + "</a>"
+                + "<div class=\"compact-status\">" + escapeHtml(localized(language, "Mevcut bir ORM ekranını modelleyip sıcak pencere, warm plan ve karşılaştırma kontrol listesini çıkar.", "Model an existing ORM route and get a hot-window, warm-plan, and comparison checklist.")) + "</div>"
+                + "</div></div>"
                 + "</div>"
                 + "<div id=\"dashboardDataStatus\" class=\"ops-data-status\" data-state=\"loading\">"
                 + "<div class=\"ops-data-status-copy\"><div class=\"ops-data-status-title\" id=\"dashboardDataStatusTitle\">" + escapeHtml(uiString("dashboardDataStatus.loadingTitle", "Veriler yükleniyor")) + "</div><div class=\"ops-data-status-detail\" id=\"dashboardDataStatusDetail\">" + escapeHtml(uiString("dashboardDataStatus.loadingDetail", "Yönetim API'lerinden son metrikler ve servis durumu alınıyor.")) + "</div></div>"
@@ -4357,6 +5254,34 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         } catch (NumberFormatException exception) {
             return defaultValue;
         }
+    }
+
+    private long parseLong(List<String> values, long defaultValue) {
+        if (values == null || values.isEmpty()) {
+            return defaultValue;
+        }
+        try {
+            return Long.parseLong(values.get(0));
+        } catch (NumberFormatException exception) {
+            return defaultValue;
+        }
+    }
+
+    private boolean parseBoolean(List<String> values, boolean defaultValue) {
+        if (values == null || values.isEmpty()) {
+            return defaultValue;
+        }
+        String value = defaultString(values.get(0)).trim();
+        if (value.isBlank()) {
+            return defaultValue;
+        }
+        if ("true".equalsIgnoreCase(value) || "1".equals(value) || "yes".equalsIgnoreCase(value) || "on".equalsIgnoreCase(value)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(value) || "0".equals(value) || "no".equalsIgnoreCase(value) || "off".equalsIgnoreCase(value)) {
+            return false;
+        }
+        return defaultValue;
     }
 
     private AdminExportFormat parseFormat(String value) {

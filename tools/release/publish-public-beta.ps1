@@ -42,8 +42,12 @@ function Invoke-Git {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.Environment["SystemRoot"] = "C:\WINDOWS"
+    $psi.Environment["windir"] = "C:\WINDOWS"
     $psi.Environment["ComSpec"] = "C:\WINDOWS\System32\cmd.exe"
+    $psi.Environment["PROCESSOR_ARCHITECTURE"] = if ($env:PROCESSOR_ARCHITECTURE) { $env:PROCESSOR_ARCHITECTURE } else { "AMD64" }
     $psi.Environment["Path"] = "C:\WINDOWS\system32;C:\WINDOWS;C:\Program Files\Git\cmd;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\bin"
+    $psi.Environment["HOME"] = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+    $psi.Environment["USERPROFILE"] = if ($env:USERPROFILE) { $env:USERPROFILE } else { "C:\Users\generic" }
 
     foreach ($key in $ExtraEnvironment.Keys) {
         $psi.Environment[$key] = [string]$ExtraEnvironment[$key]

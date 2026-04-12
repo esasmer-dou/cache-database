@@ -5,6 +5,7 @@ Bu dosya, projenin kullanıcı odaklı Türkçe giriş dokümanıdır.
 Teknik mimari için: [docs/architecture.md](docs/architecture.md)  
 Production recipe rehberi için: [docs/production-recipes.md](docs/production-recipes.md)  
 ORM alternatifi rehberi için: [docs/orm-alternative.md](docs/orm-alternative.md)  
+Geçiş planlayıcı rehberi için: [docs/migration-planner.md](docs/migration-planner.md)  
 Public beta readiness için: [docs/public-beta-readiness.md](docs/public-beta-readiness.md)  
 Release checklist için: [docs/release-checklist.md](docs/release-checklist.md)
 
@@ -143,6 +144,13 @@ cachedb:
 ```
 
 Tam kopyala-yapıştır akışı için [Getting Started](docs/getting-started.md) rehberine bak.
+Mevcut PostgreSQL + ORM route'unu taşımak istiyorsan admin UI içindeki
+[Geçiş Planlayıcı](docs/migration-planner.md) rehberine de bak. Bu yüzey artık
+keşif odaklı scaffold üretebiliyor, Redis sıcak seti için deneme modu veya
+gerçek staging ön ısıtma çalıştırabiliyor, PostgreSQL ile CacheDB route'unu
+yan yana karşılaştırabiliyor ve bu karşılaştırmadan otomatik bir geçiş
+değerlendirmesi çıkarabiliyor. Ayrıca PostgreSQL tablolarını inceleyip
+planlayıcı formunu etkileşimli biçimde dolduracak öneriler de çıkarabiliyor.
 
 ## Neden CacheDB
 

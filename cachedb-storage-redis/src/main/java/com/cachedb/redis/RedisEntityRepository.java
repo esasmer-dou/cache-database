@@ -382,7 +382,34 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 ));
             }
             pageCacheManager.recordEntityAccess(id);
-            syncProjectionPayloads(entity);
+            syncProjectionPayloads(entity, false);
+            return entity;
+        } finally {
+            recordRedisWrite(startedAt);
+        }
+    }
+
+    public T hydrate(T entity, long version) {
+        long startedAt = System.nanoTime();
+        try {
+            ID id = metadata.idAccessor().apply(entity);
+            String redisKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
+            String versionKey = keyStrategy.versionKey(metadata.redisNamespace(), id);
+            String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
+            String encoded = codec.toRedisValue(entity);
+            CachePolicy effectiveCachePolicy = effectiveCachePolicy();
+            if (effectiveCachePolicy.entityTtlSeconds() > 0) {
+                jedis.setex(redisKey, effectiveCachePolicy.entityTtlSeconds(), encoded);
+            } else {
+                jedis.set(redisKey, encoded);
+            }
+            long effectiveVersion = version > 0L ? version : 1L;
+            jedis.set(versionKey, String.valueOf(effectiveVersion));
+            expireVersionKey(versionKey);
+            jedis.del(tombstoneKey);
+            queryIndexManager.reindex(entity);
+            pageCacheManager.recordEntityAccess(id);
+            syncProjectionPayloads(entity, true);
             return entity;
         } finally {
             recordRedisWrite(startedAt);
@@ -444,7 +471,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                         operation.createdAt()
                 ));
             }
-            deleteProjectionPayloads(id);
+            deleteProjectionPayloads(id, false);
         } finally {
             recordRedisWrite(startedAt);
         }
@@ -591,7 +618,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         return jedis.mget(lookupKeys);
     }
 
-    private void syncProjectionPayloads(T entity) {
+    private void syncProjectionPayloads(T entity, boolean forceImmediateRefresh) {
         if (entityRegistry == null) {
             return;
         }
@@ -600,11 +627,11 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             return;
         }
         for (com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding : bindings) {
-            syncProjectionPayload(rawBinding, entity);
+            syncProjectionPayload(rawBinding, entity, forceImmediateRefresh);
         }
     }
 
-    private void deleteProjectionPayloads(Object id) {
+    private void deleteProjectionPayloads(Object id, boolean forceImmediateRefresh) {
         if (entityRegistry == null) {
             return;
         }
@@ -613,68 +640,70 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             return;
         }
         for (com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding : bindings) {
-            deleteProjectionPayload(rawBinding, id);
+            deleteProjectionPayload(rawBinding, id, forceImmediateRefresh);
         }
     }
 
     @SuppressWarnings("unchecked")
     private <P> void syncProjectionPayload(
             com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding,
-            T entity
+            T entity,
+            boolean forceImmediateRefresh
     ) {
         EntityProjectionBinding<T, P, ID> binding = (EntityProjectionBinding<T, P, ID>) rawBinding;
-        if (binding.projection().refreshMode().isAsync() && projectionRefreshQueue != null) {
+        if (!forceImmediateRefresh && binding.projection().refreshMode().isAsync() && projectionRefreshQueue != null) {
             projectionRefreshQueue.enqueueUpsert(metadata.entityName(), binding.projection().name(), metadata.idAccessor().apply(entity));
             return;
         }
         ProjectionSupport<T, ID, P> support = projectionSupport(binding);
         P projection = binding.projection().projector().apply(entity);
         if (projection == null) {
-            applyProjectionDelete(support, metadata.idAccessor().apply(entity));
+            applyProjectionDelete(support, metadata.idAccessor().apply(entity), forceImmediateRefresh);
             return;
         }
-        applyProjectionUpsert(support, projection);
+        applyProjectionUpsert(support, projection, forceImmediateRefresh);
     }
 
     @SuppressWarnings("unchecked")
     private <P> void deleteProjectionPayload(
             com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding,
-            Object rawId
+            Object rawId,
+            boolean forceImmediateRefresh
     ) {
         EntityProjectionBinding<T, P, ID> binding = (EntityProjectionBinding<T, P, ID>) rawBinding;
-        if (binding.projection().refreshMode().isAsync() && projectionRefreshQueue != null) {
+        if (!forceImmediateRefresh && binding.projection().refreshMode().isAsync() && projectionRefreshQueue != null) {
             projectionRefreshQueue.enqueueDelete(metadata.entityName(), binding.projection().name(), rawId);
             return;
         }
-        applyProjectionDelete(projectionSupport(binding), (ID) rawId);
+        applyProjectionDelete(projectionSupport(binding), (ID) rawId, forceImmediateRefresh);
     }
 
-    private <P> void applyProjectionUpsert(ProjectionSupport<T, ID, P> support, P projection) {
+    private <P> void applyProjectionUpsert(ProjectionSupport<T, ID, P> support, P projection, boolean forceImmediateRefresh) {
         if (projection == null) {
             return;
         }
-        if (support.binding().projection().refreshMode().isAsync() && projectionRefreshDispatcher != null) {
+        if (!forceImmediateRefresh && support.binding().projection().refreshMode().isAsync() && projectionRefreshDispatcher != null) {
             try {
                 projectionRefreshDispatcher.dispatch(() -> safeProjectionUpsert(support.refreshRuntime(), projection));
                 return;
             } catch (RuntimeException ignored) {
             }
         }
-        safeProjectionUpsert(support.readRuntime(), projection);
+        safeProjectionUpsert(forceImmediateRefresh ? support.refreshRuntime() : support.readRuntime(), projection);
     }
 
-    private <P> void applyProjectionDelete(ProjectionSupport<T, ID, P> support, ID id) {
+    private <P> void applyProjectionDelete(ProjectionSupport<T, ID, P> support, ID id, boolean forceImmediateRefresh) {
         if (id == null) {
             return;
         }
-        if (support.binding().projection().refreshMode().isAsync() && projectionRefreshDispatcher != null) {
+        if (!forceImmediateRefresh && support.binding().projection().refreshMode().isAsync() && projectionRefreshDispatcher != null) {
             try {
                 projectionRefreshDispatcher.dispatch(() -> safeProjectionDelete(support.refreshRuntime(), id));
                 return;
             } catch (RuntimeException ignored) {
             }
         }
-        safeProjectionDelete(support.readRuntime(), id);
+        safeProjectionDelete(forceImmediateRefresh ? support.refreshRuntime() : support.readRuntime(), id);
     }
 
     private <P> void safeProjectionUpsert(RedisProjectionRuntime<P, ID> runtime, P projection) {

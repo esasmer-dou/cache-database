@@ -9,6 +9,11 @@ This document covers the second path, with emphasis on Spring Boot and same-port
 
 For production surface selection and decision guidance, also see [Production Recipes](./production-recipes.md).
 For higher-level positioning against traditional ORM usage, also see [CacheDB As An ORM Alternative](./orm-alternative.md).
+For existing PostgreSQL + ORM migrations, also see [Migration Planner](./migration-planner.md).
+The planner can now run a dry-run or real staging warm execution for the Redis
+working set after it computes the recommended shape. It can also inspect the
+connected PostgreSQL schema, generate binding-ready scaffolds, and run a
+side-by-side PostgreSQL vs CacheDB comparison before cutover.
 For public-beta repo hygiene and release prep, also see [Public Beta Readiness](./public-beta-readiness.md) and [Release Checklist](./release-checklist.md).
 
 ## Recommended Production Start
@@ -181,6 +186,7 @@ Use this when you want Spring Boot to:
 The admin UI is exposed under a base path such as:
 
 - `/cachedb-admin`
+- `/cachedb-admin/migration-planner`
 
 This means the UI uses the same host and same port as your Spring Boot app. There is no second public admin port.
 

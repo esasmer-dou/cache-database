@@ -9,6 +9,12 @@ Bu doküman ikinci yolu anlatır. Odak noktası, Spring Boot ve admin UI'in ayn�
 
 Production surface seçimi ve karar rehberi için ayrıca [Production Recipes](./production-recipes.md) dokümanına bak.
 Geleneksel ORM kullanımına karşı daha üst seviyede konumlandırma için ayrıca [CacheDB Bir ORM Alternatifi Olarak](./orm-alternative.md) dokümanına bak.
+Mevcut PostgreSQL + ORM geçişleri için ayrıca [Geçiş Planlayıcı](./migration-planner.md) dokümanına bak.
+Planlayıcı artık önerilen şekli çıkardıktan sonra Redis çalışma seti için
+deneme modu veya gerçek staging ön ısıtma çalıştırması yapabiliyor. Ayrıca bağlı
+PostgreSQL şemasını inceleyip root/child route önerileri çıkarabiliyor,
+binding'e hazır scaffold üretebiliyor ve cutover öncesi PostgreSQL ile CacheDB
+route'unu yan yana karşılaştırabiliyor.
 Public beta repo hijyeni ve release hazırlığı için ayrıca [Public Beta Readiness](./public-beta-readiness.md) ve [Release Checklist](./release-checklist.md) dokümanlarına bak.
 
 ## Önerilen Production Başlangıcı
@@ -181,6 +187,7 @@ Bu yol, Spring Boot'un şu isleri üstlenmesini istediginde uygundur:
 Admin UI varsayılan olarak şu taban yolundan açılir:
 
 - `/cachedb-admin`
+- `/cachedb-admin/migration-planner`
 
 Yani ikinci bir public admin portu açılmaz. Uygulamanin host ve port'u neyse admin UI da aynı porttan servis edilir.
 
