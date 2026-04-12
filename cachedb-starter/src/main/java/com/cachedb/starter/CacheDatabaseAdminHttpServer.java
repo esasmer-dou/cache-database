@@ -37,6 +37,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -168,7 +169,15 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     }
 
     public DashboardTemplateModel renderMigrationPlannerTemplateModel(String language, String plannerPath) {
-        return renderMigrationPlannerTemplateModel(language, plannerPath, null);
+        return renderMigrationPlannerTemplateModel(language, plannerPath, (String) null);
+    }
+
+    public DashboardTemplateModel renderMigrationPlannerTemplateModel(String language, String plannerPath, String rawQuery) {
+        return renderMigrationPlannerTemplateModel(
+                language,
+                plannerPath,
+                resolveMigrationPlannerPageState(parseQuery(rawQuery), null)
+        );
     }
 
     public DashboardTemplateModel renderMigrationPlannerTemplateModel(
@@ -176,11 +185,23 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             String plannerPath,
             MigrationSchemaDiscovery.Result bootstrapDiscovery
     ) {
+        return renderMigrationPlannerTemplateModel(
+                language,
+                plannerPath,
+                resolveMigrationPlannerPageState(Map.of(), bootstrapDiscovery)
+        );
+    }
+
+    private DashboardTemplateModel renderMigrationPlannerTemplateModel(
+            String language,
+            String plannerPath,
+            MigrationPlannerPageState pageState
+    ) {
         String normalizedLanguage = normalizeDashboardLanguage(language);
         String previousLanguage = dashboardLanguage.get();
         dashboardLanguage.set(normalizedLanguage);
         try {
-            String html = renderMigrationPlanner(normalizedLanguage, plannerPath, bootstrapDiscovery);
+            String html = renderMigrationPlanner(normalizedLanguage, plannerPath, pageState);
             return new DashboardTemplateModel(
                     normalizedLanguage,
                     extractBetween(html, "<head>", "</head>"),
@@ -298,11 +319,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         }
         Map<String, List<String>> query = parseQuery(exchange.getRequestURI().getRawQuery());
         String language = normalizeDashboardLanguage(first(query, "lang"));
-        boolean bootstrapDiscovery = "1".equals(first(query, "discover"))
-                || "true".equalsIgnoreCase(first(query, "discover"));
         String previousLanguage = dashboardLanguage.get();
         dashboardLanguage.set(language);
         try {
+            MigrationPlannerPageState pageState = resolveMigrationPlannerPageState(query, null);
             sendText(
                     exchange,
                     200,
@@ -310,7 +330,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                     renderMigrationPlanner(
                             language,
                             exchange.getRequestURI().getPath(),
-                            bootstrapDiscovery ? admin.discoverMigrationSchema() : null
+                            pageState
                     )
             );
         } finally {
@@ -2439,9 +2459,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private String renderMigrationPlanner(
             String language,
             String plannerPath,
-            MigrationSchemaDiscovery.Result bootstrapDiscovery
+            MigrationPlannerPageState pageState
     ) {
         String normalizedLanguage = normalizeDashboardLanguage(language);
+        MigrationSchemaDiscovery.Result bootstrapDiscovery = pageState == null ? null : pageState.discovery();
+        Map<String, String> plannerValues = pageState == null ? defaultMigrationPlannerFormValues() : pageState.formValues();
         String title = escapeHtml(uiString("migrationPlanner.pageTitle", localized(normalizedLanguage, "CacheDB Geçiş Planlayıcı", "CacheDB Migration Planner")));
         String basePath = resolveDashboardBasePath(plannerPath);
         String dashboardUrl = escapeHtml(appendQuery(
@@ -2450,6 +2472,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         ));
         String apiBasePath = escapeJs(basePath);
         String bootstrapDiscoveryJson = bootstrapDiscovery == null ? "null" : renderMigrationSchemaDiscovery(bootstrapDiscovery);
+        String bootstrapPlannerFormJson = renderPlannerFormValues(plannerValues);
         String discoveryFallbackAction = escapeHtml(basePath.isBlank() ? "/cachedb-admin/migration-planner" : basePath + "/migration-planner");
         String bootstrapDiscoveryStatus = escapeHtml(localized(
                 normalizedLanguage,
@@ -2575,9 +2598,9 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<div id=\"plannerDemoPanel\" class=\"result-card mb-4\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "0. Demo PostgreSQL şemasını hazırla", "0. Prepare the demo PostgreSQL schema")) + "</div><div class=\"result-card-body\">"
                 + "<div class=\"small text-muted mb-3\">" + escapeHtml(localized(normalizedLanguage, "Bu aksiyon, customer/order odaklı örnek PostgreSQL tablolarını, PK/FK ilişkilerini, indeksleri ve view'leri kurar; ardından migration planner için kullanılabilecek seed verisini yükler.", "This action prepares example customer/order PostgreSQL tables, PK/FK relationships, indexes, and views, then loads seed data that the migration planner can use.")) + "</div>"
                 + "<div class=\"form-grid\">"
-                + fieldInput("demoCustomerCount", localized(normalizedLanguage, "Demo müşteri sayısı", "Demo customer count"), "120", "")
-                + fieldInput("demoHotCustomerCount", localized(normalizedLanguage, "Yoğun müşteri sayısı", "Hot customer count"), "12", "")
-                + fieldInput("demoMaxOrdersPerCustomer", localized(normalizedLanguage, "Müşteri başına maks sipariş", "Max orders per customer"), "1500", "")
+                + fieldInput("demoCustomerCount", localized(normalizedLanguage, "Demo müşteri sayısı", "Demo customer count"), "120", "", plannerValues.get("demoCustomerCount"))
+                + fieldInput("demoHotCustomerCount", localized(normalizedLanguage, "Yoğun müşteri sayısı", "Hot customer count"), "12", "", plannerValues.get("demoHotCustomerCount"))
+                + fieldInput("demoMaxOrdersPerCustomer", localized(normalizedLanguage, "Müşteri başına maks sipariş", "Max orders per customer"), "1500", "", plannerValues.get("demoMaxOrdersPerCustomer"))
                 + "</div>"
                 + "<div class=\"planner-actions mt-3\"><button id=\"plannerDemoBootstrapAction\" type=\"button\" class=\"btn btn-outline-primary\">" + escapeHtml(localized(normalizedLanguage, "Demo şemayı kur ve seed et", "Create and seed the demo schema")) + "</button></div>"
                 + "<div id=\"plannerDemoStatus\" class=\"planner-status mt-3\">" + escapeHtml(localized(normalizedLanguage, "İstersen hazır demo customer/order şemasını kur. Sonra discovery, scaffold, warm ve compare adımlarını aynı ekrandan deneyebilirsin.", "Optionally create the ready-made demo customer/order schema first. Then you can try discovery, scaffold, warm, and compare from the same screen.")) + "</div>"
@@ -2598,79 +2621,79 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<button id=\"plannerDiscoverAction\" type=\"submit\" class=\"btn btn-outline-primary\">" + escapeHtml(localized(normalizedLanguage, "PostgreSQL'den Keşfet", "Discover From PostgreSQL")) + "</button>"
                 + "</form>"
                 + "<div id=\"plannerDiscoveryStatus\" class=\"planner-status mt-3\">" + bootstrapDiscoveryStatus + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Önerilen route adayları", "Suggested route candidates")) + "</div><div id=\"plannerDiscoverySuggestions\">" + renderStaticDiscoverySuggestions(bootstrapDiscovery, normalizedLanguage) + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Keşfedilen tablolar", "Discovered tables")) + "</div><div id=\"plannerDiscoveryTables\">" + renderStaticDiscoveryTables(bootstrapDiscovery, normalizedLanguage) + "</div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Önerilen route adayları", "Suggested route candidates")) + "</div><div id=\"plannerDiscoverySuggestions\">" + renderStaticDiscoverySuggestions(bootstrapDiscovery, normalizedLanguage, discoveryFallbackAction, plannerValues) + "</div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Keşfedilen tablolar", "Discovered tables")) + "</div><div id=\"plannerDiscoveryTables\">" + renderStaticDiscoveryTables(bootstrapDiscovery, normalizedLanguage, discoveryFallbackAction, plannerValues) + "</div>"
                 + "</div></div>"
                 + "<form id=\"plannerForm\">"
                 + "<div class=\"planner-form-grid\">"
                 + "<div class=\"full planner-quickstart\"><div class=\"planner-quickstart-title\">" + escapeHtml(localized(normalizedLanguage, "Kısa kullanım akışı", "Quick usage flow")) + "</div><p class=\"planner-quickstart-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Önce keşfi çalıştır, sonra kök ve çocuk yüzeyi listeden seç. Ekran tipini belirledikten sonra planı üret; warm, scaffold ve compare adımları onun altında açılır.", "Start with discovery, then choose the root and child surfaces from the list. After selecting the screen type, generate the plan; warm, scaffold, and compare unlock below."))
                 + "</p></div>"
-                + fieldInput("workloadName", localized(normalizedLanguage, "İş yükü adı", "Workload name"), "customer-orders", "full")
+                + fieldInput("workloadName", localized(normalizedLanguage, "İş yükü adı", "Workload name"), "customer-orders", "full", plannerValues.get("workloadName"))
                 + "<div id=\"plannerConfigurePanel\" class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "1. Ekran tipi", "1. Screen type")) + "</div><div class=\"planner-form-section-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Bu seçim planner'ın temel varsayımlarını hazırlar. İstersen aşağıdaki ileri ayarlarda bunları ayrıca değiştirebilirsin.", "This choice prepares the planner's default assumptions. You can still override them later in the advanced settings."))
                 + "</div><div><label class=\"form-label fw-semibold\">" + escapeHtml(localized(normalizedLanguage, "Hazır ekran profili", "Prepared screen profile")) + "</label><select class=\"form-select\" name=\"routePreset\">"
-                + "<option value=\"timeline\">" + escapeHtml(localized(normalizedLanguage, "Timeline / müşteri sipariş listesi", "Timeline / customer order list")) + "</option>"
-                + "<option value=\"leaderboard\">" + escapeHtml(localized(normalizedLanguage, "Top-N / global sıralı ekran", "Top-N / globally sorted screen")) + "</option>"
-                + "<option value=\"threshold\">" + escapeHtml(localized(normalizedLanguage, "Threshold / aralık odaklı ekran", "Threshold / range-driven screen")) + "</option>"
-                + "<option value=\"detail-heavy\">" + escapeHtml(localized(normalizedLanguage, "Detail ağırlıklı ekran", "Detail-heavy screen")) + "</option>"
+                + selectOption("timeline", localized(normalizedLanguage, "Timeline / müşteri sipariş listesi", "Timeline / customer order list"), plannerValues.get("routePreset"))
+                + selectOption("leaderboard", localized(normalizedLanguage, "Top-N / global sıralı ekran", "Top-N / globally sorted screen"), plannerValues.get("routePreset"))
+                + selectOption("threshold", localized(normalizedLanguage, "Threshold / aralık odaklı ekran", "Threshold / range-driven screen"), plannerValues.get("routePreset"))
+                + selectOption("detail-heavy", localized(normalizedLanguage, "Detail ağırlıklı ekran", "Detail-heavy screen"), plannerValues.get("routePreset"))
                 + "</select><div id=\"plannerPresetHelp\" class=\"planner-select-help\">"
                 + escapeHtml(localized(normalizedLanguage, "Timeline seçimi, müşteri başına son siparişler gibi bounded sıcak pencere ekranları için en doğru başlangıçtır.", "Timeline is the best starting point for bounded hot-window screens such as recent orders per customer."))
                 + "</div></div></div>"
                 + "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "2. Veri yüzeyini seç", "2. Choose the data surfaces")) + "</div><div class=\"planner-form-section-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Keşif çalıştıktan sonra aşağıdaki listeler otomatik dolar. İstersen önerilen route kartından tek tıkla formu da doldurabilirsin.", "After discovery runs, the lists below are populated automatically. You can also apply a suggested route card with one click."))
                 + "</div><div class=\"planner-form-grid\">"
-                + selectInput("rootTableOrEntity", localized(normalizedLanguage, "Kök tablo / entity", "Root table / entity"), localized(normalizedLanguage, "Önce keşif çalıştır", "Run discovery first"), "")
-                + selectInput("childTableOrEntity", localized(normalizedLanguage, "Çocuk tablo / entity / view", "Child table / entity / view"), localized(normalizedLanguage, "Önce keşif çalıştır", "Run discovery first"), "")
-                + selectInput("rootPrimaryKeyColumn", localized(normalizedLanguage, "Kök PK kolonu", "Root PK column"), localized(normalizedLanguage, "Kök seçimine göre dolar", "Filled from the selected root"), "")
-                + selectInput("childPrimaryKeyColumn", localized(normalizedLanguage, "Çocuk PK kolonu", "Child PK column"), localized(normalizedLanguage, "Çocuk seçimine göre dolar", "Filled from the selected child"), "")
-                + selectInput("relationColumn", localized(normalizedLanguage, "İlişki kolonu", "Relation column"), localized(normalizedLanguage, "Önerilen FK kolonları", "Suggested FK columns"), "")
-                + selectInput("sortColumn", localized(normalizedLanguage, "Liste sıralama kolonu", "List sort column"), localized(normalizedLanguage, "Zamansal / sayısal kolonlardan seç", "Choose from temporal / numeric columns"), "")
-                + "<div><label class=\"form-label fw-semibold\">" + escapeHtml(localized(normalizedLanguage, "Sıralama yönü", "Sort direction")) + "</label><select class=\"form-select\" name=\"sortDirection\"><option value=\"DESC\">DESC</option><option value=\"ASC\">ASC</option></select><div class=\"planner-select-help\">" + escapeHtml(localized(normalizedLanguage, "Timeline için çoğu durumda DESC ile başla. ASC daha çok oldest-first archive ekranlarında gerekir.", "Start with DESC for most timelines. ASC is usually needed only for oldest-first archive screens.")) + "</div></div>"
+                + selectInput("rootTableOrEntity", localized(normalizedLanguage, "Kök tablo / entity", "Root table / entity"), localized(normalizedLanguage, "Önce keşif çalıştır", "Run discovery first"), "", discoveredSurfaceOptions(bootstrapDiscovery, false, normalizedLanguage), plannerValues.get("rootTableOrEntity"))
+                + selectInput("childTableOrEntity", localized(normalizedLanguage, "Çocuk tablo / entity / view", "Child table / entity / view"), localized(normalizedLanguage, "Önce keşif çalıştır", "Run discovery first"), "", discoveredSurfaceOptions(bootstrapDiscovery, true, normalizedLanguage), plannerValues.get("childTableOrEntity"))
+                + selectInput("rootPrimaryKeyColumn", localized(normalizedLanguage, "Kök PK kolonu", "Root PK column"), localized(normalizedLanguage, "Kök seçimine göre dolar", "Filled from the selected root"), "", discoveredColumnOptions(resolveDiscoveryTable(bootstrapDiscovery, plannerValues.get("rootTableOrEntity")), "pk"), plannerValues.get("rootPrimaryKeyColumn"))
+                + selectInput("childPrimaryKeyColumn", localized(normalizedLanguage, "Çocuk PK kolonu", "Child PK column"), localized(normalizedLanguage, "Çocuk seçimine göre dolar", "Filled from the selected child"), "", discoveredColumnOptions(resolveDiscoveryTable(bootstrapDiscovery, plannerValues.get("childTableOrEntity")), "pk"), plannerValues.get("childPrimaryKeyColumn"))
+                + selectInput("relationColumn", localized(normalizedLanguage, "İlişki kolonu", "Relation column"), localized(normalizedLanguage, "Önerilen FK kolonları", "Suggested FK columns"), "", discoveredRelationOptions(bootstrapDiscovery, plannerValues.get("rootTableOrEntity"), plannerValues.get("childTableOrEntity"), normalizedLanguage), plannerValues.get("relationColumn"))
+                + selectInput("sortColumn", localized(normalizedLanguage, "Liste sıralama kolonu", "List sort column"), localized(normalizedLanguage, "Zamansal / sayısal kolonlardan seç", "Choose from temporal / numeric columns"), "", discoveredColumnOptions(resolveDiscoveryTable(bootstrapDiscovery, plannerValues.get("childTableOrEntity")), "sort"), plannerValues.get("sortColumn"))
+                + selectInput("sortDirection", localized(normalizedLanguage, "Sıralama yönü", "Sort direction"), localized(normalizedLanguage, "Sıralama yönünü seç", "Choose the sort direction"), "", List.of(new PlannerSelectOption("DESC", "DESC"), new PlannerSelectOption("ASC", "ASC")), plannerValues.get("sortDirection"))
                 + "</div></div>"
                 + "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "3. Hızlı kapasite kararı", "3. Quick capacity decision")) + "</div><div class=\"planner-form-section-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Buradaki değerler tam hesap olmak zorunda değil. Planner için kaba ölçek ve sıcak pencere hedefini vermen yeterli.", "These values do not need to be exact. A rough scale and hot-window target are enough for the planner."))
                 + "</div><div class=\"planner-form-grid\">"
-                + fieldInput("rootRowCount", localized(normalizedLanguage, "Kök satır sayısı", "Root row count"), "100000", "")
-                + fieldInput("childRowCount", localized(normalizedLanguage, "Çocuk satır sayısı", "Child row count"), "5000000", "")
-                + fieldInput("firstPageSize", localized(normalizedLanguage, "İlk sayfa boyutu", "First page size"), "100", "")
-                + fieldInput("hotWindowPerRoot", localized(normalizedLanguage, "Sıcak pencere / kök", "Hot window / root"), "1000", "")
+                + fieldInput("rootRowCount", localized(normalizedLanguage, "Kök satır sayısı", "Root row count"), "100000", "", plannerValues.get("rootRowCount"))
+                + fieldInput("childRowCount", localized(normalizedLanguage, "Çocuk satır sayısı", "Child row count"), "5000000", "", plannerValues.get("childRowCount"))
+                + fieldInput("firstPageSize", localized(normalizedLanguage, "İlk sayfa boyutu", "First page size"), "100", "", plannerValues.get("firstPageSize"))
+                + fieldInput("hotWindowPerRoot", localized(normalizedLanguage, "Sıcak pencere / kök", "Hot window / root"), "1000", "", plannerValues.get("hotWindowPerRoot"))
                 + "</div></div>"
                 + "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "4. Operasyon tercihleri", "4. Operational preferences")) + "</div><div class=\"planner-form-section-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Bunlar doğrudan mimari kararını etkileyen temel seçimler. Geri kalan ayrıntılar aşağıdaki ileri ayarlarda duruyor.", "These are the key preferences that directly shape the architecture decision. The rest stays in the advanced settings below."))
                 + "</div><div class=\"planner-toggle-grid\">"
-                + checkboxInput("archiveHistoryRequired", localized(normalizedLanguage, "Eski tarihçe archive olarak kalsın", "Keep older history as archive"), true)
-                + checkboxInput("detailLookupIsHot", localized(normalizedLanguage, "Tekil detail lookup da sıcak", "Single-item detail lookup is also hot"), true)
-                + checkboxInput("sideBySideComparisonRequired", localized(normalizedLanguage, "Staging karşılaştırması istiyorum", "I want staging comparison"), true)
-                + checkboxInput("warmRootRows", localized(normalizedLanguage, "Warm sırasında kök satırları da doldur", "Warm the root rows too"), true)
+                + checkboxInput("archiveHistoryRequired", localized(normalizedLanguage, "Eski tarihçe archive olarak kalsın", "Keep older history as archive"), parseChecked(plannerValues, "archiveHistoryRequired", true))
+                + checkboxInput("detailLookupIsHot", localized(normalizedLanguage, "Tekil detail lookup da sıcak", "Single-item detail lookup is also hot"), parseChecked(plannerValues, "detailLookupIsHot", true))
+                + checkboxInput("sideBySideComparisonRequired", localized(normalizedLanguage, "Staging karşılaştırması istiyorum", "I want staging comparison"), parseChecked(plannerValues, "sideBySideComparisonRequired", true))
+                + checkboxInput("warmRootRows", localized(normalizedLanguage, "Warm sırasında kök satırları da doldur", "Warm the root rows too"), parseChecked(plannerValues, "warmRootRows", true))
                 + "</div></div>"
                 + "<details class=\"full planner-advanced\" data-planner-mode-min=\"intermediate\"><summary>" + escapeHtml(localized(normalizedLanguage, "İleri route ayarları", "Advanced route settings")) + "</summary><div class=\"planner-advanced-body\"><div class=\"planner-form-grid\">"
-                + fieldInput("typicalChildrenPerRoot", localized(normalizedLanguage, "Tipik çocuk sayısı / kök", "Typical children per root"), "40", "")
-                + fieldInput("maxChildrenPerRoot", localized(normalizedLanguage, "Maks çocuk sayısı / kök", "Max children per root"), "2000", "")
-                + checkboxInput("listScreen", localized(normalizedLanguage, "Bu ekran bir liste / timeline ekranı", "This route is a list / timeline screen"), true)
-                + checkboxInput("firstPaintNeedsFullAggregate", localized(normalizedLanguage, "İlk boyamada tam aggregate gerekli", "First paint needs the full aggregate"), false)
-                + checkboxInput("globalSortedScreen", localized(normalizedLanguage, "Global sıralı ekran var", "There is a global sorted screen"), false)
-                + checkboxInput("thresholdOrRangeScreen", localized(normalizedLanguage, "Threshold / range driven ekran var", "There is a threshold / range-driven screen"), false)
-                + checkboxInput("fullHistoryMustStayHot", localized(normalizedLanguage, "Tüm tarihçe Redis'te sıcak kalmalı", "Full history must stay hot in Redis"), false)
-                + checkboxInput("currentOrmUsesEagerLoading", localized(normalizedLanguage, "Mevcut ORM yolu eager-loading ağırlıklı", "Current ORM route is eager-loading heavy"), true)
-                + checkboxInput("dryRun", localized(normalizedLanguage, "Önce dry run yap, Redis'i değiştirme", "Start with a dry run and do not mutate Redis"), false)
+                + fieldInput("typicalChildrenPerRoot", localized(normalizedLanguage, "Tipik çocuk sayısı / kök", "Typical children per root"), "40", "", plannerValues.get("typicalChildrenPerRoot"))
+                + fieldInput("maxChildrenPerRoot", localized(normalizedLanguage, "Maks çocuk sayısı / kök", "Max children per root"), "2000", "", plannerValues.get("maxChildrenPerRoot"))
+                + checkboxInput("listScreen", localized(normalizedLanguage, "Bu ekran bir liste / timeline ekranı", "This route is a list / timeline screen"), parseChecked(plannerValues, "listScreen", true))
+                + checkboxInput("firstPaintNeedsFullAggregate", localized(normalizedLanguage, "İlk boyamada tam aggregate gerekli", "First paint needs the full aggregate"), parseChecked(plannerValues, "firstPaintNeedsFullAggregate", false))
+                + checkboxInput("globalSortedScreen", localized(normalizedLanguage, "Global sıralı ekran var", "There is a global sorted screen"), parseChecked(plannerValues, "globalSortedScreen", false))
+                + checkboxInput("thresholdOrRangeScreen", localized(normalizedLanguage, "Threshold / range driven ekran var", "There is a threshold / range-driven screen"), parseChecked(plannerValues, "thresholdOrRangeScreen", false))
+                + checkboxInput("fullHistoryMustStayHot", localized(normalizedLanguage, "Tüm tarihçe Redis'te sıcak kalmalı", "Full history must stay hot in Redis"), parseChecked(plannerValues, "fullHistoryMustStayHot", false))
+                + checkboxInput("currentOrmUsesEagerLoading", localized(normalizedLanguage, "Mevcut ORM yolu eager-loading ağırlıklı", "Current ORM route is eager-loading heavy"), parseChecked(plannerValues, "currentOrmUsesEagerLoading", true))
+                + checkboxInput("dryRun", localized(normalizedLanguage, "Önce dry run yap, Redis'i değiştirme", "Start with a dry run and do not mutate Redis"), parseChecked(plannerValues, "dryRun", false))
                 + "</div></div></details>"
                 + "<details class=\"full planner-advanced\" data-planner-mode-min=\"advanced\"><summary>" + escapeHtml(localized(normalizedLanguage, "İleri scaffold ve comparison ayarları", "Advanced scaffold and comparison settings")) + "</summary><div class=\"planner-advanced-body\"><div class=\"planner-form-grid\">"
-                + fieldInput("basePackage", localized(normalizedLanguage, "Üretilecek package", "Generated package"), "com.example.cachedb.migration", "")
-                + fieldInput("rootClassName", localized(normalizedLanguage, "Kök entity sınıf adı", "Root entity class name"), "CustomerEntity", "")
-                + fieldInput("childClassName", localized(normalizedLanguage, "Çocuk entity sınıf adı", "Child entity class name"), "OrderEntity", "")
-                + fieldInput("relationLoaderClassName", localized(normalizedLanguage, "Relation loader sınıf adı", "Relation loader class name"), "CustomerOrderRelationBatchLoader", "")
-                + fieldInput("projectionSupportClassName", localized(normalizedLanguage, "Projection destek sınıf adı", "Projection support class name"), "CustomerOrderReadModels", "")
-                + fieldInput("comparisonSampleRootId", localized(normalizedLanguage, "Karşılaştırma örnek kök id", "Comparison sample root id"), localized(normalizedLanguage, "Boş bırakırsan sistem seçer", "Leave blank to auto-pick"), "")
-                + fieldInput("comparisonSampleRootCount", localized(normalizedLanguage, "Karşılaştırılacak örnek kök sayısı", "Comparison sample root count"), "3", "")
-                + fieldInput("comparisonPageSize", localized(normalizedLanguage, "Karşılaştırma sayfa boyutu", "Comparison page size"), "100", "")
-                + fieldInput("comparisonWarmupIterations", localized(normalizedLanguage, "Warm-up iterasyonu", "Warm-up iterations"), "2", "")
-                + fieldInput("comparisonMeasuredIterations", localized(normalizedLanguage, "Ölçüm iterasyonu", "Measured iterations"), "8", "")
-                + fieldInput("comparisonProjectionName", localized(normalizedLanguage, "Projection override adı", "Projection override name"), localized(normalizedLanguage, "Opsiyonel", "Optional"), "")
-                + checkboxInput("includeRelationLoader", localized(normalizedLanguage, "Relation loader iskeletini üret", "Generate relation loader skeleton"), true)
-                + checkboxInput("includeProjectionSkeleton", localized(normalizedLanguage, "Projection iskeletini üret", "Generate projection skeleton"), true)
-                + checkboxInput("warmBeforeCompare", localized(normalizedLanguage, "Karşılaştırmadan önce warm çalıştır", "Run warm before comparison"), false)
-                + textareaInput("comparisonBaselineSql", localized(normalizedLanguage, "Baseline SQL override", "Baseline SQL override"), localized(normalizedLanguage, "Varsayılan türetilmiş SQL yerine kullanılır", "Used instead of the derived baseline SQL"), "full")
+                + fieldInput("basePackage", localized(normalizedLanguage, "Üretilecek package", "Generated package"), "com.example.cachedb.migration", "", plannerValues.get("basePackage"))
+                + fieldInput("rootClassName", localized(normalizedLanguage, "Kök entity sınıf adı", "Root entity class name"), "CustomerEntity", "", plannerValues.get("rootClassName"))
+                + fieldInput("childClassName", localized(normalizedLanguage, "Çocuk entity sınıf adı", "Child entity class name"), "OrderEntity", "", plannerValues.get("childClassName"))
+                + fieldInput("relationLoaderClassName", localized(normalizedLanguage, "Relation loader sınıf adı", "Relation loader class name"), "CustomerOrderRelationBatchLoader", "", plannerValues.get("relationLoaderClassName"))
+                + fieldInput("projectionSupportClassName", localized(normalizedLanguage, "Projection destek sınıf adı", "Projection support class name"), "CustomerOrderReadModels", "", plannerValues.get("projectionSupportClassName"))
+                + fieldInput("comparisonSampleRootId", localized(normalizedLanguage, "Karşılaştırma örnek kök id", "Comparison sample root id"), localized(normalizedLanguage, "Boş bırakırsan sistem seçer", "Leave blank to auto-pick"), "", plannerValues.get("comparisonSampleRootId"))
+                + fieldInput("comparisonSampleRootCount", localized(normalizedLanguage, "Karşılaştırılacak örnek kök sayısı", "Comparison sample root count"), "3", "", plannerValues.get("comparisonSampleRootCount"))
+                + fieldInput("comparisonPageSize", localized(normalizedLanguage, "Karşılaştırma sayfa boyutu", "Comparison page size"), "100", "", plannerValues.get("comparisonPageSize"))
+                + fieldInput("comparisonWarmupIterations", localized(normalizedLanguage, "Warm-up iterasyonu", "Warm-up iterations"), "2", "", plannerValues.get("comparisonWarmupIterations"))
+                + fieldInput("comparisonMeasuredIterations", localized(normalizedLanguage, "Ölçüm iterasyonu", "Measured iterations"), "8", "", plannerValues.get("comparisonMeasuredIterations"))
+                + fieldInput("comparisonProjectionName", localized(normalizedLanguage, "Projection override adı", "Projection override name"), localized(normalizedLanguage, "Opsiyonel", "Optional"), "", plannerValues.get("comparisonProjectionName"))
+                + checkboxInput("includeRelationLoader", localized(normalizedLanguage, "Relation loader iskeletini üret", "Generate relation loader skeleton"), parseChecked(plannerValues, "includeRelationLoader", true))
+                + checkboxInput("includeProjectionSkeleton", localized(normalizedLanguage, "Projection iskeletini üret", "Generate projection skeleton"), parseChecked(plannerValues, "includeProjectionSkeleton", true))
+                + checkboxInput("warmBeforeCompare", localized(normalizedLanguage, "Karşılaştırmadan önce warm çalıştır", "Run warm before comparison"), parseChecked(plannerValues, "warmBeforeCompare", false))
+                + textareaInput("comparisonBaselineSql", localized(normalizedLanguage, "Baseline SQL override", "Baseline SQL override"), localized(normalizedLanguage, "Varsayılan türetilmiş SQL yerine kullanılır", "Used instead of the derived baseline SQL"), "full", plannerValues.get("comparisonBaselineSql"))
                 + "</div></div></details>"
                 + "</div>"
                 + "<div class=\"planner-chip-row\">"
@@ -2772,6 +2795,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "(function(){"
                 + "const apiBase='" + apiBasePath + "';"
                 + "const bootstrapDiscovery=" + bootstrapDiscoveryJson + ";"
+                + "const bootstrapPlannerForm=" + bootstrapPlannerFormJson + ";"
                 + "const form=document.getElementById('plannerForm');"
                 + "const status=document.getElementById('plannerStatus');"
                 + "const defaultsButton=document.getElementById('plannerDefaults');"
@@ -2838,6 +2862,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "function syncPresetFromForm(){if(!routePresetField){return;}const listField=plannerField('listScreen');const fullAggregateField=plannerField('firstPaintNeedsFullAggregate');const globalField=plannerField('globalSortedScreen');const thresholdField=plannerField('thresholdOrRangeScreen');if(fullAggregateField&&fullAggregateField.checked&&!listField.checked){routePresetField.value='detail-heavy';}else if(globalField&&globalField.checked){routePresetField.value='leaderboard';}else if(thresholdField&&thresholdField.checked){routePresetField.value='threshold';}else{routePresetField.value='timeline';}updatePresetHelp();}"
                 + "function fillForm(data){Object.entries(data||{}).forEach(function(entry){const name=entry[0];const value=entry[1];const field=form.elements.namedItem(name);if(!field){return;}if(field instanceof RadioNodeList){return;}if(field.type==='checkbox'){field.checked=!!value;}else{field.value=value;}});syncDiscoverySelectors();syncPresetFromForm();updatePlannerProgress();}"
                 + "function serializeForm(){const params=new URLSearchParams();Array.from(form.elements).forEach(function(field){if(!field.name){return;}if(field.type==='checkbox'){params.set(field.name, field.checked ? 'true' : 'false');return;}params.set(field.name, field.value || '');});return params;}"
+                + "function demoFieldValue(name){const field=document.querySelector('[name=\"'+name+'\"]');return field?String(field.value||''):'';}"
+                + "function plannerNavigationHref(overrides){const params=new URLSearchParams(window.location.search||'');serializeForm().forEach(function(value,key){params.set(key,value);});['demoCustomerCount','demoHotCustomerCount','demoMaxOrdersPerCustomer'].forEach(function(name){const value=demoFieldValue(name);if(value){params.set(name,value);}});params.set('lang','" + escapeJs(normalizedLanguage) + "');if(!params.get('v')){params.set('v','" + dashboardInstanceId + "');}params.set('discover','true');Object.entries(overrides||{}).forEach(function(entry){const key=entry[0];const value=entry[1];if(value===undefined||value===null||value===''){params.delete(key);return;}params.set(key,String(value));});return window.location.pathname+'?'+params.toString();}"
                 + "function renderList(targetId, items, emptyMessage){const root=document.getElementById(targetId);const fallback=emptyMessage||'" + escapeJs(localized(normalizedLanguage, "Bu bölüm için ek madde üretilmedi.", "No extra items were generated for this section.")) + "';if(!items||!items.length){root.innerHTML='<div class=\"planner-empty\">' + escapeHtml(fallback) + '</div>';return;}root.innerHTML='<ul class=\"result-list\">'+items.map(function(item){return '<li>'+escapeHtml(item)+'</li>';}).join('')+'</ul>';}"
                 + "function renderWarmSteps(items){const root=document.getElementById('plannerWarmSteps');root.innerHTML=(items||[]).map(function(step,index){return '<div class=\"result-step\"><div class=\"result-step-title\">'+escapeHtml((index+1)+'. '+step.title)+'</div><div class=\"result-step-summary\">'+escapeHtml(step.summary)+'</div><ul class=\"result-list\">'+(step.tasks||[]).map(function(task){return '<li>'+escapeHtml(task)+'</li>';}).join('')+'</ul></div>';}).join('');}"
                 + "function renderComparisonChecks(items){const root=document.getElementById('plannerComparisonChecks');root.innerHTML=(items||[]).map(function(check){return '<div class=\"result-check\"><div class=\"result-step-title\">'+escapeHtml(check.title)+'</div><div class=\"small text-muted mb-2\">'+escapeHtml(check.baseline)+'</div><div class=\"fw-semibold\">'+escapeHtml(check.target)+'</div></div>';}).join('');}"
@@ -2848,7 +2874,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "function formatAssessmentReadiness(value){switch(String(value||'')){case 'READY':return '" + escapeJs(localized(normalizedLanguage, "Hazır", "Ready")) + "';case 'NEEDS_REVIEW':return '" + escapeJs(localized(normalizedLanguage, "Gözden geçir", "Needs review")) + "';case 'NOT_READY':return '" + escapeJs(localized(normalizedLanguage, "Hazır değil", "Not ready")) + "';default:return value||'-';}}"
                 + "function formatAssessmentParity(value){switch(String(value||'')){case 'EXACT':return '" + escapeJs(localized(normalizedLanguage, "Tam eşleşme", "Exact parity")) + "';case 'PARTIAL':return '" + escapeJs(localized(normalizedLanguage, "Kısmi eşleşme", "Partial parity")) + "';case 'MISMATCH':return '" + escapeJs(localized(normalizedLanguage, "Uyumsuz", "Mismatch")) + "';case 'NO_SAMPLES':return '" + escapeJs(localized(normalizedLanguage, "Örnek yok", "No samples")) + "';default:return value||'-';}}"
                 + "function renderDemoBootstrap(result){if(!demoResults){return;}demoResults.classList.remove('d-none');setMetric('plannerDemoCustomers',String(result.customerCount||0));setMetric('plannerDemoOrders',String(result.orderCount||0));setMetric('plannerDemoHottestCustomer',String(result.hottestCustomerOrderCount||0));setMetric('plannerDemoViews',String((result.viewNames||[]).length));renderList('plannerDemoNotes',result.notes,'" + escapeJs(localized(normalizedLanguage, "Demo seed notu üretilmedi.", "No demo seed note was generated.")) + "');if(result.plannerDefaults){fillForm(result.plannerDefaults);}}"
-                + "function renderDiscovery(result){const suggestionRoot=document.getElementById('plannerDiscoverySuggestions');const tableRoot=document.getElementById('plannerDiscoveryTables');const warnings=result.warnings||[];discoverySuggestions=result.routeSuggestions||[];discoveredTables=result.tables||[];rebuildDiscoveryLookup();syncDiscoverySelectors();const warningHtml=warnings.length?warnings.map(function(item){return '<div class=\"planner-warning mb-2\">'+escapeHtml(item)+'</div>';}).join(''):'';if(discoverySuggestions.length){suggestionRoot.innerHTML=warningHtml+discoverySuggestions.map(function(item,index){const surfaces=[item.rootEntityName||item.rootSurface,item.childEntityName||item.childSurface].filter(Boolean).join(' → ');const sortCandidates=(item.sortCandidates||[]).join(', ');const badges=[];if(item.temporalSortCandidate){badges.push('<span class=\"planner-badge\">" + escapeJs(localized(normalizedLanguage, "zamansal sıra", "temporal sort")) + "</span>');}if(item.rankedSortCandidate){badges.push('<span class=\"planner-badge\">" + escapeJs(localized(normalizedLanguage, "rank adayı", "rank candidate")) + "</span>');}return '<div class=\"result-check mb-3\"><div class=\"d-flex flex-column flex-lg-row justify-content-between gap-3\"><div><div>'+badges.join('')+'</div><div class=\"result-step-title\">'+escapeHtml(item.label)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml(item.summary)+'</div><div class=\"small mt-2\">'+escapeHtml(surfaces||'')+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "İlişki", "Relation")) + ": '+item.relationColumn+' · " + escapeJs(localized(normalizedLanguage, "Önerilen sıralama", "Suggested sort")) + ": '+item.sortColumn+' DESC')+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Alternatif sıralama kolonları", "Alternative sort columns")) + ": '+(sortCandidates||'-'))+'</div></div><div><button type=\"button\" class=\"btn btn-sm btn-outline-primary\" data-planner-suggestion=\"'+index+'\">" + escapeJs(localized(normalizedLanguage, "Forma Uygula", "Apply To Form")) + "</button></div></div></div>';}).join('');}else{suggestionRoot.innerHTML=warningHtml+'<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Keşiften otomatik route adayı çıkmadı. Yine de aşağıdaki listelerden tablo ve kolon seçerek plan üretebilirsin.", "No automatic route suggestion came out of discovery. You can still build the plan by choosing tables and columns from the lists below.")) + "')+'</div>';}if(discoveredTables.length){tableRoot.innerHTML=discoveredTables.map(function(item,index){const temporal=(item.temporalColumns||[]).join(', ');const foreignKeys=(item.foreignKeyColumns||[]).join(', ');const entityBadge=item.registeredEntityName?'<span class=\"planner-badge entity\">" + escapeJs(localized(normalizedLanguage, "entity", "entity")) + ": '+escapeHtml(item.registeredEntityName)+'</span>':'';const typeBadge='<span class=\"planner-badge '+(isView(item)?'view':'')+'\">'+escapeHtml(item.objectType||'TABLE')+'</span>';const actionButtons=isView(item)?'<button type=\"button\" class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"'+index+'\" data-planner-role=\"child\">" + escapeJs(localized(normalizedLanguage, "Çocuk olarak seç", "Use as child")) + "</button>':'<button type=\"button\" class=\"btn btn-sm btn-outline-primary\" data-planner-object=\"'+index+'\" data-planner-role=\"root\">" + escapeJs(localized(normalizedLanguage, "Kök seç", "Use as root")) + "</button><button type=\"button\" class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"'+index+'\" data-planner-role=\"child\">" + escapeJs(localized(normalizedLanguage, "Çocuk seç", "Use as child")) + "</button>';return '<div class=\"result-check mb-2\"><div>'+typeBadge+entityBadge+'</div><div class=\"result-step-title mt-2\">'+escapeHtml(item.qualifiedTableName)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('PK: '+(item.primaryKeyColumn||'-')+' · " + escapeJs(localized(normalizedLanguage, "Kolon", "Columns")) + ": '+item.columnCount+' · FK: '+item.importedKeyCount)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Zamansal kolonlar", "Temporal columns")) + ": '+(temporal||'-')+' · FK kolonları: '+(foreignKeys||'-'))+'</div><div class=\"planner-object-actions\">'+actionButtons+'</div></div>';}).join('');}else{tableRoot.innerHTML='<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Kullanıcı tablosu keşfedilemedi.", "No user tables were discovered.")) + "')+'</div>';}updatePlannerProgress();}"
+                + "function renderDiscovery(result){const suggestionRoot=document.getElementById('plannerDiscoverySuggestions');const tableRoot=document.getElementById('plannerDiscoveryTables');const warnings=result.warnings||[];discoverySuggestions=result.routeSuggestions||[];discoveredTables=result.tables||[];rebuildDiscoveryLookup();syncDiscoverySelectors();const warningHtml=warnings.length?warnings.map(function(item){return '<div class=\"planner-warning mb-2\">'+escapeHtml(item)+'</div>';}).join(''):'';if(discoverySuggestions.length){suggestionRoot.innerHTML=warningHtml+discoverySuggestions.map(function(item,index){const surfaces=[item.rootEntityName||item.rootSurface,item.childEntityName||item.childSurface].filter(Boolean).join(' → ');const sortCandidates=(item.sortCandidates||[]).join(', ');const badges=[];if(item.temporalSortCandidate){badges.push('<span class=\"planner-badge\">" + escapeJs(localized(normalizedLanguage, "zamansal sıra", "temporal sort")) + "</span>');}if(item.rankedSortCandidate){badges.push('<span class=\"planner-badge\">" + escapeJs(localized(normalizedLanguage, "rank adayı", "rank candidate")) + "</span>');}const applyHref=plannerNavigationHref({applySuggestion:index});return '<div class=\"result-check mb-3\"><div class=\"d-flex flex-column flex-lg-row justify-content-between gap-3\"><div><div>'+badges.join('')+'</div><div class=\"result-step-title\">'+escapeHtml(item.label)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml(item.summary)+'</div><div class=\"small mt-2\">'+escapeHtml(surfaces||'')+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "İlişki", "Relation")) + ": '+item.relationColumn+' · " + escapeJs(localized(normalizedLanguage, "Önerilen sıralama", "Suggested sort")) + ": '+item.sortColumn+' DESC')+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Alternatif sıralama kolonları", "Alternative sort columns")) + ": '+(sortCandidates||'-'))+'</div></div><div><a class=\"btn btn-sm btn-outline-primary\" data-planner-suggestion=\"'+index+'\" href=\"'+escapeHtml(applyHref)+'\">" + escapeJs(localized(normalizedLanguage, "Forma Uygula", "Apply To Form")) + "</a></div></div></div>';}).join('');}else{suggestionRoot.innerHTML=warningHtml+'<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Keşiften otomatik route adayı çıkmadı. Yine de aşağıdaki listelerden tablo ve kolon seçerek plan üretebilirsin.", "No automatic route suggestion came out of discovery. You can still build the plan by choosing tables and columns from the lists below.")) + "')+'</div>';}if(discoveredTables.length){tableRoot.innerHTML=discoveredTables.map(function(item,index){const temporal=(item.temporalColumns||[]).join(', ');const foreignKeys=(item.foreignKeyColumns||[]).join(', ');const entityBadge=item.registeredEntityName?'<span class=\"planner-badge entity\">" + escapeJs(localized(normalizedLanguage, "entity", "entity")) + ": '+escapeHtml(item.registeredEntityName)+'</span>':'';const typeBadge='<span class=\"planner-badge '+(isView(item)?'view':'')+'\">'+escapeHtml(item.objectType||'TABLE')+'</span>';const rootHref=plannerNavigationHref({plannerRole:'root',selectObject:index});const childHref=plannerNavigationHref({plannerRole:'child',selectObject:index});const actionButtons=isView(item)?'<a class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"'+index+'\" data-planner-role=\"child\" href=\"'+escapeHtml(childHref)+'\">" + escapeJs(localized(normalizedLanguage, "Çocuk olarak seç", "Use as child")) + "</a>':'<a class=\"btn btn-sm btn-outline-primary\" data-planner-object=\"'+index+'\" data-planner-role=\"root\" href=\"'+escapeHtml(rootHref)+'\">" + escapeJs(localized(normalizedLanguage, "Kök seç", "Use as root")) + "</a><a class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"'+index+'\" data-planner-role=\"child\" href=\"'+escapeHtml(childHref)+'\">" + escapeJs(localized(normalizedLanguage, "Çocuk seç", "Use as child")) + "</a>';return '<div class=\"result-check mb-2\"><div>'+typeBadge+entityBadge+'</div><div class=\"result-step-title mt-2\">'+escapeHtml(item.qualifiedTableName)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('PK: '+(item.primaryKeyColumn||'-')+' · " + escapeJs(localized(normalizedLanguage, "Kolon", "Columns")) + ": '+item.columnCount+' · FK: '+item.importedKeyCount)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Zamansal kolonlar", "Temporal columns")) + ": '+(temporal||'-')+' · FK kolonları: '+(foreignKeys||'-'))+'</div><div class=\"planner-object-actions\">'+actionButtons+'</div></div>';}).join('');}else{tableRoot.innerHTML='<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Kullanıcı tablosu keşfedilemedi.", "No user tables were discovered.")) + "')+'</div>';}updatePlannerProgress();}"
                 + "function applyDiscoverySuggestion(index){const suggestion=discoverySuggestions[index];if(!suggestion||!suggestion.plannerRequest){return;}fillForm(suggestion.plannerRequest);syncPresetFromForm();setStatus('" + escapeJs(localized(normalizedLanguage, "Keşif önerisi forma uygulandı. İstersen değerleri kontrol edip planı üret.", "Discovery suggestion applied to the form. Check the values if you want, then generate the plan.")) + "');updatePlannerProgress();window.scrollTo({top:0,behavior:'smooth'});}"
                 + "function applyDiscoveredObject(index, role){const item=discoveredTables[index];if(!item){return;}const target=role==='root'?'rootTableOrEntity':'childTableOrEntity';const field=plannerField(target);if(field){field.value=surfaceValue(item);syncDiscoverySelectors();updatePlannerProgress();setStatus('" + escapeJs(localized(normalizedLanguage, "Keşfedilen nesne forma işlendi. Şimdi diğer yüzeyi ve ekran tipini tamamlayabilirsin.", "The discovered object was applied to the form. You can now complete the other surface and the screen type.")) + "');}}"
                 + "async function loadDemoDescriptor(){setDemoStatus('" + escapeJs(localized(normalizedLanguage, "Demo şema açıklaması yükleniyor…", "Loading demo schema description…")) + "');try{const payload=await fetchJson(apiBase + '/api/migration-planner/demo');demoDescriptor=payload||null;if(payload&&payload.available){const demoCustomerField=form.elements.namedItem('demoCustomerCount');const demoHotCustomerField=form.elements.namedItem('demoHotCustomerCount');const demoMaxOrdersField=form.elements.namedItem('demoMaxOrdersPerCustomer');if(demoCustomerField){demoCustomerField.value=payload.defaultCustomerCount||120;}if(demoHotCustomerField){demoHotCustomerField.value=payload.defaultHotCustomerCount||12;}if(demoMaxOrdersField){demoMaxOrdersField.value=payload.defaultMaxOrdersPerCustomer||1500;}setDemoStatus(payload.summary||'" + escapeJs(localized(normalizedLanguage, "Demo seed hazır.", "Demo seed is ready.")) + "');}else{if(demoBootstrapButton){demoBootstrapButton.disabled=true;}setDemoStatus((payload&&payload.summary)||'" + escapeJs(localized(normalizedLanguage, "Bu runtime için demo seed desteklenmiyor.", "Demo seed is not available for this runtime.")) + "');}}catch(error){if(demoBootstrapButton){demoBootstrapButton.disabled=true;}setDemoStatus('" + escapeJs(localized(normalizedLanguage, "Demo şema bilgisi alınamadı: ", "Could not load demo schema info: ")) + "'+error.message);}}"
@@ -2881,13 +2907,185 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "if(compareButton){compareButton.addEventListener('click',function(){runComparison().catch(function(){});});}"
                 + "if(compareReportButton){compareReportButton.addEventListener('click',function(){downloadComparisonReport();});}"
                 + "document.addEventListener('click',function(event){const suggestionButton=event.target.closest('[data-planner-suggestion]');if(suggestionButton){event.preventDefault();applyDiscoverySuggestion(Number(suggestionButton.dataset.plannerSuggestion||-1));return;}const objectButton=event.target.closest('[data-planner-object]');if(objectButton){event.preventDefault();applyDiscoveredObject(Number(objectButton.dataset.plannerObject||-1),objectButton.dataset.plannerRole||'child');}});"
-                + "async function initializePlanner(){applyPlannerMode('beginner');applyRoutePreset(routePresetField&&routePresetField.value||'timeline',true);await loadTemplate();await loadDemoDescriptor();if(bootstrapDiscovery){renderDiscovery(bootstrapDiscovery);setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")) + "');}else{await loadDiscovery(false);}updatePlannerProgress();}"
+                + "async function initializePlanner(){applyPlannerMode('beginner');applyRoutePreset(routePresetField&&routePresetField.value||'timeline',true);await loadTemplate();if(bootstrapPlannerForm){fillForm(bootstrapPlannerForm);}await loadDemoDescriptor();if(bootstrapDiscovery){renderDiscovery(bootstrapDiscovery);setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")) + "');}else{await loadDiscovery(false);}updatePlannerProgress();}"
                 + "initializePlanner().catch(function(){setStatus('" + escapeJs(localized(normalizedLanguage, "Şablon yüklenemedi. Sayfayı yenileyip tekrar dene.", "Could not load the template. Refresh the page and try again.")) + "');setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi yüklenemedi. Sayfayı yenileyip tekrar dene.", "Schema discovery could not be loaded. Refresh the page and try again.")) + "');});"
                 + "})();"
                 + "</script></body></html>";
     }
 
-    private String renderStaticDiscoverySuggestions(MigrationSchemaDiscovery.Result result, String language) {
+    private MigrationPlannerPageState resolveMigrationPlannerPageState(
+            Map<String, List<String>> query,
+            MigrationSchemaDiscovery.Result fallbackDiscovery
+    ) {
+        MigrationSchemaDiscovery.Result discovery = shouldBootstrapDiscovery(query)
+                ? (fallbackDiscovery == null ? admin.discoverMigrationSchema() : fallbackDiscovery)
+                : fallbackDiscovery;
+        LinkedHashMap<String, String> values = defaultMigrationPlannerFormValues();
+        applyPlannerQueryOverrides(values, query);
+        if (discovery != null) {
+            applyDiscoveryActions(values, query, discovery);
+            enrichPlannerValuesFromDiscovery(values, discovery);
+        }
+        return new MigrationPlannerPageState(discovery, Collections.unmodifiableMap(values));
+    }
+
+    private boolean shouldBootstrapDiscovery(Map<String, List<String>> query) {
+        String discover = first(query, "discover");
+        return "1".equals(discover)
+                || "true".equalsIgnoreCase(discover)
+                || first(query, "applySuggestion") != null
+                || first(query, "selectObject") != null;
+    }
+
+    private LinkedHashMap<String, String> defaultMigrationPlannerFormValues() {
+        MigrationPlanner.Request defaults = admin.migrationPlannerTemplate().defaults();
+        LinkedHashMap<String, String> values = new LinkedHashMap<>();
+        mergePlannerRequest(values, defaults);
+        values.put("routePreset", deriveRoutePreset(defaults));
+        values.putIfAbsent("sortDirection", defaults.sortDirection() == null || defaults.sortDirection().isBlank() ? "DESC" : defaults.sortDirection());
+        values.put("demoCustomerCount", "120");
+        values.put("demoHotCustomerCount", "12");
+        values.put("demoMaxOrdersPerCustomer", "1500");
+        values.put("warmRootRows", "true");
+        values.put("dryRun", "false");
+        values.put("basePackage", "com.example.cachedb.migration");
+        values.put("rootClassName", "CustomerEntity");
+        values.put("childClassName", "OrderEntity");
+        values.put("relationLoaderClassName", "CustomerOrderRelationBatchLoader");
+        values.put("projectionSupportClassName", "CustomerOrderReadModels");
+        values.put("comparisonSampleRootId", "");
+        values.put("comparisonSampleRootCount", "3");
+        values.put("comparisonPageSize", String.valueOf(defaults.firstPageSize()));
+        values.put("comparisonWarmupIterations", "2");
+        values.put("comparisonMeasuredIterations", "8");
+        values.put("comparisonProjectionName", "");
+        values.put("includeRelationLoader", "true");
+        values.put("includeProjectionSkeleton", "true");
+        values.put("warmBeforeCompare", "false");
+        values.put("comparisonBaselineSql", "");
+        return values;
+    }
+
+    private void applyPlannerQueryOverrides(Map<String, String> values, Map<String, List<String>> query) {
+        for (String key : values.keySet()) {
+            String override = first(query, key);
+            if (override != null) {
+                values.put(key, override);
+            }
+        }
+    }
+
+    private void applyDiscoveryActions(
+            Map<String, String> values,
+            Map<String, List<String>> query,
+            MigrationSchemaDiscovery.Result discovery
+    ) {
+        String applySuggestion = first(query, "applySuggestion");
+        if (applySuggestion != null) {
+            try {
+                int index = Integer.parseInt(applySuggestion);
+                if (index >= 0 && index < discovery.routeSuggestions().size()) {
+                    mergePlannerRequest(values, discovery.routeSuggestions().get(index).plannerRequest());
+                }
+            } catch (NumberFormatException ignored) {
+                // Ignore malformed input and keep the current planner state.
+            }
+        }
+        String selectObject = first(query, "selectObject");
+        String role = defaultString(first(query, "plannerRole"));
+        if (selectObject != null && !role.isBlank()) {
+            try {
+                int index = Integer.parseInt(selectObject);
+                if (index >= 0 && index < discovery.tables().size()) {
+                    MigrationSchemaDiscovery.TableInfo table = discovery.tables().get(index);
+                    if ("root".equalsIgnoreCase(role)) {
+                        values.put("rootTableOrEntity", discoverySurfaceValue(table));
+                        values.put("rootPrimaryKeyColumn", defaultString(table.primaryKeyColumn()));
+                    } else {
+                        values.put("childTableOrEntity", discoverySurfaceValue(table));
+                        values.put("childPrimaryKeyColumn", defaultString(table.primaryKeyColumn()));
+                    }
+                }
+            } catch (NumberFormatException ignored) {
+                // Ignore malformed input and keep the current planner state.
+            }
+        }
+    }
+
+    private void enrichPlannerValuesFromDiscovery(Map<String, String> values, MigrationSchemaDiscovery.Result discovery) {
+        MigrationSchemaDiscovery.TableInfo rootTable = resolveDiscoveryTable(discovery, values.get("rootTableOrEntity"));
+        MigrationSchemaDiscovery.TableInfo childTable = resolveDiscoveryTable(discovery, values.get("childTableOrEntity"));
+        if (rootTable != null && (values.get("rootPrimaryKeyColumn") == null || values.get("rootPrimaryKeyColumn").isBlank())) {
+            values.put("rootPrimaryKeyColumn", defaultString(rootTable.primaryKeyColumn()));
+        }
+        if (childTable != null && (values.get("childPrimaryKeyColumn") == null || values.get("childPrimaryKeyColumn").isBlank())) {
+            values.put("childPrimaryKeyColumn", defaultString(childTable.primaryKeyColumn()));
+        }
+        MigrationSchemaDiscovery.RouteSuggestion suggestion = findMatchingRouteSuggestion(
+                discovery,
+                values.get("rootTableOrEntity"),
+                values.get("childTableOrEntity")
+        );
+        if ((values.get("relationColumn") == null || values.get("relationColumn").isBlank()) && suggestion != null) {
+            values.put("relationColumn", defaultString(suggestion.relationColumn()));
+        } else if ((values.get("relationColumn") == null || values.get("relationColumn").isBlank()) && childTable != null
+                && !childTable.foreignKeyColumns().isEmpty()) {
+            values.put("relationColumn", childTable.foreignKeyColumns().get(0));
+        }
+        if ((values.get("sortColumn") == null || values.get("sortColumn").isBlank()) && suggestion != null) {
+            values.put("sortColumn", defaultString(suggestion.sortColumn()));
+        } else if ((values.get("sortColumn") == null || values.get("sortColumn").isBlank()) && childTable != null
+                && !childTable.temporalColumns().isEmpty()) {
+            values.put("sortColumn", childTable.temporalColumns().get(0));
+        }
+    }
+
+    private void mergePlannerRequest(Map<String, String> values, MigrationPlanner.Request request) {
+        values.put("workloadName", defaultString(request.workloadName()));
+        values.put("rootTableOrEntity", defaultString(request.rootTableOrEntity()));
+        values.put("rootPrimaryKeyColumn", defaultString(request.rootPrimaryKeyColumn()));
+        values.put("childTableOrEntity", defaultString(request.childTableOrEntity()));
+        values.put("childPrimaryKeyColumn", defaultString(request.childPrimaryKeyColumn()));
+        values.put("relationColumn", defaultString(request.relationColumn()));
+        values.put("sortColumn", defaultString(request.sortColumn()));
+        values.put("sortDirection", request.sortDirection() == null || request.sortDirection().isBlank() ? "DESC" : request.sortDirection());
+        values.put("rootRowCount", String.valueOf(request.rootRowCount()));
+        values.put("childRowCount", String.valueOf(request.childRowCount()));
+        values.put("typicalChildrenPerRoot", String.valueOf(request.typicalChildrenPerRoot()));
+        values.put("maxChildrenPerRoot", String.valueOf(request.maxChildrenPerRoot()));
+        values.put("firstPageSize", String.valueOf(request.firstPageSize()));
+        values.put("hotWindowPerRoot", String.valueOf(request.hotWindowPerRoot()));
+        values.put("listScreen", String.valueOf(request.listScreen()));
+        values.put("firstPaintNeedsFullAggregate", String.valueOf(request.firstPaintNeedsFullAggregate()));
+        values.put("globalSortedScreen", String.valueOf(request.globalSortedScreen()));
+        values.put("thresholdOrRangeScreen", String.valueOf(request.thresholdOrRangeScreen()));
+        values.put("archiveHistoryRequired", String.valueOf(request.archiveHistoryRequired()));
+        values.put("fullHistoryMustStayHot", String.valueOf(request.fullHistoryMustStayHot()));
+        values.put("currentOrmUsesEagerLoading", String.valueOf(request.currentOrmUsesEagerLoading()));
+        values.put("detailLookupIsHot", String.valueOf(request.detailLookupIsHot()));
+        values.put("sideBySideComparisonRequired", String.valueOf(request.sideBySideComparisonRequired()));
+        values.put("routePreset", deriveRoutePreset(request));
+    }
+
+    private String deriveRoutePreset(MigrationPlanner.Request request) {
+        if (request.firstPaintNeedsFullAggregate() && !request.listScreen()) {
+            return "detail-heavy";
+        }
+        if (request.globalSortedScreen()) {
+            return "leaderboard";
+        }
+        if (request.thresholdOrRangeScreen()) {
+            return "threshold";
+        }
+        return "timeline";
+    }
+
+    private String renderStaticDiscoverySuggestions(
+            MigrationSchemaDiscovery.Result result,
+            String language,
+            String plannerPath,
+            Map<String, String> currentValues
+    ) {
         if (result == null) {
             return "";
         }
@@ -2937,16 +3135,31 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                             + " · " + localized(language, "Önerilen sıralama", "Suggested sort") + ": " + item.sortColumn() + " DESC"))
                     .append("</div><div class=\"small text-muted mt-1\">")
                     .append(escapeHtml(localized(language, "Alternatif sıralama kolonları", "Alternative sort columns") + ": " + sortCandidates))
-                    .append("</div></div><div><button type=\"button\" class=\"btn btn-sm btn-outline-primary\" data-planner-suggestion=\"")
+                    .append("</div></div><div><a class=\"btn btn-sm btn-outline-primary\" data-planner-suggestion=\"")
                     .append(index)
+                    .append("\" href=\"")
+                    .append(escapeHtml(buildMigrationPlannerNavigationLink(
+                            plannerPath,
+                            language,
+                            currentValues,
+                            Map.of(
+                                    "discover", "true",
+                                    "applySuggestion", String.valueOf(index)
+                            )
+                    )))
                     .append("\">")
                     .append(escapeHtml(localized(language, "Forma Uygula", "Apply To Form")))
-                    .append("</button></div></div></div>");
+                    .append("</a></div></div></div>");
         }
         return builder.toString();
     }
 
-    private String renderStaticDiscoveryTables(MigrationSchemaDiscovery.Result result, String language) {
+    private String renderStaticDiscoveryTables(
+            MigrationSchemaDiscovery.Result result,
+            String language,
+            String plannerPath,
+            Map<String, String> currentValues
+    ) {
         if (result == null || result.tables().isEmpty()) {
             return "";
         }
@@ -2975,39 +3188,357 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                     .append(escapeHtml(localized(language, "FK", "FK") + ": " + item.importedKeyCount()))
                     .append("</div></div><div>");
             if (view) {
-                builder.append("<button type=\"button\" class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"")
+                builder.append("<a class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"")
                         .append(index)
-                        .append("\" data-planner-role=\"child\">")
+                        .append("\" data-planner-role=\"child\" href=\"")
+                        .append(escapeHtml(buildMigrationPlannerNavigationLink(
+                                plannerPath,
+                                language,
+                                currentValues,
+                                Map.of(
+                                        "discover", "true",
+                                        "selectObject", String.valueOf(index),
+                                        "plannerRole", "child"
+                                )
+                        )))
+                        .append("\">")
                         .append(escapeHtml(localized(language, "Çocuk olarak seç", "Use as child")))
-                        .append("</button>");
+                        .append("</a>");
             } else {
-                builder.append("<div class=\"d-flex gap-2 flex-wrap\"><button type=\"button\" class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"")
+                builder.append("<div class=\"d-flex gap-2 flex-wrap\"><a class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"")
                         .append(index)
-                        .append("\" data-planner-role=\"root\">")
+                        .append("\" data-planner-role=\"root\" href=\"")
+                        .append(escapeHtml(buildMigrationPlannerNavigationLink(
+                                plannerPath,
+                                language,
+                                currentValues,
+                                Map.of(
+                                        "discover", "true",
+                                        "selectObject", String.valueOf(index),
+                                        "plannerRole", "root"
+                                )
+                        )))
+                        .append("\">")
                         .append(escapeHtml(localized(language, "Kök seç", "Select root")))
-                        .append("</button><button type=\"button\" class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"")
+                        .append("</a><a class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"")
                         .append(index)
-                        .append("\" data-planner-role=\"child\">")
+                        .append("\" data-planner-role=\"child\" href=\"")
+                        .append(escapeHtml(buildMigrationPlannerNavigationLink(
+                                plannerPath,
+                                language,
+                                currentValues,
+                                Map.of(
+                                        "discover", "true",
+                                        "selectObject", String.valueOf(index),
+                                        "plannerRole", "child"
+                                )
+                        )))
+                        .append("\">")
                         .append(escapeHtml(localized(language, "Çocuk seç", "Select child")))
-                        .append("</button></div>");
+                        .append("</a></div>");
             }
             builder.append("</div></div></div>");
         }
         return builder.toString();
     }
 
-    private String fieldInput(String name, String label, String placeholder, String extraClass) {
+    private String fieldInput(String name, String label, String placeholder, String extraClass, String value) {
         String classSuffix = extraClass == null || extraClass.isBlank() ? "" : " " + extraClass.trim();
         return "<div class=\"" + classSuffix.trim() + "\"><label class=\"form-label fw-semibold\">" + escapeHtml(label)
                 + "</label><input class=\"form-control\" name=\"" + escapeHtml(name) + "\" placeholder=\""
-                + escapeHtml(placeholder) + "\"></div>";
+                + escapeHtml(placeholder) + "\" value=\"" + escapeHtml(defaultString(value)) + "\"></div>";
     }
 
-    private String selectInput(String name, String label, String placeholder, String extraClass) {
+    private String selectInput(
+            String name,
+            String label,
+            String placeholder,
+            String extraClass,
+            List<PlannerSelectOption> options,
+            String selectedValue
+    ) {
+        String classSuffix = extraClass == null || extraClass.isBlank() ? "" : " " + extraClass.trim();
+        StringBuilder builder = new StringBuilder("<div class=\"")
+                .append(classSuffix.trim())
+                .append("\"><label class=\"form-label fw-semibold\">")
+                .append(escapeHtml(label))
+                .append("</label><select class=\"form-select\" name=\"")
+                .append(escapeHtml(name))
+                .append("\"><option value=\"\">")
+                .append(escapeHtml(placeholder))
+                .append("</option>");
+        List<PlannerSelectOption> safeOptions = options == null ? List.of() : options;
+        String normalizedSelected = normalizeSurfaceValue(selectedValue);
+        boolean selectedPresent = normalizedSelected.isBlank();
+        for (PlannerSelectOption option : safeOptions) {
+            if (option == null || option.value() == null || option.value().isBlank()) {
+                continue;
+            }
+            boolean selected = normalizeSurfaceValue(option.value()).equals(normalizedSelected);
+            if (selected) {
+                selectedPresent = true;
+            }
+            builder.append("<option value=\"")
+                    .append(escapeHtml(option.value()))
+                    .append("\"")
+                    .append(selected ? " selected" : "")
+                    .append(">")
+                    .append(escapeHtml(option.label()))
+                    .append("</option>");
+        }
+        if (!selectedPresent && selectedValue != null && !selectedValue.isBlank()) {
+            builder.append("<option value=\"")
+                    .append(escapeHtml(selectedValue))
+                    .append("\" selected>")
+                    .append(escapeHtml(selectedValue))
+                    .append("</option>");
+        }
+        builder.append("</select></div>");
+        return builder.toString();
+    }
+
+    private String selectOption(String value, String label, String selectedValue) {
+        return "<option value=\"" + escapeHtml(value) + "\""
+                + (Objects.equals(defaultString(value), defaultString(selectedValue)) ? " selected" : "")
+                + ">" + escapeHtml(label) + "</option>";
+    }
+
+    private String textareaInput(String name, String label, String placeholder, String extraClass, String value) {
         String classSuffix = extraClass == null || extraClass.isBlank() ? "" : " " + extraClass.trim();
         return "<div class=\"" + classSuffix.trim() + "\"><label class=\"form-label fw-semibold\">" + escapeHtml(label)
-                + "</label><select class=\"form-select\" name=\"" + escapeHtml(name) + "\"><option value=\"\">"
-                + escapeHtml(placeholder) + "</option></select></div>";
+                + "</label><textarea class=\"form-control\" rows=\"4\" name=\"" + escapeHtml(name)
+                + "\" placeholder=\"" + escapeHtml(placeholder) + "\">" + escapeHtml(defaultString(value)) + "</textarea></div>";
+    }
+
+    private String checkboxInput(String name, String label, boolean checked) {
+        return "<div class=\"full\"><div class=\"form-check form-switch\">"
+                + "<input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" name=\"" + escapeHtml(name) + "\""
+                + (checked ? " checked" : "") + ">"
+                + "<label class=\"form-check-label\">" + escapeHtml(label) + "</label>"
+                + "</div></div>";
+    }
+
+    private boolean parseChecked(Map<String, String> values, String key, boolean defaultValue) {
+        String raw = values == null ? null : values.get(key);
+        if (raw == null || raw.isBlank()) {
+            return defaultValue;
+        }
+        return "true".equalsIgnoreCase(raw) || "1".equals(raw) || "yes".equalsIgnoreCase(raw) || "on".equalsIgnoreCase(raw);
+    }
+
+    private String renderPlannerFormValues(Map<String, String> values) {
+        StringBuilder builder = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            if (!first) {
+                builder.append(',');
+            }
+            first = false;
+            builder.append('"').append(escapeJson(entry.getKey())).append("\":\"")
+                    .append(escapeJson(defaultString(entry.getValue())))
+                    .append('"');
+        }
+        builder.append('}');
+        return builder.toString();
+    }
+
+    private List<PlannerSelectOption> discoveredSurfaceOptions(MigrationSchemaDiscovery.Result discovery, boolean includeViews, String language) {
+        if (discovery == null) {
+            return List.of();
+        }
+        ArrayList<PlannerSelectOption> options = new ArrayList<>();
+        for (MigrationSchemaDiscovery.TableInfo table : discovery.tables()) {
+            if (table == null) {
+                continue;
+            }
+            boolean view = isView(table);
+            if (view && !includeViews) {
+                continue;
+            }
+            StringBuilder label = new StringBuilder(defaultString(table.qualifiedTableName()));
+            ArrayList<String> badges = new ArrayList<>();
+            if (view) {
+                badges.add(localized(language, "view", "view"));
+            }
+            if (table.registeredEntityName() != null && !table.registeredEntityName().isBlank()) {
+                badges.add(localized(language, "entity", "entity") + ": " + table.registeredEntityName());
+            }
+            if (!badges.isEmpty()) {
+                label.append(" · ").append(String.join(" · ", badges));
+            }
+            options.add(new PlannerSelectOption(discoverySurfaceValue(table), label.toString()));
+        }
+        return options;
+    }
+
+    private List<PlannerSelectOption> discoveredColumnOptions(MigrationSchemaDiscovery.TableInfo table, String kind) {
+        if (table == null) {
+            return List.of();
+        }
+        ArrayList<PlannerSelectOption> options = new ArrayList<>();
+        if ("pk".equalsIgnoreCase(kind)) {
+            if (table.primaryKeyColumn() != null && !table.primaryKeyColumn().isBlank()) {
+                options.add(new PlannerSelectOption(table.primaryKeyColumn(), table.primaryKeyColumn()));
+            }
+            return options;
+        }
+        if ("sort".equalsIgnoreCase(kind)) {
+            for (String column : table.temporalColumns()) {
+                options.add(new PlannerSelectOption(column, column + " · temporal"));
+            }
+            for (MigrationSchemaDiscovery.ColumnInfo column : table.columns()) {
+                if (column == null || column.name() == null || column.name().isBlank()) {
+                    continue;
+                }
+                if (options.stream().noneMatch(option -> Objects.equals(option.value(), column.name()))
+                        && isSortableColumnType(column.jdbcTypeName())) {
+                    options.add(new PlannerSelectOption(column.name(), column.name() + " · " + defaultString(column.jdbcTypeName())));
+                }
+            }
+            return options;
+        }
+        return options;
+    }
+
+    private List<PlannerSelectOption> discoveredRelationOptions(
+            MigrationSchemaDiscovery.Result discovery,
+            String rootSurface,
+            String childSurface,
+            String language
+    ) {
+        MigrationSchemaDiscovery.TableInfo childTable = resolveDiscoveryTable(discovery, childSurface);
+        ArrayList<PlannerSelectOption> options = new ArrayList<>();
+        MigrationSchemaDiscovery.RouteSuggestion suggestion = findMatchingRouteSuggestion(discovery, rootSurface, childSurface);
+        if (suggestion != null && suggestion.relationColumn() != null && !suggestion.relationColumn().isBlank()) {
+            options.add(new PlannerSelectOption(
+                    suggestion.relationColumn(),
+                    suggestion.relationColumn() + " · " + localized(language, "önerilen FK", "suggested FK")
+            ));
+        }
+        if (childTable != null) {
+            for (String column : childTable.foreignKeyColumns()) {
+                if (options.stream().noneMatch(option -> Objects.equals(option.value(), column))) {
+                    options.add(new PlannerSelectOption(column, column + " · FK"));
+                }
+            }
+        }
+        return options;
+    }
+
+    private boolean isSortableColumnType(String typeName) {
+        String normalized = defaultString(typeName).toUpperCase(Locale.ROOT);
+        return normalized.contains("INT")
+                || normalized.contains("DEC")
+                || normalized.contains("NUM")
+                || normalized.contains("REAL")
+                || normalized.contains("FLOAT")
+                || normalized.contains("DOUBLE")
+                || normalized.contains("DATE")
+                || normalized.contains("TIME")
+                || normalized.contains("STAMP");
+    }
+
+    private MigrationSchemaDiscovery.TableInfo resolveDiscoveryTable(MigrationSchemaDiscovery.Result discovery, String surface) {
+        if (discovery == null || surface == null || surface.isBlank()) {
+            return null;
+        }
+        String normalizedSurface = normalizeSurfaceValue(surface);
+        for (MigrationSchemaDiscovery.TableInfo table : discovery.tables()) {
+            if (normalizeSurfaceValue(discoverySurfaceValue(table)).equals(normalizedSurface)
+                    || normalizeSurfaceValue(table.qualifiedTableName()).equals(normalizedSurface)
+                    || normalizeSurfaceValue(table.tableName()).equals(normalizedSurface)
+                    || normalizeSurfaceValue(table.registeredEntityName()).equals(normalizedSurface)) {
+                return table;
+            }
+        }
+        return null;
+    }
+
+    private MigrationSchemaDiscovery.RouteSuggestion findMatchingRouteSuggestion(
+            MigrationSchemaDiscovery.Result discovery,
+            String rootSurface,
+            String childSurface
+    ) {
+        if (discovery == null) {
+            return null;
+        }
+        String normalizedRoot = normalizeSurfaceValue(rootSurface);
+        String normalizedChild = normalizeSurfaceValue(childSurface);
+        for (MigrationSchemaDiscovery.RouteSuggestion suggestion : discovery.routeSuggestions()) {
+            boolean rootMatches = normalizedRoot.isBlank() || matchesSuggestionSurface(normalizedRoot, suggestion.rootSurface(), suggestion.rootEntityName());
+            boolean childMatches = normalizedChild.isBlank() || matchesSuggestionSurface(normalizedChild, suggestion.childSurface(), suggestion.childEntityName());
+            if (rootMatches && childMatches) {
+                return suggestion;
+            }
+        }
+        return null;
+    }
+
+    private boolean matchesSuggestionSurface(String target, String... values) {
+        for (String value : values) {
+            if (normalizeSurfaceValue(value).equals(target)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isView(MigrationSchemaDiscovery.TableInfo table) {
+        return table != null && "VIEW".equalsIgnoreCase(defaultString(table.objectType()));
+    }
+
+    private String discoverySurfaceValue(MigrationSchemaDiscovery.TableInfo table) {
+        if (table == null) {
+            return "";
+        }
+        if (table.registeredEntityName() != null && !table.registeredEntityName().isBlank()) {
+            return table.registeredEntityName();
+        }
+        if (table.qualifiedTableName() != null && !table.qualifiedTableName().isBlank()) {
+            return table.qualifiedTableName();
+        }
+        return defaultString(table.tableName());
+    }
+
+    private String buildMigrationPlannerNavigationLink(
+            String plannerPath,
+            String language,
+            Map<String, String> currentValues,
+            Map<String, String> overrides
+    ) {
+        LinkedHashMap<String, String> query = new LinkedHashMap<>();
+        query.put("lang", defaultString(language));
+        query.put("v", dashboardInstanceId);
+        if (currentValues != null) {
+            query.putAll(currentValues);
+        }
+        if (overrides != null) {
+            query.putAll(overrides);
+        }
+        StringBuilder builder = new StringBuilder(defaultString(plannerPath));
+        boolean first = true;
+        for (Map.Entry<String, String> entry : query.entrySet()) {
+            String key = defaultString(entry.getKey());
+            String value = entry.getValue();
+            if (key.isBlank() || value == null || value.isBlank()) {
+                continue;
+            }
+            builder.append(first ? '?' : '&')
+                    .append(encodeQueryComponent(key))
+                    .append('=')
+                    .append(encodeQueryComponent(value));
+            first = false;
+        }
+        return builder.toString();
+    }
+
+    private String encodeQueryComponent(String value) {
+        return URLEncoder.encode(defaultString(value), StandardCharsets.UTF_8)
+                .replace("+", "%20");
+    }
+
+    private String normalizeSurfaceValue(String value) {
+        return defaultString(value).trim().toLowerCase(Locale.ROOT);
     }
 
     private String renderMigrationPlannerGuidance(String language) {
@@ -3060,21 +3591,6 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<span class=\"planner-step-title\">" + escapeHtml(title) + "</span>"
                 + "<span class=\"planner-step-copy\">" + escapeHtml(copy) + "</span>"
                 + "</button>";
-    }
-
-    private String textareaInput(String name, String label, String placeholder, String extraClass) {
-        String classSuffix = extraClass == null || extraClass.isBlank() ? "" : " " + extraClass.trim();
-        return "<div class=\"" + classSuffix.trim() + "\"><label class=\"form-label fw-semibold\">" + escapeHtml(label)
-                + "</label><textarea class=\"form-control\" rows=\"4\" name=\"" + escapeHtml(name)
-                + "\" placeholder=\"" + escapeHtml(placeholder) + "\"></textarea></div>";
-    }
-
-    private String checkboxInput(String name, String label, boolean checked) {
-        return "<div class=\"full\"><div class=\"form-check form-switch\">"
-                + "<input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" name=\"" + escapeHtml(name) + "\""
-                + (checked ? " checked" : "") + ">"
-                + "<label class=\"form-check-label\">" + escapeHtml(label) + "</label>"
-                + "</div></div>";
     }
 
     private String metricShell(String id, String label) {
@@ -5811,6 +6327,15 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         public byte[] body() {
             return body;
         }
+    }
+
+    private record MigrationPlannerPageState(
+            MigrationSchemaDiscovery.Result discovery,
+            Map<String, String> formValues
+    ) {
+    }
+
+    private record PlannerSelectOption(String value, String label) {
     }
 
     public static final class DashboardTemplateModel {

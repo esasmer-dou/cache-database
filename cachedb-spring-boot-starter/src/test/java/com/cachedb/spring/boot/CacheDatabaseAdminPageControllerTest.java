@@ -78,6 +78,34 @@ class CacheDatabaseAdminPageControllerTest {
             assertTrue(body.contains("customer_order"));
             assertTrue(body.contains("plannerdiscoveryfallbackform"));
             assertTrue(body.contains("data-planner-suggestion"));
+            assertTrue(body.contains("applysuggestion=0"));
+        }
+    }
+
+    @Test
+    void shouldApplyServerSideDiscoverySelectionToPlannerForm() throws Exception {
+        try (TestHarness harness = new TestHarness("page-controller-selection")) {
+            harness.seedSchema();
+            CacheDatabaseAdminPageController controller = harness.controller();
+
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/cachedb-admin/migration-planner");
+            request.setParameter("lang", "tr");
+            request.setParameter("discover", "true");
+            request.setParameter("selectObject", "0");
+            request.setParameter("plannerRole", "root");
+            request.setParameter("childTableOrEntity", "customer_order");
+            request.setParameter("v", harness.adminHttpServer().dashboardInstanceId());
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            ConcurrentModel model = new ConcurrentModel();
+
+            String view = controller.migrationPlanner(request, response, model);
+
+            assertEquals("cachedb-admin/dashboard", view);
+            String body = String.valueOf(model.getAttribute("bodyMarkup")).toLowerCase();
+            assertTrue(body.contains("name=\"roottableorentity\""));
+            assertTrue(body.contains("selected>public.customer_account</option>") || body.contains("selected>customer_account</option>"));
+            assertTrue(body.contains("name=\"rootprimarykeycolumn\""));
+            assertTrue(body.contains("customer_id"));
         }
     }
 

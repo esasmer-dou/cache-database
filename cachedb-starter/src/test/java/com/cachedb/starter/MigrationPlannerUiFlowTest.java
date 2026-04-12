@@ -115,6 +115,26 @@ class MigrationPlannerUiFlowTest {
         }
     }
 
+    @Test
+    void shouldRenderServerSideSelectionFallbackLinksAndPrefillForm() throws Exception {
+        try (TestHarness harness = new TestHarness("planner-server-side-selection")) {
+            harness.seedSchema();
+
+            CacheDatabaseAdminHttpServer.DashboardTemplateModel page =
+                    harness.adminHttpServer.renderMigrationPlannerTemplateModel(
+                            "tr",
+                            "/cachedb-admin/migration-planner",
+                            "lang=tr&discover=true&applySuggestion=0"
+                    );
+
+            String body = page.bodyMarkup().toLowerCase();
+            assertTrue(body.contains("applysuggestion=0"));
+            assertTrue(body.contains("name=\"relationcolumn\""));
+            assertTrue(body.contains("name=\"sortcolumn\""));
+            assertTrue(body.contains("data-planner-suggestion"));
+        }
+    }
+
     private String body(CacheDatabaseAdminHttpServer.AdminHttpResponse response) {
         return new String(response.body(), StandardCharsets.UTF_8);
     }

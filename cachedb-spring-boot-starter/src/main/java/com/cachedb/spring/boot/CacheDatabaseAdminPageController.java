@@ -10,6 +10,8 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 @Controller
@@ -46,7 +48,7 @@ final class CacheDatabaseAdminPageController {
         DashboardTemplateModel page = adminHandler.renderMigrationPlannerTemplateModel(
                 language,
                 requestPath,
-                shouldBootstrapDiscovery(request) ? adminHandler.discoverMigrationSchema() : null
+                encodeQueryString(request)
         );
         model.addAttribute("headMarkup", page.headMarkup());
         model.addAttribute("bodyMarkup", page.bodyMarkup());
@@ -102,12 +104,6 @@ final class CacheDatabaseAdminPageController {
         builder.queryParam("v", currentVersion);
         return "redirect:" + builder.build(true).toUriString();
     }
-
-    private boolean shouldBootstrapDiscovery(HttpServletRequest request) {
-        String discover = request.getParameter("discover");
-        return "1".equals(discover) || "true".equalsIgnoreCase(discover);
-    }
-
     private String normalizeBasePath(String configuredBasePath) {
         if (configuredBasePath == null || configuredBasePath.isBlank()) {
             return "/cachedb-admin";
@@ -126,5 +122,26 @@ final class CacheDatabaseAdminPageController {
         response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
         response.setHeader("Pragma", "no-cache");
         response.setDateHeader("Expires", 0);
+    }
+
+    private String encodeQueryString(HttpServletRequest request) {
+        StringBuilder builder = new StringBuilder();
+        request.getParameterMap().forEach((name, values) -> {
+            if (values == null || values.length == 0) {
+                appendQueryPart(builder, name, "");
+                return;
+            }
+            Arrays.stream(values).forEach(value -> appendQueryPart(builder, name, value));
+        });
+        return builder.toString();
+    }
+
+    private void appendQueryPart(StringBuilder builder, String name, String value) {
+        if (builder.length() > 0) {
+            builder.append('&');
+        }
+        builder.append(URLEncoder.encode(name, StandardCharsets.UTF_8));
+        builder.append('=');
+        builder.append(URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8));
     }
 }
