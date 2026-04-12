@@ -86,6 +86,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     private final ProjectionRefreshDispatcher projectionRefreshDispatcher;
     private final RedisProjectionRefreshQueue projectionRefreshQueue;
     private final RedisProjectionRefreshWorker projectionRefreshWorker;
+    private final ProductionReportCatalog productionReportCatalog;
+    private final CacheDatabaseAdmin admin;
 
     public static CacheDatabaseBootstrap bootstrap(DataSource dataSource) {
         return CacheDatabaseBootstrap.using(dataSource);
@@ -371,6 +373,48 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             this.performanceHistoryBuffer = PerformanceHistoryBuffer.disabled(effectiveAdminMonitoringConfig);
         }
         this.schemaAdmin = new CacheDatabaseSchemaAdmin(dataSource, entityRegistry, config.schemaBootstrap());
+        this.productionReportCatalog = new ProductionReportCatalog(ProductionReportCatalog.defaultRoots(Path.of("").toAbsolutePath()));
+        this.admin = new CacheDatabaseAdmin(
+                deadLetterManagement,
+                backgroundJedis,
+                config.keyspace().keyPrefix(),
+                config.writeBehind().activeStreamKeys(),
+                config.writeBehind().deadLetterStreamKey(),
+                config.deadLetterRecovery().reconciliationStreamKey(),
+                config.deadLetterRecovery().archiveStreamKey(),
+                config.adminReportJob().diagnosticsStreamKey(),
+                config.adminReportJob().diagnosticsMaxLength(),
+                config.adminMonitoring(),
+                config.redisGuardrail(),
+                this::workerSnapshot,
+                this::deadLetterRecoverySnapshot,
+                this::recoveryCleanupSnapshot,
+                this::adminReportJobSnapshot,
+                this::incidentDeliverySnapshot,
+                this::redisGuardrailSnapshot,
+                this::redisRuntimeProfileSnapshot,
+                this::storagePerformanceSnapshot,
+                this::projectionRefreshSnapshot,
+                this::activeRuntimeProfileProperties,
+                this::manualRuntimeProfileOverride,
+                this::setManualRuntimeProfile,
+                this::clearManualRuntimeProfileOverride,
+                indexMaintenance,
+                schemaAdmin,
+                adminIncidentDeliveryManager::enqueue,
+                dataSource,
+                config,
+                entityRegistry,
+                session,
+                productionReportCatalog,
+                this::monitoringHistory,
+                this::alertRouteHistory,
+                this::performanceHistory,
+                this::projectionRefreshFailures,
+                this::replayProjectionRefreshFailure,
+                this::resetAdminTelemetryBuffers,
+                this::resetPerformanceTelemetry
+        );
     }
 
     public void start() {
@@ -637,47 +681,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     public CacheDatabaseAdmin admin() {
-        return new CacheDatabaseAdmin(
-                deadLetterManagement,
-                backgroundJedis,
-                config.keyspace().keyPrefix(),
-                config.writeBehind().activeStreamKeys(),
-                config.writeBehind().deadLetterStreamKey(),
-                config.deadLetterRecovery().reconciliationStreamKey(),
-                config.deadLetterRecovery().archiveStreamKey(),
-                config.adminReportJob().diagnosticsStreamKey(),
-                config.adminReportJob().diagnosticsMaxLength(),
-                config.adminMonitoring(),
-                config.redisGuardrail(),
-                this::workerSnapshot,
-                this::deadLetterRecoverySnapshot,
-                this::recoveryCleanupSnapshot,
-                this::adminReportJobSnapshot,
-                this::incidentDeliverySnapshot,
-                this::redisGuardrailSnapshot,
-                this::redisRuntimeProfileSnapshot,
-                this::storagePerformanceSnapshot,
-                this::projectionRefreshSnapshot,
-                this::activeRuntimeProfileProperties,
-                this::manualRuntimeProfileOverride,
-                this::setManualRuntimeProfile,
-                this::clearManualRuntimeProfileOverride,
-                indexMaintenance,
-                schemaAdmin,
-                adminIncidentDeliveryManager::enqueue,
-                dataSource,
-                config,
-                entityRegistry,
-                session,
-                new ProductionReportCatalog(ProductionReportCatalog.defaultRoots(Path.of("").toAbsolutePath())),
-                this::monitoringHistory,
-                this::alertRouteHistory,
-                this::performanceHistory,
-                this::projectionRefreshFailures,
-                this::replayProjectionRefreshFailure,
-                this::resetAdminTelemetryBuffers,
-                this::resetPerformanceTelemetry
-        );
+        return admin;
     }
 
     public CacheDatabaseDebug debug() {

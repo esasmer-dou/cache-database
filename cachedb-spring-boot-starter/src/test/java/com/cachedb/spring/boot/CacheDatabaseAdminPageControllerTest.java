@@ -4,6 +4,8 @@ import com.reactor.cachedb.core.config.AdminHttpConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer;
+import com.reactor.cachedb.starter.MigrationPlanner;
+import com.reactor.cachedb.starter.MigrationPlannerDemoSupport;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -14,6 +16,7 @@ import redis.clients.jedis.JedisPooled;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.Statement;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -109,6 +112,34 @@ class CacheDatabaseAdminPageControllerTest {
         }
     }
 
+    @Test
+    void shouldRenderServerSideDemoBootstrapFallbackWhenRequested() {
+        try (TestHarness harness = new TestHarness("page-controller-demo-bootstrap")) {
+            CacheDatabaseAdminPageController controller = harness.controller();
+
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/cachedb-admin/migration-planner");
+            request.setParameter("lang", "tr");
+            request.setParameter("demoBootstrap", "true");
+            request.setParameter("discover", "true");
+            request.setParameter("demoCustomerCount", "18");
+            request.setParameter("demoHotCustomerCount", "3");
+            request.setParameter("demoMaxOrdersPerCustomer", "240");
+            request.setParameter("v", harness.adminHttpServer().dashboardInstanceId());
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            ConcurrentModel model = new ConcurrentModel();
+
+            String view = controller.migrationPlanner(request, response, model);
+
+            assertEquals("cachedb-admin/dashboard", view);
+            String body = String.valueOf(model.getAttribute("bodyMarkup")).toLowerCase();
+            assertTrue(body.contains("plannerdemobootstrapfallbackform"));
+            assertTrue(body.contains("plannerdemostatus"));
+            assertTrue(body.contains("name=\"democustomercount\""));
+            assertTrue(body.contains("value=\"18\""));
+            assertTrue(body.contains("value=\"240\""));
+        }
+    }
+
     private static final class TestHarness implements AutoCloseable {
         private final CacheDatabase cacheDatabase;
         private final CacheDatabaseAdminHttpServer adminHttpServer;
@@ -119,6 +150,7 @@ class CacheDatabaseAdminPageControllerTest {
             this.dataSource = newDataSource(schemaName);
             JedisPooled jedis = new JedisPooled("redis://127.0.0.1:6379");
             this.cacheDatabase = new CacheDatabase(jedis, dataSource, CacheDatabaseConfig.defaults());
+            this.cacheDatabase.admin().configureMigrationPlannerDemo(new TestMigrationPlannerDemoSupport());
             this.adminHttpServer = cacheDatabase.adminHttpServer(AdminHttpConfig.builder()
                     .enabled(false)
                     .host("127.0.0.1")
@@ -175,6 +207,67 @@ class CacheDatabaseAdminPageControllerTest {
             dataSource.setUser("sa");
             dataSource.setPassword("");
             return dataSource;
+        }
+    }
+
+    private static final class TestMigrationPlannerDemoSupport implements MigrationPlannerDemoSupport {
+
+        @Override
+        public Descriptor descriptor() {
+            return new Descriptor(
+                    true,
+                    "Demo migration planner",
+                    "Demo schema hazır.",
+                    120,
+                    12,
+                    1500,
+                    plannerDefaults()
+            );
+        }
+
+        @Override
+        public BootstrapResult bootstrap(BootstrapRequest request) {
+            return new BootstrapResult(
+                    "MigrationDemoCustomerEntity",
+                    "MigrationDemoOrderEntity",
+                    "public.migration_demo_customer",
+                    "public.migration_demo_order",
+                    List.of("public.migration_demo_customer_metrics_v"),
+                    request.customerCount(),
+                    (long) request.customerCount() * Math.max(1, request.hotCustomerCount()),
+                    Math.max(1, request.maxOrdersPerCustomer()),
+                    List.of("1001", "1002"),
+                    List.of("Demo schema seeded", "Discovery is ready"),
+                    plannerDefaults()
+            );
+        }
+
+        private MigrationPlanner.Request plannerDefaults() {
+            return new MigrationPlanner.Request(
+                    "migration-demo-timeline",
+                    "MigrationDemoCustomerEntity",
+                    "customer_id",
+                    "MigrationDemoOrderEntity",
+                    "order_id",
+                    "customer_id",
+                    "order_date",
+                    "DESC",
+                    24,
+                    7200,
+                    120,
+                    300,
+                    100,
+                    1000,
+                    true,
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                    true,
+                    true,
+                    true
+            );
         }
     }
 }

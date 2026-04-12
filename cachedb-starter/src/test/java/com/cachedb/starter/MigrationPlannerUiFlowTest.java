@@ -135,6 +135,26 @@ class MigrationPlannerUiFlowTest {
         }
     }
 
+    @Test
+    void shouldRenderServerSideDemoBootstrapFallbackAndPrefillPlanner() throws Exception {
+        try (TestHarness harness = new TestHarness("planner-demo-fallback")) {
+            CacheDatabaseAdminHttpServer.DashboardTemplateModel page =
+                    harness.adminHttpServer.renderMigrationPlannerTemplateModel(
+                            "tr",
+                            "/cachedb-admin/migration-planner",
+                            "lang=tr&demoBootstrap=true&discover=true&demoCustomerCount=24&demoHotCustomerCount=4&demoMaxOrdersPerCustomer=300"
+                    );
+
+            String body = page.bodyMarkup().toLowerCase();
+            assertTrue(body.contains("plannerdemobootstrapfallbackform"));
+            assertTrue(body.contains("name=\"demobootstrap\" value=\"true\""));
+            assertTrue(body.contains("plannerdemostatus"));
+            assertTrue(body.contains("name=\"democustomercount\""));
+            assertTrue(body.contains("value=\"24\""));
+            assertTrue(body.contains("value=\"300\""));
+        }
+    }
+
     private String body(CacheDatabaseAdminHttpServer.AdminHttpResponse response) {
         return new String(response.body(), StandardCharsets.UTF_8);
     }
@@ -149,6 +169,7 @@ class MigrationPlannerUiFlowTest {
             this.dataSource = newDataSource(schemaName);
             this.jedis = new JedisPooled("redis://127.0.0.1:6379");
             this.cacheDatabase = new CacheDatabase(jedis, dataSource, CacheDatabaseConfig.defaults());
+            this.cacheDatabase.admin().configureMigrationPlannerDemo(new TestMigrationPlannerDemoSupport());
             this.adminHttpServer = cacheDatabase.adminHttpServer(AdminHttpConfig.builder()
                     .enabled(false)
                     .host("127.0.0.1")
@@ -210,6 +231,68 @@ class MigrationPlannerUiFlowTest {
             dataSource.setUser("sa");
             dataSource.setPassword("");
             return dataSource;
+        }
+    }
+
+    private static final class TestMigrationPlannerDemoSupport implements MigrationPlannerDemoSupport {
+
+        @Override
+        public Descriptor descriptor() {
+            return new Descriptor(
+                    true,
+                    "Demo migration planner",
+                    "Demo schema hazır.",
+                    120,
+                    12,
+                    1500,
+                    plannerDefaults()
+            );
+        }
+
+        @Override
+        public BootstrapResult bootstrap(BootstrapRequest request) {
+            MigrationPlanner.Request defaults = plannerDefaults();
+            return new BootstrapResult(
+                    "MigrationDemoCustomerEntity",
+                    "MigrationDemoOrderEntity",
+                    "public.migration_demo_customer",
+                    "public.migration_demo_order",
+                    List.of("public.migration_demo_customer_order_timeline_v"),
+                    request.customerCount(),
+                    (long) request.customerCount() * Math.max(1, request.hotCustomerCount()),
+                    Math.max(1, request.maxOrdersPerCustomer()),
+                    List.of("1001", "1002"),
+                    List.of("Demo schema seeded", "Discovery is ready"),
+                    defaults
+            );
+        }
+
+        private MigrationPlanner.Request plannerDefaults() {
+            return new MigrationPlanner.Request(
+                    "migration-demo-timeline",
+                    "MigrationDemoCustomerEntity",
+                    "customer_id",
+                    "MigrationDemoOrderEntity",
+                    "order_id",
+                    "customer_id",
+                    "order_date",
+                    "DESC",
+                    24,
+                    7200,
+                    120,
+                    300,
+                    100,
+                    1000,
+                    true,
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                    true,
+                    true,
+                    true
+            );
         }
     }
 }

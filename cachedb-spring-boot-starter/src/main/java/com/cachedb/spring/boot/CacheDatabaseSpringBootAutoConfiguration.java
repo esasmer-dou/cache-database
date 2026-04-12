@@ -8,6 +8,7 @@ import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer;
 import com.reactor.cachedb.starter.CacheDatabaseProfiles;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery;
+import com.reactor.cachedb.starter.MigrationPlannerDemoSupport;
 import com.reactor.cachedb.starter.RedisConnectionConfig;
 import jakarta.servlet.Servlet;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -21,6 +22,7 @@ import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
@@ -97,6 +99,20 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         }
         cacheDatabase.start();
         return cacheDatabase;
+    }
+
+    @Bean
+    @ConditionalOnBean(MigrationPlannerDemoSupport.class)
+    public SmartInitializingSingleton cacheDatabaseMigrationPlannerDemoConfigurer(
+            CacheDatabase cacheDatabase,
+            ObjectProvider<MigrationPlannerDemoSupport> migrationPlannerDemoSupportProvider
+    ) {
+        return () -> {
+            MigrationPlannerDemoSupport support = migrationPlannerDemoSupportProvider.getIfAvailable();
+            if (support != null) {
+                cacheDatabase.admin().configureMigrationPlannerDemo(support);
+            }
+        };
     }
 
     @Bean(destroyMethod = "close")

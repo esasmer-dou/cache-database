@@ -51,6 +51,41 @@ class DemoMigrationPlannerBootstrapperTest {
         ));
     }
 
+    @Test
+    void shouldRepairExistingDemoTablesBeforeSeeding() throws SQLException {
+        DataSource dataSource = newDataSource("migration-demo-bootstrap-drift");
+        createLegacySchemaWithoutDeletedFlags(dataSource);
+        DemoMigrationPlannerBootstrapper bootstrapper = new DemoMigrationPlannerBootstrapper(
+                dataSource,
+                () -> { },
+                () -> { },
+                () -> { }
+        );
+
+        var result = bootstrapper.bootstrap(new com.reactor.cachedb.starter.MigrationPlannerDemoSupport.BootstrapRequest(24, 4, 1100));
+
+        assertEquals(24L, result.customerCount());
+        assertTrue(result.orderCount() > 24L);
+        assertEquals(1L, countRows(
+                dataSource,
+                """
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_name = 'CACHEDB_MIGRATION_DEMO_CUSTOMERS'
+                  AND column_name = 'DELETED_FLAG'
+                """
+        ));
+        assertEquals(1L, countRows(
+                dataSource,
+                """
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_name = 'CACHEDB_MIGRATION_DEMO_ORDERS'
+                  AND column_name = 'DELETED_FLAG'
+                """
+        ));
+    }
+
     private DataSource newDataSource(String name) {
         JdbcDataSource dataSource = new JdbcDataSource();
         dataSource.setURL("jdbc:h2:mem:" + name + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
@@ -65,6 +100,36 @@ class DemoMigrationPlannerBootstrapperTest {
              ResultSet resultSet = statement.executeQuery(sql)) {
             resultSet.next();
             return resultSet.getLong(1);
+        }
+    }
+
+    private void createLegacySchemaWithoutDeletedFlags(DataSource dataSource) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE cachedb_migration_demo_customers (
+                        customer_id BIGINT PRIMARY KEY,
+                        tax_number VARCHAR(32) NOT NULL,
+                        customer_type VARCHAR(24) NOT NULL,
+                        customer_status VARCHAR(24) NOT NULL,
+                        country_code VARCHAR(3) NOT NULL,
+                        created_at TIMESTAMP NOT NULL,
+                        entity_version BIGINT NOT NULL DEFAULT 1
+                    )
+                    """);
+            statement.execute("""
+                    CREATE TABLE cachedb_migration_demo_orders (
+                        order_id BIGINT PRIMARY KEY,
+                        customer_id BIGINT NOT NULL,
+                        order_date TIMESTAMP NOT NULL,
+                        order_amount DOUBLE PRECISION NOT NULL,
+                        currency_code VARCHAR(3) NOT NULL,
+                        order_type VARCHAR(24) NOT NULL,
+                        rank_score DOUBLE PRECISION NOT NULL,
+                        created_at TIMESTAMP NOT NULL,
+                        entity_version BIGINT NOT NULL DEFAULT 1
+                    )
+                    """);
         }
     }
 }

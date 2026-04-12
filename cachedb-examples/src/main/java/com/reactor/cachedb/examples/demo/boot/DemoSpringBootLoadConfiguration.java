@@ -17,6 +17,7 @@ import com.reactor.cachedb.examples.demo.DemoScenarioTuning;
 import com.reactor.cachedb.spring.boot.CacheDbSpringProperties;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery;
+import com.reactor.cachedb.starter.MigrationPlannerDemoSupport;
 import com.reactor.cachedb.starter.RedisConnectionConfig;
 import org.springframework.boot.context.properties.bind.BindResult;
 import org.springframework.boot.context.properties.bind.Bindable;
@@ -163,14 +164,35 @@ public class DemoSpringBootLoadConfiguration {
                 resolveRegistrationClassLoader()
         );
         cacheDatabase.start();
+        cacheDatabase.admin().configureMigrationPlannerDemo(
+                createMigrationPlannerDemoSupport(cacheDatabase, jedisPooled, dataSource, config)
+        );
         cacheDatabase.admin().applySchemaMigrationPlan();
-        cacheDatabase.admin().configureMigrationPlannerDemo(new DemoMigrationPlannerBootstrapper(
+        return cacheDatabase;
+    }
+
+    @Bean
+    public MigrationPlannerDemoSupport migrationPlannerDemoSupport(
+            CacheDatabase cacheDatabase,
+            @Qualifier("demoSpringBootForegroundJedisPooled") JedisPooled jedisPooled,
+            DataSource dataSource,
+            CacheDatabaseConfig config
+    ) {
+        return createMigrationPlannerDemoSupport(cacheDatabase, jedisPooled, dataSource, config);
+    }
+
+    private MigrationPlannerDemoSupport createMigrationPlannerDemoSupport(
+            CacheDatabase cacheDatabase,
+            JedisPooled jedisPooled,
+            DataSource dataSource,
+            CacheDatabaseConfig config
+    ) {
+        return new DemoMigrationPlannerBootstrapper(
                 dataSource,
                 jedisPooled,
                 cacheDatabase.admin(),
                 config.keyspace().keyPrefix()
-        ));
-        return cacheDatabase;
+        );
     }
 
     @Bean(destroyMethod = "close")

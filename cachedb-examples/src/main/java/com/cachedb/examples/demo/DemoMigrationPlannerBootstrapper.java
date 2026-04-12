@@ -166,6 +166,13 @@ public final class DemoMigrationPlannerBootstrapper implements MigrationPlannerD
                         deleted_flag VARCHAR(16)
                     )
                     """);
+            statement.execute("ALTER TABLE cachedb_migration_demo_customers ADD COLUMN IF NOT EXISTS tax_number VARCHAR(32)");
+            statement.execute("ALTER TABLE cachedb_migration_demo_customers ADD COLUMN IF NOT EXISTS customer_type VARCHAR(24)");
+            statement.execute("ALTER TABLE cachedb_migration_demo_customers ADD COLUMN IF NOT EXISTS customer_status VARCHAR(24)");
+            statement.execute("ALTER TABLE cachedb_migration_demo_customers ADD COLUMN IF NOT EXISTS country_code VARCHAR(3)");
+            statement.execute("ALTER TABLE cachedb_migration_demo_customers ADD COLUMN IF NOT EXISTS created_at TIMESTAMP");
+            statement.execute("ALTER TABLE cachedb_migration_demo_customers ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 1");
+            statement.execute("ALTER TABLE cachedb_migration_demo_customers ADD COLUMN IF NOT EXISTS deleted_flag VARCHAR(16)");
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS cachedb_migration_demo_orders (
                         order_id BIGINT PRIMARY KEY,
@@ -180,6 +187,15 @@ public final class DemoMigrationPlannerBootstrapper implements MigrationPlannerD
                         deleted_flag VARCHAR(16)
                     )
                     """);
+            statement.execute("ALTER TABLE cachedb_migration_demo_orders ADD COLUMN IF NOT EXISTS customer_id BIGINT");
+            statement.execute("ALTER TABLE cachedb_migration_demo_orders ADD COLUMN IF NOT EXISTS order_date TIMESTAMP");
+            statement.execute("ALTER TABLE cachedb_migration_demo_orders ADD COLUMN IF NOT EXISTS order_amount DOUBLE PRECISION");
+            statement.execute("ALTER TABLE cachedb_migration_demo_orders ADD COLUMN IF NOT EXISTS currency_code VARCHAR(3)");
+            statement.execute("ALTER TABLE cachedb_migration_demo_orders ADD COLUMN IF NOT EXISTS order_type VARCHAR(24)");
+            statement.execute("ALTER TABLE cachedb_migration_demo_orders ADD COLUMN IF NOT EXISTS rank_score DOUBLE PRECISION");
+            statement.execute("ALTER TABLE cachedb_migration_demo_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP");
+            statement.execute("ALTER TABLE cachedb_migration_demo_orders ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 1");
+            statement.execute("ALTER TABLE cachedb_migration_demo_orders ADD COLUMN IF NOT EXISTS deleted_flag VARCHAR(16)");
             statement.execute("ALTER TABLE cachedb_migration_demo_orders DROP CONSTRAINT IF EXISTS fk_cachedb_migration_demo_orders_customer");
             statement.execute("""
                     ALTER TABLE cachedb_migration_demo_orders
