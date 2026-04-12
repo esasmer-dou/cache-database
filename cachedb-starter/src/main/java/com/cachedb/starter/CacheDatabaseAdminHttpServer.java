@@ -2386,7 +2386,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         return fields;
     }
 
-    private String resolveDashboardBasePath(String dashboardPath) {
+    static String resolveDashboardBasePath(String dashboardPath) {
         if (dashboardPath == null || dashboardPath.isBlank()) {
             return "";
         }
@@ -2399,6 +2399,9 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         }
         if (normalized.endsWith("/dashboard")) {
             return normalized.substring(0, normalized.length() - "/dashboard".length());
+        }
+        if (normalized.endsWith("/migration-planner")) {
+            return normalized.substring(0, normalized.length() - "/migration-planner".length());
         }
         if ("/".equals(normalized)) {
             return "";
