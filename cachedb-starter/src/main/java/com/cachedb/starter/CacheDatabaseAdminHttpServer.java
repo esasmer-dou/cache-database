@@ -2466,6 +2466,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         Map<String, String> plannerValues = pageState == null ? defaultMigrationPlannerFormValues() : pageState.formValues();
         MigrationPlannerDemoSupport.BootstrapResult bootstrapDemoResult = pageState == null ? null : pageState.demoBootstrapResult();
         String bootstrapDemoError = pageState == null ? "" : defaultString(pageState.demoBootstrapError());
+        MigrationPlanner.Result bootstrapPlanResult = pageState == null ? null : pageState.planResult();
+        String bootstrapPlanError = pageState == null ? "" : defaultString(pageState.planError());
         String title = escapeHtml(uiString("migrationPlanner.pageTitle", localized(normalizedLanguage, "CacheDB Geçiş Planlayıcı", "CacheDB Migration Planner")));
         String basePath = resolveDashboardBasePath(plannerPath);
         String dashboardUrl = escapeHtml(appendQuery(
@@ -2475,12 +2477,18 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String apiBasePath = escapeJs(basePath);
         String bootstrapDiscoveryJson = bootstrapDiscovery == null ? "null" : renderMigrationSchemaDiscovery(bootstrapDiscovery);
         String bootstrapDemoJson = bootstrapDemoResult == null ? "null" : renderMigrationPlannerDemoBootstrapResult(bootstrapDemoResult);
+        String bootstrapPlanJson = bootstrapPlanResult == null ? "null" : renderMigrationPlannerResult(bootstrapPlanResult);
         String bootstrapPlannerFormJson = renderPlannerFormValues(plannerValues);
         String discoveryFallbackAction = escapeHtml(basePath.isBlank() ? "/cachedb-admin/migration-planner" : basePath + "/migration-planner");
         String demoBootstrapStatus = escapeHtml(resolveDemoBootstrapStatusMessage(
                 normalizedLanguage,
                 bootstrapDemoResult,
                 bootstrapDemoError
+        ));
+        String plannerStatusText = escapeHtml(resolvePlannerStatusMessage(
+                normalizedLanguage,
+                bootstrapPlanResult,
+                bootstrapPlanError
         ));
         String bootstrapDiscoveryStatus = escapeHtml(localized(
                 normalizedLanguage,
@@ -2641,7 +2649,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Önerilen route adayları", "Suggested route candidates")) + "</div><div id=\"plannerDiscoverySuggestions\">" + renderStaticDiscoverySuggestions(bootstrapDiscovery, normalizedLanguage, discoveryFallbackAction, plannerValues) + "</div>"
                 + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Keşfedilen tablolar", "Discovered tables")) + "</div><div id=\"plannerDiscoveryTables\">" + renderStaticDiscoveryTables(bootstrapDiscovery, normalizedLanguage, discoveryFallbackAction, plannerValues) + "</div>"
                 + "</div></div>"
-                + "<form id=\"plannerForm\">"
+                + "<form id=\"plannerForm\" method=\"get\" action=\"" + discoveryFallbackAction + "\">"
+                + "<input type=\"hidden\" name=\"lang\" value=\"" + escapeHtml(normalizedLanguage) + "\">"
+                + "<input type=\"hidden\" name=\"v\" value=\"" + escapeHtml(dashboardInstanceId) + "\">"
+                + "<input type=\"hidden\" name=\"generatePlan\" value=\"true\">"
                 + "<div class=\"planner-form-grid\">"
                 + "<div class=\"full planner-quickstart\"><div class=\"planner-quickstart-title\">" + escapeHtml(localized(normalizedLanguage, "Kısa kullanım akışı", "Quick usage flow")) + "</div><p class=\"planner-quickstart-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Önce keşfi çalıştır, sonra kök ve çocuk yüzeyi listeden seç. Ekran tipini belirledikten sonra planı üret; warm, scaffold ve compare adımları onun altında açılır.", "Start with discovery, then choose the root and child surfaces from the list. After selecting the screen type, generate the plan; warm, scaffold, and compare unlock below."))
@@ -2720,7 +2731,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "</div>"
                 + "<div class=\"planner-actions\"><button type=\"submit\" class=\"btn btn-primary\">" + escapeHtml(localized(normalizedLanguage, "Planı Oluştur", "Generate Plan")) + "</button>"
                 + "<button id=\"plannerDefaults\" type=\"button\" class=\"btn btn-outline-secondary\">" + escapeHtml(localized(normalizedLanguage, "Örnek Değerleri Yükle", "Load Example Defaults")) + "</button></div>"
-                + "<div id=\"plannerStatus\" class=\"planner-status\">" + escapeHtml(localized(normalizedLanguage, "Hazır. Mevcut ekranını anlat ve planı üret.", "Ready. Describe your current route and generate the plan.")) + "</div>"
+                + "<div id=\"plannerStatus\" class=\"planner-status\">" + plannerStatusText + "</div>"
                 + "</form></div></div>"
                 + "<div class=\"planner-results\">"
                 + "<div id=\"plannerEmpty\" class=\"planner-empty\">" + escapeHtml(localized(normalizedLanguage, "Henüz plan üretilmedi. Bu yüzey sana sıcak pencere sınırını, projection gerekliliğini, warm-up sırasını ve staging karşılaştırma kontrol listesini çıkaracak.", "No plan yet. This surface will produce the hot-window boundary, projection requirement, warm-up sequence, and staging comparison checklist.")) + "</div>"
@@ -2813,6 +2824,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "const apiBase='" + apiBasePath + "';"
                 + "const bootstrapDiscovery=" + bootstrapDiscoveryJson + ";"
                 + "const bootstrapDemoResult=" + bootstrapDemoJson + ";"
+                + "const bootstrapPlanResult=" + bootstrapPlanJson + ";"
                 + "const bootstrapPlannerForm=" + bootstrapPlannerFormJson + ";"
                 + "const form=document.getElementById('plannerForm');"
                 + "const status=document.getElementById('plannerStatus');"
@@ -2925,7 +2937,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "if(compareButton){compareButton.addEventListener('click',function(){runComparison().catch(function(){});});}"
                 + "if(compareReportButton){compareReportButton.addEventListener('click',function(){downloadComparisonReport();});}"
                 + "document.addEventListener('click',function(event){const suggestionButton=event.target.closest('[data-planner-suggestion]');if(suggestionButton){event.preventDefault();applyDiscoverySuggestion(Number(suggestionButton.dataset.plannerSuggestion||-1));return;}const objectButton=event.target.closest('[data-planner-object]');if(objectButton){event.preventDefault();applyDiscoveredObject(Number(objectButton.dataset.plannerObject||-1),objectButton.dataset.plannerRole||'child');}});"
-                + "async function initializePlanner(){applyPlannerMode('beginner');applyRoutePreset(routePresetField&&routePresetField.value||'timeline',true);await loadTemplate();if(bootstrapPlannerForm){fillForm(bootstrapPlannerForm);}await loadDemoDescriptor();if(bootstrapDemoResult){renderDemoBootstrap(bootstrapDemoResult);}if(bootstrapDiscovery){renderDiscovery(bootstrapDiscovery);setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")) + "');}else{await loadDiscovery(false);}updatePlannerProgress();}"
+                + "async function initializePlanner(){applyPlannerMode('beginner');applyRoutePreset(routePresetField&&routePresetField.value||'timeline',true);await loadTemplate();if(bootstrapPlannerForm){fillForm(bootstrapPlannerForm);}await loadDemoDescriptor();if(bootstrapDemoResult){renderDemoBootstrap(bootstrapDemoResult);}if(bootstrapDiscovery){renderDiscovery(bootstrapDiscovery);setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")) + "');}else{await loadDiscovery(false);}if(bootstrapPlanResult){renderPlan(bootstrapPlanResult);}updatePlannerProgress();}"
                 + "initializePlanner().catch(function(){setStatus('" + escapeJs(localized(normalizedLanguage, "Şablon yüklenemedi. Sayfayı yenileyip tekrar dene.", "Could not load the template. Refresh the page and try again.")) + "');setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi yüklenemedi. Sayfayı yenileyip tekrar dene.", "Schema discovery could not be loaded. Refresh the page and try again.")) + "');});"
                 + "})();"
                 + "</script></body></html>";
@@ -2939,6 +2951,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         applyPlannerQueryOverrides(values, query);
         MigrationPlannerDemoSupport.BootstrapResult demoBootstrapResult = null;
         String demoBootstrapError = "";
+        MigrationPlanner.Result planResult = null;
+        String planError = "";
         if (shouldBootstrapDemo(query)) {
             try {
                 demoBootstrapResult = admin.bootstrapMigrationPlannerDemo(parseMigrationPlannerDemoBootstrapRequest(query));
@@ -2954,11 +2968,20 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             applyDiscoveryActions(values, query, discovery);
             enrichPlannerValuesFromDiscovery(values, discovery);
         }
+        if (shouldGeneratePlan(query)) {
+            try {
+                planResult = admin.planMigration(parseMigrationPlannerRequest(toMultiValueParameters(values)));
+            } catch (IllegalArgumentException | IllegalStateException exception) {
+                planError = defaultString(exception.getMessage());
+            }
+        }
         return new MigrationPlannerPageState(
                 discovery,
                 Collections.unmodifiableMap(values),
                 demoBootstrapResult,
-                demoBootstrapError
+                demoBootstrapError,
+                planResult,
+                planError
         );
     }
 
@@ -2974,6 +2997,41 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private boolean shouldBootstrapDemo(Map<String, List<String>> query) {
         String demoBootstrap = first(query, "demoBootstrap");
         return "1".equals(demoBootstrap) || "true".equalsIgnoreCase(demoBootstrap);
+    }
+
+    private boolean shouldGeneratePlan(Map<String, List<String>> query) {
+        String generatePlan = first(query, "generatePlan");
+        return "1".equals(generatePlan) || "true".equalsIgnoreCase(generatePlan);
+    }
+
+    private Map<String, List<String>> toMultiValueParameters(Map<String, String> values) {
+        LinkedHashMap<String, List<String>> parameters = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            parameters.put(entry.getKey(), List.of(defaultString(entry.getValue())));
+        }
+        return parameters;
+    }
+
+    private String resolvePlannerStatusMessage(
+            String language,
+            MigrationPlanner.Result planResult,
+            String planError
+    ) {
+        if (planResult != null) {
+            return localized(
+                    language,
+                    "Plan hazır. İstersen hemen staging warm çalıştırabilirsin.",
+                    "Plan ready. You can run the staging warm execution right away."
+            );
+        }
+        if (planError != null && !planError.isBlank()) {
+            return localized(language, "Plan üretilemedi: ", "Could not generate the plan: ") + planError;
+        }
+        return localized(
+                language,
+                "Hazır. Mevcut ekranını anlat ve planı üret.",
+                "Ready. Describe your current route and generate the plan."
+        );
     }
 
     private LinkedHashMap<String, String> defaultMigrationPlannerFormValues() {
@@ -6416,7 +6474,9 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             MigrationSchemaDiscovery.Result discovery,
             Map<String, String> formValues,
             MigrationPlannerDemoSupport.BootstrapResult demoBootstrapResult,
-            String demoBootstrapError
+            String demoBootstrapError,
+            MigrationPlanner.Result planResult,
+            String planError
     ) {
     }
 

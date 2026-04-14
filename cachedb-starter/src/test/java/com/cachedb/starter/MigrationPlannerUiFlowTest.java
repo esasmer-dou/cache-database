@@ -155,6 +155,34 @@ class MigrationPlannerUiFlowTest {
         }
     }
 
+    @Test
+    void shouldRenderServerSidePlanFallbackWhenGeneratePlanIsRequested() throws Exception {
+        try (TestHarness harness = new TestHarness("planner-plan-fallback")) {
+            harness.seedSchema();
+
+            CacheDatabaseAdminHttpServer.DashboardTemplateModel page =
+                    harness.adminHttpServer.renderMigrationPlannerTemplateModel(
+                            "tr",
+                            "/cachedb-admin/migration-planner",
+                            "lang=tr&discover=true&rootTableOrEntity=customer_account&rootPrimaryKeyColumn=customer_id"
+                                    + "&childTableOrEntity=customer_order&childPrimaryKeyColumn=order_id"
+                                    + "&relationColumn=customer_id&sortColumn=order_date&sortDirection=DESC"
+                                    + "&rootRowCount=2&childRowCount=3&typicalChildrenPerRoot=2&maxChildrenPerRoot=3"
+                                    + "&firstPageSize=50&hotWindowPerRoot=1000&listScreen=true"
+                                    + "&firstPaintNeedsFullAggregate=false&globalSortedScreen=false"
+                                    + "&thresholdOrRangeScreen=false&archiveHistoryRequired=true"
+                                    + "&fullHistoryMustStayHot=false&detailLookupIsHot=true"
+                                    + "&currentOrmUsesEagerLoading=true&sideBySideComparisonRequired=true"
+                                    + "&generatePlan=true"
+                    );
+
+            String body = page.bodyMarkup();
+            assertTrue(body.contains("name=\"generatePlan\" value=\"true\""));
+            assertTrue(body.contains("const bootstrapPlanResult={"));
+            assertTrue(body.contains("Plan hazır. İstersen hemen staging warm çalıştırabilirsin."));
+        }
+    }
+
     private String body(CacheDatabaseAdminHttpServer.AdminHttpResponse response) {
         return new String(response.body(), StandardCharsets.UTF_8);
     }
