@@ -15,6 +15,7 @@ import java.sql.Statement;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MigrationPlannerUiFlowTest {
@@ -184,8 +185,10 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("name=\"generatePlan\" value=\"true\""));
             assertTrue(body.contains("const bootstrapPlanResult={"));
             assertTrue(body.contains("Plan hazır. İstersen hemen staging warm çalıştırabilirsin."));
-            assertTrue(body.contains("plannerServerPlanFallback"));
             assertTrue(body.contains("planner-empty d-none"));
+            assertTrue(body.contains("id=\"plannerResults\" class=\"\""));
+            assertTrue(body.contains("id=\"plannerSurface\" class=\"result-metric-value\">Use GeneratedCacheModule for normal CRUD and a ProjectionRepository for the hot list screen."));
+            assertFalse(body.contains("plannerServerPlanFallback"));
         }
     }
 
