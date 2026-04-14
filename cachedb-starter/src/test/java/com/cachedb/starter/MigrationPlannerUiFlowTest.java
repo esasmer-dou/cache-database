@@ -36,6 +36,7 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("/api/migration-planner/compare"));
             assertTrue(body.contains("navigateToPlanFallback"));
             assertTrue(body.contains("plannerGenerateAction"));
+            assertTrue(body.contains("id=\"plannerGenerateAction\" type=\"submit\""));
             assertTrue(body.contains("__cachedbPlannerGenerate"));
         }
     }
@@ -183,6 +184,8 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("name=\"generatePlan\" value=\"true\""));
             assertTrue(body.contains("const bootstrapPlanResult={"));
             assertTrue(body.contains("Plan hazır. İstersen hemen staging warm çalıştırabilirsin."));
+            assertTrue(body.contains("plannerServerPlanFallback"));
+            assertTrue(body.contains("planner-empty d-none"));
         }
     }
 

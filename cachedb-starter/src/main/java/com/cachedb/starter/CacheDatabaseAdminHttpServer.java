@@ -2480,6 +2480,13 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String bootstrapPlanJson = bootstrapPlanResult == null ? "null" : renderMigrationPlannerResult(bootstrapPlanResult);
         String bootstrapPlannerFormJson = renderPlannerFormValues(plannerValues);
         String discoveryFallbackAction = escapeHtml(basePath.isBlank() ? "/cachedb-admin/migration-planner" : basePath + "/migration-planner");
+        String serverPlanFallbackCard = renderServerSidePlanFallbackCard(
+                bootstrapPlanResult,
+                bootstrapPlanError,
+                normalizedLanguage
+        );
+        boolean hasServerPlanState = bootstrapPlanResult != null || (bootstrapPlanError != null && !bootstrapPlanError.isBlank());
+        String plannerEmptyClass = hasServerPlanState ? "planner-empty d-none" : "planner-empty";
         String demoBootstrapStatus = escapeHtml(resolveDemoBootstrapStatusMessage(
                 normalizedLanguage,
                 bootstrapDemoResult,
@@ -2729,12 +2736,13 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<span class=\"planner-chip\">" + escapeHtml(localized(normalizedLanguage, "Amaç: projection-first first paint", "Goal: projection-first first paint")) + "</span>"
                 + "<span class=\"planner-chip\">" + escapeHtml(localized(normalizedLanguage, "Amaç: staging comparison", "Goal: staging comparison")) + "</span>"
                 + "</div>"
-                + "<div class=\"planner-actions\"><button id=\"plannerGenerateAction\" type=\"button\" class=\"btn btn-primary\" onclick=\"if(window.__cachedbPlannerGenerate){window.__cachedbPlannerGenerate();}else if(this.form){this.form.submit();}\">" + escapeHtml(localized(normalizedLanguage, "Planı Oluştur", "Generate Plan")) + "</button>"
+                + "<div class=\"planner-actions\"><button id=\"plannerGenerateAction\" type=\"submit\" class=\"btn btn-primary\">" + escapeHtml(localized(normalizedLanguage, "Planı Oluştur", "Generate Plan")) + "</button>"
                 + "<button id=\"plannerDefaults\" type=\"button\" class=\"btn btn-outline-secondary\">" + escapeHtml(localized(normalizedLanguage, "Örnek Değerleri Yükle", "Load Example Defaults")) + "</button></div>"
                 + "<div id=\"plannerStatus\" class=\"planner-status\">" + plannerStatusText + "</div>"
+                + serverPlanFallbackCard
                 + "</form></div></div>"
                 + "<div class=\"planner-results\">"
-                + "<div id=\"plannerEmpty\" class=\"planner-empty\">" + escapeHtml(localized(normalizedLanguage, "Henüz plan üretilmedi. Bu yüzey sana sıcak pencere sınırını, projection gerekliliğini, warm-up sırasını ve staging karşılaştırma kontrol listesini çıkaracak.", "No plan yet. This surface will produce the hot-window boundary, projection requirement, warm-up sequence, and staging comparison checklist.")) + "</div>"
+                + "<div id=\"plannerEmpty\" class=\"" + plannerEmptyClass + "\">" + escapeHtml(localized(normalizedLanguage, "Henüz plan üretilmedi. Bu yüzey sana sıcak pencere sınırını, projection gerekliliğini, warm-up sırasını ve staging karşılaştırma kontrol listesini çıkaracak.", "No plan yet. This surface will produce the hot-window boundary, projection requirement, warm-up sequence, and staging comparison checklist.")) + "</div>"
                 + "<div id=\"plannerResults\" class=\"d-none\">"
                 + "<div id=\"plannerPlanPanel\" class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "2. Hedef mimari kararı", "2. Target architecture decision")) + "</div><div class=\"result-card-body\">"
                 + "<div class=\"result-grid\">"
@@ -3442,6 +3450,96 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         return builder.toString();
     }
 
+    private String renderServerSidePlanFallbackCard(
+            MigrationPlanner.Result planResult,
+            String planError,
+            String language
+    ) {
+        boolean hasError = planError != null && !planError.isBlank();
+        if (planResult == null && !hasError) {
+            return "";
+        }
+        String title = hasError
+                ? localized(language, "Plan üretimi başarısız oldu", "Plan generation failed")
+                : localized(language, "Plan hazır", "Plan ready");
+        String summary = hasError
+                ? localized(
+                        language,
+                        "Tarayıcı tarafı sonucu gösteremediyse bile hatayı burada görebilirsin.",
+                        "If the browser could not render the result, you can still see the error here."
+                )
+                : localized(
+                        language,
+                        "Tarayıcı tarafı sonucu göstermekte gecikirse, planner'ın server-side ürettiği özeti burada görebilirsin.",
+                        "If the browser takes time to render the result, you can still review the server-side planner summary here."
+                );
+        StringBuilder builder = new StringBuilder()
+                .append("<div id=\"plannerServerPlanFallback\" class=\"result-card mt-3\">")
+                .append("<div class=\"result-card-header\">")
+                .append(escapeHtml(title))
+                .append("</div><div class=\"result-card-body\">")
+                .append("<div class=\"small text-muted mb-3\">")
+                .append(escapeHtml(summary))
+                .append("</div>");
+        if (hasError) {
+            builder.append("<div class=\"planner-warning\">")
+                    .append(escapeHtml(planError))
+                    .append("</div></div></div>");
+            return builder.toString();
+        }
+        builder.append("<div class=\"result-grid\">")
+                .append(metricShell("plannerServerSurface", localized(language, "Önerilen yüzey", "Recommended surface"), planResult.recommendedSurface()))
+                .append(metricShell("plannerServerWindow", localized(language, "Sıcak pencere", "Hot window"), planResult.recommendedHotWindowPerRoot() + " " + localized(language, "satır / kök", "rows / root")))
+                .append(metricShell(
+                        "plannerServerProjection",
+                        localized(language, "Projection", "Projection"),
+                        planResult.projectionRequired()
+                                ? localized(language, "Gerekli", "Required") + " (" + defaultString(planResult.summaryProjectionName()) + ")"
+                                : localized(language, "İlk aşamada opsiyonel", "Optional at first")
+                ))
+                .append(metricShell(
+                        "plannerServerRanking",
+                        localized(language, "Ranked projection", "Ranked projection"),
+                        planResult.rankedProjectionRequired()
+                                ? localized(language, "Gerekli", "Required") + " (" + defaultString(
+                                planResult.rankedProjectionName().isBlank() ? planResult.rankFieldName() : planResult.rankedProjectionName()
+                        ) + ")"
+                                : localized(language, "Gerekli değil", "Not required")
+                ))
+                .append("</div>")
+                .append("<div class=\"row g-3 mt-1\"><div class=\"col-12 col-xl-6\"><div class=\"result-metric\"><div class=\"result-metric-label\">")
+                .append(escapeHtml(localized(language, "Redis yerleşimi", "Redis placement")))
+                .append("</div><div class=\"result-metric-value\">")
+                .append(escapeHtml(defaultString(planResult.redisPlacement())))
+                .append("</div></div></div>")
+                .append("<div class=\"col-12 col-xl-6\"><div class=\"result-metric\"><div class=\"result-metric-label\">")
+                .append(escapeHtml(localized(language, "PostgreSQL yerleşimi", "PostgreSQL placement")))
+                .append("</div><div class=\"result-metric-value\">")
+                .append(escapeHtml(defaultString(planResult.postgresPlacement())))
+                .append("</div></div></div></div>");
+        if (planResult.reasoning() != null && !planResult.reasoning().isEmpty()) {
+            builder.append("<div class=\"small text-muted fw-semibold mt-3 mb-2\">")
+                    .append(escapeHtml(localized(language, "Karar gerekçesi", "Decision rationale")))
+                    .append("</div><ul class=\"result-list\">");
+            for (String item : planResult.reasoning()) {
+                builder.append("<li>").append(escapeHtml(defaultString(item))).append("</li>");
+            }
+            builder.append("</ul>");
+        }
+        builder.append("</div></div>");
+        return builder.toString();
+    }
+
+    private String metricShell(String id, String label, String value) {
+        return "<div class=\"result-metric\"><div class=\"result-metric-label\">"
+                + escapeHtml(label)
+                + "</div><div id=\""
+                + escapeHtml(id)
+                + "\" class=\"result-metric-value\">"
+                + escapeHtml(defaultString(value))
+                + "</div></div>";
+    }
+
     private List<PlannerSelectOption> discoveredSurfaceOptions(MigrationSchemaDiscovery.Result discovery, boolean includeViews, String language) {
         if (discovery == null) {
             return List.of();
@@ -3695,11 +3793,6 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
 
     private String metricShell(String id, String label) {
         return metricShell(id, label, "");
-    }
-
-    private String metricShell(String id, String label, String value) {
-        return "<div class=\"result-metric\"><div class=\"result-metric-label\">" + escapeHtml(label)
-                + "</div><div id=\"" + escapeHtml(id) + "\" class=\"result-metric-value\">" + escapeHtml(defaultString(value)) + "</div></div>";
     }
 
     private String renderPlannerStaticList(List<String> items, String emptyMessage) {
