@@ -34,6 +34,7 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("/api/migration-planner/discovery"));
             assertTrue(body.contains("/api/migration-planner/warm"));
             assertTrue(body.contains("/api/migration-planner/compare"));
+            assertTrue(body.contains("navigateToPlanFallback"));
         }
     }
 
