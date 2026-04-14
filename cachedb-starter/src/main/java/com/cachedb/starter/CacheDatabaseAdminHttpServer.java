@@ -2485,14 +2485,23 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 bootstrapPlanError,
                 normalizedLanguage
         );
+        MigrationWarmRunner.Result bootstrapWarmResult = pageState == null ? null : pageState.warmResult();
+        String bootstrapWarmError = pageState == null ? "" : defaultString(pageState.warmError());
         boolean hasServerPlanResult = bootstrapPlanResult != null;
         boolean hasServerPlanState = hasServerPlanResult || (bootstrapPlanError != null && !bootstrapPlanError.isBlank());
         String plannerEmptyClass = hasServerPlanState ? "planner-empty d-none" : "planner-empty";
         String plannerResultsClass = hasServerPlanResult ? "" : "d-none";
         String plannerWarmDisabled = hasServerPlanResult ? "" : " disabled";
-        String plannerWarmStatusText = hasServerPlanResult
+        String plannerWarmStatusText = bootstrapWarmError != null && !bootstrapWarmError.isBlank()
+                ? localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ") + bootstrapWarmError
+                : bootstrapWarmResult != null
+                ? (bootstrapWarmResult.dryRun()
+                ? localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")
+                : localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready."))
+                : hasServerPlanResult
                 ? localized(normalizedLanguage, "Plan hazır. İstersen önce dry run, sonra gerçek warm çalıştırabilirsin.", "Plan ready. Start with a dry run, then run the real warm execution.")
                 : localized(normalizedLanguage, "Önce planı üret. Sonra staging warm çalıştırabilirsin.", "Generate the plan first. Then you can run the staging warm execution.");
+        String plannerWarmResultsClass = bootstrapWarmResult != null ? "mt-3" : "d-none mt-3";
         String plannerScaffoldDisabled = hasServerPlanResult ? "" : " disabled";
         String plannerScaffoldStatusText = hasServerPlanResult
                 ? localized(normalizedLanguage, "Plan hazır. İstersen aynı route için entity ve binding iskeletini üretebilirsin.", "Plan ready. You can generate the entity and binding scaffold for this route.")
@@ -2673,6 +2682,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<form id=\"plannerForm\" method=\"get\" action=\"" + discoveryFallbackAction + "\">"
                 + "<input type=\"hidden\" name=\"lang\" value=\"" + escapeHtml(normalizedLanguage) + "\">"
                 + "<input type=\"hidden\" name=\"v\" value=\"" + escapeHtml(dashboardInstanceId) + "\">"
+                + "<input type=\"hidden\" name=\"discover\" value=\"true\">"
                 + "<input type=\"hidden\" name=\"generatePlan\" value=\"true\">"
                 + "<div class=\"planner-form-grid\">"
                 + "<div class=\"full planner-quickstart\"><div class=\"planner-quickstart-title\">" + escapeHtml(localized(normalizedLanguage, "Kısa kullanım akışı", "Quick usage flow")) + "</div><p class=\"planner-quickstart-copy\">"
@@ -2780,21 +2790,21 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "</div></div>"
                 + "<div id=\"plannerWarningsCard\" class=\"result-card" + ((hasServerPlanResult && bootstrapPlanResult.warnings() != null && !bootstrapPlanResult.warnings().isEmpty()) ? "" : " d-none") + "\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "Dikkat edilmesi gerekenler", "Things to watch")) + "</div><div class=\"result-card-body\"><div id=\"plannerWarnings\">" + (hasServerPlanResult ? renderPlannerStaticWarnings(bootstrapPlanResult.warnings()) : "") + "</div></div></div>"
                 + "<div id=\"plannerWarmPanel\" class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "6. Staging warm execution", "6. Staging warm execution")) + "</div><div class=\"result-card-body\">"
-                + "<div class=\"planner-actions\"><button id=\"plannerWarmAction\" type=\"button\" class=\"btn btn-success\"" + plannerWarmDisabled + ">" + escapeHtml(localized(normalizedLanguage, "Warm'ı Çalıştır", "Run Warm")) + "</button>"
-                + "<button id=\"plannerWarmPreviewAction\" type=\"button\" class=\"btn btn-outline-secondary\"" + plannerWarmDisabled + ">" + escapeHtml(localized(normalizedLanguage, "Dry Run Çalıştır", "Run Dry Run")) + "</button></div>"
+                + "<div class=\"planner-actions\"><button id=\"plannerWarmAction\" type=\"submit\" form=\"plannerForm\" formmethod=\"get\" formaction=\"" + discoveryFallbackAction + "\" name=\"warmExecution\" value=\"true\" class=\"btn btn-success\"" + plannerWarmDisabled + ">" + escapeHtml(localized(normalizedLanguage, "Warm'ı Çalıştır", "Run Warm")) + "</button>"
+                + "<button id=\"plannerWarmPreviewAction\" type=\"submit\" form=\"plannerForm\" formmethod=\"get\" formaction=\"" + discoveryFallbackAction + "\" name=\"dryRunExecution\" value=\"true\" class=\"btn btn-outline-secondary\"" + plannerWarmDisabled + ">" + escapeHtml(localized(normalizedLanguage, "Dry Run Çalıştır", "Run Dry Run")) + "</button></div>"
                 + "<div id=\"plannerWarmStatus\" class=\"planner-status mt-3\">" + escapeHtml(plannerWarmStatusText) + "</div>"
-                + "<div id=\"plannerWarmResults\" class=\"d-none mt-3\">"
+                + "<div id=\"plannerWarmResults\" class=\"" + plannerWarmResultsClass + "\">"
                 + "<div class=\"result-grid\">"
-                + metricShell("plannerWarmChildRows", localized(normalizedLanguage, "Çocuk satırları", "Child rows"))
-                + metricShell("plannerWarmRootRows", localized(normalizedLanguage, "Kök satırları", "Root rows"))
-                + metricShell("plannerWarmSkippedRows", localized(normalizedLanguage, "Atlanan silinmiş satırlar", "Skipped deleted rows"))
-                + metricShell("plannerWarmDuration", localized(normalizedLanguage, "Süre", "Duration"))
-                + metricShell("plannerWarmReferencedRoots", localized(normalizedLanguage, "İlgili kök id sayısı", "Referenced root ids"))
-                + metricShell("plannerWarmMissingRoots", localized(normalizedLanguage, "Eksik kök id sayısı", "Missing root ids"))
+                + metricShell("plannerWarmChildRows", localized(normalizedLanguage, "Çocuk satırları", "Child rows"), bootstrapWarmResult == null ? "" : bootstrapWarmResult.childRowsHydrated() + " / " + bootstrapWarmResult.childRowsRead())
+                + metricShell("plannerWarmRootRows", localized(normalizedLanguage, "Kök satırları", "Root rows"), bootstrapWarmResult == null ? "" : bootstrapWarmResult.rootRowsHydrated() + " / " + bootstrapWarmResult.rootRowsRead())
+                + metricShell("plannerWarmSkippedRows", localized(normalizedLanguage, "Atlanan silinmiş satırlar", "Skipped deleted rows"), bootstrapWarmResult == null ? "" : String.valueOf(bootstrapWarmResult.skippedDeletedRows()))
+                + metricShell("plannerWarmDuration", localized(normalizedLanguage, "Süre", "Duration"), bootstrapWarmResult == null ? "" : bootstrapWarmResult.durationMillis() + " ms")
+                + metricShell("plannerWarmReferencedRoots", localized(normalizedLanguage, "İlgili kök id sayısı", "Referenced root ids"), bootstrapWarmResult == null ? "" : String.valueOf(bootstrapWarmResult.distinctReferencedRootIds()))
+                + metricShell("plannerWarmMissingRoots", localized(normalizedLanguage, "Eksik kök id sayısı", "Missing root ids"), bootstrapWarmResult == null ? "" : String.valueOf(bootstrapWarmResult.missingReferencedRootIds()))
                 + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Warm notları", "Warm notes")) + "</div><div id=\"plannerWarmNotes\"></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Çalışan çocuk SQL'i", "Executed child SQL")) + "</div><pre id=\"plannerWarmChildSql\" class=\"result-pre\"></pre>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Kök SQL şablonu", "Root SQL template")) + "</div><pre id=\"plannerWarmRootSql\" class=\"result-pre\"></pre>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Warm notları", "Warm notes")) + "</div><div id=\"plannerWarmNotes\">" + (bootstrapWarmResult == null ? "" : renderPlannerStaticList(bootstrapWarmResult.notes(), localized(normalizedLanguage, "Henüz warm notu üretilmedi.", "No warm note has been generated yet."))) + "</div>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Çalışan çocuk SQL'i", "Executed child SQL")) + "</div><pre id=\"plannerWarmChildSql\" class=\"result-pre\">" + escapeHtml(bootstrapWarmResult == null ? "" : defaultString(bootstrapWarmResult.childWarmSql())) + "</pre>"
+                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Kök SQL şablonu", "Root SQL template")) + "</div><pre id=\"plannerWarmRootSql\" class=\"result-pre\">" + escapeHtml(bootstrapWarmResult == null ? "" : defaultString(bootstrapWarmResult.rootWarmSql())) + "</pre>"
                 + "</div></div></div>"
                 + "<div id=\"plannerScaffoldPanel\" class=\"result-card\" data-planner-mode-min=\"intermediate\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "7. Generated CacheDB scaffold", "7. Generated CacheDB scaffold")) + "</div><div class=\"result-card-body\">"
                 + "<div class=\"planner-actions\"><button id=\"plannerScaffoldAction\" type=\"button\" class=\"btn btn-outline-primary\"" + plannerScaffoldDisabled + ">" + escapeHtml(localized(normalizedLanguage, "İskeleti Üret", "Generate Scaffold")) + "</button></div>"
@@ -2955,9 +2965,9 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "function navigateToPlanFallback(){const fallbackParams=serializeForm();fallbackParams.set('lang','" + escapeJs(normalizedLanguage) + "');fallbackParams.set('v','" + escapeJs(dashboardInstanceId) + "');fallbackParams.set('discover','true');fallbackParams.set('generatePlan','true');window.location.assign('" + escapeJs(discoveryFallbackAction) + "?'+fallbackParams.toString());}"
                 + "async function submitPlannerPlan(){setStatus('" + escapeJs(localized(normalizedLanguage, "Plan üretiliyor…", "Generating plan…")) + "');try{const payload=await fetchJson(apiBase + '/api/migration-planner/plan',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:serializeForm().toString()});renderPlan(payload);setStatus('" + escapeJs(localized(normalizedLanguage, "Plan hazır. İstersen hemen staging warm çalıştırabilirsin.", "Plan ready. You can run the staging warm execution right away.")) + "');warmStatus.textContent='" + escapeJs(localized(normalizedLanguage, "Plan hazır. Dry run ya da gerçek warm seçebilirsin.", "Plan ready. You can choose a dry run or a real warm execution.")) + "';}catch(error){setStatus('" + escapeJs(localized(normalizedLanguage, "Plan AJAX ile üretilemedi. Sayfa fallback akışına yönlendiriliyor…", "Plan could not be generated over AJAX. Redirecting to the page fallback flow…")) + "');warmStatus.textContent='" + escapeJs(localized(normalizedLanguage, "Plan üretimi fallback moduna geçti.", "Plan generation switched to fallback mode.")) + "';navigateToPlanFallback();}}"
                 + "window.__cachedbPlannerGenerate=submitPlannerPlan;"
-                + "form.addEventListener('submit',function(event){event.preventDefault();submitPlannerPlan().catch(function(){});});"
-                + "warmButton.addEventListener('click',function(){warmExecution(false).catch(function(){});});"
-                + "warmPreviewButton.addEventListener('click',function(){warmExecution(true).catch(function(){});});"
+                + "form.addEventListener('submit',function(event){const submitter=event.submitter;if(!submitter||submitter.id==='plannerGenerateAction'){event.preventDefault();submitPlannerPlan().catch(function(){});}});"
+                + "warmButton.addEventListener('click',function(event){event.preventDefault();warmExecution(false).catch(function(){});});"
+                + "warmPreviewButton.addEventListener('click',function(event){event.preventDefault();warmExecution(true).catch(function(){});});"
                 + "if(scaffoldButton){scaffoldButton.addEventListener('click',function(){scaffoldGeneration().catch(function(){});});}"
                 + "if(compareButton){compareButton.addEventListener('click',function(){runComparison().catch(function(){});});}"
                 + "if(compareReportButton){compareReportButton.addEventListener('click',function(){downloadComparisonReport();});}"
@@ -2978,6 +2988,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String demoBootstrapError = "";
         MigrationPlanner.Result planResult = null;
         String planError = "";
+        MigrationWarmRunner.Result warmResult = null;
+        String warmError = "";
+        boolean warmTriggered = false;
+        boolean dryRunTriggered = false;
         if (shouldBootstrapDemo(query)) {
             try {
                 demoBootstrapResult = admin.bootstrapMigrationPlannerDemo(parseMigrationPlannerDemoBootstrapRequest(query));
@@ -3000,13 +3014,32 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 planError = defaultString(exception.getMessage());
             }
         }
+        if (shouldExecuteWarm(query)) {
+            warmTriggered = true;
+            dryRunTriggered = shouldExecuteDryRun(query);
+            try {
+                LinkedHashMap<String, List<String>> warmParameters = new LinkedHashMap<>(toMultiValueParameters(values));
+                warmParameters.put("warmRootRows", List.of(defaultString(values.get("warmRootRows"))));
+                warmParameters.put("dryRun", List.of(dryRunTriggered ? "true" : "false"));
+                warmParameters.put("childFetchSize", List.of(defaultString(values.getOrDefault("childFetchSize", "500"))));
+                warmParameters.put("rootFetchSize", List.of(defaultString(values.getOrDefault("rootFetchSize", "500"))));
+                warmParameters.put("rootBatchSize", List.of(defaultString(values.getOrDefault("rootBatchSize", "250"))));
+                warmResult = admin.warmMigration(parseMigrationWarmRequest(warmParameters));
+            } catch (IllegalArgumentException | IllegalStateException exception) {
+                warmError = defaultString(exception.getMessage());
+            }
+        }
         return new MigrationPlannerPageState(
                 discovery,
                 Collections.unmodifiableMap(values),
                 demoBootstrapResult,
                 demoBootstrapError,
                 planResult,
-                planError
+                planError,
+                warmResult,
+                warmError,
+                warmTriggered,
+                dryRunTriggered
         );
     }
 
@@ -3027,6 +3060,18 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private boolean shouldGeneratePlan(Map<String, List<String>> query) {
         String generatePlan = first(query, "generatePlan");
         return "1".equals(generatePlan) || "true".equalsIgnoreCase(generatePlan);
+    }
+
+    private boolean shouldExecuteWarm(Map<String, List<String>> query) {
+        return shouldExecuteDryRun(query) || isTruthy(first(query, "warmExecution"));
+    }
+
+    private boolean shouldExecuteDryRun(Map<String, List<String>> query) {
+        return isTruthy(first(query, "dryRunExecution"));
+    }
+
+    private boolean isTruthy(String value) {
+        return "1".equals(defaultString(value)) || "true".equalsIgnoreCase(defaultString(value));
     }
 
     private Map<String, List<String>> toMultiValueParameters(Map<String, String> values) {
@@ -6590,7 +6635,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             MigrationPlannerDemoSupport.BootstrapResult demoBootstrapResult,
             String demoBootstrapError,
             MigrationPlanner.Result planResult,
-            String planError
+            String planError,
+            MigrationWarmRunner.Result warmResult,
+            String warmError,
+            boolean warmTriggered,
+            boolean dryRunTriggered
     ) {
     }
 
