@@ -75,7 +75,8 @@ final class MigrationWarmRunner {
             notes.add("Dry run completed. Redis was not mutated.");
         } else {
             notes.add("Redis hot entities were hydrated directly without enqueueing PostgreSQL write-behind.");
-            notes.add("Registered projections were refreshed inline so the warmed route is immediately readable in staging.");
+            notes.add("Async projections were enqueued through the normal refresh queue so warm execution returns quickly.");
+            notes.add("If the warmed route depends on projections, wait for projection refresh backlog to drain before running the side-by-side comparison.");
         }
         if (normalized.warmRootRows()) {
             notes.add("Root hydration used referenced root ids from the warmed child window.");
@@ -400,7 +401,7 @@ final class MigrationWarmRunner {
                 @Override
                 public void hydrate(Map<String, Object> row, long version) {
                     T entity = binding.codec().fromColumns(row);
-                    redisRepository.hydrate(entity, version);
+                    redisRepository.hydrateWarm(entity, version);
                 }
             };
         }
