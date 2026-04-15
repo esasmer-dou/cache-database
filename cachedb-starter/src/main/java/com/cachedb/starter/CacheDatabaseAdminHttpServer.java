@@ -1052,7 +1052,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private MigrationComparisonRunner.Request parseMigrationComparisonRequest(Map<String, List<String>> parameters) {
         return new MigrationComparisonRunner.Request(
                 parseMigrationPlannerRequest(parameters),
-                parseBoolean(parameters.get("warmBeforeCompare"), false),
+                parseBoolean(parameters.get("warmBeforeCompare"), true),
                 parseBoolean(parameters.get("warmRootRows"), true),
                 parseInt(parameters.get("childFetchSize"), 500),
                 parseInt(parameters.get("rootFetchSize"), 500),
@@ -2852,7 +2852,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + fieldInput("comparisonProjectionName", localized(normalizedLanguage, "Projection override adı", "Projection override name"), localized(normalizedLanguage, "Opsiyonel", "Optional"), "", plannerValues.get("comparisonProjectionName"))
                 + checkboxInput("includeRelationLoader", localized(normalizedLanguage, "Relation loader iskeletini üret", "Generate relation loader skeleton"), parseChecked(plannerValues, "includeRelationLoader", true))
                 + checkboxInput("includeProjectionSkeleton", localized(normalizedLanguage, "Projection iskeletini üret", "Generate projection skeleton"), parseChecked(plannerValues, "includeProjectionSkeleton", true))
-                + checkboxInput("warmBeforeCompare", localized(normalizedLanguage, "Karşılaştırmadan önce warm çalıştır", "Run warm before comparison"), parseChecked(plannerValues, "warmBeforeCompare", false))
+                + checkboxInput("warmBeforeCompare", localized(normalizedLanguage, "Karşılaştırmadan önce warm çalıştır", "Run warm before comparison"), parseChecked(plannerValues, "warmBeforeCompare", true))
                 + textareaInput("comparisonBaselineSql", localized(normalizedLanguage, "Baseline SQL override", "Baseline SQL override"), localized(normalizedLanguage, "Varsayılan türetilmiş SQL yerine kullanılır", "Used instead of the derived baseline SQL"), "full", plannerValues.get("comparisonBaselineSql"))
                 + "</div></div></details>"
                 + "</div>"
@@ -3238,7 +3238,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         values.put("comparisonProjectionName", "");
         values.put("includeRelationLoader", "true");
         values.put("includeProjectionSkeleton", "true");
-        values.put("warmBeforeCompare", "false");
+        values.put("warmBeforeCompare", "true");
         values.put("comparisonBaselineSql", "");
         return values;
     }

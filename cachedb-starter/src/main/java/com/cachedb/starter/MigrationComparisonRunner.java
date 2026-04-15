@@ -62,16 +62,17 @@ final class MigrationComparisonRunner {
                 .findFirst()
                 .orElse(null);
 
+        MigrationWarmRunner.Request warmRequest = new MigrationWarmRunner.Request(
+                plan.request(),
+                normalized.warmRootRows(),
+                false,
+                normalized.childFetchSize(),
+                normalized.rootFetchSize(),
+                normalized.rootBatchSize()
+        );
         MigrationWarmRunner.Result warmResult = null;
         if (normalized.warmBeforeCompare()) {
-            warmResult = warmRunner.execute(new MigrationWarmRunner.Request(
-                    plan.request(),
-                    normalized.warmRootRows(),
-                    false,
-                    normalized.childFetchSize(),
-                    normalized.rootFetchSize(),
-                    normalized.rootBatchSize()
-            ));
+            warmResult = warmRunner.execute(warmRequest);
         }
 
         CacheRouteExecutor cacheRouteExecutor = cacheRouteExecutorFactory.resolve(plan, normalized)
@@ -108,6 +109,17 @@ final class MigrationComparisonRunner {
                     samples,
                     normalized.pageSize()
             );
+            if (shouldAutoWarmRetry(cacheRouteExecutor, warmResult, sampleComparisons)) {
+                warmResult = warmRunner.execute(warmRequest);
+                notes.add("The initial CacheDB comparison route returned an empty cold page. The runner executed a staging warm automatically and retried the comparison.");
+                sampleComparisons = compareSamples(
+                        connection,
+                        baselineSqlTemplate,
+                        cacheRouteExecutor,
+                        samples,
+                        normalized.pageSize()
+                );
+            }
             Metrics baselineMetrics = measureBaseline(connection, baselineSqlTemplate, samples, normalized.pageSize(), normalized.warmupIterations(), normalized.measuredIterations(), plan.request().childPrimaryKeyColumn());
             Metrics cacheMetrics = measureCache(cacheRouteExecutor, samples, normalized.pageSize(), normalized.warmupIterations(), normalized.measuredIterations());
 
@@ -303,6 +315,19 @@ final class MigrationComparisonRunner {
             ));
         }
         return List.copyOf(comparisons);
+    }
+
+    private boolean shouldAutoWarmRetry(
+            CacheRouteExecutor cacheRouteExecutor,
+            MigrationWarmRunner.Result warmResult,
+            List<SampleComparison> sampleComparisons
+    ) {
+        if (warmResult != null || !cacheRouteExecutor.usesProjection() || sampleComparisons.isEmpty()) {
+            return false;
+        }
+        boolean anyBaselineRows = sampleComparisons.stream().anyMatch(sample -> sample.baselineRowCount() > 0);
+        boolean allCacheRowsEmpty = sampleComparisons.stream().allMatch(sample -> sample.cacheRowCount() == 0);
+        return anyBaselineRows && allCacheRowsEmpty;
     }
 
     private Metrics measureBaseline(

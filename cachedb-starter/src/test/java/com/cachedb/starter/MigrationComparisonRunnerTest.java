@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -108,6 +109,124 @@ class MigrationComparisonRunnerTest {
         assertTrue(result.assessment().exactMatchCount() >= 2L);
     }
 
+    @Test
+    void shouldAutoWarmAndRetryProjectionComparisonWhenColdRouteIsEmpty() throws SQLException {
+        DataSource dataSource = newDataSource("migration-compare-auto-warm");
+        seedRows(dataSource, List.of(
+                """
+                CREATE TABLE customer_order (
+                    order_id BIGINT PRIMARY KEY,
+                    customer_id BIGINT NOT NULL,
+                    order_date TIMESTAMP NOT NULL,
+                    order_amount DECIMAL(18, 2)
+                )
+                """,
+                "INSERT INTO customer_order (order_id, customer_id, order_date, order_amount) VALUES (101, 1, TIMESTAMP '2026-04-01 10:00:00', 100.00)",
+                "INSERT INTO customer_order (order_id, customer_id, order_date, order_amount) VALUES (102, 1, TIMESTAMP '2026-04-02 10:00:00', 110.00)",
+                "INSERT INTO customer_order (order_id, customer_id, order_date, order_amount) VALUES (103, 1, TIMESTAMP '2026-04-03 10:00:00', 120.00)"
+        ));
+
+        AtomicBoolean warmed = new AtomicBoolean(false);
+        MigrationSchemaDiscovery discovery = new MigrationSchemaDiscovery(dataSource, emptyRegistry());
+        MigrationWarmRunner warmRunner = new MigrationWarmRunner(
+                dataSource,
+                ignored -> Optional.of(new MigrationWarmRunner.WarmEntityHydrator() {
+                    @Override
+                    public String entityName() {
+                        return "customer_order";
+                    }
+
+                    @Override
+                    public String tableName() {
+                        return "customer_order";
+                    }
+
+                    @Override
+                    public String idColumn() {
+                        return "order_id";
+                    }
+
+                    @Override
+                    public String versionColumn() {
+                        return "version";
+                    }
+
+                    @Override
+                    public String deletedColumn() {
+                        return null;
+                    }
+
+                    @Override
+                    public String deletedMarkerValue() {
+                        return "1";
+                    }
+
+                    @Override
+                    public void hydrate(Map<String, Object> row, long version) {
+                        warmed.set(true);
+                    }
+
+                    @Override
+                    public void hydrateBatch(List<Map<String, Object>> rows, List<Long> versions, boolean forceImmediateProjectionRefresh, boolean reindexQueryIndexes) {
+                        warmed.set(true);
+                    }
+                })
+        );
+        MigrationComparisonRunner runner = new MigrationComparisonRunner(
+                dataSource,
+                discovery,
+                warmRunner,
+                new FakeCacheRouteExecutorFactory(Map.of(
+                        "1", List.of("103", "102", "101")
+                ), warmed)
+        );
+
+        MigrationComparisonRunner.Result result = runner.execute(new MigrationComparisonRunner.Request(
+                new MigrationPlanner.Request(
+                        "customer-orders",
+                        "customer_account",
+                        "customer_id",
+                        "customer_order",
+                        "order_id",
+                        "customer_id",
+                        "order_date",
+                        "DESC",
+                        1L,
+                        3L,
+                        3L,
+                        3L,
+                        3,
+                        3,
+                        true,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false,
+                        true,
+                        true,
+                        true
+                ),
+                false,
+                true,
+                25,
+                25,
+                25,
+                "",
+                1,
+                0,
+                1,
+                1,
+                "",
+                ""
+        ));
+
+        assertTrue(warmed.get());
+        assertEquals(1, result.sampleComparisons().size());
+        assertTrue(result.sampleComparisons().get(0).exactMatch());
+        assertTrue(result.notes().stream().anyMatch(note -> note.contains("executed a staging warm automatically")));
+    }
+
     private DataSource newDataSource(String name) {
         JdbcDataSource dataSource = new JdbcDataSource();
         dataSource.setURL("jdbc:h2:mem:" + name + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
@@ -161,9 +280,15 @@ class MigrationComparisonRunnerTest {
 
     private static final class FakeCacheRouteExecutorFactory implements MigrationComparisonRunner.CacheRouteExecutorFactory {
         private final Map<String, List<String>> rowsByRootId;
+        private final AtomicBoolean warmed;
 
         private FakeCacheRouteExecutorFactory(Map<String, List<String>> rowsByRootId) {
+            this(rowsByRootId, new AtomicBoolean(true));
+        }
+
+        private FakeCacheRouteExecutorFactory(Map<String, List<String>> rowsByRootId, AtomicBoolean warmed) {
             this.rowsByRootId = new LinkedHashMap<>(rowsByRootId);
+            this.warmed = warmed;
         }
 
         @Override
@@ -186,6 +311,9 @@ class MigrationComparisonRunnerTest {
 
                 @Override
                 public MigrationComparisonRunner.RoutePage execute(Object sampleRootId, int pageSize) {
+                    if (!warmed.get()) {
+                        return new MigrationComparisonRunner.RoutePage(0, List.of());
+                    }
                     List<String> ids = rowsByRootId.getOrDefault(String.valueOf(sampleRootId), List.of());
                     List<String> page = ids.subList(0, Math.min(Math.max(1, pageSize), ids.size()));
                     return new MigrationComparisonRunner.RoutePage(page.size(), List.copyOf(page));
