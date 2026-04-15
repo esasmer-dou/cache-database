@@ -25,6 +25,9 @@ import java.util.function.Function;
 
 public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepository<P, ID> {
 
+    private static final int HOT_QUERY_CACHE_LIMIT = 512;
+    private static final long HOT_QUERY_CACHE_TTL_MILLIS = 15_000L;
+
     private final RedisProjectionRuntime<P, ID> readRuntime;
     private final RedisProjectionRuntime<P, ID> refreshRuntime;
     private final QueryEvaluator queryEvaluator;
@@ -32,6 +35,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     private final Function<Collection<String>, Map<String, P>> missingByRawIdsLoader;
     private final Function<QuerySpec, List<P>> queryWarmupLoader;
     private final StoragePerformanceCollector performanceCollector;
+    private final ProjectionQueryCache<P> queryCache = new ProjectionQueryCache<>(HOT_QUERY_CACHE_LIMIT, HOT_QUERY_CACHE_TTL_MILLIS);
 
     public RedisProjectionRepository(
             RedisProjectionRuntime<P, ID> readRuntime,
@@ -49,6 +53,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         this.missingByRawIdsLoader = Objects.requireNonNull(missingByRawIdsLoader, "missingByRawIdsLoader");
         this.queryWarmupLoader = Objects.requireNonNull(queryWarmupLoader, "queryWarmupLoader");
         this.performanceCollector = performanceCollector;
+        this.readRuntime.attachQueryCacheInvalidator(queryCache::clear);
+        this.refreshRuntime.attachQueryCacheInvalidator(queryCache::clear);
     }
 
     @Override
@@ -99,10 +105,19 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     public List<P> query(QuerySpec querySpec) {
         long startedAt = System.nanoTime();
         try {
+            String hotQueryCacheKey = hotQueryCacheKey(querySpec);
+            if (hotQueryCacheKey != null) {
+                List<P> cached = queryCache.get(hotQueryCacheKey);
+                if (cached != null) {
+                    return cached;
+                }
+            }
             readRuntime.queryIndexManager().warm(querySpec);
             Optional<List<P>> rankedWindowResult = queryViaRankedProjectionWindow(querySpec);
             if (rankedWindowResult.isPresent()) {
-                return rankedWindowResult.get();
+                List<P> result = rankedWindowResult.get();
+                cacheHotQuery(hotQueryCacheKey, result);
+                return result;
             }
             boolean sortedIndexScan = readRuntime.queryIndexManager().supportsSortedIndexScan(querySpec);
             boolean primarySortedScan = !sortedIndexScan && readRuntime.queryIndexManager().shouldUsePrimarySortedScan(querySpec);
@@ -119,7 +134,9 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             if (candidateIds.isEmpty()) {
                 List<P> warmed = Optional.ofNullable(queryWarmupLoader.apply(querySpec)).orElseGet(List::of);
                 warmProjections(warmed);
-                return List.copyOf(warmed);
+                List<P> result = List.copyOf(warmed);
+                cacheHotQuery(hotQueryCacheKey, result);
+                return result;
             }
 
             if (!requiresResidualEvaluation && !requiresInMemorySort) {
@@ -128,17 +145,69 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
                 readRuntime.queryIndexManager().observe(querySpec, resolved.size());
                 List<P> ordered = new ArrayList<>(resolved.values());
                 if (sortedIndexScan || completeSortOrderResolved) {
-                    return List.copyOf(ordered);
+                    List<P> result = List.copyOf(ordered);
+                    cacheHotQuery(hotQueryCacheKey, result);
+                    return result;
                 }
                 int fromIndex = Math.min(querySpec.offset(), ordered.size());
                 int toIndex = Math.min(fromIndex + querySpec.limit(), ordered.size());
-                return List.copyOf(ordered.subList(fromIndex, toIndex));
+                List<P> result = List.copyOf(ordered.subList(fromIndex, toIndex));
+                cacheHotQuery(hotQueryCacheKey, result);
+                return result;
             }
 
-            return queryViaProjectionPayload(querySpec, candidateIds, sortedIndexScan);
+            List<P> result = queryViaProjectionPayload(querySpec, candidateIds, sortedIndexScan);
+            cacheHotQuery(hotQueryCacheKey, result);
+            return result;
         } finally {
             recordRedisRead(startedAt);
         }
+    }
+
+    private void cacheHotQuery(String key, List<P> result) {
+        if (key == null || result == null) {
+            return;
+        }
+        queryCache.put(key, result);
+    }
+
+    private String hotQueryCacheKey(QuerySpec querySpec) {
+        if (querySpec == null) {
+            return null;
+        }
+        if (querySpec.offset() != 0 || querySpec.limit() <= 0 || querySpec.limit() > 200) {
+            return null;
+        }
+        if (querySpec.rootGroup().operator() != com.reactor.cachedb.core.query.QueryGroupOperator.AND) {
+            return null;
+        }
+        if (querySpec.fetchPlan() != null
+                && (!querySpec.fetchPlan().includes().isEmpty()
+                || !querySpec.fetchPlan().relationLimits().isEmpty())) {
+            return null;
+        }
+        if (querySpec.filters().size() != 1 || querySpec.sorts().isEmpty()) {
+            return null;
+        }
+        QueryFilter filter = querySpec.filters().get(0);
+        if (filter.operator() != QueryOperator.EQ || filter.column().contains(".")) {
+            return null;
+        }
+        StringBuilder builder = new StringBuilder(readRuntime.metadata().entityName())
+                .append('|')
+                .append(filter.column())
+                .append('=')
+                .append(String.valueOf(filter.value()))
+                .append('|')
+                .append("limit=")
+                .append(querySpec.limit());
+        for (QuerySort sort : querySpec.sorts()) {
+            builder.append('|')
+                    .append(sort.column())
+                    .append(':')
+                    .append(sort.direction().name());
+        }
+        return builder.toString();
     }
 
     private Optional<List<P>> queryViaRankedProjectionWindow(QuerySpec querySpec) {
@@ -509,5 +578,42 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             }
             return maxInclusive ? score > max : score >= max;
         }
+    }
+
+    private static final class ProjectionQueryCache<P> {
+        private final int maxEntries;
+        private final long ttlMillis;
+        private final LinkedHashMap<String, CachedQueryResult<P>> entries = new LinkedHashMap<>(32, 0.75f, true);
+
+        private ProjectionQueryCache(int maxEntries, long ttlMillis) {
+            this.maxEntries = Math.max(1, maxEntries);
+            this.ttlMillis = Math.max(1L, ttlMillis);
+        }
+
+        private synchronized List<P> get(String key) {
+            pruneExpired(System.currentTimeMillis());
+            CachedQueryResult<P> cached = entries.get(key);
+            return cached == null ? null : cached.result();
+        }
+
+        private synchronized void put(String key, List<P> result) {
+            pruneExpired(System.currentTimeMillis());
+            entries.put(key, new CachedQueryResult<>(List.copyOf(result), System.currentTimeMillis() + ttlMillis));
+            while (entries.size() > maxEntries) {
+                String eldestKey = entries.keySet().iterator().next();
+                entries.remove(eldestKey);
+            }
+        }
+
+        private synchronized void clear() {
+            entries.clear();
+        }
+
+        private void pruneExpired(long now) {
+            entries.entrySet().removeIf(entry -> entry.getValue().expiresAtEpochMillis() < now);
+        }
+    }
+
+    private record CachedQueryResult<P>(List<P> result, long expiresAtEpochMillis) {
     }
 }

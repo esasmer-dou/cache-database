@@ -423,10 +423,10 @@ final class MigrationSchemaDiscovery {
                 return 10;
             }
             if (isTemporalColumnName(column.name) && column.temporal()) {
-                return 120;
+                return 120 + temporalNameBonus(column.name);
             }
             if (column.temporal()) {
-                return 100;
+                return 100 + temporalNameBonus(column.name);
             }
             if (isRankLikeColumn(column.name) && column.numeric()) {
                 return 80;
@@ -435,6 +435,26 @@ final class MigrationSchemaDiscovery {
                 return 40;
             }
             return 0;
+        }
+
+        private int temporalNameBonus(String columnName) {
+            String normalized = normalize(columnName);
+            if (normalized.contains("order_date")) {
+                return 30;
+            }
+            if (normalized.contains("event_date") || normalized.contains("business_date") || normalized.endsWith("_date")) {
+                return 20;
+            }
+            if (normalized.contains("order") && normalized.contains("date")) {
+                return 20;
+            }
+            if (normalized.contains("created")) {
+                return 5;
+            }
+            if (normalized.contains("updated")) {
+                return 0;
+            }
+            return 10;
         }
 
         private TableInfo freeze() {

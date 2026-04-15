@@ -42,6 +42,7 @@ class MigrationSchemaDiscoveryTest {
                     order_id BIGINT PRIMARY KEY,
                     customer_id BIGINT NOT NULL,
                     order_date TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP NOT NULL,
                     order_amount DECIMAL(18, 2),
                     currency_code VARCHAR(3),
                     order_type VARCHAR(32),
@@ -77,6 +78,7 @@ class MigrationSchemaDiscoveryTest {
         assertTrue(suggestion.relationColumn().equalsIgnoreCase("customer_id"));
         assertTrue(suggestion.sortColumn().equalsIgnoreCase("order_date"));
         assertTrue(suggestion.sortCandidates().stream().anyMatch(column -> column.equalsIgnoreCase("order_date")));
+        assertTrue(suggestion.sortCandidates().stream().anyMatch(column -> column.equalsIgnoreCase("created_at")));
         assertTrue(suggestion.plannerRequest().rootTableOrEntity().equalsIgnoreCase("customer_account"));
         assertTrue(suggestion.plannerRequest().childTableOrEntity().equalsIgnoreCase("customer_order"));
         assertTrue(suggestion.plannerRequest().relationColumn().equalsIgnoreCase("customer_id"));

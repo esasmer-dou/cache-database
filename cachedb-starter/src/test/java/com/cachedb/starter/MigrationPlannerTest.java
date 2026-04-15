@@ -3,6 +3,7 @@ package com.reactor.cachedb.starter;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MigrationPlannerTest {
@@ -88,5 +89,39 @@ class MigrationPlannerTest {
         assertTrue(result.warnings().stream().anyMatch(item -> item.toLowerCase().contains("global sorted")));
         assertFalse(result.sampleWarmSql().contains("PARTITION BY"));
         assertTrue(result.sampleWarmSql().contains("ORDER BY order_amount DESC"));
+    }
+
+    @Test
+    void shouldPreserveRegisteredEntityCasingWhenBuildingProjectionNames() {
+        MigrationPlanner.Request request = new MigrationPlanner.Request(
+                "migration-demo",
+                "MigrationDemoCustomerEntity",
+                "customer_id",
+                "MigrationDemoOrderEntity",
+                "order_id",
+                "customer_id",
+                "order_date",
+                "DESC",
+                120L,
+                24_000L,
+                220L,
+                1_350L,
+                100,
+                1_000,
+                true,
+                false,
+                false,
+                false,
+                true,
+                false,
+                true,
+                true,
+                true
+        );
+
+        MigrationPlanner.Result result = planner.plan(request);
+
+        assertEquals("MigrationDemoCustomerEntityMigrationDemoOrderEntitySummaryHot", result.summaryProjectionName());
+        assertEquals("", result.rankedProjectionName());
     }
 }

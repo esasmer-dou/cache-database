@@ -325,6 +325,13 @@ public final class MigrationPlanner {
             if (part.isBlank()) {
                 continue;
             }
+            if (part.indexOf('_') < 0 && part.indexOf('-') < 0 && containsUppercaseBeyondFirst(part)) {
+                builder.append(Character.toUpperCase(part.charAt(0)));
+                if (part.length() > 1) {
+                    builder.append(part.substring(1));
+                }
+                continue;
+            }
             String lower = part.toLowerCase(Locale.ROOT);
             builder.append(Character.toUpperCase(lower.charAt(0)));
             if (lower.length() > 1) {
@@ -332,6 +339,15 @@ public final class MigrationPlanner {
             }
         }
         return builder.isEmpty() ? "Entity" : builder.toString();
+    }
+
+    private boolean containsUppercaseBeyondFirst(String value) {
+        for (int index = 1; index < value.length(); index++) {
+            if (Character.isUpperCase(value.charAt(index))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public record Template(

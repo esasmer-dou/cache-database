@@ -1723,6 +1723,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             builder.append("        register(cacheDatabase, cacheDatabase.config().resourceLimits().defaultCachePolicy());\n");
         } else {
             builder.append("        cacheDatabase.register(METADATA, CODEC);\n");
+            renderProjectionRegistrationStatements(builder, model);
         }
         builder.append("    }\n\n");
         builder.append("    public static void register(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
@@ -1735,24 +1736,29 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         } else {
             builder.append("        cacheDatabase.register(METADATA, CODEC, cachePolicy);\n");
         }
+        renderProjectionRegistrationStatements(builder, model);
         builder.append("    }\n\n");
         builder.append("    public static void register(CacheDatabase cacheDatabase, RelationBatchLoader<")
                 .append(model.simpleName()).append("> relationBatchLoader) {\n");
         builder.append("        cacheDatabase.register(METADATA, CODEC, cacheDatabase.config().resourceLimits().defaultCachePolicy(), relationBatchLoader, null);\n");
+        renderProjectionRegistrationStatements(builder, model);
         builder.append("    }\n\n");
         builder.append("    public static void register(CacheDatabase cacheDatabase, CachePolicy cachePolicy, RelationBatchLoader<")
                 .append(model.simpleName()).append("> relationBatchLoader) {\n");
         builder.append("        cacheDatabase.register(METADATA, CODEC, cachePolicy, relationBatchLoader, null);\n");
+        renderProjectionRegistrationStatements(builder, model);
         builder.append("    }\n\n");
         builder.append("    public static void register(CacheDatabase cacheDatabase, RelationBatchLoader<")
                 .append(model.simpleName()).append("> relationBatchLoader, EntityPageLoader<").append(model.simpleName())
                 .append("> pageLoader) {\n");
         builder.append("        cacheDatabase.register(METADATA, CODEC, cacheDatabase.config().resourceLimits().defaultCachePolicy(), relationBatchLoader, pageLoader);\n");
+        renderProjectionRegistrationStatements(builder, model);
         builder.append("    }\n\n");
         builder.append("    public static void register(CacheDatabase cacheDatabase, CachePolicy cachePolicy, RelationBatchLoader<")
                 .append(model.simpleName()).append("> relationBatchLoader, EntityPageLoader<").append(model.simpleName())
                 .append("> pageLoader) {\n");
         builder.append("        cacheDatabase.register(METADATA, CODEC, cachePolicy, relationBatchLoader, pageLoader);\n");
+        renderProjectionRegistrationStatements(builder, model);
         builder.append("    }\n\n");
         builder.append("    public static ActiveRecordInstance<").append(model.simpleName()).append(", ").append(model.idField().typeName())
                 .append("> attach(CacheSession session, ").append(model.simpleName()).append(" entity) {\n");
@@ -1799,6 +1805,14 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 .append(model.idField().typeName()).append(" id) {\n");
         builder.append("        repository(session, cachePolicy).deleteById(id);\n");
         builder.append("    }\n");
+    }
+
+    private void renderProjectionRegistrationStatements(StringBuilder builder, EntityModel model) {
+        for (ProjectionModel projection : model.projections()) {
+            builder.append("        cacheDatabase.registerProjection(METADATA, ")
+                    .append(projection.accessorName())
+                    .append("Projection());\n");
+        }
     }
 
     private void renderUseCaseGroups(StringBuilder builder, EntityModel model) {

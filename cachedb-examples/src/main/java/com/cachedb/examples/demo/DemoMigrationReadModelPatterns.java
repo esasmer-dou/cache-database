@@ -4,9 +4,7 @@ import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.projection.ProjectionCodec;
 import com.reactor.cachedb.examples.demo.entity.MigrationDemoOrderEntity;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +28,7 @@ public final class DemoMigrationReadModelPatterns {
                                     encode(projection.orderId()),
                                     encode(projection.customerId()),
                                     encodeInstant(projection.orderDate()),
+                                    encodeInstant(projection.createdAt()),
                                     encodeDouble(projection.orderAmount()),
                                     encodeString(projection.currencyCode()),
                                     encodeString(projection.orderType())
@@ -43,18 +42,20 @@ public final class DemoMigrationReadModelPatterns {
                                     parseLong(parts[0]),
                                     parseLong(parts[1]),
                                     parseInstant(parts[2]),
-                                    parseDouble(parts[3]),
-                                    decodeString(parts[4]),
-                                    decodeString(parts[5])
+                                    parseInstant(parts[3]),
+                                    parseDouble(parts[4]),
+                                    decodeString(parts[5]),
+                                    decodeString(parts[6])
                             );
                         }
                     },
                     MigrationOrderSummaryView::orderId,
-                    List.of("order_id", "customer_id", "order_date", "order_amount", "currency_code", "order_type"),
+                    List.of("order_id", "customer_id", "order_date", "created_at", "order_amount", "currency_code", "order_type"),
                     projection -> projectionColumns(
                             "order_id", projection.orderId(),
                             "customer_id", projection.customerId(),
                             "order_date", projection.orderDate(),
+                            "created_at", projection.createdAt(),
                             "order_amount", projection.orderAmount(),
                             "currency_code", projection.currencyCode(),
                             "order_type", projection.orderType()
@@ -63,6 +64,7 @@ public final class DemoMigrationReadModelPatterns {
                             order.orderId,
                             order.customerId,
                             order.orderDate,
+                            order.createdAt,
                             order.orderAmount,
                             order.currencyCode,
                             order.orderType
@@ -80,6 +82,7 @@ public final class DemoMigrationReadModelPatterns {
                                     encode(projection.orderId()),
                                     encode(projection.customerId()),
                                     encodeInstant(projection.orderDate()),
+                                    encodeInstant(projection.createdAt()),
                                     encodeDouble(projection.orderAmount()),
                                     encodeString(projection.currencyCode()),
                                     encodeString(projection.orderType()),
@@ -94,19 +97,21 @@ public final class DemoMigrationReadModelPatterns {
                                     parseLong(parts[0]),
                                     parseLong(parts[1]),
                                     parseInstant(parts[2]),
-                                    parseDouble(parts[3]),
-                                    decodeString(parts[4]),
+                                    parseInstant(parts[3]),
+                                    parseDouble(parts[4]),
                                     decodeString(parts[5]),
-                                    parseDouble(parts[6])
+                                    decodeString(parts[6]),
+                                    parseDouble(parts[7])
                             );
                         }
                     },
                     MigrationOrderRankedView::orderId,
-                    List.of("order_id", "customer_id", "order_date", "order_amount", "currency_code", "order_type", "rank_score"),
+                    List.of("order_id", "customer_id", "order_date", "created_at", "order_amount", "currency_code", "order_type", "rank_score"),
                     projection -> projectionColumns(
                             "order_id", projection.orderId(),
                             "customer_id", projection.customerId(),
                             "order_date", projection.orderDate(),
+                            "created_at", projection.createdAt(),
                             "order_amount", projection.orderAmount(),
                             "currency_code", projection.currencyCode(),
                             "order_type", projection.orderType(),
@@ -116,6 +121,7 @@ public final class DemoMigrationReadModelPatterns {
                             order.orderId,
                             order.customerId,
                             order.orderDate,
+                            order.createdAt,
                             order.orderAmount,
                             order.currencyCode,
                             order.orderType,
@@ -130,6 +136,7 @@ public final class DemoMigrationReadModelPatterns {
             Long orderId,
             Long customerId,
             Instant orderDate,
+            Instant createdAt,
             Double orderAmount,
             String currencyCode,
             String orderType
@@ -140,6 +147,7 @@ public final class DemoMigrationReadModelPatterns {
             Long orderId,
             Long customerId,
             Instant orderDate,
+            Instant createdAt,
             Double orderAmount,
             String currencyCode,
             String orderType,
@@ -156,29 +164,23 @@ public final class DemoMigrationReadModelPatterns {
     }
 
     private static String encode(Object value) {
-        return encodeString(value == null ? null : String.valueOf(value));
+        return value == null ? NULL_SENTINEL : String.valueOf(value);
     }
 
     private static String encodeDouble(Double value) {
-        return encodeString(value == null ? null : String.valueOf(value));
+        return value == null ? NULL_SENTINEL : String.valueOf(value);
     }
 
     private static String encodeInstant(Instant value) {
-        return encodeString(value == null ? null : String.valueOf(value.toEpochMilli()));
+        return value == null ? NULL_SENTINEL : String.valueOf(value.toEpochMilli());
     }
 
     private static String encodeString(String value) {
-        if (value == null) {
-            return NULL_SENTINEL;
-        }
-        return Base64.getUrlEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+        return value == null ? NULL_SENTINEL : value;
     }
 
     private static String decodeString(String encoded) {
-        if (NULL_SENTINEL.equals(encoded)) {
-            return null;
-        }
-        return new String(Base64.getUrlDecoder().decode(encoded), StandardCharsets.UTF_8);
+        return NULL_SENTINEL.equals(encoded) ? null : encoded;
     }
 
     private static Long parseLong(String encoded) {

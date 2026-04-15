@@ -60,9 +60,34 @@ final class MigrationWarmRunner {
         WarmCounters rootCounters = WarmCounters.empty();
         try (Connection connection = dataSource.getConnection()) {
             connection.setReadOnly(true);
-            childCounters = warmChildRows(connection, childWarmSql, normalized.childFetchSize(), childHydrator, plan.request().relationColumn(), normalized.dryRun(), referencedRootIds);
+            boolean forceImmediateProjectionRefresh = !normalized.dryRun() && plan.projectionRequired();
+            boolean reindexQueryIndexes = !normalized.dryRun() && !plan.projectionRequired();
+            boolean projectionOnlyChildWarm = !normalized.dryRun()
+                    && plan.projectionRequired()
+                    && childHydrator.supportsProjectionOnlyWarm();
+            childCounters = warmChildRows(
+                    connection,
+                    childWarmSql,
+                    normalized.childFetchSize(),
+                    childHydrator,
+                    plan.request().relationColumn(),
+                    normalized.dryRun(),
+                    projectionOnlyChildWarm,
+                    forceImmediateProjectionRefresh,
+                    reindexQueryIndexes,
+                    referencedRootIds
+            );
             if (rootHydrator != null && !referencedRootIds.isEmpty()) {
-                rootCounters = warmRootRows(connection, rootHydrator, referencedRootIds, normalized.rootFetchSize(), normalized.rootBatchSize(), normalized.dryRun());
+                rootCounters = warmRootRows(
+                        connection,
+                        rootHydrator,
+                        referencedRootIds,
+                        normalized.rootFetchSize(),
+                        normalized.rootBatchSize(),
+                        normalized.dryRun(),
+                        forceImmediateProjectionRefresh,
+                        reindexQueryIndexes
+                );
             }
         } catch (SQLException exception) {
             throw new IllegalStateException("Migration warm execution failed: " + exception.getMessage(), exception);
@@ -76,8 +101,15 @@ final class MigrationWarmRunner {
         } else {
             notes.add("Redis hot entities were hydrated directly without enqueueing PostgreSQL write-behind.");
             notes.add("Warm hydration skips eager query-index rebuilds and page-cache touches so the hot set can be loaded faster.");
-            notes.add("Async projections were enqueued through the normal refresh queue so warm execution returns quickly.");
-            notes.add("If the warmed route depends on projections or query indexes, wait for the projection backlog to drain and let the first compare pass warm the query indexes.");
+            if (plan.projectionRequired()) {
+                if (childHydrator.supportsProjectionOnlyWarm()) {
+                    notes.add("Projection-required child rows were warmed directly into the projection surface; wide child entity payload hydration was skipped.");
+                }
+                notes.add("The warmed route requires a projection, so projection payloads and projection query indexes were rebuilt inline before returning.");
+                notes.add("Entity query indexes were deferred because this warm path is optimizing the projection route, not the wide entity route.");
+            } else {
+                notes.add("The warmed route does not require a projection, so entity query indexes were rebuilt inline before returning.");
+            }
         }
         if (normalized.warmRootRows()) {
             notes.add("Root hydration used referenced root ids from the warmed child window.");
@@ -121,6 +153,9 @@ final class MigrationWarmRunner {
             WarmEntityHydrator hydrator,
             String relationColumn,
             boolean dryRun,
+            boolean projectionOnlyWarm,
+            boolean forceImmediateProjectionRefresh,
+            boolean reindexQueryIndexes,
             LinkedHashSet<Object> referencedRootIds
     ) throws SQLException {
         long readRows = 0L;
@@ -147,7 +182,14 @@ final class MigrationWarmRunner {
                         pendingRows.add(row);
                         pendingVersions.add(versionValue(row, hydrator));
                         if (pendingRows.size() >= hydrateBatchSize) {
-                            hydrator.hydrateBatch(pendingRows, pendingVersions);
+                            hydrateBatch(
+                                    hydrator,
+                                    pendingRows,
+                                    pendingVersions,
+                                    projectionOnlyWarm,
+                                    forceImmediateProjectionRefresh,
+                                    reindexQueryIndexes
+                            );
                             pendingRows.clear();
                             pendingVersions.clear();
                         }
@@ -157,9 +199,31 @@ final class MigrationWarmRunner {
             }
         }
         if (!dryRun && pendingRows != null && !pendingRows.isEmpty()) {
-            hydrator.hydrateBatch(pendingRows, pendingVersions);
+            hydrateBatch(
+                    hydrator,
+                    pendingRows,
+                    pendingVersions,
+                    projectionOnlyWarm,
+                    forceImmediateProjectionRefresh,
+                    reindexQueryIndexes
+            );
         }
         return new WarmCounters(readRows, hydratedRows, skippedDeletedRows);
+    }
+
+    private void hydrateBatch(
+            WarmEntityHydrator hydrator,
+            List<Map<String, Object>> rows,
+            List<Long> versions,
+            boolean projectionOnlyWarm,
+            boolean forceImmediateProjectionRefresh,
+            boolean reindexQueryIndexes
+    ) {
+        if (projectionOnlyWarm) {
+            hydrator.hydrateProjectionBatch(rows, versions);
+            return;
+        }
+        hydrator.hydrateBatch(rows, versions, forceImmediateProjectionRefresh, reindexQueryIndexes);
     }
 
     private WarmCounters warmRootRows(
@@ -168,7 +232,9 @@ final class MigrationWarmRunner {
             Collection<Object> rootIds,
             int fetchSize,
             int batchSize,
-            boolean dryRun
+            boolean dryRun,
+            boolean forceImmediateProjectionRefresh,
+            boolean reindexQueryIndexes
     ) throws SQLException {
         if (rootIds.isEmpty()) {
             return WarmCounters.empty();
@@ -204,7 +270,12 @@ final class MigrationWarmRunner {
                     }
                 }
                 if (!dryRun && pendingRows != null && !pendingRows.isEmpty()) {
-                    hydrator.hydrateBatch(pendingRows, pendingVersions);
+                    hydrator.hydrateBatch(
+                            pendingRows,
+                            pendingVersions,
+                            forceImmediateProjectionRefresh,
+                            reindexQueryIndexes
+                    );
                 }
             }
         }
@@ -299,6 +370,23 @@ final class MigrationWarmRunner {
         String deletedMarkerValue();
         void hydrate(Map<String, Object> row, long version);
         default void hydrateBatch(List<Map<String, Object>> rows, List<Long> versions) {
+            hydrateBatch(rows, versions, false);
+        }
+        default void hydrateBatch(List<Map<String, Object>> rows, List<Long> versions, boolean forceImmediateProjectionRefresh) {
+            hydrateBatch(rows, versions, forceImmediateProjectionRefresh, false);
+        }
+        default boolean supportsProjectionOnlyWarm() {
+            return false;
+        }
+        default void hydrateProjectionBatch(List<Map<String, Object>> rows, List<Long> versions) {
+            hydrateBatch(rows, versions, true, false);
+        }
+        default void hydrateBatch(
+                List<Map<String, Object>> rows,
+                List<Long> versions,
+                boolean forceImmediateProjectionRefresh,
+                boolean reindexQueryIndexes
+        ) {
             for (int index = 0; index < rows.size(); index++) {
                 hydrate(rows.get(index), versions.get(index));
             }
@@ -430,11 +518,40 @@ final class MigrationWarmRunner {
 
                 @Override
                 public void hydrateBatch(List<Map<String, Object>> rows, List<Long> versions) {
+                    hydrateBatch(rows, versions, false);
+                }
+
+                @Override
+                public void hydrateBatch(List<Map<String, Object>> rows, List<Long> versions, boolean forceImmediateProjectionRefresh) {
+                    hydrateBatch(rows, versions, forceImmediateProjectionRefresh, false);
+                }
+
+                @Override
+                public void hydrateBatch(
+                        List<Map<String, Object>> rows,
+                        List<Long> versions,
+                        boolean forceImmediateProjectionRefresh,
+                        boolean reindexQueryIndexes
+                ) {
                     ArrayList<T> entities = new ArrayList<>(rows.size());
                     for (Map<String, Object> row : rows) {
                         entities.add(binding.codec().fromColumns(row));
                     }
-                    redisRepository.hydrateWarmBatch(entities, versions);
+                    redisRepository.hydrateWarmBatch(entities, versions, forceImmediateProjectionRefresh, reindexQueryIndexes);
+                }
+
+                @Override
+                public boolean supportsProjectionOnlyWarm() {
+                    return true;
+                }
+
+                @Override
+                public void hydrateProjectionBatch(List<Map<String, Object>> rows, List<Long> versions) {
+                    ArrayList<T> entities = new ArrayList<>(rows.size());
+                    for (Map<String, Object> row : rows) {
+                        entities.add(binding.codec().fromColumns(row));
+                    }
+                    redisRepository.hydrateProjectionWarmBatch(entities);
                 }
             };
         }

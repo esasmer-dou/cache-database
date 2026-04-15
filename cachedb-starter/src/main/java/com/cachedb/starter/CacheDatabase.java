@@ -16,6 +16,8 @@ import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.page.EntityPageLoader;
 import com.reactor.cachedb.core.page.NoOpEntityPageLoader;
 import com.reactor.cachedb.core.query.QueryEvaluator;
+import com.reactor.cachedb.core.projection.EntityProjection;
+import com.reactor.cachedb.core.projection.EntityProjectionBinding;
 import com.reactor.cachedb.core.queue.AdminReportJobSnapshot;
 import com.reactor.cachedb.core.registry.DefaultEntityRegistry;
 import com.reactor.cachedb.core.registry.EntityBinding;
@@ -498,6 +500,13 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 binding.relationBatchLoader(),
                 binding.pageLoader()
         );
+    }
+
+    public <T, ID, P> EntityProjectionBinding<T, P, ID> registerProjection(
+            EntityMetadata<T, ID> metadata,
+            EntityProjection<T, P, ID> projection
+    ) {
+        return entityRegistry.registerProjection(metadata, projection);
     }
 
     @Override

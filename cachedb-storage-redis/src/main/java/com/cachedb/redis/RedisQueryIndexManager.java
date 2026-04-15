@@ -20,6 +20,7 @@ import com.reactor.cachedb.core.query.QueryExplainStep;
 import com.reactor.cachedb.core.query.QueryHistogramBucket;
 import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.core.query.QuerySort;
+import com.reactor.cachedb.core.projection.ProjectionEntityMetadata;
 import com.reactor.cachedb.core.queue.QueryIndexRebuildResult;
 import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
@@ -38,6 +39,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -85,6 +87,32 @@ public final class RedisQueryIndexManager<T, ID> {
     public void reindex(T entity) {
         try {
             reindexEntity(entity, true);
+        } catch (RuntimeException exception) {
+            markIndexFeaturesDegradedSafely();
+        }
+    }
+
+    public void reindexBatch(Collection<T> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return;
+        }
+        try {
+            reindexEntities(entities, true);
+        } catch (RuntimeException exception) {
+            markIndexFeaturesDegradedSafely();
+        }
+    }
+
+    public void reindexProjectionWarmBatch(Collection<T> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return;
+        }
+        if (!(metadata instanceof ProjectionEntityMetadata<?, ?>)) {
+            reindexBatch(entities);
+            return;
+        }
+        try {
+            reindexProjectionWarmEntities(entities);
         } catch (RuntimeException exception) {
             markIndexFeaturesDegradedSafely();
         }
@@ -172,10 +200,154 @@ public final class RedisQueryIndexManager<T, ID> {
                     }
                 }
             }
+            upsertPartitionedSortIndexes(pipeline, idValue, columns);
             if (!metaValues.isEmpty()) {
                 pipeline.hset(keyStrategy.indexMetaKey(metadata.redisNamespace(), id), metaValues);
             }
             pipeline.sync();
+        }
+    }
+
+    private void reindexEntities(Collection<T> entities, boolean respectShedding) {
+        ArrayList<T> candidates = new ArrayList<>(entities.size());
+        for (T entity : entities) {
+            if (entity != null) {
+                candidates.add(entity);
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        if (respectShedding && shouldShedIndexWrites()) {
+            for (T entity : candidates) {
+                removeById(metadata.idAccessor().apply(entity));
+            }
+            markIndexFeaturesDegraded();
+            return;
+        }
+
+        invalidatePlannerStatistics();
+        ArrayList<String> idValues = new ArrayList<>(candidates.size());
+        ArrayList<Map<String, Object>> entityColumns = new ArrayList<>(candidates.size());
+        ArrayList<Response<Map<String, String>>> priorMetaResponses = new ArrayList<>(candidates.size());
+        String namespace = metadata.redisNamespace();
+        try (Pipeline readPipeline = jedis.pipelined()) {
+            for (T entity : candidates) {
+                ID id = metadata.idAccessor().apply(entity);
+                idValues.add(String.valueOf(id));
+                entityColumns.add(codec.toColumns(entity));
+                priorMetaResponses.add(readPipeline.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
+            }
+            readPipeline.sync();
+        }
+
+        try (Pipeline writePipeline = jedis.pipelined()) {
+            for (int index = 0; index < candidates.size(); index++) {
+                String idValue = idValues.get(index);
+                Map<String, String> priorMetaValues = priorMetaResponses.get(index).get();
+                String metaKey = keyStrategy.indexMetaKey(namespace, idValue);
+                if (priorMetaValues != null && !priorMetaValues.isEmpty()) {
+                    for (Map.Entry<String, String> entry : priorMetaValues.entrySet()) {
+                        if (config.exactIndexEnabled()) {
+                            writePipeline.srem(
+                                    keyStrategy.indexExactKey(namespace, entry.getKey(), encodeKeyPart(entry.getValue())),
+                                    idValue
+                            );
+                        }
+                        removeStringValueIndex(writePipeline, idValue, entry.getKey(), decodeValue(entry.getValue()));
+                        writePipeline.zrem(keyStrategy.indexSortKey(namespace, entry.getKey()), idValue);
+                    }
+                    removePartitionedSortIndexes(writePipeline, idValue, priorMetaValues);
+                    writePipeline.del(metaKey);
+                } else {
+                    for (String column : metadata.columns()) {
+                        writePipeline.zrem(keyStrategy.indexSortKey(namespace, column), idValue);
+                    }
+                }
+                writePipeline.srem(keyStrategy.indexAllKey(namespace), idValue);
+            }
+
+            for (int index = 0; index < candidates.size(); index++) {
+                String idValue = idValues.get(index);
+                Map<String, Object> columns = entityColumns.get(index);
+                LinkedHashMap<String, String> metaValues = new LinkedHashMap<>();
+                writePipeline.sadd(keyStrategy.indexAllKey(namespace), idValue);
+                for (String column : metadata.columns()) {
+                    Object value = columns.get(column);
+                    String serialized = serializeValue(value);
+                    metaValues.put(column, serialized);
+                    if (config.exactIndexEnabled()) {
+                        writePipeline.sadd(keyStrategy.indexExactKey(namespace, column, encodeKeyPart(serialized)), idValue);
+                    }
+                    if (value instanceof String stringValue) {
+                        indexStringValue(writePipeline, idValue, column, stringValue);
+                    }
+                    if (config.rangeIndexEnabled()) {
+                        Double score = RedisScoreSupport.toScore(metadata.columnTypes(), column, value);
+                        if (score != null) {
+                            writePipeline.zadd(keyStrategy.indexSortKey(namespace, column), score, idValue);
+                        }
+                    }
+                }
+                upsertPartitionedSortIndexes(writePipeline, idValue, columns);
+                if (!metaValues.isEmpty()) {
+                    writePipeline.hset(keyStrategy.indexMetaKey(namespace, idValue), metaValues);
+                }
+            }
+            writePipeline.sync();
+        }
+    }
+
+    private void reindexProjectionWarmEntities(Collection<T> entities) {
+        ArrayList<T> candidates = new ArrayList<>(entities.size());
+        for (T entity : entities) {
+            if (entity != null) {
+                candidates.add(entity);
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+
+        invalidatePlannerStatistics();
+        ArrayList<String> idValues = new ArrayList<>(candidates.size());
+        ArrayList<Map<String, Object>> entityColumns = new ArrayList<>(candidates.size());
+        ArrayList<Response<Map<String, String>>> priorMetaResponses = new ArrayList<>(candidates.size());
+        String namespace = metadata.redisNamespace();
+        try (Pipeline readPipeline = jedis.pipelined()) {
+            for (T entity : candidates) {
+                ID id = metadata.idAccessor().apply(entity);
+                idValues.add(String.valueOf(id));
+                entityColumns.add(codec.toColumns(entity));
+                priorMetaResponses.add(readPipeline.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
+            }
+            readPipeline.sync();
+        }
+
+        try (Pipeline writePipeline = jedis.pipelined()) {
+            for (int index = 0; index < candidates.size(); index++) {
+                String idValue = idValues.get(index);
+                Map<String, String> priorMetaValues = priorMetaResponses.get(index).get();
+                String metaKey = keyStrategy.indexMetaKey(namespace, idValue);
+                if (priorMetaValues != null && !priorMetaValues.isEmpty()) {
+                    removePartitionedSortIndexes(writePipeline, idValue, priorMetaValues);
+                    writePipeline.del(metaKey);
+                }
+            }
+
+            for (int index = 0; index < candidates.size(); index++) {
+                String idValue = idValues.get(index);
+                Map<String, Object> columns = entityColumns.get(index);
+                LinkedHashMap<String, String> metaValues = new LinkedHashMap<>();
+                for (String column : metadata.columns()) {
+                    metaValues.put(column, serializeValue(columns.get(column)));
+                }
+                upsertPartitionedSortIndexes(writePipeline, idValue, columns);
+                if (!metaValues.isEmpty()) {
+                    writePipeline.hset(keyStrategy.indexMetaKey(namespace, idValue), metaValues);
+                }
+            }
+            writePipeline.sync();
         }
     }
 
@@ -200,6 +372,7 @@ public final class RedisQueryIndexManager<T, ID> {
                     removeStringValueIndex(pipeline, idValue, entry.getKey(), decodeValue(entry.getValue()));
                     pipeline.zrem(keyStrategy.indexSortKey(metadata.redisNamespace(), entry.getKey()), idValue);
                 }
+                removePartitionedSortIndexes(pipeline, idValue, metaValues);
                 pipeline.del(metaKey);
             } else {
                 for (String column : metadata.columns()) {
@@ -254,6 +427,10 @@ public final class RedisQueryIndexManager<T, ID> {
         if (!supportsSortedIndexScan(querySpec)) {
             return resolveCandidateIds(querySpec);
         }
+        List<String> partitionedExactSorted = resolveSortedIdsFromPartitionedExactSort(querySpec);
+        if (partitionedExactSorted != null) {
+            return partitionedExactSorted;
+        }
         List<String> candidateScoreOrdered = resolveSortedIdsFromCandidateScores(querySpec);
         if (candidateScoreOrdered != null) {
             return candidateScoreOrdered;
@@ -305,6 +482,10 @@ public final class RedisQueryIndexManager<T, ID> {
         }
         if (querySpec.sorts().size() == 1) {
             return resolveSortedIds(querySpec);
+        }
+        List<String> partitionedExactSorted = resolvePrimarySortedIdsFromPartitionedExactSort(querySpec);
+        if (partitionedExactSorted != null) {
+            return partitionedExactSorted;
         }
         List<String> candidateScoreOrdered = resolvePrimarySortedIdsFromCandidateScores(querySpec);
         if (candidateScoreOrdered != null) {
@@ -487,6 +668,97 @@ public final class RedisQueryIndexManager<T, ID> {
         return hasPrimaryRangeFilter;
     }
 
+    private List<String> resolveSortedIdsFromPartitionedExactSort(QuerySpec querySpec) {
+        PartitionedExactSortPlan plan = buildPartitionedExactSortPlan(querySpec);
+        if (plan == null || querySpec.sorts().size() != 1) {
+            return null;
+        }
+        int targetCount = querySpec.offset() + querySpec.limit();
+        if (targetCount <= 0) {
+            return List.of();
+        }
+        return plan.sort().direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
+                ? jedis.zrevrange(plan.sortKey(), querySpec.offset(), querySpec.offset() + querySpec.limit() - 1)
+                : jedis.zrange(plan.sortKey(), querySpec.offset(), querySpec.offset() + querySpec.limit() - 1);
+    }
+
+    private List<String> resolvePrimarySortedIdsFromPartitionedExactSort(QuerySpec querySpec) {
+        PartitionedExactSortPlan plan = buildPartitionedExactSortPlan(querySpec);
+        if (plan == null || querySpec.sorts().size() <= 1) {
+            return null;
+        }
+        int targetCount = querySpec.offset() + querySpec.limit();
+        if (targetCount <= 0) {
+            return List.of();
+        }
+
+        ArrayList<String> ordered = new ArrayList<>(targetCount + Math.max(querySpec.limit(), 16));
+        int rank = 0;
+        int chunkSize = Math.max(querySpec.limit() * 4, 64);
+        Double boundaryScore = null;
+        while (true) {
+            List<Tuple> batch = plan.sort().direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
+                    ? jedis.zrevrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1)
+                    : jedis.zrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1);
+            if (batch == null || batch.isEmpty()) {
+                break;
+            }
+
+            boolean completedBoundaryCoverage = false;
+            for (Tuple tuple : batch) {
+                double score = tuple.getScore();
+                if (boundaryScore != null && Double.compare(score, boundaryScore) != 0 && ordered.size() >= targetCount) {
+                    completedBoundaryCoverage = true;
+                    break;
+                }
+                ordered.add(tuple.getElement());
+                if (boundaryScore == null && ordered.size() >= targetCount) {
+                    boundaryScore = score;
+                }
+            }
+
+            if (completedBoundaryCoverage) {
+                break;
+            }
+            rank += chunkSize;
+        }
+        return ordered.isEmpty() ? List.of() : List.copyOf(ordered);
+    }
+
+    private PartitionedExactSortPlan buildPartitionedExactSortPlan(QuerySpec querySpec) {
+        if (!(metadata instanceof ProjectionEntityMetadata<?, ?>)) {
+            return null;
+        }
+        if (querySpec == null || querySpec.sorts().isEmpty() || querySpec.filters().size() != 1) {
+            return null;
+        }
+        if (querySpec.rootGroup().operator() != QueryGroupOperator.AND) {
+            return null;
+        }
+        QuerySort primarySort = querySpec.sorts().get(0);
+        if (!supportsScoreOrdering(primarySort.column())) {
+            return null;
+        }
+        QueryFilter filter = querySpec.filters().get(0);
+        if (filter.column().contains(".") || filter.operator() != QueryOperator.EQ) {
+            return null;
+        }
+        if (!isPartitionedExactSortColumn(filter.column())) {
+            return null;
+        }
+        return new PartitionedExactSortPlan(
+                filter.column(),
+                filter.value(),
+                primarySort,
+                keyStrategy.indexPartitionSortKey(
+                        metadata.redisNamespace(),
+                        filter.column(),
+                        encodeKeyPart(serializeValue(filter.value())),
+                        primarySort.column()
+                )
+        );
+    }
+
     private List<String> resolveSortedIdsFromCandidateScores(QuerySpec querySpec) {
         if (!canUseCandidateScoreSort(querySpec)) {
             return null;
@@ -539,7 +811,11 @@ public final class RedisQueryIndexManager<T, ID> {
 
     private int maxCandidateScoreSortSize(QuerySpec querySpec) {
         int targetCount = Math.max(1, querySpec.offset() + querySpec.limit());
-        return Math.max(128, Math.min(512, targetCount * 8));
+        int baseLimit = Math.max(128, Math.min(512, targetCount * 8));
+        if (metadata instanceof ProjectionEntityMetadata<?, ?>) {
+            return Math.max(baseLimit, Math.max(1024, Math.min(4096, targetCount * 16)));
+        }
+        return baseLimit;
     }
 
     private List<String> orderCandidateIdsByScores(Collection<String> candidateIds, List<QuerySort> sorts) {
@@ -859,11 +1135,17 @@ public final class RedisQueryIndexManager<T, ID> {
         if (shouldBypassIndexes(querySpec)) {
             return false;
         }
+        if (buildPartitionedExactSortPlan(querySpec) != null && querySpec.sorts().size() == 1) {
+            return true;
+        }
         SortPlan sortPlan = chooseSortPlan(querySpec);
         return sortPlan.usesSortedIndex() && querySpec.sorts().size() == 1;
     }
 
     public boolean shouldUsePrimarySortedScan(QuerySpec querySpec) {
+        if (buildPartitionedExactSortPlan(querySpec) != null) {
+            return true;
+        }
         SortPlan sortPlan = chooseSortPlan(querySpec);
         return sortPlan.usesSortedIndex();
     }
@@ -879,6 +1161,14 @@ public final class RedisQueryIndexManager<T, ID> {
         }
         if (shouldBypassIndexes(querySpec)) {
             return new SortPlan(querySpec.sorts().size() > 1 ? "IN_MEMORY_MULTI_SORT" : "IN_MEMORY_SORT", estimateSortCost(querySpec), false);
+        }
+        PartitionedExactSortPlan partitionedExactSortPlan = buildPartitionedExactSortPlan(querySpec);
+        if (partitionedExactSortPlan != null) {
+            return new SortPlan(
+                    querySpec.sorts().size() == 1 ? "PARTITIONED_SORTED_INDEX_SCAN" : "PARTITIONED_PRIMARY_SORT_WITH_TIEBREAK",
+                    Math.max(1L, estimateSortCost(querySpec) / 3L),
+                    true
+            );
         }
         int sortablePrefixLength = sortablePrefixLength(querySpec.sorts());
         if (sortablePrefixLength == 0) {
@@ -1614,6 +1904,83 @@ public final class RedisQueryIndexManager<T, ID> {
         }
     }
 
+    private void upsertPartitionedSortIndexes(Pipeline pipeline, String idValue, Map<String, Object> columns) {
+        if (!supportsPartitionedExactSortIndexes() || columns == null || columns.isEmpty()) {
+            return;
+        }
+        for (String exactColumn : partitionedExactSortColumns()) {
+            Object exactValue = columns.get(exactColumn);
+            if (exactValue == null && !columns.containsKey(exactColumn)) {
+                continue;
+            }
+            String encodedExactValue = encodeKeyPart(serializeValue(exactValue));
+            for (String sortColumn : partitionedSortColumns()) {
+                Double score = RedisScoreSupport.toScore(metadata.columnTypes(), sortColumn, columns.get(sortColumn));
+                if (score == null) {
+                    continue;
+                }
+                pipeline.zadd(
+                        keyStrategy.indexPartitionSortKey(metadata.redisNamespace(), exactColumn, encodedExactValue, sortColumn),
+                        score,
+                        idValue
+                );
+            }
+        }
+    }
+
+    private void removePartitionedSortIndexes(Pipeline pipeline, String idValue, Map<String, String> priorMetaValues) {
+        if (!supportsPartitionedExactSortIndexes() || priorMetaValues == null || priorMetaValues.isEmpty()) {
+            return;
+        }
+        for (String exactColumn : partitionedExactSortColumns()) {
+            String serializedExactValue = priorMetaValues.get(exactColumn);
+            if (serializedExactValue == null) {
+                continue;
+            }
+            String encodedExactValue = encodeKeyPart(serializedExactValue);
+            for (String sortColumn : partitionedSortColumns()) {
+                pipeline.zrem(
+                        keyStrategy.indexPartitionSortKey(metadata.redisNamespace(), exactColumn, encodedExactValue, sortColumn),
+                        idValue
+                );
+            }
+        }
+    }
+
+    private boolean supportsPartitionedExactSortIndexes() {
+        return metadata instanceof ProjectionEntityMetadata<?, ?>
+                && config.exactIndexEnabled()
+                && config.rangeIndexEnabled();
+    }
+
+    private List<String> partitionedExactSortColumns() {
+        if (!supportsPartitionedExactSortIndexes()) {
+            return List.of();
+        }
+        return metadata.columns().stream()
+                .filter(this::isPartitionedExactSortColumn)
+                .toList();
+    }
+
+    private boolean isPartitionedExactSortColumn(String column) {
+        if (column == null || column.isBlank()) {
+            return false;
+        }
+        if (column.equalsIgnoreCase(metadata.idColumn())) {
+            return false;
+        }
+        return column.toLowerCase(Locale.ROOT).endsWith("_id");
+    }
+
+    private List<String> partitionedSortColumns() {
+        if (!supportsPartitionedExactSortIndexes()) {
+            return List.of();
+        }
+        return metadata.columns().stream()
+                .filter(this::supportsScoreOrdering)
+                .toList();
+    }
+
     private List<String> tokenize(String rawValue) {
         String normalized = normalizeText(rawValue);
         if (normalized.isBlank()) {
@@ -2299,6 +2666,14 @@ public final class RedisQueryIndexManager<T, ID> {
             ScoreRange scoreRange,
             com.reactor.cachedb.core.query.QuerySortDirection direction,
             boolean requiresDecode
+    ) {
+    }
+
+    private record PartitionedExactSortPlan(
+            String exactColumn,
+            Object exactValue,
+            QuerySort sort,
+            String sortKey
     ) {
     }
 

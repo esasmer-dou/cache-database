@@ -102,6 +102,10 @@ public final class RedisKeyStrategy {
         return keyPrefix + ":" + namespace + ":" + indexSegment + ":sort:" + column;
     }
 
+    public String indexPartitionSortKey(String namespace, String exactColumn, String encodedExactValue, String sortColumn) {
+        return keyPrefix + ":" + namespace + ":" + indexSegment + ":partition-sort:" + exactColumn + ":" + encodedExactValue + ":" + sortColumn;
+    }
+
     public String indexPrefixKey(String namespace, String column, String encodedPrefix) {
         return keyPrefix + ":" + namespace + ":" + indexSegment + ":prefix:" + column + ":" + encodedPrefix;
     }

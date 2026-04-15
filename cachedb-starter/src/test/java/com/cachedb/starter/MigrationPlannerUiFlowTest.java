@@ -42,6 +42,8 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("id=\"plannerGenerateAction\" type=\"submit\""));
             assertTrue(body.contains("__cachedbPlannerGenerate"));
             assertTrue(body.contains("Warm execution arka planda başlatılıyor"));
+            assertTrue(body.contains("field.checked=toBooleanValue(value)"));
+            assertTrue(body.contains("field.name==='generatePlan'||field.name==='warmExecution'||field.name==='dryRunExecution'"));
         }
     }
 
@@ -140,6 +142,7 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("name=\"relationcolumn\""));
             assertTrue(body.contains("name=\"sortcolumn\""));
             assertTrue(body.contains("data-planner-suggestion"));
+            assertFalse(body.contains("warmexecution=true&dryrunexecution=true&applysuggestion=0"));
         }
     }
 

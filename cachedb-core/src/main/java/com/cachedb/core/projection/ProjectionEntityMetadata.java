@@ -4,6 +4,7 @@ import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.model.RelationDefinition;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -27,7 +28,21 @@ public final class ProjectionEntityMetadata<P, ID> implements EntityMetadata<P, 
         this.entityType = (Class<P>) Object.class;
         this.idAccessor = projection.idAccessor();
         this.columns = List.copyOf(projection.columns());
-        this.columnTypes = Map.of();
+        LinkedHashMap<String, String> inheritedColumnTypes = new LinkedHashMap<>();
+        Map<String, String> baseColumnTypes = baseMetadata.columnTypes();
+        if (baseColumnTypes != null && !baseColumnTypes.isEmpty()) {
+            for (String column : this.columns) {
+                String declaredType = baseColumnTypes.get(column);
+                if (declaredType != null && !declaredType.isBlank()) {
+                    inheritedColumnTypes.put(column, declaredType);
+                }
+            }
+            String idDeclaredType = baseColumnTypes.get(this.idColumn);
+            if (idDeclaredType != null && !idDeclaredType.isBlank()) {
+                inheritedColumnTypes.putIfAbsent(this.idColumn, idDeclaredType);
+            }
+        }
+        this.columnTypes = Map.copyOf(inheritedColumnTypes);
     }
 
     @Override

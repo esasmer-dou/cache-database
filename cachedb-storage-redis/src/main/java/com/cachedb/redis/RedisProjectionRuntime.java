@@ -5,6 +5,10 @@ import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.projection.EntityProjectionBinding;
 import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.Pipeline;
+
+import java.util.ArrayList;
+import java.util.Collection;
 
 final class RedisProjectionRuntime<P, ID> {
 
@@ -15,6 +19,7 @@ final class RedisProjectionRuntime<P, ID> {
     private final CachePolicy cachePolicy;
     private final RedisQueryIndexManager<P, ID> queryIndexManager;
     private final EntityProjectionBinding<?, P, ID> binding;
+    private volatile Runnable queryCacheInvalidator;
 
     RedisProjectionRuntime(
             JedisPooled jedis,
@@ -86,10 +91,97 @@ final class RedisProjectionRuntime<P, ID> {
         }
         jedis.del(tombstoneKey(id));
         queryIndexManager.reindex(projection);
+        invalidateQueryCache();
+    }
+
+    void upsertBatch(Collection<P> projections) {
+        if (projections == null || projections.isEmpty()) {
+            return;
+        }
+        ArrayList<P> candidates = new ArrayList<>(projections.size());
+        for (P projection : projections) {
+            if (projection != null) {
+                candidates.add(projection);
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        long ttlSeconds = cachePolicy.entityTtlSeconds();
+        int effectiveTtlSeconds = ttlSeconds > 0
+                ? Math.toIntExact(Math.min(Integer.MAX_VALUE, ttlSeconds))
+                : 0;
+        try (Pipeline pipeline = jedis.pipelined()) {
+            for (P projection : candidates) {
+                ID id = metadata.idAccessor().apply(projection);
+                String payloadKey = payloadKey(id);
+                String encoded = codec.toRedisValue(projection);
+                if (effectiveTtlSeconds > 0) {
+                    pipeline.setex(payloadKey, effectiveTtlSeconds, encoded);
+                } else {
+                    pipeline.set(payloadKey, encoded);
+                }
+                pipeline.del(tombstoneKey(id));
+            }
+            pipeline.sync();
+        }
+        queryIndexManager.reindexBatch(candidates);
+        invalidateQueryCache();
+    }
+
+    void upsertWarmBatch(Collection<P> projections) {
+        if (projections == null || projections.isEmpty()) {
+            return;
+        }
+        ArrayList<P> candidates = new ArrayList<>(projections.size());
+        for (P projection : projections) {
+            if (projection != null) {
+                candidates.add(projection);
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        long ttlSeconds = cachePolicy.entityTtlSeconds();
+        int effectiveTtlSeconds = ttlSeconds > 0
+                ? Math.toIntExact(Math.min(Integer.MAX_VALUE, ttlSeconds))
+                : 0;
+        try (Pipeline pipeline = jedis.pipelined()) {
+            for (P projection : candidates) {
+                ID id = metadata.idAccessor().apply(projection);
+                String payloadKey = payloadKey(id);
+                String encoded = codec.toRedisValue(projection);
+                if (effectiveTtlSeconds > 0) {
+                    pipeline.setex(payloadKey, effectiveTtlSeconds, encoded);
+                } else {
+                    pipeline.set(payloadKey, encoded);
+                }
+                pipeline.del(tombstoneKey(id));
+            }
+            pipeline.sync();
+        }
+        queryIndexManager.reindexProjectionWarmBatch(candidates);
+        invalidateQueryCache();
     }
 
     void delete(ID id) {
         jedis.del(payloadKey(id), tombstoneKey(id));
         queryIndexManager.removeById(id);
+        invalidateQueryCache();
+    }
+
+    void attachQueryCacheInvalidator(Runnable invalidator) {
+        this.queryCacheInvalidator = invalidator;
+    }
+
+    private void invalidateQueryCache() {
+        Runnable invalidator = queryCacheInvalidator;
+        if (invalidator == null) {
+            return;
+        }
+        try {
+            invalidator.run();
+        } catch (RuntimeException ignored) {
+        }
     }
 }

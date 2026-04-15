@@ -103,7 +103,12 @@ class MigrationWarmRunnerTest {
         assertEquals(List.of(5L, 6L, 7L), childHydrator.hydratedVersions());
         assertEquals(List.of(1L, 2L), rootHydrator.hydratedIds());
         assertEquals(List.of(11L, 12L), rootHydrator.hydratedVersions());
-        assertTrue(result.notes().stream().anyMatch(note -> note.contains("hydrated directly")));
+        assertTrue(childHydrator.forceImmediateProjectionRefreshFlags().stream().allMatch(Boolean::booleanValue));
+        assertTrue(rootHydrator.forceImmediateProjectionRefreshFlags().stream().allMatch(Boolean::booleanValue));
+        assertTrue(childHydrator.reindexQueryIndexesFlags().stream().noneMatch(Boolean::booleanValue));
+        assertTrue(rootHydrator.reindexQueryIndexesFlags().stream().noneMatch(Boolean::booleanValue));
+        assertTrue(result.notes().stream().anyMatch(note -> note.contains("projection payloads and projection query indexes were rebuilt inline")));
+        assertTrue(result.notes().stream().anyMatch(note -> note.contains("Entity query indexes were deferred")));
     }
 
     @Test
@@ -252,6 +257,8 @@ class MigrationWarmRunnerTest {
         private final String deletedColumn;
         private final String deletedMarkerValue;
         private final List<HydratedRow> hydratedRows = new ArrayList<>();
+        private final List<Boolean> forceImmediateProjectionRefreshFlags = new ArrayList<>();
+        private final List<Boolean> reindexQueryIndexesFlags = new ArrayList<>();
 
         private RecordingHydrator(
                 String entityName,
@@ -304,6 +311,23 @@ class MigrationWarmRunnerTest {
             hydratedRows.add(new HydratedRow(version, new LinkedHashMap<>(row), Instant.now()));
         }
 
+        @Override
+        public void hydrateBatch(
+                List<Map<String, Object>> rows,
+                List<Long> versions,
+                boolean forceImmediateProjectionRefresh,
+                boolean reindexQueryIndexes
+        ) {
+            forceImmediateProjectionRefreshFlags.add(forceImmediateProjectionRefresh);
+            reindexQueryIndexesFlags.add(reindexQueryIndexes);
+            MigrationWarmRunner.WarmEntityHydrator.super.hydrateBatch(
+                    rows,
+                    versions,
+                    forceImmediateProjectionRefresh,
+                    reindexQueryIndexes
+            );
+        }
+
         private List<Long> hydratedIds() {
             return hydratedRows.stream()
                     .map(row -> valueOf(row.row(), idColumn))
@@ -319,6 +343,14 @@ class MigrationWarmRunnerTest {
 
         private List<HydratedRow> hydratedRows() {
             return hydratedRows;
+        }
+
+        private List<Boolean> forceImmediateProjectionRefreshFlags() {
+            return forceImmediateProjectionRefreshFlags;
+        }
+
+        private List<Boolean> reindexQueryIndexesFlags() {
+            return reindexQueryIndexesFlags;
         }
 
         private Object valueOf(Map<String, Object> row, String column) {

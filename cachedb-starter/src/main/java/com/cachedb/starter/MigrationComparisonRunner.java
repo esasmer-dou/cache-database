@@ -580,6 +580,12 @@ final class MigrationComparisonRunner {
                 if (projection.isPresent()) {
                     return projection;
                 }
+                Optional<EntityProjectionBinding<?, ?, ?>> caseInsensitiveProjection = entityRegistry.projections(binding.metadata().entityName()).stream()
+                        .filter(item -> item.projection().name().equalsIgnoreCase(candidate))
+                        .findFirst();
+                if (caseInsensitiveProjection.isPresent()) {
+                    return caseInsensitiveProjection;
+                }
             }
             return entityRegistry.projections(binding.metadata().entityName()).stream().findFirst();
         }

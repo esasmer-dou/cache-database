@@ -399,6 +399,19 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     }
 
     public void hydrateWarmBatch(List<T> entities, List<Long> versions) {
+        hydrateWarmBatch(entities, versions, false, false);
+    }
+
+    public void hydrateWarmBatch(List<T> entities, List<Long> versions, boolean forceImmediateProjectionRefresh) {
+        hydrateWarmBatch(entities, versions, forceImmediateProjectionRefresh, false);
+    }
+
+    public void hydrateWarmBatch(
+            List<T> entities,
+            List<Long> versions,
+            boolean forceImmediateProjectionRefresh,
+            boolean reindexQueryIndexes
+    ) {
         if (entities == null || entities.isEmpty()) {
             return;
         }
@@ -432,9 +445,67 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 }
                 pipeline.sync();
             }
-            enqueueProjectionRefreshBatch(entities, ids);
+            if (reindexQueryIndexes) {
+                queryIndexManager.reindexBatch(entities);
+            }
+            if (forceImmediateProjectionRefresh) {
+                syncProjectionPayloadsBatch(entities, true);
+            } else {
+                enqueueProjectionRefreshBatch(entities, ids);
+            }
         } finally {
             recordRedisWrite(startedAt);
+        }
+    }
+
+    public void hydrateProjectionWarmBatch(List<T> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return;
+        }
+        long startedAt = System.nanoTime();
+        try {
+            warmProjectionPayloadsBatch(entities);
+        } finally {
+            recordRedisWrite(startedAt);
+        }
+    }
+
+    private void warmProjectionPayloadsBatch(List<T> entities) {
+        if (entities == null || entities.isEmpty() || entityRegistry == null) {
+            return;
+        }
+        Collection<com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>> bindings = entityRegistry.projections(metadata.entityName());
+        if (bindings.isEmpty()) {
+            return;
+        }
+        for (com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding : bindings) {
+            warmProjectionPayloadBatch(rawBinding, entities);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <P> void warmProjectionPayloadBatch(
+            com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding,
+            List<T> entities
+    ) {
+        EntityProjectionBinding<T, P, ID> binding = (EntityProjectionBinding<T, P, ID>) rawBinding;
+        ProjectionSupport<T, ID, P> support = projectionSupport(binding);
+        ArrayList<P> projections = new ArrayList<>(entities.size());
+        ArrayList<ID> deleteIds = new ArrayList<>();
+        for (T entity : entities) {
+            ID id = metadata.idAccessor().apply(entity);
+            P projection = binding.projection().projector().apply(entity);
+            if (projection == null) {
+                deleteIds.add(id);
+            } else {
+                projections.add(projection);
+            }
+        }
+        if (!projections.isEmpty()) {
+            safeProjectionWarmUpsertBatch(support.refreshRuntime(), projections);
+        }
+        for (ID deleteId : deleteIds) {
+            applyProjectionDelete(support, deleteId, true);
         }
     }
 
@@ -690,6 +761,19 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         }
     }
 
+    private void syncProjectionPayloadsBatch(List<T> entities, boolean forceImmediateRefresh) {
+        if (entities == null || entities.isEmpty() || entityRegistry == null) {
+            return;
+        }
+        Collection<com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>> bindings = entityRegistry.projections(metadata.entityName());
+        if (bindings.isEmpty()) {
+            return;
+        }
+        for (com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding : bindings) {
+            syncProjectionPayloadBatch(rawBinding, entities, forceImmediateRefresh);
+        }
+    }
+
     private void enqueueProjectionRefreshBatch(List<T> entities, Collection<ID> ids) {
         if (ids == null || ids.isEmpty() || entities == null || entities.isEmpty() || entityRegistry == null) {
             return;
@@ -754,6 +838,39 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     }
 
     @SuppressWarnings("unchecked")
+    private <P> void syncProjectionPayloadBatch(
+            com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding,
+            List<T> entities,
+            boolean forceImmediateRefresh
+    ) {
+        EntityProjectionBinding<T, P, ID> binding = (EntityProjectionBinding<T, P, ID>) rawBinding;
+        if (!forceImmediateRefresh && binding.projection().refreshMode().isAsync() && projectionRefreshQueue != null) {
+            ArrayList<ID> ids = new ArrayList<>(entities.size());
+            for (T entity : entities) {
+                ids.add(metadata.idAccessor().apply(entity));
+            }
+            projectionRefreshQueue.enqueueUpsertBatch(metadata.entityName(), List.of(binding.projection().name()), ids);
+            return;
+        }
+        ProjectionSupport<T, ID, P> support = projectionSupport(binding);
+        ArrayList<P> projections = new ArrayList<>(entities.size());
+        ArrayList<ID> deleteIds = new ArrayList<>();
+        for (T entity : entities) {
+            ID id = metadata.idAccessor().apply(entity);
+            P projection = binding.projection().projector().apply(entity);
+            if (projection == null) {
+                deleteIds.add(id);
+            } else {
+                projections.add(projection);
+            }
+        }
+        applyProjectionUpsertBatch(support, projections, forceImmediateRefresh);
+        for (ID deleteId : deleteIds) {
+            applyProjectionDelete(support, deleteId, forceImmediateRefresh);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
     private <P> void deleteProjectionPayload(
             com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding,
             Object rawId,
@@ -781,6 +898,20 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         safeProjectionUpsert(forceImmediateRefresh ? support.refreshRuntime() : support.readRuntime(), projection);
     }
 
+    private <P> void applyProjectionUpsertBatch(ProjectionSupport<T, ID, P> support, Collection<P> projections, boolean forceImmediateRefresh) {
+        if (projections == null || projections.isEmpty()) {
+            return;
+        }
+        if (!forceImmediateRefresh && support.binding().projection().refreshMode().isAsync() && projectionRefreshDispatcher != null) {
+            try {
+                projectionRefreshDispatcher.dispatch(() -> safeProjectionUpsertBatch(support.refreshRuntime(), projections));
+                return;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        safeProjectionUpsertBatch(forceImmediateRefresh ? support.refreshRuntime() : support.readRuntime(), projections);
+    }
+
     private <P> void applyProjectionDelete(ProjectionSupport<T, ID, P> support, ID id, boolean forceImmediateRefresh) {
         if (id == null) {
             return;
@@ -798,6 +929,20 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     private <P> void safeProjectionUpsert(RedisProjectionRuntime<P, ID> runtime, P projection) {
         try {
             runtime.upsert(projection);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private <P> void safeProjectionUpsertBatch(RedisProjectionRuntime<P, ID> runtime, Collection<P> projections) {
+        try {
+            runtime.upsertBatch(projections);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private <P> void safeProjectionWarmUpsertBatch(RedisProjectionRuntime<P, ID> runtime, Collection<P> projections) {
+        try {
+            runtime.upsertWarmBatch(projections);
         } catch (RuntimeException ignored) {
         }
     }
@@ -820,13 +965,14 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     private <P> ProjectionSupport<T, ID, P> createProjectionSupport(EntityProjectionBinding<T, P, ID> binding) {
         ProjectionEntityMetadata<P, ID> projectionMetadata = new ProjectionEntityMetadata<>(metadata, binding.projection());
         ProjectionEntityCodec<P, ID> projectionCodec = new ProjectionEntityCodec<>(binding.projection());
+        QueryIndexConfig projectionQueryIndexConfig = projectionQueryIndexConfig();
         RedisQueryIndexManager<P, ID> foregroundProjectionQueryIndexManager = new RedisQueryIndexManager<>(
                 jedis,
                 projectionMetadata,
                 projectionCodec,
                 keyStrategy,
                 entityRegistry,
-                queryIndexConfig,
+                projectionQueryIndexConfig,
                 relationConfig,
                 queryEvaluator,
                 producerGuard
@@ -848,7 +994,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                     projectionCodec,
                     keyStrategy,
                     entityRegistry,
-                    queryIndexConfig,
+                    projectionQueryIndexConfig,
                     relationConfig,
                     queryEvaluator,
                     producerGuard
@@ -864,6 +1010,27 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             );
         }
         return new ProjectionSupport<>(binding, readRuntime, refreshRuntime);
+    }
+
+    private QueryIndexConfig projectionQueryIndexConfig() {
+        return QueryIndexConfig.builder()
+                .exactIndexEnabled(queryIndexConfig.exactIndexEnabled())
+                .rangeIndexEnabled(queryIndexConfig.rangeIndexEnabled())
+                .prefixIndexEnabled(queryIndexConfig.prefixIndexEnabled())
+                .textIndexEnabled(queryIndexConfig.textIndexEnabled())
+                .plannerStatisticsEnabled(false)
+                .plannerStatisticsPersisted(false)
+                .plannerStatisticsTtlMillis(queryIndexConfig.plannerStatisticsTtlMillis())
+                .plannerStatisticsSampleSize(queryIndexConfig.plannerStatisticsSampleSize())
+                .learnedStatisticsEnabled(false)
+                .learnedStatisticsWeight(queryIndexConfig.learnedStatisticsWeight())
+                .cacheWarmingEnabled(false)
+                .rangeHistogramBuckets(queryIndexConfig.rangeHistogramBuckets())
+                .prefixMaxLength(queryIndexConfig.prefixMaxLength())
+                .textTokenMinLength(queryIndexConfig.textTokenMinLength())
+                .textTokenMaxLength(queryIndexConfig.textTokenMaxLength())
+                .textMaxTokensPerValue(queryIndexConfig.textMaxTokensPerValue())
+                .build();
     }
 
     private <P> Optional<P> loadProjectionFromBaseEntityPayload(String rawId, EntityProjection<T, P, ID> projection) {
