@@ -31,6 +31,7 @@ import com.reactor.cachedb.core.relation.RelationBatchContext;
 import com.reactor.cachedb.core.relation.RelationBatchLoader;
 import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.Pipeline;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -397,6 +398,46 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         return hydrateInternal(entity, version, false, false, false);
     }
 
+    public void hydrateWarmBatch(List<T> entities, List<Long> versions) {
+        if (entities == null || entities.isEmpty()) {
+            return;
+        }
+        if (versions == null || versions.size() != entities.size()) {
+            throw new IllegalArgumentException("versions must be present and aligned with entities for hydrateWarmBatch");
+        }
+        long startedAt = System.nanoTime();
+        try {
+            CachePolicy effectiveCachePolicy = effectiveCachePolicy();
+            ArrayList<ID> ids = new ArrayList<>(entities.size());
+            try (Pipeline pipeline = jedis.pipelined()) {
+                for (int index = 0; index < entities.size(); index++) {
+                    T entity = entities.get(index);
+                    ID id = metadata.idAccessor().apply(entity);
+                    ids.add(id);
+                    String redisKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
+                    String versionKey = keyStrategy.versionKey(metadata.redisNamespace(), id);
+                    String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
+                    String encoded = codec.toRedisValue(entity);
+                    if (effectiveCachePolicy.entityTtlSeconds() > 0) {
+                        pipeline.setex(redisKey, effectiveCachePolicy.entityTtlSeconds(), encoded);
+                    } else {
+                        pipeline.set(redisKey, encoded);
+                    }
+                    long effectiveVersion = versions.get(index) != null && versions.get(index) > 0L ? versions.get(index) : 1L;
+                    pipeline.set(versionKey, String.valueOf(effectiveVersion));
+                    if (guardrailConfig.versionKeyTtlSeconds() > 0) {
+                        pipeline.expire(versionKey, guardrailConfig.versionKeyTtlSeconds());
+                    }
+                    pipeline.del(tombstoneKey);
+                }
+                pipeline.sync();
+            }
+            enqueueProjectionRefreshBatch(entities, ids);
+        } finally {
+            recordRedisWrite(startedAt);
+        }
+    }
+
     private T hydrateInternal(
             T entity,
             long version,
@@ -646,6 +687,36 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         }
         for (com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding : bindings) {
             syncProjectionPayload(rawBinding, entity, forceImmediateRefresh);
+        }
+    }
+
+    private void enqueueProjectionRefreshBatch(List<T> entities, Collection<ID> ids) {
+        if (ids == null || ids.isEmpty() || entities == null || entities.isEmpty() || entityRegistry == null) {
+            return;
+        }
+        Collection<com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>> bindings = entityRegistry.projections(metadata.entityName());
+        if (bindings.isEmpty()) {
+            return;
+        }
+        ArrayList<String> asyncProjectionNames = new ArrayList<>();
+        ArrayList<com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>> synchronousBindings = new ArrayList<>();
+        for (com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding : bindings) {
+            if (rawBinding.projection().refreshMode().isAsync()) {
+                asyncProjectionNames.add(rawBinding.projection().name());
+            } else {
+                synchronousBindings.add(rawBinding);
+            }
+        }
+        if (!asyncProjectionNames.isEmpty() && projectionRefreshQueue != null) {
+            projectionRefreshQueue.enqueueUpsertBatch(metadata.entityName(), asyncProjectionNames, ids);
+        }
+        if (synchronousBindings.isEmpty()) {
+            return;
+        }
+        for (T entity : entities) {
+            for (com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding : synchronousBindings) {
+                syncProjectionPayload(rawBinding, entity, false);
+            }
         }
     }
 

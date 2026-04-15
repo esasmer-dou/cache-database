@@ -126,6 +126,9 @@ final class MigrationWarmRunner {
         long readRows = 0L;
         long hydratedRows = 0L;
         long skippedDeletedRows = 0L;
+        int hydrateBatchSize = Math.max(32, Math.min(fetchSize, 512));
+        ArrayList<Map<String, Object>> pendingRows = dryRun ? null : new ArrayList<>(hydrateBatchSize);
+        ArrayList<Long> pendingVersions = dryRun ? null : new ArrayList<>(hydrateBatchSize);
         try (PreparedStatement statement = connection.prepareStatement(childWarmSql)) {
             statement.setFetchSize(Math.max(1, fetchSize));
             try (ResultSet resultSet = statement.executeQuery()) {
@@ -141,11 +144,20 @@ final class MigrationWarmRunner {
                         referencedRootIds.add(relationValue);
                     }
                     if (!dryRun) {
-                        hydrator.hydrate(row, versionValue(row, hydrator));
+                        pendingRows.add(row);
+                        pendingVersions.add(versionValue(row, hydrator));
+                        if (pendingRows.size() >= hydrateBatchSize) {
+                            hydrator.hydrateBatch(pendingRows, pendingVersions);
+                            pendingRows.clear();
+                            pendingVersions.clear();
+                        }
                     }
                     hydratedRows++;
                 }
             }
+        }
+        if (!dryRun && pendingRows != null && !pendingRows.isEmpty()) {
+            hydrator.hydrateBatch(pendingRows, pendingVersions);
         }
         return new WarmCounters(readRows, hydratedRows, skippedDeletedRows);
     }
@@ -171,6 +183,8 @@ final class MigrationWarmRunner {
             String sql = buildRootChunkSql(hydrator.tableName(), hydrator.idColumn(), chunk.size());
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setFetchSize(Math.max(1, fetchSize));
+                ArrayList<Map<String, Object>> pendingRows = dryRun ? null : new ArrayList<>(chunk.size());
+                ArrayList<Long> pendingVersions = dryRun ? null : new ArrayList<>(chunk.size());
                 for (int index = 0; index < chunk.size(); index++) {
                     statement.setObject(index + 1, chunk.get(index));
                 }
@@ -183,10 +197,14 @@ final class MigrationWarmRunner {
                             continue;
                         }
                         if (!dryRun) {
-                            hydrator.hydrate(row, versionValue(row, hydrator));
+                            pendingRows.add(row);
+                            pendingVersions.add(versionValue(row, hydrator));
                         }
                         hydratedRows++;
                     }
+                }
+                if (!dryRun && pendingRows != null && !pendingRows.isEmpty()) {
+                    hydrator.hydrateBatch(pendingRows, pendingVersions);
                 }
             }
         }
@@ -280,6 +298,11 @@ final class MigrationWarmRunner {
         String deletedColumn();
         String deletedMarkerValue();
         void hydrate(Map<String, Object> row, long version);
+        default void hydrateBatch(List<Map<String, Object>> rows, List<Long> versions) {
+            for (int index = 0; index < rows.size(); index++) {
+                hydrate(rows.get(index), versions.get(index));
+            }
+        }
     }
 
     record Request(
@@ -403,6 +426,15 @@ final class MigrationWarmRunner {
                 public void hydrate(Map<String, Object> row, long version) {
                     T entity = binding.codec().fromColumns(row);
                     redisRepository.hydrateWarm(entity, version);
+                }
+
+                @Override
+                public void hydrateBatch(List<Map<String, Object>> rows, List<Long> versions) {
+                    ArrayList<T> entities = new ArrayList<>(rows.size());
+                    for (Map<String, Object> row : rows) {
+                        entities.add(binding.codec().fromColumns(row));
+                    }
+                    redisRepository.hydrateWarmBatch(entities, versions);
                 }
             };
         }
