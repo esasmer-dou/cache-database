@@ -34,11 +34,14 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("const apiBase='/cachedb-admin';"));
             assertTrue(body.contains("/api/migration-planner/discovery"));
             assertTrue(body.contains("/api/migration-planner/warm"));
+            assertTrue(body.contains("/api/migration-planner/warm/start"));
+            assertTrue(body.contains("/api/migration-planner/warm/status"));
             assertTrue(body.contains("/api/migration-planner/compare"));
             assertTrue(body.contains("navigateToPlanFallback"));
             assertTrue(body.contains("plannerGenerateAction"));
             assertTrue(body.contains("id=\"plannerGenerateAction\" type=\"submit\""));
             assertTrue(body.contains("__cachedbPlannerGenerate"));
+            assertTrue(body.contains("Warm execution arka planda başlatılıyor"));
         }
     }
 
@@ -219,6 +222,8 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("form=\"plannerForm\""));
             assertTrue(body.contains("warmExecution(false)"));
             assertTrue(body.contains("warmExecution(true)"));
+            assertTrue(body.contains("runWarmSyncFallback"));
+            assertTrue(body.contains("pollWarmJob"));
         }
     }
 

@@ -75,8 +75,9 @@ final class MigrationWarmRunner {
             notes.add("Dry run completed. Redis was not mutated.");
         } else {
             notes.add("Redis hot entities were hydrated directly without enqueueing PostgreSQL write-behind.");
+            notes.add("Warm hydration skips eager query-index rebuilds and page-cache touches so the hot set can be loaded faster.");
             notes.add("Async projections were enqueued through the normal refresh queue so warm execution returns quickly.");
-            notes.add("If the warmed route depends on projections, wait for projection refresh backlog to drain before running the side-by-side comparison.");
+            notes.add("If the warmed route depends on projections or query indexes, wait for the projection backlog to drain and let the first compare pass warm the query indexes.");
         }
         if (normalized.warmRootRows()) {
             notes.add("Root hydration used referenced root ids from the warmed child window.");

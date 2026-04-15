@@ -39,14 +39,17 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -65,10 +68,13 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private final AtomicReference<String> lastHotSnapshotError = new AtomicReference<>("");
     private final AtomicReference<String> lastServedHotSnapshotJson = new AtomicReference<>("");
     private final String dashboardInstanceId = UUID.randomUUID().toString();
+    private final AtomicLong migrationPlannerWarmJobSequence = new AtomicLong();
+    private final Map<String, MigrationPlannerWarmJob> migrationPlannerWarmJobs = new ConcurrentHashMap<>();
     private final AtomicLong lastGoodHotSnapshotAtEpochMillis = new AtomicLong();
     private final AtomicLong lastServedHotSnapshotAtEpochMillis = new AtomicLong();
     private HttpServer server;
     private ExecutorService executor;
+    private ExecutorService backgroundExecutor;
 
     public CacheDatabaseAdminHttpServer(CacheDatabase cacheDatabase, AdminHttpConfig config) {
         this.admin = cacheDatabase.admin();
@@ -133,6 +139,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         server.createContext("/api/migration-planner/discovery", this::handleMigrationPlannerDiscovery);
         server.createContext("/api/migration-planner/plan", this::handleMigrationPlannerPlan);
         server.createContext("/api/migration-planner/warm", this::handleMigrationPlannerWarm);
+        server.createContext("/api/migration-planner/warm/start", this::handleMigrationPlannerWarmStart);
+        server.createContext("/api/migration-planner/warm/status", this::handleMigrationPlannerWarmStatus);
         server.createContext("/api/migration-planner/scaffold", this::handleMigrationPlannerScaffold);
         server.createContext("/api/migration-planner/compare", this::handleMigrationPlannerCompare);
         server.start();
@@ -265,6 +273,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             case "/api/migration-planner/discovery" -> handleMigrationPlannerDiscovery(exchange);
             case "/api/migration-planner/plan" -> handleMigrationPlannerPlan(exchange);
             case "/api/migration-planner/warm" -> handleMigrationPlannerWarm(exchange);
+            case "/api/migration-planner/warm/start" -> handleMigrationPlannerWarmStart(exchange);
+            case "/api/migration-planner/warm/status" -> handleMigrationPlannerWarmStatus(exchange);
             case "/api/migration-planner/scaffold" -> handleMigrationPlannerScaffold(exchange);
             case "/api/migration-planner/compare" -> handleMigrationPlannerCompare(exchange);
             default -> sendText(exchange, 404, "text/plain; charset=utf-8", "Not found");
@@ -852,6 +862,40 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         }
     }
 
+    private void handleMigrationPlannerWarmStart(HttpExchange exchange) throws IOException {
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        Map<String, List<String>> parameters = parseFormParameters(exchange);
+        try {
+            MigrationPlannerWarmJob job = startMigrationPlannerWarmJob(parseMigrationWarmRequest(parameters));
+            sendJson(exchange, 202, renderMigrationWarmJobStatus(job));
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            sendJson(exchange, 400, "{\"error\":\"" + escapeJson(exception.getMessage()) + "\"}");
+        }
+    }
+
+    private void handleMigrationPlannerWarmStatus(HttpExchange exchange) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        Map<String, List<String>> parameters = parseQuery(exchange.getRequestURI().getRawQuery());
+        String jobId = defaultString(first(parameters, "jobId"));
+        if (jobId.isBlank()) {
+            sendJson(exchange, 400, "{\"error\":\"Missing jobId\"}");
+            return;
+        }
+        pruneCompletedWarmJobs();
+        MigrationPlannerWarmJob job = migrationPlannerWarmJobs.get(jobId);
+        if (job == null) {
+            sendJson(exchange, 404, "{\"error\":\"Warm job not found\"}");
+            return;
+        }
+        sendJson(exchange, 200, renderMigrationWarmJobStatus(job));
+    }
+
     private void handleMigrationPlannerScaffold(HttpExchange exchange) throws IOException {
         if (!"POST".equalsIgnoreCase(exchange.getRequestMethod()) && !"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
             sendMethodNotAllowed(exchange);
@@ -905,6 +949,44 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             builder.fetchPlan(FetchPlan.of(includes.toArray(String[]::new)));
         }
         return builder.build();
+    }
+
+    private MigrationPlannerWarmJob startMigrationPlannerWarmJob(MigrationWarmRunner.Request request) {
+        pruneCompletedWarmJobs();
+        long createdAt = System.currentTimeMillis();
+        String jobId = "warm-" + migrationPlannerWarmJobSequence.incrementAndGet();
+        MigrationPlannerWarmJob job = new MigrationPlannerWarmJob(jobId, request.dryRun(), createdAt);
+        migrationPlannerWarmJobs.put(jobId, job);
+        ensureBackgroundExecutor().submit(() -> {
+            job.markRunning(System.currentTimeMillis());
+            try {
+                job.markCompleted(admin.warmMigration(request), System.currentTimeMillis());
+            } catch (RuntimeException exception) {
+                job.markFailed(exception, System.currentTimeMillis());
+            }
+        });
+        return job;
+    }
+
+    private synchronized ExecutorService ensureBackgroundExecutor() {
+        if (backgroundExecutor == null || backgroundExecutor.isShutdown()) {
+            backgroundExecutor = Executors.newFixedThreadPool(2, new AdminAsyncJobThreadFactory());
+        }
+        return backgroundExecutor;
+    }
+
+    private void pruneCompletedWarmJobs() {
+        long cutoffEpochMillis = System.currentTimeMillis() - 15L * 60L * 1000L;
+        migrationPlannerWarmJobs.entrySet().removeIf(entry -> entry.getValue().canPrune(cutoffEpochMillis));
+        if (migrationPlannerWarmJobs.size() <= 24) {
+            return;
+        }
+        migrationPlannerWarmJobs.entrySet().stream()
+                .sorted(Comparator.comparingLong(entry -> entry.getValue().lastTouchedEpochMillis()))
+                .limit(Math.max(0, migrationPlannerWarmJobs.size() - 24))
+                .map(Map.Entry::getKey)
+                .toList()
+                .forEach(migrationPlannerWarmJobs::remove);
     }
 
     private MigrationPlanner.Request parseMigrationPlannerRequest(Map<String, List<String>> parameters) {
@@ -2133,6 +2215,25 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "}";
     }
 
+    private String renderMigrationWarmJobStatus(MigrationPlannerWarmJob job) {
+        long now = System.currentTimeMillis();
+        long completedAt = job.completedAtEpochMillis();
+        long durationMillis = completedAt > 0
+                ? Math.max(0L, completedAt - Math.max(job.startedAtEpochMillis(), job.createdAtEpochMillis()))
+                : Math.max(0L, now - Math.max(job.startedAtEpochMillis(), job.createdAtEpochMillis()));
+        return "{"
+                + "\"jobId\":\"" + escapeJson(job.jobId()) + "\","
+                + "\"status\":\"" + job.status().name() + "\","
+                + "\"dryRun\":" + job.dryRun() + ","
+                + "\"createdAt\":\"" + Instant.ofEpochMilli(job.createdAtEpochMillis()) + "\","
+                + "\"startedAt\":\"" + (job.startedAtEpochMillis() > 0 ? Instant.ofEpochMilli(job.startedAtEpochMillis()) : "") + "\","
+                + "\"completedAt\":\"" + (completedAt > 0 ? Instant.ofEpochMilli(completedAt) : "") + "\","
+                + "\"durationMillis\":" + durationMillis + ","
+                + "\"error\":\"" + escapeJson(job.errorMessage()) + "\","
+                + "\"result\":" + (job.result() == null ? "null" : renderMigrationWarmResult(job.result()))
+                + "}";
+    }
+
     private String renderMigrationScaffoldResult(MigrationScaffoldGenerator.Result result) {
         return "{"
                 + "\"request\":" + renderMigrationScaffoldRequest(result.request()) + ","
@@ -2944,6 +3045,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "async function loadDiscovery(manual){const startMessage=manual?'" + escapeJs(localized(normalizedLanguage, "PostgreSQL şeması yeniden keşfediliyor…", "Refreshing PostgreSQL schema discovery…")) + "':'" + escapeJs(localized(normalizedLanguage, "PostgreSQL şeması inceleniyor…", "Inspecting PostgreSQL schema…")) + "';setDiscoveryStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/discovery');renderDiscovery(payload);setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")) + "');updatePlannerProgress();}catch(error){setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi başarısız oldu: ", "Schema discovery failed: ")) + "'+error.message);updatePlannerProgress();}}"
                 + "function setMetric(id,value){document.getElementById(id).innerHTML=escapeHtml(value);}"
                 + "function renderPlan(plan){emptyState.classList.add('d-none');results.classList.remove('d-none');warmResults.classList.add('d-none');setMetric('plannerSurface',plan.recommendedSurface);setMetric('plannerWindow',String(plan.recommendedHotWindowPerRoot)+' " + escapeJs(localized(normalizedLanguage, "satır / kök", "rows / root")) + "');setMetric('plannerProjection',plan.projectionRequired ? '" + escapeJs(localized(normalizedLanguage, "Gerekli", "Required")) + " (' + plan.summaryProjectionName + ')' : '" + escapeJs(localized(normalizedLanguage, "İlk aşamada opsiyonel", "Optional at first")) + "');setMetric('plannerRanking',plan.rankedProjectionRequired ? '" + escapeJs(localized(normalizedLanguage, "Gerekli", "Required")) + " (' + (plan.rankedProjectionName || plan.rankFieldName) + ')' : '" + escapeJs(localized(normalizedLanguage, "Gerekli değil", "Not required")) + "');document.getElementById('plannerRedisPlacement').textContent=plan.redisPlacement;document.getElementById('plannerPostgresPlacement').textContent=plan.postgresPlacement;renderList('plannerReasoning',plan.reasoning);renderList('plannerRedisArtifacts',plan.recommendedRedisArtifacts);renderList('plannerPostgresArtifacts',plan.recommendedPostgresArtifacts);renderList('plannerApiShapes',plan.recommendedApiShapes);renderWarmSteps(plan.warmSteps);document.getElementById('plannerComparisonSummary').textContent=plan.comparisonSummary;renderComparisonChecks(plan.comparisonChecks);document.getElementById('plannerWarmSql').textContent=plan.sampleWarmSql||'';document.getElementById('plannerRootWarmSql').textContent=plan.sampleRootWarmSql||'';renderWarnings(plan.warnings);warmButton.disabled=false;warmPreviewButton.disabled=false;if(scaffoldButton){scaffoldButton.disabled=false;}if(compareButton){compareButton.disabled=false;}if(compareReportButton){compareReportButton.disabled=true;}updatePlannerProgress();}"
+                + "let warmJobPollHandle=0;"
+                + "function setWarmButtonsBusy(busy){if(warmButton){warmButton.disabled=!!busy;}if(warmPreviewButton){warmPreviewButton.disabled=!!busy;}if(scaffoldButton){scaffoldButton.disabled=!!busy && scaffoldResults.classList.contains('d-none');}if(compareButton){compareButton.disabled=!!busy && compareResults.classList.contains('d-none');}}"
+                + "function clearWarmJobPoll(){if(warmJobPollHandle){window.clearTimeout(warmJobPollHandle);warmJobPollHandle=0;}}"
+                + "function formatJobDuration(durationMillis){const safe=Math.max(0,Number(durationMillis||0));const seconds=Math.max(1,Math.round(safe/1000));return seconds+' sn';}"
                 + "function renderWarmExecution(result){if(result.plan){renderPlan(result.plan);}warmResults.classList.remove('d-none');setMetric('plannerWarmChildRows',String(result.childRowsHydrated)+' / '+String(result.childRowsRead));setMetric('plannerWarmRootRows',String(result.rootRowsHydrated)+' / '+String(result.rootRowsRead));setMetric('plannerWarmSkippedRows',String(result.skippedDeletedRows));setMetric('plannerWarmDuration',String(result.durationMillis)+' ms');setMetric('plannerWarmReferencedRoots',String(result.distinctReferencedRootIds));setMetric('plannerWarmMissingRoots',String(result.missingReferencedRootIds));renderList('plannerWarmNotes',result.notes);document.getElementById('plannerWarmChildSql').textContent=result.childWarmSql||'';document.getElementById('plannerWarmRootSql').textContent=result.rootWarmSql||'';updatePlannerProgress();}"
                 + "function renderScaffold(result){if(result.plan){renderPlan(result.plan);}scaffoldResults.classList.remove('d-none');setMetric('plannerScaffoldBasePackage',result.basePackage||'-');setMetric('plannerScaffoldFileCount',String(result.fileCount||0));renderList('plannerScaffoldNotes',result.notes);renderList('plannerScaffoldWarnings',result.warnings);renderScaffoldFiles(result.files||[]);updatePlannerProgress();}"
                 + "function renderComparisonAssessment(assessment){if(!assessment){setMetric('plannerCompareAssessmentStatus','-');setMetric('plannerCompareAssessmentParity','-');setMetric('plannerCompareAssessmentAvgRatio','-');setMetric('plannerCompareAssessmentP95Ratio','-');document.getElementById('plannerCompareAssessmentSummary').textContent='';document.getElementById('plannerCompareAssessmentDecision').textContent='';renderList('plannerCompareAssessmentStrengths',[], '" + escapeJs(localized(normalizedLanguage, "Henüz güçlü sinyal yok.", "No positive signals yet.")) + "');renderList('plannerCompareAssessmentBlockers',[], '" + escapeJs(localized(normalizedLanguage, "Henüz blokaj kaydedilmedi.", "No blockers recorded yet.")) + "');renderList('plannerCompareAssessmentNextSteps',[], '" + escapeJs(localized(normalizedLanguage, "Henüz sonraki adım üretilmedi.", "No next steps generated yet.")) + "');return;}setMetric('plannerCompareAssessmentStatus',formatAssessmentReadiness(assessment.readiness));setMetric('plannerCompareAssessmentParity',formatAssessmentParity(assessment.parityStatus));setMetric('plannerCompareAssessmentAvgRatio',formatRatio(assessment.averageLatencyRatio));setMetric('plannerCompareAssessmentP95Ratio',formatRatio(assessment.p95LatencyRatio));document.getElementById('plannerCompareAssessmentSummary').textContent=assessment.summary||'';document.getElementById('plannerCompareAssessmentDecision').textContent=assessment.decision||'';renderList('plannerCompareAssessmentStrengths',assessment.strengths,'" + escapeJs(localized(normalizedLanguage, "Bu ölçüm turunda öne çıkan güçlü sinyal yok.", "No strong positive signal stood out in this run.")) + "');renderList('plannerCompareAssessmentBlockers',assessment.blockers,'" + escapeJs(localized(normalizedLanguage, "Bu turda doğrudan cutover blokajı görülmedi.", "No direct cutover blocker was found in this run.")) + "');renderList('plannerCompareAssessmentNextSteps',assessment.nextSteps,'" + escapeJs(localized(normalizedLanguage, "Önerilen ek adım üretilmedi.", "No additional next step was generated.")) + "');}"
@@ -2958,7 +3063,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "['sortColumn','sortDirection','rootPrimaryKeyColumn','childPrimaryKeyColumn','relationColumn'].forEach(function(name){const field=plannerField(name);if(field){field.addEventListener('change',function(){updatePlannerProgress();});}});"
                 + "if(demoBootstrapButton){demoBootstrapButton.addEventListener('click',function(event){event.preventDefault();seedDemoSchema().catch(function(){});});}"
                 + "if(discoverButton){discoverButton.addEventListener('click',function(event){event.preventDefault();loadDiscovery(true).catch(function(){});});}"
-                + "async function warmExecution(dryRun){const params=serializeForm();params.set('dryRun',dryRun?'true':'false');const startMessage=dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run başlatıldı…", "Dry run started…")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution başlatıldı…", "Warm execution started…")) + "';warmStatus.textContent=startMessage;setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/warm',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderWarmExecution(payload);const doneMessage=payload.dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready.")) + "';warmStatus.textContent=doneMessage;setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ")) + "'+error.message;warmStatus.textContent=message;setStatus(message);}}"
+                + "async function pollWarmJob(jobId,dryRun){const payload=await fetchJson(apiBase + '/api/migration-planner/warm/status?jobId='+encodeURIComponent(jobId));if(payload.status==='QUEUED'){const queuedMessage=(dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run kuyruğa alındı… ", "Dry run queued… ")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution kuyruğa alındı… ", "Warm execution queued… ")) + "')+formatJobDuration(payload.durationMillis||0);warmStatus.textContent=queuedMessage;setStatus(queuedMessage);warmJobPollHandle=window.setTimeout(function(){pollWarmJob(jobId,dryRun).catch(handleWarmJobError);},1000);return;}if(payload.status==='RUNNING'){const runningMessage=(dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run arka planda çalışıyor… ", "Dry run is running in the background… ")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution arka planda çalışıyor… ", "Warm execution is running in the background… ")) + "')+formatJobDuration(payload.durationMillis||0);warmStatus.textContent=runningMessage;setStatus(runningMessage);warmJobPollHandle=window.setTimeout(function(){pollWarmJob(jobId,dryRun).catch(handleWarmJobError);},1200);return;}clearWarmJobPoll();setWarmButtonsBusy(false);if(payload.status==='COMPLETED'&&payload.result){renderWarmExecution(payload.result);const doneMessage=payload.result.dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready.")) + "';warmStatus.textContent=doneMessage;setStatus(doneMessage);return;}const failedMessage='" + escapeJs(localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ")) + "'+(payload.error||'" + escapeJs(localized(normalizedLanguage, "Bilinmeyen hata", "Unknown error")) + "');warmStatus.textContent=failedMessage;setStatus(failedMessage);}"
+                + "async function runWarmSyncFallback(params,dryRun){const payload=await fetchJson(apiBase + '/api/migration-planner/warm',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderWarmExecution(payload);const doneMessage=payload.dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready.")) + "';warmStatus.textContent=doneMessage;setStatus(doneMessage);}"
+                + "function handleWarmJobError(error){clearWarmJobPoll();setWarmButtonsBusy(false);const message='" + escapeJs(localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ")) + "'+error.message;warmStatus.textContent=message;setStatus(message);}"
+                + "async function warmExecution(dryRun){const params=serializeForm();params.set('dryRun',dryRun?'true':'false');clearWarmJobPoll();setWarmButtonsBusy(true);const startMessage=dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run arka planda başlatılıyor…", "Starting the dry run in the background…")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution arka planda başlatılıyor…", "Starting the warm execution in the background…")) + "';warmStatus.textContent=startMessage;setStatus(startMessage);try{const started=await fetchJson(apiBase + '/api/migration-planner/warm/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});if(started&&started.jobId){await pollWarmJob(started.jobId,dryRun);return;}await runWarmSyncFallback(params,dryRun);setWarmButtonsBusy(false);}catch(error){setStatus('" + escapeJs(localized(normalizedLanguage, "Arka plan warm başlatılamadı. Senkron çalıştırılıyor…", "Background warm start failed. Falling back to synchronous execution…")) + "');try{await runWarmSyncFallback(params,dryRun);}catch(syncError){handleWarmJobError(syncError);}finally{setWarmButtonsBusy(false);}}}"
                 + "async function scaffoldGeneration(){const params=serializeForm();const startMessage='" + escapeJs(localized(normalizedLanguage, "Scaffold üretiliyor…", "Generating scaffold…")) + "';if(scaffoldStatus){scaffoldStatus.textContent=startMessage;}setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/scaffold',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderScaffold(payload);const doneMessage='" + escapeJs(localized(normalizedLanguage, "Scaffold hazır. Dosyaları kopyalayıp projene ekleyebilirsin.", "Scaffold ready. You can copy the files into your project.")) + "';if(scaffoldStatus){scaffoldStatus.textContent=doneMessage;}setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Scaffold üretimi başarısız oldu: ", "Scaffold generation failed: ")) + "'+error.message;if(scaffoldStatus){scaffoldStatus.textContent=message;}setStatus(message);}}"
                 + "async function runComparison(){const params=serializeForm();const startMessage='" + escapeJs(localized(normalizedLanguage, "Side-by-side comparison başlatıldı…", "Side-by-side comparison started…")) + "';if(compareStatus){compareStatus.textContent=startMessage;}setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/compare',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderComparison(payload);const doneMessage='" + escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. PostgreSQL ve CacheDB sonuçları yan yana hazır.", "Comparison completed. PostgreSQL and CacheDB results are ready side by side.")) + "';if(compareStatus){compareStatus.textContent=doneMessage;}setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız oldu: ", "Comparison failed: ")) + "'+error.message;if(compareStatus){compareStatus.textContent=message;}setStatus(message);}}"
                 + "Array.from(form.elements).forEach(function(field){if(!field||!field.name){return;}field.addEventListener('change',function(){updatePlannerProgress();});});"
@@ -6594,12 +6702,24 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         if (executor != null) {
             executor.shutdownNow();
         }
+        if (backgroundExecutor != null) {
+            backgroundExecutor.shutdownNow();
+        }
     }
 
     private static final class AdminHttpThreadFactory implements ThreadFactory {
         @Override
         public Thread newThread(Runnable runnable) {
             Thread thread = new Thread(runnable, "cachedb-admin-http");
+            thread.setDaemon(true);
+            return thread;
+        }
+    }
+
+    private static final class AdminAsyncJobThreadFactory implements ThreadFactory {
+        @Override
+        public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(runnable, "cachedb-admin-async-job");
             thread.setDaemon(true);
             return thread;
         }
@@ -6641,6 +6761,98 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             boolean warmTriggered,
             boolean dryRunTriggered
     ) {
+    }
+
+    private enum MigrationPlannerWarmJobStatus {
+        QUEUED,
+        RUNNING,
+        COMPLETED,
+        FAILED
+    }
+
+    private static final class MigrationPlannerWarmJob {
+        private final String jobId;
+        private final boolean dryRun;
+        private final long createdAtEpochMillis;
+        private final AtomicReference<MigrationPlannerWarmJobStatus> status =
+                new AtomicReference<>(MigrationPlannerWarmJobStatus.QUEUED);
+        private final AtomicLong startedAtEpochMillis = new AtomicLong();
+        private final AtomicLong completedAtEpochMillis = new AtomicLong();
+        private final AtomicReference<String> errorMessage = new AtomicReference<>("");
+        private final AtomicReference<MigrationWarmRunner.Result> result = new AtomicReference<>();
+
+        private MigrationPlannerWarmJob(String jobId, boolean dryRun, long createdAtEpochMillis) {
+            this.jobId = jobId;
+            this.dryRun = dryRun;
+            this.createdAtEpochMillis = createdAtEpochMillis;
+        }
+
+        private String jobId() {
+            return jobId;
+        }
+
+        private boolean dryRun() {
+            return dryRun;
+        }
+
+        private long createdAtEpochMillis() {
+            return createdAtEpochMillis;
+        }
+
+        private MigrationPlannerWarmJobStatus status() {
+            return status.get();
+        }
+
+        private long startedAtEpochMillis() {
+            return startedAtEpochMillis.get();
+        }
+
+        private long completedAtEpochMillis() {
+            return completedAtEpochMillis.get();
+        }
+
+        private String errorMessage() {
+            return errorMessage.get();
+        }
+
+        private MigrationWarmRunner.Result result() {
+            return result.get();
+        }
+
+        private void markRunning(long startedAtMillis) {
+            startedAtEpochMillis.compareAndSet(0L, startedAtMillis);
+            status.set(MigrationPlannerWarmJobStatus.RUNNING);
+        }
+
+        private void markCompleted(MigrationWarmRunner.Result warmResult, long completedAtMillis) {
+            result.set(warmResult);
+            completedAtEpochMillis.set(completedAtMillis);
+            status.set(MigrationPlannerWarmJobStatus.COMPLETED);
+        }
+
+        private void markFailed(RuntimeException exception, long completedAtMillis) {
+            errorMessage.set(exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage());
+            completedAtEpochMillis.set(completedAtMillis);
+            status.set(MigrationPlannerWarmJobStatus.FAILED);
+        }
+
+        private long lastTouchedEpochMillis() {
+            long completedAt = completedAtEpochMillis();
+            if (completedAt > 0) {
+                return completedAt;
+            }
+            long startedAt = startedAtEpochMillis();
+            if (startedAt > 0) {
+                return startedAt;
+            }
+            return createdAtEpochMillis;
+        }
+
+        private boolean canPrune(long cutoffEpochMillis) {
+            return (status() == MigrationPlannerWarmJobStatus.COMPLETED
+                    || status() == MigrationPlannerWarmJobStatus.FAILED)
+                    && lastTouchedEpochMillis() < cutoffEpochMillis;
+        }
     }
 
     private record PlannerSelectOption(String value, String label) {

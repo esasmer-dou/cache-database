@@ -390,14 +390,20 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     }
 
     public T hydrate(T entity, long version) {
-        return hydrateInternal(entity, version, true);
+        return hydrateInternal(entity, version, true, true, true);
     }
 
     public T hydrateWarm(T entity, long version) {
-        return hydrateInternal(entity, version, false);
+        return hydrateInternal(entity, version, false, false, false);
     }
 
-    private T hydrateInternal(T entity, long version, boolean forceImmediateProjectionRefresh) {
+    private T hydrateInternal(
+            T entity,
+            long version,
+            boolean forceImmediateProjectionRefresh,
+            boolean reindexQueryIndexes,
+            boolean recordPageAccess
+    ) {
         long startedAt = System.nanoTime();
         try {
             ID id = metadata.idAccessor().apply(entity);
@@ -415,8 +421,12 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             jedis.set(versionKey, String.valueOf(effectiveVersion));
             expireVersionKey(versionKey);
             jedis.del(tombstoneKey);
-            queryIndexManager.reindex(entity);
-            pageCacheManager.recordEntityAccess(id);
+            if (reindexQueryIndexes) {
+                queryIndexManager.reindex(entity);
+            }
+            if (recordPageAccess) {
+                pageCacheManager.recordEntityAccess(id);
+            }
             syncProjectionPayloads(entity, forceImmediateProjectionRefresh);
             return entity;
         } finally {
