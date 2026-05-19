@@ -23,6 +23,9 @@ import java.util.Set;
 
 final class MigrationSchemaDiscovery {
 
+    private static final int MAX_ROUTE_SUGGESTIONS = 24;
+    private static final int MAX_SORT_VARIANTS_PER_RELATION = 4;
+
     private static final Set<String> SYSTEM_SCHEMAS = Set.of(
             "information_schema",
             "pg_catalog",
@@ -165,8 +168,12 @@ final class MigrationSchemaDiscovery {
 
     private List<RouteSuggestion> buildSuggestions(Map<TableKey, MutableTable> tables, List<String> warnings) {
         ArrayList<RouteSuggestion> suggestions = new ArrayList<>();
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
         MigrationPlanner.Request defaults = MigrationPlanner.Request.defaults();
-        for (MutableTable childTable : tables.values()) {
+        List<MutableTable> orderedTables = tables.values().stream()
+                .sorted(Comparator.comparing(table -> table.qualifiedTableName, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+        for (MutableTable childTable : orderedTables) {
             if (!childTable.plannable()) {
                 continue;
             }
@@ -184,66 +191,249 @@ final class MigrationSchemaDiscovery {
                 if (rootTable == null) {
                     continue;
                 }
-                List<String> sortCandidates = childTable.sortCandidates();
-                String selectedSortColumn = sortCandidates.isEmpty()
-                        ? firstNonBlank(childTable.primaryKeyColumn, importedKey.foreignKeyColumn())
-                        : sortCandidates.get(0);
-                boolean rankedSortCandidate = isRankLikeColumn(selectedSortColumn);
-                boolean temporalSortCandidate = isTemporalColumnName(selectedSortColumn);
-                String rootSurface = firstNonBlank(rootTable.registeredEntityName, rootTable.qualifiedTableName);
-                String childSurface = firstNonBlank(childTable.registeredEntityName, childTable.qualifiedTableName);
-                MigrationPlanner.Request plannerRequest = new MigrationPlanner.Request(
-                        rootTable.tableName + "-" + childTable.tableName,
-                        rootSurface,
-                        firstNonBlank(rootTable.primaryKeyColumn, importedKey.parentColumn()),
-                        childSurface,
-                        firstNonBlank(childTable.primaryKeyColumn, importedKey.foreignKeyColumn()),
+                addRelationSuggestions(
+                        suggestions,
+                        seen,
+                        defaults,
+                        rootTable,
+                        childTable,
+                        importedKey.parentColumn(),
                         importedKey.foreignKeyColumn(),
-                        selectedSortColumn,
-                        "DESC",
-                        0L,
-                        0L,
-                        defaults.typicalChildrenPerRoot(),
-                        defaults.maxChildrenPerRoot(),
-                        defaults.firstPageSize(),
-                        defaults.hotWindowPerRoot(),
-                        true,
-                        false,
-                        false,
-                        false,
-                        true,
-                        false,
-                        false,
-                        true,
-                        true
+                        "foreign-key"
                 );
-                String summary = "Detected foreign key "
-                        + childTable.qualifiedTableName + "." + importedKey.foreignKeyColumn()
-                        + " -> " + rootTable.qualifiedTableName + "." + importedKey.parentColumn()
-                        + ". Suggested default sort is " + selectedSortColumn + " DESC"
-                        + (rankedSortCandidate
-                        ? " If this screen is a top-N or threshold route, enable global sorted / threshold mode before planning."
-                        : ".");
-                suggestions.add(new RouteSuggestion(
-                        rootTable.qualifiedTableName + " -> " + childTable.qualifiedTableName,
-                        summary,
-                        rootSurface,
-                        firstNonBlank(rootTable.registeredEntityName, ""),
-                        firstNonBlank(rootTable.primaryKeyColumn, importedKey.parentColumn()),
-                        childSurface,
-                        firstNonBlank(childTable.registeredEntityName, ""),
-                        firstNonBlank(childTable.primaryKeyColumn, importedKey.foreignKeyColumn()),
-                        importedKey.foreignKeyColumn(),
-                        selectedSortColumn,
-                        List.copyOf(sortCandidates),
-                        rankedSortCandidate,
-                        temporalSortCandidate,
-                        plannerRequest
-                ));
+                if (suggestions.size() >= MAX_ROUTE_SUGGESTIONS) {
+                    warnings.add("Route suggestion list was capped at " + MAX_ROUTE_SUGGESTIONS + " candidates. Narrow the schema or use the table selectors for the remaining routes.");
+                    return List.copyOf(suggestions);
+                }
             }
         }
-        suggestions.sort(Comparator.comparing(RouteSuggestion::label, String.CASE_INSENSITIVE_ORDER));
+        for (MutableTable childTable : orderedTables) {
+            for (MutableTable rootTable : orderedTables) {
+                if (rootTable == childTable || !rootTable.plannable()) {
+                    continue;
+                }
+                String relationColumn = inferImplicitRelationColumn(rootTable, childTable);
+                if (relationColumn.isBlank()) {
+                    continue;
+                }
+                addRelationSuggestions(
+                        suggestions,
+                        seen,
+                        defaults,
+                        rootTable,
+                        childTable,
+                        rootTable.primaryKeyColumn,
+                        relationColumn,
+                        childTable.plannable() ? "implicit-column-match" : "view-read-model"
+                );
+                if (suggestions.size() >= MAX_ROUTE_SUGGESTIONS) {
+                    warnings.add("Route suggestion list was capped at " + MAX_ROUTE_SUGGESTIONS + " candidates. Narrow the schema or use the table selectors for the remaining routes.");
+                    return List.copyOf(suggestions);
+                }
+            }
+        }
         return List.copyOf(suggestions);
+    }
+
+    private void addRelationSuggestions(
+            ArrayList<RouteSuggestion> suggestions,
+            LinkedHashSet<String> seen,
+            MigrationPlanner.Request defaults,
+            MutableTable rootTable,
+            MutableTable childTable,
+            String parentColumn,
+            String relationColumn,
+            String source
+    ) {
+        List<String> sortCandidates = childTable.sortCandidates();
+        List<String> variants = routeSortVariants(childTable, relationColumn, sortCandidates);
+        for (String sortColumn : variants) {
+            if (suggestions.size() >= MAX_ROUTE_SUGGESTIONS) {
+                return;
+            }
+            String key = normalize(rootTable.qualifiedTableName)
+                    + "|"
+                    + normalize(childTable.qualifiedTableName)
+                    + "|"
+                    + normalize(relationColumn)
+                    + "|"
+                    + normalize(sortColumn);
+            if (!seen.add(key)) {
+                continue;
+            }
+            boolean rankedSortCandidate = isRankLikeColumn(sortColumn);
+            boolean temporalSortCandidate = isTemporalColumnName(sortColumn);
+            boolean rankedRoute = rankedSortCandidate && !temporalSortCandidate;
+            String rootSurface = firstNonBlank(rootTable.registeredEntityName, rootTable.qualifiedTableName);
+            String childSurface = firstNonBlank(childTable.registeredEntityName, childTable.qualifiedTableName);
+            String rootPrimaryKey = firstNonBlank(rootTable.primaryKeyColumn, parentColumn);
+            String childPrimaryKey = firstNonBlank(childTable.primaryKeyColumn, inferIdentityColumn(childTable, relationColumn));
+            MigrationPlanner.Request plannerRequest = new MigrationPlanner.Request(
+                    compactWorkloadName(rootTable.tableName, childTable.tableName, sortColumn),
+                    rootSurface,
+                    rootPrimaryKey,
+                    childSurface,
+                    childPrimaryKey,
+                    relationColumn,
+                    sortColumn,
+                    "DESC",
+                    0L,
+                    0L,
+                    defaults.typicalChildrenPerRoot(),
+                    defaults.maxChildrenPerRoot(),
+                    defaults.firstPageSize(),
+                    defaults.hotWindowPerRoot(),
+                    true,
+                    false,
+                    rankedRoute,
+                    rankedRoute,
+                    true,
+                    false,
+                    false,
+                    true,
+                    true
+            );
+            String variantLabel = routeVariantLabel(sortColumn, rankedRoute, temporalSortCandidate);
+            String summary = routeSummary(source, rootTable, childTable, parentColumn, relationColumn, sortColumn, rankedRoute);
+            suggestions.add(new RouteSuggestion(
+                    rootTable.qualifiedTableName + " -> " + childTable.qualifiedTableName + " / " + variantLabel,
+                    summary,
+                    rootSurface,
+                    firstNonBlank(rootTable.registeredEntityName, ""),
+                    rootPrimaryKey,
+                    childSurface,
+                    firstNonBlank(childTable.registeredEntityName, ""),
+                    childPrimaryKey,
+                    relationColumn,
+                    sortColumn,
+                    List.copyOf(sortCandidates),
+                    rankedSortCandidate,
+                    temporalSortCandidate,
+                    plannerRequest
+            ));
+        }
+    }
+
+    private List<String> routeSortVariants(MutableTable childTable, String relationColumn, List<String> sortCandidates) {
+        ArrayList<String> variants = new ArrayList<>();
+        for (String candidate : sortCandidates) {
+            if (candidate == null || candidate.isBlank()) {
+                continue;
+            }
+            if (!usableRouteSortCandidate(childTable, relationColumn, candidate)) {
+                continue;
+            }
+            addDistinctVariant(variants, candidate);
+            if (variants.size() >= MAX_SORT_VARIANTS_PER_RELATION) {
+                break;
+            }
+        }
+        if (variants.isEmpty()
+                && childTable.primaryKeyColumn != null
+                && !childTable.primaryKeyColumn.isBlank()
+                && !normalize(childTable.primaryKeyColumn).equals(normalize(relationColumn))) {
+            addDistinctVariant(variants, childTable.primaryKeyColumn);
+        }
+        return List.copyOf(variants);
+    }
+
+    private boolean usableRouteSortCandidate(MutableTable childTable, String relationColumn, String candidate) {
+        String normalized = normalize(candidate);
+        if (normalized.isBlank()
+                || normalized.equals(normalize(relationColumn))
+                || normalized.equals(normalize(childTable.primaryKeyColumn))) {
+            return false;
+        }
+        if (normalized.equals("entity_version")
+                || normalized.equals("version")
+                || normalized.equals("deleted_flag")
+                || normalized.equals("created_by")
+                || normalized.equals("updated_by")) {
+            return false;
+        }
+        return !normalized.equals("id") && !normalized.endsWith("_id");
+    }
+
+    private void addDistinctVariant(ArrayList<String> variants, String candidate) {
+        if (candidate == null || candidate.isBlank()) {
+            return;
+        }
+        String normalizedCandidate = normalize(candidate);
+        for (String existing : variants) {
+            if (normalize(existing).equals(normalizedCandidate)) {
+                return;
+            }
+        }
+        variants.add(candidate);
+    }
+
+    private String inferImplicitRelationColumn(MutableTable rootTable, MutableTable childTable) {
+        if (rootTable.primaryKeyColumn == null || rootTable.primaryKeyColumn.isBlank()) {
+            return "";
+        }
+        MutableColumn sameName = childTable.columns.get(normalize(rootTable.primaryKeyColumn));
+        if (sameName != null && !sameName.primaryKey) {
+            return sameName.name;
+        }
+        String expected = compactTableName(rootTable.tableName)
+                .replaceFirst("(?i)_account$", "")
+                .replaceFirst("(?i)_master$", "")
+                .replaceFirst("(?i)s$", "")
+                + "_id";
+        MutableColumn namedRelation = childTable.columns.get(normalize(expected));
+        if (namedRelation != null && !namedRelation.primaryKey) {
+            return namedRelation.name;
+        }
+        return "";
+    }
+
+    private String inferIdentityColumn(MutableTable table, String relationColumn) {
+        if (table.primaryKeyColumn != null && !table.primaryKeyColumn.isBlank()) {
+            return table.primaryKeyColumn;
+        }
+        for (MutableColumn column : table.columns.values()) {
+            String normalized = normalize(column.name);
+            if (!normalized.equals(normalize(relationColumn)) && (normalized.equals("id") || normalized.endsWith("_id"))) {
+                return column.name;
+            }
+        }
+        return relationColumn;
+    }
+
+    private String routeVariantLabel(String sortColumn, boolean rankedRoute, boolean temporalSortCandidate) {
+        if (rankedRoute) {
+            return "ranked by " + sortColumn;
+        }
+        if (temporalSortCandidate) {
+            return "timeline by " + sortColumn;
+        }
+        return "sorted by " + sortColumn;
+    }
+
+    private String routeSummary(
+            String source,
+            MutableTable rootTable,
+            MutableTable childTable,
+            String parentColumn,
+            String relationColumn,
+            String sortColumn,
+            boolean rankedRoute
+    ) {
+        String prefix;
+        if ("foreign-key".equals(source)) {
+            prefix = "Declared foreign key route";
+        } else if ("view-read-model".equals(source)) {
+            prefix = "View/read-model candidate inferred from matching key columns";
+        } else {
+            prefix = "Implicit relation candidate inferred from matching key columns";
+        }
+        return prefix
+                + ": " + childTable.qualifiedTableName + "." + relationColumn
+                + " -> " + rootTable.qualifiedTableName + "." + parentColumn
+                + ". This variant sorts by " + sortColumn + " DESC."
+                + (rankedRoute
+                ? " Treat it as a ranked/top-window route and keep projection parity strict before cutover."
+                : " Treat it as a bounded timeline/list route.");
     }
 
     private String resolveRegisteredEntityName(String schema, String tableName) {
@@ -256,6 +446,40 @@ final class MigrationSchemaDiscovery {
             }
         }
         return "";
+    }
+
+    private String compactWorkloadName(String rootTableName, String childTableName) {
+        return compactWorkloadName(rootTableName, childTableName, "");
+    }
+
+    private String compactWorkloadName(String rootTableName, String childTableName, String sortColumn) {
+        String root = compactTableName(rootTableName);
+        String child = compactTableName(childTableName);
+        String sort = compactTableName(sortColumn).replace('_', '-');
+        String base;
+        if (root.isBlank() && child.isBlank()) {
+            base = "discovered-route";
+        } else if (root.isBlank()) {
+            base = child;
+        } else if (child.isBlank()) {
+            base = root;
+        } else {
+            base = root + "-" + child;
+        }
+        if (sort.isBlank()) {
+            return base;
+        }
+        return base + "-" + sort;
+    }
+
+    private String compactTableName(String tableName) {
+        String normalized = tableName == null ? "" : tableName.trim();
+        if (normalized.isBlank()) {
+            return "";
+        }
+        return normalized
+                .replaceFirst("(?i)^cachedb_migration_demo_", "")
+                .replaceFirst("(?i)^cachedb_demo_", "");
     }
 
     private boolean isSystemSchema(String schema) {

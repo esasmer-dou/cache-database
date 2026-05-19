@@ -1,0 +1,20 @@
+<div id="plannerWorkspace" class="planner-results">
+  <div class="planner-workspace-summary">
+    <div id="plannerOutcomeTitle" class="planner-workspace-title">__CACHEDB_HTML_WORKSPACE_TITLE__</div>
+    <p id="plannerOutcomeCopy" class="planner-workspace-copy">__CACHEDB_HTML_WORKSPACE_COPY__</p>
+    <div class="planner-state-row" aria-label="__CACHEDB_HTML_STATE_ARIA__">
+      <span id="plannerStateDiscover" class="planner-state-pill">__CACHEDB_HTML_STATE_DISCOVER__</span>
+      <span id="plannerStatePlan" class="planner-state-pill">__CACHEDB_HTML_STATE_PLAN__</span>
+      <span id="plannerStateWarm" class="planner-state-pill">__CACHEDB_HTML_STATE_WARM__</span>
+      <span id="plannerStateCompare" class="planner-state-pill">__CACHEDB_HTML_STATE_COMPARE__</span>
+      <span id="plannerStateReport" class="planner-state-pill">__CACHEDB_HTML_STATE_REPORT__</span>
+    </div>
+  </div>
+  <div id="plannerEmpty" class="__CACHEDB_HTML_EMPTY_CLASS__">__CACHEDB_HTML_EMPTY_COPY__</div>
+  <div id="plannerResults" class="__CACHEDB_HTML_RESULTS_CLASS__">
+    __CACHEDB_HTML_PLAN_RESULTS__
+    __CACHEDB_HTML_WARM_CARD__
+    __CACHEDB_HTML_SCAFFOLD_CARD__
+    __CACHEDB_HTML_COMPARE_CARD__
+  </div>
+</div>

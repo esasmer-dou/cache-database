@@ -1,0 +1,19 @@
+<div id="plannerWarmPanel" class="result-card">
+  <div class="result-card-header">__CACHEDB_HTML_WARM_TITLE__</div>
+  <div class="result-card-body">
+    <div class="planner-actions">
+      <button id="plannerWarmAction" type="submit" form="plannerForm" formmethod="get" formaction="__CACHEDB_HTML_ACTION__" name="warmExecution" value="true" class="btn btn-success"__CACHEDB_HTML_WARM_DISABLED__>__CACHEDB_HTML_WARM_BUTTON__</button>
+      <button id="plannerWarmPreviewAction" type="submit" form="plannerForm" formmethod="get" formaction="__CACHEDB_HTML_ACTION__" name="dryRunExecution" value="true" class="btn btn-outline-secondary"__CACHEDB_HTML_WARM_DISABLED__>__CACHEDB_HTML_DRY_RUN_BUTTON__</button>
+    </div>
+    <div id="plannerWarmStatus" class="planner-status mt-3">__CACHEDB_HTML_WARM_STATUS__</div>
+    <div id="plannerWarmResults" class="__CACHEDB_HTML_WARM_RESULTS_CLASS__">
+      <div class="result-grid">__CACHEDB_HTML_WARM_METRICS__</div>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_WARM_NOTES_LABEL__</div>
+      <div id="plannerWarmNotes">__CACHEDB_HTML_WARM_NOTES__</div>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_WARM_CHILD_SQL_LABEL__</div>
+      <pre id="plannerWarmChildSql" class="result-pre">__CACHEDB_HTML_WARM_CHILD_SQL__</pre>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_WARM_ROOT_SQL_LABEL__</div>
+      <pre id="plannerWarmRootSql" class="result-pre">__CACHEDB_HTML_WARM_ROOT_SQL__</pre>
+    </div>
+  </div>
+</div>

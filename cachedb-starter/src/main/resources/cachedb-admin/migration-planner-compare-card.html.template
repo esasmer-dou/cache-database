@@ -1,0 +1,45 @@
+<div id="plannerComparePanel" class="result-card">
+  <div class="result-card-header">__CACHEDB_HTML_COMPARE_TITLE__</div>
+  <div class="result-card-body">
+    <div class="planner-actions">
+      <button id="plannerCompareAction" type="button" class="btn btn-outline-dark"__CACHEDB_HTML_COMPARE_DISABLED__>__CACHEDB_HTML_COMPARE_BUTTON__</button>
+      <button id="plannerCompareDownloadReportAction" type="button" class="btn btn-outline-secondary" disabled>__CACHEDB_HTML_REPORT_BUTTON__</button>
+      <button id="plannerCompareCopyReportAction" type="button" class="btn btn-outline-secondary" disabled>__CACHEDB_HTML_COPY_REPORT_BUTTON__</button>
+    </div>
+    <div id="plannerCompareStatus" class="planner-status mt-3">__CACHEDB_HTML_COMPARE_STATUS__</div>
+    <div id="plannerCompareResults" class="d-none mt-3">
+      <div class="result-grid">__CACHEDB_HTML_COMPARE_METRICS__</div>
+      <div class="result-card mt-3">
+        <div class="result-card-header">__CACHEDB_HTML_ASSESSMENT_TITLE__</div>
+        <div class="result-card-body">
+          <div class="result-grid">__CACHEDB_HTML_ASSESSMENT_METRICS__</div>
+          <div id="plannerCompareAssessmentSummary" class="planner-status mt-3"></div>
+          <div id="plannerCompareAssessmentDecision" class="small text-muted mt-2"></div>
+          <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_STRENGTHS_LABEL__</div>
+          <div id="plannerCompareAssessmentStrengths"></div>
+          <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_BLOCKERS_LABEL__</div>
+          <div id="plannerCompareAssessmentBlockers"></div>
+          <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_NEXT_STEPS_LABEL__</div>
+          <div id="plannerCompareAssessmentNextSteps"></div>
+        </div>
+      </div>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_BASELINE_SQL_LABEL__</div>
+      <pre id="plannerCompareBaselineSql" class="result-pre"></pre>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_SAMPLES_LABEL__</div>
+      <div id="plannerCompareSamples"></div>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_NOTES_LABEL__</div>
+      <div id="plannerCompareNotes"></div>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_WARNINGS_LABEL__</div>
+      <div id="plannerCompareWarnings"></div>
+      <div id="plannerCompareReportPanel" class="result-report-panel d-none mt-3">
+        <div class="result-report-top">
+          <div>
+            <div class="small text-muted fw-semibold">__CACHEDB_HTML_REPORT_PREVIEW_LABEL__</div>
+            <div id="plannerCompareReportFileName" class="result-report-file"></div>
+          </div>
+        </div>
+        <pre id="plannerCompareReportPreview" class="result-pre result-report-preview"></pre>
+      </div>
+    </div>
+  </div>
+</div>

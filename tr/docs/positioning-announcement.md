@@ -1,6 +1,6 @@
 # CacheDB Konumlandırma Taslagi
 
-CacheDB, production runtime overhead'i önemseyen ama tüm kodu alt seviye altyapi stiline düşurmek istemeyen ekipler için Redis-first bir persistence kütüphanesidir.
+CacheDB, production runtime overhead'i önemseyen ama tüm kodu alt seviye altyapi stiline düşürmek istemeyen ekipler için Redis-first bir persistence kütüphanesidir.
 
 Kısa hikaye:
 
@@ -30,11 +30,11 @@ Repo içindeki güncel kanıtlar:
 
 Önerilen guardrail cumlesi:
 
-> CacheDB persistence davranışını gizlemeye çalışmaz. Düşük-overhead yolunu daha kolay tüketilir hale getirmeye çalışir.
+> CacheDB persistence davranışını gizlemeye çalışmaz. Düşük-overhead yolunu daha kolay tüketilir hale getirmeye çalışır.
 
 Önerilen hedef kitle:
 
-- sıcak read path'i olan ürün servisleri
+- sıcak read path'i olan ürün servişleri
 - Redis'i birinci sınıf bağımlilik olarak isleten ekipler
 - projection'dan fayda sağlayan dashboard ve liste-ağır uygulamalar
 - generated API yüzeyi isteyen ama hotspot kaçış hattına da ihtiyaç duyan ekipler
@@ -44,3 +44,5 @@ Uygun olmayan hedef kitle:
 - ana yuku SQL join ve iliskisel raporlama olan uygulamalar
 - ORM davranışının büyük ölçude implicit kalmasini isteyen ekipler
 - Redis'in gerçek runtime tasarıminin parcasi olmadigi sistemler
+
+

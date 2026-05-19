@@ -1,0 +1,30 @@
+<form id="plannerForm" method="get" action="__CACHEDB_HTML_ACTION__">
+  <input type="hidden" name="lang" value="__CACHEDB_HTML_LANGUAGE__">
+  <input type="hidden" name="v" value="__CACHEDB_HTML_INSTANCE_ID__">
+  <input type="hidden" name="discover" value="true">
+  <input type="hidden" name="generatePlan" value="true">
+  <div class="planner-form-grid">
+    <div class="full planner-quickstart">
+      <div class="planner-quickstart-title">__CACHEDB_HTML_QUICKSTART_TITLE__</div>
+      <p class="planner-quickstart-copy">__CACHEDB_HTML_QUICKSTART_COPY__</p>
+    </div>
+    __CACHEDB_HTML_WORKLOAD_FIELD__
+    __CACHEDB_HTML_SCREEN_SECTION__
+    __CACHEDB_HTML_SURFACE_SECTION__
+    __CACHEDB_HTML_CAPACITY_SECTION__
+    __CACHEDB_HTML_OPERATIONS_SECTION__
+    __CACHEDB_HTML_ADVANCED_ROUTE_SECTION__
+    __CACHEDB_HTML_ADVANCED_SCAFFOLD_SECTION__
+  </div>
+  <div class="planner-chip-row">
+    <span class="planner-chip">__CACHEDB_HTML_CHIP_HOT_SET__</span>
+    <span class="planner-chip">__CACHEDB_HTML_CHIP_PROJECTION__</span>
+    <span class="planner-chip">__CACHEDB_HTML_CHIP_COMPARISON__</span>
+  </div>
+  <div class="planner-actions">
+    <button id="plannerGenerateAction" type="submit" class="btn btn-primary">__CACHEDB_HTML_GENERATE_BUTTON__</button>
+    <button id="plannerDefaults" type="button" class="btn btn-outline-secondary">__CACHEDB_HTML_DEFAULTS_BUTTON__</button>
+  </div>
+  <div id="plannerStatus" class="planner-status">__CACHEDB_HTML_PLANNER_STATUS__</div>
+  __CACHEDB_HTML_SERVER_PLAN_FALLBACK__
+</form>

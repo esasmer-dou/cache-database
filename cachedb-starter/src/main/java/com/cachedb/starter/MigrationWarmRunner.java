@@ -37,10 +37,10 @@ final class MigrationWarmRunner {
         Request normalized = Objects.requireNonNull(request, "request").normalize();
         MigrationPlanner.Result plan = planner.plan(normalized.plannerRequest());
         WarmEntityHydrator childHydrator = hydratorFactory.resolve(plan.request().childTableOrEntity())
-                .orElseThrow(() -> new IllegalArgumentException("No registered CacheDB entity found for child surface: " + plan.request().childTableOrEntity()));
+                .orElseThrow(() -> missingRegisteredEntity("child", plan.request().childTableOrEntity()));
         WarmEntityHydrator rootHydrator = normalized.warmRootRows()
                 ? hydratorFactory.resolve(plan.request().rootTableOrEntity())
-                .orElseThrow(() -> new IllegalArgumentException("No registered CacheDB entity found for root surface: " + plan.request().rootTableOrEntity()))
+                .orElseThrow(() -> missingRegisteredEntity("root", plan.request().rootTableOrEntity()))
                 : null;
 
         String childWarmSql = MigrationPlanner.buildChildWarmSql(
@@ -143,6 +143,14 @@ final class MigrationWarmRunner {
                 startedAt,
                 completedAt,
                 durationMillis
+        );
+    }
+
+    private IllegalArgumentException missingRegisteredEntity(String role, String surface) {
+        return new IllegalArgumentException(
+                "No registered CacheDB entity found for " + role + " surface: " + surface
+                        + ". Warm execution can plan from discovered tables, but it can only hydrate Redis for registered CacheDB entities. "
+                        + "Choose the entity-mapped surface from schema discovery, or generate/register the CacheDB entity binding before running warm."
         );
     }
 

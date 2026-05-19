@@ -73,7 +73,7 @@ class MigrationSchemaDiscoveryTest {
                 table.tableName().equalsIgnoreCase("customer_order_metrics_v")
                         && table.objectType().equalsIgnoreCase("VIEW")));
 
-        assertEquals(1, result.routeSuggestions().size());
+        assertEquals(4, result.routeSuggestions().size());
         MigrationSchemaDiscovery.RouteSuggestion suggestion = result.routeSuggestions().get(0);
         assertTrue(suggestion.relationColumn().equalsIgnoreCase("customer_id"));
         assertTrue(suggestion.sortColumn().equalsIgnoreCase("order_date"));
@@ -83,6 +83,17 @@ class MigrationSchemaDiscoveryTest {
         assertTrue(suggestion.plannerRequest().childTableOrEntity().equalsIgnoreCase("customer_order"));
         assertTrue(suggestion.plannerRequest().relationColumn().equalsIgnoreCase("customer_id"));
         assertFalse(suggestion.rankedSortCandidate());
+        assertTrue(result.routeSuggestions().stream().anyMatch(route ->
+                route.childSurface().equalsIgnoreCase("customer_order")
+                        && route.sortColumn().equalsIgnoreCase("created_at")));
+        assertTrue(result.routeSuggestions().stream().anyMatch(route ->
+                route.childSurface().equalsIgnoreCase("customer_order")
+                        && route.sortColumn().equalsIgnoreCase("order_amount")
+                        && route.rankedSortCandidate()
+                        && route.plannerRequest().globalSortedScreen()));
+        assertTrue(result.routeSuggestions().stream().anyMatch(route ->
+                route.childSurface().equalsIgnoreCase("customer_order_metrics_v")
+                        && route.summary().contains("View/read-model candidate")));
         assertTrue(result.warnings().isEmpty());
     }
 

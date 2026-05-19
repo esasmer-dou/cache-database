@@ -23,6 +23,21 @@ If you want the shortest possible recommendation:
 - drop only measured hotspots, workers, or infra flows to direct repository usage
 - use projections plus `withRelationLimit(...)` for relation-heavy list and dashboard screens
 
+## Use-Case Cookbook
+
+| Use case | Recommended design | Avoid |
+| --- | --- | --- |
+| Customer detail page with 1,000+ orders | Customer root entity, order summary projection, bounded per-customer hot window | Loading the full customer aggregate and every order line for first paint |
+| Order detail page with many lines | Load order detail explicitly, preload only a small `orderLines` preview | Fetching hundreds or thousands of lines before the user asks for them |
+| Global "highest value orders" dashboard | Ranked projection with a precomputed business rank field | Wide entity scan followed by in-memory sort |
+| Admin CRUD screen | Generated module or binding | Premature direct repository code for non-hot admin paths |
+| Write-behind repair or replay worker | Direct repository with explicit limits and retries | Hiding operational work behind high-level domain helpers |
+| Existing ORM route migration | Migration Planner, dry-run warm, staging warm, side-by-side compare | Blind cutover based only on Redis latency |
+
+The most common mistake is treating Redis as a magic full-aggregate cache.
+CacheDB is faster when the read model is intentionally smaller than the durable
+history stored in PostgreSQL.
+
 ## When Projections Are Required
 
 Treat projections as required, not optional, when the screen shape matches one of these patterns:

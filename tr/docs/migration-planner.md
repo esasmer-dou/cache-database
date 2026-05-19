@@ -1,45 +1,243 @@
 # Geçiş Planlayıcı
 
-Admin UI artık mevcut PostgreSQL + ORM yapısından gelen ekipler için bir geçiş
-planlayıcı sihirbazı içeriyor.
+Geçiş Planlayıcı, mevcut PostgreSQL tabloları ve çalışan bir ORM route'u olan
+ekiplerin CacheDB'ye geçişi tahminle değil kanıtla değerlendirmesi için admin UI
+içinde sunulan akıştır.
 
-Şu soruları netleştirmek için kullan:
+Bu ekran production cutover düğmesi değildir. Tek bir route'u keşfetmek,
+planlamak, warm etmek, karşılaştırmak ve raporlamak için kullanılır.
 
-- Bu route full entity ile mi kalmalı, projection'a mı geçmeli?
-- Hangi satırlar Redis'te sıcak kalmalı?
-- Soğuk veri / tarihçe sınırı nerede başlamalı?
-- İlk Redis çalışma seti nasıl warm edilmeli?
-- Cutover öncesi staging ortamında hangi metrikler karşılaştırılmalı?
+## Ne Zaman Kullanılır?
 
-## Artık Neleri Keşfedebilir
+Şu durumlarda planlayıcıyı kullan:
 
-Planlayıcı artık bağlı PostgreSQL şemasını inceleyip sihirbazı etkileşimli
-şekilde doldurmak için başlangıç önerileri çıkarabiliyor.
+- mevcut PostgreSQL tabloların varsa
+- route bugün JPA, Hibernate, MyBatis, JDBC veya başka bir data layer ile çalışıyorsa
+- child satır sayısı arttıkça liste/detail ekranı pahalılaşıyorsa
+- route'un entity read, projection read veya ranked projection read olarak mı tasarlanacağını netleştirmek istiyorsan
+- production trafiğini değiştirmeden önce staging kanıtı görmek istiyorsan
 
-Şunları keşfedebilir:
+Bunu production verisini değiştiren bir otomasyon gibi kullanma. Bu ekran bir
+geçiş provası ve karar yüzeyidir.
 
-- yapılandırılmış `DataSource` üzerinden kullanıcı tablolarını
-- primary key kolonlarını
-- tek kolonlu foreign key ilişkilerini
-- zamansal ve sıralama için uygun kolon adaylarını
-- forma doğrudan uygulanabilecek root/child route önerilerini
-- keşfedilen route için scaffold üretimine uygun sınıf adlarını ve sıcak route varsayılanlarını
+## Nerede Açılır?
 
-Böylece kullanıcı planlamaya başlamadan önce tüm tablo ve kolon adlarını tek
-tek elle girmek zorunda kalmaz.
+Aynı admin host ve port üzerinde:
 
-## Etkileşimli Demo Bootstrap
+- Spring Boot: `/cachedb-admin/migration-planner`
+- Native admin server: `/migration-planner`
 
-Spring Boot demo artık planlayıcının kendisi için tek tıkla kurulabilen bir
-PostgreSQL migration veri seti de içeriyor.
+Spring Boot örneği:
 
-`/cachedb-admin/migration-planner` ekranından artık şunları yapabilirsin:
+```text
+http://127.0.0.1:8090/cachedb-admin/migration-planner
+```
 
-1. demo customer/order şemasını kur
-2. gerçeğe yakın customer ve order tarihçesi seed et
-3. explicit PK/FK ve destekleyici index'leri hazırla
-4. elle SQL incelemesi için hazır view'leri oluştur
-5. discovery'yi yenileyip doğrudan scaffold, warm ve compare adımlarına geç
+## Önerilen UI Akışı
+
+### 1. PostgreSQL Şemasını Keşfet
+
+Önce şema keşfi aksiyonunu çalıştır.
+
+Beklenen sonuç:
+
+- kullanıcı tabloları görünür
+- primary key bilgileri görünür
+- foreign key ilişkileri görünür
+- route adayları listelenir
+- önerilen root/child çiftleri forma uygulanabilir hale gelir
+
+Keşif başarısız olursa Spring `DataSource` doğru veritabanına gidiyor mu ve
+uygulama kullanıcısı `information_schema` metadata'sını okuyabiliyor mu kontrol
+et.
+
+### 2. Route Adayı Seç
+
+Önerilen listeden tek bir route adayı seç.
+
+Örnekler:
+
+- müşteri timeline ekranı için `customers -> orders`
+- sipariş detay preview için `orders -> order_lines`
+- stok geçmişi için `products -> inventory_events`
+- finansal hareket ekranı için `accounts -> transactions`
+
+`Forma uygula` düğmesine bas.
+
+Beklenen sonuç:
+
+- root table/entity dolar
+- child table/entity dolar
+- keşif biliyorsa primary key kolonları dolar
+- foreign key üzerinden relation kolonu dolar
+- sort adayları önerilir
+- row count ve fan-out ipuçları mümkünse doldurulur
+
+### 3. Route Davranışını Gözden Geçir
+
+Keşif şema bilgisini okuyabilir, ama ürün davranışını tamamen bilemez. Şu alanı
+elle kontrol et:
+
+- ilk sayfa boyutu
+- root başına sıcak pencere
+- root başına tipik child sayısı
+- root başına maksimum child sayısı
+- archive history gerekli mi
+- detail lookup sıcak mı
+- route liste ağırlıklı mı
+- mevcut ORM eager loading kullanıyor mu
+- side-by-side comparison gerekli mi
+
+Pratik kural:
+
+- liste ekranı: summary projection tercih et
+- detay ekranı: full entity gerektiğinde yüklenebilir
+- global sorted ekran: ranked projection tercih et
+- yüksek fan-out child tablo: Redis'te yalnızca sınırlı sıcak pencere tut
+
+### 4. Planı Oluştur
+
+`Planı oluştur` düğmesine bas.
+
+Beklenen sonuç:
+
+- önerilen CacheDB kullanım yüzeyi
+- Redis yerleşim kararı
+- PostgreSQL yerleşim kararı
+- projection gerekli mi bilgisi
+- ranked projection gerekli mi bilgisi
+- sıcak pencere boyutu
+- warm-up adımları
+- staging comparison checklist
+- örnek child SQL
+- örnek root SQL
+
+Plan görünmüyorsa ekranın artık sessiz kalmak yerine server-side hata göstermesi
+beklenir.
+
+### 5. Scaffold Üret
+
+Java kodu için başlangıç iskeleti istiyorsan scaffold üretimini kullan.
+
+Beklenen sonuç:
+
+- root `@CacheEntity` iskeleti
+- child `@CacheEntity` iskeleti
+- sıcak liste named query'si
+- opsiyonel relation loader iskeleti
+- opsiyonel projection support iskeleti
+- generated binding kullanım örneği
+
+Bu çıktı production domain modeli değildir. Column type, isimlendirme,
+nullability ve index varsayımlarını commit etmeden önce gözden geçir.
+
+### 6. Dry-Run Warm Çalıştır
+
+Redis'i değiştirmeden önce dry-run çalıştır.
+
+Beklenen sonuç:
+
+- PostgreSQL child satırları sayılır
+- ilişkili root satırları sayılır
+- üretilecek warm SQL görünür
+- Redis değişmez
+- eksik root ID veya beklenmeyen row count varsa görünür
+
+Bu adımı query şekli ve satır sayıları doğru mu diye kontrol etmek için kullan.
+
+### 7. Staging Warm Çalıştır
+
+Gerçek warm adımını yalnızca staging veya güvenli test ortamında çalıştır.
+
+Beklenen sonuç:
+
+- seçilen child sıcak penceresi PostgreSQL'den okunur
+- Redis entity yüzeyleri doğrudan hydrate edilir
+- kayıtlı projection'lar inline yenilenir
+- seçildiyse ilişkili root satırları da warm edilir
+- warm istatistiklerinde root satırı, child satırı, atlanan satır ve süre görünür
+
+`No registered CacheDB entity found` hatası alırsan seçilen route çalışan
+uygulamada kayıtlı değildir. Önce entity binding'i üret veya bağla, uygulamayı
+yeniden build et, sonra planlayıcıyı tekrar çalıştır.
+
+### 8. Side-By-Side Comparison Çalıştır
+
+Warm sonrasında comparison çalıştır.
+
+Beklenen sonuç:
+
+- PostgreSQL baseline latency
+- CacheDB route latency
+- `entity:...` veya `projection:...` route etiketi
+- örnek root'larda ilk sayfa ID eşleşmesi
+- readiness assessment
+- blokajlar ve sonraki adımlar
+
+Şu durumlarda cutover yapma:
+
+- örnekler birebir eşleşmiyorsa
+- planner projection isterken CacheDB route entity fallback'e düşüyorsa
+- sıralama farklıysa
+- p95 latency baseline'dan belirgin şekilde kötüyse
+- warm set production sıcak pencereyi temsil etmiyorsa
+
+### 9. Migration Report İndir
+
+Comparison sonrasında raporu indir.
+
+Rapor şunları içermelidir:
+
+- route özeti
+- seçilen tasarım
+- warm sonuçları
+- comparison sonuçları
+- readiness durumu
+- cutover action plan
+- blokajlar
+- rollback notları
+
+## Tam Sistem Migration Coverage
+
+Planner tek seferde bir sıcak route modeller. Bu bilinçli bir tasarımdır.
+Güvenli tam sistem dönüşümü tek büyük otomatik dönüşümden değil, route
+envanterinden gelir.
+
+%100 coverage için:
+
+1. tüm production ekran, API, batch, worker ve report route'larını listele
+2. her route'u root tablo, child tablo, sort, filter ve page size ile eşleştir
+3. her route'u generated CRUD, projection, ranked projection, direct repository veya PostgreSQL cold path olarak sınıflandır
+4. Redis-first hot path olacak her route için planner akışını çalıştır
+5. owner, readiness, blokaj ve rollback planı içeren coverage tablosu tut
+6. her route için açık karar verilmeden migration tamamlandı deme
+
+Önerilen coverage kolonları:
+
+| Kolon | Anlamı |
+| --- | --- |
+| Route adı | Ekran/API/job için anlaşılır isim |
+| Root table | Ana entity/table |
+| Child table | Varsa child/fan-out table |
+| Query shape | filter, sort, page, range, threshold |
+| CacheDB shape | generated, projection, ranked projection, repository, cold path |
+| Warm durumu | başlamadı, dry-run ok, warm ok |
+| Compare durumu | çalışmadı, eşleşti, fark var |
+| Cutover durumu | blocked, ready, canary, live |
+| Rollback planı | net fallback yolu |
+
+## Demo Bootstrap
+
+Spring Boot demo, planner için tek tıkla kurulabilen PostgreSQL migration veri
+seti içerir.
+
+`/cachedb-admin/migration-planner` üzerinden şunları yapabilirsin:
+
+1. demo customer/order şemasını oluştur
+2. customer ve order tarihçesini seed et
+3. PK/FK constraint'lerini ve destekleyici index'leri oluştur
+4. inceleme view'lerini oluştur
+5. discovery'yi yenileyip scaffold, warm ve compare adımlarına geç
 
 Hazırlanan demo nesneleri:
 
@@ -49,146 +247,26 @@ Hazırlanan demo nesneleri:
 - `cachedb_migration_demo_customer_metrics_v`
 - `cachedb_migration_demo_ranked_orders_v`
 
-Böylece tam akışı tek ekran üzerinden prova etmek kolaylaşır:
-
-- keşfet
-- scaffold üret
-- dry-run warm çalıştır
-- gerçek warm çalıştır
-- side-by-side compare yap
-
-## Nerede Açılır
-
-Aynı admin host ve port'u üzerinden:
-
-- Spring Boot: `/cachedb-admin/migration-planner`
-- Native admin server: `/migration-planner`
-
-## Kullanıcıdan Ne İster
-
-İlk sürüm aynı anda tek bir sıcak route'u modeller.
-
-Artık tercih edilen akış şu:
-
-1. önce PostgreSQL şemasını keşfet
-2. önerilen root/child route'lardan birini forma uygula
-3. keşfin bilemeyeceği route davranış bayraklarını elle düzelt
-
-Elle devam edeceksen planlayıcı yine şunları ister:
-
-- kök tablo/entity
-- çocuk tablo/entity
-- ilişki kolonu
-- sıralama kolonu ve yönü
-- mevcut kök ve çocuk satır sayıları
-- kök başına tipik ve en kötü durum çocuk fan-out değeri
-- ilk sayfa boyutu
-- kök başına hedef sıcak pencere
-- route'un liste ağırlıklı, global sıralı, threshold/range driven veya eager-loading ağırlıklı olup olmadığı
-- tüm tarihçenin sıcak kalıp kalmaması gereği
-
-## Ne Üretir
-
-Sihirbaz somut bir geçiş planı ve staging ön ısıtma şekli üretir:
-
-- önerilen CacheDB surface
-- projection gerekliliği
-- ranked projection gerekliliği
-- bounded Redis sıcak pencere önerisi
-- Redis yerleşim kararı
-- PostgreSQL yerleşim kararı
-- warm-up adımları
-- staging karşılaştırma kontrol listesi
-- PostgreSQL'den ilk sıcak çocuk penceresini çıkarmak için örnek child SQL'i
-- ilişkili kök satırları çekmek için örnek root SQL şablonu
-
-## Artık Neyi Üretebilir
-
-Planlayıcı artık keşfedilen route'tan binding'e hazır bir scaffold da
-üretebiliyor.
-
-Bu scaffold şunları içerir:
-
-- kök `@CacheEntity` iskeleti
-- sıcak liste named query'si olan çocuk `@CacheEntity` iskeleti
-- opsiyonel relation loader iskeleti
-- opsiyonel projection destek iskeleti
-- derleme sonrası oluşacak generated binding kullanım yüzeyini gösteren bir kullanım örneği
-
-Bu çıktı bilinçli olarak temkinlidir. Amaç, ekibin entity metadata'sını sıfırdan
-elle yazması yerine gerçek route şekli üzerinden başlamasını sağlamaktır.
-
-## Artık Neyi Çalıştırabilir
-
-Planlayıcı artık gerçek bir staging ön ısıtma çalıştırması da yapabilir.
-
-Bu ön ısıtma akışı:
-
-- seçilen sıcak pencereyi PostgreSQL'den okur
-- PostgreSQL write-behind kuyruğuna tekrar yazmadan Redis entity yüzeylerini doğrudan hydrate eder
-- kayıtlı projection'ları inline yeniler; böylece warmed route hemen okunabilir hale gelir
-- istenirse aynı sıcak çocuk penceresine karşılık gelen kök satırları da warm eder
-- Redis'i değiştirmeden önce dry-run modu ile deneme yapabilir
-
-Bu yüzey staging ve geçiş provası içindir. Production cutover düğmesi olarak
-tasarlanmadı.
-
-Planlayıcı artık mevcut PostgreSQL route'una karşı side-by-side comparison da
-çalıştırabiliyor.
-
-Bu karşılaştırma şunları yapabilir:
-
-- baseline PostgreSQL liste gecikmesini ölçer
-- çözülen CacheDB route'unun gecikmesini ölçer
-- temsilî kök örneklerinde ilk sayfa üyeliği ve sıralamasını karşılaştırır
-- istenirse karşılaştırmadan hemen önce Redis çalışma setini warm eder
-- baseline SQL'i görünür bırakarak ekibin onu incelemesine veya override etmesine izin verir
-
-Karşılaştırma sonucu artık otomatik bir geçiş değerlendirmesi de üretir. Bu
-değerlendirme şunları tek bakışta özetler:
-
-- route'un geçiş için hazır olup olmadığını
-- örnek sayfaların PostgreSQL ile birebir eşleşip eşleşmediğini
-- CacheDB'nin beklenen gecikme aralığında kalıp kalmadığını
-- cutover öncesi çözülmesi gereken blokajları
-- staging tarafında önerilen sonraki adımları
-
-## Nasıl Kullanılmalı
-
-Bunu aşamalı geçişin bir parçası olarak kullan:
-
-1. mevcut ORM route'unun baseline'ını al
-2. route'u planlayıcıda modelle
-3. önerilen projection / sıcak pencere tasarımını staging'de kur
-4. route için entity/projection scaffold'unu üret
-5. önce deneme modunda ön ısıtma çalıştır ve üretilen SQL'i gözden geçir
-6. sonra önerilen Redis çalışma seti için gerçek staging ön ısıtmasını çalıştır
-7. staging ortamında side-by-side comparison çalıştır
-8. sıralama, gecikme ve yük şekli doğru görünmeden production cutover yapma
-
 ## Mevcut Kapsam
 
-Bu sürüm, staging ön ısıtma çalıştırabiliyor olsa da bilinçli olarak
-muhafazakâr tutuldu.
+Planner şunları yapar:
 
-Şunları yapar:
+- PostgreSQL şema metadata'sını keşfeder
+- root/child route adayları önerir
+- migration planı üretir
+- Java scaffold üretir
+- dry-run warm çalıştırır
+- Redis'e staging warm çalıştırır
+- warm sırasında kayıtlı projection'ları inline yeniler
+- PostgreSQL ve CacheDB arasında side-by-side comparison çalıştırır
+- comparison sonucundan migration assessment ve report içeriği üretir
 
-- hedef veri şeklini çıkarır
-- warm-up planı üretir
-- karşılaştırma kontrol listesi çıkarır
-- örnek backfill SQL'lerini üretir
-- binding'e hazır entity/relation/projection scaffold'u üretir
-- gerçek staging ön ısıtma çalıştırır
-- PostgreSQL ile CacheDB arasında side-by-side comparison çalıştırır
-- karşılaştırma sonucundan otomatik geçiş değerlendirmesi üretir
-- Redis'i değiştirmeden önce dry-run doğrulaması sunar
-
-Henüz şunları yapmaz:
+Planner henüz şunları yapmaz:
 
 - PostgreSQL'i mutate etmez
-- production verisini değiştirmez
-- mevcut ORM source class'larını otomatik içeri aktarmayı yapmaz
-- tek tuş production cutover yapmaz
+- mevcut ORM source class'larını otomatik import etmez
+- route envanteri olmadan tam sistem coverage garanti etmez
+- tek tık production cutover yapmaz
 
-Bu sınır bilinçlidir. Amaç, ekiplerin önce doğru mimari kararı verip staging'de
-geçiş provasını yapması, daha sonra kalan otomasyonu güvenle eklemesidir.
+Bu sınır bilinçlidir. Planner'ın amacı, trafik taşınmadan önce mimari kararları
+görünür ve ölçülebilir hale getirmektir.

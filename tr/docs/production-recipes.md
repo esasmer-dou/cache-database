@@ -16,10 +16,25 @@ Cevap bilerek projenin birinci önceliğine bağlı tutuldu:
 
 En kısa tavsiye şu:
 
-- yeni production servislerine `GeneratedCacheModule.using(session)...` ile başla
+- yeni production servişlerine `GeneratedCacheModule.using(session)...` ile başla
 - kanıtlanmış sıcak endpoint'i `*CacheBinding.using(session)...` tarafına indir
 - ölçülmüş hotspot, worker ve infra akışlarını doğrudan repository kullanımına çek
 - relation-ağır liste ve dashboard ekranlarında projection + `withRelationLimit(...)` kullan
+
+## Use-Case Rehberi
+
+| Senaryo | Önerilen tasarım | Kaçınılacak tasarım |
+| --- | --- | --- |
+| Müşteri detayında 1.000+ sipariş | Customer root entity, order summary projection, root başına sınırlı sıcak pencere | İlk ekranda full customer aggregate ve tüm order line'ları yüklemek |
+| Çok satırlı sipariş detayı | Order detail'i açıkça yükle, yalnızca küçük `orderLines` preview preload et | Kullanıcı istemeden yüzlerce/binlerce satırı yüklemek |
+| Global "en yüksek değerli siparişler" dashboard'u | Önceden hesaplanmış business rank alanı olan ranked projection | Geniş entity scan yapıp memory içinde sıralamak |
+| Admin CRUD ekranı | Generated module veya binding | Sıcak olmayan admin path için erken direct repository kodu yazmak |
+| Write-behind repair veya replay worker | Explicit limit ve retry içeren direct repository | Operasyonel işi yüksek seviye domain helper arkasına saklamak |
+| Mevcut ORM route geçişi | Migration Planner, dry-run warm, staging warm, side-by-side compare | Sadece Redis latency hızlı diye kör cutover yapmak |
+
+En yaygın hata Redis'i sihirli bir full-aggregate cache gibi kullanmaktır.
+CacheDB, read-model PostgreSQL'deki durable history'den bilinçli olarak daha
+küçük tasarlandığında daha iyi sonuç verir.
 
 ## Projection'in Şart Olduğu Durumlar
 
@@ -62,7 +77,7 @@ flowchart TD
 | --- | --- | --- | --- | --- |
 | Tipik iş CRUD'u, servis katmanı uygulamaları, hızlı onboarding | `GeneratedCacheModule.using(session)...` | En az glue ile en ORM-benzeri yol; onboarding için en güvenli başlangıç | Düşük | Ancak gerçek hotspot kanıtlanırsa daha alta in |
 | Package-level domain wrapper istemeyen ama generated helper isteyen ekipler | `*CacheBinding.using(session)...` | Biraz daha explicit, hala generated, hala düşük ceremony | Çok düşük | Tekil endpoint latency-hassas hale gelince daha alta in |
-| Bilinen sıcak read/write endpoint'leri, batch işleri, infra servisleri | doğrudan `EntityRepository` / `ProjectionRepository` | En küçük wrapper yüzeyi ve tam kontrol | En düşük | Sadece kanıtlanmış hotspotlarda burada kal |
+| Bilinen sıcak read/write endpoint'leri, batch işleri, infra servişleri | doğrudan `EntityRepository` / `ProjectionRepository` | En küçük wrapper yüzeyi ve tam kontrol | En düşük | Sadece kanıtlanmış hotspotlarda burada kal |
 | Relation-ağır okuma ekranları | generated binding veya minimal repository + projection + relation limit | Ergonomiyi korurken geniş object graph maliyetini düşürür | Düşük ile çok düşük arası | Summary/detail hâlâ hedefi tutmazsa minimal repository'ye in |
 | İç admin/reporting akışları | generated modüle veya binding | Geliştirici hızı genelde nanosaniye kazancından daha değerlidir | Düşük | Çoğu durumda daha alta inmek gerekmez |
 | Replay/recovery/worker kodu | minimal repository | Operasyonel kodun explicit ve tahmin edilebilir kalması daha iyi | En düşük | Genelde ekstra soyutlama gerekmez |
@@ -120,7 +135,7 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
   "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.RepositoryRecipeBenchmarkMain"
 ```
 
-Çıkti:
+Çıktı:
 
 - `target/cachedb-prodtest-reports/repository-recipe-comparison.md`
 - `target/cachedb-prodtest-reports/repository-recipe-comparison.json`
@@ -129,19 +144,19 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
 
 - bu benchmark CacheDB API-surface overhead'ini ölçer
 - dış Hibernate/JPA runtime maliyetini ölçmez
-- Redis/PostgreSQL üzerindeki end-to-end production senaryo koşularinin yerine geçmez
+- Redis/PostgreSQL üzerindeki end-to-end production senaryo koşularınin yerine geçmez
 
-Generated-surface cache iyilestirmesinden sonraki son yerel ölçum özetimiz:
+Generated-surface cache iyilestirmesinden sonraki son yerel ölçüm özetimiz:
 
-- `Generated entity binding`: güncel yerel koşuda ortalamada en hızli
+- `Generated entity binding`: güncel yerel koşuda ortalamada en hızlı
 - `Minimal repository`: güncel yerel koşuda en düşük p95
 - `JPA-style domain modüle`: gruplanmis ergonomik surface, makul wrapper maliyeti
 
-Buradaki asil çıkarim:
+Buradaki asıl çıkarim:
 
-- ergonomik surface'ler sifir maliyetli değil
-- ama maliyetleri doğrudan repository kullanımıyla aynı düşük-overhead bandinda kaliyor; bu yuzden çoğu is kodunu minimal-repository stiline zorlamaya gerek yok
-- production latency'nin asil suruculeri hala query şekli, relation hydration, Redis contention ve write-behind baskisi
+- ergonomik surface'ler sıfır maliyetli değil
+- ama maliyetleri doğrudan repository kullanımıyla aynı düşük-overhead bandinda kaliyor; bu yüzden çoğu iş kodunu minimal-repository stiline zorlamaya gerek yok
+- production latency'nin asıl sürücüleri hala query şekli, relation hydration, Redis contention ve write-behind baskisi
 
 ## Ekip Tipine Göre Hızli Tavsiye
 
@@ -164,7 +179,7 @@ Kodun büyük kısmını generated domain modüle üzerinde bırak, sadece ölç
 
 Bu genelde en iyi orta noktadir, çünkü:
 
-- kodun geri kalani okunakli kalir
+- kodun geri kalanı okunaklı kalır
 - sıcak endpoint daha küçük bir wrapper yüzeyi alir
 - tüm kodu erken davranip alt seviye repository stiline indirmezsin
 
@@ -176,13 +191,13 @@ Bu yol şu durumlarda daha doğru:
 
 - kod ürün endpoint'inden çok operasyonel akış ise
 - helper ergonomisinden çok açıklık gerekiyorsa
-- replay, repair veya batch mantiginda en küçük abstraction yüzeyi isteniyorsa
+- replay, repair veya batch mantığında en küçük abstraction yüzeyi isteniyorsa
 
 ## JPA/Hibernate'ten Geçis Yolu
 
-Bir ekip JPA/Hibernate aliskanligindan geliyorsa onu bir anda minimal repository stiline zorlama.
+Bir ekip JPA/Hibernate alışkanlığından geliyorsa onu bir anda minimal repository stiline zorlama.
 
-Bunun yerine şu geçis yolunu kullan:
+Bunun yerine şu geçiş yolunu kullan:
 
 1. `GeneratedCacheModule.using(session)...` ile başla
 2. Geniş eager read'leri projection + explicit detail fetch modeline çek
@@ -190,7 +205,7 @@ Bunun yerine şu geçis yolunu kullan:
 4. Sadece kanıtlanmış hotspot'lari `*CacheBinding.using(session)...` tarafına indir
 5. Doğrudan repository stilini ancak profiling hala gerekli diyorsa kullan
 
-Bu yol ekiplerin zihinsel modelini tamamen bozmaz ama daha düşük overhead'li query sekillerine yonlendirir.
+Bu yol ekiplerin zihinsel modelini tamamen bozmaz ama daha düşük overhead'li query şekillerine yonlendirir.
 
 ## Recipe'ler
 
@@ -198,8 +213,8 @@ Bu yol ekiplerin zihinsel modelini tamamen bozmaz ama daha düşük overhead'li 
 
 Şu durumlarda kullan:
 
-- hızli onboarding istiyorsan
-- ekip JPA/Hibernate benzeri çalışma aliskanligindan geliyorsa
+- hızlı onboarding istiyorsan
+- ekip JPA/Hibernate benzeri çalışma alışkanlığından geliyorsa
 - endpoint'lerin çoğu normal CRUD veya filtreli liste ise
 
 Önerilen surface:
@@ -247,11 +262,11 @@ Neden:
 
 Önerilen pattern:
 
-1. Summaries tarafini projection repository ile query et
+1. Summaries tarafıni projection repository ile query et
 2. Detail'i ihtiyaç olduğunda açıkça yükle
 3. Relation preview'leri `withRelationLimit(...)` ile sinirla
 4. Global top-N veya threshold odaklı ekranlarda geniş multi-sort entity query yerine projection'e özel ranked alan kullan
-5. Bu ranked alani `rankedBy(...)` ile isaretle ki projection repository projection'e özel top-window yolunu kullanabilsin
+5. Bu ranked alanı `rankedBy(...)` ile işaretle ki projection repository projection'e özel top-window yolunu kullanabilsin
 
 Örnek:
 
@@ -266,12 +281,12 @@ EntityRepository<DemoOrderEntity, Long> previewRepository =
         DemoOrderEntityCacheBinding.using(session).fetches().orderLinesPreview(8);
 ```
 
-Eğer ekran tüm veri kümesi üstunde "line count'a göre en büyük siparişler, sonra revenue" gibi bir global sıralama istiyorsa, tam entity query'yi daha da zorlamaya çalışma. Projection'e özel rank alani ekle ve bu projection'i tek sorted index ile query et.
+Eğer ekran tüm veri kümesi üstunde "line count'a göre en büyük siparişler, sonra revenue" gibi bir global sıralama istiyorsa, tam entity query'yi daha da zorlamaya çalışma. Projection'e özel rank alanı ekle ve bu projection'i tek sorted index ile query et.
 
 Neden:
 
 - ilk okumada geniş object graph oluşmasini engeller
-- Redis payload ve decode maliyetini düşurur
+- Redis payload ve decode maliyetini düşürür
 - uygulama ekibi için API doğal kalır
 
 Ölçülmüş destek:
@@ -344,19 +359,19 @@ cachedb:
       enabled: true
 ```
 
-Sonra generated registrar'lar entity'leri otomatik register etsin ve servis kodunda generated modüle veya binding surface kullanılsin.
+Sonra generated registrar'lar entity'leri otomatik register etsin ve serviş kodunda generated modüle veya binding surface kullanılsin.
 
 ## Çok Pod'lu Kubernetes Recipe
 
-Birden fazla application pod aynı Redis ve aynı PostgreSQL'e bağlandiginda şu kurallari açık tut:
+Birden fazla application pod aynı Redis ve aynı PostgreSQL'e bağlandiginda şu kuralları açık tut:
 
-- consumer group'lari pod'lar arasinda ortak birak
+- consumer group'lari pod'lar arasinda ortak bırak
 - CacheDB'nin consumer adlarına otomatik instance id eklemesine izin ver
 - cleanup/report/history benzeri singleton loop'lar için Redis leader lease'i açık tut
 - worker thread ve flush parallelism değerlerini pod bazlı değil, cluster toplami olarak hesapla
 - Redis'i koordinasyon katmanının kritik bağımlılığı olarak düşün ve durability/failover ile çalıştır
 
-Önerilen başlangic:
+Önerilen başlangıç:
 
 ```yaml
 cachedb:
@@ -374,8 +389,8 @@ cachedb:
 Bu varsayılanla artık şunlar olur:
 
 - write-behind, DLQ replay, projection refresh ve incident-delivery DLQ worker'lari ortak consumer group üzerinden yatay ölçeklenmeye devam eder
-- consumer adları çözulmus instance id sayesinde otomatik olarak pod-unique olur
-- cleanup/report/history loop'lari Redis lease ile singleton kalir
+- consumer adları çözülmüş instance id sayesinde otomatik olarak pod-unique olur
+- cleanup/report/history loop'lari Redis lease ile singleton kalır
 - pod düşmesi tek başına veri kaybı anlamina gelmez; pending stream isi başka pod tarafından claim edilebilir
 
 Değismeyen şeyler:
@@ -386,7 +401,7 @@ Değismeyen şeyler:
 
 ## Önerilen Varsayılanlar
 
-Bir engineering playbook'a hızlica kopyalanacak kısa production kural seti istiyorsan şu listeyi kullan:
+Bir engineering playbook'a hızlıca kopyalanacak kısa production kural seti istiyorsan şu listeyi kullan:
 
 - varsayılan uygulama kodu: `GeneratedCacheModule.using(session)...`
 - sıcak endpoint kaçış hattı: `*CacheBinding.using(session)...`
@@ -402,3 +417,5 @@ Ilgili dokümanlar:
 - [Production Tests](../../cachedb-production-tests/README.md)
 - [CI production evidence workflow](../../.github/workflows/production-evidence.yml)
 - [CI local runner](../../tools/ci/run-production-evidence.ps1)
+
+

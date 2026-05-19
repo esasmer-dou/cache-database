@@ -41,13 +41,13 @@ Ayrıca bir site yoksa repo URL'si veya ana doküman landing sayfasi kullanılab
 
 `Public beta: projection/read-model discipline is part of the intended design, especially for relation-heavy and globally ranked screens.`
 
-## İlk Public Release Başlığı
+## Güncel Public Beta Release Başlığı
 
-`cache-database public beta`
+`cache-database v0.1.0-beta.2`
 
-Önerilen ilk tag:
+Güncel tag:
 
-`v0.1.0-beta.1`
+`v0.1.0-beta.2`
 
 ## İlk Public Release Note Taslağı
 

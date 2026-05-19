@@ -1,0 +1,9 @@
+<div class="planner-panel planner-input-panel">
+  <div class="planner-panel-header">__CACHEDB_HTML_INPUT_TITLE__</div>
+  <div class="planner-panel-sub">__CACHEDB_HTML_INPUT_COPY__</div>
+  <div class="planner-panel-body">
+    __CACHEDB_HTML_DEMO_CARD__
+    __CACHEDB_HTML_DISCOVERY_CARD__
+    __CACHEDB_HTML_ROUTE_FORM__
+  </div>
+</div>

@@ -41,7 +41,7 @@ Bu nedenle CacheDB şu gözle değerlendirilmelidir:
 
 - explicit kontrol isteyen ekipler için düşük-overhead bir ORM alternatifi
 - Redis-first uygulamalar için production-odaklı persistence kütüphanesi
-- gerçek hotspot'lar için net bir kaçış hattı birakan bir library
+- gerçek hotspot'lar için net bir kaçış hattı bırakan bir library
 
 ## Hızli Karşılastirma
 
@@ -50,7 +50,7 @@ Bu nedenle CacheDB şu gözle değerlendirilmelidir:
 | Birincil okuma yolu | Redis-first | Database-first |
 | Metadata modeli | Compile-time generated | Genelde runtime reflection ve ORM metadata |
 | Varsayılan felsefe | Explicit kontrol | Saydam soyutlama |
-| Relation loading | Explicit `FetchPlan`, loader, projection | Çoğu zaman implicit lazy/eager graph davranisi |
+| Relation loading | Explicit `FetchPlan`, loader, projection | Çoğu zaman implicit lazy/eager graph davranışi |
 | Hotspot kaçış hattı | Binding veya doğrudan repository'ye inebilirsin | Çoğu zaman ORM içinde kalınır veya custom SQL yazılır |
 | En iyi uyum | Düşük geçikmeli servisler, read-ağır API'ler, Redis-merkezli sistemler | Iliskisel alanlar, SQL-merkezli sistemler, join-ağır uygulamalar |
 | Runtime overhead hedefi | Çok düşük | Genelde kabul edilebilir, ama birincil tasarım hedefi değil |
@@ -59,10 +59,10 @@ Bu nedenle CacheDB şu gözle değerlendirilmelidir:
 
 CacheDB şu alanlarda guclu bir uyum verir:
 
-- sıcak read path'i olan ürün servisleri
+- sıcak read path'i olan ürün servişleri
 - projection kullanan dashboard ve liste-ağır uygulamalar
 - Redis'i zaten production'da birinci sınıf bağımlilik olarak isleten sistemler
-- reflection-ağır runtime davranis istemeyen ama generated ergonomi isteyen ekipler
+- reflection-ağır runtime davranış istemeyen ama generated ergonomi isteyen ekipler
 - normal kod ile ölçülmüş hotspot'ları net ayırmak isteyen servisler
 
 ## Nerede Daha Kötü Bir Uyumluluk Gösterir
@@ -82,7 +82,7 @@ Bu mesaji açık vermek zayiflik değil; konumlandırmayi daha güvenilir hale g
 
 Bir ekip CacheDB'yi doğru kullanırsa production resmi genelde söyle olur:
 
-- varsayılan is kodu generated domain veya binding surface kullanır
+- varsayılan iş kodu generated domain veya binding surface kullanır
 - sıcak path'ler projection ve explicit fetch limit ile kurulur
 - global sorted/range ekranları, geniş multi-sort entity query yerine projection'a özel ranked alan kullanır
 - bu ranked alanlar `rankedBy(...)` ile tanımlanir; boylece projection repository top-window fast path kullanabilir
@@ -101,10 +101,10 @@ CacheDB explicitligi odullendirir. Object graph'in bedelsiz olduğunu varsaymayi
 
 ## Önerilen Geçis Yolu
 
-Bir ekip JPA/Hibernate'ten geliyorsa şu geçis yolunu izle:
+Bir ekip JPA/Hibernate'ten geliyorsa şu geçiş yolunu izle:
 
 1. `GeneratedCacheModule.using(session)...` ile başla
-2. CRUD ve normal servis endpoint'lerini generated surface üzerinde birak
+2. CRUD ve normal servis endpoint'lerini generated surface üzerinde bırak
 3. Liste ekranlarıni projection ve summary/detail pattern'ine çek
 4. Preview relation'lara `withRelationLimit(...)` ekle
 5. Sadece ölçülmüş hotspot'ları `*CacheBinding.using(session)...` tarafına indir
@@ -118,7 +118,7 @@ Bunu ekipler için varsayılan kural seti gibi kullan:
 
 | Ekip veya yuk tipi | Önerilen surface |
 | --- | --- |
-| Normal ürün servis kodu | `GeneratedCacheModule.using(session)...` |
+| Normal ürün serviş kodu | `GeneratedCacheModule.using(session)...` |
 | Explicit sıcak endpoint'ler | `*CacheBinding.using(session)...` |
 | Worker, replay, recovery, infra kodu | doğrudan `EntityRepository` / `ProjectionRepository` |
 | Relation-ağır liste veya dashboard okumasi | projection + `withRelationLimit(...)` |
@@ -133,7 +133,7 @@ Kanıtledigi şey şu:
 
 Kanıtlemadigi şey ise şu:
 
-- CacheDB'nin her yukte Hibernate'den hızli olduğu
+- CacheDB'nin her yükte Hibernate'den hızlı olduğu
 - Redis latency'nin ortadan kalktigi
 - relation-ağır ekranların read-model disiplini olmadan ucuz olacagi
 
@@ -143,14 +143,14 @@ Bu benchmark'i marketing masali için değil, API-surface dürüstlüğü için 
 
 Son recipe benchmark özeti:
 
-- `Generated entity binding`: güncel yerel koşuda ortalamada en hızli
+- `Generated entity binding`: güncel yerel koşuda ortalamada en hızlı
 - `Minimal repository`: güncel yerel koşuda en düşük p95
 - `JPA-style domain modüle`: gruplanmis ergonomik surface, makul wrapper maliyeti
 
-Buradaki asil sonuc:
+Buradaki asıl sonuc:
 
 - ergonomik surface bedelsiz değil
-- ama doğrudan repository yoluna yeterince yakın; bu yuzden çoğu ekip okunabilirlikten erken vazgecmemeli
+- ama doğrudan repository yoluna yeterince yakın; bu yüzden çoğu ekip okunabilirlikten erken vazgecmemeli
 
 ## Sonraki Okuma
 
@@ -158,3 +158,5 @@ Buradaki asil sonuc:
 - [Spring Boot Starter](./spring-boot-starter.md)
 - [Tuning Parameters](./tuning-parameters.md)
 - [Production Tests](../../cachedb-production-tests/README.md)
+
+

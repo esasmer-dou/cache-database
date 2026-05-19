@@ -1,0 +1,2452 @@
+(function () {
+  const apiBase = "__CACHEDB_MIGRATION_PLANNER_TOKEN_000__";
+  const bootstrapDiscovery = __CACHEDB_MIGRATION_PLANNER_TOKEN_001__;
+  const bootstrapDemoResult = __CACHEDB_MIGRATION_PLANNER_TOKEN_002__;
+  const bootstrapPlanResult = __CACHEDB_MIGRATION_PLANNER_TOKEN_003__;
+  const bootstrapPlannerForm = __CACHEDB_MIGRATION_PLANNER_TOKEN_004__;
+  const form = document.getElementById("plannerForm");
+  const status = document.getElementById("plannerStatus");
+  const statusMirror = document.getElementById("plannerStatusMirror");
+  const nextActionTitle = document.getElementById("plannerNextActionTitle");
+  const nextActionCopy = document.getElementById("plannerNextActionCopy");
+  const outcomeTitle = document.getElementById("plannerOutcomeTitle");
+  const outcomeCopy = document.getElementById("plannerOutcomeCopy");
+  const commandButtons = Array.from(
+    document.querySelectorAll("[data-planner-shortcut]"),
+  );
+  const defaultsButton = document.getElementById("plannerDefaults");
+  const emptyState = document.getElementById("plannerEmpty");
+  const results = document.getElementById("plannerResults");
+  const warmButton = document.getElementById("plannerWarmAction");
+  const warmPreviewButton = document.getElementById("plannerWarmPreviewAction");
+  const warmStatus = document.getElementById("plannerWarmStatus");
+  const warmResults = document.getElementById("plannerWarmResults");
+  const scaffoldButton = document.getElementById("plannerScaffoldAction");
+  const scaffoldStatus = document.getElementById("plannerScaffoldStatus");
+  const scaffoldResults = document.getElementById("plannerScaffoldResults");
+  const compareButton = document.getElementById("plannerCompareAction");
+  const compareReportButton = document.getElementById(
+    "plannerCompareDownloadReportAction",
+  );
+  const compareCopyReportButton = document.getElementById(
+    "plannerCompareCopyReportAction",
+  );
+  const compareReportPanel = document.getElementById(
+    "plannerCompareReportPanel",
+  );
+  const compareReportPreview = document.getElementById(
+    "plannerCompareReportPreview",
+  );
+  const compareReportFileName = document.getElementById(
+    "plannerCompareReportFileName",
+  );
+  const compareStatus = document.getElementById("plannerCompareStatus");
+  const compareResults = document.getElementById("plannerCompareResults");
+  const demoBootstrapButton = document.getElementById(
+    "plannerDemoBootstrapAction",
+  );
+  const demoStatus = document.getElementById("plannerDemoStatus");
+  const demoResults = document.getElementById("plannerDemoResults");
+  const discoverButton = document.getElementById("plannerDiscoverAction");
+  const discoveryStatus = document.getElementById("plannerDiscoveryStatus");
+  const routePresetField = form.elements.namedItem("routePreset");
+  const presetHelp = document.getElementById("plannerPresetHelp");
+  const modeButtons = Array.from(
+    document.querySelectorAll("[data-planner-mode]"),
+  );
+  const modeSummary = document.getElementById("plannerModeSummary");
+  const progressTitle = document.getElementById("plannerProgressTitle");
+  const progressDetail = document.getElementById("plannerProgressDetail");
+  const progressPercent = document.getElementById("plannerProgressPercent");
+  const progressFill = document.getElementById("plannerProgressFill");
+  const stepButtons = Array.from(
+    document.querySelectorAll("[data-planner-step-target]"),
+  );
+  let demoDescriptor = null;
+  let templateDefaults = null;
+  let discoveredTables = [];
+  let discoveryLookup = {};
+  let discoverySuggestions = [];
+  let lastComparisonResult = null;
+  let plannerMode = "beginner";
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, function (ch) {
+      return {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[ch];
+    });
+  }
+  function setStatus(message) {
+    if (status) {
+      status.textContent = message;
+    }
+    if (statusMirror) {
+      statusMirror.textContent = message;
+    }
+  }
+  function setNextAction(title, copy, shortcut) {
+    if (nextActionTitle) {
+      nextActionTitle.textContent = title || "";
+    }
+    if (nextActionCopy) {
+      nextActionCopy.textContent = copy || "";
+    }
+    commandButtons.forEach(function (button) {
+      button.classList.toggle(
+        "is-active",
+        button.dataset.plannerShortcut === shortcut,
+      );
+    });
+  }
+  function setOutcome(title, copy) {
+    if (outcomeTitle) {
+      outcomeTitle.textContent = title || "";
+    }
+    if (outcomeCopy) {
+      outcomeCopy.textContent = copy || "";
+    }
+  }
+  function setFlowState(name, state) {
+    const element = document.getElementById("plannerState" + name);
+    if (!element) {
+      return;
+    }
+    element.classList.toggle("is-active", state === "active");
+    element.classList.toggle("is-done", state === "done");
+  }
+  function resetFlowStates() {
+    ["Discover", "Plan", "Warm", "Compare", "Report"].forEach(function (name) {
+      setFlowState(name, "");
+    });
+  }
+  function scrollToPlannerTarget(id) {
+    const target = document.getElementById(id);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+  function requirePlanBefore(action) {
+    if (warmButton && warmButton.disabled) {
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_005__");
+      setNextAction(
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_006__",
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_007__",
+        "plan",
+      );
+      scrollToPlannerTarget("plannerConfigurePanel");
+      return false;
+    }
+    return true;
+  }
+  function setDemoStatus(message) {
+    if (demoStatus) {
+      demoStatus.textContent = message;
+    }
+  }
+  function setDiscoveryStatus(message) {
+    if (discoveryStatus) {
+      discoveryStatus.textContent = message;
+    }
+  }
+  function plannerModeRank(mode) {
+    switch (String(mode || "beginner")) {
+      case "advanced":
+        return 2;
+      case "intermediate":
+        return 1;
+      default:
+        return 0;
+    }
+  }
+  function plannerModeSummaryMessage(mode) {
+    switch (String(mode || "beginner")) {
+      case "advanced":
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_008__";
+      case "intermediate":
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_009__";
+      default:
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_010__";
+    }
+  }
+  function applyPlannerMode(mode) {
+    plannerMode = String(mode || "beginner");
+    modeButtons.forEach(function (button) {
+      button.classList.toggle(
+        "is-active",
+        button.dataset.plannerMode === plannerMode,
+      );
+    });
+    Array.from(document.querySelectorAll("[data-planner-mode-min]")).forEach(
+      function (element) {
+        const required = element.dataset.plannerModeMin || "beginner";
+        element.classList.toggle(
+          "planner-hidden-by-mode",
+          plannerModeRank(plannerMode) < plannerModeRank(required),
+        );
+      },
+    );
+    if (modeSummary) {
+      modeSummary.textContent = plannerModeSummaryMessage(plannerMode);
+    }
+    updatePlannerProgress();
+  }
+  function formatLatency(nanos) {
+    const value = Number(nanos || 0);
+    if (!Number.isFinite(value) || value <= 0) {
+      return "0 ns";
+    }
+    if (value >= 1000000) {
+      return (value / 1000000).toFixed(2) + " ms";
+    }
+    if (value >= 1000) {
+      return (value / 1000).toFixed(2) + " µs";
+    }
+    return String(Math.round(value)) + " ns";
+  }
+  async function fetchJson(url, options) {
+    const response = await fetch(url, options);
+    const text = await response.text();
+    let payload = null;
+    try {
+      payload = JSON.parse(text);
+    } catch (ignore) {}
+    if (!response.ok) {
+      throw new Error((payload && payload.error) || text || "request failed");
+    }
+    return payload || {};
+  }
+  function plannerField(name) {
+    return form.elements.namedItem(name);
+  }
+  function normalizeValue(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase();
+  }
+  function surfaceValue(item) {
+    return (
+      (item &&
+        ((item.registeredEntityName &&
+          String(item.registeredEntityName).trim()) ||
+          item.qualifiedTableName ||
+          item.tableName)) ||
+      ""
+    );
+  }
+  function isView(item) {
+    return String((item && item.objectType) || "").toUpperCase() === "VIEW";
+  }
+  function compactIdentifier(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return "";
+    }
+    const lastSegment = raw.split(".").pop() || raw;
+    const withoutDemoPrefix = lastSegment
+      .replace(/^cachedb_migration_demo_/i, "")
+      .replace(/^cachedb_demo_/i, "");
+    return withoutDemoPrefix || lastSegment;
+  }
+  function compactSurfaceLabel(item) {
+    const base =
+      compactIdentifier(item && item.tableName) ||
+      compactIdentifier(item && item.qualifiedTableName) ||
+      compactIdentifier(item && item.registeredEntityName) ||
+      surfaceValue(item);
+    const badges = [];
+    if (isView(item)) {
+      badges.push("__CACHEDB_MIGRATION_PLANNER_TOKEN_012__");
+    } else if (item && item.registeredEntityName) {
+      badges.push("__CACHEDB_MIGRATION_PLANNER_TOKEN_013__");
+    }
+    return base + (badges.length ? " (" + badges.join("/") + ")" : "");
+  }
+  function rebuildDiscoveryLookup() {
+    discoveryLookup = {};
+    (discoveredTables || []).forEach(function (item, index) {
+      const aliases = [
+        surfaceValue(item),
+        item && item.qualifiedTableName,
+        item && item.tableName,
+        item && item.registeredEntityName,
+      ].filter(Boolean);
+      aliases.forEach(function (alias) {
+        discoveryLookup[normalizeValue(alias)] = index;
+      });
+    });
+  }
+  function resolveDiscoveredTable(surface) {
+    const index = discoveryLookup[normalizeValue(surface)];
+    return index === undefined ? null : discoveredTables[index] || null;
+  }
+  function populateSelect(field, options, placeholder, selectedValue) {
+    if (!field) {
+      return;
+    }
+    const current = selectedValue === undefined ? field.value : selectedValue;
+    let entries = (options || []).filter(function (option) {
+      return option && option.value;
+    });
+    const hasCurrent =
+      current &&
+      entries.some(function (option) {
+        return option.value === current;
+      });
+    if (current && !hasCurrent) {
+      entries = [
+        {
+          value: current,
+          label:
+            compactIdentifier(current) +
+            " (__CACHEDB_MIGRATION_PLANNER_TOKEN_011__)",
+        },
+      ].concat(entries);
+    }
+    field.innerHTML =
+      '<option value="">' +
+      escapeHtml(placeholder || "") +
+      "</option>" +
+      entries
+        .map(function (option) {
+          return (
+            '<option value="' +
+            escapeHtml(option.value) +
+            '"' +
+            (option.value === current ? " selected" : "") +
+            ">" +
+            escapeHtml(option.label || option.value) +
+            "</option>"
+          );
+        })
+        .join("");
+  }
+  function discoveredSurfaceOptions(includeViews) {
+    return (discoveredTables || [])
+      .filter(function (item) {
+        return includeViews || !isView(item);
+      })
+      .map(function (item) {
+        return {
+          value: surfaceValue(item),
+          label: compactSurfaceLabel(item),
+        };
+      });
+  }
+  function sortColumnPriority(column) {
+    if (!column) {
+      return 0;
+    }
+    if (column.primaryKey) {
+      return 10;
+    }
+    if (column.temporal) {
+      return 120;
+    }
+    if (column.numeric) {
+      return 70;
+    }
+    return 20;
+  }
+  function discoveredColumnOptions(table, mode) {
+    if (!table) {
+      return [];
+    }
+    const columns = (table.columns || []).slice();
+    columns.sort(function (left, right) {
+      let leftScore = 0;
+      let rightScore = 0;
+      if (mode === "pk") {
+        leftScore = left && left.primaryKey ? 100 : 0;
+        rightScore = right && right.primaryKey ? 100 : 0;
+      } else if (mode === "relation") {
+        leftScore = left && left.foreignKey ? 100 : 0;
+        rightScore = right && right.foreignKey ? 100 : 0;
+      } else if (mode === "sort") {
+        leftScore = sortColumnPriority(left);
+        rightScore = sortColumnPriority(right);
+      }
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore;
+      }
+      return String(left.name || "").localeCompare(String(right.name || ""));
+    });
+    return columns.map(function (column) {
+      const tags = [];
+      if (column.primaryKey) {
+        tags.push("PK");
+      }
+      if (column.foreignKey) {
+        tags.push("FK");
+      }
+      if (column.temporal) {
+        tags.push("__CACHEDB_MIGRATION_PLANNER_TOKEN_014__");
+      }
+      if (column.numeric) {
+        tags.push("__CACHEDB_MIGRATION_PLANNER_TOKEN_015__");
+      }
+      return {
+        value: column.name,
+        label: column.name + (tags.length ? " · " + tags.join(" · ") : ""),
+      };
+    });
+  }
+  function discoveredRelationOptions(rootTable, childTable) {
+    const rootValue = surfaceValue(rootTable);
+    const childValue = surfaceValue(childTable);
+    const suggestions = (discoverySuggestions || []).filter(function (item) {
+      const rootMatches = [item.rootSurface, item.rootEntityName]
+        .filter(Boolean)
+        .some(function (value) {
+          return normalizeValue(value) === normalizeValue(rootValue);
+        });
+      const childMatches = [item.childSurface, item.childEntityName]
+        .filter(Boolean)
+        .some(function (value) {
+          return normalizeValue(value) === normalizeValue(childValue);
+        });
+      return rootMatches && childMatches;
+    });
+    const optionMap = {};
+    suggestions.forEach(function (item) {
+      if (item.relationColumn) {
+        optionMap[item.relationColumn] = {
+          value: item.relationColumn,
+          label: item.relationColumn + " (FK*)",
+        };
+      }
+    });
+    ((childTable && childTable.columns) || []).forEach(function (column) {
+      if (column && column.foreignKey && !optionMap[column.name]) {
+        optionMap[column.name] = {
+          value: column.name,
+          label: column.name + " (FK)",
+        };
+      }
+    });
+    return Object.keys(optionMap).map(function (key) {
+      return optionMap[key];
+    });
+  }
+  function syncDiscoverySelectors() {
+    const rootField = plannerField("rootTableOrEntity");
+    const childField = plannerField("childTableOrEntity");
+    populateSelect(
+      rootField,
+      discoveredSurfaceOptions(false),
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_017__",
+      rootField && rootField.value,
+    );
+    populateSelect(
+      childField,
+      discoveredSurfaceOptions(true),
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_018__",
+      childField && childField.value,
+    );
+    const rootTable = resolveDiscoveredTable(rootField && rootField.value);
+    const childTable = resolveDiscoveredTable(childField && childField.value);
+    populateSelect(
+      plannerField("rootPrimaryKeyColumn"),
+      discoveredColumnOptions(rootTable, "pk"),
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_019__",
+      plannerField("rootPrimaryKeyColumn") &&
+        plannerField("rootPrimaryKeyColumn").value,
+    );
+    populateSelect(
+      plannerField("childPrimaryKeyColumn"),
+      discoveredColumnOptions(childTable, "pk"),
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_020__",
+      plannerField("childPrimaryKeyColumn") &&
+        plannerField("childPrimaryKeyColumn").value,
+    );
+    populateSelect(
+      plannerField("relationColumn"),
+      discoveredRelationOptions(rootTable, childTable),
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_021__",
+      plannerField("relationColumn") && plannerField("relationColumn").value,
+    );
+    populateSelect(
+      plannerField("sortColumn"),
+      discoveredColumnOptions(childTable, "sort"),
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_022__",
+      plannerField("sortColumn") && plannerField("sortColumn").value,
+    );
+  }
+  function plannerFlags() {
+    const rootValue =
+      plannerField("rootTableOrEntity") &&
+      plannerField("rootTableOrEntity").value;
+    const childValue =
+      plannerField("childTableOrEntity") &&
+      plannerField("childTableOrEntity").value;
+    const sortValue =
+      plannerField("sortColumn") && plannerField("sortColumn").value;
+    return {
+      discovered:
+        (discoveredTables || []).length > 0 ||
+        (discoverySuggestions || []).length > 0,
+      configured: !!(rootValue && childValue && sortValue),
+      planned: !results.classList.contains("d-none"),
+      warmed: !!(warmResults && !warmResults.classList.contains("d-none")),
+      compared: !!(
+        compareResults && !compareResults.classList.contains("d-none")
+      ),
+    };
+  }
+  function plannerProgressDescriptor(flags) {
+    if (!flags.discovered) {
+      return {
+        step: 1,
+        percent: 8,
+        title: "__CACHEDB_MIGRATION_PLANNER_TOKEN_023__",
+        detail: "__CACHEDB_MIGRATION_PLANNER_TOKEN_024__",
+      };
+    }
+    if (!flags.configured) {
+      return {
+        step: 2,
+        percent: 28,
+        title: "__CACHEDB_MIGRATION_PLANNER_TOKEN_025__",
+        detail: "__CACHEDB_MIGRATION_PLANNER_TOKEN_026__",
+      };
+    }
+    if (!flags.planned) {
+      return {
+        step: 3,
+        percent: 52,
+        title: "__CACHEDB_MIGRATION_PLANNER_TOKEN_027__",
+        detail: "__CACHEDB_MIGRATION_PLANNER_TOKEN_028__",
+      };
+    }
+    if (!flags.warmed) {
+      return {
+        step: 4,
+        percent: 76,
+        title: "__CACHEDB_MIGRATION_PLANNER_TOKEN_029__",
+        detail: "__CACHEDB_MIGRATION_PLANNER_TOKEN_030__",
+      };
+    }
+    if (!flags.compared) {
+      return {
+        step: 5,
+        percent: 90,
+        title: "__CACHEDB_MIGRATION_PLANNER_TOKEN_031__",
+        detail: "__CACHEDB_MIGRATION_PLANNER_TOKEN_032__",
+      };
+    }
+    return {
+      step: 5,
+      percent: 100,
+      title: "__CACHEDB_MIGRATION_PLANNER_TOKEN_033__",
+      detail: "__CACHEDB_MIGRATION_PLANNER_TOKEN_034__",
+    };
+  }
+  function updatePlannerProgress() {
+    const flags = plannerFlags();
+    const descriptor = plannerProgressDescriptor(flags);
+    if (progressTitle) {
+      progressTitle.textContent = descriptor.title;
+    }
+    if (progressDetail) {
+      progressDetail.textContent = descriptor.detail;
+    }
+    if (progressPercent) {
+      progressPercent.textContent = String(descriptor.percent) + "%";
+    }
+    if (progressFill) {
+      progressFill.style.width = String(descriptor.percent) + "%";
+    }
+    stepButtons.forEach(function (button) {
+      const index = Number(button.dataset.plannerStepIndex || "0");
+      button.classList.toggle(
+        "is-complete",
+        index < descriptor.step ||
+          (descriptor.step === 5 &&
+            descriptor.percent === 100 &&
+            index <= descriptor.step),
+      );
+      button.classList.toggle(
+        "is-active",
+        descriptor.step === index && descriptor.percent < 100,
+      );
+    });
+  }
+  function updatePresetHelp() {
+    if (!presetHelp || !routePresetField) {
+      return;
+    }
+    const preset = routePresetField.value || "timeline";
+    const messages = {
+      timeline: "__CACHEDB_MIGRATION_PLANNER_TOKEN_035__",
+      leaderboard: "__CACHEDB_MIGRATION_PLANNER_TOKEN_036__",
+      threshold: "__CACHEDB_MIGRATION_PLANNER_TOKEN_037__",
+      "detail-heavy": "__CACHEDB_MIGRATION_PLANNER_TOKEN_038__",
+    };
+    presetHelp.textContent = messages[preset] || messages.timeline;
+  }
+  function applyRoutePreset(preset, silent) {
+    const listField = plannerField("listScreen");
+    const fullAggregateField = plannerField("firstPaintNeedsFullAggregate");
+    const globalField = plannerField("globalSortedScreen");
+    const thresholdField = plannerField("thresholdOrRangeScreen");
+    const eagerField = plannerField("currentOrmUsesEagerLoading");
+    const archiveField = plannerField("archiveHistoryRequired");
+    const historyField = plannerField("fullHistoryMustStayHot");
+    const pageField = plannerField("firstPageSize");
+    const windowField = plannerField("hotWindowPerRoot");
+    function setNumeric(field, value) {
+      if (field && (!silent || !field.value)) {
+        field.value = value;
+      }
+    }
+    switch (String(preset || "timeline")) {
+      case "leaderboard":
+        if (listField) {
+          listField.checked = true;
+        }
+        if (fullAggregateField) {
+          fullAggregateField.checked = false;
+        }
+        if (globalField) {
+          globalField.checked = true;
+        }
+        if (thresholdField) {
+          thresholdField.checked = true;
+        }
+        if (eagerField) {
+          eagerField.checked = false;
+        }
+        if (archiveField) {
+          archiveField.checked = true;
+        }
+        if (historyField) {
+          historyField.checked = false;
+        }
+        setNumeric(pageField, "50");
+        setNumeric(windowField, "500");
+        break;
+      case "threshold":
+        if (listField) {
+          listField.checked = true;
+        }
+        if (fullAggregateField) {
+          fullAggregateField.checked = false;
+        }
+        if (globalField) {
+          globalField.checked = false;
+        }
+        if (thresholdField) {
+          thresholdField.checked = true;
+        }
+        if (eagerField) {
+          eagerField.checked = false;
+        }
+        if (archiveField) {
+          archiveField.checked = true;
+        }
+        if (historyField) {
+          historyField.checked = false;
+        }
+        setNumeric(pageField, "50");
+        setNumeric(windowField, "400");
+        break;
+      case "detail-heavy":
+        if (listField) {
+          listField.checked = false;
+        }
+        if (fullAggregateField) {
+          fullAggregateField.checked = true;
+        }
+        if (globalField) {
+          globalField.checked = false;
+        }
+        if (thresholdField) {
+          thresholdField.checked = false;
+        }
+        if (eagerField) {
+          eagerField.checked = false;
+        }
+        if (archiveField) {
+          archiveField.checked = true;
+        }
+        if (historyField) {
+          historyField.checked = false;
+        }
+        setNumeric(pageField, "25");
+        setNumeric(windowField, "100");
+        break;
+      default:
+        if (listField) {
+          listField.checked = true;
+        }
+        if (fullAggregateField) {
+          fullAggregateField.checked = false;
+        }
+        if (globalField) {
+          globalField.checked = false;
+        }
+        if (thresholdField) {
+          thresholdField.checked = false;
+        }
+        if (eagerField) {
+          eagerField.checked = true;
+        }
+        if (archiveField) {
+          archiveField.checked = true;
+        }
+        if (historyField) {
+          historyField.checked = false;
+        }
+        setNumeric(pageField, "100");
+        setNumeric(windowField, "1000");
+    }
+    updatePresetHelp();
+    if (!silent) {
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_039__");
+    }
+  }
+  function syncPresetFromForm() {
+    if (!routePresetField) {
+      return;
+    }
+    const listField = plannerField("listScreen");
+    const fullAggregateField = plannerField("firstPaintNeedsFullAggregate");
+    const globalField = plannerField("globalSortedScreen");
+    const thresholdField = plannerField("thresholdOrRangeScreen");
+    if (
+      fullAggregateField &&
+      fullAggregateField.checked &&
+      !listField.checked
+    ) {
+      routePresetField.value = "detail-heavy";
+    } else if (globalField && globalField.checked) {
+      routePresetField.value = "leaderboard";
+    } else if (thresholdField && thresholdField.checked) {
+      routePresetField.value = "threshold";
+    } else {
+      routePresetField.value = "timeline";
+    }
+    updatePresetHelp();
+  }
+  function toBooleanValue(value) {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    const normalized = normalizeValue(value);
+    return (
+      normalized === "true" ||
+      normalized === "1" ||
+      normalized === "on" ||
+      normalized === "yes"
+    );
+  }
+  function fillForm(data) {
+    const values = data || {};
+    function setFormValue(name, value) {
+      const field = form.elements.namedItem(name);
+      if (!field) {
+        return;
+      }
+      if (field instanceof RadioNodeList) {
+        return;
+      }
+      if (field.type === "checkbox") {
+        field.checked = toBooleanValue(value);
+      } else {
+        field.value = value;
+      }
+    }
+    [
+      "workloadName",
+      "routePreset",
+      "rootTableOrEntity",
+      "childTableOrEntity",
+    ].forEach(function (name) {
+      if (Object.prototype.hasOwnProperty.call(values, name)) {
+        setFormValue(name, values[name]);
+      }
+    });
+    syncDiscoverySelectors();
+    Object.entries(values).forEach(function (entry) {
+      const name = entry[0];
+      if (
+        name === "workloadName" ||
+        name === "routePreset" ||
+        name === "rootTableOrEntity" ||
+        name === "childTableOrEntity"
+      ) {
+        return;
+      }
+      setFormValue(name, entry[1]);
+    });
+    syncDiscoverySelectors();
+    syncPresetFromForm();
+    updatePlannerProgress();
+  }
+  function serializeForm() {
+    const params = new URLSearchParams();
+    Array.from(form.elements).forEach(function (field) {
+      if (!field || !field.name) {
+        return;
+      }
+      const tagName = String(field.tagName || "").toUpperCase();
+      const fieldType = String(field.type || "").toLowerCase();
+      if (
+        tagName === "BUTTON" ||
+        fieldType === "submit" ||
+        fieldType === "button" ||
+        fieldType === "reset"
+      ) {
+        return;
+      }
+      if (
+        field.name === "generatePlan" ||
+        field.name === "warmExecution" ||
+        field.name === "dryRunExecution"
+      ) {
+        return;
+      }
+      if (field.type === "checkbox") {
+        params.set(field.name, field.checked ? "true" : "false");
+        return;
+      }
+      params.set(field.name, field.value || "");
+    });
+    return params;
+  }
+  function surfaceFieldLabel(fieldName) {
+    if (fieldName === "rootTableOrEntity") {
+      return "root";
+    }
+    if (fieldName === "childTableOrEntity") {
+      return "child";
+    }
+    return fieldName || "surface";
+  }
+  function canonicalizeDiscoveredSurface(fieldName) {
+    const field = plannerField(fieldName);
+    if (!field || !field.value || !discoveredTables.length) {
+      return { ok: true, changed: false };
+    }
+    const table = resolveDiscoveredTable(field.value);
+    if (!table) {
+      return {
+        ok: false,
+        fieldName,
+        value: field.value,
+        reason: "not-discovered",
+      };
+    }
+    if (!table.registeredEntityName) {
+      return {
+        ok: false,
+        fieldName,
+        value: field.value,
+        reason: "not-registered",
+      };
+    }
+    if (field.value !== table.registeredEntityName) {
+      field.value = table.registeredEntityName;
+      return { ok: true, changed: true };
+    }
+    return { ok: true, changed: false };
+  }
+  function ensureRegisteredSurfacesForExecution() {
+    if (!discoveredTables.length) {
+      return true;
+    }
+    const root = canonicalizeDiscoveredSurface("rootTableOrEntity");
+    const child = canonicalizeDiscoveredSurface("childTableOrEntity");
+    const failures = [root, child].filter(function (item) {
+      return item && !item.ok;
+    });
+    if (!failures.length && (root.changed || child.changed)) {
+      syncDiscoverySelectors();
+      updatePlannerProgress();
+      return true;
+    }
+    if (!failures.length) {
+      return true;
+    }
+    const failureText = failures
+      .map(function (failure) {
+        return surfaceFieldLabel(failure.fieldName) + "=" + (failure.value || "-");
+      })
+      .join(", ");
+    setStatus(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_198__" +
+        failureText +
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_199__",
+    );
+    setOutcome(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_200__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_201__",
+    );
+    setNextAction(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_202__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_203__",
+      "configure",
+    );
+    scrollToPlannerTarget("plannerConfigurePanel");
+    return false;
+  }
+  function demoFieldValue(name) {
+    const field = document.querySelector('[name="' + name + '"]');
+    return field ? String(field.value || "") : "";
+  }
+  function plannerNavigationHref(overrides) {
+    const params = new URLSearchParams(window.location.search || "");
+    [
+      "applySuggestion",
+      "selectObject",
+      "plannerRole",
+      "generatePlan",
+      "warmExecution",
+      "dryRunExecution",
+      "demoBootstrap",
+    ].forEach(function (name) {
+      params.delete(name);
+    });
+    serializeForm().forEach(function (value, key) {
+      params.set(key, value);
+    });
+    [
+      "demoCustomerCount",
+      "demoHotCustomerCount",
+      "demoMaxOrdersPerCustomer",
+    ].forEach(function (name) {
+      const value = demoFieldValue(name);
+      if (value) {
+        params.set(name, value);
+      }
+    });
+    params.set("lang", "__CACHEDB_MIGRATION_PLANNER_TOKEN_040__");
+    if (!params.get("v")) {
+      params.set("v", "__CACHEDB_MIGRATION_PLANNER_TOKEN_041__");
+    }
+    params.set("discover", "true");
+    Object.entries(overrides || {}).forEach(function (entry) {
+      const key = entry[0];
+      const value = entry[1];
+      if (value === undefined || value === null || value === "") {
+        params.delete(key);
+        return;
+      }
+      params.set(key, String(value));
+    });
+    return window.location.pathname + "?" + params.toString();
+  }
+  function renderList(targetId, items, emptyMessage) {
+    const root = document.getElementById(targetId);
+    const fallback = emptyMessage || "__CACHEDB_MIGRATION_PLANNER_TOKEN_042__";
+    if (!items || !items.length) {
+      root.innerHTML =
+        '<div class="planner-empty">' + escapeHtml(fallback) + "</div>";
+      return;
+    }
+    root.innerHTML =
+      '<ul class="result-list">' +
+      items
+        .map(function (item) {
+          return "<li>" + escapeHtml(item) + "</li>";
+        })
+        .join("") +
+      "</ul>";
+  }
+  function renderWarmSteps(items) {
+    const root = document.getElementById("plannerWarmSteps");
+    root.innerHTML = (items || [])
+      .map(function (step, index) {
+        return (
+          '<div class="result-step"><div class="result-step-title">' +
+          escapeHtml(index + 1 + ". " + step.title) +
+          '</div><div class="result-step-summary">' +
+          escapeHtml(step.summary) +
+          '</div><ul class="result-list">' +
+          (step.tasks || [])
+            .map(function (task) {
+              return "<li>" + escapeHtml(task) + "</li>";
+            })
+            .join("") +
+          "</ul></div>"
+        );
+      })
+      .join("");
+  }
+  function renderComparisonChecks(items) {
+    const root = document.getElementById("plannerComparisonChecks");
+    root.innerHTML = (items || [])
+      .map(function (check) {
+        return (
+          '<div class="result-check"><div class="result-step-title">' +
+          escapeHtml(check.title) +
+          '</div><div class="small text-muted mb-2">' +
+          escapeHtml(check.baseline) +
+          '</div><div class="fw-semibold">' +
+          escapeHtml(check.target) +
+          "</div></div>"
+        );
+      })
+      .join("");
+  }
+  function renderWarnings(items) {
+    const wrapper = document.getElementById("plannerWarningsCard");
+    const root = document.getElementById("plannerWarnings");
+    if (!items || !items.length) {
+      wrapper.classList.add("d-none");
+      root.innerHTML = "";
+      return;
+    }
+    wrapper.classList.remove("d-none");
+    root.innerHTML = items
+      .map(function (item) {
+        return (
+          '<div class="planner-warning mb-2">' + escapeHtml(item) + "</div>"
+        );
+      })
+      .join("");
+  }
+  function renderScaffoldFiles(items) {
+    const root = document.getElementById("plannerScaffoldFiles");
+    if (!items || !items.length) {
+      root.innerHTML =
+        '<div class="planner-empty">' +
+        escapeHtml("__CACHEDB_MIGRATION_PLANNER_TOKEN_043__") +
+        "</div>";
+      return;
+    }
+    root.innerHTML = items
+      .map(function (file) {
+        return (
+          '<div class="result-check mb-3"><div class="result-step-title">' +
+          escapeHtml(file.fileName) +
+          '</div><div class="small text-muted mt-1">' +
+          escapeHtml(
+            (file.relativePath || "") + " · " + (file.description || ""),
+          ) +
+          '</div><pre class="result-pre mt-3">' +
+          escapeHtml(file.content || "") +
+          "</pre></div>"
+        );
+      })
+      .join("");
+  }
+  function renderComparisonSamples(items) {
+    const root = document.getElementById("plannerCompareSamples");
+    if (!items || !items.length) {
+      root.innerHTML =
+        '<div class="planner-empty">' +
+        escapeHtml("__CACHEDB_MIGRATION_PLANNER_TOKEN_044__") +
+        "</div>";
+      return;
+    }
+    root.innerHTML = items
+      .map(function (item) {
+        const matchLabel = item.exactMatch
+          ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_045__"
+          : "__CACHEDB_MIGRATION_PLANNER_TOKEN_046__";
+        const tone = item.exactMatch ? "#147d64" : "#b54708";
+        return (
+          '<div class="result-check mb-3"><div class="d-flex flex-column flex-lg-row justify-content-between gap-3"><div><div class="result-step-title">' +
+          escapeHtml(item.sampleLabel) +
+          '</div><div class="small text-muted mt-1">' +
+          escapeHtml(
+            "__CACHEDB_MIGRATION_PLANNER_TOKEN_047__: " +
+              item.baselineRowCount +
+              " · __CACHEDB_MIGRATION_PLANNER_TOKEN_048__: " +
+              item.cacheRowCount,
+          ) +
+          '</div></div><div class="fw-semibold" style="color:' +
+          tone +
+          '">' +
+          escapeHtml(matchLabel) +
+          '</div></div><div class="small text-muted mt-3">__CACHEDB_MIGRATION_PLANNER_TOKEN_049__</div><pre class="result-pre">' +
+          escapeHtml((item.baselineIds || []).join(", ")) +
+          '</pre><div class="small text-muted mt-3">__CACHEDB_MIGRATION_PLANNER_TOKEN_050__</div><pre class="result-pre">' +
+          escapeHtml((item.cacheIds || []).join(", ")) +
+          "</pre></div>"
+        );
+      })
+      .join("");
+  }
+  function formatRatio(value) {
+    const numeric = Number(value || 0);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      return "-";
+    }
+    return numeric.toFixed(2) + "x";
+  }
+  function formatAssessmentReadiness(value) {
+    switch (String(value || "")) {
+      case "READY":
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_051__";
+      case "NEEDS_REVIEW":
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_052__";
+      case "NOT_READY":
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_053__";
+      default:
+        return value || "-";
+    }
+  }
+  function formatAssessmentParity(value) {
+    switch (String(value || "")) {
+      case "EXACT":
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_054__";
+      case "PARTIAL":
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_055__";
+      case "MISMATCH":
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_056__";
+      case "NO_SAMPLES":
+        return "__CACHEDB_MIGRATION_PLANNER_TOKEN_057__";
+      default:
+        return value || "-";
+    }
+  }
+  function renderDemoBootstrap(result) {
+    if (!demoResults) {
+      return;
+    }
+    demoResults.classList.remove("d-none");
+    setMetric("plannerDemoCustomers", String(result.customerCount || 0));
+    setMetric("plannerDemoOrders", String(result.orderCount || 0));
+    setMetric(
+      "plannerDemoHottestCustomer",
+      String(result.hottestCustomerOrderCount || 0),
+    );
+    setMetric("plannerDemoViews", String((result.viewNames || []).length));
+    renderList(
+      "plannerDemoNotes",
+      result.notes,
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_058__",
+    );
+    if (result.plannerDefaults) {
+      fillForm(result.plannerDefaults);
+    }
+    setFlowState("Discover", "active");
+    setOutcome(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_059__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_060__",
+    );
+    setNextAction(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_061__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_062__",
+      "discover",
+    );
+  }
+  function renderDiscovery(result) {
+    const suggestionRoot = document.getElementById(
+      "plannerDiscoverySuggestions",
+    );
+    const tableRoot = document.getElementById("plannerDiscoveryTables");
+    const warnings = result.warnings || [];
+    discoverySuggestions = result.routeSuggestions || [];
+    discoveredTables = result.tables || [];
+    rebuildDiscoveryLookup();
+    syncDiscoverySelectors();
+    const warningHtml = warnings.length
+      ? warnings
+          .map(function (item) {
+            return (
+              '<div class="planner-warning mb-2">' + escapeHtml(item) + "</div>"
+            );
+          })
+          .join("")
+      : "";
+    if (discoverySuggestions.length) {
+      suggestionRoot.innerHTML =
+        warningHtml +
+        '<div class="planner-suggestion-list">' +
+        discoverySuggestions
+          .map(function (item, index) {
+            const surfaces = [
+              item.rootEntityName || item.rootSurface,
+              item.childEntityName || item.childSurface,
+            ]
+              .filter(Boolean)
+              .join(" → ");
+            const sortCandidates = (item.sortCandidates || []).join(", ");
+            const badges = [];
+            if (item.temporalSortCandidate) {
+              badges.push(
+                '<span class="planner-badge">__CACHEDB_MIGRATION_PLANNER_TOKEN_063__</span>',
+              );
+            }
+            if (item.rankedSortCandidate) {
+              badges.push(
+                '<span class="planner-badge">__CACHEDB_MIGRATION_PLANNER_TOKEN_064__</span>',
+              );
+            }
+            const applyHref = plannerNavigationHref({ applySuggestion: index });
+            return (
+              '<div class="planner-suggestion-row"><div class="planner-suggestion-index">' +
+              (index + 1) +
+              '</div><div class="planner-suggestion-main"><div class="planner-suggestion-badges">' +
+              badges.join("") +
+              '</div><div class="result-step-title planner-suggestion-title">' +
+              escapeHtml(item.label) +
+              '</div><div class="small text-muted mt-1">' +
+              escapeHtml(item.summary) +
+              '</div><div class="small mt-2 planner-suggestion-surfaces">' +
+              escapeHtml(surfaces || "") +
+              '</div><div class="planner-suggestion-meta">' +
+              '<span>' +
+              escapeHtml(
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_065__: " +
+                  item.relationColumn +
+                  " / __CACHEDB_MIGRATION_PLANNER_TOKEN_066__: " +
+                  item.sortColumn +
+                  " DESC",
+              ) +
+              '</span><span>' +
+              escapeHtml(
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_067__: " +
+                  (sortCandidates || "-"),
+              ) +
+              '</span></div></div><div class="planner-suggestion-action"><a class="btn btn-sm btn-outline-primary planner-suggestion-apply" data-planner-suggestion="' +
+              index +
+              '" href="' +
+              escapeHtml(applyHref) +
+              '">__CACHEDB_MIGRATION_PLANNER_TOKEN_068__</a></div></div>'
+            );
+          })
+          .join("") +
+        "</div>";
+    } else {
+      suggestionRoot.innerHTML =
+        warningHtml +
+        '<div class="planner-empty">' +
+        escapeHtml("__CACHEDB_MIGRATION_PLANNER_TOKEN_069__") +
+        "</div>";
+    }
+    if (discoveredTables.length) {
+      tableRoot.innerHTML = discoveredTables
+        .map(function (item, index) {
+          const temporal = (item.temporalColumns || []).join(", ");
+          const foreignKeys = (item.foreignKeyColumns || []).join(", ");
+          const entityBadge = item.registeredEntityName
+            ? '<span class="planner-badge entity">__CACHEDB_MIGRATION_PLANNER_TOKEN_070__: ' +
+              escapeHtml(item.registeredEntityName) +
+              "</span>"
+            : "";
+          const typeBadge =
+            '<span class="planner-badge ' +
+            (isView(item) ? "view" : "") +
+            '">' +
+            escapeHtml(item.objectType || "TABLE") +
+            "</span>";
+          const rootHref = plannerNavigationHref({
+            plannerRole: "root",
+            selectObject: index,
+          });
+          const childHref = plannerNavigationHref({
+            plannerRole: "child",
+            selectObject: index,
+          });
+          const actionButtons = isView(item)
+            ? '<a class="btn btn-sm btn-outline-secondary" data-planner-object="' +
+              index +
+              '" data-planner-role="child" href="' +
+              escapeHtml(childHref) +
+              '">__CACHEDB_MIGRATION_PLANNER_TOKEN_071__</a>'
+            : '<a class="btn btn-sm btn-outline-primary" data-planner-object="' +
+              index +
+              '" data-planner-role="root" href="' +
+              escapeHtml(rootHref) +
+              '">__CACHEDB_MIGRATION_PLANNER_TOKEN_072__</a><a class="btn btn-sm btn-outline-secondary" data-planner-object="' +
+              index +
+              '" data-planner-role="child" href="' +
+              escapeHtml(childHref) +
+              '">__CACHEDB_MIGRATION_PLANNER_TOKEN_073__</a>';
+          return (
+            '<div class="result-check mb-2"><div>' +
+            typeBadge +
+            entityBadge +
+            '</div><div class="result-step-title mt-2">' +
+            escapeHtml(item.qualifiedTableName) +
+            '</div><div class="small text-muted mt-1">' +
+            escapeHtml(
+              "PK: " +
+                (item.primaryKeyColumn || "-") +
+                " · __CACHEDB_MIGRATION_PLANNER_TOKEN_074__: " +
+                item.columnCount +
+                " · FK: " +
+                item.importedKeyCount,
+            ) +
+            '</div><div class="small text-muted mt-1">' +
+            escapeHtml(
+              "__CACHEDB_MIGRATION_PLANNER_TOKEN_075__: " +
+                (temporal || "-") +
+                " · FK kolonları: " +
+                (foreignKeys || "-"),
+            ) +
+            '</div><div class="planner-object-actions">' +
+            actionButtons +
+            "</div></div>"
+          );
+        })
+        .join("");
+    } else {
+      tableRoot.innerHTML =
+        '<div class="planner-empty">' +
+        escapeHtml("__CACHEDB_MIGRATION_PLANNER_TOKEN_076__") +
+        "</div>";
+    }
+    setFlowState("Discover", discoveredTables.length ? "done" : "active");
+    setFlowState("Plan", "active");
+    setOutcome(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_077__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_078__",
+    );
+    setNextAction(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_079__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_080__",
+      "configure",
+    );
+    updatePlannerProgress();
+  }
+  function applyDiscoverySuggestion(index) {
+    const suggestion = discoverySuggestions[index];
+    if (!suggestion || !suggestion.plannerRequest) {
+      return;
+    }
+    fillForm(suggestion.plannerRequest);
+    syncPresetFromForm();
+    setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_081__");
+    setFlowState("Discover", "done");
+    setFlowState("Plan", "active");
+    setNextAction(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_082__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_083__",
+      "plan",
+    );
+    updatePlannerProgress();
+    scrollToPlannerTarget("plannerConfigurePanel");
+  }
+  function applyDiscoveredObject(index, role) {
+    const item = discoveredTables[index];
+    if (!item) {
+      return;
+    }
+    const target = role === "root" ? "rootTableOrEntity" : "childTableOrEntity";
+    const field = plannerField(target);
+    if (field) {
+      field.value = surfaceValue(item);
+      syncDiscoverySelectors();
+      updatePlannerProgress();
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_084__");
+      setFlowState("Discover", "done");
+      setFlowState("Plan", "active");
+      setNextAction(
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_085__",
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_086__",
+        "configure",
+      );
+      scrollToPlannerTarget("plannerConfigurePanel");
+    }
+  }
+  async function loadDemoDescriptor() {
+    setDemoStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_087__");
+    try {
+      const payload = await fetchJson(apiBase + "/api/migration-planner/demo");
+      demoDescriptor = payload || null;
+      if (payload && payload.available) {
+        const demoCustomerField = form.elements.namedItem("demoCustomerCount");
+        const demoHotCustomerField = form.elements.namedItem(
+          "demoHotCustomerCount",
+        );
+        const demoMaxOrdersField = form.elements.namedItem(
+          "demoMaxOrdersPerCustomer",
+        );
+        if (demoCustomerField) {
+          demoCustomerField.value = payload.defaultCustomerCount || 120;
+        }
+        if (demoHotCustomerField) {
+          demoHotCustomerField.value = payload.defaultHotCustomerCount || 12;
+        }
+        if (demoMaxOrdersField) {
+          demoMaxOrdersField.value =
+            payload.defaultMaxOrdersPerCustomer || 1500;
+        }
+        setDemoStatus(
+          payload.summary || "__CACHEDB_MIGRATION_PLANNER_TOKEN_088__",
+        );
+      } else {
+        if (demoBootstrapButton) {
+          demoBootstrapButton.disabled = true;
+        }
+        setDemoStatus(
+          (payload && payload.summary) ||
+            "__CACHEDB_MIGRATION_PLANNER_TOKEN_089__",
+        );
+      }
+    } catch (error) {
+      if (demoBootstrapButton) {
+        demoBootstrapButton.disabled = true;
+      }
+      setDemoStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_090__" + error.message);
+    }
+  }
+  async function seedDemoSchema() {
+    const params = new URLSearchParams();
+    params.set(
+      "demoCustomerCount",
+      String(
+        (form.elements.namedItem("demoCustomerCount") || {}).value || "120",
+      ),
+    );
+    params.set(
+      "demoHotCustomerCount",
+      String(
+        (form.elements.namedItem("demoHotCustomerCount") || {}).value || "12",
+      ),
+    );
+    params.set(
+      "demoMaxOrdersPerCustomer",
+      String(
+        (form.elements.namedItem("demoMaxOrdersPerCustomer") || {}).value ||
+          "1500",
+      ),
+    );
+    const startMessage = "__CACHEDB_MIGRATION_PLANNER_TOKEN_091__";
+    setDemoStatus(startMessage);
+    setStatus(startMessage);
+    try {
+      const payload = await fetchJson(apiBase + "/api/migration-planner/demo", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        },
+        body: params.toString(),
+      });
+      renderDemoBootstrap(payload);
+      if (payload.plannerDefaults) {
+        fillForm(payload.plannerDefaults);
+      }
+      await loadDiscovery(true);
+      const hotRoots = (payload.sampleRootIds || []).join(", ");
+      const doneMessage = "__CACHEDB_MIGRATION_PLANNER_TOKEN_092__";
+      setDemoStatus(
+        doneMessage +
+          (hotRoots
+            ? " __CACHEDB_MIGRATION_PLANNER_TOKEN_093__: " + hotRoots
+            : ""),
+      );
+      setStatus(doneMessage);
+    } catch (error) {
+      const message = "__CACHEDB_MIGRATION_PLANNER_TOKEN_094__" + error.message;
+      setDemoStatus(message);
+      setStatus(message);
+    }
+  }
+  async function loadDiscovery(manual) {
+    const startMessage = manual
+      ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_095__"
+      : "__CACHEDB_MIGRATION_PLANNER_TOKEN_096__";
+    setDiscoveryStatus(startMessage);
+    setStatus(startMessage);
+    setFlowState("Discover", "active");
+    try {
+      const payload = await fetchJson(
+        apiBase + "/api/migration-planner/discovery",
+      );
+      renderDiscovery(payload);
+      setDiscoveryStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_097__");
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_098__");
+      updatePlannerProgress();
+    } catch (error) {
+      const message = "__CACHEDB_MIGRATION_PLANNER_TOKEN_099__" + error.message;
+      setDiscoveryStatus(message);
+      setStatus(message);
+      setOutcome("__CACHEDB_MIGRATION_PLANNER_TOKEN_100__", message);
+      updatePlannerProgress();
+    }
+  }
+  function setMetric(id, value) {
+    document.getElementById(id).innerHTML = escapeHtml(value);
+  }
+  function renderPlan(plan) {
+    emptyState.classList.add("d-none");
+    results.classList.remove("d-none");
+    warmResults.classList.add("d-none");
+    setMetric("plannerSurface", plan.recommendedSurface);
+    setMetric(
+      "plannerWindow",
+      String(plan.recommendedHotWindowPerRoot) +
+        " __CACHEDB_MIGRATION_PLANNER_TOKEN_101__",
+    );
+    setMetric(
+      "plannerProjection",
+      plan.projectionRequired
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_102__ (" +
+            plan.summaryProjectionName +
+            ")"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_103__",
+    );
+    setMetric(
+      "plannerRanking",
+      plan.rankedProjectionRequired
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_104__ (" +
+            (plan.rankedProjectionName || plan.rankFieldName) +
+            ")"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_105__",
+    );
+    document.getElementById("plannerRedisPlacement").textContent =
+      plan.redisPlacement;
+    document.getElementById("plannerPostgresPlacement").textContent =
+      plan.postgresPlacement;
+    renderList("plannerReasoning", plan.reasoning);
+    renderList("plannerRedisArtifacts", plan.recommendedRedisArtifacts);
+    renderList("plannerPostgresArtifacts", plan.recommendedPostgresArtifacts);
+    renderList("plannerApiShapes", plan.recommendedApiShapes);
+    renderWarmSteps(plan.warmSteps);
+    document.getElementById("plannerComparisonSummary").textContent =
+      plan.comparisonSummary;
+    renderComparisonChecks(plan.comparisonChecks);
+    document.getElementById("plannerWarmSql").textContent =
+      plan.sampleWarmSql || "";
+    document.getElementById("plannerRootWarmSql").textContent =
+      plan.sampleRootWarmSql || "";
+    renderWarnings(plan.warnings);
+    warmButton.disabled = false;
+    warmPreviewButton.disabled = false;
+    if (scaffoldButton) {
+      scaffoldButton.disabled = false;
+    }
+    if (compareButton) {
+      compareButton.disabled = false;
+    }
+    if (compareReportButton) {
+      compareReportButton.disabled = true;
+    }
+    setFlowState("Discover", "done");
+    setFlowState("Plan", "done");
+    setFlowState("Warm", "active");
+    setOutcome(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_106__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_107__",
+    );
+    setNextAction(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_108__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_109__",
+      "dry-run",
+    );
+    updatePlannerProgress();
+    scrollToPlannerTarget("plannerPlanPanel");
+  }
+  let warmJobPollHandle = 0;
+  let compareJobPollHandle = 0;
+  function setWarmButtonsBusy(busy) {
+    if (warmButton) {
+      warmButton.disabled = !!busy;
+    }
+    if (warmPreviewButton) {
+      warmPreviewButton.disabled = !!busy;
+    }
+    if (scaffoldButton) {
+      scaffoldButton.disabled =
+        !!busy && scaffoldResults.classList.contains("d-none");
+    }
+    if (compareButton) {
+      compareButton.disabled =
+        !!busy && compareResults.classList.contains("d-none");
+    }
+  }
+  function clearWarmExecutionView(statusMessage) {
+    warmResults.classList.add("d-none");
+    setMetric("plannerWarmChildRows", "-");
+    setMetric("plannerWarmRootRows", "-");
+    setMetric("plannerWarmSkippedRows", "-");
+    setMetric("plannerWarmDuration", "-");
+    setMetric("plannerWarmReferencedRoots", "-");
+    setMetric("plannerWarmMissingRoots", "-");
+    renderList(
+      "plannerWarmNotes",
+      [],
+      statusMessage || "__CACHEDB_MIGRATION_PLANNER_TOKEN_110__",
+    );
+    document.getElementById("plannerWarmChildSql").textContent = "";
+    document.getElementById("plannerWarmRootSql").textContent = "";
+  }
+  function clearWarmJobPoll() {
+    if (warmJobPollHandle) {
+      window.clearTimeout(warmJobPollHandle);
+      warmJobPollHandle = 0;
+    }
+  }
+  function formatJobDuration(durationMillis) {
+    const safe = Math.max(0, Number(durationMillis || 0));
+    const seconds = Math.max(1, Math.round(safe / 1000));
+    return seconds + " sn";
+  }
+  function renderWarmExecution(result) {
+    if (result.plan) {
+      renderPlan(result.plan);
+    }
+    warmResults.classList.remove("d-none");
+    setMetric(
+      "plannerWarmChildRows",
+      String(result.childRowsHydrated) + " / " + String(result.childRowsRead),
+    );
+    setMetric(
+      "plannerWarmRootRows",
+      String(result.rootRowsHydrated) + " / " + String(result.rootRowsRead),
+    );
+    setMetric("plannerWarmSkippedRows", String(result.skippedDeletedRows));
+    setMetric("plannerWarmDuration", String(result.durationMillis) + " ms");
+    setMetric(
+      "plannerWarmReferencedRoots",
+      String(result.distinctReferencedRootIds),
+    );
+    setMetric(
+      "plannerWarmMissingRoots",
+      String(result.missingReferencedRootIds),
+    );
+    renderList("plannerWarmNotes", result.notes);
+    document.getElementById("plannerWarmChildSql").textContent =
+      result.childWarmSql || "";
+    document.getElementById("plannerWarmRootSql").textContent =
+      result.rootWarmSql || "";
+    setFlowState("Warm", result.dryRun ? "active" : "done");
+    setFlowState("Compare", result.dryRun ? "" : "active");
+    setOutcome(
+      result.dryRun
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_111__"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_112__",
+      result.dryRun
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_113__"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_114__",
+    );
+    setNextAction(
+      result.dryRun
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_115__"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_116__",
+      result.dryRun
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_117__"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_118__",
+      result.dryRun ? "warm" : "compare",
+    );
+    updatePlannerProgress();
+    scrollToPlannerTarget("plannerWarmPanel");
+  }
+  function renderScaffold(result) {
+    if (result.plan) {
+      renderPlan(result.plan);
+    }
+    scaffoldResults.classList.remove("d-none");
+    setMetric("plannerScaffoldBasePackage", result.basePackage || "-");
+    setMetric("plannerScaffoldFileCount", String(result.fileCount || 0));
+    renderList("plannerScaffoldNotes", result.notes);
+    renderList("plannerScaffoldWarnings", result.warnings);
+    renderScaffoldFiles(result.files || []);
+    setOutcome(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_119__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_120__",
+    );
+    updatePlannerProgress();
+    scrollToPlannerTarget("plannerScaffoldPanel");
+  }
+  function renderComparisonAssessment(assessment) {
+    if (!assessment) {
+      setMetric("plannerCompareAssessmentStatus", "-");
+      setMetric("plannerCompareAssessmentParity", "-");
+      setMetric("plannerCompareAssessmentAvgRatio", "-");
+      setMetric("plannerCompareAssessmentP95Ratio", "-");
+      document.getElementById("plannerCompareAssessmentSummary").textContent =
+        "";
+      document.getElementById("plannerCompareAssessmentDecision").textContent =
+        "";
+      renderList(
+        "plannerCompareAssessmentStrengths",
+        [],
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_121__",
+      );
+      renderList(
+        "plannerCompareAssessmentBlockers",
+        [],
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_122__",
+      );
+      renderList(
+        "plannerCompareAssessmentNextSteps",
+        [],
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_123__",
+      );
+      return;
+    }
+    setMetric(
+      "plannerCompareAssessmentStatus",
+      formatAssessmentReadiness(assessment.readiness),
+    );
+    setMetric(
+      "plannerCompareAssessmentParity",
+      formatAssessmentParity(assessment.parityStatus),
+    );
+    setMetric(
+      "plannerCompareAssessmentAvgRatio",
+      formatRatio(assessment.averageLatencyRatio),
+    );
+    setMetric(
+      "plannerCompareAssessmentP95Ratio",
+      formatRatio(assessment.p95LatencyRatio),
+    );
+    document.getElementById("plannerCompareAssessmentSummary").textContent =
+      assessment.summary || "";
+    document.getElementById("plannerCompareAssessmentDecision").textContent =
+      assessment.decision || "";
+    renderList(
+      "plannerCompareAssessmentStrengths",
+      assessment.strengths,
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_124__",
+    );
+    renderList(
+      "plannerCompareAssessmentBlockers",
+      assessment.blockers,
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_125__",
+    );
+    renderList(
+      "plannerCompareAssessmentNextSteps",
+      assessment.nextSteps,
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_126__",
+    );
+  }
+  function renderComparison(result) {
+    lastComparisonResult = result || null;
+    if (result.plan) {
+      renderPlan(result.plan);
+    }
+    if (result.warmResult) {
+      renderWarmExecution(result.warmResult);
+    }
+    compareResults.classList.remove("d-none");
+    const exactMatches = (result.sampleComparisons || []).filter(
+      function (item) {
+        return !!item.exactMatch;
+      },
+    ).length;
+    setMetric("plannerCompareRoute", result.cacheRouteLabel || "-");
+    setMetric(
+      "plannerCompareExactMatches",
+      String(exactMatches) +
+        " / " +
+        String((result.sampleComparisons || []).length),
+    );
+    setMetric(
+      "plannerCompareBaselineAvg",
+      formatLatency(
+        result.baselineMetrics && result.baselineMetrics.averageLatencyNanos,
+      ),
+    );
+    setMetric(
+      "plannerCompareBaselineP95",
+      formatLatency(
+        result.baselineMetrics && result.baselineMetrics.p95LatencyNanos,
+      ),
+    );
+    setMetric(
+      "plannerCompareCacheAvg",
+      formatLatency(
+        result.cacheMetrics && result.cacheMetrics.averageLatencyNanos,
+      ),
+    );
+    setMetric(
+      "plannerCompareCacheP95",
+      formatLatency(result.cacheMetrics && result.cacheMetrics.p95LatencyNanos),
+    );
+    renderComparisonAssessment(result.assessment);
+    document.getElementById("plannerCompareBaselineSql").textContent =
+      result.baselineSqlTemplate || "";
+    renderComparisonSamples(result.sampleComparisons || []);
+    renderList("plannerCompareNotes", result.notes);
+    renderList("plannerCompareWarnings", result.warnings);
+    renderComparisonReportPreview(result.report);
+    setFlowState("Warm", "done");
+    setFlowState("Compare", "done");
+    setFlowState(
+      "Report",
+      result.report && result.report.markdown ? "active" : "",
+    );
+    setOutcome(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_127__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_128__",
+    );
+    setNextAction(
+      result.report && result.report.markdown
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_129__"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_130__",
+      result.report && result.report.markdown
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_131__"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_132__",
+      result.report && result.report.markdown ? "report" : "compare",
+    );
+    updatePlannerProgress();
+    scrollToPlannerTarget("plannerComparePanel");
+  }
+  function hasComparisonReport() {
+    return !!(
+      lastComparisonResult &&
+      lastComparisonResult.report &&
+      lastComparisonResult.report.markdown
+    );
+  }
+  function renderComparisonReportPreview(report) {
+    const hasReport = !!(report && report.markdown);
+    if (compareReportButton) {
+      compareReportButton.disabled = !hasReport;
+    }
+    if (compareCopyReportButton) {
+      compareCopyReportButton.disabled = !hasReport;
+    }
+    if (compareReportPanel) {
+      compareReportPanel.classList.toggle("d-none", !hasReport);
+    }
+    if (compareReportPreview) {
+      compareReportPreview.textContent = hasReport ? report.markdown : "";
+    }
+    if (compareReportFileName) {
+      compareReportFileName.textContent = hasReport ? report.fileName || "" : "";
+    }
+  }
+  function downloadComparisonReport() {
+    if (!hasComparisonReport()) {
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_133__");
+      return;
+    }
+    const fileName =
+      lastComparisonResult.report.fileName || "migration-report.md";
+    const blob = new Blob([lastComparisonResult.report.markdown], {
+      type: "text/markdown;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+    setFlowState("Report", "done");
+    setOutcome(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_134__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_135__",
+    );
+    setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_136__");
+  }
+  function fallbackCopyText(value) {
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "readonly");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    let copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch (ignored) {
+      copied = false;
+    }
+    document.body.removeChild(textarea);
+    return copied;
+  }
+  async function copyComparisonReport() {
+    if (!hasComparisonReport()) {
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_133__");
+      return;
+    }
+    const markdown = lastComparisonResult.report.markdown;
+    let copied = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(markdown);
+        copied = true;
+      } catch (ignored) {
+        copied = false;
+      }
+    }
+    if (!copied) {
+      copied = fallbackCopyText(markdown);
+    }
+    if (copied) {
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_193__");
+      setOutcome(
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_194__",
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_195__",
+      );
+    } else {
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_196__");
+      scrollToPlannerTarget("plannerCompareReportPanel");
+    }
+  }
+  async function loadTemplate() {
+    setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_137__");
+    resetFlowStates();
+    const payload = await fetchJson(
+      apiBase + "/api/migration-planner/template",
+    );
+    templateDefaults = payload.defaults || null;
+    if (templateDefaults) {
+      fillForm(templateDefaults);
+    }
+    setFlowState("Discover", "active");
+    setNextAction(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_138__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_139__",
+      "discover",
+    );
+    setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_140__");
+  }
+  defaultsButton.addEventListener("click", function () {
+    if (templateDefaults) {
+      fillForm(templateDefaults);
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_141__");
+    }
+  });
+  modeButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      applyPlannerMode(button.dataset.plannerMode || "beginner");
+    });
+  });
+  function handlePlannerShortcut(shortcut) {
+    switch (String(shortcut || "")) {
+      case "demo":
+        if (demoBootstrapButton) {
+          demoBootstrapButton.click();
+        } else {
+          scrollToPlannerTarget("plannerDemoPanel");
+        }
+        break;
+      case "discover":
+        if (discoverButton) {
+          discoverButton.click();
+        } else {
+          scrollToPlannerTarget("plannerDiscoveryPanel");
+        }
+        break;
+      case "configure":
+        scrollToPlannerTarget("plannerConfigurePanel");
+        break;
+      case "plan":
+        submitPlannerPlan().catch(function () {});
+        break;
+      case "dry-run":
+        if (requirePlanBefore("dry-run")) {
+          warmExecution(true).catch(function () {});
+        }
+        break;
+      case "warm":
+        if (requirePlanBefore("warm")) {
+          warmExecution(false).catch(function () {});
+        }
+        break;
+      case "compare":
+        if (requirePlanBefore("compare")) {
+          runComparison().catch(function () {});
+        }
+        break;
+      case "report":
+        if (hasComparisonReport()) {
+          scrollToPlannerTarget("plannerCompareReportPanel");
+          setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_197__");
+        } else {
+          setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_142__");
+          setNextAction(
+            "__CACHEDB_MIGRATION_PLANNER_TOKEN_143__",
+            "__CACHEDB_MIGRATION_PLANNER_TOKEN_144__",
+            "compare",
+          );
+          scrollToPlannerTarget("plannerComparePanel");
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  commandButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      handlePlannerShortcut(button.dataset.plannerShortcut);
+    });
+  });
+  stepButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      const target = document.getElementById(
+        button.dataset.plannerStepTarget || "",
+      );
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  });
+  if (routePresetField) {
+    routePresetField.addEventListener("change", function () {
+      applyRoutePreset(routePresetField.value, false);
+    });
+    updatePresetHelp();
+  }
+  ["rootTableOrEntity", "childTableOrEntity"].forEach(function (name) {
+    const field = plannerField(name);
+    if (field) {
+      field.addEventListener("change", function () {
+        syncDiscoverySelectors();
+        updatePlannerProgress();
+      });
+    }
+  });
+  [
+    "sortColumn",
+    "sortDirection",
+    "rootPrimaryKeyColumn",
+    "childPrimaryKeyColumn",
+    "relationColumn",
+  ].forEach(function (name) {
+    const field = plannerField(name);
+    if (field) {
+      field.addEventListener("change", function () {
+        updatePlannerProgress();
+      });
+    }
+  });
+  if (demoBootstrapButton) {
+    demoBootstrapButton.addEventListener("click", function (event) {
+      event.preventDefault();
+      seedDemoSchema().catch(function () {});
+    });
+  }
+  if (discoverButton) {
+    discoverButton.addEventListener("click", function (event) {
+      event.preventDefault();
+      loadDiscovery(true).catch(function () {});
+    });
+  }
+  async function pollWarmJob(jobId, dryRun) {
+    const payload = await fetchJson(
+      apiBase +
+        "/api/migration-planner/warm/status?jobId=" +
+        encodeURIComponent(jobId),
+    );
+    if (payload.status === "QUEUED") {
+      const queuedMessage =
+        (dryRun
+          ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_145__"
+          : "__CACHEDB_MIGRATION_PLANNER_TOKEN_146__") +
+        formatJobDuration(payload.durationMillis || 0);
+      warmStatus.textContent = queuedMessage;
+      setStatus(queuedMessage);
+      warmJobPollHandle = window.setTimeout(function () {
+        pollWarmJob(jobId, dryRun).catch(handleWarmJobError);
+      }, 1000);
+      return;
+    }
+    if (payload.status === "RUNNING") {
+      const runningMessage =
+        (dryRun
+          ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_147__"
+          : "__CACHEDB_MIGRATION_PLANNER_TOKEN_148__") +
+        formatJobDuration(payload.durationMillis || 0);
+      warmStatus.textContent = runningMessage;
+      setStatus(runningMessage);
+      warmJobPollHandle = window.setTimeout(function () {
+        pollWarmJob(jobId, dryRun).catch(handleWarmJobError);
+      }, 1200);
+      return;
+    }
+    clearWarmJobPoll();
+    setWarmButtonsBusy(false);
+    if (payload.status === "COMPLETED" && payload.result) {
+      renderWarmExecution(payload.result);
+      const doneMessage = payload.result.dryRun
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_149__"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_150__";
+      warmStatus.textContent = doneMessage;
+      setStatus(doneMessage);
+      return;
+    }
+    const failedMessage =
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_151__" +
+      (payload.error || "__CACHEDB_MIGRATION_PLANNER_TOKEN_152__");
+    warmStatus.textContent = failedMessage;
+    setStatus(failedMessage);
+  }
+  async function runWarmSyncFallback(params, dryRun) {
+    const payload = await fetchJson(apiBase + "/api/migration-planner/warm", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      },
+      body: params.toString(),
+    });
+    renderWarmExecution(payload);
+    const doneMessage = payload.dryRun
+      ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_153__"
+      : "__CACHEDB_MIGRATION_PLANNER_TOKEN_154__";
+    warmStatus.textContent = doneMessage;
+    setStatus(doneMessage);
+  }
+  function handleWarmJobError(error) {
+    clearWarmJobPoll();
+    setWarmButtonsBusy(false);
+    const message = "__CACHEDB_MIGRATION_PLANNER_TOKEN_155__" + error.message;
+    warmStatus.textContent = message;
+    setStatus(message);
+  }
+  async function warmExecution(dryRun) {
+    if (!ensureRegisteredSurfacesForExecution()) {
+      return;
+    }
+    const params = serializeForm();
+    params.set("dryRun", dryRun ? "true" : "false");
+    clearWarmJobPoll();
+    setWarmButtonsBusy(true);
+    const startMessage = dryRun
+      ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_156__"
+      : "__CACHEDB_MIGRATION_PLANNER_TOKEN_157__";
+    clearWarmExecutionView(
+      dryRun
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_158__"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_159__",
+    );
+    warmStatus.textContent = startMessage;
+    setStatus(startMessage);
+    setFlowState("Warm", "active");
+    setNextAction(
+      dryRun
+        ? "__CACHEDB_MIGRATION_PLANNER_TOKEN_160__"
+        : "__CACHEDB_MIGRATION_PLANNER_TOKEN_161__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_162__",
+      dryRun ? "dry-run" : "warm",
+    );
+    scrollToPlannerTarget("plannerWarmPanel");
+    try {
+      const started = await fetchJson(
+        apiBase + "/api/migration-planner/warm/start",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          },
+          body: params.toString(),
+        },
+      );
+      if (started && started.jobId) {
+        await pollWarmJob(started.jobId, dryRun);
+        return;
+      }
+      await runWarmSyncFallback(params, dryRun);
+      setWarmButtonsBusy(false);
+    } catch (error) {
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_163__");
+      try {
+        await runWarmSyncFallback(params, dryRun);
+      } catch (syncError) {
+        handleWarmJobError(syncError);
+      } finally {
+        setWarmButtonsBusy(false);
+      }
+    }
+  }
+  async function scaffoldGeneration() {
+    const params = serializeForm();
+    const startMessage = "__CACHEDB_MIGRATION_PLANNER_TOKEN_164__";
+    if (scaffoldStatus) {
+      scaffoldStatus.textContent = startMessage;
+    }
+    setStatus(startMessage);
+    try {
+      const payload = await fetchJson(
+        apiBase + "/api/migration-planner/scaffold",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          },
+          body: params.toString(),
+        },
+      );
+      renderScaffold(payload);
+      const doneMessage = "__CACHEDB_MIGRATION_PLANNER_TOKEN_165__";
+      if (scaffoldStatus) {
+        scaffoldStatus.textContent = doneMessage;
+      }
+      setStatus(doneMessage);
+    } catch (error) {
+      const message = "__CACHEDB_MIGRATION_PLANNER_TOKEN_166__" + error.message;
+      if (scaffoldStatus) {
+        scaffoldStatus.textContent = message;
+      }
+      setStatus(message);
+    }
+  }
+  function clearCompareJobPoll() {
+    if (compareJobPollHandle) {
+      window.clearTimeout(compareJobPollHandle);
+      compareJobPollHandle = 0;
+    }
+  }
+  function setCompareButtonBusy(busy) {
+    if (compareButton) {
+      compareButton.disabled = !!busy;
+    }
+    if (compareReportButton && busy) {
+      compareReportButton.disabled = true;
+    }
+    if (compareCopyReportButton && busy) {
+      compareCopyReportButton.disabled = true;
+    }
+  }
+  async function pollCompareJob(jobId) {
+    const payload = await fetchJson(
+      apiBase +
+        "/api/migration-planner/compare/status?jobId=" +
+        encodeURIComponent(jobId),
+    );
+    if (payload.status === "QUEUED") {
+      const message =
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_167__" +
+        formatJobDuration(payload.durationMillis || 0);
+      if (compareStatus) {
+        compareStatus.textContent = message;
+      }
+      setStatus(message);
+      compareJobPollHandle = window.setTimeout(function () {
+        pollCompareJob(jobId).catch(handleCompareJobError);
+      }, 1000);
+      return;
+    }
+    if (payload.status === "RUNNING") {
+      const message =
+        "__CACHEDB_MIGRATION_PLANNER_TOKEN_168__" +
+        formatJobDuration(payload.durationMillis || 0);
+      if (compareStatus) {
+        compareStatus.textContent = message;
+      }
+      setStatus(message);
+      compareJobPollHandle = window.setTimeout(function () {
+        pollCompareJob(jobId).catch(handleCompareJobError);
+      }, 1200);
+      return;
+    }
+    clearCompareJobPoll();
+    setCompareButtonBusy(false);
+    if (payload.status === "COMPLETED" && payload.result) {
+      renderComparison(payload.result);
+      const doneMessage = "__CACHEDB_MIGRATION_PLANNER_TOKEN_169__";
+      if (compareStatus) {
+        compareStatus.textContent = doneMessage;
+      }
+      setStatus(doneMessage);
+      return;
+    }
+    const failedMessage =
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_170__" +
+      (payload.error || "__CACHEDB_MIGRATION_PLANNER_TOKEN_171__");
+    if (compareStatus) {
+      compareStatus.textContent = failedMessage;
+    }
+    setStatus(failedMessage);
+    setOutcome("__CACHEDB_MIGRATION_PLANNER_TOKEN_172__", failedMessage);
+  }
+  async function runComparisonSyncFallback(params) {
+    const payload = await fetchJson(
+      apiBase + "/api/migration-planner/compare",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        },
+        body: params.toString(),
+      },
+    );
+    renderComparison(payload);
+    const doneMessage = "__CACHEDB_MIGRATION_PLANNER_TOKEN_173__";
+    if (compareStatus) {
+      compareStatus.textContent = doneMessage;
+    }
+    setStatus(doneMessage);
+  }
+  function handleCompareJobError(error) {
+    clearCompareJobPoll();
+    setCompareButtonBusy(false);
+    const message = "__CACHEDB_MIGRATION_PLANNER_TOKEN_174__" + error.message;
+    if (compareStatus) {
+      compareStatus.textContent = message;
+    }
+    setStatus(message);
+    setOutcome("__CACHEDB_MIGRATION_PLANNER_TOKEN_175__", message);
+  }
+  async function runComparison() {
+    if (!ensureRegisteredSurfacesForExecution()) {
+      return;
+    }
+    const params = serializeForm();
+    const startMessage = "__CACHEDB_MIGRATION_PLANNER_TOKEN_176__";
+    clearCompareJobPoll();
+    setCompareButtonBusy(true);
+    if (compareStatus) {
+      compareStatus.textContent = startMessage;
+    }
+    setStatus(startMessage);
+    setFlowState("Compare", "active");
+    setNextAction(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_177__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_178__",
+      "compare",
+    );
+    scrollToPlannerTarget("plannerComparePanel");
+    try {
+      const started = await fetchJson(
+        apiBase + "/api/migration-planner/compare/start",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          },
+          body: params.toString(),
+        },
+      );
+      if (started && started.jobId) {
+        await pollCompareJob(started.jobId);
+        return;
+      }
+      await runComparisonSyncFallback(params);
+      setCompareButtonBusy(false);
+    } catch (error) {
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_179__");
+      try {
+        await runComparisonSyncFallback(params);
+      } catch (syncError) {
+        handleCompareJobError(syncError);
+      } finally {
+        setCompareButtonBusy(false);
+      }
+    }
+  }
+  Array.from(form.elements).forEach(function (field) {
+    if (!field || !field.name) {
+      return;
+    }
+    field.addEventListener("change", function () {
+      updatePlannerProgress();
+    });
+  });
+  function navigateToPlanFallback() {
+    const fallbackParams = serializeForm();
+    fallbackParams.set("lang", "__CACHEDB_MIGRATION_PLANNER_TOKEN_180__");
+    fallbackParams.set("v", "__CACHEDB_MIGRATION_PLANNER_TOKEN_181__");
+    fallbackParams.set("discover", "true");
+    fallbackParams.set("generatePlan", "true");
+    window.location.assign(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_182__?" + fallbackParams.toString(),
+    );
+  }
+  async function submitPlannerPlan() {
+    setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_183__");
+    setFlowState("Plan", "active");
+    setNextAction(
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_184__",
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_185__",
+      "plan",
+    );
+    try {
+      const payload = await fetchJson(apiBase + "/api/migration-planner/plan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        },
+        body: serializeForm().toString(),
+      });
+      renderPlan(payload);
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_186__");
+      warmStatus.textContent = "__CACHEDB_MIGRATION_PLANNER_TOKEN_187__";
+    } catch (error) {
+      setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_188__");
+      warmStatus.textContent = "__CACHEDB_MIGRATION_PLANNER_TOKEN_189__";
+      navigateToPlanFallback();
+    }
+  }
+  window.__cachedbPlannerGenerate = submitPlannerPlan;
+  form.addEventListener("submit", function (event) {
+    const submitter = event.submitter;
+    if (!submitter || submitter.id === "plannerGenerateAction") {
+      event.preventDefault();
+      submitPlannerPlan().catch(function () {});
+    }
+  });
+  warmButton.addEventListener("click", function (event) {
+    event.preventDefault();
+    warmExecution(false).catch(function () {});
+  });
+  warmPreviewButton.addEventListener("click", function (event) {
+    event.preventDefault();
+    warmExecution(true).catch(function () {});
+  });
+  if (scaffoldButton) {
+    scaffoldButton.addEventListener("click", function () {
+      scaffoldGeneration().catch(function () {});
+    });
+  }
+  if (compareButton) {
+    compareButton.addEventListener("click", function () {
+      runComparison().catch(function () {});
+    });
+  }
+  if (compareReportButton) {
+    compareReportButton.addEventListener("click", function () {
+      downloadComparisonReport();
+    });
+  }
+  if (compareCopyReportButton) {
+    compareCopyReportButton.addEventListener("click", function () {
+      copyComparisonReport().catch(function () {});
+    });
+  }
+  document.addEventListener("click", function (event) {
+    const suggestionButton = event.target.closest("[data-planner-suggestion]");
+    if (suggestionButton) {
+      event.preventDefault();
+      applyDiscoverySuggestion(
+        Number(suggestionButton.dataset.plannerSuggestion || -1),
+      );
+      return;
+    }
+    const objectButton = event.target.closest("[data-planner-object]");
+    if (objectButton) {
+      event.preventDefault();
+      applyDiscoveredObject(
+        Number(objectButton.dataset.plannerObject || -1),
+        objectButton.dataset.plannerRole || "child",
+      );
+    }
+  });
+  async function initializePlanner() {
+    applyPlannerMode("beginner");
+    applyRoutePreset(
+      (routePresetField && routePresetField.value) || "timeline",
+      true,
+    );
+    await loadTemplate();
+    if (bootstrapPlannerForm) {
+      fillForm(bootstrapPlannerForm);
+    }
+    await loadDemoDescriptor();
+    if (bootstrapDemoResult) {
+      renderDemoBootstrap(bootstrapDemoResult);
+    }
+    if (bootstrapDiscovery) {
+      renderDiscovery(bootstrapDiscovery);
+      setDiscoveryStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_190__");
+    } else {
+      await loadDiscovery(false);
+    }
+    if (bootstrapPlanResult) {
+      renderPlan(bootstrapPlanResult);
+    }
+    updatePlannerProgress();
+  }
+  initializePlanner().catch(function () {
+    setStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_191__");
+    setDiscoveryStatus("__CACHEDB_MIGRATION_PLANNER_TOKEN_192__");
+  });
+})();

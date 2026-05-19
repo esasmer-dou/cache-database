@@ -192,6 +192,23 @@ This means the UI uses the same host and same port as your Spring Boot app. Ther
 
 ## Minimum Dependencies
 
+### Which DataSource Dependency Should I Add?
+
+CacheDB's Spring Boot starter does not replace Spring JDBC or JPA
+auto-configuration. It reuses the `DataSource` that your application already
+has.
+
+| Your application already has | Add `spring-boot-starter-jdbc`? | Why |
+| --- | --- | --- |
+| `spring-boot-starter-data-jpa` | No | JPA already creates the Spring `DataSource` path |
+| `spring-boot-starter-jdbc` | No | The required `DataSource` path already exists |
+| A manually defined `DataSource` bean | No | CacheDB can reuse that bean |
+| No JDBC/JPA/DataSource setup | Yes | Spring needs a JDBC path to create a `DataSource` |
+
+The required contract is simple: by the time CacheDB autoconfiguration runs,
+there must be exactly one usable Spring `DataSource` or an explicitly selected
+one.
+
 ### Plain Java
 
 ```xml

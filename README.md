@@ -1,36 +1,56 @@
 # cache-database
 
-Turkce surum: [tr/README.md](tr/README.md)
+Turkish version: [tr/README.md](tr/README.md)
 
-Production recipe guide: [docs/production-recipes.md](docs/production-recipes.md)  
-ORM alternative guide: [docs/orm-alternative.md](docs/orm-alternative.md)  
-Migration planner guide: [docs/migration-planner.md](docs/migration-planner.md)  
-Public beta readiness: [docs/public-beta-readiness.md](docs/public-beta-readiness.md)  
-Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
+`cache-database` is a Redis-first Java persistence library for teams that want
+low runtime overhead without giving up an ORM-like developer experience.
 
-`cache-database` is a Redis-first persistence library for teams that care about production runtime overhead and still want an ORM-like developer experience.
+It is designed around one clear rule: keep the hot read/write path explicit,
+bounded, and measurable.
 
-It gives you:
+## What You Get
 
-- Redis-first reads and writes
-- PostgreSQL durability through async write-behind
-- compile-time generated metadata instead of runtime reflection
-- explicit relation loading, projections, and hotspot escape hatches
-- generated ergonomics that stay close to minimal repository overhead
+- Redis-first reads and writes for hot application routes.
+- PostgreSQL durability through async write-behind.
+- Compile-time generated metadata instead of runtime reflection.
+- ORM-like generated APIs for normal service code.
+- Explicit relation loading, projections, and read models for expensive screens.
+- Escape hatches to lower-level repositories when profiling proves a hotspot.
+- Same-port Spring Boot admin UI with migration planning, warm-up, and comparison flows.
+
+## Current Status
+
+CacheDB is suitable for public beta evaluation and staging pilots. It is not
+positioned as a no-caveats GA release yet.
+
+Use it with production discipline:
+
+- Redis must be treated as a real production dependency.
+- Relation-heavy list screens should use projection/read-model design.
+- Global sorted or ranked business screens should use ranked projections.
+- Cutover from an existing ORM should be rehearsed with warm-up and side-by-side comparison first.
+
+## Choose Your Starting Path
+
+| Situation | Start Here | Why |
+| --- | --- | --- |
+| New Spring Boot service | `cachedb-spring-boot-starter` | Fastest setup, same-port admin UI, production defaults |
+| Plain Java service | `cachedb-starter` | Full bootstrap control without Spring Boot |
+| Existing PostgreSQL + ORM app | Admin UI Migration Planner | Discover schema, choose hot routes, warm Redis, compare results |
+| Relation-heavy list screen | Projection/read-model | Avoid hydrating full aggregates on first paint |
+| One proven latency hotspot | `*CacheBinding` or direct repository | Lower ceremony and tighter control only where measured |
+| Internal worker/replay path | Direct repository | Predictable, explicit, low-allocation operational code |
 
 ## Install In 5 Minutes
 
-If you want the fastest path:
-
-1. add CacheDB dependencies to your `pom.xml`
-2. point it at Redis and PostgreSQL
-3. start with `GeneratedCacheModule.using(session)...`
-
 ### Maven: Spring Boot
+
+Use this when your application already uses Spring Boot and has or can create a
+Spring `DataSource`.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.1</cachedb.version>
+    <cachedb.version>0.1.0-beta.2</cachedb.version>
 </properties>
 
 <dependencies>
@@ -73,16 +93,18 @@ If you want the fastest path:
 </build>
 ```
 
-Use `spring-boot-starter-jdbc` only if your app does not already bring a `DataSource`
-through something like `spring-boot-starter-data-jpa`. CacheDB's Spring Boot
-starter expects an existing Spring `DataSource`; it does not create JDBC
-auto-configuration by itself.
+If your app already brings a `DataSource` through `spring-boot-starter-data-jpa`
+or another starter, do not add `spring-boot-starter-jdbc` again just for
+CacheDB. CacheDB needs a `DataSource`; it does not require duplicate JDBC
+auto-configuration.
 
 ### Maven: Plain Java
 
+Use this when you want to bootstrap `CacheDatabase` yourself.
+
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.1</cachedb.version>
+    <cachedb.version>0.1.0-beta.2</cachedb.version>
 </properties>
 
 <dependencies>
@@ -126,7 +148,7 @@ auto-configuration by itself.
 </build>
 ```
 
-### Minimal Spring Boot config
+### Minimal Spring Boot Configuration
 
 ```yaml
 spring:
@@ -142,61 +164,116 @@ cachedb:
     uri: redis://127.0.0.1:6379
 ```
 
-For the full copy-paste path, see [Getting Started](docs/getting-started.md).
-If you are migrating an existing PostgreSQL + ORM route, also open the
-[Migration Planner](docs/migration-planner.md) in the admin UI. It can now turn
-the route decision into a discovery-driven scaffold, a dry-run or real staging
-warm execution for the Redis hot set, a side-by-side PostgreSQL vs CacheDB
-comparison, and an automatic migration assessment that says whether the route is
-ready, needs review, or still has cutover blockers. It can also inspect
-PostgreSQL tables to seed the planner interactively.
+After startup, the admin UI is available on the same application port:
+
+- dashboard: `/cachedb-admin`
+- migration planner: `/cachedb-admin/migration-planner`
+- health API: `/cachedb-admin/api/health`
+
+## Day-One Implementation Flow
+
+1. Add the Maven dependencies.
+2. Configure PostgreSQL and Redis.
+3. Add `@CacheEntity` to your first hot entity.
+4. Let the annotation processor generate bindings.
+5. Start application code with `GeneratedCacheModule.using(session)...`.
+6. Add projections only for list screens that should not hydrate full aggregates.
+7. Use `withRelationLimit(...)` for preview rows such as "latest 8 order lines".
+8. Move only measured hotspots to direct repository usage.
+
+## Common Use Cases
+
+### Use Case 1: Customer Has Many Orders
+
+If the user opens a customer detail page and wants the latest 1,000 orders by
+date, do not load the full customer aggregate with every order line.
+
+Use this shape:
+
+- `CustomerEntity` stays the root entity.
+- `OrderEntity` stays durable in PostgreSQL and hot in Redis only for the needed window.
+- A customer-order summary projection stores the list fields needed by the screen.
+- The list query sorts by `order_date DESC, order_id DESC`.
+- The full order detail is fetched only when the user opens one order.
+
+Result: first paint stays bounded even as the customer history keeps growing.
+
+### Use Case 2: Dashboard Shows Top Business Rows
+
+If the screen is globally sorted by business priority, revenue, risk, or a
+compound score, use a ranked projection.
+
+Use this shape:
+
+- compute a stable `rank_score` or equivalent projection field
+- index/query the projection by that ranking field
+- keep the first page/window in Redis
+- avoid scanning wide entity payloads only to sort them later
+
+### Use Case 3: Existing ORM Route Migration
+
+If your app already runs on PostgreSQL and another ORM, do not migrate blindly.
+
+Use the Migration Planner:
+
+1. Open `/cachedb-admin/migration-planner`.
+2. Discover the PostgreSQL schema.
+3. Pick a suggested root/child route.
+4. Generate the recommended entity/projection scaffold.
+5. Run dry-run warm to inspect SQL without changing Redis.
+6. Run staging warm to fill the Redis hot set.
+7. Run side-by-side comparison.
+8. Cut over only if data parity, ordering, and latency are acceptable.
+
+For full-system migration, repeat this route by route until every production
+screen and API is classified as one of:
+
+- generated CRUD route
+- projection/read-model route
+- ranked projection route
+- direct repository/worker route
+- intentionally left on PostgreSQL cold path
 
 ## Why CacheDB
 
 Choose CacheDB when:
 
 - low-latency reads matter
-- Redis is a real production dependency in your architecture
+- Redis is already a real production dependency
 - you want explicit control over read-model shape
-- you want a library that starts ergonomic but lets you go lower on proven hotspots
+- relation fan-out can grow over time
+- you want generated ergonomics without runtime reflection
+- you need a staged path from PostgreSQL/ORM routes into Redis-first hot paths
 
 ## Why Not CacheDB
 
 Stay with a traditional JPA/Hibernate-style stack when:
 
-- your application is mainly driven by SQL joins and relational reporting
-- you want ORM behavior to stay mostly implicit
-- your team does not want to think about projections, fetch limits, or relation shape
-- Redis is not part of the real runtime plan
+- your application is mainly SQL join and reporting driven
+- implicit ORM behavior is a product requirement
+- the team does not want to own projection/read-model design
+- Redis is not part of the intended production runtime
 
-That tradeoff is intentional. CacheDB is optimized for explicit control and low runtime overhead, not for hiding persistence behavior.
-
-## How To Start
-
-1. Start with Spring Boot starter or the plain Java bootstrap path.
-2. Use `GeneratedCacheModule.using(session)...` as the default application surface.
-3. Move only measured hotspots lower to `*CacheBinding.using(session)...` or direct repositories.
-
-For relation-heavy screens, start with projections and `withRelationLimit(...)` before reaching for lower-level repository code.
+This tradeoff is intentional. CacheDB optimizes for explicit control,
+bounded hot paths, and predictable runtime overhead.
 
 ## Quick Comparison
 
 | Topic | CacheDB | Traditional ORM |
 | --- | --- | --- |
 | Primary read path | Redis-first | Database-first |
-| Metadata | Compile-time generated | Usually runtime reflection + ORM metadata |
-| Default relation model | Explicit fetch plans and loaders | Mostly implicit lazy/eager graph behavior |
-| Hotspot strategy | Measured escape hatch to lower surfaces | Often stays inside ORM abstractions |
-| Best fit | Low-latency services, Redis-centric systems | Relational domains, SQL-centric applications |
+| Durability | PostgreSQL through write-behind | Database transaction path |
+| Metadata | Compile-time generated | Usually runtime reflection and ORM metadata |
+| Relation model | Explicit fetch plans, loaders, projections | Mostly implicit lazy/eager behavior |
+| Hot list screens | Projection/read-model first | Often entity graph first |
+| Best fit | Low-latency services, Redis-centric systems | SQL-centric relational applications |
 
 ## Measured Evidence
 
-The claim here is not that ergonomics are free.
-
-The claim is narrower and more useful:
-
-- generated ergonomics stay in the same low-overhead band as the minimal repository path
-- the real production cost still comes from query shape, relation hydration, Redis contention, and write-behind pressure
+The claim is not that ergonomics are free. The practical claim is that generated
+ergonomics stay in the same low-overhead band as the minimal repository path,
+while the larger production cost usually comes from query shape, relation
+hydration, Redis contention, and write-behind pressure.
 
 Latest local recipe benchmark snapshot:
 
@@ -208,14 +285,6 @@ Latest local recipe benchmark snapshot:
 
 ![Repository recipe benchmark](docs/assets/repository-recipe-benchmark.svg)
 
-Measured operations in this snapshot:
-
-- `activeCustomers`
-- `customersPage`
-- `topCustomerOrdersSummary`
-- `promoteVipCustomer`
-- `deleteCustomer`
-
 Re-run the report with:
 
 ```powershell
@@ -223,104 +292,30 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
   "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.RepositoryRecipeBenchmarkMain"
 ```
 
-Output:
-
-- `target/cachedb-prodtest-reports/repository-recipe-comparison.md`
-- `target/cachedb-prodtest-reports/repository-recipe-comparison.json`
-
-Interpretation note:
-
-- this benchmark is directional, not a promise that one wrapper surface always wins every micro-run
-- the important result is that generated ergonomics remain in the same order of magnitude as direct repository usage
-
-## Should You Start With CacheDB?
-
-```mermaid
-flowchart TD
-    A["Do low-latency reads and explicit runtime control matter?"] -->|Yes| B["Is Redis a real production dependency?"]
-    A -->|No| C["Traditional ORM is usually the simpler default"]
-    B -->|Yes| D["Start with CacheDB"]
-    B -->|No| E["Traditional ORM is usually the better fit"]
-    D --> F["Use GeneratedCacheModule first"]
-    F --> G["Use projections and relation limits for list screens"]
-    G --> H["Drop only measured hotspots lower"]
-```
-
-## Core Design
-
-- no runtime reflection
-- compile-time generated entity metadata
-- Redis-first reads and writes
-- PostgreSQL durability via async write-behind
-- explicit relation loading and projection-based read models
-- guardrails for hot-data budgets and runtime pressure
-
 ## Production Recipe Ladder
 
 ![Production recipe ladder](docs/assets/production-recipe-ladder.svg)
 
 Rule of thumb:
 
-1. start with `GeneratedCacheModule.using(session)...`
-2. move only hot endpoints to `*CacheBinding.using(session)...`
-3. drop only proven hotspots, replay paths, or workers to direct repositories
-
-## Fastest Start
-
-### Spring Boot
-
-```yaml
-spring:
-  datasource:
-    url: jdbc:postgresql://127.0.0.1:5432/app
-    username: app
-    password: app
-
-cachedb:
-  enabled: true
-  profile: production
-  redis:
-    uri: redis://127.0.0.1:6379
-```
-
-### Plain Java
-
-```java
-JedisPooled jedis = new JedisPooled("redis://127.0.0.1:6379");
-DataSource dataSource = ...;
-
-try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
-        .production()
-        .keyPrefix("app-cache")
-        .register(com.reactor.cachedb.examples.entity.GeneratedCacheBindings::register)
-        .start()) {
-    // use repositories here
-}
-```
-
-What you get on the recommended path:
-
-- production-oriented defaults
-- split foreground/background Redis pools
-- generated registrar auto-registration
-- same-port admin UI in Spring Boot
-- clear projection + relation-limit path for relation-heavy reads
+1. Start with `GeneratedCacheModule.using(session)...`.
+2. Move hot endpoints to `*CacheBinding.using(session)...` only when measured.
+3. Drop proven hotspots, replay paths, or workers to direct repositories.
+4. Use projection/read-models for relation-heavy and globally sorted screens.
 
 ## Read Next
 
-- [Production Recipes](docs/production-recipes.md)
 - [Getting Started](docs/getting-started.md)
-- [ORM Alternative Guide](docs/orm-alternative.md)
-- [Public Beta Launch Kit](docs/public-beta-launch-kit.md)
-- [Maven Central Publish Checklist](docs/maven-central-publish-checklist.md)
-- [Public Beta Readiness](docs/public-beta-readiness.md)
-- [Release Checklist](docs/release-checklist.md)
-- [Positioning Announcement Draft](docs/positioning-announcement.md)
 - [Spring Boot Starter](docs/spring-boot-starter.md)
+- [Migration Planner](docs/migration-planner.md)
+- [Production Recipes](docs/production-recipes.md)
+- [ORM Alternative Guide](docs/orm-alternative.md)
 - [Tuning Parameters](docs/tuning-parameters.md)
 - [Production Tests](cachedb-production-tests/README.md)
 - [Examples](cachedb-examples/README.md)
 - [Architecture](docs/architecture.md)
+- [Public Beta Readiness](docs/public-beta-readiness.md)
+- [Release Checklist](docs/release-checklist.md)
 
 ## Community
 

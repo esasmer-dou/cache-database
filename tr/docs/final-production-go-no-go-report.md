@@ -24,7 +24,7 @@ Bu kanıtlar önceki ana blokajlari kapatiyor:
 
 - uzun koşu steady-state backlog artık kontrolsuz buyumuyor
 - uzun soak artık `DOWN` ile bitmiyor
-- certification koşularinda drain completion stabil
+- certification koşularında drain completion stabil
 - hard producer rejection kalmadi
 - restart, replay, rebuild ve fault recovery akışları geçmeye devam ediyor
 
@@ -52,3 +52,4 @@ Bu `GO` karari doğru yorumlanmali:
 - `target/cachedb-prodtest-reports/production-gate-ladder-report.md`
 - `target/cachedb-prodtest-reports/campaign-push-spike-soak-1h.md`
 - `target/cachedb-prodtest-reports/campaign-push-spike-soak-4h.md`
+

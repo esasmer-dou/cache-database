@@ -2,12 +2,34 @@
 
 This module contains runnable examples for `cache-database`.
 
+Use it for two purposes:
+
+- observe Redis-first runtime behavior under demo load
+- rehearse the migration planner flow against a real PostgreSQL demo schema
+
+## Spring Boot Demo
+
+Start the recommended demo with:
+
+```powershell
+./tools/ops/demo/run-spring-boot-load-demo.ps1
+```
+
+Open:
+
+- demo load UI: `http://127.0.0.1:8090/demo-load`
+- admin dashboard: `http://127.0.0.1:8090/cachedb-admin?lang=tr`
+- migration planner: `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`
+
+The load UI and admin dashboard use the same Spring Boot application port. There
+is no second public admin server in this mode.
+
 ## Load Scenario Workspace
 
-The load scenario workspace starts:
+The load workspace includes:
 
 - a Bootstrap + AJAX control UI for seeding data and starting load profiles
-- the existing CacheDB admin dashboard for monitoring backlog, incidents, memory, and routing
+- CacheDB admin dashboard pages for backlog, incidents, memory, routing, and migration planning
 
 Demo domain:
 
@@ -16,14 +38,6 @@ Demo domain:
 - `DemoCartEntity`
 - `DemoOrderEntity`
 - `DemoOrderLineEntity`
-
-UI views:
-
-- customers
-- products
-- carts
-- orders
-- order lines
 
 Default seeded volume:
 
@@ -34,15 +48,61 @@ Default seeded volume:
 - order lines: `54,000`
 - total: `65,300`
 
-This default profile is meant to stay interactive in the Spring Boot demo while still feeling like a believable commerce slice. Most of the physical volume still sits in order lines, but the overall footprint is smaller so `Seed`, `Clear`, `Fresh Start`, and `LOW / MEDIUM / HIGH` transitions remain practical during repeated observation runs.
+The volume is intentionally large enough to show relation-heavy behavior, but
+small enough to keep repeated local demo runs practical.
+
+## Which Button Should I Press?
+
+For a normal load demo:
+
+1. Open `http://127.0.0.1:8090/demo-load`.
+2. Click `Seed Demo Data`.
+3. Start `LOW` and watch admin metrics.
+4. Move to `MEDIUM`.
+5. Move to `HIGH` only after the previous profile is stable.
+6. Watch write-behind backlog, Redis memory, incidents, and runtime profile.
+
+If `LOW / MEDIUM / HIGH` fails because data is missing, seed first. The demo no
+longer silently starts seed work behind a load button.
 
 Load profiles:
 
 - `LOW`: daytime traffic with catalog browsing, full-customer sweeps, and light bulk cart/product updates
-- `MEDIUM`: evening shopping traffic with large catalog reads, top-customer order lookups, and balanced bulk writes
+- `MEDIUM`: evening shopping traffic with larger reads, top-customer order lookups, and balanced bulk writes
 - `HIGH`: campaign-hour spike with full customer scans, high-line-count order reads, and dense stock/cart/order bursts
 
-Run standalone demo:
+## Migration Planner Demo Flow
+
+Use this flow when you want to test existing-PostgreSQL migration behavior:
+
+1. Open `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`.
+2. Click `Create and seed the demo schema`.
+3. Run PostgreSQL schema discovery.
+4. Pick a suggested route such as customer to orders.
+5. Click `Apply to form`.
+6. Click `Generate plan`.
+7. Generate scaffold if you want Java skeleton output.
+8. Run dry-run warm.
+9. Run real staging warm.
+10. Run side-by-side compare.
+11. Download the migration report.
+
+Prepared demo objects:
+
+- `cachedb_migration_demo_customers`
+- `cachedb_migration_demo_orders`
+- `cachedb_migration_demo_customer_order_timeline_v`
+- `cachedb_migration_demo_customer_metrics_v`
+- `cachedb_migration_demo_ranked_orders_v`
+
+If comparison says the route is not ready, inspect the report before changing
+the route. A fast CacheDB number is not enough; first-page membership and order
+must also match PostgreSQL for the selected route.
+
+## Standalone Demo
+
+Use the standalone mode only when you explicitly want to run outside Spring
+Boot:
 
 ```powershell
 mvn -q -pl cachedb-examples -am exec:java `
@@ -53,42 +113,10 @@ mvn -q -pl cachedb-examples -am exec:java `
   "-Dcachedb.demo.jdbcPassword=postgresql"
 ```
 
-Default URLs:
+Default standalone URLs:
 
 - demo load UI: `http://127.0.0.1:8090`
 - admin dashboard: `http://127.0.0.1:8080/dashboard`
-
-Run Spring Boot demo:
-
-```powershell
-./tools/ops/demo/run-spring-boot-load-demo.ps1
-```
-
-Spring Boot URLs:
-
-- demo load UI: `http://127.0.0.1:8090/demo-load`
-- admin dashboard: `http://127.0.0.1:8090/cachedb-admin?lang=tr`
-- migration planner wizard: `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`
-
-Spring Boot notes:
-
-- the load UI and admin dashboard share the same application port
-- there is no second internal admin HTTP server in Spring Boot mode
-- the same seed volume and LOW / MEDIUM / HIGH scenarios are reused
-- the demo Redis pool is widened by default to match the heavier standalone load behavior
-- foreground repository Redis traffic and background worker/admin traffic use separate pools in the Spring Boot demo
-- `Start LOW / MEDIUM / HIGH` does not auto-seed; if data is not ready, the UI returns a direct error and asks you to seed first
-- Spring Boot demo now uses zero-glue generated registrar discovery, so bindings are auto-registered without an explicit `GeneratedCacheBindings.register(...)` call
-- the migration planner page can now bootstrap its own PostgreSQL customer/order demo schema with PK/FK, indexes, seeded history, and inspection views
-
-Migration planner demo flow:
-
-1. open `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`
-2. click `Create and seed the demo schema`
-3. review discovered tables plus views
-4. generate scaffold
-5. run dry-run warm, then real warm
-6. run side-by-side compare and download the migration report
 
 ## Read-Model Example
 
@@ -96,48 +124,34 @@ For production-style relation-heavy screens, see:
 
 - [src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java](src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java)
 
-This example shows the preferred pattern:
+This example represents the common "customer has many orders" problem:
 
-- summary query first
-- explicit detail fetch second
-- limited relation preload only when it is intentional
-- generated binding classes and fluent `QuerySpec.where(...).orderBy(...).limitTo(...)` usage
-- generated projection helpers such as `DemoOrderEntityCacheBinding.orderSummary(orderRepository)`
-- generated named query helpers such as `DemoOrderEntityCacheBinding.topCustomerOrders(orderSummaryRepository, customerId, 24)`
-- generated fetch preset helpers such as `DemoOrderEntityCacheBinding.orderLinesPreviewRepository(orderRepository, 8)`
-- generated page preset helpers such as `UserEntityCacheBinding.usersPage(session, 0, 25)`
-- generated write command helpers such as `UserEntityCacheBinding.activateUser(session, 41L, "alice")`
-- session-bound use-case groups such as `UserEntityCacheBinding.using(session).queries().activeUsers(25)`
-- package-level domain modules such as `com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session).users().queries().activeUsers(25)`
+- query summaries first
+- fetch detail explicitly when the user opens a row
+- limit relation preload when showing previews
+- use projection-specific Redis indexes instead of decoding wide base entities
+- move read-model maintenance out of the foreground write path with `EntityProjection.asyncRefresh()`
 
-The example uses:
+Generated helpers shown by the example:
 
-- `FetchPlan.withRelationLimit("orderLines", 8)`
-- a separate summary read model instead of rendering directly from a large eager object graph
-- projection-specific Redis indexes instead of reusing only the base entity payload path
-- `EntityProjection.asyncRefresh()` so read-model maintenance can move off the foreground write path
+- `DemoOrderEntityCacheBinding.orderSummary(orderRepository)`
+- `DemoOrderEntityCacheBinding.topCustomerOrders(orderSummaryRepository, customerId, 24)`
+- `DemoOrderEntityCacheBinding.orderLinesPreviewRepository(orderRepository, 8)`
+- `UserEntityCacheBinding.usersPage(session, 0, 25)`
+- `UserEntityCacheBinding.activateUser(session, 41L, "alice")`
+- `UserEntityCacheBinding.using(session).queries().activeUsers(25)`
+- `com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session).users().queries().activeUsers(25)`
 
-Important note:
+Important consistency note:
 
-- the current async projection refresh is Redis Stream-backed durable eventual consistency
-- it improves production write overhead and read payload size
-- refresh events survive process restarts and can be consumed through a Redis consumer group
-- it is still not a full projection platform with poison-queue handling or dedicated replay tooling
+- async projection refresh is Redis Stream-backed and durable
+- refresh events survive process restarts
+- projection reads are eventually consistent by design
+- cutover decisions still need side-by-side parity checks for migrated routes
 
-Suggested flow:
+## Runtime Tuning
 
-1. Open the demo load UI.
-2. Click `Seed Demo Data`.
-3. Start `LOW`, then `MEDIUM`, then `HIGH`.
-4. Keep the admin dashboard open in parallel and watch:
-   - write-behind backlog
-   - Redis memory
-   - incidents
-   - runtime profile
-   - alert routing
-   - incident severity trends
-
-Runtime tuning:
+Common demo knobs:
 
 - demo Redis connection and pool: `cachedb.demo.redis.*`
 - demo PostgreSQL connection: `cachedb.demo.postgres.*`

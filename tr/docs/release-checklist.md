@@ -35,7 +35,7 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 ## Publishing
 
 - `oss-release` Maven profilinin sources ve javadocs üretebildigini doğrula
-- seçilen release kanali için signing config ve seçret'lari doğrula
+- seçilen release kanali için signing config ve secret'ları doğrula
 - hedef release workflow ve credential'lari doğrula
 
 ## GitHub / Repo Ayarlari
@@ -51,3 +51,4 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 - production recipe rehberi güncel
 - yeni tuning parametreleri dokümante edildi
 - public beta sinirlari açıkça yazıli
+

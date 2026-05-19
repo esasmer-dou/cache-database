@@ -1,0 +1,16 @@
+<div id="plannerDiscoveryPanel" class="result-card mb-4">
+  <div class="result-card-header">__CACHEDB_HTML_DISCOVERY_TITLE__</div>
+  <div class="result-card-body">
+    <form id="plannerDiscoveryFallbackForm" method="get" action="__CACHEDB_HTML_ACTION__" class="planner-actions">
+      <input type="hidden" name="lang" value="__CACHEDB_HTML_LANGUAGE__">
+      <input type="hidden" name="v" value="__CACHEDB_HTML_INSTANCE_ID__">
+      <input type="hidden" name="discover" value="true">
+      <button id="plannerDiscoverAction" type="submit" class="btn btn-outline-primary">__CACHEDB_HTML_DISCOVERY_BUTTON__</button>
+    </form>
+    <div id="plannerDiscoveryStatus" class="planner-status mt-3">__CACHEDB_HTML_DISCOVERY_STATUS__</div>
+    <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_SUGGESTIONS_LABEL__</div>
+    <div id="plannerDiscoverySuggestions">__CACHEDB_HTML_SUGGESTIONS__</div>
+    <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_TABLES_LABEL__</div>
+    <div id="plannerDiscoveryTables">__CACHEDB_HTML_TABLES__</div>
+  </div>
+</div>

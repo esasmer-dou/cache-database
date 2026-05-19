@@ -16,9 +16,54 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MigrationWarmRunnerTest {
+
+    @Test
+    void shouldExplainMissingRegisteredEntityBeforeWarm() {
+        MigrationWarmRunner runner = new MigrationWarmRunner(
+                newDataSource("warm-missing-entity"),
+                new RecordingHydratorFactory()
+        );
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> runner.execute(new MigrationWarmRunner.Request(
+                new MigrationPlanner.Request(
+                        "customer-orders",
+                        "customer",
+                        "customer_id",
+                        "orders",
+                        "order_id",
+                        "customer_id",
+                        "order_date",
+                        "DESC",
+                        2L,
+                        4L,
+                        3L,
+                        4L,
+                        2,
+                        2,
+                        true,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false,
+                        true,
+                        true,
+                        true
+                ),
+                true,
+                false,
+                25,
+                25,
+                50
+        )));
+
+        assertTrue(exception.getMessage().contains("No registered CacheDB entity found for child surface: orders"));
+        assertTrue(exception.getMessage().contains("Choose the entity-mapped surface from schema discovery"));
+    }
 
     @Test
     void shouldWarmChildRowsAndReferencedRootsFromPostgres() throws SQLException {

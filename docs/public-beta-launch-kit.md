@@ -45,13 +45,13 @@ Recommended caveat:
 
 `Public beta: projection/read-model discipline is part of the intended design, especially for relation-heavy and globally ranked screens.`
 
-## First Public Release Title
+## Current Public Beta Release Title
 
-`cache-database public beta`
+`cache-database v0.1.0-beta.2`
 
-Suggested first tag:
+Current tag:
 
-`v0.1.0-beta.1`
+`v0.1.0-beta.2`
 
 ## First Public Release Notes
 

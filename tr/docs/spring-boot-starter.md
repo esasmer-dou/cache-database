@@ -95,7 +95,7 @@ Bu da çoğu uygulamada `ExampleBindings` benzeri elle yazılmış toplayıcı r
 Bu yol şu durumlarda uygundur:
 
 - küçük bir API yüzeyi istiyorsan
-- iyi varsayılanlarla hızli başlamak istiyorsan
+- iyi varsayılanlarla hızlı başlamak istiyorsan
 - sonra gerekirse tam config builder yoluna inmek istiyorsan
 
 ### Spring Boot, en az seremoni
@@ -118,9 +118,9 @@ Bu kadar ayarla:
 
 - `CacheDatabase` bean oluşur
 - split foreground/background Redis pool devreye girer
-- admin UI aynı porttan yayınlanir
+- admin UI aynı porttan yayınlanır
 - production odaklı write-behind ve guardrail varsayılanlari gelir
-- worker consumer adları için otomatik runtime `instanceId` çözulur
+- worker consumer adları için otomatik runtime `instanceId` çözülür
 - cleanup/report/history benzeri tekil loop'lar için Redis leader lease devreye girer
 
 ### Çok Pod'lu Kubernetes Varsayılanlari
@@ -140,7 +140,7 @@ Varsayılan `instanceId` çözme sırası:
 5. `COMPUTERNAME`
 6. üretilen UUID
 
-Önerilen Kubernetes başlangici:
+Önerilen Kubernetes başlangıçi:
 
 ```yaml
 cachedb:
@@ -156,42 +156,58 @@ cachedb:
     leader-lease-segment: coordination:leader
 ```
 
-`cachedb.runtime.instance-id` değerini ancak uygulama seviyesinde açık bir kimlik istedigin durumda ver. Kubernetes'te çoğu zaman varsayılan hostname/pod-name çözumu doğru seçimdir.
+`cachedb.runtime.instance-id` değerini ancak uygulama seviyesinde açık bir kimlik istediğin durumda ver. Kubernetes'te çoğu zaman varsayılan hostname/pod-name çözümü doğru seçimdir.
 
-Aynı host üzerinde local multi-instance smoke koşarken ise bunun tersini yap: her process için açık `cachedb.runtime.instance-id` ver ya da [../tools/ops/cluster/run-multi-instance-coordination-smoke.ps1](../tools/ops/cluster/run-multi-instance-coordination-smoke.ps1) script'ini kullan. Tek workstation genelde tek `HOSTNAME` paylastigi için, sadece hostname çözumu ile gitmek gerçek pod davranisinda görmeyecegin consumer kimliği sorunlarini saklayabilir.
+Aynı host üzerinde local multi-instance smoke koşarken ise bunun tersini yap: her process için açık `cachedb.runtime.instance-id` ver ya da [../tools/ops/cluster/run-multi-instance-coordination-smoke.ps1](../tools/ops/cluster/run-multi-instance-coordination-smoke.ps1) script'ini kullan. Tek workstation genelde tek `HOSTNAME` paylaştığı için, sadece hostname çözümü ile gitmek gerçek pod davranışinda görmeyeceğin consumer kimliği sorunlarini saklayabilir.
 
 ## Kullanım Modlari
 
 ### 1. Düz Java kütüphanesi
 
-Bu yol, `CacheDatabase` nesnesini kendin bootstrap etmek istediginde uygundur.
+Bu yol, `CacheDatabase` nesnesini kendin bootstrap etmek istediğinde uygundur.
 
 Minimum parcalar:
 
 - `cachedb-annotations`
 - `cachedb-processor`
 - `cachedb-starter`
-- kendi `DataSource` tanımin
-- kendi `JedisPooled` tanımin
+- kendi `DataSource` tanımın
+- kendi `JedisPooled` tanımın
 
 ### 2. Spring Boot starter
 
-Bu yol, Spring Boot'un şu isleri üstlenmesini istediginde uygundur:
+Bu yol, Spring Boot'un şu işleri üstlenmesini istediğinde uygundur:
 
 - `CacheDatabase` bean'ini oluşturmak
 - `JedisPooled` bean'ini config'ten kurmak
 - mevcut Spring `DataSource` bean'ini kullanmak
 - CacheDB admin UI'ini Spring Boot web sunucusunun aynı portundan yayınlamak
-- admin dashboard sayfasini Thymeleaf ile render etmek
+- admin dashboard sayfasını Thymeleaf ile render etmek
 
-Admin UI varsayılan olarak şu taban yolundan açılir:
+Admin UI varsayılan olarak şu taban yolundan açılır:
 
 - `/cachedb-admin`
 - `/cachedb-admin/migration-planner`
 
-Yani ikinci bir public admin portu açılmaz. Uygulamanin host ve port'u neyse admin UI da aynı porttan servis edilir.
+Yani ikinci bir public admin portu açılmaz. Uygulamanın host ve port'u neyse admin UI da aynı porttan servis edilir.
 
-## Minimum Bağımliliklar
+## Minimum Bağımlılıklar
+
+### Hangi DataSource Bağımlılığını Eklemeliyim?
+
+CacheDB Spring Boot starter, Spring JDBC veya JPA auto-configuration yerine
+geçmez. Uygulamanın zaten sahip olduğu `DataSource` bean'ini kullanır.
+
+| Uygulamada zaten ne var? | `spring-boot-starter-jdbc` eklenmeli mi? | Neden |
+| --- | --- | --- |
+| `spring-boot-starter-data-jpa` | Hayır | JPA zaten Spring `DataSource` yolunu oluşturur |
+| `spring-boot-starter-jdbc` | Hayır | Gerekli `DataSource` yolu zaten vardır |
+| Elle tanımlanmış `DataSource` bean'i | Hayır | CacheDB bu bean'i kullanabilir |
+| JDBC/JPA/DataSource yok | Evet | Spring'in `DataSource` oluşturması için JDBC yolu gerekir |
+
+Gerekli sözleşme basittir: CacheDB autoconfiguration çalıştığında uygulamada
+kullanılabilir tek bir Spring `DataSource` olmalı ya da hangi `DataSource`'un
+kullanılacağı açıkça seçilmelidir.
 
 ### Düz Java
 
@@ -287,7 +303,7 @@ Notlar:
 - `cachedb.profile` şu değerleri kabul eder: `default`, `development`, `production`, `benchmark`, `memory-constrained`, `minimal-overhead`.
 - generated package registrar'lari `ServiceLoader` ile otomatik kesfedilir; normal Spring Boot yolunda entity binding'leri için elle `register(...)` çağrısı gerekmez
 - tamamen manuel binding registration istiyorsan `cachedb.registration.enabled=false` kullanabilirsin
-- `cachedb.runtime.append-instance-id-to-consumer-names=true` çok pod'lu güvenli varsayılandir; consumer group'lari ortak birakir ama consumer adlarıni pod-unique yapar
+- `cachedb.runtime.append-instance-id-to-consumer-names=true` çok pod'lu güvenli varsayılandır; consumer group'lari ortak bırakir ama consumer adlarıni pod-unique yapar
 - `cachedb.runtime.leader-lease-enabled=true` cleanup/report/history loop'larini Redis leader lease altına alir; boylece her pod aynı singleton isi koşmaz
 
 ## İlk Çalışan Düz Java Örneği
@@ -336,10 +352,10 @@ Bu turdaki temel kolayliklar:
 - generated `*CacheBinding.repository(session)` artık explicit cache policy istemiyor
 - `EntityRepository` ve `ProjectionRepository` için kısa `query(...)` overload'lari var
 - `QuerySpec.where(...).orderBy(...).limitTo(...).fetching(...)` immutable fluent akış sunuyor
-- entity içindeki `@CacheNamedQuery` isaretli statik metodlar `UserEntityCacheBinding.activeUsers(...)` gibi helper'lar üretir
-- entity içindeki `@CacheFetchPreset` isaretli statik metodlar `DemoOrderEntityCacheBinding.orderLinesPreviewRepository(...)` gibi helper'lar üretir
-- entity içindeki `@CachePagePreset` isaretli statik metodlar `UserEntityCacheBinding.usersPage(...)` gibi helper'lar üretir
-- entity içindeki `@CacheSaveCommand` ve `@CacheDeleteCommand` isaretli statik metodlar `UserEntityCacheBinding.activateUser(...)` ve `UserEntityCacheBinding.deleteUser(...)` gibi helper'lar üretir
+- entity içindeki `@CacheNamedQuery` işaretli statik metodlar `UserEntityCacheBinding.activeUsers(...)` gibi helper'lar üretir
+- entity içindeki `@CacheFetchPreset` işaretli statik metodlar `DemoOrderEntityCacheBinding.orderLinesPreviewRepository(...)` gibi helper'lar üretir
+- entity içindeki `@CachePagePreset` işaretli statik metodlar `UserEntityCacheBinding.usersPage(...)` gibi helper'lar üretir
+- entity içindeki `@CacheSaveCommand` ve `@CacheDeleteCommand` işaretli statik metodlar `UserEntityCacheBinding.activateUser(...)` ve `UserEntityCacheBinding.deleteUser(...)` gibi helper'lar üretir
 
 Örnek:
 
@@ -386,7 +402,7 @@ Relation ağır ekranlarda önerilen desen:
 
 ## Minimal Overhead Modu
 
-CacheDB'yi gömülü kütüphane gibi kullanıyor ve admin UI ya da admin telemetrisine ihtiyaçin yoksa, açık bir minimal-overhead profili kullanman daha doğru olur.
+CacheDB'yi gömülü kütüphane gibi kullanıyor ve admin UI ya da admin telemetrisine ihtiyacın yoksa, açık bir minimal-overhead profili kullanman daha doğru olur.
 
 Düz Java:
 
@@ -421,7 +437,7 @@ Semeru JDK 21 ile aldigimiz odaklı benchmark sonucu:
 - `enabledIncidentThreadDelta=1`
 - `activeMinusNoopBytes=4259840`
 
-Bu ölçum tam uygulama benchmark'i değil; admin kapali modda ek admin thread açılmadigini ve aktif collector yolunun no-op yola göre daha fazla heap tuttugunu gösteren hedefli bir doğrulamadir.
+Bu ölçüm tam uygulama benchmark'i değil; admin kapali modda ek admin thread açılmadigini ve aktif collector yolunun no-op yola göre daha fazla heap tuttugunu gösteren hedefli bir doğrulamadir.
 
 ## İlk Çalışan Spring Boot Örneği
 
@@ -461,7 +477,7 @@ cachedb:
 Bu kurulumla:
 
 - Spring Boot uygulaman aynı `server.port` üzerinde çalışmaya devam eder
-- CacheDB admin UI aynı porttan yayınlanir
+- CacheDB admin UI aynı porttan yayınlanır
 - public dashboard URL'i şu olur:
   - `http://127.0.0.1:8080/cachedb-admin`
 
@@ -469,7 +485,7 @@ Bu kurulumla:
 
 Spring Boot starter artık split Redis pool yapısini varsayılan üretim reçetesi olarak kabul eder.
 
-Varsayılan davranis:
+Varsayılan davranış:
 
 - repository veri yolu `cachedb.redis.pool.*` havuzunu kullanır
 - worker/admin/telemetry arka plan yolu `cachedb.redis.background.pool.*` havuzunu kullanır
@@ -505,7 +521,7 @@ Neden önemli:
 
 - repository okumaları write-behind/recovery/admin trafiğiyle aynı havuzda birikmez
 - karisik yuk altında p95 okuma geçikmesi daha stabil olur
-- foreground SLA ile background bakim trafiği daha temiz ayrisir
+- foreground SLA ile background bakım trafiği daha temiz ayrisir
 - worker stream read komutlari foreground ile aynı kısa read timeout'u kullanmaz; bu da blocking Redis komutlarinda sahte `SocketTimeoutException: Read timed out` gürültüsunu azaltir
 
 Eski tek-pool davranışını istiyorsan:
@@ -538,7 +554,7 @@ Bu durumda:
 - Spring Boot `/cachedb-admin/*` yollarini yayınlamaz
 - `CacheDatabase` içinde admin monitoring kapatilir
 - performance collection no-op collector yoluna geçer
-- admin tarafi history ve delivery worker'lari başlamaz
+- admin tarafı history ve delivery worker'lari başlamaz
 
 ## Starter Neleri Oluşturur
 
@@ -556,11 +572,11 @@ Bu tasarım sayesinde admin UI aynı porttan gelir ve Spring Boot modunda ikinci
 
 Davranis:
 
-- dış kullanıcı Boot uygulamasinin base path'i altından admin UI'a erisir
-- dashboard içindeki API çağrılari da bu base path'e göre çalışir
+- dış kullanıcı Boot uygulamasinin base path'i altından admin UI'a erişir
+- dashboard içindeki API çağrıları da bu base path'e göre çalışır
 - admin route'lari Spring Boot servlet konteyneri içinde doğrudan dispatch edilir
-- base path'in koku ve `/dashboard` sayfasi Thymeleaf ile render edilir
-- `/dashboard-v3` eski bookmark'lar için legacy redirect olarak kalir
+- base path'in kökü ve `/dashboard` sayfasi Thymeleaf ile render edilir
+- `/dashboard-v3` eski bookmark'lar için legacy redirect olarak kalır
 - `/api/*` aynı portta native admin servlet tarafından servis edilir
 
 Varsayılan dış URL'ler:
@@ -607,7 +623,7 @@ CacheDatabaseConfigCustomizer cacheDatabaseProjectionCustomizer() {
 }
 ```
 
-Bu yol, durable Redis Stream tabanlı projection refresh davranışını sadece `-Dcachedb.config.projectionRefresh.*` flag'lerine bağlı kalmadan Spring Boot içinden kurmak istediginde kullanılir.
+Bu yol, durable Redis Stream tabanlı projection refresh davranışını sadece `-Dcachedb.config.projectionRefresh.*` flag'lerine bağlı kalmadan Spring Boot içinden kurmak istediğinde kullanılir.
 
 Operasyonel yüzeyler:
 
@@ -665,10 +681,10 @@ ProjectionRepository<DemoOrderReadModelPatterns.OrderLinePreviewReadModel, Long>
 
 Projection-specific index ve refresh:
 
-- her projection kendi Redis namespace'i ve query index seti ile çalışir
-- projection cache isindiginda okuma tarafi tam base entity payload decode etmek zorunda kalmaz
-- `EntityProjection.asyncRefresh()` projection bakimini foreground write path dışına iter
-- async refresh artık Redis Stream tabanlı durable worker ile çalışir
+- her projection kendi Redis namespace'i ve query index seti ile çalışır
+- projection cache isindiginda okuma tarafı tam base entity payload decode etmek zorunda kalmaz
+- `EntityProjection.asyncRefresh()` projection bakımini foreground write path dışına iter
+- async refresh artık Redis Stream tabanlı durable worker ile çalışır
 - refresh event'leri process restart sonrasında kaybolmaz; Redis consumer group üzerinden birden fazla uygulama node'u tarafından işlenebilir
 - model tasarım geregi hala eventual consistency tabanlıdir
 - ama henüz poison queue, replay tooling veya ayrik admin telemetrisi olan tam bir projection platformu değildir
@@ -704,7 +720,7 @@ Referans örnek:
 
 Production tarafında neden önemli:
 
-- Redis key/value okuma hızli olsa bile relation-heavy query yine aday filtreleme, decode, sort ve object graph materialization maliyeti oder
+- Redis key/value okuma hızlı olsa bile relation-heavy query yine aday filtreleme, decode, sort ve object graph materialization maliyeti öder
 - pahalı kisim genellikle tek bir `GET` değil, ne kadar büyük graph hydrate ettiğindir
 - daha küçük summary query'ler p95'i gerçek repository hot path'e daha yakın tutar
 
@@ -725,9 +741,12 @@ Tam tablo için:
 
 ## Önerilen Sonraki Adim
 
-Starter'i bağladiktan sonra tipik sonraki adimlar şunlardir:
+Starter'i bağladiktan sonra tipik sonraki adımlar şunlardir:
 
 - entity ve relation loader'larini kaydetmek
 - pahalı liste akışları için page loader tanımlamak
 - admin explain UI ile fetch planlarıni doğrulamak
 - `/cachedb-admin` üzerinden admin UI erisimini kontrol etmek
+
+
+

@@ -2,12 +2,34 @@
 
 Bu modül, `cache-database` için çalıştırılabilir örnekler içerir.
 
+İki amaç için kullan:
+
+- demo yük altında Redis-first runtime davranışını gözlemlemek
+- gerçek bir PostgreSQL demo şeması üzerinde migration planner akışını prova etmek
+
+## Spring Boot Demo
+
+Önerilen demoyu şu komutla başlat:
+
+```powershell
+./tools/ops/demo/run-spring-boot-load-demo.ps1
+```
+
+Açılacak adresler:
+
+- demo load UI: `http://127.0.0.1:8090/demo-load`
+- admin dashboard: `http://127.0.0.1:8090/cachedb-admin?lang=tr`
+- geçiş planlayıcı: `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`
+
+Load UI ve admin dashboard aynı Spring Boot uygulama portunu kullanır. Bu modda
+ikinci bir public admin server açılmaz.
+
 ## Yük Senaryosu Çalışma Alanı
 
-Bu çalışma alanı aynı anda iki yüz açar:
+Load workspace şunları içerir:
 
-- veri seed etmek ve yük profillerini başlatmak için Bootstrap + AJAX kontrol UI'i
-- backlog, incident, memory ve routing izlemek için mevcut CacheDB admin dashboard
+- veri seed etmek ve yük profillerini başlatmak için Bootstrap + AJAX kontrol UI
+- backlog, incident, memory, routing ve migration planning için CacheDB admin dashboard sayfaları
 
 Demo domain:
 
@@ -17,14 +39,6 @@ Demo domain:
 - `DemoOrderEntity`
 - `DemoOrderLineEntity`
 
-UI görünümleri:
-
-- customers
-- products
-- carts
-- orders
-- order lines
-
 Varsayılan seed hacmi:
 
 - customers: `1,800`
@@ -32,17 +46,62 @@ Varsayılan seed hacmi:
 - carts: `4,500`
 - orders: `3,600`
 - order lines: `54,000`
-- toplam: `65.300`
+- toplam: `65,300`
 
-Bu varsayılan profil, Spring Boot demo içinde daha interaktif kalırken yine de gerçeğe yakın bir e-ticaret dilimi hissi versin diye seçildi. Fiziksel hacmin büyük kısmı yine sipariş satırlarında kalır; ama toplam footprint daha küçük olduğu için `Seed`, `Clear`, `Fresh Start` ve `LOW / MEDIUM / HIGH` geçişleri tekrarlı gözlem koşularında daha kullanışlı kalır.
+Bu hacim relation-heavy davranışı gösterecek kadar büyük, lokal demo tekrarlarını
+zorlamayacak kadar sınırlı tutulmuştur.
+
+## Hangi Düğmeye Basmalıyım?
+
+Normal load demo için:
+
+1. `http://127.0.0.1:8090/demo-load` adresini aç.
+2. `Seed Demo Data` düğmesine bas.
+3. `LOW` yükünü başlat ve admin metriklerini izle.
+4. Sonra `MEDIUM` yüküne geç.
+5. `HIGH` yüküne ancak önceki profil stabil görünüyorsa geç.
+6. Write-behind backlog, Redis memory, incident ve runtime profile alanlarını izle.
+
+Veri hazır değilken `LOW / MEDIUM / HIGH` başlatırsan UI hata verir ve önce seed
+ister. Load düğmeleri artık arka planda gizlice seed başlatmaz.
 
 Yük profilleri:
 
-- `LOW`: gündüz trafiğine yakın katalog gezme, tüm müşteri taraması ve hafif toplu sepet/ürün güncellemesi
-- `MEDIUM`: büyük katalog okumaları, en çok sipariş veren müşterinin siparişleri ve dengeli toplu yazmalar
-- `HIGH`: tüm müşteri taramaları, çok satırlı sipariş okumaları ve yoğun stok/sepet/sipariş dalgalari
+- `LOW`: katalog gezme, tüm müşteri taraması ve hafif toplu sepet/ürün güncellemesi
+- `MEDIUM`: daha büyük okumalar, top-customer order lookup ve dengeli toplu yazmalar
+- `HIGH`: kampanya saati davranışı, full customer scan, high-line order read ve yoğun stok/sepet/sipariş dalgalanması
 
-Standalone demo çalıştırma:
+## Migration Planner Demo Akışı
+
+Mevcut PostgreSQL geçiş davranışını denemek için:
+
+1. `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr` adresini aç.
+2. `Demo şemayı kur ve seed et` düğmesine bas.
+3. PostgreSQL şema keşfini çalıştır.
+4. Customer to orders gibi önerilen bir route seç.
+5. `Forma uygula` düğmesine bas.
+6. `Planı oluştur` düğmesine bas.
+7. Java iskeleti istiyorsan scaffold üret.
+8. Dry-run warm çalıştır.
+9. Gerçek staging warm çalıştır.
+10. Side-by-side compare çalıştır.
+11. Migration report indir.
+
+Hazırlanan demo nesneleri:
+
+- `cachedb_migration_demo_customers`
+- `cachedb_migration_demo_orders`
+- `cachedb_migration_demo_customer_order_timeline_v`
+- `cachedb_migration_demo_customer_metrics_v`
+- `cachedb_migration_demo_ranked_orders_v`
+
+Comparison sonucu route hazır değil diyorsa önce raporu incele. CacheDB tarafı
+hızlı görünse bile PostgreSQL ile ilk sayfa üyeliği ve sıralaması eşleşmeden
+cutover yapılmamalıdır.
+
+## Standalone Demo
+
+Spring Boot dışında çalıştırmak istediğinde standalone modu kullan:
 
 ```powershell
 mvn -q -pl cachedb-examples -am exec:java `
@@ -53,98 +112,52 @@ mvn -q -pl cachedb-examples -am exec:java `
   "-Dcachedb.demo.jdbcPassword=postgresql"
 ```
 
-Varsayılan URL'ler:
+Varsayılan standalone URL'ler:
 
 - demo load UI: `http://127.0.0.1:8090`
 - admin dashboard: `http://127.0.0.1:8080/dashboard`
 
-Spring Boot demo çalıştırma:
-
-```powershell
-./tools/ops/demo/run-spring-boot-load-demo.ps1
-```
-
-Spring Boot URL'leri:
-
-- demo load UI: `http://127.0.0.1:8090/demo-load`
-- admin dashboard: `http://127.0.0.1:8090/cachedb-admin?lang=tr`
-- geçiş planlayıcı sihirbazı: `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`
-
-Spring Boot notları:
-
-- load UI ve admin dashboard aynı uygulama portunu kullanır
-- Spring Boot modunda ikinci bir dahili admin HTTP server açılmaz
-- aynı seed hacmi ve LOW / MEDIUM / HIGH senaryoları yeniden kullanılir
-- ağır yuk altında standalone davranışını korumak için demo Redis pool varsayılan olarak genişletilir
-- Spring Boot demo içinde foreground repository Redis trafiği ile background worker/admin trafiği ayrı pool'lara ayrılır
-- `Start LOW / MEDIUM / HIGH` gizlice seed başlatmaz; veri hazır değilse UI doğrudan hata verir ve önce `Seed Demo Data` ister
-- Spring Boot demo artık zero-glue generated registrar discovery kullanıyor; yani explicit `GeneratedCacheBindings.register(...)` çağrısı olmadan binding'ler otomatik kaydolur
-- geçiş planlayıcı sayfası artık kendi PostgreSQL customer/order demo şemasını PK/FK, index, seed edilmiş tarihçe ve inceleme view'leri ile kurabilir
-
-Geçiş planlayıcı demo akışı:
-
-1. `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr` adresini aç
-2. `Demo şemayı kur ve seed et` düğmesine bas
-3. keşfedilen tablo ve view'leri incele
-4. scaffold üret
-5. önce dry-run warm, sonra gerçek warm çalıştır
-6. side-by-side compare çalıştır ve migration report indir
-
 ## Read-Model Örneği
 
-Production benzeri relation-heavy ekran deseni için şu örneğe bak:
+Production benzeri relation-heavy ekran deseni için:
 
-- [src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java](src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java)
+- [src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java](../../cachedb-examples/src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java)
 
-Bu örnek şu yaklaşımı gösterir:
+Bu örnek, yaygın "müşterinin çok siparişi var" problemini temsil eder:
 
-- önce özet sorgu
-- sonra açık detail fetch
-- preload gerekiyorsa bile ilişkiyi bilinçli olarak sınırlama
-- generated binding sınıflari ve fluent `QuerySpec.where(...).orderBy(...).limitTo(...)` kullanımı
-- `DemoOrderEntityCacheBinding.orderSummary(orderRepository)` gibi generated projection helper'ları
-- `DemoOrderEntityCacheBinding.topCustomerOrders(orderSummaryRepository, customerId, 24)` gibi generated named query helper'ları
-- `DemoOrderEntityCacheBinding.orderLinesPreviewRepository(orderRepository, 8)` gibi generated fetch preset helper'ları
-- `UserEntityCacheBinding.usersPage(session, 0, 25)` gibi generated page preset helper'ları
-- `UserEntityCacheBinding.activateUser(session, 41L, "alice")` gibi generated write command helper'ları
-- `UserEntityCacheBinding.using(session).queries().activeUsers(25)` gibi session'a bağlı kullanım gruplari
-- `com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session).users().queries().activeUsers(25)` gibi package seviyesinde domain modülleri
+- önce summary query çalışır
+- kullanıcı satırı açınca detail ayrıca yüklenir
+- preview gerekiyorsa relation preload sınırlandırılır
+- geniş base entity decode etmek yerine projection-specific Redis index kullanılır
+- `EntityProjection.asyncRefresh()` ile read-model bakımı foreground write path dışına taşınır
 
-Örnekte şunlar kullanılir:
+Örnekte gösterilen generated helper'lar:
 
-- `FetchPlan.withRelationLimit("orderLines", 8)`
-- büyük eager object graph yerine ayrı summary read model
-- sadece base entity payload yolunu değil projection-specific Redis index'lerini kullanma
-- read-model bakimini foreground write path dışına itmek için `EntityProjection.asyncRefresh()`
+- `DemoOrderEntityCacheBinding.orderSummary(orderRepository)`
+- `DemoOrderEntityCacheBinding.topCustomerOrders(orderSummaryRepository, customerId, 24)`
+- `DemoOrderEntityCacheBinding.orderLinesPreviewRepository(orderRepository, 8)`
+- `UserEntityCacheBinding.usersPage(session, 0, 25)`
+- `UserEntityCacheBinding.activateUser(session, 41L, "alice")`
+- `UserEntityCacheBinding.using(session).queries().activeUsers(25)`
+- `com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session).users().queries().activeUsers(25)`
 
-Önemli not:
+Tutarlılık notu:
 
-- şu anki async projection refresh Redis Stream tabanlı durable eventual consistency modelidir
-- production write overhead'ini ve read payload boyutunu düşürmeye yardım eder
-- refresh event'leri process restart sonrasında kaybolmaz; Redis consumer group üzerinden işlenebilir
-- ama henüz poison queue veya replay tooling içeren tam bir projection platformu değildir
+- async projection refresh Redis Stream tabanlı ve durable çalışır
+- refresh event'leri process restart sonrasında kaybolmaz
+- projection okumaları tasarım gereği eventual consistency taşır
+- migration cutover kararları yine side-by-side parity check ile verilmelidir
 
-Önerilen akış:
+## Runtime Tuning
 
-1. Demo load UI'i ac.
-2. `Seed Demo Data` butonuna bas.
-3. Sırayla `LOW`, sonra `MEDIUM`, sonra `HIGH` yüklerini bas.
-4. Paralelde admin dashboard'u açık tut ve şunları izle:
-   - write-behind backlog
-   - Redis memory
-   - incidents
-   - runtime profile
-   - alert routing
-   - incident severity trendleri
-
-Runtime tuning:
+Yaygın demo ayarları:
 
 - demo Redis bağlantı ve pool ayarları: `cachedb.demo.redis.*`
 - demo PostgreSQL bağlantı ayarları: `cachedb.demo.postgres.*`
 - demo'ya özel core override: `cachedb.demo.config.*`
 - global core override: `cachedb.config.*`
-- demo cache policy ve seed satır sayilari: `cachedb.demo.cache.*`, `cachedb.demo.seed.*`
-- demo view ve stop/error davranisi: `cachedb.demo.view.*`, `cachedb.demo.stop.*`, `cachedb.demo.error.*`
+- demo cache policy ve seed satır sayıları: `cachedb.demo.cache.*`, `cachedb.demo.seed.*`
+- demo view ve stop/error davranışı: `cachedb.demo.view.*`, `cachedb.demo.stop.*`, `cachedb.demo.error.*`
 - demo load profilleri: `cachedb.demo.load.low.*`, `cachedb.demo.load.medium.*`, `cachedb.demo.load.high.*`
 - demo UI worker/refresh kontrolleri: `cachedb.demo.ui.*`
 

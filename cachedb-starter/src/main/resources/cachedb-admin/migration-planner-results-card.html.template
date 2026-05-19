@@ -1,0 +1,45 @@
+<div id="plannerPlanPanel" class="result-card">
+  <div class="result-card-header">__CACHEDB_HTML_PLAN_TITLE__</div>
+  <div class="result-card-body">
+    <div class="result-grid">__CACHEDB_HTML_PLAN_METRICS__</div>
+    <div class="row g-3 mt-1">
+      <div class="col-12 col-xl-6">
+        <div class="result-metric">
+          <div class="result-metric-label">__CACHEDB_HTML_REDIS_LABEL__</div>
+          <div id="plannerRedisPlacement" class="result-metric-value">__CACHEDB_HTML_REDIS_VALUE__</div>
+        </div>
+      </div>
+      <div class="col-12 col-xl-6">
+        <div class="result-metric">
+          <div class="result-metric-label">__CACHEDB_HTML_POSTGRES_LABEL__</div>
+          <div id="plannerPostgresPlacement" class="result-metric-value">__CACHEDB_HTML_POSTGRES_VALUE__</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+__CACHEDB_HTML_LIST_CARDS__
+<div class="result-card">
+  <div class="result-card-header">__CACHEDB_HTML_WARM_PLAN_TITLE__</div>
+  <div class="result-card-body"><div id="plannerWarmSteps">__CACHEDB_HTML_WARM_STEPS__</div></div>
+</div>
+<div class="result-card">
+  <div class="result-card-header">__CACHEDB_HTML_COMPARISON_PLAN_TITLE__</div>
+  <div class="result-card-body">
+    <div id="plannerComparisonSummary" class="planner-status mb-3">__CACHEDB_HTML_COMPARISON_SUMMARY__</div>
+    <div id="plannerComparisonChecks">__CACHEDB_HTML_COMPARISON_CHECKS__</div>
+  </div>
+</div>
+<div class="result-card" data-planner-mode-min="intermediate">
+  <div class="result-card-header">__CACHEDB_HTML_SAMPLE_SQL_TITLE__</div>
+  <div class="result-card-body">
+    <div class="small text-muted fw-semibold mb-2">__CACHEDB_HTML_CHILD_SQL_LABEL__</div>
+    <pre id="plannerWarmSql" class="result-pre">__CACHEDB_HTML_CHILD_SQL__</pre>
+    <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_ROOT_SQL_LABEL__</div>
+    <pre id="plannerRootWarmSql" class="result-pre">__CACHEDB_HTML_ROOT_SQL__</pre>
+  </div>
+</div>
+<div id="plannerWarningsCard" class="result-card__CACHEDB_HTML_WARNINGS_CLASS__">
+  <div class="result-card-header">__CACHEDB_HTML_WARNINGS_TITLE__</div>
+  <div class="result-card-body"><div id="plannerWarnings">__CACHEDB_HTML_WARNINGS__</div></div>
+</div>

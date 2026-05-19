@@ -1,0 +1,22 @@
+<div id="plannerDemoPanel" class="result-card mb-4">
+  <div class="result-card-header">__CACHEDB_HTML_DEMO_TITLE__</div>
+  <div class="result-card-body">
+    <div class="small text-muted mb-3">__CACHEDB_HTML_DEMO_COPY__</div>
+    <form id="plannerDemoBootstrapFallbackForm" method="get" action="__CACHEDB_HTML_ACTION__">
+      <input type="hidden" name="lang" value="__CACHEDB_HTML_LANGUAGE__">
+      <input type="hidden" name="v" value="__CACHEDB_HTML_INSTANCE_ID__">
+      <input type="hidden" name="discover" value="true">
+      <input type="hidden" name="demoBootstrap" value="true">
+      <div class="form-grid">__CACHEDB_HTML_DEMO_FIELDS__</div>
+      <div class="planner-actions mt-3">
+        <button id="plannerDemoBootstrapAction" type="submit" class="btn btn-outline-primary">__CACHEDB_HTML_DEMO_BUTTON__</button>
+      </div>
+    </form>
+    <div id="plannerDemoStatus" class="planner-status mt-3">__CACHEDB_HTML_DEMO_STATUS__</div>
+    <div id="plannerDemoResults" class="__CACHEDB_HTML_DEMO_RESULTS_CLASS__mt-3">
+      <div class="result-grid">__CACHEDB_HTML_DEMO_METRICS__</div>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_DEMO_NOTES_LABEL__</div>
+      <div id="plannerDemoNotes">__CACHEDB_HTML_DEMO_NOTES__</div>
+    </div>
+  </div>
+</div>

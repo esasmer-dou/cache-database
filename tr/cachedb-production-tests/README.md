@@ -121,9 +121,9 @@ Bu koşu `production-certification-report.json` ve `production-certification-rep
 Admin gözlemlenebilirlik:
 
 - `/api/prometheus` write-behind, DLQ, planner, guardrail ve runtime-profile metriklerini Prometheus text formatinda verir
-- `/api/query-index/rebuild` pressure düştukten sonra değraded namespace'leri recover etmek için kullanılabilir
+- `/api/query-index/rebuild` pressure düştükten sonra degraded namespace'leri recover etmek için kullanılabilir
 - `/api/deployment` canli deployment/runtime topology özetini verir
-- `/api/schema/status` bootstrap modu, validation özeti ve migration adim sayilarini verir
+- `/api/schema/status` bootstrap modu, validation özeti ve migration adım sayılarıni verir
 - `/api/schema/history` son schema plan/apply geçmişini migration görünürlüğü için verir
 - `/api/schema/ddl` entity bazlı üretilmiş bootstrap DDL çıktisini verir
 - `/api/registry` kayıtlı entity/API yüzeyini ve cache kontratini verir
@@ -196,7 +196,7 @@ Bu koşu `crash-replay-chaos-suite.json` ve `crash-replay-chaos-suite.md` dosyal
 
 - latest-state delete restart sonrasi stale resurrection olmadan korunur
 - exact-sequence order durumu restart sonrasi son duruma converge eder
-- manual dead-letter replay restart sonrasi da erişilebilir kalir
+- manual dead-letter replay restart sonrasi da erişilebilir kalır
 
 Fault injection suite:
 
@@ -209,7 +209,7 @@ Bu koşu `fault-injection-suite.json` ve `fault-injection-suite.md` dosyalarıni
 
 - yarım flush restart sonrasi toparlanir
 - geçici PostgreSQL kaybı DLQ oluşturur ve replay ile toparlanir
-- restart sonrasi stale replay ordering kurallariyla reddedilir
+- restart sonrasi stale replay ordering kurallarıyla reddedilir
 - tekrarlı outage/replay döngüleri bounded recovery-soak olarak doğrulanir
 
 Production gate:
@@ -326,30 +326,31 @@ Entity semantics matrisi:
 | Entity | UPSERT semantigi | DELETE semantigi | Production niyeti |
 | --- | --- | --- | --- |
 | `EcomCustomerEntity` | `LATEST_STATE` | `LATEST_STATE` | kampanya ve müşteri profil güncellemeleri son bilinen duruma katlanir |
-| `EcomInventoryEntity` | `LATEST_STATE` | `LATEST_STATE` | sıcak SKU stok güncellemelerinde tüm ara adimlar yerine son stok doğrusu öncelenir |
+| `EcomInventoryEntity` | `LATEST_STATE` | `LATEST_STATE` | sıcak SKU stok güncellemelerinde tüm ara adımlar yerine son stok doğrusu öncelenir |
 | `EcomCartEntity` | `LATEST_STATE` | `LATEST_STATE` | sepet durumu değişebilir session state olarak ele alınır |
 | `EcomOrderEntity` | `EXACT_SEQUENCE` | `EXACT_SEQUENCE` | order yazmalari sıra önemli olduğu için daha tutucu tutulur |
 
 Hard-limit shedding notu:
 
 - runtime hard-limit modunda page cache write, read-through cache fill, hot-set tracking, query index write, query index read ve planner learning özellikleri shed edilir
-- query index write shed olduğunda namespace değraded olarak isaretlenir ve sorgular entity key taraması ile residual evaluation fallback yoluna düşer
-- delete islemleri sinirli TTL ile Redis tombstone birakir; okumalar tombstone'u dikkate aldigi için stale Redis payload silinmis entity'yi diriltemez
-- query/index recovery admin katmanından tetiklenebilir; pressure düştukten sonra değraded namespace manual veya otomatik rebuild ile toparlanabilir
+- query index write shed olduğunda namespace degraded olarak işaretlenir ve sorgular entity key taraması ile residual evaluation fallback yoluna düşer
+- delete islemleri sinirli TTL ile Redis tombstone bırakir; okumalar tombstone'u dikkate aldigi için stale Redis payload silinmis entity'yi diriltemez
+- query/index recovery admin katmanından tetiklenebilir; pressure düştükten sonra degraded namespace manual veya otomatik rebuild ile toparlanabilir
 
 Admin rebuild ve recovery:
 
 - `POST /api/query-index/rebuild?entity=UserEntity&note=manual-recover` tek entity namespace'i rebuild eder
 - `POST /api/query-index/rebuild?note=manual-recover-all` tüm kayıtlı entity namespace'lerini rebuild eder
-- rebuild beklerken değraded namespace okunabilir kalir; sorgular full-scan fallback ile çalışir
+- rebuild beklerken degraded namespace okunabilir kalır; sorgular full-scan fallback ile çalışır
 - namespace ve query-class hard-limit policy'leri ile exact lookup açık tutulurken text, relation veya sort ağırlikli sorgular shed edilebilir
 
 Runtime profile switching notu:
 
 - runtime switching production odaklı profillerde varsayılan olarak açıktir
-- hedef geçisler `NORMAL -> STANDARD`, `WARN -> BALANCED`, `CRITICAL -> AGGRESSIVE` şeklindedir
-- switching tek sample ile değil, ardışık pressure sample sayilariyla çalışir
+- hedef geçişler `NORMAL -> STANDARD`, `WARN -> BALANCED`, `CRITICAL -> AGGRESSIVE` şeklindedir
+- switching tek sample ile değil, ardışık pressure sample sayılarıyla çalışır
 - comparison suite zorunlu profil kullandiginda runtime auto-switch kapatilir
 - scenario ve suite raporlari switch count ve timeline bilgisini yazar
 - ayrı profile churn raporlari her scenario için yapısal switch event'lerini üretir
 - switch event'leri diagnostics stream'e `RUNTIME_PROFILE_SWITCH` olarak da yazılır
+

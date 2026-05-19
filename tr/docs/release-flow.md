@@ -5,7 +5,7 @@ Her public beta release sonrasında bu akış kullanılmalıdır.
 ## Önerilen ritim
 
 1. mevcut beta release'i yayınla
-2. release asset ve GitHub release sayfasini doğrula
+2. release asset ve GitHub release sayfasını doğrula
 3. bir sonraki geliştirme döngüsünü hemen aç
 4. `main` branch'ini bir sonraki `-SNAPSHOT` sürümünde tut
 
@@ -15,8 +15,8 @@ Her public beta release sonrasında bu akış kullanılmalıdır.
 
 ```powershell
 ./tools/release/start-next-beta-cycle.ps1 `
-  -CurrentVersion 0.1.0-beta.1 `
-  -NextVersion 0.1.0-beta.2-SNAPSHOT `
+  -CurrentVersion 0.1.0-beta.2 `
+  -NextVersion 0.1.0-beta.3-SNAPSHOT `
   -CreateReleaseNotesTemplate
 ```
 
@@ -44,3 +44,4 @@ Bu komut şunları yapar:
 
 Public release sonrasında `main` branch'ini önceki beta sürümünde bırakma.
 Bir sonraki döngüyü hemen aç ki dependency kullanan ekipler ve dış katkıcılar aktif geliştirme hattını görebilsin.
+

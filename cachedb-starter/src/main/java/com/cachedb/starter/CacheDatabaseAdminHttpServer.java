@@ -59,6 +59,21 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
 
+    private static final String MIGRATION_PLANNER_STYLES = loadRequiredAdminTextResource("cachedb-admin/migration-planner.css");
+    private static final String MIGRATION_PLANNER_SCRIPT_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner.js.template");
+    private static final String MIGRATION_PLANNER_PAGE_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-page.html.template");
+    private static final String MIGRATION_PLANNER_COMMAND_STRIP_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-command-strip.html.template");
+    private static final String MIGRATION_PLANNER_BODY_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-body.html.template");
+    private static final String MIGRATION_PLANNER_INPUT_PANEL_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-input-panel.html.template");
+    private static final String MIGRATION_PLANNER_DEMO_CARD_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-demo-card.html.template");
+    private static final String MIGRATION_PLANNER_DISCOVERY_CARD_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-discovery-card.html.template");
+    private static final String MIGRATION_PLANNER_ROUTE_FORM_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-route-form.html.template");
+    private static final String MIGRATION_PLANNER_WORKSPACE_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-workspace.html.template");
+    private static final String MIGRATION_PLANNER_RESULTS_CARD_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-results-card.html.template");
+    private static final String MIGRATION_PLANNER_WARM_CARD_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-warm-card.html.template");
+    private static final String MIGRATION_PLANNER_SCAFFOLD_CARD_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-scaffold-card.html.template");
+    private static final String MIGRATION_PLANNER_COMPARE_CARD_TEMPLATE = loadRequiredAdminTextResource("cachedb-admin/migration-planner-compare-card.html.template");
+
     private final CacheDatabaseAdmin admin;
     private final CacheDatabaseDebug debug;
     private final AdminHttpConfig config;
@@ -70,6 +85,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private final String dashboardInstanceId = UUID.randomUUID().toString();
     private final AtomicLong migrationPlannerWarmJobSequence = new AtomicLong();
     private final Map<String, MigrationPlannerWarmJob> migrationPlannerWarmJobs = new ConcurrentHashMap<>();
+    private final AtomicLong migrationPlannerCompareJobSequence = new AtomicLong();
+    private final Map<String, MigrationPlannerCompareJob> migrationPlannerCompareJobs = new ConcurrentHashMap<>();
     private final AtomicLong lastGoodHotSnapshotAtEpochMillis = new AtomicLong();
     private final AtomicLong lastServedHotSnapshotAtEpochMillis = new AtomicLong();
     private HttpServer server;
@@ -80,6 +97,28 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         this.admin = cacheDatabase.admin();
         this.debug = cacheDatabase.debug();
         this.config = config;
+    }
+
+    private static String loadRequiredAdminTextResource(String resourcePath) {
+        try (InputStream input = CacheDatabaseAdminHttpServer.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (input == null) {
+                throw new IllegalStateException("Missing admin UI resource: " + resourcePath);
+            }
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not load admin UI resource: " + resourcePath, exception);
+        }
+    }
+
+    private static String renderAdminTemplate(String template, String... replacements) {
+        if ((replacements.length & 1) != 0) {
+            throw new IllegalArgumentException("Template replacements must be provided as token/value pairs");
+        }
+        String rendered = template;
+        for (int index = 0; index < replacements.length; index += 2) {
+            rendered = rendered.replace(replacements[index], replacements[index + 1] == null ? "" : replacements[index + 1]);
+        }
+        return rendered;
     }
 
     public void start() throws IOException {
@@ -143,6 +182,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         server.createContext("/api/migration-planner/warm/status", this::handleMigrationPlannerWarmStatus);
         server.createContext("/api/migration-planner/scaffold", this::handleMigrationPlannerScaffold);
         server.createContext("/api/migration-planner/compare", this::handleMigrationPlannerCompare);
+        server.createContext("/api/migration-planner/compare/start", this::handleMigrationPlannerCompareStart);
+        server.createContext("/api/migration-planner/compare/status", this::handleMigrationPlannerCompareStatus);
         server.start();
     }
 
@@ -277,6 +318,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             case "/api/migration-planner/warm/status" -> handleMigrationPlannerWarmStatus(exchange);
             case "/api/migration-planner/scaffold" -> handleMigrationPlannerScaffold(exchange);
             case "/api/migration-planner/compare" -> handleMigrationPlannerCompare(exchange);
+            case "/api/migration-planner/compare/start" -> handleMigrationPlannerCompareStart(exchange);
+            case "/api/migration-planner/compare/status" -> handleMigrationPlannerCompareStatus(exchange);
             default -> sendText(exchange, 404, "text/plain; charset=utf-8", "Not found");
         }
     }
@@ -926,6 +969,40 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         }
     }
 
+    private void handleMigrationPlannerCompareStart(HttpExchange exchange) throws IOException {
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        Map<String, List<String>> parameters = parseFormParameters(exchange);
+        try {
+            MigrationPlannerCompareJob job = startMigrationPlannerCompareJob(parseMigrationComparisonRequest(parameters));
+            sendJson(exchange, 202, renderMigrationCompareJobStatus(job));
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            sendJson(exchange, 400, "{\"error\":\"" + escapeJson(exception.getMessage()) + "\"}");
+        }
+    }
+
+    private void handleMigrationPlannerCompareStatus(HttpExchange exchange) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendMethodNotAllowed(exchange);
+            return;
+        }
+        Map<String, List<String>> parameters = parseQuery(exchange.getRequestURI().getRawQuery());
+        String jobId = defaultString(first(parameters, "jobId"));
+        if (jobId.isBlank()) {
+            sendJson(exchange, 400, "{\"error\":\"Missing jobId\"}");
+            return;
+        }
+        pruneCompletedCompareJobs();
+        MigrationPlannerCompareJob job = migrationPlannerCompareJobs.get(jobId);
+        if (job == null) {
+            sendJson(exchange, 404, "{\"error\":\"Compare job not found\"}");
+            return;
+        }
+        sendJson(exchange, 200, renderMigrationCompareJobStatus(job));
+    }
+
     private QuerySpec parseQuerySpec(Map<String, List<String>> query) {
         QuerySpec.Builder builder = QuerySpec.builder()
                 .offset(parseInt(query.get("offset"), 0))
@@ -987,6 +1064,37 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 .map(Map.Entry::getKey)
                 .toList()
                 .forEach(migrationPlannerWarmJobs::remove);
+    }
+
+    private MigrationPlannerCompareJob startMigrationPlannerCompareJob(MigrationComparisonRunner.Request request) {
+        pruneCompletedCompareJobs();
+        long createdAt = System.currentTimeMillis();
+        String jobId = "compare-" + migrationPlannerCompareJobSequence.incrementAndGet();
+        MigrationPlannerCompareJob job = new MigrationPlannerCompareJob(jobId, createdAt);
+        migrationPlannerCompareJobs.put(jobId, job);
+        ensureBackgroundExecutor().submit(() -> {
+            job.markRunning(System.currentTimeMillis());
+            try {
+                job.markCompleted(admin.compareMigration(request), System.currentTimeMillis());
+            } catch (RuntimeException exception) {
+                job.markFailed(exception, System.currentTimeMillis());
+            }
+        });
+        return job;
+    }
+
+    private void pruneCompletedCompareJobs() {
+        long cutoffEpochMillis = System.currentTimeMillis() - 15L * 60L * 1000L;
+        migrationPlannerCompareJobs.entrySet().removeIf(entry -> entry.getValue().canPrune(cutoffEpochMillis));
+        if (migrationPlannerCompareJobs.size() <= 24) {
+            return;
+        }
+        migrationPlannerCompareJobs.entrySet().stream()
+                .sorted(Comparator.comparingLong(entry -> entry.getValue().lastTouchedEpochMillis()))
+                .limit(Math.max(0, migrationPlannerCompareJobs.size() - 24))
+                .map(Map.Entry::getKey)
+                .toList()
+                .forEach(migrationPlannerCompareJobs::remove);
     }
 
     private MigrationPlanner.Request parseMigrationPlannerRequest(Map<String, List<String>> parameters) {
@@ -2234,6 +2342,24 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "}";
     }
 
+    private String renderMigrationCompareJobStatus(MigrationPlannerCompareJob job) {
+        long now = System.currentTimeMillis();
+        long completedAt = job.completedAtEpochMillis();
+        long durationMillis = completedAt > 0
+                ? Math.max(0L, completedAt - Math.max(job.startedAtEpochMillis(), job.createdAtEpochMillis()))
+                : Math.max(0L, now - Math.max(job.startedAtEpochMillis(), job.createdAtEpochMillis()));
+        return "{"
+                + "\"jobId\":\"" + escapeJson(job.jobId()) + "\","
+                + "\"status\":\"" + job.status().name() + "\","
+                + "\"createdAt\":\"" + Instant.ofEpochMilli(job.createdAtEpochMillis()) + "\","
+                + "\"startedAt\":\"" + (job.startedAtEpochMillis() > 0 ? Instant.ofEpochMilli(job.startedAtEpochMillis()) : "") + "\","
+                + "\"completedAt\":\"" + (completedAt > 0 ? Instant.ofEpochMilli(completedAt) : "") + "\","
+                + "\"durationMillis\":" + durationMillis + ","
+                + "\"error\":\"" + escapeJson(job.errorMessage()) + "\","
+                + "\"result\":" + (job.result() == null ? "null" : renderMigrationComparisonResult(job.result()))
+                + "}";
+    }
+
     private String renderMigrationScaffoldResult(MigrationScaffoldGenerator.Result result) {
         return "{"
                 + "\"request\":" + renderMigrationScaffoldRequest(result.request()) + ","
@@ -2642,155 +2768,183 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "Bu sihirbaz, mevcut ekran şekline göre doğru CacheDB mimarisini seçmene yardım eder. Planı ürettikten sonra staging'de gerçek warm execution çalıştırabilir; doğru sıcak veri sınırını, projection kararını ve karşılaştırma planını birlikte görürsün.",
                 "This wizard helps choose the right CacheDB architecture for an existing screen shape. After generating the plan, it can run a real staging warm execution so you can see the hot-data boundary, projection decision, and comparison plan together."
         ));
-        String plannerThemeCss = "body{margin:0;background:linear-gradient(180deg,#f7f4ed 0%,#eef2f7 100%);color:#102a43;font-family:'Inter','Segoe UI',system-ui,sans-serif}"
-                + ".planner-shell{max-width:1400px;margin:0 auto;padding:2rem 1.25rem 3rem}"
-                + ".planner-topbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:1.25rem}"
-                + ".planner-back{display:inline-flex;align-items:center;gap:.5rem;padding:.72rem 1rem;border-radius:999px;border:1px solid #cbd7e6;background:#fff;color:#17324d;text-decoration:none;font-weight:700;box-shadow:0 .4rem 1rem rgba(15,23,42,.06)}"
-                + ".planner-hero{padding:1.5rem 1.6rem;border-radius:1.4rem;background:linear-gradient(135deg,#0f2742,#194b84 60%,#2f6fed);color:#fff;box-shadow:0 1.1rem 2.7rem rgba(15,23,42,.18);margin-bottom:1.25rem}"
-                + ".planner-hero h1{font-size:2rem;font-weight:800;margin:0 0 .55rem 0}"
-                + ".planner-hero p{margin:0;color:rgba(255,255,255,.9);max-width:70rem;line-height:1.6}"
-                + ".planner-guidance{display:grid;grid-template-columns:minmax(280px,360px) minmax(0,1fr);gap:1rem;align-items:start;margin-bottom:1rem}"
-                + ".planner-grid{display:grid;grid-template-columns:minmax(360px,480px) minmax(0,1fr);gap:1rem;align-items:start}"
-                + ".planner-panel{border:1px solid rgba(124,145,168,.24);border-radius:1.25rem;background:rgba(255,255,255,.96);box-shadow:0 .9rem 2rem rgba(15,23,42,.08);overflow:hidden}"
-                + ".planner-panel-header{padding:1rem 1.15rem .25rem 1.15rem;font-size:1rem;font-weight:800;color:#102a43}"
-                + ".planner-panel-sub{padding:0 1.15rem 1rem 1.15rem;color:#52606d;font-size:.9rem;line-height:1.5}"
-                + ".planner-panel-body{padding:0 1.15rem 1.15rem 1.15rem}"
-                + ".planner-mode-switch{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.7rem}"
-                + ".planner-mode-button{display:flex;flex-direction:column;align-items:flex-start;gap:.28rem;padding:.92rem 1rem;border-radius:1rem;border:1px solid #dbe7f3;background:linear-gradient(180deg,#fff,#f8fbff);color:#17324d;text-align:left;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}"
-                + ".planner-mode-button:hover{transform:translateY(-1px);box-shadow:0 .5rem 1rem rgba(15,23,42,.08)}"
-                + ".planner-mode-button.is-active{border-color:#2f6fed;box-shadow:0 .7rem 1.4rem rgba(47,111,237,.16);background:linear-gradient(180deg,#eff6ff,#fff)}"
-                + ".planner-mode-title{font-size:.92rem;font-weight:800}"
-                + ".planner-mode-copy{font-size:.8rem;line-height:1.45;color:#52606d}"
-                + ".planner-progress-shell{padding:1rem 1.05rem;border-radius:1rem;background:linear-gradient(180deg,#ffffff,#f8fbff);border:1px solid #dbe7f3;box-shadow:inset 0 1px 0 rgba(255,255,255,.75)}"
-                + ".planner-progress-top{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:.85rem}"
-                + ".planner-progress-title{font-size:1rem;font-weight:800;color:#102a43}"
-                + ".planner-progress-copy{font-size:.86rem;line-height:1.5;color:#52606d;margin-top:.2rem;max-width:44rem}"
-                + ".planner-progress-percent{font-size:1.1rem;font-weight:800;color:#1d4ed8}"
-                + ".planner-progress-track{position:relative;height:.72rem;border-radius:999px;background:#dfe8f3;overflow:hidden}"
-                + ".planner-progress-fill{position:absolute;inset:0 auto 0 0;width:0%;border-radius:inherit;background:linear-gradient(90deg,#0ea5e9,#2563eb);transition:width .25s ease}"
-                + ".planner-stepper{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.7rem;margin-top:1rem}"
-                + ".planner-step{display:flex;flex-direction:column;gap:.28rem;padding:.9rem .95rem;border-radius:1rem;border:1px solid #dbe7f3;background:#fff;text-align:left;color:#17324d;min-height:100%;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease}"
-                + ".planner-step:hover{transform:translateY(-1px);box-shadow:0 .55rem 1rem rgba(15,23,42,.08)}"
-                + ".planner-step.is-complete{border-color:#bbf7d0;background:#f0fdf4}"
-                + ".planner-step.is-active{border-color:#60a5fa;background:#eff6ff;box-shadow:0 .6rem 1.1rem rgba(59,130,246,.14)}"
-                + ".planner-step-index{display:inline-flex;align-items:center;justify-content:center;width:1.7rem;height:1.7rem;border-radius:999px;background:#e2e8f0;color:#17324d;font-size:.82rem;font-weight:800}"
-                + ".planner-step.is-complete .planner-step-index{background:#16a34a;color:#fff}"
-                + ".planner-step.is-active .planner-step-index{background:#2563eb;color:#fff}"
-                + ".planner-step-title{font-size:.86rem;font-weight:800}"
-                + ".planner-step-copy{font-size:.77rem;line-height:1.4;color:#52606d}"
-                + ".planner-quickstart{padding:1rem 1.05rem;border-radius:1rem;background:linear-gradient(180deg,#f8fbff,#fff);border:1px solid #dbe7f3;box-shadow:inset 0 1px 0 rgba(255,255,255,.7)}"
-                + ".planner-quickstart-title{font-size:.82rem;letter-spacing:.05em;text-transform:uppercase;font-weight:800;color:#486581;margin-bottom:.45rem}"
-                + ".planner-quickstart-copy{font-size:.92rem;line-height:1.55;color:#334e68;margin:0}"
-                + ".planner-form-section{padding:1rem 1.05rem;border-radius:1rem;background:linear-gradient(180deg,#ffffff,#f9fbfd);border:1px solid #e4edf5;box-shadow:0 .45rem 1.2rem rgba(15,23,42,.04)}"
-                + ".planner-form-section[data-planner-mode-min],.result-card[data-planner-mode-min],.planner-advanced[data-planner-mode-min]{transition:opacity .18s ease}"
-                + ".planner-hidden-by-mode{display:none !important}"
-                + ".planner-form-section-title{font-size:.93rem;font-weight:800;color:#102a43;margin-bottom:.2rem}"
-                + ".planner-form-section-copy{font-size:.86rem;line-height:1.5;color:#52606d;margin-bottom:.8rem}"
-                + ".planner-select-help{margin-top:.38rem;font-size:.79rem;line-height:1.4;color:#6b7a89}"
-                + ".planner-toggle-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem}"
-                + ".planner-toggle-grid .form-check{padding:.72rem .78rem;border-radius:.9rem;background:#f8fafc;border:1px solid #e4edf5;margin:0}"
-                + ".planner-advanced{border:1px solid #dbe7f3;border-radius:1rem;background:#fbfdff;overflow:hidden}"
-                + ".planner-advanced > summary{cursor:pointer;list-style:none;padding:.9rem 1rem;font-weight:800;color:#17324d;background:linear-gradient(180deg,#f8fbff,#f2f7fc)}"
-                + ".planner-advanced > summary::-webkit-details-marker{display:none}"
-                + ".planner-advanced-body{padding:1rem}"
-                + ".planner-object-actions{display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.7rem}"
-                + ".planner-badge{display:inline-flex;align-items:center;padding:.22rem .52rem;border-radius:999px;background:#eef4ff;border:1px solid #dbe7ff;color:#1d4ed8;font-size:.74rem;font-weight:700;margin-right:.35rem}"
-                + ".planner-badge.view{background:#f5f3ff;border-color:#ddd6fe;color:#6d28d9}"
-                + ".planner-badge.entity{background:#ecfdf5;border-color:#bbf7d0;color:#166534}"
-                + ".planner-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.85rem}"
-                + ".planner-form-grid .full{grid-column:1 / -1}"
-                + ".planner-actions{display:flex;gap:.7rem;flex-wrap:wrap;margin-top:1rem}"
-                + ".planner-chip-row{display:flex;gap:.55rem;flex-wrap:wrap;margin-top:1rem}"
-                + ".planner-chip{display:inline-flex;align-items:center;padding:.38rem .72rem;border-radius:999px;background:#eef4ff;border:1px solid #dbe7ff;color:#1d4ed8;font-size:.8rem;font-weight:700}"
-                + ".planner-status{margin-top:1rem;padding:.8rem .95rem;border-radius:1rem;background:#f8fbff;border:1px solid #dbe7f3;color:#486581;font-size:.88rem;line-height:1.45}"
-                + ".planner-results{display:flex;flex-direction:column;gap:1rem}"
-                + ".result-card{border:1px solid rgba(124,145,168,.24);border-radius:1.2rem;background:#fff;box-shadow:0 .8rem 1.8rem rgba(15,23,42,.07);overflow:hidden}"
-                + ".result-card-header{padding:1rem 1.1rem;border-bottom:1px solid #e4edf5;font-size:.98rem;font-weight:800;color:#102a43;background:linear-gradient(180deg,#fff,#f8fbff)}"
-                + ".result-card-body{padding:1rem 1.1rem}"
-                + ".result-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}"
-                + ".result-metric{padding:.9rem .95rem;border-radius:1rem;background:#f8fafc;border:1px solid #e4edf5}"
-                + ".result-metric-label{font-size:.74rem;letter-spacing:.04em;color:#7b8794;font-weight:800;text-transform:uppercase;margin-bottom:.25rem}"
-                + ".result-metric-value{font-size:1.02rem;font-weight:800;color:#17324d;line-height:1.35}"
-                + ".result-list{margin:0;padding-left:1.15rem;display:flex;flex-direction:column;gap:.45rem;color:#334e68}"
-                + ".result-step{padding:.9rem;border-radius:1rem;background:#f8fbff;border:1px solid #dbe7f3;margin-bottom:.75rem}"
-                + ".result-step:last-child{margin-bottom:0}"
-                + ".result-step-title{font-weight:800;color:#102a43;margin-bottom:.3rem}"
-                + ".result-step-summary{color:#52606d;font-size:.9rem;line-height:1.5;margin-bottom:.55rem}"
-                + ".result-check{padding:.85rem;border-radius:1rem;background:#fff7ed;border:1px solid #fed7aa;margin-bottom:.75rem}"
-                + ".result-check:last-child{margin-bottom:0}"
-                + ".result-pre{margin:0;background:#0f172a;color:#ecf3ff;border-radius:1rem;padding:1rem;overflow:auto;border:1px solid rgba(148,163,184,.18);font-family:'IBM Plex Mono','JetBrains Mono',Consolas,monospace;font-size:.85rem;line-height:1.5}"
-                + ".planner-empty{padding:1.2rem;border-radius:1rem;border:1px dashed #cbd5e1;background:#fff;color:#52606d;line-height:1.6}"
-                + ".planner-warning{padding:.85rem .95rem;border-radius:1rem;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:.88rem;line-height:1.5}"
-                + "@media (max-width: 1100px){.planner-guidance{grid-template-columns:1fr}.planner-grid{grid-template-columns:1fr}.planner-form-grid{grid-template-columns:1fr}.result-grid{grid-template-columns:1fr}.planner-stepper{grid-template-columns:repeat(2,minmax(0,1fr))}}"
-                + "@media (max-width: 720px){.planner-mode-switch{grid-template-columns:1fr}.planner-stepper{grid-template-columns:1fr}}";
-        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-                + "<title>" + title + "</title>"
-                + "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">"
-                + "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>"
-                + "<link rel=\"stylesheet\" href=\"" + bootstrapCssUrl + "\">"
-                + "<link rel=\"stylesheet\" href=\"" + googleFontsUrl + "\">"
-                + "<style>" + plannerThemeCss + "</style>"
-                + "</head><body>"
-                + "<main class=\"planner-shell\">"
-                + "<div class=\"planner-topbar\"><a class=\"planner-back\" href=\"" + dashboardUrl + "\">"
-                + escapeHtml(localized(normalizedLanguage, "Yönetim paneline dön", "Back to admin dashboard"))
-                + "</a></div>"
-                + "<section class=\"planner-hero\"><h1>" + title + "</h1><p><strong>" + subtitle + "</strong><br>" + intro + "</p></section>"
-                + renderMigrationPlannerGuidance(normalizedLanguage)
-                + "<section class=\"planner-grid\">"
-                + "<div class=\"planner-panel\">"
-                + "<div class=\"planner-panel-header\">" + escapeHtml(localized(normalizedLanguage, "1. Mevcut route'u anlat", "1. Describe the current route")) + "</div>"
-                + "<div class=\"planner-panel-sub\">" + escapeHtml(localized(normalizedLanguage, "Bir sıcak ekranı ya da endpoint'i modelle. Sihirbaz, veriyi tamamen Redis'te taşımak yerine hangi kısmın sıcak çalışma seti olması gerektiğini çıkarır.", "Model one hot screen or endpoint. The wizard decides which part should be the hot working set instead of pushing all history into Redis.")) + "</div>"
-                + "<div class=\"planner-panel-body\">"
-                + "<div id=\"plannerDemoPanel\" class=\"result-card mb-4\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "0. Demo PostgreSQL şemasını hazırla", "0. Prepare the demo PostgreSQL schema")) + "</div><div class=\"result-card-body\">"
-                + "<div class=\"small text-muted mb-3\">" + escapeHtml(localized(normalizedLanguage, "Bu aksiyon, customer/order odaklı örnek PostgreSQL tablolarını, PK/FK ilişkilerini, indeksleri ve view'leri kurar; ardından migration planner için kullanılabilecek seed verisini yükler.", "This action prepares example customer/order PostgreSQL tables, PK/FK relationships, indexes, and views, then loads seed data that the migration planner can use.")) + "</div>"
-                + "<form id=\"plannerDemoBootstrapFallbackForm\" method=\"get\" action=\"" + discoveryFallbackAction + "\">"
-                + "<input type=\"hidden\" name=\"lang\" value=\"" + escapeHtml(normalizedLanguage) + "\">"
-                + "<input type=\"hidden\" name=\"v\" value=\"" + escapeHtml(dashboardInstanceId) + "\">"
-                + "<input type=\"hidden\" name=\"discover\" value=\"true\">"
-                + "<input type=\"hidden\" name=\"demoBootstrap\" value=\"true\">"
-                + "<div class=\"form-grid\">"
-                + fieldInput("demoCustomerCount", localized(normalizedLanguage, "Demo müşteri sayısı", "Demo customer count"), "120", "", plannerValues.get("demoCustomerCount"))
+        String plannerThemeCss = MIGRATION_PLANNER_STYLES;
+        String commandStripHtml = renderMigrationPlannerCommandStrip(normalizedLanguage, plannerStatusText);
+        String demoCardHtml = renderMigrationPlannerDemoCard(
+                normalizedLanguage,
+                plannerValues,
+                bootstrapDemoResult,
+                demoBootstrapStatus,
+                discoveryFallbackAction
+        );
+        String discoveryCardHtml = renderMigrationPlannerDiscoveryCard(
+                normalizedLanguage,
+                bootstrapDiscovery,
+                bootstrapDiscoveryStatus,
+                discoveryFallbackAction,
+                plannerValues
+        );
+        String routeFormHtml = renderMigrationPlannerRouteForm(
+                normalizedLanguage,
+                plannerValues,
+                bootstrapDiscovery,
+                discoveryFallbackAction,
+                plannerStatusText,
+                serverPlanFallbackCard
+        );
+        String inputPanelHtml = renderMigrationPlannerInputPanel(
+                normalizedLanguage,
+                demoCardHtml,
+                discoveryCardHtml,
+                routeFormHtml
+        );
+        String planResultsHtml = renderMigrationPlannerResultsCard(
+                normalizedLanguage,
+                hasServerPlanResult,
+                bootstrapPlanResult
+        );
+        String warmCardHtml = renderMigrationPlannerWarmCard(
+                normalizedLanguage,
+                discoveryFallbackAction,
+                plannerWarmDisabled,
+                plannerWarmStatusText,
+                plannerWarmResultsClass,
+                bootstrapWarmResult
+        );
+        String scaffoldCardHtml = renderMigrationPlannerScaffoldCard(
+                normalizedLanguage,
+                plannerScaffoldDisabled,
+                plannerScaffoldStatusText
+        );
+        String compareCardHtml = renderMigrationPlannerCompareCard(
+                normalizedLanguage,
+                plannerCompareDisabled,
+                plannerCompareStatusText
+        );
+        String workspaceHtml = renderMigrationPlannerWorkspace(
+                normalizedLanguage,
+                plannerEmptyClass,
+                plannerResultsClass,
+                planResultsHtml,
+                warmCardHtml,
+                scaffoldCardHtml,
+                compareCardHtml
+        );
+        String plannerBody = renderMigrationPlannerBody(inputPanelHtml, workspaceHtml);
+        return renderMigrationPlannerPage(
+                title,
+                bootstrapCssUrl,
+                googleFontsUrl,
+                plannerThemeCss,
+                dashboardUrl,
+                escapeHtml(localized(normalizedLanguage, "Yönetim paneline dön", "Back to admin dashboard")),
+                subtitle,
+                intro,
+                renderMigrationPlannerGuidance(normalizedLanguage),
+                commandStripHtml,
+                plannerBody,
+                renderMigrationPlannerScript(
+                        normalizedLanguage,
+                        apiBasePath,
+                        bootstrapDiscoveryJson,
+                        bootstrapDemoJson,
+                        bootstrapPlanJson,
+                        bootstrapPlannerFormJson,
+                        discoveryFallbackAction
+                )
+        );
+    }
+
+    private String renderMigrationPlannerBody(String inputPanelHtml, String workspaceHtml) {
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_BODY_TEMPLATE,
+                "__CACHEDB_HTML_INPUT_PANEL__", inputPanelHtml,
+                "__CACHEDB_HTML_WORKSPACE__", workspaceHtml
+        );
+    }
+
+    private String renderMigrationPlannerInputPanel(
+            String normalizedLanguage,
+            String demoCardHtml,
+            String discoveryCardHtml,
+            String routeFormHtml
+    ) {
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_INPUT_PANEL_TEMPLATE,
+                "__CACHEDB_HTML_INPUT_TITLE__", escapeHtml(localized(normalizedLanguage, "1. Mevcut route'u anlat", "1. Describe the current route")),
+                "__CACHEDB_HTML_INPUT_COPY__", escapeHtml(localized(normalizedLanguage, "Bir sıcak ekranı ya da endpoint'i modelle. Sihirbaz, veriyi tamamen Redis'te taşımak yerine hangi kısmın sıcak çalışma seti olması gerektiğini çıkarır.", "Model one hot screen or endpoint. The wizard decides which part should be the hot working set instead of pushing all history into Redis.")),
+                "__CACHEDB_HTML_DEMO_CARD__", demoCardHtml,
+                "__CACHEDB_HTML_DISCOVERY_CARD__", discoveryCardHtml,
+                "__CACHEDB_HTML_ROUTE_FORM__", routeFormHtml
+        );
+    }
+
+    private String renderMigrationPlannerDemoCard(
+            String normalizedLanguage,
+            Map<String, String> plannerValues,
+            MigrationPlannerDemoSupport.BootstrapResult bootstrapDemoResult,
+            String demoBootstrapStatus,
+            String discoveryFallbackAction
+    ) {
+        String demoFields = fieldInput("demoCustomerCount", localized(normalizedLanguage, "Demo müşteri sayısı", "Demo customer count"), "120", "", plannerValues.get("demoCustomerCount"))
                 + fieldInput("demoHotCustomerCount", localized(normalizedLanguage, "Yoğun müşteri sayısı", "Hot customer count"), "12", "", plannerValues.get("demoHotCustomerCount"))
-                + fieldInput("demoMaxOrdersPerCustomer", localized(normalizedLanguage, "Müşteri başına maks sipariş", "Max orders per customer"), "1500", "", plannerValues.get("demoMaxOrdersPerCustomer"))
-                + "</div>"
-                + "<div class=\"planner-actions mt-3\"><button id=\"plannerDemoBootstrapAction\" type=\"submit\" class=\"btn btn-outline-primary\">" + escapeHtml(localized(normalizedLanguage, "Demo şemayı kur ve seed et", "Create and seed the demo schema")) + "</button></div>"
-                + "</form>"
-                + "<div id=\"plannerDemoStatus\" class=\"planner-status mt-3\">" + demoBootstrapStatus + "</div>"
-                + "<div id=\"plannerDemoResults\" class=\"" + (bootstrapDemoResult == null ? "d-none " : "") + "mt-3\">"
-                + "<div class=\"result-grid\">"
-                + metricShell("plannerDemoCustomers", localized(normalizedLanguage, "Müşteriler", "Customers"), bootstrapDemoResult == null ? "" : String.valueOf(bootstrapDemoResult.customerCount()))
+                + fieldInput("demoMaxOrdersPerCustomer", localized(normalizedLanguage, "Müşteri başına maks sipariş", "Max orders per customer"), "1500", "", plannerValues.get("demoMaxOrdersPerCustomer"));
+        String demoMetrics = metricShell("plannerDemoCustomers", localized(normalizedLanguage, "Müşteriler", "Customers"), bootstrapDemoResult == null ? "" : String.valueOf(bootstrapDemoResult.customerCount()))
                 + metricShell("plannerDemoOrders", localized(normalizedLanguage, "Siparişler", "Orders"), bootstrapDemoResult == null ? "" : String.valueOf(bootstrapDemoResult.orderCount()))
                 + metricShell("plannerDemoHottestCustomer", localized(normalizedLanguage, "En yoğun müşteri siparişi", "Hottest customer orders"), bootstrapDemoResult == null ? "" : String.valueOf(bootstrapDemoResult.hottestCustomerOrderCount()))
-                + metricShell("plannerDemoViews", localized(normalizedLanguage, "Hazır view", "Prepared views"), bootstrapDemoResult == null ? "" : String.valueOf(bootstrapDemoResult.viewNames().size()))
-                + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Demo notları", "Demo notes")) + "</div><div id=\"plannerDemoNotes\">" + renderPlannerStaticList(
-                        bootstrapDemoResult == null ? List.of() : bootstrapDemoResult.notes(),
-                        localized(normalizedLanguage, "Henüz demo seed notu üretilmedi.", "No demo seed note was generated yet.")
-                ) + "</div>"
-                + "</div></div></div>"
-                + "<div id=\"plannerDiscoveryPanel\" class=\"result-card mb-4\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "0. PostgreSQL Şema Keşfi", "0. PostgreSQL Schema Discovery")) + "</div><div class=\"result-card-body\">"
-                + "<form id=\"plannerDiscoveryFallbackForm\" method=\"get\" action=\"" + discoveryFallbackAction + "\" class=\"planner-actions\">"
-                + "<input type=\"hidden\" name=\"lang\" value=\"" + escapeHtml(normalizedLanguage) + "\">"
-                + "<input type=\"hidden\" name=\"v\" value=\"" + escapeHtml(dashboardInstanceId) + "\">"
-                + "<input type=\"hidden\" name=\"discover\" value=\"true\">"
-                + "<button id=\"plannerDiscoverAction\" type=\"submit\" class=\"btn btn-outline-primary\">" + escapeHtml(localized(normalizedLanguage, "PostgreSQL'den Keşfet", "Discover From PostgreSQL")) + "</button>"
-                + "</form>"
-                + "<div id=\"plannerDiscoveryStatus\" class=\"planner-status mt-3\">" + bootstrapDiscoveryStatus + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Önerilen route adayları", "Suggested route candidates")) + "</div><div id=\"plannerDiscoverySuggestions\">" + renderStaticDiscoverySuggestions(bootstrapDiscovery, normalizedLanguage, discoveryFallbackAction, plannerValues) + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Keşfedilen tablolar", "Discovered tables")) + "</div><div id=\"plannerDiscoveryTables\">" + renderStaticDiscoveryTables(bootstrapDiscovery, normalizedLanguage, discoveryFallbackAction, plannerValues) + "</div>"
-                + "</div></div>"
-                + "<form id=\"plannerForm\" method=\"get\" action=\"" + discoveryFallbackAction + "\">"
-                + "<input type=\"hidden\" name=\"lang\" value=\"" + escapeHtml(normalizedLanguage) + "\">"
-                + "<input type=\"hidden\" name=\"v\" value=\"" + escapeHtml(dashboardInstanceId) + "\">"
-                + "<input type=\"hidden\" name=\"discover\" value=\"true\">"
-                + "<input type=\"hidden\" name=\"generatePlan\" value=\"true\">"
-                + "<div class=\"planner-form-grid\">"
-                + "<div class=\"full planner-quickstart\"><div class=\"planner-quickstart-title\">" + escapeHtml(localized(normalizedLanguage, "Kısa kullanım akışı", "Quick usage flow")) + "</div><p class=\"planner-quickstart-copy\">"
-                + escapeHtml(localized(normalizedLanguage, "Önce keşfi çalıştır, sonra kök ve çocuk yüzeyi listeden seç. Ekran tipini belirledikten sonra planı üret; warm, scaffold ve compare adımları onun altında açılır.", "Start with discovery, then choose the root and child surfaces from the list. After selecting the screen type, generate the plan; warm, scaffold, and compare unlock below."))
-                + "</p></div>"
-                + fieldInput("workloadName", localized(normalizedLanguage, "İş yükü adı", "Workload name"), "customer-orders", "full", plannerValues.get("workloadName"))
-                + "<div id=\"plannerConfigurePanel\" class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "1. Ekran tipi", "1. Screen type")) + "</div><div class=\"planner-form-section-copy\">"
+                + metricShell("plannerDemoViews", localized(normalizedLanguage, "Hazır view", "Prepared views"), bootstrapDemoResult == null ? "" : String.valueOf(bootstrapDemoResult.viewNames().size()));
+        String demoNotes = renderPlannerStaticList(
+                bootstrapDemoResult == null ? List.of() : bootstrapDemoResult.notes(),
+                localized(normalizedLanguage, "Henüz demo seed notu üretilmedi.", "No demo seed note was generated yet.")
+        );
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_DEMO_CARD_TEMPLATE,
+                "__CACHEDB_HTML_DEMO_TITLE__", escapeHtml(localized(normalizedLanguage, "0. Demo PostgreSQL şemasını hazırla", "0. Prepare the demo PostgreSQL schema")),
+                "__CACHEDB_HTML_DEMO_COPY__", escapeHtml(localized(normalizedLanguage, "Bu aksiyon, customer/order odaklı örnek PostgreSQL tablolarını, PK/FK ilişkilerini, indeksleri ve view'leri kurar; ardından migration planner için kullanılabilecek seed verisini yükler.", "This action prepares example customer/order PostgreSQL tables, PK/FK relationships, indexes, and views, then loads seed data that the migration planner can use.")),
+                "__CACHEDB_HTML_ACTION__", discoveryFallbackAction,
+                "__CACHEDB_HTML_LANGUAGE__", escapeHtml(normalizedLanguage),
+                "__CACHEDB_HTML_INSTANCE_ID__", escapeHtml(dashboardInstanceId),
+                "__CACHEDB_HTML_DEMO_FIELDS__", demoFields,
+                "__CACHEDB_HTML_DEMO_BUTTON__", escapeHtml(localized(normalizedLanguage, "Demo şemayı kur ve seed et", "Create and seed the demo schema")),
+                "__CACHEDB_HTML_DEMO_STATUS__", demoBootstrapStatus,
+                "__CACHEDB_HTML_DEMO_RESULTS_CLASS__", bootstrapDemoResult == null ? "d-none " : "",
+                "__CACHEDB_HTML_DEMO_METRICS__", demoMetrics,
+                "__CACHEDB_HTML_DEMO_NOTES_LABEL__", escapeHtml(localized(normalizedLanguage, "Demo notları", "Demo notes")),
+                "__CACHEDB_HTML_DEMO_NOTES__", demoNotes
+        );
+    }
+
+    private String renderMigrationPlannerDiscoveryCard(
+            String normalizedLanguage,
+            MigrationSchemaDiscovery.Result bootstrapDiscovery,
+            String bootstrapDiscoveryStatus,
+            String discoveryFallbackAction,
+            Map<String, String> plannerValues
+    ) {
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_DISCOVERY_CARD_TEMPLATE,
+                "__CACHEDB_HTML_DISCOVERY_TITLE__", escapeHtml(localized(normalizedLanguage, "0. PostgreSQL Şema Keşfi", "0. PostgreSQL Schema Discovery")),
+                "__CACHEDB_HTML_ACTION__", discoveryFallbackAction,
+                "__CACHEDB_HTML_LANGUAGE__", escapeHtml(normalizedLanguage),
+                "__CACHEDB_HTML_INSTANCE_ID__", escapeHtml(dashboardInstanceId),
+                "__CACHEDB_HTML_DISCOVERY_BUTTON__", escapeHtml(localized(normalizedLanguage, "Şemayı Keşfet", "Discover Schema")),
+                "__CACHEDB_HTML_DISCOVERY_STATUS__", bootstrapDiscoveryStatus,
+                "__CACHEDB_HTML_SUGGESTIONS_LABEL__", escapeHtml(localized(normalizedLanguage, "Önerilen route adayları", "Suggested route candidates")),
+                "__CACHEDB_HTML_SUGGESTIONS__", renderStaticDiscoverySuggestions(bootstrapDiscovery, normalizedLanguage, discoveryFallbackAction, plannerValues),
+                "__CACHEDB_HTML_TABLES_LABEL__", escapeHtml(localized(normalizedLanguage, "Keşfedilen tablolar", "Discovered tables")),
+                "__CACHEDB_HTML_TABLES__", renderStaticDiscoveryTables(bootstrapDiscovery, normalizedLanguage, discoveryFallbackAction, plannerValues)
+        );
+    }
+
+    private String renderMigrationPlannerRouteForm(
+            String normalizedLanguage,
+            Map<String, String> plannerValues,
+            MigrationSchemaDiscovery.Result bootstrapDiscovery,
+            String discoveryFallbackAction,
+            String plannerStatusText,
+            String serverPlanFallbackCard
+    ) {
+        String screenSection = "<div id=\"plannerConfigurePanel\" class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "1. Ekran tipi", "1. Screen type")) + "</div><div class=\"planner-form-section-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Bu seçim planner'ın temel varsayımlarını hazırlar. İstersen aşağıdaki ileri ayarlarda bunları ayrıca değiştirebilirsin.", "This choice prepares the planner's default assumptions. You can still override them later in the advanced settings."))
                 + "</div><div><label class=\"form-label fw-semibold\">" + escapeHtml(localized(normalizedLanguage, "Hazır ekran profili", "Prepared screen profile")) + "</label><select class=\"form-select\" name=\"routePreset\">"
                 + selectOption("timeline", localized(normalizedLanguage, "Timeline / müşteri sipariş listesi", "Timeline / customer order list"), plannerValues.get("routePreset"))
@@ -2799,8 +2953,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + selectOption("detail-heavy", localized(normalizedLanguage, "Detail ağırlıklı ekran", "Detail-heavy screen"), plannerValues.get("routePreset"))
                 + "</select><div id=\"plannerPresetHelp\" class=\"planner-select-help\">"
                 + escapeHtml(localized(normalizedLanguage, "Timeline seçimi, müşteri başına son siparişler gibi bounded sıcak pencere ekranları için en doğru başlangıçtır.", "Timeline is the best starting point for bounded hot-window screens such as recent orders per customer."))
-                + "</div></div></div>"
-                + "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "2. Veri yüzeyini seç", "2. Choose the data surfaces")) + "</div><div class=\"planner-form-section-copy\">"
+                + "</div></div></div>";
+        String surfaceSection = "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "2. Veri yüzeyini seç", "2. Choose the data surfaces")) + "</div><div class=\"planner-form-section-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Keşif çalıştıktan sonra aşağıdaki listeler otomatik dolar. İstersen önerilen route kartından tek tıkla formu da doldurabilirsin.", "After discovery runs, the lists below are populated automatically. You can also apply a suggested route card with one click."))
                 + "</div><div class=\"planner-form-grid\">"
                 + selectInput("rootTableOrEntity", localized(normalizedLanguage, "Kök tablo / entity", "Root table / entity"), localized(normalizedLanguage, "Önce keşif çalıştır", "Run discovery first"), "", discoveredSurfaceOptions(bootstrapDiscovery, false, normalizedLanguage), plannerValues.get("rootTableOrEntity"))
@@ -2810,24 +2964,24 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + selectInput("relationColumn", localized(normalizedLanguage, "İlişki kolonu", "Relation column"), localized(normalizedLanguage, "Önerilen FK kolonları", "Suggested FK columns"), "", discoveredRelationOptions(bootstrapDiscovery, plannerValues.get("rootTableOrEntity"), plannerValues.get("childTableOrEntity"), normalizedLanguage), plannerValues.get("relationColumn"))
                 + selectInput("sortColumn", localized(normalizedLanguage, "Liste sıralama kolonu", "List sort column"), localized(normalizedLanguage, "Zamansal / sayısal kolonlardan seç", "Choose from temporal / numeric columns"), "", discoveredColumnOptions(resolveDiscoveryTable(bootstrapDiscovery, plannerValues.get("childTableOrEntity")), "sort"), plannerValues.get("sortColumn"))
                 + selectInput("sortDirection", localized(normalizedLanguage, "Sıralama yönü", "Sort direction"), localized(normalizedLanguage, "Sıralama yönünü seç", "Choose the sort direction"), "", List.of(new PlannerSelectOption("DESC", "DESC"), new PlannerSelectOption("ASC", "ASC")), plannerValues.get("sortDirection"))
-                + "</div></div>"
-                + "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "3. Hızlı kapasite kararı", "3. Quick capacity decision")) + "</div><div class=\"planner-form-section-copy\">"
+                + "</div></div>";
+        String capacitySection = "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "3. Hızlı kapasite kararı", "3. Quick capacity decision")) + "</div><div class=\"planner-form-section-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Buradaki değerler tam hesap olmak zorunda değil. Planner için kaba ölçek ve sıcak pencere hedefini vermen yeterli.", "These values do not need to be exact. A rough scale and hot-window target are enough for the planner."))
                 + "</div><div class=\"planner-form-grid\">"
                 + fieldInput("rootRowCount", localized(normalizedLanguage, "Kök satır sayısı", "Root row count"), "100000", "", plannerValues.get("rootRowCount"))
                 + fieldInput("childRowCount", localized(normalizedLanguage, "Çocuk satır sayısı", "Child row count"), "5000000", "", plannerValues.get("childRowCount"))
                 + fieldInput("firstPageSize", localized(normalizedLanguage, "İlk sayfa boyutu", "First page size"), "100", "", plannerValues.get("firstPageSize"))
                 + fieldInput("hotWindowPerRoot", localized(normalizedLanguage, "Sıcak pencere / kök", "Hot window / root"), "1000", "", plannerValues.get("hotWindowPerRoot"))
-                + "</div></div>"
-                + "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "4. Operasyon tercihleri", "4. Operational preferences")) + "</div><div class=\"planner-form-section-copy\">"
+                + "</div></div>";
+        String operationsSection = "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "4. Operasyon tercihleri", "4. Operational preferences")) + "</div><div class=\"planner-form-section-copy\">"
                 + escapeHtml(localized(normalizedLanguage, "Bunlar doğrudan mimari kararını etkileyen temel seçimler. Geri kalan ayrıntılar aşağıdaki ileri ayarlarda duruyor.", "These are the key preferences that directly shape the architecture decision. The rest stays in the advanced settings below."))
                 + "</div><div class=\"planner-toggle-grid\">"
                 + checkboxInput("archiveHistoryRequired", localized(normalizedLanguage, "Eski tarihçe archive olarak kalsın", "Keep older history as archive"), parseChecked(plannerValues, "archiveHistoryRequired", true))
                 + checkboxInput("detailLookupIsHot", localized(normalizedLanguage, "Tekil detail lookup da sıcak", "Single-item detail lookup is also hot"), parseChecked(plannerValues, "detailLookupIsHot", true))
                 + checkboxInput("sideBySideComparisonRequired", localized(normalizedLanguage, "Staging karşılaştırması istiyorum", "I want staging comparison"), parseChecked(plannerValues, "sideBySideComparisonRequired", true))
                 + checkboxInput("warmRootRows", localized(normalizedLanguage, "Warm sırasında kök satırları da doldur", "Warm the root rows too"), parseChecked(plannerValues, "warmRootRows", true))
-                + "</div></div>"
-                + "<details class=\"full planner-advanced\" data-planner-mode-min=\"intermediate\"><summary>" + escapeHtml(localized(normalizedLanguage, "İleri route ayarları", "Advanced route settings")) + "</summary><div class=\"planner-advanced-body\"><div class=\"planner-form-grid\">"
+                + "</div></div>";
+        String advancedRouteSection = "<details class=\"full planner-advanced\" data-planner-mode-min=\"intermediate\"><summary>" + escapeHtml(localized(normalizedLanguage, "İleri route ayarları", "Advanced route settings")) + "</summary><div class=\"planner-advanced-body\"><div class=\"planner-form-grid\">"
                 + fieldInput("typicalChildrenPerRoot", localized(normalizedLanguage, "Tipik çocuk sayısı / kök", "Typical children per root"), "40", "", plannerValues.get("typicalChildrenPerRoot"))
                 + fieldInput("maxChildrenPerRoot", localized(normalizedLanguage, "Maks çocuk sayısı / kök", "Max children per root"), "2000", "", plannerValues.get("maxChildrenPerRoot"))
                 + checkboxInput("listScreen", localized(normalizedLanguage, "Bu ekran bir liste / timeline ekranı", "This route is a list / timeline screen"), parseChecked(plannerValues, "listScreen", true))
@@ -2837,8 +2991,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + checkboxInput("fullHistoryMustStayHot", localized(normalizedLanguage, "Tüm tarihçe Redis'te sıcak kalmalı", "Full history must stay hot in Redis"), parseChecked(plannerValues, "fullHistoryMustStayHot", false))
                 + checkboxInput("currentOrmUsesEagerLoading", localized(normalizedLanguage, "Mevcut ORM yolu eager-loading ağırlıklı", "Current ORM route is eager-loading heavy"), parseChecked(plannerValues, "currentOrmUsesEagerLoading", true))
                 + checkboxInput("dryRun", localized(normalizedLanguage, "Önce dry run yap, Redis'i değiştirme", "Start with a dry run and do not mutate Redis"), parseChecked(plannerValues, "dryRun", false))
-                + "</div></div></details>"
-                + "<details class=\"full planner-advanced\" data-planner-mode-min=\"advanced\"><summary>" + escapeHtml(localized(normalizedLanguage, "İleri scaffold ve comparison ayarları", "Advanced scaffold and comparison settings")) + "</summary><div class=\"planner-advanced-body\"><div class=\"planner-form-grid\">"
+                + "</div></div></details>";
+        String advancedScaffoldSection = "<details class=\"full planner-advanced\" data-planner-mode-min=\"advanced\"><summary>" + escapeHtml(localized(normalizedLanguage, "İleri scaffold ve comparison ayarları", "Advanced scaffold and comparison settings")) + "</summary><div class=\"planner-advanced-body\"><div class=\"planner-form-grid\">"
                 + fieldInput("basePackage", localized(normalizedLanguage, "Üretilecek package", "Generated package"), "com.example.cachedb.migration", "", plannerValues.get("basePackage"))
                 + fieldInput("rootClassName", localized(normalizedLanguage, "Kök entity sınıf adı", "Root entity class name"), "CustomerEntity", "", plannerValues.get("rootClassName"))
                 + fieldInput("childClassName", localized(normalizedLanguage, "Çocuk entity sınıf adı", "Child entity class name"), "OrderEntity", "", plannerValues.get("childClassName"))
@@ -2854,238 +3008,453 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + checkboxInput("includeProjectionSkeleton", localized(normalizedLanguage, "Projection iskeletini üret", "Generate projection skeleton"), parseChecked(plannerValues, "includeProjectionSkeleton", true))
                 + checkboxInput("warmBeforeCompare", localized(normalizedLanguage, "Karşılaştırmadan önce warm çalıştır", "Run warm before comparison"), parseChecked(plannerValues, "warmBeforeCompare", true))
                 + textareaInput("comparisonBaselineSql", localized(normalizedLanguage, "Baseline SQL override", "Baseline SQL override"), localized(normalizedLanguage, "Varsayılan türetilmiş SQL yerine kullanılır", "Used instead of the derived baseline SQL"), "full", plannerValues.get("comparisonBaselineSql"))
-                + "</div></div></details>"
-                + "</div>"
-                + "<div class=\"planner-chip-row\">"
-                + "<span class=\"planner-chip\">" + escapeHtml(localized(normalizedLanguage, "Amaç: bounded Redis hot set", "Goal: bounded Redis hot set")) + "</span>"
-                + "<span class=\"planner-chip\">" + escapeHtml(localized(normalizedLanguage, "Amaç: projection-first first paint", "Goal: projection-first first paint")) + "</span>"
-                + "<span class=\"planner-chip\">" + escapeHtml(localized(normalizedLanguage, "Amaç: staging comparison", "Goal: staging comparison")) + "</span>"
-                + "</div>"
-                + "<div class=\"planner-actions\"><button id=\"plannerGenerateAction\" type=\"submit\" class=\"btn btn-primary\">" + escapeHtml(localized(normalizedLanguage, "Planı Oluştur", "Generate Plan")) + "</button>"
-                + "<button id=\"plannerDefaults\" type=\"button\" class=\"btn btn-outline-secondary\">" + escapeHtml(localized(normalizedLanguage, "Örnek Değerleri Yükle", "Load Example Defaults")) + "</button></div>"
-                + "<div id=\"plannerStatus\" class=\"planner-status\">" + plannerStatusText + "</div>"
-                + serverPlanFallbackCard
-                + "</form></div></div>"
-                + "<div class=\"planner-results\">"
-                + "<div id=\"plannerEmpty\" class=\"" + plannerEmptyClass + "\">" + escapeHtml(localized(normalizedLanguage, "Henüz plan üretilmedi. Bu yüzey sana sıcak pencere sınırını, projection gerekliliğini, warm-up sırasını ve staging karşılaştırma kontrol listesini çıkaracak.", "No plan yet. This surface will produce the hot-window boundary, projection requirement, warm-up sequence, and staging comparison checklist.")) + "</div>"
-                + "<div id=\"plannerResults\" class=\"" + plannerResultsClass + "\">"
-                + "<div id=\"plannerPlanPanel\" class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "2. Hedef mimari kararı", "2. Target architecture decision")) + "</div><div class=\"result-card-body\">"
-                + "<div class=\"result-grid\">"
-                + metricShell("plannerSurface", localized(normalizedLanguage, "Önerilen yüzey", "Recommended surface"), hasServerPlanResult ? bootstrapPlanResult.recommendedSurface() : "")
+                + "</div></div></details>";
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_ROUTE_FORM_TEMPLATE,
+                "__CACHEDB_HTML_ACTION__", discoveryFallbackAction,
+                "__CACHEDB_HTML_LANGUAGE__", escapeHtml(normalizedLanguage),
+                "__CACHEDB_HTML_INSTANCE_ID__", escapeHtml(dashboardInstanceId),
+                "__CACHEDB_HTML_QUICKSTART_TITLE__", escapeHtml(localized(normalizedLanguage, "Kısa kullanım akışı", "Quick usage flow")),
+                "__CACHEDB_HTML_QUICKSTART_COPY__", escapeHtml(localized(normalizedLanguage, "Önce keşfi çalıştır, sonra kök ve çocuk yüzeyi listeden seç. Ekran tipini belirledikten sonra planı üret; warm, scaffold ve compare adımları onun altında açılır.", "Start with discovery, then choose the root and child surfaces from the list. After selecting the screen type, generate the plan; warm, scaffold, and compare unlock below.")),
+                "__CACHEDB_HTML_WORKLOAD_FIELD__", fieldInput("workloadName", localized(normalizedLanguage, "İş yükü adı", "Workload name"), "customer-orders", "full", plannerValues.get("workloadName")),
+                "__CACHEDB_HTML_SCREEN_SECTION__", screenSection,
+                "__CACHEDB_HTML_SURFACE_SECTION__", surfaceSection,
+                "__CACHEDB_HTML_CAPACITY_SECTION__", capacitySection,
+                "__CACHEDB_HTML_OPERATIONS_SECTION__", operationsSection,
+                "__CACHEDB_HTML_ADVANCED_ROUTE_SECTION__", advancedRouteSection,
+                "__CACHEDB_HTML_ADVANCED_SCAFFOLD_SECTION__", advancedScaffoldSection,
+                "__CACHEDB_HTML_CHIP_HOT_SET__", escapeHtml(localized(normalizedLanguage, "Amaç: bounded Redis hot set", "Goal: bounded Redis hot set")),
+                "__CACHEDB_HTML_CHIP_PROJECTION__", escapeHtml(localized(normalizedLanguage, "Amaç: projection-first first paint", "Goal: projection-first first paint")),
+                "__CACHEDB_HTML_CHIP_COMPARISON__", escapeHtml(localized(normalizedLanguage, "Amaç: staging comparison", "Goal: staging comparison")),
+                "__CACHEDB_HTML_GENERATE_BUTTON__", escapeHtml(localized(normalizedLanguage, "Planı Oluştur", "Generate Plan")),
+                "__CACHEDB_HTML_DEFAULTS_BUTTON__", escapeHtml(localized(normalizedLanguage, "Örnek Değerleri Yükle", "Load Example Defaults")),
+                "__CACHEDB_HTML_PLANNER_STATUS__", plannerStatusText,
+                "__CACHEDB_HTML_SERVER_PLAN_FALLBACK__", serverPlanFallbackCard
+        );
+    }
+
+    private String renderMigrationPlannerWorkspace(
+            String normalizedLanguage,
+            String plannerEmptyClass,
+            String plannerResultsClass,
+            String planResultsHtml,
+            String warmCardHtml,
+            String scaffoldCardHtml,
+            String compareCardHtml
+    ) {
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_WORKSPACE_TEMPLATE,
+                "__CACHEDB_HTML_WORKSPACE_TITLE__", escapeHtml(localized(normalizedLanguage, "Migration çalışma alanı", "Migration workspace")),
+                "__CACHEDB_HTML_WORKSPACE_COPY__", escapeHtml(localized(normalizedLanguage, "Plan, warm sonucu, scaffold, karşılaştırma ve rapor bu geniş alanda AJAX ile güncellenir. Sayfa reload olursa fallback devrededir; normal akışta çıktılar burada kalır.", "Plan, warm result, scaffold, comparison, and report update in this wide workspace over AJAX. If the page reloads, fallback still works; in the normal flow outputs stay here.")),
+                "__CACHEDB_HTML_STATE_ARIA__", escapeHtml(localized(normalizedLanguage, "Akış durumu", "Flow state")),
+                "__CACHEDB_HTML_STATE_DISCOVER__", escapeHtml(localized(normalizedLanguage, "Keşif", "Discovery")),
+                "__CACHEDB_HTML_STATE_PLAN__", escapeHtml(localized(normalizedLanguage, "Plan", "Plan")),
+                "__CACHEDB_HTML_STATE_WARM__", escapeHtml(localized(normalizedLanguage, "Warm", "Warm")),
+                "__CACHEDB_HTML_STATE_COMPARE__", escapeHtml(localized(normalizedLanguage, "Compare", "Compare")),
+                "__CACHEDB_HTML_STATE_REPORT__", escapeHtml(localized(normalizedLanguage, "Rapor", "Report")),
+                "__CACHEDB_HTML_EMPTY_CLASS__", plannerEmptyClass,
+                "__CACHEDB_HTML_EMPTY_COPY__", escapeHtml(localized(normalizedLanguage, "Henüz plan üretilmedi. Bu yüzey sana sıcak pencere sınırını, projection gerekliliğini, warm-up sırasını ve staging karşılaştırma kontrol listesini çıkaracak.", "No plan yet. This surface will produce the hot-window boundary, projection requirement, warm-up sequence, and staging comparison checklist.")),
+                "__CACHEDB_HTML_RESULTS_CLASS__", plannerResultsClass,
+                "__CACHEDB_HTML_PLAN_RESULTS__", planResultsHtml,
+                "__CACHEDB_HTML_WARM_CARD__", warmCardHtml,
+                "__CACHEDB_HTML_SCAFFOLD_CARD__", scaffoldCardHtml,
+                "__CACHEDB_HTML_COMPARE_CARD__", compareCardHtml
+        );
+    }
+
+    private String renderMigrationPlannerResultsCard(
+            String normalizedLanguage,
+            boolean hasServerPlanResult,
+            MigrationPlanner.Result bootstrapPlanResult
+    ) {
+        String planMetrics = metricShell("plannerSurface", localized(normalizedLanguage, "Önerilen yüzey", "Recommended surface"), hasServerPlanResult ? bootstrapPlanResult.recommendedSurface() : "")
                 + metricShell("plannerWindow", localized(normalizedLanguage, "Önerilen sıcak pencere", "Recommended hot window"), hasServerPlanResult ? bootstrapPlanResult.recommendedHotWindowPerRoot() + " " + localized(normalizedLanguage, "satır / kök", "rows / root") : "")
                 + metricShell("plannerProjection", localized(normalizedLanguage, "Projection kararı", "Projection decision"), hasServerPlanResult ? (bootstrapPlanResult.projectionRequired() ? localized(normalizedLanguage, "Gerekli", "Required") + " (" + defaultString(bootstrapPlanResult.summaryProjectionName()) + ")" : localized(normalizedLanguage, "İlk aşamada opsiyonel", "Optional at first")) : "")
-                + metricShell("plannerRanking", localized(normalizedLanguage, "Ranked projection", "Ranked projection"), hasServerPlanResult ? (bootstrapPlanResult.rankedProjectionRequired() ? localized(normalizedLanguage, "Gerekli", "Required") + " (" + defaultString(bootstrapPlanResult.rankedProjectionName().isBlank() ? bootstrapPlanResult.rankFieldName() : bootstrapPlanResult.rankedProjectionName()) + ")" : localized(normalizedLanguage, "Gerekli değil", "Not required")) : "")
-                + "</div>"
-                + "<div class=\"row g-3 mt-1\"><div class=\"col-12 col-xl-6\"><div class=\"result-metric\"><div class=\"result-metric-label\">" + escapeHtml(localized(normalizedLanguage, "Redis yerleşimi", "Redis placement")) + "</div><div id=\"plannerRedisPlacement\" class=\"result-metric-value\">" + escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.redisPlacement()) : "") + "</div></div></div>"
-                + "<div class=\"col-12 col-xl-6\"><div class=\"result-metric\"><div class=\"result-metric-label\">" + escapeHtml(localized(normalizedLanguage, "PostgreSQL yerleşimi", "PostgreSQL placement")) + "</div><div id=\"plannerPostgresPlacement\" class=\"result-metric-value\">" + escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.postgresPlacement()) : "") + "</div></div></div></div>"
-                + "</div></div>"
-                + resultListCard("plannerReasoningCard", localized(normalizedLanguage, "Neden bu karar çıktı?", "Why this decision?"), "plannerReasoning", hasServerPlanResult ? renderPlannerStaticList(bootstrapPlanResult.reasoning(), localized(normalizedLanguage, "Henüz karar gerekçesi üretilmedi.", "No reasoning has been generated yet.")) : "")
+                + metricShell("plannerRanking", localized(normalizedLanguage, "Ranked projection", "Ranked projection"), hasServerPlanResult ? (bootstrapPlanResult.rankedProjectionRequired() ? localized(normalizedLanguage, "Gerekli", "Required") + " (" + defaultString(bootstrapPlanResult.rankedProjectionName().isBlank() ? bootstrapPlanResult.rankFieldName() : bootstrapPlanResult.rankedProjectionName()) + ")" : localized(normalizedLanguage, "Gerekli değil", "Not required")) : "");
+        String listCards = resultListCard("plannerReasoningCard", localized(normalizedLanguage, "Neden bu karar çıktı?", "Why this decision?"), "plannerReasoning", hasServerPlanResult ? renderPlannerStaticList(bootstrapPlanResult.reasoning(), localized(normalizedLanguage, "Henüz karar gerekçesi üretilmedi.", "No reasoning has been generated yet.")) : "")
                 + resultListCard("plannerArtifactsCard", localized(normalizedLanguage, "Hangi yüzeyler oluşmalı?", "Which surfaces should exist?"), "plannerRedisArtifacts", hasServerPlanResult ? renderPlannerStaticList(bootstrapPlanResult.recommendedRedisArtifacts(), localized(normalizedLanguage, "Henüz önerilen Redis yüzeyi üretilmedi.", "No Redis surface recommendation has been generated yet.")) : "")
                 + resultListCard("plannerPostgresCard", localized(normalizedLanguage, "PostgreSQL'de ne kalmalı?", "What stays in PostgreSQL?"), "plannerPostgresArtifacts", hasServerPlanResult ? renderPlannerStaticList(bootstrapPlanResult.recommendedPostgresArtifacts(), localized(normalizedLanguage, "Henüz PostgreSQL yerleşimi üretilmedi.", "No PostgreSQL placement guidance has been generated yet.")) : "")
-                + resultListCard("plannerApiCard", localized(normalizedLanguage, "Route şekli nasıl olmalı?", "What should the route shape look like?"), "plannerApiShapes", hasServerPlanResult ? renderPlannerStaticList(bootstrapPlanResult.recommendedApiShapes(), localized(normalizedLanguage, "Henüz API şekli önerisi üretilmedi.", "No API shape recommendation has been generated yet.")) : "")
-                + "<div class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "3. Warm-up planı", "3. Warm-up plan")) + "</div><div class=\"result-card-body\"><div id=\"plannerWarmSteps\">" + (hasServerPlanResult ? renderPlannerStaticWarmSteps(bootstrapPlanResult.warmSteps()) : "") + "</div></div></div>"
-                + "<div class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "4. Staging karşılaştırma planı", "4. Staging comparison plan")) + "</div><div class=\"result-card-body\"><div id=\"plannerComparisonSummary\" class=\"planner-status mb-3\">" + escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.comparisonSummary()) : "") + "</div><div id=\"plannerComparisonChecks\">" + (hasServerPlanResult ? renderPlannerStaticComparisonChecks(bootstrapPlanResult.comparisonChecks()) : "") + "</div></div></div>"
-                + "<div class=\"result-card\" data-planner-mode-min=\"intermediate\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "5. Örnek warm SQL", "5. Sample warm SQL")) + "</div><div class=\"result-card-body\">"
-                + "<div class=\"small text-muted fw-semibold mb-2\">" + escapeHtml(localized(normalizedLanguage, "Çocuk sıcak pencere SQL'i", "Child hot-window SQL")) + "</div><pre id=\"plannerWarmSql\" class=\"result-pre\">" + escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.sampleWarmSql()) : "") + "</pre>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "İlgili kök satırları için SQL şablonu", "Referenced root SQL template")) + "</div><pre id=\"plannerRootWarmSql\" class=\"result-pre\">" + escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.sampleRootWarmSql()) : "") + "</pre>"
-                + "</div></div>"
-                + "<div id=\"plannerWarningsCard\" class=\"result-card" + ((hasServerPlanResult && bootstrapPlanResult.warnings() != null && !bootstrapPlanResult.warnings().isEmpty()) ? "" : " d-none") + "\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "Dikkat edilmesi gerekenler", "Things to watch")) + "</div><div class=\"result-card-body\"><div id=\"plannerWarnings\">" + (hasServerPlanResult ? renderPlannerStaticWarnings(bootstrapPlanResult.warnings()) : "") + "</div></div></div>"
-                + "<div id=\"plannerWarmPanel\" class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "6. Staging warm execution", "6. Staging warm execution")) + "</div><div class=\"result-card-body\">"
-                + "<div class=\"planner-actions\"><button id=\"plannerWarmAction\" type=\"submit\" form=\"plannerForm\" formmethod=\"get\" formaction=\"" + discoveryFallbackAction + "\" name=\"warmExecution\" value=\"true\" class=\"btn btn-success\"" + plannerWarmDisabled + ">" + escapeHtml(localized(normalizedLanguage, "Warm'ı Çalıştır", "Run Warm")) + "</button>"
-                + "<button id=\"plannerWarmPreviewAction\" type=\"submit\" form=\"plannerForm\" formmethod=\"get\" formaction=\"" + discoveryFallbackAction + "\" name=\"dryRunExecution\" value=\"true\" class=\"btn btn-outline-secondary\"" + plannerWarmDisabled + ">" + escapeHtml(localized(normalizedLanguage, "Dry Run Çalıştır", "Run Dry Run")) + "</button></div>"
-                + "<div id=\"plannerWarmStatus\" class=\"planner-status mt-3\">" + escapeHtml(plannerWarmStatusText) + "</div>"
-                + "<div id=\"plannerWarmResults\" class=\"" + plannerWarmResultsClass + "\">"
-                + "<div class=\"result-grid\">"
-                + metricShell("plannerWarmChildRows", localized(normalizedLanguage, "Çocuk satırları", "Child rows"), bootstrapWarmResult == null ? "" : bootstrapWarmResult.childRowsHydrated() + " / " + bootstrapWarmResult.childRowsRead())
+                + resultListCard("plannerApiCard", localized(normalizedLanguage, "Route şekli nasıl olmalı?", "What should the route shape look like?"), "plannerApiShapes", hasServerPlanResult ? renderPlannerStaticList(bootstrapPlanResult.recommendedApiShapes(), localized(normalizedLanguage, "Henüz API şekli önerisi üretilmedi.", "No API shape recommendation has been generated yet.")) : "");
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_RESULTS_CARD_TEMPLATE,
+                "__CACHEDB_HTML_PLAN_TITLE__", escapeHtml(localized(normalizedLanguage, "2. Hedef mimari kararı", "2. Target architecture decision")),
+                "__CACHEDB_HTML_PLAN_METRICS__", planMetrics,
+                "__CACHEDB_HTML_REDIS_LABEL__", escapeHtml(localized(normalizedLanguage, "Redis yerleşimi", "Redis placement")),
+                "__CACHEDB_HTML_REDIS_VALUE__", escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.redisPlacement()) : ""),
+                "__CACHEDB_HTML_POSTGRES_LABEL__", escapeHtml(localized(normalizedLanguage, "PostgreSQL yerleşimi", "PostgreSQL placement")),
+                "__CACHEDB_HTML_POSTGRES_VALUE__", escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.postgresPlacement()) : ""),
+                "__CACHEDB_HTML_LIST_CARDS__", listCards,
+                "__CACHEDB_HTML_WARM_PLAN_TITLE__", escapeHtml(localized(normalizedLanguage, "3. Warm-up planı", "3. Warm-up plan")),
+                "__CACHEDB_HTML_WARM_STEPS__", hasServerPlanResult ? renderPlannerStaticWarmSteps(bootstrapPlanResult.warmSteps()) : "",
+                "__CACHEDB_HTML_COMPARISON_PLAN_TITLE__", escapeHtml(localized(normalizedLanguage, "4. Staging karşılaştırma planı", "4. Staging comparison plan")),
+                "__CACHEDB_HTML_COMPARISON_SUMMARY__", escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.comparisonSummary()) : ""),
+                "__CACHEDB_HTML_COMPARISON_CHECKS__", hasServerPlanResult ? renderPlannerStaticComparisonChecks(bootstrapPlanResult.comparisonChecks()) : "",
+                "__CACHEDB_HTML_SAMPLE_SQL_TITLE__", escapeHtml(localized(normalizedLanguage, "5. Örnek warm SQL", "5. Sample warm SQL")),
+                "__CACHEDB_HTML_CHILD_SQL_LABEL__", escapeHtml(localized(normalizedLanguage, "Çocuk sıcak pencere SQL'i", "Child hot-window SQL")),
+                "__CACHEDB_HTML_CHILD_SQL__", escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.sampleWarmSql()) : ""),
+                "__CACHEDB_HTML_ROOT_SQL_LABEL__", escapeHtml(localized(normalizedLanguage, "İlgili kök satırları için SQL şablonu", "Referenced root SQL template")),
+                "__CACHEDB_HTML_ROOT_SQL__", escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.sampleRootWarmSql()) : ""),
+                "__CACHEDB_HTML_WARNINGS_CLASS__", (hasServerPlanResult && bootstrapPlanResult.warnings() != null && !bootstrapPlanResult.warnings().isEmpty()) ? "" : " d-none",
+                "__CACHEDB_HTML_WARNINGS_TITLE__", escapeHtml(localized(normalizedLanguage, "Dikkat edilmesi gerekenler", "Things to watch")),
+                "__CACHEDB_HTML_WARNINGS__", hasServerPlanResult ? renderPlannerStaticWarnings(bootstrapPlanResult.warnings()) : ""
+        );
+    }
+
+    private String renderMigrationPlannerWarmCard(
+            String normalizedLanguage,
+            String discoveryFallbackAction,
+            String plannerWarmDisabled,
+            String plannerWarmStatusText,
+            String plannerWarmResultsClass,
+            MigrationWarmRunner.Result bootstrapWarmResult
+    ) {
+        String warmMetrics = metricShell("plannerWarmChildRows", localized(normalizedLanguage, "Çocuk satırları", "Child rows"), bootstrapWarmResult == null ? "" : bootstrapWarmResult.childRowsHydrated() + " / " + bootstrapWarmResult.childRowsRead())
                 + metricShell("plannerWarmRootRows", localized(normalizedLanguage, "Kök satırları", "Root rows"), bootstrapWarmResult == null ? "" : bootstrapWarmResult.rootRowsHydrated() + " / " + bootstrapWarmResult.rootRowsRead())
                 + metricShell("plannerWarmSkippedRows", localized(normalizedLanguage, "Atlanan silinmiş satırlar", "Skipped deleted rows"), bootstrapWarmResult == null ? "" : String.valueOf(bootstrapWarmResult.skippedDeletedRows()))
                 + metricShell("plannerWarmDuration", localized(normalizedLanguage, "Süre", "Duration"), bootstrapWarmResult == null ? "" : bootstrapWarmResult.durationMillis() + " ms")
                 + metricShell("plannerWarmReferencedRoots", localized(normalizedLanguage, "İlgili kök id sayısı", "Referenced root ids"), bootstrapWarmResult == null ? "" : String.valueOf(bootstrapWarmResult.distinctReferencedRootIds()))
-                + metricShell("plannerWarmMissingRoots", localized(normalizedLanguage, "Eksik kök id sayısı", "Missing root ids"), bootstrapWarmResult == null ? "" : String.valueOf(bootstrapWarmResult.missingReferencedRootIds()))
-                + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Warm notları", "Warm notes")) + "</div><div id=\"plannerWarmNotes\">" + (bootstrapWarmResult == null ? "" : renderPlannerStaticList(bootstrapWarmResult.notes(), localized(normalizedLanguage, "Henüz warm notu üretilmedi.", "No warm note has been generated yet."))) + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Çalışan çocuk SQL'i", "Executed child SQL")) + "</div><pre id=\"plannerWarmChildSql\" class=\"result-pre\">" + escapeHtml(bootstrapWarmResult == null ? "" : defaultString(bootstrapWarmResult.childWarmSql())) + "</pre>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Kök SQL şablonu", "Root SQL template")) + "</div><pre id=\"plannerWarmRootSql\" class=\"result-pre\">" + escapeHtml(bootstrapWarmResult == null ? "" : defaultString(bootstrapWarmResult.rootWarmSql())) + "</pre>"
-                + "</div></div></div>"
-                + "<div id=\"plannerScaffoldPanel\" class=\"result-card\" data-planner-mode-min=\"intermediate\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "7. Generated CacheDB scaffold", "7. Generated CacheDB scaffold")) + "</div><div class=\"result-card-body\">"
-                + "<div class=\"planner-actions\"><button id=\"plannerScaffoldAction\" type=\"button\" class=\"btn btn-outline-primary\"" + plannerScaffoldDisabled + ">" + escapeHtml(localized(normalizedLanguage, "İskeleti Üret", "Generate Scaffold")) + "</button></div>"
-                + "<div id=\"plannerScaffoldStatus\" class=\"planner-status mt-3\">" + escapeHtml(plannerScaffoldStatusText) + "</div>"
-                + "<div id=\"plannerScaffoldResults\" class=\"d-none mt-3\">"
-                + "<div class=\"result-grid\">"
-                + metricShell("plannerScaffoldBasePackage", localized(normalizedLanguage, "Base package", "Base package"))
-                + metricShell("plannerScaffoldFileCount", localized(normalizedLanguage, "Üretilen dosya", "Generated files"))
-                + "</div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "İskelet notları", "Scaffold notes")) + "</div><div id=\"plannerScaffoldNotes\"></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Üretilen dosyalar", "Generated files")) + "</div><div id=\"plannerScaffoldFiles\"></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Scaffold uyarıları", "Scaffold warnings")) + "</div><div id=\"plannerScaffoldWarnings\"></div>"
-                + "</div></div></div>"
-                + "<div id=\"plannerComparePanel\" class=\"result-card\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "8. Side-by-side comparison", "8. Side-by-side comparison")) + "</div><div class=\"result-card-body\">"
-                + "<div class=\"planner-actions\"><button id=\"plannerCompareAction\" type=\"button\" class=\"btn btn-outline-dark\"" + plannerCompareDisabled + ">" + escapeHtml(localized(normalizedLanguage, "Karşılaştırmayı Çalıştır", "Run Comparison")) + "</button>"
-                + "<button id=\"plannerCompareDownloadReportAction\" type=\"button\" class=\"btn btn-outline-secondary\" disabled>" + escapeHtml(localized(normalizedLanguage, "Raporu İndir", "Download Report")) + "</button></div>"
-                + "<div id=\"plannerCompareStatus\" class=\"planner-status mt-3\">" + escapeHtml(plannerCompareStatusText) + "</div>"
-                + "<div id=\"plannerCompareResults\" class=\"d-none mt-3\">"
-                + "<div class=\"result-grid\">"
-                + metricShell("plannerCompareRoute", localized(normalizedLanguage, "CacheDB route", "CacheDB route"))
+                + metricShell("plannerWarmMissingRoots", localized(normalizedLanguage, "Eksik kök id sayısı", "Missing root ids"), bootstrapWarmResult == null ? "" : String.valueOf(bootstrapWarmResult.missingReferencedRootIds()));
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_WARM_CARD_TEMPLATE,
+                "__CACHEDB_HTML_WARM_TITLE__", escapeHtml(localized(normalizedLanguage, "6. Staging warm execution", "6. Staging warm execution")),
+                "__CACHEDB_HTML_ACTION__", discoveryFallbackAction,
+                "__CACHEDB_HTML_WARM_DISABLED__", plannerWarmDisabled,
+                "__CACHEDB_HTML_WARM_BUTTON__", escapeHtml(localized(normalizedLanguage, "Warm'ı Çalıştır", "Run Warm")),
+                "__CACHEDB_HTML_DRY_RUN_BUTTON__", escapeHtml(localized(normalizedLanguage, "Dry Run Çalıştır", "Run Dry Run")),
+                "__CACHEDB_HTML_WARM_STATUS__", escapeHtml(plannerWarmStatusText),
+                "__CACHEDB_HTML_WARM_RESULTS_CLASS__", plannerWarmResultsClass,
+                "__CACHEDB_HTML_WARM_METRICS__", warmMetrics,
+                "__CACHEDB_HTML_WARM_NOTES_LABEL__", escapeHtml(localized(normalizedLanguage, "Warm notları", "Warm notes")),
+                "__CACHEDB_HTML_WARM_NOTES__", bootstrapWarmResult == null ? "" : renderPlannerStaticList(bootstrapWarmResult.notes(), localized(normalizedLanguage, "Henüz warm notu üretilmedi.", "No warm note has been generated yet.")),
+                "__CACHEDB_HTML_WARM_CHILD_SQL_LABEL__", escapeHtml(localized(normalizedLanguage, "Çalışan çocuk SQL'i", "Executed child SQL")),
+                "__CACHEDB_HTML_WARM_CHILD_SQL__", escapeHtml(bootstrapWarmResult == null ? "" : defaultString(bootstrapWarmResult.childWarmSql())),
+                "__CACHEDB_HTML_WARM_ROOT_SQL_LABEL__", escapeHtml(localized(normalizedLanguage, "Kök SQL şablonu", "Root SQL template")),
+                "__CACHEDB_HTML_WARM_ROOT_SQL__", escapeHtml(bootstrapWarmResult == null ? "" : defaultString(bootstrapWarmResult.rootWarmSql()))
+        );
+    }
+
+    private String renderMigrationPlannerScaffoldCard(
+            String normalizedLanguage,
+            String plannerScaffoldDisabled,
+            String plannerScaffoldStatusText
+    ) {
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_SCAFFOLD_CARD_TEMPLATE,
+                "__CACHEDB_HTML_SCAFFOLD_TITLE__", escapeHtml(localized(normalizedLanguage, "7. Generated CacheDB scaffold", "7. Generated CacheDB scaffold")),
+                "__CACHEDB_HTML_SCAFFOLD_DISABLED__", plannerScaffoldDisabled,
+                "__CACHEDB_HTML_SCAFFOLD_BUTTON__", escapeHtml(localized(normalizedLanguage, "İskeleti Üret", "Generate Scaffold")),
+                "__CACHEDB_HTML_SCAFFOLD_STATUS__", escapeHtml(plannerScaffoldStatusText),
+                "__CACHEDB_HTML_SCAFFOLD_METRICS__", metricShell("plannerScaffoldBasePackage", localized(normalizedLanguage, "Base package", "Base package"))
+                        + metricShell("plannerScaffoldFileCount", localized(normalizedLanguage, "Üretilen dosya", "Generated files")),
+                "__CACHEDB_HTML_SCAFFOLD_NOTES_LABEL__", escapeHtml(localized(normalizedLanguage, "İskelet notları", "Scaffold notes")),
+                "__CACHEDB_HTML_SCAFFOLD_FILES_LABEL__", escapeHtml(localized(normalizedLanguage, "Üretilen dosyalar", "Generated files")),
+                "__CACHEDB_HTML_SCAFFOLD_WARNINGS_LABEL__", escapeHtml(localized(normalizedLanguage, "Scaffold uyarıları", "Scaffold warnings"))
+        );
+    }
+
+    private String renderMigrationPlannerCompareCard(
+            String normalizedLanguage,
+            String plannerCompareDisabled,
+            String plannerCompareStatusText
+    ) {
+        String compareMetrics = metricShell("plannerCompareRoute", localized(normalizedLanguage, "CacheDB route", "CacheDB route"))
                 + metricShell("plannerCompareExactMatches", localized(normalizedLanguage, "Tam eşleşen örnek", "Exact sample matches"))
                 + metricShell("plannerCompareBaselineAvg", localized(normalizedLanguage, "Baseline ort.", "Baseline avg"))
                 + metricShell("plannerCompareBaselineP95", localized(normalizedLanguage, "Baseline p95", "Baseline p95"))
                 + metricShell("plannerCompareCacheAvg", localized(normalizedLanguage, "Cache avg", "Cache avg"))
-                + metricShell("plannerCompareCacheP95", localized(normalizedLanguage, "Cache p95", "Cache p95"))
-                + "</div>"
-                + "<div class=\"result-card mt-3\"><div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "Geçiş değerlendirmesi", "Migration assessment")) + "</div><div class=\"result-card-body\">"
-                + "<div class=\"result-grid\">"
-                + metricShell("plannerCompareAssessmentStatus", localized(normalizedLanguage, "Geçiş kararı", "Cutover decision"))
+                + metricShell("plannerCompareCacheP95", localized(normalizedLanguage, "Cache p95", "Cache p95"));
+        String assessmentMetrics = metricShell("plannerCompareAssessmentStatus", localized(normalizedLanguage, "Geçiş kararı", "Cutover decision"))
                 + metricShell("plannerCompareAssessmentParity", localized(normalizedLanguage, "Veri eşleşmesi", "Data parity"))
                 + metricShell("plannerCompareAssessmentAvgRatio", localized(normalizedLanguage, "Ort. oran", "Avg ratio"))
-                + metricShell("plannerCompareAssessmentP95Ratio", localized(normalizedLanguage, "p95 oran", "p95 ratio"))
-                + "</div>"
-                + "<div id=\"plannerCompareAssessmentSummary\" class=\"planner-status mt-3\"></div>"
-                + "<div id=\"plannerCompareAssessmentDecision\" class=\"small text-muted mt-2\"></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Güçlü sinyaller", "Positive signals")) + "</div><div id=\"plannerCompareAssessmentStrengths\"></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Cutover blokajları", "Cutover blockers")) + "</div><div id=\"plannerCompareAssessmentBlockers\"></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Sonraki adımlar", "Next steps")) + "</div><div id=\"plannerCompareAssessmentNextSteps\"></div>"
-                + "</div></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Baseline SQL", "Baseline SQL")) + "</div><pre id=\"plannerCompareBaselineSql\" class=\"result-pre\"></pre>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Örnek karşılaştırmalar", "Sample comparisons")) + "</div><div id=\"plannerCompareSamples\"></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Karşılaştırma notları", "Comparison notes")) + "</div><div id=\"plannerCompareNotes\"></div>"
-                + "<div class=\"small text-muted fw-semibold mt-3 mb-2\">" + escapeHtml(localized(normalizedLanguage, "Karşılaştırma uyarıları", "Comparison warnings")) + "</div><div id=\"plannerCompareWarnings\"></div>"
-                + "</div></div></div>"
-                + "</div></div>"
-                + "</section></main>"
-                + "<script>"
-                + "(function(){"
-                + "const apiBase='" + apiBasePath + "';"
-                + "const bootstrapDiscovery=" + bootstrapDiscoveryJson + ";"
-                + "const bootstrapDemoResult=" + bootstrapDemoJson + ";"
-                + "const bootstrapPlanResult=" + bootstrapPlanJson + ";"
-                + "const bootstrapPlannerForm=" + bootstrapPlannerFormJson + ";"
-                + "const form=document.getElementById('plannerForm');"
-                + "const status=document.getElementById('plannerStatus');"
-                + "const defaultsButton=document.getElementById('plannerDefaults');"
-                + "const emptyState=document.getElementById('plannerEmpty');"
-                + "const results=document.getElementById('plannerResults');"
-                + "const warmButton=document.getElementById('plannerWarmAction');"
-                + "const warmPreviewButton=document.getElementById('plannerWarmPreviewAction');"
-                + "const warmStatus=document.getElementById('plannerWarmStatus');"
-                + "const warmResults=document.getElementById('plannerWarmResults');"
-                + "const scaffoldButton=document.getElementById('plannerScaffoldAction');"
-                + "const scaffoldStatus=document.getElementById('plannerScaffoldStatus');"
-                + "const scaffoldResults=document.getElementById('plannerScaffoldResults');"
-                + "const compareButton=document.getElementById('plannerCompareAction');"
-                + "const compareReportButton=document.getElementById('plannerCompareDownloadReportAction');"
-                + "const compareStatus=document.getElementById('plannerCompareStatus');"
-                + "const compareResults=document.getElementById('plannerCompareResults');"
-                + "const demoBootstrapButton=document.getElementById('plannerDemoBootstrapAction');"
-                + "const demoStatus=document.getElementById('plannerDemoStatus');"
-                + "const demoResults=document.getElementById('plannerDemoResults');"
-                + "const discoverButton=document.getElementById('plannerDiscoverAction');"
-                + "const discoveryStatus=document.getElementById('plannerDiscoveryStatus');"
-                + "const routePresetField=form.elements.namedItem('routePreset');"
-                + "const presetHelp=document.getElementById('plannerPresetHelp');"
-                + "const modeButtons=Array.from(document.querySelectorAll('[data-planner-mode]'));"
-                + "const modeSummary=document.getElementById('plannerModeSummary');"
-                + "const progressTitle=document.getElementById('plannerProgressTitle');"
-                + "const progressDetail=document.getElementById('plannerProgressDetail');"
-                + "const progressPercent=document.getElementById('plannerProgressPercent');"
-                + "const progressFill=document.getElementById('plannerProgressFill');"
-                + "const stepButtons=Array.from(document.querySelectorAll('[data-planner-step-target]'));"
-                + "let demoDescriptor=null;"
-                + "let templateDefaults=null;"
-                + "let discoveredTables=[];"
-                + "let discoveryLookup={};"
-                + "let discoverySuggestions=[];"
-                + "let lastComparisonResult=null;"
-                + "let plannerMode='beginner';"
-                + "function escapeHtml(value){return String(value??'').replace(/[&<>\"']/g,function(ch){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'})[ch];});}"
-                + "function setStatus(message){status.textContent=message;}"
-                + "function setDemoStatus(message){if(demoStatus){demoStatus.textContent=message;}}"
-                + "function setDiscoveryStatus(message){if(discoveryStatus){discoveryStatus.textContent=message;}}"
-                + "function plannerModeRank(mode){switch(String(mode||'beginner')){case 'advanced':return 2;case 'intermediate':return 1;default:return 0;}}"
-                + "function plannerModeSummaryMessage(mode){switch(String(mode||'beginner')){case 'advanced':return '" + escapeJs(localized(normalizedLanguage, "İleri mod açık. Ham SQL, scaffold ve comparison override alanlarının tamamı görünür durumda.", "Advanced mode is active. Raw SQL, scaffold, and comparison override inputs are all visible.")) + "';case 'intermediate':return '" + escapeJs(localized(normalizedLanguage, "Orta mod açık. Warm ve scaffold yüzeyleri daha görünür, ama ekran hâlâ rehberli ilerliyor.", "Intermediate mode is active. Warm and scaffold are more visible while the flow stays guided.")) + "';default:return '" + escapeJs(localized(normalizedLanguage, "Başlangıç modu açık. Sadece gerekli seçimleri gösterip seni keşif → plan → warm → compare akışında tutar.", "Beginner mode is active. It shows only the essential choices and keeps you on the discovery → plan → warm → compare flow.")) + "';}}"
-                + "function applyPlannerMode(mode){plannerMode=String(mode||'beginner');modeButtons.forEach(function(button){button.classList.toggle('is-active',button.dataset.plannerMode===plannerMode);});Array.from(document.querySelectorAll('[data-planner-mode-min]')).forEach(function(element){const required=element.dataset.plannerModeMin||'beginner';element.classList.toggle('planner-hidden-by-mode', plannerModeRank(plannerMode)<plannerModeRank(required));});if(modeSummary){modeSummary.textContent=plannerModeSummaryMessage(plannerMode);}updatePlannerProgress();}"
-                + "function formatLatency(nanos){const value=Number(nanos||0);if(!Number.isFinite(value)||value<=0){return '0 ns';}if(value>=1000000){return (value/1000000).toFixed(2)+' ms';}if(value>=1000){return (value/1000).toFixed(2)+' µs';}return String(Math.round(value))+' ns';}"
-                + "async function fetchJson(url,options){const response=await fetch(url,options);const text=await response.text();let payload=null;try{payload=JSON.parse(text);}catch(ignore){}if(!response.ok){throw new Error((payload&&payload.error)||text||'request failed');}return payload||{};}"
-                + "function plannerField(name){return form.elements.namedItem(name);}"
-                + "function normalizeValue(value){return String(value||'').trim().toLowerCase();}"
-                + "function surfaceValue(item){return item&&((item.registeredEntityName&&String(item.registeredEntityName).trim())||item.qualifiedTableName||item.tableName)||'';}"
-                + "function isView(item){return String((item&&item.objectType)||'').toUpperCase()==='VIEW';}"
-                + "function rebuildDiscoveryLookup(){discoveryLookup={};(discoveredTables||[]).forEach(function(item,index){const aliases=[surfaceValue(item),item&&item.qualifiedTableName,item&&item.tableName,item&&item.registeredEntityName].filter(Boolean);aliases.forEach(function(alias){discoveryLookup[normalizeValue(alias)]=index;});});}"
-                + "function resolveDiscoveredTable(surface){const index=discoveryLookup[normalizeValue(surface)];return index===undefined?null:(discoveredTables[index]||null);}"
-                + "function populateSelect(field, options, placeholder, selectedValue){if(!field){return;}const current=selectedValue===undefined?field.value:selectedValue;let entries=(options||[]).filter(function(option){return option&&option.value;});const hasCurrent=current&&entries.some(function(option){return option.value===current;});if(current&&!hasCurrent){entries=[{value:current,label:current+' · " + escapeJs(localized(normalizedLanguage, "manuel giriş", "manual entry")) + "'}].concat(entries);}field.innerHTML='<option value=\"\">'+escapeHtml(placeholder||'')+'</option>'+entries.map(function(option){return '<option value=\"'+escapeHtml(option.value)+'\"'+(option.value===current?' selected':'')+'>'+escapeHtml(option.label||option.value)+'</option>';}).join('');}"
-                + "function discoveredSurfaceOptions(includeViews){return (discoveredTables||[]).filter(function(item){return includeViews || !isView(item);}).map(function(item){const badges=[];if(isView(item)){badges.push('" + escapeJs(localized(normalizedLanguage, "view", "view")) + "');}if(item.registeredEntityName){badges.push('" + escapeJs(localized(normalizedLanguage, "entity", "entity")) + ": '+item.registeredEntityName);}return {value:surfaceValue(item),label:item.qualifiedTableName+(badges.length?(' · '+badges.join(' · ')):'')};});}"
-                + "function sortColumnPriority(column){if(!column){return 0;}if(column.primaryKey){return 10;}if(column.temporal){return 120;}if(column.numeric){return 70;}return 20;}"
-                + "function discoveredColumnOptions(table, mode){if(!table){return [];}const columns=(table.columns||[]).slice();columns.sort(function(left,right){let leftScore=0;let rightScore=0;if(mode==='pk'){leftScore=left&&left.primaryKey?100:0;rightScore=right&&right.primaryKey?100:0;}else if(mode==='relation'){leftScore=left&&left.foreignKey?100:0;rightScore=right&&right.foreignKey?100:0;}else if(mode==='sort'){leftScore=sortColumnPriority(left);rightScore=sortColumnPriority(right);}if(leftScore!==rightScore){return rightScore-leftScore;}return String(left.name||'').localeCompare(String(right.name||''));});return columns.map(function(column){const tags=[];if(column.primaryKey){tags.push('PK');}if(column.foreignKey){tags.push('FK');}if(column.temporal){tags.push('" + escapeJs(localized(normalizedLanguage, "zamansal", "temporal")) + "');}if(column.numeric){tags.push('" + escapeJs(localized(normalizedLanguage, "sayısal", "numeric")) + "');}return {value:column.name,label:column.name+(tags.length?(' · '+tags.join(' · ')):'')};});}"
-                + "function discoveredRelationOptions(rootTable, childTable){const rootValue=surfaceValue(rootTable);const childValue=surfaceValue(childTable);const suggestions=(discoverySuggestions||[]).filter(function(item){const rootMatches=[item.rootSurface,item.rootEntityName].filter(Boolean).some(function(value){return normalizeValue(value)===normalizeValue(rootValue);});const childMatches=[item.childSurface,item.childEntityName].filter(Boolean).some(function(value){return normalizeValue(value)===normalizeValue(childValue);});return rootMatches&&childMatches;});const optionMap={};suggestions.forEach(function(item){if(item.relationColumn){optionMap[item.relationColumn]={value:item.relationColumn,label:item.relationColumn+' · " + escapeJs(localized(normalizedLanguage, "önerilen FK", "suggested FK")) + "'};}});(childTable&&childTable.columns||[]).forEach(function(column){if(column&&column.foreignKey&&!optionMap[column.name]){optionMap[column.name]={value:column.name,label:column.name+' · FK'};}});return Object.keys(optionMap).map(function(key){return optionMap[key];});}"
-                + "function syncDiscoverySelectors(){const rootField=plannerField('rootTableOrEntity');const childField=plannerField('childTableOrEntity');populateSelect(rootField,discoveredSurfaceOptions(false),'" + escapeJs(localized(normalizedLanguage, "Kök tabloyu keşiften seç", "Choose a root table from discovery")) + "',rootField&&rootField.value);populateSelect(childField,discoveredSurfaceOptions(true),'" + escapeJs(localized(normalizedLanguage, "Çocuk yüzeyi keşiften seç", "Choose a child surface from discovery")) + "',childField&&childField.value);const rootTable=resolveDiscoveredTable(rootField&&rootField.value);const childTable=resolveDiscoveredTable(childField&&childField.value);populateSelect(plannerField('rootPrimaryKeyColumn'),discoveredColumnOptions(rootTable,'pk'),'" + escapeJs(localized(normalizedLanguage, "Kök seçimine göre dolacak", "Filled from the selected root")) + "',plannerField('rootPrimaryKeyColumn')&&plannerField('rootPrimaryKeyColumn').value);populateSelect(plannerField('childPrimaryKeyColumn'),discoveredColumnOptions(childTable,'pk'),'" + escapeJs(localized(normalizedLanguage, "Çocuk seçimine göre dolacak", "Filled from the selected child")) + "',plannerField('childPrimaryKeyColumn')&&plannerField('childPrimaryKeyColumn').value);populateSelect(plannerField('relationColumn'),discoveredRelationOptions(rootTable,childTable),'" + escapeJs(localized(normalizedLanguage, "İlişki kolonu seç", "Choose the relation column")) + "',plannerField('relationColumn')&&plannerField('relationColumn').value);populateSelect(plannerField('sortColumn'),discoveredColumnOptions(childTable,'sort'),'" + escapeJs(localized(normalizedLanguage, "Liste sıralama kolonunu seç", "Choose the list sort column")) + "',plannerField('sortColumn')&&plannerField('sortColumn').value);}"
-                + "function plannerFlags(){const rootValue=plannerField('rootTableOrEntity')&&plannerField('rootTableOrEntity').value;const childValue=plannerField('childTableOrEntity')&&plannerField('childTableOrEntity').value;const sortValue=plannerField('sortColumn')&&plannerField('sortColumn').value;return {discovered:(discoveredTables||[]).length>0 || (discoverySuggestions||[]).length>0,configured:!!(rootValue&&childValue&&sortValue),planned:!results.classList.contains('d-none'),warmed:!!(warmResults&&!warmResults.classList.contains('d-none')),compared:!!(compareResults&&!compareResults.classList.contains('d-none'))};}"
-                + "function plannerProgressDescriptor(flags){if(!flags.discovered){return {step:1,percent:8,title:'" + escapeJs(localized(normalizedLanguage, "1. adım: Şemayı keşfet", "Step 1: Discover the schema")) + "',detail:'" + escapeJs(localized(normalizedLanguage, "PostgreSQL şemasını keşfedip kök/çocuk adaylarını görünür hale getir.", "Discover the PostgreSQL schema and surface root/child candidates.")) + "'};}if(!flags.configured){return {step:2,percent:28,title:'" + escapeJs(localized(normalizedLanguage, "2. adım: Route'u seç", "Step 2: Select the route")) + "',detail:'" + escapeJs(localized(normalizedLanguage, "Kök tabloyu, çocuk yüzeyi ve ekran tipini seç. Başlangıç modu bunu en az alanla yapar.", "Choose the root table, child surface, and screen profile. Beginner mode keeps this minimal.")) + "'};}if(!flags.planned){return {step:3,percent:52,title:'" + escapeJs(localized(normalizedLanguage, "3. adım: Planı üret", "Step 3: Generate the plan")) + "',detail:'" + escapeJs(localized(normalizedLanguage, "Projection, ranked surface ve bounded sıcak pencere kararı burada netleşir.", "Projection, ranked surface, and bounded hot-window decisions become explicit here.")) + "'};}if(!flags.warmed){return {step:4,percent:76,title:'" + escapeJs(localized(normalizedLanguage, "4. adım: Warm çalıştır", "Step 4: Run warm")) + "',detail:'" + escapeJs(localized(normalizedLanguage, "Dry run ile başlayıp staging sıcak setini PostgreSQL'den besle.", "Start with a dry run, then populate the staging hot set from PostgreSQL.")) + "'};}if(!flags.compared){return {step:5,percent:90,title:'" + escapeJs(localized(normalizedLanguage, "5. adım: Compare ve rapor", "Step 5: Compare and report")) + "',detail:'" + escapeJs(localized(normalizedLanguage, "CacheDB ile mevcut route'u yan yana ölç, assessment'ı oku ve migration raporunu indir.", "Measure CacheDB and the existing route side by side, read the assessment, and download the migration report.")) + "'};}return {step:5,percent:100,title:'" + escapeJs(localized(normalizedLanguage, "Akış tamamlandı", "Flow completed")) + "',detail:'" + escapeJs(localized(normalizedLanguage, "Discovery, plan, warm ve compare zinciri tamam. Cutover readiness raporu hazır.", "The discovery, plan, warm, and compare chain is complete. The cutover readiness report is ready.")) + "'};}"
-                + "function updatePlannerProgress(){const flags=plannerFlags();const descriptor=plannerProgressDescriptor(flags);if(progressTitle){progressTitle.textContent=descriptor.title;}if(progressDetail){progressDetail.textContent=descriptor.detail;}if(progressPercent){progressPercent.textContent=String(descriptor.percent)+'%';}if(progressFill){progressFill.style.width=String(descriptor.percent)+'%';}stepButtons.forEach(function(button){const index=Number(button.dataset.plannerStepIndex||'0');button.classList.toggle('is-complete', index<descriptor.step || (descriptor.step===5&&descriptor.percent===100&&index<=descriptor.step));button.classList.toggle('is-active', descriptor.step===index && descriptor.percent<100);});}"
-                + "function updatePresetHelp(){if(!presetHelp||!routePresetField){return;}const preset=routePresetField.value||'timeline';const messages={timeline:'" + escapeJs(localized(normalizedLanguage, "Timeline profili, müşteri başına son kayıtları bounded pencere olarak taşımak için doğru başlangıçtır.", "Timeline is the right starting point when you want a bounded hot window per root.")) + "',leaderboard:'" + escapeJs(localized(normalizedLanguage, "Top-N profili, ranked projection ve global sıralı ekran kararlarını öne çeker.", "Top-N emphasizes ranked projection and globally sorted screens.")) + "',threshold:'" + escapeJs(localized(normalizedLanguage, "Threshold profili, aralık / eşik filtreli ekranlarda projection ve dar pencereyi öne çıkarır.", "Threshold emphasizes projection and narrow windows for threshold / range screens.")) + "','detail-heavy':'" + escapeJs(localized(normalizedLanguage, "Detail ağırlıklı profil, ilk boyamada daha zengin aggregate ihtiyacı olan ekranlar içindir.", "Detail-heavy is for screens that need a richer aggregate on first paint.")) + "'};presetHelp.textContent=messages[preset]||messages.timeline;}"
-                + "function applyRoutePreset(preset, silent){const listField=plannerField('listScreen');const fullAggregateField=plannerField('firstPaintNeedsFullAggregate');const globalField=plannerField('globalSortedScreen');const thresholdField=plannerField('thresholdOrRangeScreen');const eagerField=plannerField('currentOrmUsesEagerLoading');const archiveField=plannerField('archiveHistoryRequired');const historyField=plannerField('fullHistoryMustStayHot');const pageField=plannerField('firstPageSize');const windowField=plannerField('hotWindowPerRoot');function setNumeric(field,value){if(field&&(!silent||!field.value)){field.value=value;}}switch(String(preset||'timeline')){case 'leaderboard':if(listField){listField.checked=true;}if(fullAggregateField){fullAggregateField.checked=false;}if(globalField){globalField.checked=true;}if(thresholdField){thresholdField.checked=true;}if(eagerField){eagerField.checked=false;}if(archiveField){archiveField.checked=true;}if(historyField){historyField.checked=false;}setNumeric(pageField,'50');setNumeric(windowField,'500');break;case 'threshold':if(listField){listField.checked=true;}if(fullAggregateField){fullAggregateField.checked=false;}if(globalField){globalField.checked=false;}if(thresholdField){thresholdField.checked=true;}if(eagerField){eagerField.checked=false;}if(archiveField){archiveField.checked=true;}if(historyField){historyField.checked=false;}setNumeric(pageField,'50');setNumeric(windowField,'400');break;case 'detail-heavy':if(listField){listField.checked=false;}if(fullAggregateField){fullAggregateField.checked=true;}if(globalField){globalField.checked=false;}if(thresholdField){thresholdField.checked=false;}if(eagerField){eagerField.checked=false;}if(archiveField){archiveField.checked=true;}if(historyField){historyField.checked=false;}setNumeric(pageField,'25');setNumeric(windowField,'100');break;default:if(listField){listField.checked=true;}if(fullAggregateField){fullAggregateField.checked=false;}if(globalField){globalField.checked=false;}if(thresholdField){thresholdField.checked=false;}if(eagerField){eagerField.checked=true;}if(archiveField){archiveField.checked=true;}if(historyField){historyField.checked=false;}setNumeric(pageField,'100');setNumeric(windowField,'1000');}updatePresetHelp();if(!silent){setStatus('" + escapeJs(localized(normalizedLanguage, "Hazır ekran profili güncellendi. İstersen planı hemen üretebilirsin.", "The prepared screen profile was updated. You can generate the plan right away.")) + "');}}"
-                + "function syncPresetFromForm(){if(!routePresetField){return;}const listField=plannerField('listScreen');const fullAggregateField=plannerField('firstPaintNeedsFullAggregate');const globalField=plannerField('globalSortedScreen');const thresholdField=plannerField('thresholdOrRangeScreen');if(fullAggregateField&&fullAggregateField.checked&&!listField.checked){routePresetField.value='detail-heavy';}else if(globalField&&globalField.checked){routePresetField.value='leaderboard';}else if(thresholdField&&thresholdField.checked){routePresetField.value='threshold';}else{routePresetField.value='timeline';}updatePresetHelp();}"
-                + "function toBooleanValue(value){if(typeof value==='boolean'){return value;}const normalized=normalizeValue(value);return normalized==='true'||normalized==='1'||normalized==='on'||normalized==='yes';}"
-                + "function fillForm(data){Object.entries(data||{}).forEach(function(entry){const name=entry[0];const value=entry[1];const field=form.elements.namedItem(name);if(!field){return;}if(field instanceof RadioNodeList){return;}if(field.type==='checkbox'){field.checked=toBooleanValue(value);}else{field.value=value;}});syncDiscoverySelectors();syncPresetFromForm();updatePlannerProgress();}"
-                + "function serializeForm(){const params=new URLSearchParams();Array.from(form.elements).forEach(function(field){if(!field||!field.name){return;}const tagName=String(field.tagName||'').toUpperCase();const fieldType=String(field.type||'').toLowerCase();if(tagName==='BUTTON'||fieldType==='submit'||fieldType==='button'||fieldType==='reset'){return;}if(field.name==='generatePlan'||field.name==='warmExecution'||field.name==='dryRunExecution'){return;}if(field.type==='checkbox'){params.set(field.name, field.checked ? 'true' : 'false');return;}params.set(field.name, field.value || '');});return params;}"
-                + "function demoFieldValue(name){const field=document.querySelector('[name=\"'+name+'\"]');return field?String(field.value||''):'';}"
-                + "function plannerNavigationHref(overrides){const params=new URLSearchParams(window.location.search||'');['applySuggestion','selectObject','plannerRole','generatePlan','warmExecution','dryRunExecution','demoBootstrap'].forEach(function(name){params.delete(name);});serializeForm().forEach(function(value,key){params.set(key,value);});['demoCustomerCount','demoHotCustomerCount','demoMaxOrdersPerCustomer'].forEach(function(name){const value=demoFieldValue(name);if(value){params.set(name,value);}});params.set('lang','" + escapeJs(normalizedLanguage) + "');if(!params.get('v')){params.set('v','" + dashboardInstanceId + "');}params.set('discover','true');Object.entries(overrides||{}).forEach(function(entry){const key=entry[0];const value=entry[1];if(value===undefined||value===null||value===''){params.delete(key);return;}params.set(key,String(value));});return window.location.pathname+'?'+params.toString();}"
-                + "function renderList(targetId, items, emptyMessage){const root=document.getElementById(targetId);const fallback=emptyMessage||'" + escapeJs(localized(normalizedLanguage, "Bu bölüm için ek madde üretilmedi.", "No extra items were generated for this section.")) + "';if(!items||!items.length){root.innerHTML='<div class=\"planner-empty\">' + escapeHtml(fallback) + '</div>';return;}root.innerHTML='<ul class=\"result-list\">'+items.map(function(item){return '<li>'+escapeHtml(item)+'</li>';}).join('')+'</ul>';}"
-                + "function renderWarmSteps(items){const root=document.getElementById('plannerWarmSteps');root.innerHTML=(items||[]).map(function(step,index){return '<div class=\"result-step\"><div class=\"result-step-title\">'+escapeHtml((index+1)+'. '+step.title)+'</div><div class=\"result-step-summary\">'+escapeHtml(step.summary)+'</div><ul class=\"result-list\">'+(step.tasks||[]).map(function(task){return '<li>'+escapeHtml(task)+'</li>';}).join('')+'</ul></div>';}).join('');}"
-                + "function renderComparisonChecks(items){const root=document.getElementById('plannerComparisonChecks');root.innerHTML=(items||[]).map(function(check){return '<div class=\"result-check\"><div class=\"result-step-title\">'+escapeHtml(check.title)+'</div><div class=\"small text-muted mb-2\">'+escapeHtml(check.baseline)+'</div><div class=\"fw-semibold\">'+escapeHtml(check.target)+'</div></div>';}).join('');}"
-                + "function renderWarnings(items){const wrapper=document.getElementById('plannerWarningsCard');const root=document.getElementById('plannerWarnings');if(!items||!items.length){wrapper.classList.add('d-none');root.innerHTML='';return;}wrapper.classList.remove('d-none');root.innerHTML=items.map(function(item){return '<div class=\"planner-warning mb-2\">'+escapeHtml(item)+'</div>';}).join('');}"
-                + "function renderScaffoldFiles(items){const root=document.getElementById('plannerScaffoldFiles');if(!items||!items.length){root.innerHTML='<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Dosya üretilmedi.", "No files were generated.")) + "')+'</div>';return;}root.innerHTML=items.map(function(file){return '<div class=\"result-check mb-3\"><div class=\"result-step-title\">'+escapeHtml(file.fileName)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml((file.relativePath||'')+' · '+(file.description||''))+'</div><pre class=\"result-pre mt-3\">'+escapeHtml(file.content||'')+'</pre></div>';}).join('');}"
-                + "function renderComparisonSamples(items){const root=document.getElementById('plannerCompareSamples');if(!items||!items.length){root.innerHTML='<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Karşılaştırma örneği oluşmadı.", "No comparison samples were produced.")) + "')+'</div>';return;}root.innerHTML=items.map(function(item){const matchLabel=item.exactMatch?'" + escapeJs(localized(normalizedLanguage, "Tam eşleşme", "Exact match")) + "':'" + escapeJs(localized(normalizedLanguage, "Fark var", "Mismatch")) + "';const tone=item.exactMatch?'#147d64':'#b54708';return '<div class=\"result-check mb-3\"><div class=\"d-flex flex-column flex-lg-row justify-content-between gap-3\"><div><div class=\"result-step-title\">'+escapeHtml(item.sampleLabel)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Baseline satır", "Baseline rows")) + ": '+item.baselineRowCount+' · " + escapeJs(localized(normalizedLanguage, "Cache satır", "Cache rows")) + ": '+item.cacheRowCount)+'</div></div><div class=\"fw-semibold\" style=\"color:'+tone+'\">'+escapeHtml(matchLabel)+'</div></div><div class=\"small text-muted mt-3\">" + escapeJs(localized(normalizedLanguage, "Baseline id listesi", "Baseline id list")) + "</div><pre class=\"result-pre\">'+escapeHtml((item.baselineIds||[]).join(', '))+'</pre><div class=\"small text-muted mt-3\">" + escapeJs(localized(normalizedLanguage, "Cache id listesi", "Cache id list")) + "</div><pre class=\"result-pre\">'+escapeHtml((item.cacheIds||[]).join(', '))+'</pre></div>';}).join('');}"
-                + "function formatRatio(value){const numeric=Number(value||0);if(!Number.isFinite(numeric)||numeric<=0){return '-';}return numeric.toFixed(2)+'x';}"
-                + "function formatAssessmentReadiness(value){switch(String(value||'')){case 'READY':return '" + escapeJs(localized(normalizedLanguage, "Hazır", "Ready")) + "';case 'NEEDS_REVIEW':return '" + escapeJs(localized(normalizedLanguage, "Gözden geçir", "Needs review")) + "';case 'NOT_READY':return '" + escapeJs(localized(normalizedLanguage, "Hazır değil", "Not ready")) + "';default:return value||'-';}}"
-                + "function formatAssessmentParity(value){switch(String(value||'')){case 'EXACT':return '" + escapeJs(localized(normalizedLanguage, "Tam eşleşme", "Exact parity")) + "';case 'PARTIAL':return '" + escapeJs(localized(normalizedLanguage, "Kısmi eşleşme", "Partial parity")) + "';case 'MISMATCH':return '" + escapeJs(localized(normalizedLanguage, "Uyumsuz", "Mismatch")) + "';case 'NO_SAMPLES':return '" + escapeJs(localized(normalizedLanguage, "Örnek yok", "No samples")) + "';default:return value||'-';}}"
-                + "function renderDemoBootstrap(result){if(!demoResults){return;}demoResults.classList.remove('d-none');setMetric('plannerDemoCustomers',String(result.customerCount||0));setMetric('plannerDemoOrders',String(result.orderCount||0));setMetric('plannerDemoHottestCustomer',String(result.hottestCustomerOrderCount||0));setMetric('plannerDemoViews',String((result.viewNames||[]).length));renderList('plannerDemoNotes',result.notes,'" + escapeJs(localized(normalizedLanguage, "Demo seed notu üretilmedi.", "No demo seed note was generated.")) + "');if(result.plannerDefaults){fillForm(result.plannerDefaults);}}"
-                + "function renderDiscovery(result){const suggestionRoot=document.getElementById('plannerDiscoverySuggestions');const tableRoot=document.getElementById('plannerDiscoveryTables');const warnings=result.warnings||[];discoverySuggestions=result.routeSuggestions||[];discoveredTables=result.tables||[];rebuildDiscoveryLookup();syncDiscoverySelectors();const warningHtml=warnings.length?warnings.map(function(item){return '<div class=\"planner-warning mb-2\">'+escapeHtml(item)+'</div>';}).join(''):'';if(discoverySuggestions.length){suggestionRoot.innerHTML=warningHtml+discoverySuggestions.map(function(item,index){const surfaces=[item.rootEntityName||item.rootSurface,item.childEntityName||item.childSurface].filter(Boolean).join(' → ');const sortCandidates=(item.sortCandidates||[]).join(', ');const badges=[];if(item.temporalSortCandidate){badges.push('<span class=\"planner-badge\">" + escapeJs(localized(normalizedLanguage, "zamansal sıra", "temporal sort")) + "</span>');}if(item.rankedSortCandidate){badges.push('<span class=\"planner-badge\">" + escapeJs(localized(normalizedLanguage, "rank adayı", "rank candidate")) + "</span>');}const applyHref=plannerNavigationHref({applySuggestion:index});return '<div class=\"result-check mb-3\"><div class=\"d-flex flex-column flex-lg-row justify-content-between gap-3\"><div><div>'+badges.join('')+'</div><div class=\"result-step-title\">'+escapeHtml(item.label)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml(item.summary)+'</div><div class=\"small mt-2\">'+escapeHtml(surfaces||'')+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "İlişki", "Relation")) + ": '+item.relationColumn+' · " + escapeJs(localized(normalizedLanguage, "Önerilen sıralama", "Suggested sort")) + ": '+item.sortColumn+' DESC')+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Alternatif sıralama kolonları", "Alternative sort columns")) + ": '+(sortCandidates||'-'))+'</div></div><div><a class=\"btn btn-sm btn-outline-primary\" data-planner-suggestion=\"'+index+'\" href=\"'+escapeHtml(applyHref)+'\">" + escapeJs(localized(normalizedLanguage, "Forma Uygula", "Apply To Form")) + "</a></div></div></div>';}).join('');}else{suggestionRoot.innerHTML=warningHtml+'<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Keşiften otomatik route adayı çıkmadı. Yine de aşağıdaki listelerden tablo ve kolon seçerek plan üretebilirsin.", "No automatic route suggestion came out of discovery. You can still build the plan by choosing tables and columns from the lists below.")) + "')+'</div>';}if(discoveredTables.length){tableRoot.innerHTML=discoveredTables.map(function(item,index){const temporal=(item.temporalColumns||[]).join(', ');const foreignKeys=(item.foreignKeyColumns||[]).join(', ');const entityBadge=item.registeredEntityName?'<span class=\"planner-badge entity\">" + escapeJs(localized(normalizedLanguage, "entity", "entity")) + ": '+escapeHtml(item.registeredEntityName)+'</span>':'';const typeBadge='<span class=\"planner-badge '+(isView(item)?'view':'')+'\">'+escapeHtml(item.objectType||'TABLE')+'</span>';const rootHref=plannerNavigationHref({plannerRole:'root',selectObject:index});const childHref=plannerNavigationHref({plannerRole:'child',selectObject:index});const actionButtons=isView(item)?'<a class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"'+index+'\" data-planner-role=\"child\" href=\"'+escapeHtml(childHref)+'\">" + escapeJs(localized(normalizedLanguage, "Çocuk olarak seç", "Use as child")) + "</a>':'<a class=\"btn btn-sm btn-outline-primary\" data-planner-object=\"'+index+'\" data-planner-role=\"root\" href=\"'+escapeHtml(rootHref)+'\">" + escapeJs(localized(normalizedLanguage, "Kök seç", "Use as root")) + "</a><a class=\"btn btn-sm btn-outline-secondary\" data-planner-object=\"'+index+'\" data-planner-role=\"child\" href=\"'+escapeHtml(childHref)+'\">" + escapeJs(localized(normalizedLanguage, "Çocuk seç", "Use as child")) + "</a>';return '<div class=\"result-check mb-2\"><div>'+typeBadge+entityBadge+'</div><div class=\"result-step-title mt-2\">'+escapeHtml(item.qualifiedTableName)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('PK: '+(item.primaryKeyColumn||'-')+' · " + escapeJs(localized(normalizedLanguage, "Kolon", "Columns")) + ": '+item.columnCount+' · FK: '+item.importedKeyCount)+'</div><div class=\"small text-muted mt-1\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Zamansal kolonlar", "Temporal columns")) + ": '+(temporal||'-')+' · FK kolonları: '+(foreignKeys||'-'))+'</div><div class=\"planner-object-actions\">'+actionButtons+'</div></div>';}).join('');}else{tableRoot.innerHTML='<div class=\"planner-empty\">'+escapeHtml('" + escapeJs(localized(normalizedLanguage, "Kullanıcı tablosu keşfedilemedi.", "No user tables were discovered.")) + "')+'</div>';}updatePlannerProgress();}"
-                + "function applyDiscoverySuggestion(index){const suggestion=discoverySuggestions[index];if(!suggestion||!suggestion.plannerRequest){return;}fillForm(suggestion.plannerRequest);syncPresetFromForm();setStatus('" + escapeJs(localized(normalizedLanguage, "Keşif önerisi forma uygulandı. İstersen değerleri kontrol edip planı üret.", "Discovery suggestion applied to the form. Check the values if you want, then generate the plan.")) + "');updatePlannerProgress();window.scrollTo({top:0,behavior:'smooth'});}"
-                + "function applyDiscoveredObject(index, role){const item=discoveredTables[index];if(!item){return;}const target=role==='root'?'rootTableOrEntity':'childTableOrEntity';const field=plannerField(target);if(field){field.value=surfaceValue(item);syncDiscoverySelectors();updatePlannerProgress();setStatus('" + escapeJs(localized(normalizedLanguage, "Keşfedilen nesne forma işlendi. Şimdi diğer yüzeyi ve ekran tipini tamamlayabilirsin.", "The discovered object was applied to the form. You can now complete the other surface and the screen type.")) + "');}}"
-                + "async function loadDemoDescriptor(){setDemoStatus('" + escapeJs(localized(normalizedLanguage, "Demo şema açıklaması yükleniyor…", "Loading demo schema description…")) + "');try{const payload=await fetchJson(apiBase + '/api/migration-planner/demo');demoDescriptor=payload||null;if(payload&&payload.available){const demoCustomerField=form.elements.namedItem('demoCustomerCount');const demoHotCustomerField=form.elements.namedItem('demoHotCustomerCount');const demoMaxOrdersField=form.elements.namedItem('demoMaxOrdersPerCustomer');if(demoCustomerField){demoCustomerField.value=payload.defaultCustomerCount||120;}if(demoHotCustomerField){demoHotCustomerField.value=payload.defaultHotCustomerCount||12;}if(demoMaxOrdersField){demoMaxOrdersField.value=payload.defaultMaxOrdersPerCustomer||1500;}setDemoStatus(payload.summary||'" + escapeJs(localized(normalizedLanguage, "Demo seed hazır.", "Demo seed is ready.")) + "');}else{if(demoBootstrapButton){demoBootstrapButton.disabled=true;}setDemoStatus((payload&&payload.summary)||'" + escapeJs(localized(normalizedLanguage, "Bu runtime için demo seed desteklenmiyor.", "Demo seed is not available for this runtime.")) + "');}}catch(error){if(demoBootstrapButton){demoBootstrapButton.disabled=true;}setDemoStatus('" + escapeJs(localized(normalizedLanguage, "Demo şema bilgisi alınamadı: ", "Could not load demo schema info: ")) + "'+error.message);}}"
-                + "async function seedDemoSchema(){const params=new URLSearchParams();params.set('demoCustomerCount',String((form.elements.namedItem('demoCustomerCount')||{}).value||'120'));params.set('demoHotCustomerCount',String((form.elements.namedItem('demoHotCustomerCount')||{}).value||'12'));params.set('demoMaxOrdersPerCustomer',String((form.elements.namedItem('demoMaxOrdersPerCustomer')||{}).value||'1500'));const startMessage='" + escapeJs(localized(normalizedLanguage, "Demo PostgreSQL şeması hazırlanıyor…", "Preparing the demo PostgreSQL schema…")) + "';setDemoStatus(startMessage);setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/demo',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderDemoBootstrap(payload);if(payload.plannerDefaults){fillForm(payload.plannerDefaults);}await loadDiscovery(true);const hotRoots=(payload.sampleRootIds||[]).join(', ');const doneMessage='" + escapeJs(localized(normalizedLanguage, "Demo şema hazır. Discovery güncellendi ve planner formu seed edilen route ile dolduruldu.", "The demo schema is ready. Discovery was refreshed and the planner form was populated with the seeded route.")) + "';setDemoStatus(doneMessage+(hotRoots?(' " + escapeJs(localized(normalizedLanguage, "Örnek kök id", "Sample root ids")) + ": '+hotRoots):''));setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Demo şema kurulamadı: ", "Demo schema bootstrap failed: ")) + "'+error.message;setDemoStatus(message);setStatus(message);}}"
-                + "async function loadDiscovery(manual){const startMessage=manual?'" + escapeJs(localized(normalizedLanguage, "PostgreSQL şeması yeniden keşfediliyor…", "Refreshing PostgreSQL schema discovery…")) + "':'" + escapeJs(localized(normalizedLanguage, "PostgreSQL şeması inceleniyor…", "Inspecting PostgreSQL schema…")) + "';setDiscoveryStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/discovery');renderDiscovery(payload);setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")) + "');updatePlannerProgress();}catch(error){setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi başarısız oldu: ", "Schema discovery failed: ")) + "'+error.message);updatePlannerProgress();}}"
-                + "function setMetric(id,value){document.getElementById(id).innerHTML=escapeHtml(value);}"
-                + "function renderPlan(plan){emptyState.classList.add('d-none');results.classList.remove('d-none');warmResults.classList.add('d-none');setMetric('plannerSurface',plan.recommendedSurface);setMetric('plannerWindow',String(plan.recommendedHotWindowPerRoot)+' " + escapeJs(localized(normalizedLanguage, "satır / kök", "rows / root")) + "');setMetric('plannerProjection',plan.projectionRequired ? '" + escapeJs(localized(normalizedLanguage, "Gerekli", "Required")) + " (' + plan.summaryProjectionName + ')' : '" + escapeJs(localized(normalizedLanguage, "İlk aşamada opsiyonel", "Optional at first")) + "');setMetric('plannerRanking',plan.rankedProjectionRequired ? '" + escapeJs(localized(normalizedLanguage, "Gerekli", "Required")) + " (' + (plan.rankedProjectionName || plan.rankFieldName) + ')' : '" + escapeJs(localized(normalizedLanguage, "Gerekli değil", "Not required")) + "');document.getElementById('plannerRedisPlacement').textContent=plan.redisPlacement;document.getElementById('plannerPostgresPlacement').textContent=plan.postgresPlacement;renderList('plannerReasoning',plan.reasoning);renderList('plannerRedisArtifacts',plan.recommendedRedisArtifacts);renderList('plannerPostgresArtifacts',plan.recommendedPostgresArtifacts);renderList('plannerApiShapes',plan.recommendedApiShapes);renderWarmSteps(plan.warmSteps);document.getElementById('plannerComparisonSummary').textContent=plan.comparisonSummary;renderComparisonChecks(plan.comparisonChecks);document.getElementById('plannerWarmSql').textContent=plan.sampleWarmSql||'';document.getElementById('plannerRootWarmSql').textContent=plan.sampleRootWarmSql||'';renderWarnings(plan.warnings);warmButton.disabled=false;warmPreviewButton.disabled=false;if(scaffoldButton){scaffoldButton.disabled=false;}if(compareButton){compareButton.disabled=false;}if(compareReportButton){compareReportButton.disabled=true;}updatePlannerProgress();}"
-                + "let warmJobPollHandle=0;"
-                + "function setWarmButtonsBusy(busy){if(warmButton){warmButton.disabled=!!busy;}if(warmPreviewButton){warmPreviewButton.disabled=!!busy;}if(scaffoldButton){scaffoldButton.disabled=!!busy && scaffoldResults.classList.contains('d-none');}if(compareButton){compareButton.disabled=!!busy && compareResults.classList.contains('d-none');}}"
-                + "function clearWarmExecutionView(statusMessage){warmResults.classList.add('d-none');setMetric('plannerWarmChildRows','-');setMetric('plannerWarmRootRows','-');setMetric('plannerWarmSkippedRows','-');setMetric('plannerWarmDuration','-');setMetric('plannerWarmReferencedRoots','-');setMetric('plannerWarmMissingRoots','-');renderList('plannerWarmNotes',[],statusMessage||'" + escapeJs(localized(normalizedLanguage, "Yeni warm çalışması başladı. Sonuçlar tamamlanınca bu kart güncellenecek.", "A new warm run has started. This card will refresh when the result is ready.")) + "');document.getElementById('plannerWarmChildSql').textContent='';document.getElementById('plannerWarmRootSql').textContent='';}"
-                + "function clearWarmJobPoll(){if(warmJobPollHandle){window.clearTimeout(warmJobPollHandle);warmJobPollHandle=0;}}"
-                + "function formatJobDuration(durationMillis){const safe=Math.max(0,Number(durationMillis||0));const seconds=Math.max(1,Math.round(safe/1000));return seconds+' sn';}"
-                + "function renderWarmExecution(result){if(result.plan){renderPlan(result.plan);}warmResults.classList.remove('d-none');setMetric('plannerWarmChildRows',String(result.childRowsHydrated)+' / '+String(result.childRowsRead));setMetric('plannerWarmRootRows',String(result.rootRowsHydrated)+' / '+String(result.rootRowsRead));setMetric('plannerWarmSkippedRows',String(result.skippedDeletedRows));setMetric('plannerWarmDuration',String(result.durationMillis)+' ms');setMetric('plannerWarmReferencedRoots',String(result.distinctReferencedRootIds));setMetric('plannerWarmMissingRoots',String(result.missingReferencedRootIds));renderList('plannerWarmNotes',result.notes);document.getElementById('plannerWarmChildSql').textContent=result.childWarmSql||'';document.getElementById('plannerWarmRootSql').textContent=result.rootWarmSql||'';updatePlannerProgress();}"
-                + "function renderScaffold(result){if(result.plan){renderPlan(result.plan);}scaffoldResults.classList.remove('d-none');setMetric('plannerScaffoldBasePackage',result.basePackage||'-');setMetric('plannerScaffoldFileCount',String(result.fileCount||0));renderList('plannerScaffoldNotes',result.notes);renderList('plannerScaffoldWarnings',result.warnings);renderScaffoldFiles(result.files||[]);updatePlannerProgress();}"
-                + "function renderComparisonAssessment(assessment){if(!assessment){setMetric('plannerCompareAssessmentStatus','-');setMetric('plannerCompareAssessmentParity','-');setMetric('plannerCompareAssessmentAvgRatio','-');setMetric('plannerCompareAssessmentP95Ratio','-');document.getElementById('plannerCompareAssessmentSummary').textContent='';document.getElementById('plannerCompareAssessmentDecision').textContent='';renderList('plannerCompareAssessmentStrengths',[], '" + escapeJs(localized(normalizedLanguage, "Henüz güçlü sinyal yok.", "No positive signals yet.")) + "');renderList('plannerCompareAssessmentBlockers',[], '" + escapeJs(localized(normalizedLanguage, "Henüz blokaj kaydedilmedi.", "No blockers recorded yet.")) + "');renderList('plannerCompareAssessmentNextSteps',[], '" + escapeJs(localized(normalizedLanguage, "Henüz sonraki adım üretilmedi.", "No next steps generated yet.")) + "');return;}setMetric('plannerCompareAssessmentStatus',formatAssessmentReadiness(assessment.readiness));setMetric('plannerCompareAssessmentParity',formatAssessmentParity(assessment.parityStatus));setMetric('plannerCompareAssessmentAvgRatio',formatRatio(assessment.averageLatencyRatio));setMetric('plannerCompareAssessmentP95Ratio',formatRatio(assessment.p95LatencyRatio));document.getElementById('plannerCompareAssessmentSummary').textContent=assessment.summary||'';document.getElementById('plannerCompareAssessmentDecision').textContent=assessment.decision||'';renderList('plannerCompareAssessmentStrengths',assessment.strengths,'" + escapeJs(localized(normalizedLanguage, "Bu ölçüm turunda öne çıkan güçlü sinyal yok.", "No strong positive signal stood out in this run.")) + "');renderList('plannerCompareAssessmentBlockers',assessment.blockers,'" + escapeJs(localized(normalizedLanguage, "Bu turda doğrudan cutover blokajı görülmedi.", "No direct cutover blocker was found in this run.")) + "');renderList('plannerCompareAssessmentNextSteps',assessment.nextSteps,'" + escapeJs(localized(normalizedLanguage, "Önerilen ek adım üretilmedi.", "No additional next step was generated.")) + "');}"
-                + "function renderComparison(result){lastComparisonResult=result||null;if(result.plan){renderPlan(result.plan);}compareResults.classList.remove('d-none');const exactMatches=(result.sampleComparisons||[]).filter(function(item){return !!item.exactMatch;}).length;setMetric('plannerCompareRoute',result.cacheRouteLabel||'-');setMetric('plannerCompareExactMatches',String(exactMatches)+' / '+String((result.sampleComparisons||[]).length));setMetric('plannerCompareBaselineAvg',formatLatency(result.baselineMetrics&&result.baselineMetrics.averageLatencyNanos));setMetric('plannerCompareBaselineP95',formatLatency(result.baselineMetrics&&result.baselineMetrics.p95LatencyNanos));setMetric('plannerCompareCacheAvg',formatLatency(result.cacheMetrics&&result.cacheMetrics.averageLatencyNanos));setMetric('plannerCompareCacheP95',formatLatency(result.cacheMetrics&&result.cacheMetrics.p95LatencyNanos));renderComparisonAssessment(result.assessment);document.getElementById('plannerCompareBaselineSql').textContent=result.baselineSqlTemplate||'';renderComparisonSamples(result.sampleComparisons||[]);renderList('plannerCompareNotes',result.notes);renderList('plannerCompareWarnings',result.warnings);if(compareReportButton){compareReportButton.disabled=!(result.report&&result.report.markdown);}if(result.warmResult){renderWarmExecution(result.warmResult);}updatePlannerProgress();}"
-                + "function downloadComparisonReport(){if(!lastComparisonResult||!lastComparisonResult.report||!lastComparisonResult.report.markdown){setStatus('" + escapeJs(localized(normalizedLanguage, "Önce karşılaştırmayı çalıştırıp raporu üret.", "Run the comparison first to generate the report.")) + "');return;}const fileName=lastComparisonResult.report.fileName||'migration-report.md';const blob=new Blob([lastComparisonResult.report.markdown],{type:'text/markdown;charset=utf-8'});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=fileName;document.body.appendChild(link);link.click();document.body.removeChild(link);window.setTimeout(function(){URL.revokeObjectURL(url);},1000);setStatus('" + escapeJs(localized(normalizedLanguage, "Migration report indirildi.", "Migration report downloaded.")) + "');}"
-                + "async function loadTemplate(){setStatus('" + escapeJs(localized(normalizedLanguage, "Planlayıcı şablonu yükleniyor…", "Loading planner template…")) + "');const payload=await fetchJson(apiBase + '/api/migration-planner/template');templateDefaults=payload.defaults||null;if(templateDefaults){fillForm(templateDefaults);}setStatus('" + escapeJs(localized(normalizedLanguage, "Hazır. Mevcut ekranını anlat ve planı üret.", "Ready. Describe your current route and generate the plan.")) + "');}"
-                + "defaultsButton.addEventListener('click',function(){if(templateDefaults){fillForm(templateDefaults);setStatus('" + escapeJs(localized(normalizedLanguage, "Örnek değerler yeniden yüklendi.", "Example defaults reloaded.")) + "');}});"
-                + "modeButtons.forEach(function(button){button.addEventListener('click',function(){applyPlannerMode(button.dataset.plannerMode||'beginner');});});"
-                + "stepButtons.forEach(function(button){button.addEventListener('click',function(){const target=document.getElementById(button.dataset.plannerStepTarget||'');if(target){target.scrollIntoView({behavior:'smooth',block:'start'});}});});"
-                + "if(routePresetField){routePresetField.addEventListener('change',function(){applyRoutePreset(routePresetField.value,false);});updatePresetHelp();}"
-                + "['rootTableOrEntity','childTableOrEntity'].forEach(function(name){const field=plannerField(name);if(field){field.addEventListener('change',function(){syncDiscoverySelectors();updatePlannerProgress();});}});"
-                + "['sortColumn','sortDirection','rootPrimaryKeyColumn','childPrimaryKeyColumn','relationColumn'].forEach(function(name){const field=plannerField(name);if(field){field.addEventListener('change',function(){updatePlannerProgress();});}});"
-                + "if(demoBootstrapButton){demoBootstrapButton.addEventListener('click',function(event){event.preventDefault();seedDemoSchema().catch(function(){});});}"
-                + "if(discoverButton){discoverButton.addEventListener('click',function(event){event.preventDefault();loadDiscovery(true).catch(function(){});});}"
-                + "async function pollWarmJob(jobId,dryRun){const payload=await fetchJson(apiBase + '/api/migration-planner/warm/status?jobId='+encodeURIComponent(jobId));if(payload.status==='QUEUED'){const queuedMessage=(dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run kuyruğa alındı… ", "Dry run queued… ")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution kuyruğa alındı… ", "Warm execution queued… ")) + "')+formatJobDuration(payload.durationMillis||0);warmStatus.textContent=queuedMessage;setStatus(queuedMessage);warmJobPollHandle=window.setTimeout(function(){pollWarmJob(jobId,dryRun).catch(handleWarmJobError);},1000);return;}if(payload.status==='RUNNING'){const runningMessage=(dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run arka planda çalışıyor… ", "Dry run is running in the background… ")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution arka planda çalışıyor… ", "Warm execution is running in the background… ")) + "')+formatJobDuration(payload.durationMillis||0);warmStatus.textContent=runningMessage;setStatus(runningMessage);warmJobPollHandle=window.setTimeout(function(){pollWarmJob(jobId,dryRun).catch(handleWarmJobError);},1200);return;}clearWarmJobPoll();setWarmButtonsBusy(false);if(payload.status==='COMPLETED'&&payload.result){renderWarmExecution(payload.result);const doneMessage=payload.result.dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready.")) + "';warmStatus.textContent=doneMessage;setStatus(doneMessage);return;}const failedMessage='" + escapeJs(localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ")) + "'+(payload.error||'" + escapeJs(localized(normalizedLanguage, "Bilinmeyen hata", "Unknown error")) + "');warmStatus.textContent=failedMessage;setStatus(failedMessage);}"
-                + "async function runWarmSyncFallback(params,dryRun){const payload=await fetchJson(apiBase + '/api/migration-planner/warm',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderWarmExecution(payload);const doneMessage=payload.dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready.")) + "';warmStatus.textContent=doneMessage;setStatus(doneMessage);}"
-                + "function handleWarmJobError(error){clearWarmJobPoll();setWarmButtonsBusy(false);const message='" + escapeJs(localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ")) + "'+error.message;warmStatus.textContent=message;setStatus(message);}"
-                + "async function warmExecution(dryRun){const params=serializeForm();params.set('dryRun',dryRun?'true':'false');clearWarmJobPoll();setWarmButtonsBusy(true);const startMessage=dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run arka planda başlatılıyor…", "Starting the dry run in the background…")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution arka planda başlatılıyor…", "Starting the warm execution in the background…")) + "';clearWarmExecutionView(dryRun?'" + escapeJs(localized(normalizedLanguage, "Dry run başladı. Yeni sonuçlar gelene kadar önceki warm metrikleri gizlendi.", "The dry run has started. Previous warm metrics are hidden until the new result arrives.")) + "':'" + escapeJs(localized(normalizedLanguage, "Warm execution başladı. Yeni sonuçlar gelene kadar önceki dry run metrikleri gizlendi.", "The warm execution has started. Previous dry-run metrics are hidden until the new result arrives.")) + "');warmStatus.textContent=startMessage;setStatus(startMessage);try{const started=await fetchJson(apiBase + '/api/migration-planner/warm/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});if(started&&started.jobId){await pollWarmJob(started.jobId,dryRun);return;}await runWarmSyncFallback(params,dryRun);setWarmButtonsBusy(false);}catch(error){setStatus('" + escapeJs(localized(normalizedLanguage, "Arka plan warm başlatılamadı. Senkron çalıştırılıyor…", "Background warm start failed. Falling back to synchronous execution…")) + "');try{await runWarmSyncFallback(params,dryRun);}catch(syncError){handleWarmJobError(syncError);}finally{setWarmButtonsBusy(false);}}}"
-                + "async function scaffoldGeneration(){const params=serializeForm();const startMessage='" + escapeJs(localized(normalizedLanguage, "Scaffold üretiliyor…", "Generating scaffold…")) + "';if(scaffoldStatus){scaffoldStatus.textContent=startMessage;}setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/scaffold',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderScaffold(payload);const doneMessage='" + escapeJs(localized(normalizedLanguage, "Scaffold hazır. Dosyaları kopyalayıp projene ekleyebilirsin.", "Scaffold ready. You can copy the files into your project.")) + "';if(scaffoldStatus){scaffoldStatus.textContent=doneMessage;}setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Scaffold üretimi başarısız oldu: ", "Scaffold generation failed: ")) + "'+error.message;if(scaffoldStatus){scaffoldStatus.textContent=message;}setStatus(message);}}"
-                + "async function runComparison(){const params=serializeForm();const startMessage='" + escapeJs(localized(normalizedLanguage, "Side-by-side comparison başlatıldı…", "Side-by-side comparison started…")) + "';if(compareStatus){compareStatus.textContent=startMessage;}setStatus(startMessage);try{const payload=await fetchJson(apiBase + '/api/migration-planner/compare',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:params.toString()});renderComparison(payload);const doneMessage='" + escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. PostgreSQL ve CacheDB sonuçları yan yana hazır.", "Comparison completed. PostgreSQL and CacheDB results are ready side by side.")) + "';if(compareStatus){compareStatus.textContent=doneMessage;}setStatus(doneMessage);}catch(error){const message='" + escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız oldu: ", "Comparison failed: ")) + "'+error.message;if(compareStatus){compareStatus.textContent=message;}setStatus(message);}}"
-                + "Array.from(form.elements).forEach(function(field){if(!field||!field.name){return;}field.addEventListener('change',function(){updatePlannerProgress();});});"
-                + "function navigateToPlanFallback(){const fallbackParams=serializeForm();fallbackParams.set('lang','" + escapeJs(normalizedLanguage) + "');fallbackParams.set('v','" + escapeJs(dashboardInstanceId) + "');fallbackParams.set('discover','true');fallbackParams.set('generatePlan','true');window.location.assign('" + escapeJs(discoveryFallbackAction) + "?'+fallbackParams.toString());}"
-                + "async function submitPlannerPlan(){setStatus('" + escapeJs(localized(normalizedLanguage, "Plan üretiliyor…", "Generating plan…")) + "');try{const payload=await fetchJson(apiBase + '/api/migration-planner/plan',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:serializeForm().toString()});renderPlan(payload);setStatus('" + escapeJs(localized(normalizedLanguage, "Plan hazır. İstersen hemen staging warm çalıştırabilirsin.", "Plan ready. You can run the staging warm execution right away.")) + "');warmStatus.textContent='" + escapeJs(localized(normalizedLanguage, "Plan hazır. Dry run ya da gerçek warm seçebilirsin.", "Plan ready. You can choose a dry run or a real warm execution.")) + "';}catch(error){setStatus('" + escapeJs(localized(normalizedLanguage, "Plan AJAX ile üretilemedi. Sayfa fallback akışına yönlendiriliyor…", "Plan could not be generated over AJAX. Redirecting to the page fallback flow…")) + "');warmStatus.textContent='" + escapeJs(localized(normalizedLanguage, "Plan üretimi fallback moduna geçti.", "Plan generation switched to fallback mode.")) + "';navigateToPlanFallback();}}"
-                + "window.__cachedbPlannerGenerate=submitPlannerPlan;"
-                + "form.addEventListener('submit',function(event){const submitter=event.submitter;if(!submitter||submitter.id==='plannerGenerateAction'){event.preventDefault();submitPlannerPlan().catch(function(){});}});"
-                + "warmButton.addEventListener('click',function(event){event.preventDefault();warmExecution(false).catch(function(){});});"
-                + "warmPreviewButton.addEventListener('click',function(event){event.preventDefault();warmExecution(true).catch(function(){});});"
-                + "if(scaffoldButton){scaffoldButton.addEventListener('click',function(){scaffoldGeneration().catch(function(){});});}"
-                + "if(compareButton){compareButton.addEventListener('click',function(){runComparison().catch(function(){});});}"
-                + "if(compareReportButton){compareReportButton.addEventListener('click',function(){downloadComparisonReport();});}"
-                + "document.addEventListener('click',function(event){const suggestionButton=event.target.closest('[data-planner-suggestion]');if(suggestionButton){event.preventDefault();applyDiscoverySuggestion(Number(suggestionButton.dataset.plannerSuggestion||-1));return;}const objectButton=event.target.closest('[data-planner-object]');if(objectButton){event.preventDefault();applyDiscoveredObject(Number(objectButton.dataset.plannerObject||-1),objectButton.dataset.plannerRole||'child');}});"
-                + "async function initializePlanner(){applyPlannerMode('beginner');applyRoutePreset(routePresetField&&routePresetField.value||'timeline',true);await loadTemplate();if(bootstrapPlannerForm){fillForm(bootstrapPlannerForm);}await loadDemoDescriptor();if(bootstrapDemoResult){renderDemoBootstrap(bootstrapDemoResult);}if(bootstrapDiscovery){renderDiscovery(bootstrapDiscovery);setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")) + "');}else{await loadDiscovery(false);}if(bootstrapPlanResult){renderPlan(bootstrapPlanResult);}updatePlannerProgress();}"
-                + "initializePlanner().catch(function(){setStatus('" + escapeJs(localized(normalizedLanguage, "Şablon yüklenemedi. Sayfayı yenileyip tekrar dene.", "Could not load the template. Refresh the page and try again.")) + "');setDiscoveryStatus('" + escapeJs(localized(normalizedLanguage, "Şema keşfi yüklenemedi. Sayfayı yenileyip tekrar dene.", "Schema discovery could not be loaded. Refresh the page and try again.")) + "');});"
-                + "})();"
-                + "</script></body></html>";
+                + metricShell("plannerCompareAssessmentP95Ratio", localized(normalizedLanguage, "p95 oran", "p95 ratio"));
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_COMPARE_CARD_TEMPLATE,
+                "__CACHEDB_HTML_COMPARE_TITLE__", escapeHtml(localized(normalizedLanguage, "8. Side-by-side comparison", "8. Side-by-side comparison")),
+                "__CACHEDB_HTML_COMPARE_DISABLED__", plannerCompareDisabled,
+                "__CACHEDB_HTML_COMPARE_BUTTON__", escapeHtml(localized(normalizedLanguage, "Karşılaştırmayı Çalıştır", "Run Comparison")),
+                "__CACHEDB_HTML_REPORT_BUTTON__", escapeHtml(localized(normalizedLanguage, "Raporu İndir", "Download Report")),
+                "__CACHEDB_HTML_COPY_REPORT_BUTTON__", escapeHtml(localized(normalizedLanguage, "Raporu Kopyala", "Copy Report")),
+                "__CACHEDB_HTML_COMPARE_STATUS__", escapeHtml(plannerCompareStatusText),
+                "__CACHEDB_HTML_COMPARE_METRICS__", compareMetrics,
+                "__CACHEDB_HTML_ASSESSMENT_TITLE__", escapeHtml(localized(normalizedLanguage, "Geçiş değerlendirmesi", "Migration assessment")),
+                "__CACHEDB_HTML_ASSESSMENT_METRICS__", assessmentMetrics,
+                "__CACHEDB_HTML_STRENGTHS_LABEL__", escapeHtml(localized(normalizedLanguage, "Güçlü sinyaller", "Positive signals")),
+                "__CACHEDB_HTML_BLOCKERS_LABEL__", escapeHtml(localized(normalizedLanguage, "Cutover blokajları", "Cutover blockers")),
+                "__CACHEDB_HTML_NEXT_STEPS_LABEL__", escapeHtml(localized(normalizedLanguage, "Sonraki adımlar", "Next steps")),
+                "__CACHEDB_HTML_BASELINE_SQL_LABEL__", escapeHtml(localized(normalizedLanguage, "Baseline SQL", "Baseline SQL")),
+                "__CACHEDB_HTML_SAMPLES_LABEL__", escapeHtml(localized(normalizedLanguage, "Örnek karşılaştırmalar", "Sample comparisons")),
+                "__CACHEDB_HTML_NOTES_LABEL__", escapeHtml(localized(normalizedLanguage, "Karşılaştırma notları", "Comparison notes")),
+                "__CACHEDB_HTML_WARNINGS_LABEL__", escapeHtml(localized(normalizedLanguage, "Karşılaştırma uyarıları", "Comparison warnings")),
+                "__CACHEDB_HTML_REPORT_PREVIEW_LABEL__", escapeHtml(localized(normalizedLanguage, "Rapor ön izlemesi", "Report preview"))
+        );
+    }
+
+    private String renderMigrationPlannerPage(
+            String title,
+            String bootstrapCssUrl,
+            String googleFontsUrl,
+            String plannerThemeCss,
+            String dashboardUrl,
+            String backLabel,
+            String subtitle,
+            String intro,
+            String guidanceHtml,
+            String commandStripHtml,
+            String bodyHtml,
+            String script
+    ) {
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_PAGE_TEMPLATE,
+                "__CACHEDB_HTML_TITLE__", title,
+                "__CACHEDB_HTML_BOOTSTRAP_CSS_URL__", bootstrapCssUrl,
+                "__CACHEDB_HTML_GOOGLE_FONTS_URL__", googleFontsUrl,
+                "__CACHEDB_HTML_PLANNER_CSS__", plannerThemeCss,
+                "__CACHEDB_HTML_DASHBOARD_URL__", dashboardUrl,
+                "__CACHEDB_HTML_BACK_LABEL__", backLabel,
+                "__CACHEDB_HTML_SUBTITLE__", subtitle,
+                "__CACHEDB_HTML_INTRO__", intro,
+                "__CACHEDB_HTML_GUIDANCE__", guidanceHtml,
+                "__CACHEDB_HTML_COMMAND_STRIP__", commandStripHtml,
+                "__CACHEDB_HTML_BODY__", bodyHtml,
+                "__CACHEDB_HTML_SCRIPT__", script
+        );
+    }
+
+    private String renderMigrationPlannerCommandStrip(String normalizedLanguage, String plannerStatusText) {
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_COMMAND_STRIP_TEMPLATE,
+                "__CACHEDB_HTML_COMMAND_ARIA__", escapeHtml(localized(normalizedLanguage, "Planlayıcı hızlı aksiyonları", "Planner quick actions")),
+                "__CACHEDB_HTML_COMMAND_KICKER__", escapeHtml(localized(normalizedLanguage, "Sıradaki doğru adım", "Next best action")),
+                "__CACHEDB_HTML_NEXT_TITLE__", escapeHtml(localized(normalizedLanguage, "Demo veya canlı şema ile başla", "Start with demo or live schema")),
+                "__CACHEDB_HTML_NEXT_COPY__", escapeHtml(localized(normalizedLanguage, "Önce PostgreSQL şemasını keşfet; sonra bir route önerisini forma uygula ve planı AJAX ile üret.", "Discover the PostgreSQL schema first, apply a route suggestion to the form, then generate the plan over AJAX.")),
+                "__CACHEDB_HTML_STATUS__", plannerStatusText,
+                "__CACHEDB_HTML_DEMO_BUTTON__", escapeHtml(localized(normalizedLanguage, "Demo hazırla", "Prepare demo")),
+                "__CACHEDB_HTML_DISCOVER_BUTTON__", escapeHtml(localized(normalizedLanguage, "Şemayı keşfet", "Discover schema")),
+                "__CACHEDB_HTML_CONFIGURE_BUTTON__", escapeHtml(localized(normalizedLanguage, "Seçimi tamamla", "Complete selection")),
+                "__CACHEDB_HTML_PLAN_BUTTON__", escapeHtml(localized(normalizedLanguage, "Planı oluştur", "Generate plan")),
+                "__CACHEDB_HTML_DRY_RUN_BUTTON__", escapeHtml(localized(normalizedLanguage, "Dry run", "Dry run")),
+                "__CACHEDB_HTML_WARM_BUTTON__", escapeHtml(localized(normalizedLanguage, "Warm", "Warm")),
+                "__CACHEDB_HTML_COMPARE_BUTTON__", escapeHtml(localized(normalizedLanguage, "Compare", "Compare")),
+                "__CACHEDB_HTML_REPORT_BUTTON__", escapeHtml(localized(normalizedLanguage, "Rapor", "Report"))
+        );
+    }
+
+    private String renderMigrationPlannerScript(
+            String normalizedLanguage,
+            String apiBasePath,
+            String bootstrapDiscoveryJson,
+            String bootstrapDemoJson,
+            String bootstrapPlanJson,
+            String bootstrapPlannerFormJson,
+            String discoveryFallbackAction
+    ) {
+        return renderAdminTemplate(
+                MIGRATION_PLANNER_SCRIPT_TEMPLATE,
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_000__", apiBasePath,
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_001__", bootstrapDiscoveryJson,
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_002__", bootstrapDemoJson,
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_003__", bootstrapPlanJson,
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_004__", bootstrapPlannerFormJson,
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_005__", escapeJs(localized(normalizedLanguage, "Önce planı oluştur. Warm, compare ve rapor aksiyonları plan olmadan çalışmaz.", "Generate the plan first. Warm, compare, and report actions cannot run without a plan.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_006__", escapeJs(localized(normalizedLanguage, "Önce planı oluştur", "Generate the plan first")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_007__", escapeJs(localized(normalizedLanguage, "Route seçimini tamamlayıp Planı Oluştur düğmesine bas.", "Complete the route selection and press Generate Plan.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_008__", escapeJs(localized(normalizedLanguage, "İleri mod açık. Ham SQL, scaffold ve comparison override alanlarının tamamı görünür durumda.", "Advanced mode is active. Raw SQL, scaffold, and comparison override inputs are all visible.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_009__", escapeJs(localized(normalizedLanguage, "Orta mod açık. Warm ve scaffold yüzeyleri daha görünür, ama ekran hâlâ rehberli ilerliyor.", "Intermediate mode is active. Warm and scaffold are more visible while the flow stays guided.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_010__", escapeJs(localized(normalizedLanguage, "Başlangıç modu açık. Sadece gerekli seçimleri gösterip seni keşif → plan → warm → compare akışında tutar.", "Beginner mode is active. It shows only the essential choices and keeps you on the discovery → plan → warm → compare flow.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_011__", escapeJs(localized(normalizedLanguage, "manuel", "manual")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_012__", escapeJs(localized(normalizedLanguage, "view", "view")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_013__", escapeJs(localized(normalizedLanguage, "entity", "entity")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_014__", escapeJs(localized(normalizedLanguage, "zaman", "time")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_015__", escapeJs(localized(normalizedLanguage, "sayı", "num")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_016__", escapeJs("FK*"),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_017__", escapeJs(localized(normalizedLanguage, "Kök tabloyu keşiften seç", "Choose a root table from discovery")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_018__", escapeJs(localized(normalizedLanguage, "Çocuk yüzeyi keşiften seç", "Choose a child surface from discovery")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_019__", escapeJs(localized(normalizedLanguage, "Kök seçimine göre dolacak", "Filled from the selected root")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_020__", escapeJs(localized(normalizedLanguage, "Çocuk seçimine göre dolacak", "Filled from the selected child")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_021__", escapeJs(localized(normalizedLanguage, "İlişki kolonu seç", "Choose the relation column")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_022__", escapeJs(localized(normalizedLanguage, "Liste sıralama kolonunu seç", "Choose the list sort column")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_023__", escapeJs(localized(normalizedLanguage, "1. adım: Şemayı keşfet", "Step 1: Discover the schema")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_024__", escapeJs(localized(normalizedLanguage, "PostgreSQL şemasını keşfedip kök/çocuk adaylarını görünür hale getir.", "Discover the PostgreSQL schema and surface root/child candidates.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_025__", escapeJs(localized(normalizedLanguage, "2. adım: Route'u seç", "Step 2: Select the route")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_026__", escapeJs(localized(normalizedLanguage, "Kök tabloyu, çocuk yüzeyi ve ekran tipini seç. Başlangıç modu bunu en az alanla yapar.", "Choose the root table, child surface, and screen profile. Beginner mode keeps this minimal.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_027__", escapeJs(localized(normalizedLanguage, "3. adım: Planı üret", "Step 3: Generate the plan")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_028__", escapeJs(localized(normalizedLanguage, "Projection, ranked surface ve bounded sıcak pencere kararı burada netleşir.", "Projection, ranked surface, and bounded hot-window decisions become explicit here.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_029__", escapeJs(localized(normalizedLanguage, "4. adım: Warm çalıştır", "Step 4: Run warm")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_030__", escapeJs(localized(normalizedLanguage, "Dry run ile başlayıp staging sıcak setini PostgreSQL'den besle.", "Start with a dry run, then populate the staging hot set from PostgreSQL.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_031__", escapeJs(localized(normalizedLanguage, "5. adım: Compare ve rapor", "Step 5: Compare and report")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_032__", escapeJs(localized(normalizedLanguage, "CacheDB ile mevcut route'u yan yana ölç, assessment'ı oku ve migration raporunu indir.", "Measure CacheDB and the existing route side by side, read the assessment, and download the migration report.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_033__", escapeJs(localized(normalizedLanguage, "Akış tamamlandı", "Flow completed")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_034__", escapeJs(localized(normalizedLanguage, "Discovery, plan, warm ve compare zinciri tamam. Cutover readiness raporu hazır.", "The discovery, plan, warm, and compare chain is complete. The cutover readiness report is ready.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_035__", escapeJs(localized(normalizedLanguage, "Timeline profili, müşteri başına son kayıtları bounded pencere olarak taşımak için doğru başlangıçtır.", "Timeline is the right starting point when you want a bounded hot window per root.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_036__", escapeJs(localized(normalizedLanguage, "Top-N profili, ranked projection ve global sıralı ekran kararlarını öne çeker.", "Top-N emphasizes ranked projection and globally sorted screens.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_037__", escapeJs(localized(normalizedLanguage, "Threshold profili, aralık / eşik filtreli ekranlarda projection ve dar pencereyi öne çıkarır.", "Threshold emphasizes projection and narrow windows for threshold / range screens.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_038__", escapeJs(localized(normalizedLanguage, "Detail ağırlıklı profil, ilk boyamada daha zengin aggregate ihtiyacı olan ekranlar içindir.", "Detail-heavy is for screens that need a richer aggregate on first paint.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_039__", escapeJs(localized(normalizedLanguage, "Hazır ekran profili güncellendi. İstersen planı hemen üretebilirsin.", "The prepared screen profile was updated. You can generate the plan right away.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_040__", escapeJs(normalizedLanguage),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_041__", dashboardInstanceId,
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_042__", escapeJs(localized(normalizedLanguage, "Bu bölüm için ek madde üretilmedi.", "No extra items were generated for this section.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_043__", escapeJs(localized(normalizedLanguage, "Dosya üretilmedi.", "No files were generated.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_044__", escapeJs(localized(normalizedLanguage, "Karşılaştırma örneği oluşmadı.", "No comparison samples were produced.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_045__", escapeJs(localized(normalizedLanguage, "Tam eşleşme", "Exact match")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_046__", escapeJs(localized(normalizedLanguage, "Fark var", "Mismatch")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_047__", escapeJs(localized(normalizedLanguage, "Baseline satır", "Baseline rows")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_048__", escapeJs(localized(normalizedLanguage, "Cache satır", "Cache rows")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_049__", escapeJs(localized(normalizedLanguage, "Baseline id listesi", "Baseline id list")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_050__", escapeJs(localized(normalizedLanguage, "Cache id listesi", "Cache id list")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_051__", escapeJs(localized(normalizedLanguage, "Hazır", "Ready")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_052__", escapeJs(localized(normalizedLanguage, "Gözden geçir", "Needs review")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_053__", escapeJs(localized(normalizedLanguage, "Hazır değil", "Not ready")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_054__", escapeJs(localized(normalizedLanguage, "Tam eşleşme", "Exact parity")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_055__", escapeJs(localized(normalizedLanguage, "Kısmi eşleşme", "Partial parity")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_056__", escapeJs(localized(normalizedLanguage, "Uyumsuz", "Mismatch")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_057__", escapeJs(localized(normalizedLanguage, "Örnek yok", "No samples")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_058__", escapeJs(localized(normalizedLanguage, "Demo seed notu üretilmedi.", "No demo seed note was generated.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_059__", escapeJs(localized(normalizedLanguage, "Demo veri hazır", "Demo data is ready")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_060__", escapeJs(localized(normalizedLanguage, "Şimdi PostgreSQL şemasını keşfet ve önerilen customer/order route'unu forma uygula.", "Now discover the PostgreSQL schema and apply the suggested customer/order route to the form.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_061__", escapeJs(localized(normalizedLanguage, "Şemayı keşfet", "Discover the schema")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_062__", escapeJs(localized(normalizedLanguage, "Demo tabloları hazır. Keşif sonucu route adayları ve kolon seçimleri otomatik dolacak.", "Demo tables are ready. Discovery will populate route candidates and column selectors.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_063__", escapeJs(localized(normalizedLanguage, "zamansal sıra", "temporal sort")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_064__", escapeJs(localized(normalizedLanguage, "rank adayı", "rank candidate")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_065__", escapeJs(localized(normalizedLanguage, "İlişki", "Relation")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_066__", escapeJs(localized(normalizedLanguage, "Önerilen sıralama", "Suggested sort")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_067__", escapeJs(localized(normalizedLanguage, "Alternatif sıralama kolonları", "Alternative sort columns")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_068__", escapeJs(localized(normalizedLanguage, "Forma Uygula", "Apply To Form")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_069__", escapeJs(localized(normalizedLanguage, "Keşiften otomatik route adayı çıkmadı. Yine de aşağıdaki listelerden tablo ve kolon seçerek plan üretebilirsin.", "No automatic route suggestion came out of discovery. You can still build the plan by choosing tables and columns from the lists below.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_070__", escapeJs(localized(normalizedLanguage, "entity", "entity")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_071__", escapeJs(localized(normalizedLanguage, "Çocuk olarak seç", "Use as child")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_072__", escapeJs(localized(normalizedLanguage, "Kök seç", "Use as root")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_073__", escapeJs(localized(normalizedLanguage, "Çocuk seç", "Use as child")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_074__", escapeJs(localized(normalizedLanguage, "Kolon", "Columns")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_075__", escapeJs(localized(normalizedLanguage, "Zamansal kolonlar", "Temporal columns")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_076__", escapeJs(localized(normalizedLanguage, "Kullanıcı tablosu keşfedilemedi.", "No user tables were discovered.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_077__", escapeJs(localized(normalizedLanguage, "Şema keşfi sonucu hazır", "Schema discovery result is ready")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_078__", escapeJs(localized(normalizedLanguage, "Route adaylarından birini forma uygula veya listeden kök/çocuk yüzeyi seç. Sonra planı üret.", "Apply one route candidate to the form or choose root/child surfaces from the list. Then generate the plan.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_079__", escapeJs(localized(normalizedLanguage, "Route seçimini tamamla", "Complete the route selection")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_080__", escapeJs(localized(normalizedLanguage, "Kök, çocuk, ilişki ve sıralama kolonları doluysa Planı Oluştur aksiyonuna geç.", "When root, child, relation, and sort columns are filled, move to Generate Plan.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_081__", escapeJs(localized(normalizedLanguage, "Keşif önerisi forma uygulandı. Değerleri kontrol edip planı üretebilirsin.", "Discovery suggestion applied to the form. Review the values and generate the plan.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_082__", escapeJs(localized(normalizedLanguage, "Planı oluştur", "Generate the plan")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_083__", escapeJs(localized(normalizedLanguage, "Route seçimi hazır. Plan çıktısı sağdaki geniş çalışma alanında açılacak.", "Route selection is ready. The plan output will open in the wide workspace on the right.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_084__", escapeJs(localized(normalizedLanguage, "Keşfedilen nesne forma işlendi. Şimdi diğer yüzeyi ve ekran tipini tamamlayabilirsin.", "The discovered object was applied to the form. You can now complete the other surface and the screen type.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_085__", escapeJs(localized(normalizedLanguage, "Seçimi tamamla", "Complete the selection")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_086__", escapeJs(localized(normalizedLanguage, "Kök ve çocuk yüzeyleri, ilişki kolonu ve sıralama kolonu dolunca plan üret.", "Generate the plan after root and child surfaces, relation column, and sort column are filled.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_087__", escapeJs(localized(normalizedLanguage, "Demo şema açıklaması yükleniyor…", "Loading demo schema description…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_088__", escapeJs(localized(normalizedLanguage, "Demo seed hazır.", "Demo seed is ready.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_089__", escapeJs(localized(normalizedLanguage, "Bu runtime için demo seed desteklenmiyor.", "Demo seed is not available for this runtime.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_090__", escapeJs(localized(normalizedLanguage, "Demo şema bilgisi alınamadı: ", "Could not load demo schema info: ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_091__", escapeJs(localized(normalizedLanguage, "Demo PostgreSQL şeması hazırlanıyor…", "Preparing the demo PostgreSQL schema…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_092__", escapeJs(localized(normalizedLanguage, "Demo şema hazır. Discovery güncellendi ve planner formu seed edilen route ile dolduruldu.", "The demo schema is ready. Discovery was refreshed and the planner form was populated with the seeded route.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_093__", escapeJs(localized(normalizedLanguage, "Örnek kök id", "Sample root ids")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_094__", escapeJs(localized(normalizedLanguage, "Demo şema kurulamadı: ", "Demo schema bootstrap failed: ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_095__", escapeJs(localized(normalizedLanguage, "PostgreSQL şeması yeniden keşfediliyor…", "Refreshing PostgreSQL schema discovery…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_096__", escapeJs(localized(normalizedLanguage, "PostgreSQL şeması inceleniyor…", "Inspecting PostgreSQL schema…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_097__", escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_098__", escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. Route adayını seçip planı oluşturabilirsin.", "Schema discovery is ready. Pick a route candidate and generate the plan.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_099__", escapeJs(localized(normalizedLanguage, "Şema keşfi başarısız oldu: ", "Schema discovery failed: ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_100__", escapeJs(localized(normalizedLanguage, "Şema keşfi başarısız", "Schema discovery failed")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_101__", escapeJs(localized(normalizedLanguage, "satır / kök", "rows / root")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_102__", escapeJs(localized(normalizedLanguage, "Gerekli", "Required")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_103__", escapeJs(localized(normalizedLanguage, "İlk aşamada opsiyonel", "Optional at first")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_104__", escapeJs(localized(normalizedLanguage, "Gerekli", "Required")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_105__", escapeJs(localized(normalizedLanguage, "Gerekli değil", "Not required")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_106__", escapeJs(localized(normalizedLanguage, "Plan hazır", "Plan is ready")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_107__", escapeJs(localized(normalizedLanguage, "Mimari karar, Redis/PostgreSQL yerleşimi ve warm planı sağdaki kartlarda açıldı. Sıradaki güvenli adım dry run.", "Architecture decision, Redis/PostgreSQL placement, and warm plan are visible in the cards on the right. The next safe step is dry run.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_108__", escapeJs(localized(normalizedLanguage, "Dry run çalıştır", "Run dry run")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_109__", escapeJs(localized(normalizedLanguage, "Önce Redis'i değiştirmeden warm SQL'inin kaç satır okuyacağını doğrula.", "First verify how many rows the warm SQL reads without mutating Redis.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_110__", escapeJs(localized(normalizedLanguage, "Yeni warm çalışması başladı. Sonuçlar tamamlanınca bu kart güncellenecek.", "A new warm run has started. This card will refresh when the result is ready.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_111__", escapeJs(localized(normalizedLanguage, "Dry run tamamlandı", "Dry run completed")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_112__", escapeJs(localized(normalizedLanguage, "Warm tamamlandı", "Warm completed")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_113__", escapeJs(localized(normalizedLanguage, "Redis değiştirilmedi. Satır sayıları doğruysa gerçek warm çalıştır.", "Redis was not mutated. If row counts look correct, run the real warm.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_114__", escapeJs(localized(normalizedLanguage, "Staging hot set hazır. Şimdi PostgreSQL ve CacheDB sonucunu yan yana karşılaştır.", "The staging hot set is ready. Now compare PostgreSQL and CacheDB side by side.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_115__", escapeJs(localized(normalizedLanguage, "Warm çalıştır", "Run warm")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_116__", escapeJs(localized(normalizedLanguage, "Karşılaştırmayı çalıştır", "Run comparison")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_117__", escapeJs(localized(normalizedLanguage, "Dry run güvenli geçtiyse staging Redis hot set'i doldur.", "If the dry run looks safe, fill the staging Redis hot set.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_118__", escapeJs(localized(normalizedLanguage, "Parity ve latency kararını aynı ekranda oku.", "Read parity and latency decision on the same screen.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_119__", escapeJs(localized(normalizedLanguage, "Scaffold hazır", "Scaffold is ready")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_120__", escapeJs(localized(normalizedLanguage, "Entity, relation loader ve projection iskeleti aynı route kararıyla üretildi.", "Entity, relation loader, and projection skeleton were generated from the same route decision.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_121__", escapeJs(localized(normalizedLanguage, "Henüz güçlü sinyal yok.", "No positive signals yet.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_122__", escapeJs(localized(normalizedLanguage, "Henüz blokaj kaydedilmedi.", "No blockers recorded yet.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_123__", escapeJs(localized(normalizedLanguage, "Henüz sonraki adım üretilmedi.", "No next steps generated yet.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_124__", escapeJs(localized(normalizedLanguage, "Bu ölçüm turunda öne çıkan güçlü sinyal yok.", "No strong positive signal stood out in this run.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_125__", escapeJs(localized(normalizedLanguage, "Bu turda doğrudan cutover blokajı görülmedi.", "No direct cutover blocker was found in this run.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_126__", escapeJs(localized(normalizedLanguage, "Önerilen ek adım üretilmedi.", "No additional next step was generated.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_127__", escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı", "Comparison completed")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_128__", escapeJs(localized(normalizedLanguage, "Parity, latency ve cutover değerlendirmesi aynı yüzeyde hazır. Uygunsa migration raporunu indir.", "Parity, latency, and cutover assessment are ready on the same surface. Download the migration report if appropriate.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_129__", escapeJs(localized(normalizedLanguage, "Raporu indir", "Download report")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_130__", escapeJs(localized(normalizedLanguage, "Karşılaştırma çıktısını incele", "Review comparison output")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_131__", escapeJs(localized(normalizedLanguage, "Tek sayfalık cutover readiness raporu compare sonucundan üretildi.", "A one-page cutover readiness report was generated from the compare result.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_132__", escapeJs(localized(normalizedLanguage, "Örnek farklarını, SQL'i ve cutover blokajlarını incele.", "Review sample mismatches, SQL, and cutover blockers.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_133__", escapeJs(localized(normalizedLanguage, "Önce karşılaştırmayı çalıştırıp raporu üret.", "Run the comparison first to generate the report.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_134__", escapeJs(localized(normalizedLanguage, "Rapor indirildi", "Report downloaded")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_135__", escapeJs(localized(normalizedLanguage, "Bu çıktı ekip içinde cutover readiness kanıtı olarak paylaşılabilir.", "This output can be shared with the team as cutover readiness evidence.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_136__", escapeJs(localized(normalizedLanguage, "Migration report indirildi.", "Migration report downloaded.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_137__", escapeJs(localized(normalizedLanguage, "Planlayıcı şablonu yükleniyor…", "Loading planner template…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_138__", escapeJs(localized(normalizedLanguage, "Şemayı keşfet", "Discover the schema")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_139__", escapeJs(localized(normalizedLanguage, "Canlı PostgreSQL şemasından tablo, view, PK/FK ve route adaylarını çek.", "Read tables, views, PK/FK metadata, and route candidates from live PostgreSQL.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_140__", escapeJs(localized(normalizedLanguage, "Hazır. Önce PostgreSQL şemasını keşfet veya demo verisini hazırla.", "Ready. Discover the PostgreSQL schema first or prepare demo data.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_141__", escapeJs(localized(normalizedLanguage, "Örnek değerler yeniden yüklendi.", "Example defaults reloaded.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_142__", escapeJs(localized(normalizedLanguage, "Önce karşılaştırmayı çalıştır. Rapor, compare sonucundan üretilir.", "Run the comparison first. The report is generated from the compare result.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_143__", escapeJs(localized(normalizedLanguage, "Önce karşılaştırmayı çalıştır", "Run comparison first")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_144__", escapeJs(localized(normalizedLanguage, "CacheDB ve PostgreSQL route sonucu oluşmadan rapor indirilemez.", "The report cannot be downloaded before CacheDB and PostgreSQL route results exist.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_145__", escapeJs(localized(normalizedLanguage, "Dry run kuyruğa alındı… ", "Dry run queued… ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_146__", escapeJs(localized(normalizedLanguage, "Warm execution kuyruğa alındı… ", "Warm execution queued… ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_147__", escapeJs(localized(normalizedLanguage, "Dry run arka planda çalışıyor… ", "Dry run is running in the background… ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_148__", escapeJs(localized(normalizedLanguage, "Warm execution arka planda çalışıyor… ", "Warm execution is running in the background… ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_149__", escapeJs(localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_150__", escapeJs(localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_151__", escapeJs(localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_152__", escapeJs(localized(normalizedLanguage, "Bilinmeyen hata", "Unknown error")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_153__", escapeJs(localized(normalizedLanguage, "Dry run tamamlandı. Redis değiştirilmedi.", "Dry run completed. Redis was not mutated.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_154__", escapeJs(localized(normalizedLanguage, "Warm execution tamamlandı. Staging hot set hazır.", "Warm execution completed. The staging hot set is ready.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_155__", escapeJs(localized(normalizedLanguage, "Warm execution başarısız oldu: ", "Warm execution failed: ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_156__", escapeJs(localized(normalizedLanguage, "Dry run arka planda başlatılıyor…", "Starting the dry run in the background…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_157__", escapeJs(localized(normalizedLanguage, "Warm execution arka planda başlatılıyor…", "Starting the warm execution in the background…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_158__", escapeJs(localized(normalizedLanguage, "Dry run başladı. Yeni sonuçlar gelene kadar önceki warm metrikleri gizlendi.", "The dry run has started. Previous warm metrics are hidden until the new result arrives.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_159__", escapeJs(localized(normalizedLanguage, "Warm execution başladı. Yeni sonuçlar gelene kadar önceki dry run metrikleri gizlendi.", "The warm execution has started. Previous dry-run metrics are hidden until the new result arrives.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_160__", escapeJs(localized(normalizedLanguage, "Dry run çalışıyor", "Dry run is running")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_161__", escapeJs(localized(normalizedLanguage, "Warm çalışıyor", "Warm is running")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_162__", escapeJs(localized(normalizedLanguage, "Bu işlem arka plan job olarak izleniyor; sayfa aynı yerde kalır.", "This operation is tracked as a background job; the page stays in place.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_163__", escapeJs(localized(normalizedLanguage, "Arka plan warm başlatılamadı. Senkron çalıştırılıyor…", "Background warm start failed. Falling back to synchronous execution…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_164__", escapeJs(localized(normalizedLanguage, "Scaffold üretiliyor…", "Generating scaffold…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_165__", escapeJs(localized(normalizedLanguage, "Scaffold hazır. Dosyaları kopyalayıp projene ekleyebilirsin.", "Scaffold ready. You can copy the files into your project.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_166__", escapeJs(localized(normalizedLanguage, "Scaffold üretimi başarısız oldu: ", "Scaffold generation failed: ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_167__", escapeJs(localized(normalizedLanguage, "Karşılaştırma kuyruğa alındı… ", "Comparison queued… ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_168__", escapeJs(localized(normalizedLanguage, "Karşılaştırma arka planda çalışıyor… ", "Comparison is running in the background… ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_169__", escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. PostgreSQL ve CacheDB sonuçları yan yana hazır.", "Comparison completed. PostgreSQL and CacheDB results are ready side by side.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_170__", escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız oldu: ", "Comparison failed: ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_171__", escapeJs(localized(normalizedLanguage, "Bilinmeyen hata", "Unknown error")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_172__", escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız", "Comparison failed")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_173__", escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. PostgreSQL ve CacheDB sonuçları yan yana hazır.", "Comparison completed. PostgreSQL and CacheDB results are ready side by side.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_174__", escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız oldu: ", "Comparison failed: ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_175__", escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız", "Comparison failed")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_176__", escapeJs(localized(normalizedLanguage, "Side-by-side comparison arka planda başlatılıyor…", "Starting side-by-side comparison in the background…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_177__", escapeJs(localized(normalizedLanguage, "Karşılaştırma çalışıyor", "Comparison is running")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_178__", escapeJs(localized(normalizedLanguage, "PostgreSQL baseline ve CacheDB route'u aynı parametrelerle ölçülüyor. Uzun POST yerine job polling kullanılıyor.", "PostgreSQL baseline and CacheDB route are measured with the same parameters. Job polling is used instead of a long POST.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_179__", escapeJs(localized(normalizedLanguage, "Arka plan karşılaştırma başlatılamadı. Senkron çalıştırılıyor…", "Background comparison start failed. Falling back to synchronous execution…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_180__", escapeJs(normalizedLanguage),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_181__", escapeJs(dashboardInstanceId),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_182__", escapeJs(discoveryFallbackAction),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_183__", escapeJs(localized(normalizedLanguage, "Plan üretiliyor…", "Generating plan…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_184__", escapeJs(localized(normalizedLanguage, "Plan üretiliyor", "Generating plan")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_185__", escapeJs(localized(normalizedLanguage, "Sonuç sağdaki çalışma alanına AJAX ile yazılacak.", "The result will be written to the workspace on the right over AJAX.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_186__", escapeJs(localized(normalizedLanguage, "Plan hazır. İstersen hemen staging warm çalıştırabilirsin.", "Plan ready. You can run the staging warm execution right away.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_187__", escapeJs(localized(normalizedLanguage, "Plan hazır. Dry run ya da gerçek warm seçebilirsin.", "Plan ready. You can choose a dry run or a real warm execution.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_188__", escapeJs(localized(normalizedLanguage, "Plan AJAX ile üretilemedi. Sayfa fallback akışına yönlendiriliyor…", "Plan could not be generated over AJAX. Redirecting to the page fallback flow…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_189__", escapeJs(localized(normalizedLanguage, "Plan üretimi fallback moduna geçti.", "Plan generation switched to fallback mode.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_190__", escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_191__", escapeJs(localized(normalizedLanguage, "Şablon yüklenemedi. Sayfayı yenileyip tekrar dene.", "Could not load the template. Refresh the page and try again.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_192__", escapeJs(localized(normalizedLanguage, "Şema keşfi yüklenemedi. Sayfayı yenileyip tekrar dene.", "Schema discovery could not be loaded. Refresh the page and try again.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_193__", escapeJs(localized(normalizedLanguage, "Migration report panoya kopyalandı.", "Migration report copied to the clipboard.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_194__", escapeJs(localized(normalizedLanguage, "Rapor kopyalandı", "Report copied")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_195__", escapeJs(localized(normalizedLanguage, "Aynı rapor artık ön izleme alanında da okunabilir.", "The same report is now readable in the preview area too.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_196__", escapeJs(localized(normalizedLanguage, "Kopyalama yapılamadı. Rapor metnini ön izleme alanından seçebilirsin.", "Copy failed. You can select the report text from the preview area.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_197__", escapeJs(localized(normalizedLanguage, "Rapor ön izlemesi aşağıda hazır.", "Report preview is ready below.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_198__", escapeJs(localized(normalizedLanguage, "Warm/compare için seçilen yüzey CacheDB entity ile eşleşmiyor: ", "The selected surface does not match a CacheDB entity for warm/compare: ")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_199__", escapeJs(localized(normalizedLanguage, ". Keşif listesinden entity eşleşmesi olan yüzeyi seç veya önce scaffold üretip entity binding'i uygulamaya ekle.", ". Choose a surface with an entity match from discovery or generate the scaffold and add the entity binding first.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_200__", escapeJs(localized(normalizedLanguage, "Yüzey seçimi eksik", "Surface selection is incomplete")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_201__", escapeJs(localized(normalizedLanguage, "Warm ve compare için registered CacheDB entity gerekir.", "Warm and compare require a registered CacheDB entity.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_202__", escapeJs(localized(normalizedLanguage, "Kök/çocuk yüzeyi seç", "Choose root/child surfaces")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_203__", escapeJs(localized(normalizedLanguage, "orders gibi manuel placeholder değerler warm çalıştırmaz; keşiften gelen entity yüzeyini seç.", "Manual placeholder values such as orders cannot run warm; choose the entity surface from discovery."))
+        );
     }
 
     private MigrationPlannerPageState resolveMigrationPlannerPageState(
@@ -3292,6 +3661,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private void enrichPlannerValuesFromDiscovery(Map<String, String> values, MigrationSchemaDiscovery.Result discovery) {
         MigrationSchemaDiscovery.TableInfo rootTable = resolveDiscoveryTable(discovery, values.get("rootTableOrEntity"));
         MigrationSchemaDiscovery.TableInfo childTable = resolveDiscoveryTable(discovery, values.get("childTableOrEntity"));
+        normalizeRegisteredSurface(values, "rootTableOrEntity", rootTable);
+        normalizeRegisteredSurface(values, "childTableOrEntity", childTable);
         if (rootTable != null && (values.get("rootPrimaryKeyColumn") == null || values.get("rootPrimaryKeyColumn").isBlank())) {
             values.put("rootPrimaryKeyColumn", defaultString(rootTable.primaryKeyColumn()));
         }
@@ -3315,6 +3686,17 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 && !childTable.temporalColumns().isEmpty()) {
             values.put("sortColumn", childTable.temporalColumns().get(0));
         }
+    }
+
+    private void normalizeRegisteredSurface(
+            Map<String, String> values,
+            String fieldName,
+            MigrationSchemaDiscovery.TableInfo table
+    ) {
+        if (table == null || table.registeredEntityName() == null || table.registeredEntityName().isBlank()) {
+            return;
+        }
+        values.put(fieldName, table.registeredEntityName());
     }
 
     private void mergePlannerRequest(Map<String, String> values, MigrationPlanner.Request request) {
@@ -3382,6 +3764,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                     .append("</div>");
             return builder.toString();
         }
+        builder.append("<div class=\"planner-suggestion-list\">");
         for (int index = 0; index < result.routeSuggestions().size(); index++) {
             MigrationSchemaDiscovery.RouteSuggestion item = result.routeSuggestions().get(index);
             String surfaces = List.of(item.rootEntityName(), item.rootSurface(), item.childEntityName(), item.childSurface()).stream()
@@ -3390,7 +3773,9 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                     .reduce((left, right) -> left + " → " + right)
                     .orElse("");
             String sortCandidates = item.sortCandidates().isEmpty() ? "-" : String.join(", ", item.sortCandidates());
-            builder.append("<div class=\"result-check mb-3\"><div class=\"d-flex flex-column flex-lg-row justify-content-between gap-3\"><div><div>");
+            builder.append("<div class=\"planner-suggestion-row\"><div class=\"planner-suggestion-index\">")
+                    .append(index + 1)
+                    .append("</div><div class=\"planner-suggestion-main\"><div class=\"planner-suggestion-badges\">");
             if (item.temporalSortCandidate()) {
                 builder.append("<span class=\"planner-badge\">")
                         .append(escapeHtml(localized(language, "zamansal sıra", "temporal sort")))
@@ -3401,18 +3786,18 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                         .append(escapeHtml(localized(language, "rank adayı", "rank candidate")))
                         .append("</span>");
             }
-            builder.append("</div><div class=\"result-step-title\">")
+            builder.append("</div><div class=\"result-step-title planner-suggestion-title\">")
                     .append(escapeHtml(item.label()))
                     .append("</div><div class=\"small text-muted mt-1\">")
                     .append(escapeHtml(item.summary()))
-                    .append("</div><div class=\"small mt-2\">")
+                    .append("</div><div class=\"small mt-2 planner-suggestion-surfaces\">")
                     .append(escapeHtml(surfaces))
-                    .append("</div><div class=\"small text-muted mt-1\">")
+                    .append("</div><div class=\"planner-suggestion-meta\"><span>")
                     .append(escapeHtml(localized(language, "İlişki", "Relation") + ": " + item.relationColumn()
-                            + " · " + localized(language, "Önerilen sıralama", "Suggested sort") + ": " + item.sortColumn() + " DESC"))
-                    .append("</div><div class=\"small text-muted mt-1\">")
+                            + " / " + localized(language, "Önerilen sıralama", "Suggested sort") + ": " + item.sortColumn() + " DESC"))
+                    .append("</span><span>")
                     .append(escapeHtml(localized(language, "Alternatif sıralama kolonları", "Alternative sort columns") + ": " + sortCandidates))
-                    .append("</div></div><div><a class=\"btn btn-sm btn-outline-primary\" data-planner-suggestion=\"")
+                    .append("</span></div></div><div class=\"planner-suggestion-action\"><a class=\"btn btn-sm btn-outline-primary planner-suggestion-apply\" data-planner-suggestion=\"")
                     .append(index)
                     .append("\" href=\"")
                     .append(escapeHtml(buildMigrationPlannerNavigationLink(
@@ -3426,8 +3811,9 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                     )))
                     .append("\">")
                     .append(escapeHtml(localized(language, "Forma Uygula", "Apply To Form")))
-                    .append("</a></div></div></div>");
+                    .append("</a></div></div>");
         }
+        builder.append("</div>");
         return builder.toString();
     }
 
@@ -3671,18 +4057,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             if (view && !includeViews) {
                 continue;
             }
-            StringBuilder label = new StringBuilder(defaultString(table.qualifiedTableName()));
-            ArrayList<String> badges = new ArrayList<>();
-            if (view) {
-                badges.add(localized(language, "view", "view"));
-            }
-            if (table.registeredEntityName() != null && !table.registeredEntityName().isBlank()) {
-                badges.add(localized(language, "entity", "entity") + ": " + table.registeredEntityName());
-            }
-            if (!badges.isEmpty()) {
-                label.append(" · ").append(String.join(" · ", badges));
-            }
-            options.add(new PlannerSelectOption(discoverySurfaceValue(table), label.toString()));
+            options.add(new PlannerSelectOption(discoverySurfaceValue(table), compactSurfaceOptionLabel(table, view, language)));
         }
         return options;
     }
@@ -3700,7 +4075,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         }
         if ("sort".equalsIgnoreCase(kind)) {
             for (String column : table.temporalColumns()) {
-                options.add(new PlannerSelectOption(column, column + " · temporal"));
+                options.add(new PlannerSelectOption(column, column + " (time)"));
             }
             for (MigrationSchemaDiscovery.ColumnInfo column : table.columns()) {
                 if (column == null || column.name() == null || column.name().isBlank()) {
@@ -3708,7 +4083,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 }
                 if (options.stream().noneMatch(option -> Objects.equals(option.value(), column.name()))
                         && isSortableColumnType(column.jdbcTypeName())) {
-                    options.add(new PlannerSelectOption(column.name(), column.name() + " · " + defaultString(column.jdbcTypeName())));
+                    options.add(new PlannerSelectOption(column.name(), compactColumnOptionLabel(column.name(), column.jdbcTypeName())));
                 }
             }
             return options;
@@ -3728,17 +4103,69 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         if (suggestion != null && suggestion.relationColumn() != null && !suggestion.relationColumn().isBlank()) {
             options.add(new PlannerSelectOption(
                     suggestion.relationColumn(),
-                    suggestion.relationColumn() + " · " + localized(language, "önerilen FK", "suggested FK")
+                    suggestion.relationColumn() + " (FK*)"
             ));
         }
         if (childTable != null) {
             for (String column : childTable.foreignKeyColumns()) {
                 if (options.stream().noneMatch(option -> Objects.equals(option.value(), column))) {
-                    options.add(new PlannerSelectOption(column, column + " · FK"));
+                    options.add(new PlannerSelectOption(column, column + " (FK)"));
                 }
             }
         }
         return options;
+    }
+
+    private String compactSurfaceOptionLabel(MigrationSchemaDiscovery.TableInfo table, boolean view, String language) {
+        String baseName = compactIdentifierForUi(firstNonBlankValue(table.tableName(), table.qualifiedTableName(), table.registeredEntityName(), ""));
+        ArrayList<String> markers = new ArrayList<>();
+        markers.add(view ? localized(language, "view", "view") : localized(language, "tablo", "table"));
+        if (table.registeredEntityName() != null && !table.registeredEntityName().isBlank()) {
+            markers.add("entity");
+        }
+        return baseName + " (" + String.join("/", markers) + ")";
+    }
+
+    private String compactColumnOptionLabel(String columnName, String jdbcTypeName) {
+        String normalized = defaultString(jdbcTypeName).toUpperCase(Locale.ROOT);
+        String marker;
+        if (normalized.contains("TIMESTAMP") || normalized.contains("DATE") || normalized.contains("TIME")) {
+            marker = "time";
+        } else if (normalized.contains("INT")) {
+            marker = "int";
+        } else if (normalized.contains("DEC") || normalized.contains("NUM") || normalized.contains("REAL")
+                || normalized.contains("FLOAT") || normalized.contains("DOUBLE")) {
+            marker = "num";
+        } else {
+            marker = "sort";
+        }
+        return columnName + " (" + marker + ")";
+    }
+
+    private String compactIdentifierForUi(String value) {
+        String normalized = defaultString(value).trim();
+        if (normalized.isBlank()) {
+            return "";
+        }
+        int dot = normalized.lastIndexOf('.');
+        if (dot >= 0 && dot + 1 < normalized.length()) {
+            normalized = normalized.substring(dot + 1);
+        }
+        return normalized
+                .replaceFirst("(?i)^cachedb_migration_demo_", "")
+                .replaceFirst("(?i)^cachedb_demo_", "");
+    }
+
+    private String firstNonBlankValue(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
     }
 
     private boolean isSortableColumnType(String typeName) {
@@ -4030,8 +4457,12 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "body{background:linear-gradient(180deg,#f6f4ef 0%,#efe9de 100%);color:#1b2733;font-family:'Inter','Segoe UI',system-ui,sans-serif;line-height:1.55;letter-spacing:-.01em}"
                         + "main{max-width:1680px;margin:0 auto}"
                         + ".navbar{backdrop-filter:saturate(1.05) blur(10px);background:rgba(22,30,38,.92)!important}"
+                        + ".navbar .container-fluid{flex-wrap:wrap;min-width:0}"
+                        + ".navbar .d-flex.align-items-center.gap-2{flex-wrap:wrap;min-width:0}"
                         + ".navbar-brand{font-weight:700;letter-spacing:-.02em;font-size:1.15rem}"
-                        + ".navbar-text{max-width:56rem;font-size:.96rem;line-height:1.45}"
+                        + ".navbar-brand,.navbar .badge{white-space:normal;overflow-wrap:anywhere}"
+                        + ".navbar-text{max-width:56rem;font-size:.96rem;line-height:1.45;color:rgba(255,255,255,.72)!important}"
+                        + ".navbar .small.text-light-emphasis{color:rgba(255,255,255,.72)!important}"
                         + ".lang-switch{display:flex;gap:.4rem;align-items:center}"
                         + ".lang-switch .btn{min-width:3rem;border-radius:999px;padding:.35rem .75rem;font-weight:600}"
                         + ".ops-shell{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);gap:1.1rem;align-items:start}"
@@ -4046,6 +4477,26 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                         + ".ops-data-status[data-state='loading']{border-color:#cfe0ff;background:linear-gradient(180deg,#f8fbff,#f3f8ff)}"
                         + ".ops-data-status[data-state='success']{border-color:#ccebd7;background:linear-gradient(180deg,#f5fff8,#effbf3)}"
                         + ".ops-data-status[data-state='error']{border-color:#f4c7c3;background:linear-gradient(180deg,#fff7f6,#fff1ef)}"
+                        + ".ops-command-center{margin:0 0 1rem 0;padding:1.15rem;border:1px solid rgba(124,145,168,.2);border-radius:1.45rem;background:linear-gradient(135deg,rgba(255,255,255,.98),rgba(240,246,252,.96));box-shadow:0 1rem 2.6rem rgba(15,23,42,.08);overflow:hidden;position:relative}"
+                        + ".ops-command-center::before{content:'';position:absolute;inset:0 0 auto 0;height:5px;background:linear-gradient(90deg,#12344d,#2f6fed,#22c55e)}"
+                        + ".ops-command-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,320px);gap:1rem;align-items:start;margin-bottom:1rem}"
+                        + ".ops-command-head h1{margin:.18rem 0 .35rem 0;font-size:1.55rem;line-height:1.15;color:#102a43;font-weight:850;letter-spacing:-.035em}"
+                        + ".ops-command-head p{margin:0;color:#52606d;font-size:.95rem;line-height:1.55;max-width:68rem}"
+                        + ".ops-eyebrow{font-size:.72rem;font-weight:850;text-transform:uppercase;letter-spacing:.08em;color:#2f6fed}"
+                        + ".ops-command-status{border:1px solid #dbe7f3;border-radius:1.05rem;background:rgba(255,255,255,.74);padding:.82rem .9rem;color:#334e68;box-shadow:inset 0 1px 0 rgba(255,255,255,.86)}"
+                        + ".ops-command-status-title{font-size:.78rem;font-weight:850;letter-spacing:.04em;text-transform:uppercase;color:#7b8794;margin-bottom:.25rem}"
+                        + ".ops-command-status-body{font-size:.86rem;line-height:1.45;color:#334e68}"
+                        + ".ops-workspace-tabs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:.62rem;margin-bottom:1rem}"
+                        + ".ops-workspace-tab{appearance:none;border:1px solid #d7e2ee;background:linear-gradient(180deg,#fff,#f7faff);border-radius:1rem;padding:.82rem .86rem;text-align:left;color:#17324d;min-height:8.25rem;display:flex;flex-direction:column;gap:.28rem;cursor:pointer;box-shadow:0 .45rem 1rem rgba(15,23,42,.055);transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,background .16s ease}"
+                        + ".ops-workspace-tab:hover,.ops-workspace-tab:focus{transform:translateY(-2px);border-color:#8ab4ff;box-shadow:0 .7rem 1.45rem rgba(47,111,237,.16);outline:none}"
+                        + ".ops-workspace-tab.active{border-color:#2f6fed;background:linear-gradient(180deg,#eef5ff,#fff);box-shadow:0 .75rem 1.55rem rgba(47,111,237,.18),inset 0 0 0 1px rgba(47,111,237,.14)}"
+                        + ".ops-tab-meta{font-size:.68rem;font-weight:850;letter-spacing:.06em;text-transform:uppercase;color:#7b8794}"
+                        + ".ops-tab-title{font-size:.95rem;font-weight:850;color:#102a43;line-height:1.18}"
+                        + ".ops-tab-copy{font-size:.78rem;color:#52606d;line-height:1.35}"
+                        + ".ops-guidance-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.72rem}"
+                        + ".ops-guidance-card{padding:.88rem .95rem;border-radius:1rem;border:1px solid #e1e9f2;background:rgba(255,255,255,.72);min-width:0}"
+                        + ".ops-guidance-card-title{font-size:.84rem;font-weight:850;color:#102a43;margin-bottom:.28rem}"
+                        + ".ops-guidance-card-copy{font-size:.82rem;color:#52606d;line-height:1.42}"
                         + ".metric-value.metric-placeholder{font-size:1.08rem;color:#627d98;font-weight:700;line-height:1.35}"
                         + ".metric-value.metric-error{font-size:1rem;color:#a61b1b;font-weight:800;line-height:1.35}"
                         + ".ops-utility-strip .nav-panel{height:auto}"
@@ -4067,19 +4518,30 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                         + ".compact-status{margin-top:.45rem;padding:.48rem .58rem;border-radius:.78rem;background:#f8fbff;border:1px solid #dbe7ff;font-size:.8rem;color:#486581}"
                         + ".nav-panel.navigator-panel{display:flex;flex-direction:column;flex:0 0 auto}"
                         + ".nav-panel.navigator-panel .nav-panel-body{overflow:visible;max-height:none;padding-right:0}"
+                        + ".nav-route-list{display:flex;flex-direction:column;gap:.5rem;margin-bottom:.8rem}"
+                        + ".nav-route-card{width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);gap:.62rem;align-items:start;text-align:left;border:1px solid #dce7f2;background:linear-gradient(180deg,#fff,#f8fbff);border-radius:1rem;padding:.72rem .76rem;color:#17324d;cursor:pointer;transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,background .16s ease}"
+                        + ".nav-route-card:hover,.nav-route-card:focus{transform:translateY(-1px);border-color:#8ab4ff;box-shadow:0 .55rem 1.2rem rgba(47,111,237,.14);outline:none}"
+                        + ".nav-route-card.active{border-color:#2f6fed;background:linear-gradient(180deg,#eef5ff,#fff);box-shadow:inset 0 0 0 1px rgba(47,111,237,.14),0 .55rem 1.25rem rgba(47,111,237,.13)}"
+                        + ".nav-route-index{display:inline-flex;align-items:center;justify-content:center;width:1.85rem;height:1.85rem;border-radius:.72rem;background:#e9f1ff;color:#1d4ed8;font-size:.76rem;font-weight:850;letter-spacing:.02em;line-height:1}"
+                        + ".nav-route-card.active .nav-route-index{background:#1d4ed8;color:#fff}"
+                        + ".nav-route-kicker{font-size:.68rem;font-weight:850;letter-spacing:.06em;text-transform:uppercase;color:#7b8794;line-height:1.15;margin-bottom:.12rem}"
+                        + ".nav-route-title{font-size:.9rem;font-weight:850;color:#102a43;line-height:1.18;margin-bottom:.16rem}"
+                        + ".nav-route-copy{font-size:.76rem;line-height:1.32;color:#52606d}"
+                        + ".nav-subhead{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.68rem .1rem .42rem;border-top:1px solid #e5edf6;color:#7b8794;font-size:.72rem;font-weight:850;letter-spacing:.06em;text-transform:uppercase}"
                         + ".nav-tree-list{display:flex;flex-direction:column;gap:.65rem}"
-                        + ".nav-tree-section{padding-top:.1rem}"
-                        + ".nav-tree-section + .nav-tree-section{border-top:1px solid #e5edf6;padding-top:.65rem}"
-                        + ".nav-tree-section-title{font-size:.78rem;font-weight:800;letter-spacing:.02em;color:#7b8794;margin-bottom:.35rem}"
+                        + ".nav-tree-section{display:none;padding-top:.1rem}"
+                        + ".nav-tree-section.active{display:block}"
+                        + ".nav-tree-section-title{font-size:.78rem;font-weight:850;letter-spacing:.02em;color:#486581;margin-bottom:.38rem}"
                         + ".nav-tree-links{display:flex;flex-direction:column;gap:.24rem}"
-                        + ".nav-tree-link{display:flex;flex-direction:column;align-items:flex-start;gap:.06rem;width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:.76rem;padding:.46rem .56rem;color:#17324d;transition:all .18s ease;position:relative;z-index:2;pointer-events:auto;cursor:pointer}"
+                        + ".nav-tree-link{display:flex;flex-direction:column;align-items:flex-start;gap:.06rem;width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:.76rem;padding:.5rem .58rem;color:#17324d;transition:all .18s ease;position:relative;z-index:2;pointer-events:auto;cursor:pointer}"
                         + ".nav-tree-link-title{font-size:.83rem;line-height:1.2}"
                         + ".nav-tree-link-copy{font-size:.73rem;line-height:1.25;color:#627d98}"
                         + ".nav-tree-link:hover{background:#f4f8ff;border-color:#dbe7ff;transform:translateX(2px)}"
                         + ".nav-tree-link.active{background:#eef4ff;border-color:#8ab4ff;box-shadow:inset 0 0 0 1px rgba(47,111,237,.12)}"
                         + ".nav-tree-link-title{font-weight:700;font-size:.86rem}"
                         + ".nav-tree-link-copy{font-size:.74rem;color:#6b7a89;line-height:1.3}"
-                        + ".workspace-group{display:block;animation:fadeWorkspace .22s ease}"
+                        + ".workspace-group{display:none;animation:fadeWorkspace .22s ease}"
+                        + ".workspace-group.active{display:block}"
                         + ".workspace-group-header{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin-bottom:1rem;padding:.2rem .2rem 1rem .2rem;border-bottom:1px solid rgba(207,217,228,.9)}"
                         + ".workspace-group-title{font-size:1.45rem;font-weight:800;color:#102a43;margin:0}"
                         + ".workspace-group-copy{color:#52606d;font-size:.95rem;max-width:62rem}"
@@ -4236,13 +4698,17 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                         + ".jump-nav .jump-link:active{transform:translateY(0);box-shadow:0 .35rem .85rem rgba(15,23,42,.12)}"
                         + ".scroll-jump-stack{position:fixed;right:1.25rem;bottom:1.25rem;z-index:1080;display:flex;flex-direction:column;gap:.55rem}"
                         + ".scroll-jump{border-radius:999px;box-shadow:0 .6rem 1.2rem rgba(31,41,51,.16);min-width:9rem;padding:.72rem 1rem;background:#102a43;border:0}"
+                        + "@media (max-width: 1399px){.ops-workspace-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}}"
                         + "@media (max-width: 1199px){.ops-shell{grid-template-columns:1fr}.ops-sidebar{position:static;max-height:none;overflow:visible}.ops-utility-strip{grid-template-columns:1fr}.workspace-group-header{flex-direction:column;align-items:flex-start}.ops-workspace > .workspace-group{padding:1rem}}"
+                        + "@media (max-width: 767px){.ops-command-head{grid-template-columns:1fr}.ops-workspace-tabs{grid-template-columns:1fr}.ops-guidance-grid{grid-template-columns:1fr}.ops-command-center{padding:1rem}.ops-workspace-tab{min-height:auto}}"
         );
         String navbarSubtitle = escapeHtml(uiString(
                 "navbarSubtitle",
-                "Operational monitoring console for cache health, write-behind flow, recovery, query behavior, and incident triage."
+                localized(language,
+                        "Cache sağlığı, write-behind akışı, recovery, sorgu davranışı ve olay müdahalesi için sadeleştirilmiş yönetim kokpiti.",
+                        "Simplified operations cockpit for cache health, write-behind flow, recovery, query behavior, and incident response.")
         ));
-        String uiRevisionBadge = escapeHtml(uiString("uiRevisionBadge", localized(language, "Arayüz sürümü: navigator-v3", "UI revision: navigator-v3")));
+        String uiRevisionBadge = escapeHtml(uiString("uiRevisionBadge", localized(language, "Arayüz sürümü: admin-cockpit-v4", "UI revision: admin-cockpit-v4")));
         String loadingText = escapeHtml(uiString("loadingText", "Loading…"));
         String resetToolsTitle = escapeHtml(uiString("resetToolsTitle", "Admin Reset Tools"));
         String resetTelemetryLabel = escapeHtml(uiString("resetTelemetryLabel", "Reset Telemetry History"));
@@ -4393,8 +4859,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String jumpNavRouting = escapeHtml(localized(language, "Uyarı Yönlendirme", "Alert Routing"));
         String jumpNavTuning = escapeHtml(localized(language, "Etkin Ayarlar", "Effective Tuning"));
         String jumpNavExplain = escapeHtml(localized(language, "Açıklama", "Explain"));
-        String workspaceNavTitle = escapeHtml(localized(language, "Operasyon Gezgini v3", "Operations Navigator v3"));
-        String workspaceNavIntro = escapeHtml(localized(language, "Soldaki başlıklardan bir çalışma alanı seç. Böylece ekranda yalnızca ilgili bilgi grubu görünür.", "Choose a workspace from the left. The console will show only the relevant information group."));
+        String workspaceNavTitle = escapeHtml(localized(language, "Nereye Bakmalıyım?", "Where Should I Look?"));
+        String workspaceNavIntro = escapeHtml(localized(language, "Tek tek teknik başlık arama. Önce amacını seç; sol panel yalnız seçtiğin amacın alt başlıklarını gösterir.", "Do not hunt through technical sections. Pick your intent first; the sidebar then shows only that intent's subsections."));
         String workspaceAllLabel = escapeHtml(localized(language, "Tüm Bölümler", "All Sections"));
         String workspaceOverviewLabel = escapeHtml(localized(language, "Genel Bakış", "Overview"));
         String workspaceHealthLabel = escapeHtml(localized(language, "Sağlık ve Teşhis", "Health & Diagnosis"));
@@ -4402,6 +4868,16 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String workspaceRuntimeLabel = escapeHtml(localized(language, "Çalışma Ayarları", "Runtime Controls"));
         String workspaceSchemaLabel = escapeHtml(localized(language, "Şema ve Kayıtlar", "Schema & Registry"));
         String workspaceExplainLabel = escapeHtml(localized(language, "Sorgu Analizi", "Query Analysis"));
+        String workspaceSubsectionLabel = escapeHtml(localized(language, "Seçili Alanın Başlıkları", "Selected Area Sections"));
+        String cockpitEyebrow = escapeHtml(localized(language, "Önce karar alanı seç", "Choose the decision area first"));
+        String cockpitTitle = escapeHtml(localized(language, "Yönetim Kokpiti", "Admin Cockpit"));
+        String cockpitIntro = escapeHtml(localized(language,
+                "Bu ekran artık her şeyi aynı anda göstermiyor. Önce yapmak istediğin operasyonel kararı seç; panel yalnız o karar için gereken metrikleri, açıklamaları ve aksiyonları gösterir.",
+                "This screen no longer shows everything at once. Choose the operational decision first; the console then shows the metrics, explanations, and actions needed for that decision."));
+        String cockpitStatusTitle = escapeHtml(localized(language, "Kullanım kuralı", "Usage rule"));
+        String cockpitStatusBody = escapeHtml(localized(language,
+                "Acil durumda Sağlık ve Teşhis, kapasite okumada Genel Bakış, değişiklik öncesinde Şema veya Çalışma Ayarları ile başla.",
+                "For incidents start with Health, for capacity start with Overview, and before changes start with Schema or Runtime Controls."));
         String operationalTaxonomyIntro = escapeHtml(localized(
                 language,
                 "Bu sözlük ekranda gördüğün tüm önemli terimleri açıklar. Her kartta terimin ne olduğu, birimi, nasıl okunacağı ve ne zaman dikkat gerektirdiği yazıyor.",
@@ -4554,8 +5030,17 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<aside class=\"ops-sidebar\">"
                 + "<div class=\"nav-panel navigator-panel\"><div class=\"nav-panel-header\">" + workspaceNavTitle + "</div><div class=\"nav-panel-body\">"
                 + "<div class=\"small text-muted mb-3\">" + workspaceNavIntro + "</div>"
+                + "<div class=\"nav-route-list\">"
+                + sidebarRouteCard("01", "overview", "primary-signals", localized(language, "Durum", "Status"), localized(language, "Sistem iyi mi?", "Is the system healthy?"), localized(language, "Yük, Redis bellek, write-behind ve performans özetini aç.", "Open load, Redis memory, write-behind, and performance summary."), true)
+                + sidebarRouteCard("02", "health", "triage-section", localized(language, "Olay", "Incident"), localized(language, "Sorun nerede?", "Where is the problem?"), localized(language, "Triage, canlı trendler, worker hataları ve açık olayları göster.", "Show triage, live trends, worker failures, and open incidents."), false)
+                + sidebarRouteCard("03", "schema", "schema-runtime-section", localized(language, "Model", "Model"), localized(language, "Şema doğru mu?", "Is the schema correct?"), localized(language, "Deployment, registry, migration geçmişi ve DDL görünümüne git.", "Go to deployment, registry, migration history, and DDL."), false)
+                + sidebarRouteCard("04", "runtime", "runtime-profile-section", localized(language, "Ayar", "Control"), localized(language, "Canlı ayar ne?", "What is active?"), localized(language, "Runtime profilini, geçerli tuning değerlerini ve profil değişimini incele.", "Inspect runtime profile, effective tuning, and profile churn."), false)
+                + sidebarRouteCard("05", "routing", "alert-routing-section", localized(language, "Alarm", "Alert"), localized(language, "Uyarı ulaşıyor mu?", "Are alerts delivered?"), localized(language, "Alert hedefleri, retry davranışı, runbook ve teslim geçmişini aç.", "Open alert targets, retry behavior, runbooks, and delivery history."), false)
+                + sidebarRouteCard("06", "explain", "explain-section", localized(language, "Sorgu", "Query"), localized(language, "Neden pahalı?", "Why is it costly?"), localized(language, "Planner, relation yolu, sort/filter ve maliyet adımlarını analiz et.", "Analyze planner, relation path, sort/filter, and cost steps."), false)
+                + "</div>"
+                + "<div class=\"nav-subhead\"><span>" + workspaceSubsectionLabel + "</span></div>"
                 + "<div class=\"nav-tree-list\">"
-                + "<div class=\"nav-tree-section\"><div class=\"nav-tree-section-title\">" + workspaceOverviewLabel + "</div><div class=\"nav-tree-links\">"
+                + "<div class=\"nav-tree-section active\" data-group=\"overview\"><div class=\"nav-tree-section-title\">" + workspaceOverviewLabel + "</div><div class=\"nav-tree-links\">"
                 + "<a class=\"nav-tree-link active\" href=\"#primary-signals\" data-target=\"primary-signals\"><span class=\"nav-tree-link-title\">" + jumpNavPrimary + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Yük ve baskıyı ilk burada okuyacaksın.", "Start here for the first view of load and pressure.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#supporting-signals\" data-target=\"supporting-signals\"><span class=\"nav-tree-link-title\">" + supportingSignalsTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Ana göstergeleri açıklayan destek verileri burada.", "Supporting data that explains the primary signals.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#performance-section\" data-target=\"performance-section\"><span class=\"nav-tree-link-title\">" + performanceSectionTitle + "</span><span class=\"nav-tree-link-copy\">" + performanceNavCopy + "</span></a>"
@@ -4563,33 +5048,53 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<a class=\"nav-tree-link\" href=\"#signal-dashboard\" data-target=\"signal-dashboard\"><span class=\"nav-tree-link-title\">" + signalDashboardTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Öne çıkan sinyalleri kısa yorumla birlikte gösterir.", "Shows the headline signals with short guidance.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#operational-taxonomy\" data-target=\"operational-taxonomy\"><span class=\"nav-tree-link-title\">" + operationalTaxonomyTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Terimlerin ne anlama geldiğini açıklar.", "Explains what the terms mean.")) + "</span></a>"
                 + "</div></div>"
-                + "<div class=\"nav-tree-section\"><div class=\"nav-tree-section-title\">" + workspaceHealthLabel + "</div><div class=\"nav-tree-links\">"
+                + "<div class=\"nav-tree-section\" data-group=\"health\"><div class=\"nav-tree-section-title\">" + workspaceHealthLabel + "</div><div class=\"nav-tree-links\">"
                 + "<a class=\"nav-tree-link\" href=\"#live-trends\" data-target=\"live-trends\"><span class=\"nav-tree-link-title\">" + jumpNavTrends + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Zaman içinde baskının artıp artmadığını gösterir.", "Shows whether pressure is rising over time.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#triage-section\" data-target=\"triage-section\"><span class=\"nav-tree-link-title\">" + jumpNavTriage + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "İlk bakılacak darboğazı ve servis durumunu özetler.", "Summarizes the first bottleneck to inspect and service state.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#background-errors-section\" data-target=\"background-errors-section\"><span class=\"nav-tree-link-title\">" + backgroundErrorsTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Gizli kalan worker hatalarını exception ve stack ile açar.", "Reveals hidden worker failures with exception and stack detail.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#diagnostics-section\" data-target=\"diagnostics-section\"><span class=\"nav-tree-link-title\">" + metricDiagnosticsTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Toplanan tanılama kayıtlarını ve ayrıntılarını açar.", "Opens collected diagnostic records and their details.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#incidents-section\" data-target=\"incidents-section\"><span class=\"nav-tree-link-title\">" + jumpNavIncidents + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Açık olayları ve önem düzeylerini listeler.", "Lists active incidents and their severity.")) + "</span></a>"
                 + "</div></div>"
-                + "<div class=\"nav-tree-section\"><div class=\"nav-tree-section-title\">" + workspaceRoutingLabel + "</div><div class=\"nav-tree-links\">"
+                + "<div class=\"nav-tree-section\" data-group=\"routing\"><div class=\"nav-tree-section-title\">" + workspaceRoutingLabel + "</div><div class=\"nav-tree-links\">"
                 + "<a class=\"nav-tree-link\" href=\"#alert-routing-section\" data-target=\"alert-routing-section\"><span class=\"nav-tree-link-title\">" + jumpNavRouting + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Uyarıların hangi hedefe nasıl gittiğini gösterir.", "Shows where alerts go and how they are delivered.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#alert-route-history-section\" data-target=\"alert-route-history-section\"><span class=\"nav-tree-link-title\">" + alertRouteHistoryTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Son teslim denemelerini ve hata geçmişini gösterir.", "Shows recent delivery attempts and failure history.")) + "</span></a>"
                 + "</div></div>"
-                + "<div class=\"nav-tree-section\"><div class=\"nav-tree-section-title\">" + workspaceRuntimeLabel + "</div><div class=\"nav-tree-links\">"
+                + "<div class=\"nav-tree-section\" data-group=\"runtime\"><div class=\"nav-tree-section-title\">" + workspaceRuntimeLabel + "</div><div class=\"nav-tree-links\">"
                 + "<a class=\"nav-tree-link\" href=\"#runtime-profile-section\" data-target=\"runtime-profile-section\"><span class=\"nav-tree-link-title\">" + runtimeProfileControlTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Canlı çalışma profilini buradan değiştir.", "Change the live runtime profile here.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#runtime-profile-churn-section\" data-target=\"runtime-profile-churn-section\"><span class=\"nav-tree-link-title\">" + runtimeProfileChurnTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Profilin zaman içinde nasıl değiştiğini burada gör.", "See how the runtime profile changed over time.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#tuning-section\" data-target=\"tuning-section\"><span class=\"nav-tree-link-title\">" + jumpNavTuning + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Şu anda geçerli olan ayarları gösterir.", "Shows the settings currently in effect.")) + "</span></a>"
                 + "</div></div>"
-                + "<div class=\"nav-tree-section\"><div class=\"nav-tree-section-title\">" + workspaceSchemaLabel + "</div><div class=\"nav-tree-links\">"
+                + "<div class=\"nav-tree-section\" data-group=\"schema\"><div class=\"nav-tree-section-title\">" + workspaceSchemaLabel + "</div><div class=\"nav-tree-links\">"
                 + "<a class=\"nav-tree-link\" href=\"#schema-runtime-section\" data-target=\"schema-runtime-section\"><span class=\"nav-tree-link-title\">" + deploymentTitle + " / " + schemaStatusTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Canlı yapı ve şema durumunu birlikte gösterir.", "Shows runtime posture and schema status together.")) + "</span></a>"
                 + "<a class=\"nav-tree-link\" href=\"#schema-history-section\" data-target=\"schema-history-section\"><span class=\"nav-tree-link-title\">" + schemaHistoryTitle + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Şema geçmişi ve kayıt görünümünü açar.", "Opens schema history and registry views.")) + "</span></a>"
                 + "</div></div>"
-                + "<div class=\"nav-tree-section\"><div class=\"nav-tree-section-title\">" + workspaceExplainLabel + "</div><div class=\"nav-tree-links\">"
+                + "<div class=\"nav-tree-section\" data-group=\"explain\"><div class=\"nav-tree-section-title\">" + workspaceExplainLabel + "</div><div class=\"nav-tree-links\">"
                 + "<a class=\"nav-tree-link\" href=\"#explain-section\" data-target=\"explain-section\"><span class=\"nav-tree-link-title\">" + jumpNavExplain + "</span><span class=\"nav-tree-link-copy\">" + escapeHtml(localized(language, "Sorgu neden yavaşladı sorusunu açar.", "Explains why a query became slow.")) + "</span></a>"
                 + "</div></div>"
                 + "</div>"
                 + "</div></div>"
                 + "</aside>"
                 + "<section class=\"ops-workspace\">"
+                + "<div id=\"dashboardDataStatus\" class=\"ops-data-status\" data-state=\"loading\">"
+                + "<div class=\"ops-data-status-copy\"><div class=\"ops-data-status-title\" id=\"dashboardDataStatusTitle\">" + escapeHtml(uiString("dashboardDataStatus.loadingTitle", "Veriler yükleniyor")) + "</div><div class=\"ops-data-status-detail\" id=\"dashboardDataStatusDetail\">" + escapeHtml(uiString("dashboardDataStatus.loadingDetail", "Yönetim API'lerinden son metrikler ve servis durumu alınıyor.")) + "</div></div>"
+                + "<span id=\"dashboardDataStatusBadge\"><span class=\"badge text-bg-warning\">" + escapeHtml(uiString("dashboardDataStatus.loadingBadge", localized(language, "Yükleniyor", "Loading"))) + "</span></span>"
+                + "</div>"
+                + "<section class=\"ops-command-center\" aria-label=\"" + cockpitTitle + "\">"
+                + "<div class=\"ops-command-head\"><div><div class=\"ops-eyebrow\">" + cockpitEyebrow + "</div><h1>" + cockpitTitle + "</h1><p>" + cockpitIntro + "</p></div>"
+                + "<div class=\"ops-command-status\"><div class=\"ops-command-status-title\">" + cockpitStatusTitle + "</div><div class=\"ops-command-status-body\">" + cockpitStatusBody + "</div></div></div>"
+                + "<div class=\"ops-workspace-tabs\" aria-label=\"" + workspaceNavTitle + "\">"
+                + workspaceTab("overview", "primary-signals", localized(language, "Genel Bakış", "Overview"), localized(language, "Durum", "Status"), localized(language, "Ana sinyaller, performans ve metrik sözlüğü.", "Primary signals, performance, and metric glossary."), true)
+                + workspaceTab("health", "triage-section", localized(language, "Sağlık ve Teşhis", "Health & Diagnosis"), localized(language, "Olay", "Incident"), localized(language, "Canlı baskı, triage, worker hataları ve açık olaylar.", "Live pressure, triage, worker errors, and open incidents."), false)
+                + workspaceTab("schema", "schema-runtime-section", localized(language, "Şema ve Kayıtlar", "Schema & Registry"), localized(language, "Model", "Model"), localized(language, "Deployment durumu, şema geçmişi, registry ve DDL.", "Deployment state, schema history, registry, and DDL."), false)
+                + workspaceTab("runtime", "runtime-profile-section", localized(language, "Çalışma Ayarları", "Runtime Controls"), localized(language, "Kontrol", "Control"), localized(language, "Runtime profil, etkin ayarlar ve profil değişim geçmişi.", "Runtime profile, effective tuning, and profile churn."), false)
+                + workspaceTab("routing", "alert-routing-section", localized(language, "Uyarı Akışı", "Alert Delivery"), localized(language, "Teslimat", "Delivery"), localized(language, "Alert rotaları, runbook ve teslim geçmişi.", "Alert routes, runbooks, and delivery history."), false)
+                + workspaceTab("explain", "explain-section", localized(language, "Sorgu Analizi", "Query Analysis"), localized(language, "Analiz", "Analysis"), localized(language, "Sorgu planı, relation yolu ve maliyet açıklaması.", "Query plan, relation path, and cost explanation."), false)
+                + "</div>"
+                + "<div class=\"ops-guidance-grid\">"
+                + guidanceCard(localized(language, "1. Önce alanı seç", "1. Pick the area"), localized(language, "Genel durum, olay müdahalesi, şema, runtime, uyarı teslimatı ve sorgu analizi ayrı karar alanlarıdır.", "Overview, incident response, schema, runtime, alert delivery, and query analysis are separate decision areas."))
+                + guidanceCard(localized(language, "2. Sonra ilk sinyali oku", "2. Read the first signal"), localized(language, "Her kategoride en üstte kısa açıklama ve ilk bakılacak metrik bulunur. Detay tabloları yalnız doğrulama için kullan.", "Each category starts with short guidance and the first signal to inspect. Use detail tables only for verification."))
+                + guidanceCard(localized(language, "3. Aksiyonu izole et", "3. Isolate the action"), localized(language, "Reset, profil değişimi veya replay gibi aksiyonlar kendi bölümünde kalır; business data silen işlem bu panelde yoktur.", "Actions such as reset, profile switch, or replay stay in their own section; this panel does not delete business data."))
+                + "</div></section>"
                 + "<div class=\"ops-utility-strip\">"
                 + "<div class=\"nav-panel compact-panel\"><div class=\"nav-panel-header\">" + liveRefreshTitle + "</div><div class=\"nav-panel-body\">"
                 + "<div class=\"compact-help\">" + liveRefreshIntro + "</div>"
@@ -4616,33 +5121,6 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<div class=\"compact-status\">" + escapeHtml(localized(language, "Mevcut bir ORM ekranını modelleyip sıcak pencere, warm plan ve karşılaştırma kontrol listesini çıkar.", "Model an existing ORM route and get a hot-window, warm-plan, and comparison checklist.")) + "</div>"
                 + "</div></div>"
                 + "</div>"
-                + "<div id=\"dashboardDataStatus\" class=\"ops-data-status\" data-state=\"loading\">"
-                + "<div class=\"ops-data-status-copy\"><div class=\"ops-data-status-title\" id=\"dashboardDataStatusTitle\">" + escapeHtml(uiString("dashboardDataStatus.loadingTitle", "Veriler yükleniyor")) + "</div><div class=\"ops-data-status-detail\" id=\"dashboardDataStatusDetail\">" + escapeHtml(uiString("dashboardDataStatus.loadingDetail", "Yönetim API'lerinden son metrikler ve servis durumu alınıyor.")) + "</div></div>"
-                + "<span id=\"dashboardDataStatusBadge\"><span class=\"badge text-bg-warning\">" + escapeHtml(uiString("dashboardDataStatus.loadingBadge", localized(language, "Yükleniyor", "Loading"))) + "</span></span>"
-                + "</div>"
-                + "<div class=\"row g-3 mb-3\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + howToReadTitle + "</div><div class=\"card-body\">"
-                + "<div class=\"row g-3\">"
-                + "<div class=\"col-12 col-lg-4\"><div class=\"fw-semibold mb-1\">" + howToReadStep1Title + "</div><div class=\"text-muted small\">" + howToReadStep1Body + "</div></div>"
-                + "<div class=\"col-12 col-lg-4\"><div class=\"fw-semibold mb-1\">" + howToReadStep2Title + "</div><div class=\"text-muted small\">" + howToReadStep2Body + "</div></div>"
-                + "<div class=\"col-12 col-lg-4\"><div class=\"fw-semibold mb-1\">" + howToReadStep3Title + "</div><div class=\"text-muted small\">" + howToReadStep3Body + "</div></div>"
-                + "</div></div></div></div></div>"
-                + "<div class=\"row g-3 mb-3\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + sectionGuideTitle + "</div><div class=\"card-body\">"
-                + "<div class=\"row g-3\">"
-                + "<div class=\"col-12 col-md-6 col-xl-3\"><div class=\"fw-semibold mb-1\">" + sectionGuideLiveTrendsTitle + "</div><div class=\"text-muted small\">" + sectionGuideLiveTrendsBody + "</div></div>"
-                + "<div class=\"col-12 col-md-6 col-xl-3\"><div class=\"fw-semibold mb-1\">" + sectionGuideTriageTitle + "</div><div class=\"text-muted small\">" + sectionGuideTriageBody + "</div></div>"
-                + "<div class=\"col-12 col-md-6 col-xl-3\"><div class=\"fw-semibold mb-1\">" + sectionGuideTopSignalsTitle + "</div><div class=\"text-muted small\">" + sectionGuideTopSignalsBody + "</div></div>"
-                + "<div class=\"col-12 col-md-6 col-xl-3\"><div class=\"fw-semibold mb-1\">" + sectionGuideRoutingTitle + "</div><div class=\"text-muted small\">" + sectionGuideRoutingBody + "</div></div>"
-                + "</div></div></div></div></div>"
-                + "<div class=\"row g-3 mb-3\" id=\"operational-taxonomy\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + operationalTaxonomyTitle + "</div><div class=\"card-body\">"
-                + sectionIntro(operationalTaxonomyIntro)
-                + "<div class=\"row g-3 align-items-end mb-3\">"
-                + "<div class=\"col-12 col-lg-8\"><label class=\"form-label\">" + operationalTaxonomySearchLabel + "</label><input id=\"taxonomySearch\" class=\"form-control glossary-search\" placeholder=\"" + operationalTaxonomySearchPlaceholder + "\"></div>"
-                + "<div class=\"col-12 col-lg-4\"><div class=\"small text-muted\">" + operationalTaxonomyCountLabel + "</div><div id=\"taxonomyCount\" class=\"fw-semibold\">0</div></div>"
-                + "</div>"
-                + "<div id=\"taxonomyEmptyState\" class=\"glossary-empty d-none\">" + operationalTaxonomyEmpty + "</div>"
-                + "<div id=\"taxonomyGrid\" class=\"row g-3\">"
-                + renderOperationalTaxonomy(language)
-                + "</div></div></div></div></div>"
                 + "<div class=\"workspace-group active\" data-group=\"overview\">"
                 + "<div class=\"workspace-group-header\"><div><h2 class=\"workspace-group-title\">" + workspaceOverviewLabel + "</h2><div class=\"workspace-group-copy\">" + escapeHtml(localized(language, "Genel bakış alanı, metriklerin ne anlama geldiğini ve ilk bakışta hangi göstergelere odaklanman gerektiğini toplar.", "The overview gathers metric meaning and the first signals worth scanning.")) + "</div></div></div>"
                 + "<div class=\"row g-3 mb-3\" id=\"primary-signals\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + primarySignalsTitle + "</div><div class=\"card-body\">"
@@ -4714,6 +5192,16 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<div class=\"col-12 col-md-6 col-xl-4\"><div class=\"taxonomy-item\"><h6>" + taxonomyQueryTitle + "</h6><div class=\"text-muted small\">" + taxonomyQueryBody + "</div></div></div>"
                 + "<div class=\"col-12 col-md-6 col-xl-4\"><div class=\"taxonomy-item\"><h6>" + taxonomyControlsTitle + "</h6><div class=\"text-muted small\">" + taxonomyControlsBody + "</div></div></div>"
                 + "<div class=\"col-12\"><div class=\"taxonomy-item\"><h6>" + taxonomyUnitsTitle + "</h6><div class=\"text-muted small\">" + taxonomyUnitsBody + "</div></div></div>"
+                + "</div></div></div></div></div>"
+                + "<div class=\"row g-3 mb-3\" id=\"operational-taxonomy\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + operationalTaxonomyTitle + "</div><div class=\"card-body\">"
+                + sectionIntro(operationalTaxonomyIntro)
+                + "<div class=\"row g-3 align-items-end mb-3\">"
+                + "<div class=\"col-12 col-lg-8\"><label class=\"form-label\">" + operationalTaxonomySearchLabel + "</label><input id=\"taxonomySearch\" class=\"form-control glossary-search\" placeholder=\"" + operationalTaxonomySearchPlaceholder + "\"></div>"
+                + "<div class=\"col-12 col-lg-4\"><div class=\"small text-muted\">" + operationalTaxonomyCountLabel + "</div><div id=\"taxonomyCount\" class=\"fw-semibold\">0</div></div>"
+                + "</div>"
+                + "<div id=\"taxonomyEmptyState\" class=\"glossary-empty d-none\">" + operationalTaxonomyEmpty + "</div>"
+                + "<div id=\"taxonomyGrid\" class=\"row g-3\">"
+                + renderOperationalTaxonomy(language)
                 + "</div></div></div></div></div>"
                 + "</div>"
                 + "<div class=\"workspace-group\" data-group=\"health\">"
@@ -4877,6 +5365,9 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 uiString("registry.header.pageSize", "Page Size"))
                 + "</div></div></div></div>"
                 + "</div>"
+                + "<div class=\"row g-3 mb-3\" id=\"schema-ddl-section\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + schemaDdlTitle + "</div><div class=\"card-body\">"
+                + sectionIntro(schemaDdlIntro)
+                + "<pre id=\"schemaDdl\" class=\"mb-0\"></pre></div></div></div></div>"
                 + "</div>"
                 + "<div class=\"workspace-group\" data-group=\"runtime\">"
                 + "<div class=\"workspace-group-header\"><div><h2 class=\"workspace-group-title\">" + workspaceRuntimeLabel + "</h2><div class=\"workspace-group-copy\">" + escapeHtml(localized(language, "Bu alan çalışma profilini, etkin ayarları ve profil değişimlerini birlikte yönetmek için hazırlanmıştır.", "This workspace is for managing runtime profile, effective tuning, and profile churn together.")) + "</div></div></div>"
@@ -4920,6 +5411,14 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 uiString("tuning.header.source", "Source"),
                 uiString("tuning.header.detail", "Meaning"))
                 + "</div></div></div></div>"
+                + "<div class=\"row g-3 mb-3\" id=\"runtime-profile-churn-section\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + runtimeProfileChurnTitle + "</div><div class=\"card-body\">"
+                + sectionIntro(runtimeProfileIntro)
+                + "<svg id=\"churnSvg\" viewBox=\"0 0 960 180\" class=\"w-100 mb-3\" style=\"height:180px\"></svg>"
+                + tableShellWithHead("churnRows",
+                uiString("churn.header.time", "Recorded At"),
+                uiString("churn.header.transition", "Profile Transition"),
+                uiString("churn.header.pressure", "Pressure Level"))
+                + "</div></div></div></div>"
                 + "</div>"
                 + "<div class=\"workspace-group\" data-group=\"routing\">"
                 + "<div class=\"workspace-group-header\"><div><h2 class=\"workspace-group-title\">" + workspaceRoutingLabel + "</h2><div class=\"workspace-group-copy\">" + escapeHtml(localized(language, "Bu alan uyarı rotalarını, teslim davranışını ve müdahale notlarını birlikte izlemek içindir.", "This workspace is for monitoring alert routes, delivery behavior, and response notes together.")) + "</div></div></div>"
@@ -4938,17 +5437,6 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 uiString("alertRouteHistory.header.delivered", "Delivered"),
                 uiString("alertRouteHistory.header.failed", "Failed"),
                 uiString("alertRouteHistory.header.lastError", "Last Error"))
-                + "</div></div></div></div>"
-                + "<div class=\"row g-3 mb-3\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + schemaDdlTitle + "</div><div class=\"card-body\">"
-                + sectionIntro(schemaDdlIntro)
-                + "<pre id=\"schemaDdl\" class=\"mb-0\"></pre></div></div></div></div>"
-                + "<div class=\"row g-3 mb-3\" id=\"runtime-profile-churn-section\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + runtimeProfileChurnTitle + "</div><div class=\"card-body\">"
-                + sectionIntro(runtimeProfileIntro)
-                + "<svg id=\"churnSvg\" viewBox=\"0 0 960 180\" class=\"w-100 mb-3\" style=\"height:180px\"></svg>"
-                + tableShellWithHead("churnRows",
-                uiString("churn.header.time", "Recorded At"),
-                uiString("churn.header.transition", "Profile Transition"),
-                uiString("churn.header.pressure", "Pressure Level"))
                 + "</div></div></div></div>"
                 + "</div>"
                 + "<div class=\"workspace-group\" data-group=\"explain\">"
@@ -5053,6 +5541,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "'runtime-profile-churn-section':[['c','/api/profile-churn?limit=24','" + escapeJs(localized(language, "Profil geçiş geçmişi", "Profile churn")) + "',false]],"
                 + "'schema-runtime-section':[['d','/api/deployment','" + escapeJs(localized(language, "Canlı yapı", "Deployment")) + "',false],['s','/api/schema/status','" + escapeJs(localized(language, "Şema durumu", "Schema status")) + "',false]],"
                 + "'schema-history-section':[['sh','/api/schema/history?limit=8','" + escapeJs(localized(language, "Şema geçmişi", "Schema history")) + "',false],['ddl','/api/schema/ddl','DDL',false],['p','/api/profiles','" + escapeJs(localized(language, "Başlangıç profilleri", "Starter profiles")) + "',false],['r','/api/registry','" + escapeJs(localized(language, "Varlık kaydı", "Registry")) + "',false]],"
+                + "'schema-ddl-section':[['ddl','/api/schema/ddl','DDL',false]],"
                 + "'runtime-profile-section':[['rp','/api/runtime-profile','" + escapeJs(localized(language, "Çalışma profili", "Runtime profile")) + "',false]],"
                 + "'tuning-section':[['tuning','/api/tuning','" + escapeJs(localized(language, "Etkin ayarlar", "Effective tuning")) + "',false]],"
                 + "'alert-routing-section':[['route','/api/alert-routing','" + escapeJs(localized(language, "Uyarı yönlendirme", "Alert routing")) + "',false],['rb','/api/runbooks','" + escapeJs(localized(language, "Runbook kayıtları", "Runbooks")) + "',false]],"
@@ -5243,7 +5732,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "function filterTaxonomy(){const input=document.getElementById('taxonomySearch');if(!input){return;}const q=(input.value||'').trim().toLowerCase();const cards=[...document.querySelectorAll('.taxonomy-card')];let visible=0;cards.forEach(card=>{const haystack=(card.dataset.search||'').toLowerCase();const show=!q||haystack.includes(q);card.classList.toggle('d-none',!show);if(show){visible++;}});const count=document.getElementById('taxonomyCount');if(count){count.textContent=String(visible);}const empty=document.getElementById('taxonomyEmptyState');if(empty){empty.classList.toggle('d-none',visible!==0);}}"
                 + "function activateNavLink(targetId){document.querySelectorAll('.nav-tree-link').forEach(link=>link.classList.toggle('active',link.dataset.target===targetId));}"
                 + "function scrollToSection(target){if(!target){return;}const navbar=document.querySelector('.navbar');const offset=(navbar?navbar.getBoundingClientRect().height:0)+18;const top=window.scrollY+target.getBoundingClientRect().top-offset;window.scrollTo({top:Math.max(0,top),behavior:'smooth'});}"
-                + "function revealWorkspaceTarget(targetId){activateNavLink(targetId);window.requestAnimationFrame(()=>window.requestAnimationFrame(()=>{const target=document.getElementById(targetId);if(target){scrollToSection(target);}}));}"
+                + "function activateWorkspaceForTarget(targetId){const target=document.getElementById(targetId);const group=target?target.closest('.workspace-group'):null;const groupName=group?group.dataset.group:'overview';document.querySelectorAll('.workspace-group').forEach(item=>item.classList.toggle('active',item.dataset.group===groupName));document.querySelectorAll('[data-workspace-tab]').forEach(tab=>tab.classList.toggle('active',tab.dataset.group===groupName));document.querySelectorAll('[data-sidebar-route]').forEach(route=>route.classList.toggle('active',route.dataset.group===groupName));document.querySelectorAll('.nav-tree-section').forEach(section=>section.classList.toggle('active',section.dataset.group===groupName));if(targetId&&dashboardLazySections[targetId]){markLazySectionVisible(targetId);}if(group){Object.keys(dashboardLazySections).forEach(id=>{const item=document.getElementById(id);if(item&&group.contains(item)){const rect=item.getBoundingClientRect();if(rect.top<(window.innerHeight+360)&&rect.bottom>-360){markLazySectionVisible(id);}}});}}"
+                + "function revealWorkspaceTarget(targetId){activateNavLink(targetId);activateWorkspaceForTarget(targetId);window.requestAnimationFrame(()=>window.requestAnimationFrame(()=>{const target=document.getElementById(targetId);if(target){scrollToSection(target);captureVisibleLazySections();loadVisibleLazySections(false).then(result=>renderDashboardFromCache(result.failures||[])).catch(()=>{});}}));}"
                 + "function workerNameLabel(name){const labels={'write-behind-worker':'" + escapeJs(localized(language, "Arka plan yazma işleyicisi", "Write-behind worker")) + "','dead-letter-recovery-worker':'" + escapeJs(localized(language, "Başarısız kayıt kurtarma işleyicisi", "Dead-letter recovery worker")) + "','recovery-cleanup-worker':'" + escapeJs(localized(language, "Kurtarma temizleme işleyicisi", "Recovery cleanup worker")) + "','projection-refresh-worker':'" + escapeJs(localized(language, "Projection refresh işleyicisi", "Projection refresh worker")) + "','incident-delivery-recovery-worker':'" + escapeJs(localized(language, "Olay teslimi kurtarma işleyicisi", "Incident delivery recovery worker")) + "','admin-report-job-worker':'" + escapeJs(localized(language, "Yönetim raporu işleyicisi", "Admin report job worker")) + "'};return labels[String(name||'').trim()]||String(name||'-');}"
                 + "function backgroundErrorStatusLabel(item){if(!item){return '-';}return item.recent?'" + escapeJs(localized(language, "Yakın zamanlı hata", "Recent error")) + "':'" + escapeJs(localized(language, "Geçmiş hata izi", "Historical error")) + "';}"
                 + "function backgroundErrorExceptionCell(item){const top=item.rootErrorType||item.errorType||'-';const nested=(item.rootErrorType&&item.errorType&&item.rootErrorType!==item.errorType)?'<div class=\"small text-muted mono\">'+escapeText(item.errorType)+'</div>':'';return '<div class=\"d-flex flex-column gap-1\"><span class=\"mono\">'+escapeText(top)+'</span>'+nested+'</div>';}"
@@ -5337,7 +5827,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "bindIfPresent('refreshInterval','change',applyRefreshInterval);bindIfPresent('toggleRefresh','click',toggleRefreshAction);setupLazySectionObserver();refreshNowAction();applyRefreshInterval();"
                 + "bindIfPresent('taxonomySearch','input',filterTaxonomy);filterTaxonomy();"
                 + "document.querySelectorAll('.nav-tree-link').forEach(link=>link.addEventListener('click',event=>{event.preventDefault();revealWorkspaceTarget(link.dataset.target);}));"
-                + "activateNavLink('metric-taxonomy');"
+                + "activateNavLink('primary-signals');activateWorkspaceForTarget('primary-signals');"
                 + "</script>"
                 + "<div class=\"scroll-jump-stack\"><button id=\"scrollToTopButton\" class=\"btn btn-dark scroll-jump\" type=\"button\">" + scrollToTopLabel + "</button><button id=\"scrollToBottomButton\" class=\"btn btn-dark scroll-jump\" type=\"button\">" + scrollToBottomLabel + "</button></div><script>"
                 + "document.getElementById('scrollToTopButton').addEventListener('click',()=>window.scrollTo({top:0,behavior:'smooth'}));"
@@ -5782,6 +6272,43 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             return "";
         }
         return "<div class=\"section-intro\">" + escapeHtml(text) + "</div>";
+    }
+
+    private String workspaceTab(String group, String targetId, String title, String meta, String copy, boolean active) {
+        String activeClass = active ? " active" : "";
+        return "<button class=\"ops-workspace-tab" + activeClass + "\" type=\"button\" data-workspace-tab=\"true\" data-nav-card=\"true\" data-group=\""
+                + escapeHtml(defaultString(group))
+                + "\" data-target=\"" + escapeHtml(defaultString(targetId)) + "\">"
+                + "<span class=\"ops-tab-meta\">" + escapeHtml(defaultString(meta)) + "</span>"
+                + "<span class=\"ops-tab-title\">" + escapeHtml(defaultString(title)) + "</span>"
+                + "<span class=\"ops-tab-copy\">" + escapeHtml(defaultString(copy)) + "</span>"
+                + "</button>";
+    }
+
+    private String guidanceCard(String title, String copy) {
+        return "<div class=\"ops-guidance-card\"><div class=\"ops-guidance-card-title\">"
+                + escapeHtml(defaultString(title))
+                + "</div><div class=\"ops-guidance-card-copy\">"
+                + escapeHtml(defaultString(copy))
+                + "</div></div>";
+    }
+
+    private String sidebarRouteCard(String index,
+                                    String group,
+                                    String targetId,
+                                    String kicker,
+                                    String title,
+                                    String copy,
+                                    boolean active) {
+        String activeClass = active ? " active" : "";
+        return "<button class=\"nav-route-card" + activeClass + "\" type=\"button\" data-sidebar-route=\"true\" data-nav-card=\"true\" data-group=\""
+                + escapeHtml(defaultString(group))
+                + "\" data-target=\"" + escapeHtml(defaultString(targetId)) + "\">"
+                + "<span class=\"nav-route-index\">" + escapeHtml(defaultString(index)) + "</span>"
+                + "<span><span class=\"nav-route-kicker\">" + escapeHtml(defaultString(kicker)) + "</span>"
+                + "<span class=\"nav-route-title\">" + escapeHtml(defaultString(title)) + "</span>"
+                + "<span class=\"nav-route-copy\">" + escapeHtml(defaultString(copy)) + "</span></span>"
+                + "</button>";
     }
 
     private String sectionPair(String leftTitle, String leftTableId, int leftColumns, String rightTitle, String rightTableId, int rightColumns) {
@@ -6772,6 +7299,13 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         FAILED
     }
 
+    private enum MigrationPlannerCompareJobStatus {
+        QUEUED,
+        RUNNING,
+        COMPLETED,
+        FAILED
+    }
+
     private static final class MigrationPlannerWarmJob {
         private final String jobId;
         private final boolean dryRun;
@@ -6853,6 +7387,85 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         private boolean canPrune(long cutoffEpochMillis) {
             return (status() == MigrationPlannerWarmJobStatus.COMPLETED
                     || status() == MigrationPlannerWarmJobStatus.FAILED)
+                    && lastTouchedEpochMillis() < cutoffEpochMillis;
+        }
+    }
+
+    private static final class MigrationPlannerCompareJob {
+        private final String jobId;
+        private final long createdAtEpochMillis;
+        private final AtomicReference<MigrationPlannerCompareJobStatus> status =
+                new AtomicReference<>(MigrationPlannerCompareJobStatus.QUEUED);
+        private final AtomicLong startedAtEpochMillis = new AtomicLong();
+        private final AtomicLong completedAtEpochMillis = new AtomicLong();
+        private final AtomicReference<String> errorMessage = new AtomicReference<>("");
+        private final AtomicReference<MigrationComparisonRunner.Result> result = new AtomicReference<>();
+
+        private MigrationPlannerCompareJob(String jobId, long createdAtEpochMillis) {
+            this.jobId = jobId;
+            this.createdAtEpochMillis = createdAtEpochMillis;
+        }
+
+        private String jobId() {
+            return jobId;
+        }
+
+        private long createdAtEpochMillis() {
+            return createdAtEpochMillis;
+        }
+
+        private MigrationPlannerCompareJobStatus status() {
+            return status.get();
+        }
+
+        private long startedAtEpochMillis() {
+            return startedAtEpochMillis.get();
+        }
+
+        private long completedAtEpochMillis() {
+            return completedAtEpochMillis.get();
+        }
+
+        private String errorMessage() {
+            return errorMessage.get();
+        }
+
+        private MigrationComparisonRunner.Result result() {
+            return result.get();
+        }
+
+        private void markRunning(long startedAtMillis) {
+            startedAtEpochMillis.compareAndSet(0L, startedAtMillis);
+            status.set(MigrationPlannerCompareJobStatus.RUNNING);
+        }
+
+        private void markCompleted(MigrationComparisonRunner.Result comparisonResult, long completedAtMillis) {
+            result.set(comparisonResult);
+            completedAtEpochMillis.set(completedAtMillis);
+            status.set(MigrationPlannerCompareJobStatus.COMPLETED);
+        }
+
+        private void markFailed(RuntimeException exception, long completedAtMillis) {
+            errorMessage.set(exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage());
+            completedAtEpochMillis.set(completedAtMillis);
+            status.set(MigrationPlannerCompareJobStatus.FAILED);
+        }
+
+        private long lastTouchedEpochMillis() {
+            long completedAt = completedAtEpochMillis();
+            if (completedAt > 0) {
+                return completedAt;
+            }
+            long startedAt = startedAtEpochMillis();
+            if (startedAt > 0) {
+                return startedAt;
+            }
+            return createdAtEpochMillis;
+        }
+
+        private boolean canPrune(long cutoffEpochMillis) {
+            return (status() == MigrationPlannerCompareJobStatus.COMPLETED
+                    || status() == MigrationPlannerCompareJobStatus.FAILED)
                     && lastTouchedEpochMillis() < cutoffEpochMillis;
         }
     }

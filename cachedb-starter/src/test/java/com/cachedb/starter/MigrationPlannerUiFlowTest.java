@@ -27,23 +27,74 @@ class MigrationPlannerUiFlowTest {
                     harness.adminHttpServer.renderMigrationPlannerTemplateModel("tr", "/cachedb-admin/migration-planner");
 
             String body = page.bodyMarkup();
+            String head = page.headMarkup();
             assertTrue(body.contains("planner-stepper"));
+            assertTrue(body.contains("planner-command-strip"));
+            assertTrue(body.contains("plannerWorkspace"));
+            assertTrue(body.contains("plannerStatusMirror"));
+            assertTrue(body.contains("data-planner-shortcut=\"plan\""));
+            assertTrue(body.contains("handlePlannerShortcut"));
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner.css") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner.js.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-page.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-command-strip.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-body.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-input-panel.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-demo-card.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-discovery-card.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-route-form.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-workspace.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-results-card.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-warm-card.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-scaffold-card.html.template") != null);
+            assertTrue(Thread.currentThread().getContextClassLoader()
+                    .getResource("cachedb-admin/migration-planner-compare-card.html.template") != null);
             assertTrue(body.contains("plannerProgressFill"));
             assertTrue(body.contains("data-planner-mode=\"beginner\""));
             assertTrue(body.contains("data-planner-mode=\"advanced\""));
-            assertTrue(body.contains("const apiBase='/cachedb-admin';"));
+            assertTrue(body.contains("const apiBase = \"/cachedb-admin\";"));
             assertTrue(body.contains("/api/migration-planner/discovery"));
             assertTrue(body.contains("/api/migration-planner/warm"));
             assertTrue(body.contains("/api/migration-planner/warm/start"));
             assertTrue(body.contains("/api/migration-planner/warm/status"));
             assertTrue(body.contains("/api/migration-planner/compare"));
+            assertTrue(body.contains("/api/migration-planner/compare/start"));
+            assertTrue(body.contains("/api/migration-planner/compare/status"));
+            assertTrue(body.contains("plannerCompareReportPanel"));
+            assertTrue(body.contains("plannerCompareReportPreview"));
+            assertTrue(body.contains("plannerCompareCopyReportAction"));
+            assertTrue(body.contains("function renderComparisonReportPreview"));
+            assertTrue(body.contains("function copyComparisonReport"));
+            assertTrue(body.contains("function ensureRegisteredSurfacesForExecution"));
+            assertTrue(body.contains("function canonicalizeDiscoveredSurface"));
+            assertTrue(body.contains("orders gibi manuel placeholder değerler warm çalıştırmaz"));
             assertTrue(body.contains("navigateToPlanFallback"));
             assertTrue(body.contains("plannerGenerateAction"));
             assertTrue(body.contains("id=\"plannerGenerateAction\" type=\"submit\""));
             assertTrue(body.contains("__cachedbPlannerGenerate"));
             assertTrue(body.contains("Warm execution arka planda başlatılıyor"));
-            assertTrue(body.contains("field.checked=toBooleanValue(value)"));
-            assertTrue(body.contains("field.name==='generatePlan'||field.name==='warmExecution'||field.name==='dryRunExecution'"));
+            assertTrue(body.contains("field.checked = toBooleanValue(value);"));
+            assertTrue(body.contains("field.name === \"generatePlan\""));
+            assertTrue(body.contains("function compactSurfaceLabel"));
+            assertTrue(body.contains("compactIdentifier(current)"));
+            assertTrue(head.contains(".planner-form-section .planner-form-grid"));
+            assertTrue(head.contains("overflow-wrap: anywhere"));
+            assertTrue(head.contains("white-space: pre-wrap"));
+            assertFalse(body.contains("__CACHEDB_HTML_"));
+            assertFalse(body.contains("__CACHEDB_MIGRATION_PLANNER_TOKEN_"));
         }
     }
 
@@ -142,6 +193,8 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("name=\"relationcolumn\""));
             assertTrue(body.contains("name=\"sortcolumn\""));
             assertTrue(body.contains("data-planner-suggestion"));
+            assertTrue(body.contains("planner-suggestion-row"));
+            assertTrue(body.contains("applysuggestion=1"));
             assertFalse(body.contains("warmexecution=true&dryrunexecution=true&applysuggestion=0"));
         }
     }
@@ -189,7 +242,7 @@ class MigrationPlannerUiFlowTest {
 
             String body = page.bodyMarkup();
             assertTrue(body.contains("name=\"generatePlan\" value=\"true\""));
-            assertTrue(body.contains("const bootstrapPlanResult={"));
+            assertTrue(body.contains("const bootstrapPlanResult = {"));
             assertTrue(body.contains("Plan hazır. İstersen hemen staging warm çalıştırabilirsin."));
             assertTrue(body.contains("planner-empty d-none"));
             assertTrue(body.contains("id=\"plannerResults\" class=\"\""));
@@ -227,6 +280,8 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("warmExecution(true)"));
             assertTrue(body.contains("runWarmSyncFallback"));
             assertTrue(body.contains("pollWarmJob"));
+            assertTrue(body.contains("pollCompareJob"));
+            assertTrue(body.contains("runComparisonSyncFallback"));
         }
     }
 
@@ -242,7 +297,7 @@ class MigrationPlannerUiFlowTest {
 
         private TestHarness(String schemaName) {
             this.dataSource = newDataSource(schemaName);
-            this.jedis = new JedisPooled("redis://127.0.0.1:6379");
+            this.jedis = new JedisPooled(resolveRedisUri());
             this.cacheDatabase = new CacheDatabase(jedis, dataSource, CacheDatabaseConfig.defaults());
             this.cacheDatabase.admin().configureMigrationPlannerDemo(new TestMigrationPlannerDemoSupport());
             this.adminHttpServer = cacheDatabase.adminHttpServer(AdminHttpConfig.builder()
@@ -306,6 +361,16 @@ class MigrationPlannerUiFlowTest {
             dataSource.setUser("sa");
             dataSource.setPassword("");
             return dataSource;
+        }
+
+        private static String resolveRedisUri() {
+            String configured = System.getProperty("cachedb.test.redisUri");
+            if (configured == null || configured.isBlank()) {
+                configured = System.getenv("CACHEDB_TEST_REDIS_URI");
+            }
+            return configured == null || configured.isBlank()
+                    ? "redis://default:welcome1@127.0.0.1:6379"
+                    : configured;
         }
     }
 

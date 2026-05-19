@@ -30,7 +30,7 @@ Olumlu sinyaller:
 Görülen darboğaz:
 
 - Her iki koşu sonunda da anlamli write-behind backlog oluştu.
-- Bu, kısa vadede asil limitin Redis mutation hızi değil, PostgreSQL flush kapasitesi ve drain hızi olduğunu gösteriyor.
+- Bu, kısa vadede asıl limitin Redis mutation hızi değil, PostgreSQL flush kapasitesi ve drain hızi olduğunu gösteriyor.
 - `BREAK` senaryosunda geçikme, karisik yuk senaryosuna göre belirgin şekilde daha kötü; bu da inventory/order yazma baskisiyla uyumlu.
 
 Bugunku yorum:
@@ -54,7 +54,7 @@ Bugunku yorum:
    Düşük hot-set butcesiyle büyük browse firtinalari Redis verimini azaltip read-through baskisini arttirabilir.
 
 5. Benchmark boslugu.
-   Bugunku doğrulama bilerek kucultulmus smoke testtir. 10k, 25k veya 50k TPS sınıfinda davranis henüz kanıtlanmadi.
+   Bugunku doğrulama bilerek kucultulmus smoke testtir. 10k, 25k veya 50k TPS sınıfinda davranış henüz kanıtlanmadi.
 
 ## Guardrail Alert ve Runbook Seti
 
@@ -64,17 +64,17 @@ Bugunku yorum:
 | --- | --- | --- | --- | --- |
 | `WRITE_BEHIND_BACKLOG` | backlog warning eşiğini geçer | backlog critical eşiğini geçer | PostgreSQL drain saturation | producer'lari yavaslat, flush throughput ve drain durumunu kontrol et |
 | `COMPACTION_PENDING_BACKLOG` | pending compaction warning eşiğini geçer | pending compaction critical eşiğini geçer | Redis memory büyümesi ve stale flush geçikmesi | compaction worker sağligini ve runtime profile switching'i kontrol et |
-| `REDIS_MEMORY_PRESSURE` | used memory warning butcesini geçer | used memory critical butcesini geçer | Redis eviction baskisi ve değraded serving | daha sert guardrail profile'a geç, hot-set/page-cache butcelerini daralt |
-| `REDIS_HARD_REJECTIONS` | yok | herhangi bir rejected write | bounded-memory korumasi yazılari düşuruyor | kampanya trafiğini azalt ve drain kapasitesini geri kazan |
-| `QUERY_INDEX_DEGRADED` | namespace değraded isaretlenir | değraded namespace SLA içinde rebuild edilmez | full-scan fallback nedeniyle query latency artar | query-index rebuild tetikle ve hard-limit baskisinin bittigini doğrula |
-| `TOMBSTONE_BUILDUP` | tombstone sayisi delete baseline üstunde buyur | tombstone TTL ile bosalmiyor | delete ağırlikli churn veya drain lag | delete trafiğini, stale resurrection korumasini ve TTL cleanup'i kontrol et |
+| `REDIS_MEMORY_PRESSURE` | used memory warning butcesini geçer | used memory critical butcesini geçer | Redis eviction baskisi ve degraded serving | daha sert guardrail profile'a geç, hot-set/page-cache butcelerini daralt |
+| `REDIS_HARD_REJECTIONS` | yok | herhangi bir rejected write | bounded-memory korumasi yazılari düşürüyor | kampanya trafiğini azalt ve drain kapasitesini geri kazan |
+| `QUERY_INDEX_DEGRADED` | namespace degraded işaretlenir | degraded namespace SLA içinde rebuild edilmez | full-scan fallback nedeniyle query latency artar | query-index rebuild tetikle ve hard-limit baskisinin bittigini doğrula |
+| `TOMBSTONE_BUILDUP` | tombstone sayısı delete baseline üstunde buyur | tombstone TTL ile bosalmiyor | delete ağırlikli churn veya drain lag | delete trafiğini, stale resurrection korumasini ve TTL cleanup'i kontrol et |
 
 Önerilen operator runbook:
 
 1. Backlog ve memory birlikte yukseliyorsa önce Redis sizing değil PostgreSQL drain kapasitesini supheli kabul et.
 2. Hard rejection görülurse önce kritik olmayan kampanya trafiğini kis; sistem bounded memory korumasi için availability'den feragat ediyor olabilir.
-3. Bir namespace değraded query-index modundaysa hard-limit baskisinin düştugunu doğrula ve `/api/query-index/rebuild` tetikle.
-4. Pressure düştukten sonra tombstone yüksek kalmaya devam ediyorsa delete ağırlikli is yüklerini, write-behind drain'i ve tombstone TTL ayarlarıni incele.
+3. Bir namespace degraded query-index modundaysa hard-limit baskisinin düştugunu doğrula ve `/api/query-index/rebuild` tetikle.
+4. Pressure düştükten sonra tombstone yüksek kalmaya devam ediyorsa delete ağırlikli is yüklerini, write-behind drain'i ve tombstone TTL ayarlarıni incele.
 5. Throughput kazanmak için tombstone'u kapatma; bu stale resurrection riskini geri getirir.
 
 ## Admin Metrics Export
@@ -90,9 +90,9 @@ Buradan şu metrik aileleri alinabilir:
 - write-behind, DLQ, reconciliation ve diagnostics stream uzunluklari
 - write-behind worker flush/coalescing/dead-letter sayaclari
 - dead-letter recovery replay/failure sayaclari
-- planner statistics key sayilari
-- Redis used memory, peak memory, compaction pending, payload count ve hard rejection sayilari
-- runtime profile etiketi ve switch sayisi
+- planner statistics key sayıları
+- Redis used memory, peak memory, compaction pending, payload count ve hard rejection sayıları
+- runtime profile etiketi ve switch sayısı
 
 Bu sayede production alerting yalnızca dashboard'a bağlı kalmadan Prometheus tarafına da tasinabilir.
 
@@ -158,7 +158,7 @@ Amac:
 - güvenli throughput araligini bulmak
 - ilk kalıci değradation noktasıni görmek
 
-Önerilen adimlar:
+Önerilen adımlar:
 
 1. `campaign-push-spike` senaryosunu `0.05`, `0.10`, `0.20` `scaleFactor` ile koş.
 2. Şu metrikleri kaydet:
@@ -190,7 +190,7 @@ Amac:
 
 - queue length egimi
 - DLQ oluşumu
-- recovery worker claim sayisi
+- recovery worker claim sayısı
 - order/inventory persistence lag
 
 Başari kriterleri:
@@ -226,11 +226,11 @@ Başari kriterleri:
 
 Amac:
 
-- sistemi konfor alaninin dışına itince recovery davranışını doğrulamak
+- sistemi konfor alanınin dışına itince recovery davranışını doğrulamak
 
 Önerilen kırma testleri:
 
-- write-behind worker sayisini `1`e düşurmek
+- write-behind worker sayısını `1`e düşürmek
 - batch size'i agresif şekilde kucultmek
 - hot-set limitlerini daraltmak
 - checkout ve inventory oranini arttirmak
@@ -240,8 +240,8 @@ Beklenen çıktular:
 
 - backlog buyur
 - health değrade olur
-- recovery yolu gözlemlenebilir kalir
-- veri tutarliligi korumalari yine de çalışir
+- recovery yolu gözlemlenebilir kalır
+- veri tutarlılığı korumaları yine de çalışır
 
 ## Production Gate Önerisi
 
@@ -254,9 +254,11 @@ Gerçek bir e-ticaret kampanya yolu için DAO katmanına production-ready denmed
 - hot inventory contention güvensiz persistence lag üretmemeli
 - operasyon ekibinin `DEGRADED` ve `DOWN` esikleri net olmali
 
-## Sonraki Somut Çıktilar
+## Sonraki Somut Çıktılar
 
 1. `5m`, `15m`, `30m` gibi sabit süreli uzun benchmark profilleri ekle.
 2. Benchmark raporlarina p95/p99 geçikme ve backlog egimi ekle.
 3. Resilience testi için opsiyonel PostgreSQL pause/fault injection ekle.
 4. Koşulari zaman içinde karşılastiracak benchmark karşılastirma dokümani ekle.
+
+

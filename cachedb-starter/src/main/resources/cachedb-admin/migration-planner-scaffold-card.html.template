@@ -1,0 +1,18 @@
+<div id="plannerScaffoldPanel" class="result-card" data-planner-mode-min="intermediate">
+  <div class="result-card-header">__CACHEDB_HTML_SCAFFOLD_TITLE__</div>
+  <div class="result-card-body">
+    <div class="planner-actions">
+      <button id="plannerScaffoldAction" type="button" class="btn btn-outline-primary"__CACHEDB_HTML_SCAFFOLD_DISABLED__>__CACHEDB_HTML_SCAFFOLD_BUTTON__</button>
+    </div>
+    <div id="plannerScaffoldStatus" class="planner-status mt-3">__CACHEDB_HTML_SCAFFOLD_STATUS__</div>
+    <div id="plannerScaffoldResults" class="d-none mt-3">
+      <div class="result-grid">__CACHEDB_HTML_SCAFFOLD_METRICS__</div>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_SCAFFOLD_NOTES_LABEL__</div>
+      <div id="plannerScaffoldNotes"></div>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_SCAFFOLD_FILES_LABEL__</div>
+      <div id="plannerScaffoldFiles"></div>
+      <div class="small text-muted fw-semibold mt-3 mb-2">__CACHEDB_HTML_SCAFFOLD_WARNINGS_LABEL__</div>
+      <div id="plannerScaffoldWarnings"></div>
+    </div>
+  </div>
+</div>

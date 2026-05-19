@@ -1,8 +1,16 @@
 param(
-    [switch]$CleanBuild
+    [switch]$CleanBuild,
+    [int]$PostgresPort = 55432,
+    [int]$RedisPort = 56379
 )
 
 $ErrorActionPreference = "Stop"
+if (-not [string]::IsNullOrWhiteSpace($env:CACHEDB_DEMO_POSTGRES_PORT)) {
+    $PostgresPort = [int]$env:CACHEDB_DEMO_POSTGRES_PORT
+}
+if (-not [string]::IsNullOrWhiteSpace($env:CACHEDB_DEMO_REDIS_PORT)) {
+    $RedisPort = [int]$env:CACHEDB_DEMO_REDIS_PORT
+}
 
 $javaHome = "C:\java64\Semeru\jdk-21.0.2.13-openj9"
 $mavenHome = "C:\apache-maven-3.9.6"
@@ -17,6 +25,14 @@ $mavenRepackageLog = Join-Path $logDir "mvn-demo-container-repackage.log"
 $dockerBuildLog = Join-Path $logDir "docker-demo-container-build.log"
 $dockerRunLog = Join-Path $logDir "docker-demo-container-run.log"
 $examplesTargetDir = Join-Path $repoRoot "cachedb-examples\target"
+$postgresUrl = "jdbc:postgresql://host.docker.internal:$($PostgresPort)/postgres"
+$redisUri = "redis://default:welcome1@host.docker.internal:$($RedisPort)/15"
+$mavenOpts = [System.Environment]::GetEnvironmentVariable("MAVEN_OPTS", "Process")
+if ([string]::IsNullOrWhiteSpace($mavenOpts)) {
+    $mavenOpts = "-Xss64m"
+} elseif ($mavenOpts -notmatch "(^|\s)-Xss") {
+    $mavenOpts = "$mavenOpts -Xss64m"
+}
 
 function Invoke-ExternalProcess {
     param(
@@ -37,6 +53,7 @@ function Invoke-ExternalProcess {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $psi.Environment["JAVA_HOME"] = $javaHome
+    $psi.Environment["MAVEN_OPTS"] = $mavenOpts
     $psi.Environment["SystemRoot"] = "C:\WINDOWS"
     $psi.Environment["ComSpec"] = "C:\WINDOWS\System32\cmd.exe"
     $psi.Environment["Path"] = "$javaHome\bin;$mavenHome\bin;" +
@@ -131,7 +148,7 @@ if ($build.ExitCode -ne 0) {
 
 $run = Invoke-ExternalProcess `
         -FilePath $dockerExe `
-        -Arguments "run -d --name $containerName -p 8090:8090 -e SPRING_DATASOURCE_URL=jdbc:postgresql://host.docker.internal:55432/postgres -e SPRING_DATASOURCE_USERNAME=postgres -e SPRING_DATASOURCE_PASSWORD=postgresql -e CACHEDB_REDIS_URI=redis://default:welcome1@host.docker.internal:56379/15 -e CACHEDB_DEMO_REDIS_URI=redis://default:welcome1@host.docker.internal:56379/15 -e CACHEDB_DEMO_REDISURI=redis://default:welcome1@host.docker.internal:56379/15 $imageName" `
+        -Arguments "run -d --name $containerName -p 8090:8090 -e SPRING_DATASOURCE_URL=$postgresUrl -e SPRING_DATASOURCE_USERNAME=postgres -e SPRING_DATASOURCE_PASSWORD=postgresql -e CACHEDB_REDIS_URI=$redisUri -e CACHEDB_DEMO_REDIS_URI=$redisUri -e CACHEDB_DEMO_REDISURI=$redisUri $imageName" `
         -WorkingDirectory $repoRoot `
         -TimeoutMs 120000 `
         -StdOutPath $dockerRunLog `

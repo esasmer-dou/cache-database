@@ -1,0 +1,18 @@
+<section class="planner-command-strip" aria-label="__CACHEDB_HTML_COMMAND_ARIA__">
+  <div>
+    <div class="planner-command-kicker">__CACHEDB_HTML_COMMAND_KICKER__</div>
+    <div id="plannerNextActionTitle" class="planner-command-title">__CACHEDB_HTML_NEXT_TITLE__</div>
+    <div id="plannerNextActionCopy" class="planner-command-copy">__CACHEDB_HTML_NEXT_COPY__</div>
+    <div id="plannerStatusMirror" class="planner-command-status">__CACHEDB_HTML_STATUS__</div>
+  </div>
+  <div class="planner-command-buttons">
+    <button type="button" class="planner-command-button" data-planner-shortcut="demo">__CACHEDB_HTML_DEMO_BUTTON__</button>
+    <button type="button" class="planner-command-button" data-planner-shortcut="discover">__CACHEDB_HTML_DISCOVER_BUTTON__</button>
+    <button type="button" class="planner-command-button" data-planner-shortcut="configure">__CACHEDB_HTML_CONFIGURE_BUTTON__</button>
+    <button type="button" class="planner-command-button is-primary" data-planner-shortcut="plan">__CACHEDB_HTML_PLAN_BUTTON__</button>
+    <button type="button" class="planner-command-button" data-planner-shortcut="dry-run">__CACHEDB_HTML_DRY_RUN_BUTTON__</button>
+    <button type="button" class="planner-command-button" data-planner-shortcut="warm">__CACHEDB_HTML_WARM_BUTTON__</button>
+    <button type="button" class="planner-command-button" data-planner-shortcut="compare">__CACHEDB_HTML_COMPARE_BUTTON__</button>
+    <button type="button" class="planner-command-button" data-planner-shortcut="report">__CACHEDB_HTML_REPORT_BUTTON__</button>
+  </div>
+</section>

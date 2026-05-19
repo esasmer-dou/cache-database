@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>__CACHEDB_HTML_TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="__CACHEDB_HTML_BOOTSTRAP_CSS_URL__">
+<link rel="stylesheet" href="__CACHEDB_HTML_GOOGLE_FONTS_URL__">
+<style>__CACHEDB_HTML_PLANNER_CSS__</style>
+</head>
+<body>
+<main class="planner-shell">
+<div class="planner-topbar"><a class="planner-back" href="__CACHEDB_HTML_DASHBOARD_URL__">__CACHEDB_HTML_BACK_LABEL__</a></div>
+<section class="planner-hero"><h1>__CACHEDB_HTML_TITLE__</h1><p><strong>__CACHEDB_HTML_SUBTITLE__</strong><br>__CACHEDB_HTML_INTRO__</p></section>
+__CACHEDB_HTML_GUIDANCE__
+__CACHEDB_HTML_COMMAND_STRIP__
+__CACHEDB_HTML_BODY__
+</main>
+<script>__CACHEDB_HTML_SCRIPT__</script>
+</body>
+</html>

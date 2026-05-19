@@ -52,6 +52,7 @@ temp/
 
 # Codex / local automation
 .codex/
+.playwright-cli/
 
 # Local Windows path artifact accidentally created in this workspace
 %SystemDrive%/

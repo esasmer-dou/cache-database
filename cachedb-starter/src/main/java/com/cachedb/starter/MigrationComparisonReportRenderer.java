@@ -46,6 +46,8 @@ final class MigrationComparisonReportRenderer {
         appendList(markdown, "Strengths", assessment.strengths(), "No strong positive signal was recorded in this run.");
         appendList(markdown, "Cutover Blockers", assessment.blockers(), "No direct blocker was recorded in this run.");
         appendList(markdown, "Next Steps", assessment.nextSteps(), "No additional next step was generated.");
+        appendCutoverActionPlan(markdown, comparison);
+        appendFullCoveragePlan(markdown, comparison);
 
         markdown.append("## Latency Snapshot\n\n");
         markdown.append("| Surface | Avg latency | p95 | p99 | Avg rows/op |\n");
@@ -84,6 +86,75 @@ final class MigrationComparisonReportRenderer {
         appendList(markdown, "Warnings", comparison.warnings(), "No warning was recorded.");
 
         return new Report(fileName, markdown.toString());
+    }
+
+    private static void appendCutoverActionPlan(StringBuilder markdown, MigrationComparisonRunner.Result comparison) {
+        MigrationPlanner.Result plan = comparison.plan();
+        MigrationPlanner.Request request = plan.request();
+        MigrationComparisonAssessment.Result assessment = comparison.assessment();
+        String root = safe(request.rootTableOrEntity());
+        String child = safe(request.childTableOrEntity());
+        String relation = safe(request.relationColumn());
+        String sort = safe(request.sortColumn()) + " " + safe(request.sortDirection());
+        String projection = safe(plan.summaryProjectionName());
+        String route = safe(comparison.cacheRouteLabel());
+
+        markdown.append("## Cutover Action Plan\n\n");
+        markdown.append("This action plan is scoped to the selected route only: `")
+                .append(root).append(" -> ").append(child)
+                .append("` via `").append(relation).append("`, sorted by `").append(sort).append("`.\n\n");
+        markdown.append("| Phase | Required action | Exit gate |\n");
+        markdown.append("| --- | --- | --- |\n");
+        markdown.append("| Pre-checks | Freeze the route contract: root `").append(root)
+                .append("`, child `").append(child)
+                .append("`, relation `").append(relation)
+                .append("`, sort `").append(sort)
+                .append("`, page size `").append(request.firstPageSize())
+                .append("`, hot window `").append(plan.recommendedHotWindowPerRoot())
+                .append("`. | Contract is reviewed and no endpoint uses a wider first-paint aggregate. |\n");
+        markdown.append("| Schema/index | Verify PostgreSQL has a covering list index for `")
+                .append(relation).append(", ").append(sort)
+                .append("` and a deterministic tie-breaker on `").append(safe(request.childPrimaryKeyColumn()))
+                .append("`. | Baseline query plan avoids full scans for the measured route. |\n");
+        markdown.append("| CacheDB binding | Register the selected entity bindings, relation loader, and projection `")
+                .append(projection).append("`. | Cache route label is `").append(route)
+                .append("` and does not fall back to `entity:*` when projection is required. |\n");
+        markdown.append("| Dry run | Run warm dry-run before mutating Redis. | Child/root row counts are expected and missing referenced roots are `0`. |\n");
+        markdown.append("| Warm | Execute staging warm for the bounded hot window. | Hydrated rows match read rows and warm completes without retry/poison warnings. |\n");
+        markdown.append("| Compare | Run side-by-side compare with representative samples. | Exact parity is `")
+                .append(assessment.exactMatchCount()).append(" / ").append(assessment.sampleCount())
+                .append("` in this report and must remain exact after increasing sample coverage. |\n");
+        markdown.append("| Full cutover rehearsal | Because hybrid runtime is not the target, rehearse the full switch in staging with the old stack stopped or isolated. | New stack serves the route from CacheDB with exact parity and accepted p95/p99 latency. |\n");
+        markdown.append("| Production switch | Take the agreed maintenance/freeze window if writes cannot be dual-controlled, warm Redis, deploy the CacheDB-backed application, then route traffic to the new stack. | Health, Redis memory, projection lag, and route latency stay inside the production gate. |\n");
+        markdown.append("| Rollback | Keep PostgreSQL as durable source of truth and keep the previous deploy artifact/config ready until the go/no-go window closes. | Rollback path is tested before production switch; Redis hot data can be discarded and rebuilt. |\n");
+        markdown.append("| Go/No-Go | Use this report plus the full coverage matrix below. | Go only when readiness is `READY`, parity is exact, route status is projection/ranked projection when required, and there are no blockers. |\n\n");
+    }
+
+    private static void appendFullCoveragePlan(StringBuilder markdown, MigrationComparisonRunner.Result comparison) {
+        MigrationPlanner.Result plan = comparison.plan();
+        MigrationPlanner.Request request = plan.request();
+        markdown.append("## Full Conversion Coverage Plan\n\n");
+        markdown.append("This report is not a whole-system conversion certificate. It certifies one selected route. ")
+                .append("For a 100% conversion, every production read path, write path, background job, report, and integration must be represented in the migration inventory and must produce its own ready evidence.\n\n");
+        markdown.append("### Current Route Coverage\n\n");
+        markdown.append("| Item | Value |\n");
+        markdown.append("| --- | --- |\n");
+        markdown.append("| Root surface | `").append(safe(request.rootTableOrEntity())).append("` |\n");
+        markdown.append("| Child surface | `").append(safe(request.childTableOrEntity())).append("` |\n");
+        markdown.append("| Relation column | `").append(safe(request.relationColumn())).append("` |\n");
+        markdown.append("| Sort contract | `").append(safe(request.sortColumn())).append(" ").append(safe(request.sortDirection())).append("` |\n");
+        markdown.append("| Required Redis artifacts | `").append(plan.recommendedRedisArtifacts().size()).append("` artifact(s) |\n");
+        markdown.append("| Required PostgreSQL artifacts | `").append(plan.recommendedPostgresArtifacts().size()).append("` artifact(s) |\n");
+        markdown.append("| API shapes covered | `").append(plan.recommendedApiShapes().size()).append("` shape(s) |\n\n");
+        markdown.append("### 100% Coverage Gate\n\n");
+        markdown.append("- Build a route inventory from the real application: every endpoint, service method, scheduled job, report query, external callback, and admin screen.\n");
+        markdown.append("- Map every inventory item to one CacheDB route plan: CRUD entity, bounded relation projection, ranked/global projection, detail lookup, aggregate/report path, or explicit out-of-scope archive path.\n");
+        markdown.append("- Reject unclassified routes. A route that is not in the inventory is not covered.\n");
+        markdown.append("- For each relation-heavy or sorted/range route, require a generated projection contract and a side-by-side comparison report.\n");
+        markdown.append("- For every write path, prove idempotency, primary-key ownership, Redis mutation path, PostgreSQL durability path, retry behavior, and rollback behavior.\n");
+        markdown.append("- For every table/view in PostgreSQL, assign an owner route and a migration decision: CacheDB entity, projection source, archive-only source, or removal candidate.\n");
+        markdown.append("- Raise comparison sample coverage before production. The demo `3 / 3` signal is useful for development; a full conversion needs representative samples across hot, cold, sparse, dense, boundary, and recently mutated records.\n");
+        markdown.append("- Do not declare 100% coverage until every inventory item has a ready report, no route falls back unexpectedly, and the final staging rehearsal runs with the old stack isolated.\n\n");
     }
 
     private static void appendMetricsRow(StringBuilder markdown, String label, MigrationComparisonRunner.Metrics metrics) {

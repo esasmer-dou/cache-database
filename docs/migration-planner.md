@@ -1,61 +1,24 @@
 # Migration Planner
 
-The admin UI now includes a migration planner wizard for teams coming from an
-existing PostgreSQL plus ORM stack.
+The Migration Planner is the admin UI flow for teams that already have
+PostgreSQL tables and an existing ORM route, but want to evaluate a Redis-first
+CacheDB path without guessing.
 
-Use it when you need help answering questions like:
+It does not perform a blind production cutover. It helps you discover, plan,
+warm, compare, and report one route at a time.
 
-- should this route stay on full entities or move to a projection?
-- which rows should stay hot in Redis?
-- where should the cold/history boundary live?
-- how should we warm the first Redis working set?
-- what should we compare in staging before cutover?
+## When To Use It
 
-## What It Can Discover Now
+Use the planner when:
 
-The planner can now inspect the connected PostgreSQL schema and seed the wizard
-interactively.
+- you already have PostgreSQL tables
+- the current route is served by JPA, Hibernate, MyBatis, JDBC, or another ORM/data layer
+- a list/detail route is getting expensive as child rows grow
+- you need to know whether a route should use entity reads, projection reads, or ranked projection reads
+- you want staging evidence before changing production traffic
 
-It can discover:
-
-- user tables from the configured `DataSource`
-- primary keys
-- single-column foreign key relationships
-- temporal and ranking-like sort candidates
-- suggested root/child route pairs you can apply directly to the planner form
-- scaffold-friendly class names and hot-route defaults for the discovered pair
-
-This means the user no longer has to type every table and column name by hand
-before planning a route.
-
-## Interactive Demo Bootstrap
-
-The Spring Boot demo now includes a one-click PostgreSQL migration dataset for
-the planner wizard itself.
-
-From `/cachedb-admin/migration-planner` you can now:
-
-1. create a demo customer/order schema
-2. seed realistic customer and order history
-3. apply explicit PK/FK and supporting indexes
-4. create ready-made SQL views for manual inspection
-5. refresh discovery and continue directly into scaffold, warm, and compare
-
-The prepared demo objects are:
-
-- `cachedb_migration_demo_customers`
-- `cachedb_migration_demo_orders`
-- `cachedb_migration_demo_customer_order_timeline_v`
-- `cachedb_migration_demo_customer_metrics_v`
-- `cachedb_migration_demo_ranked_orders_v`
-
-This makes it easy to rehearse the full route:
-
-- discover
-- scaffold
-- dry-run warm
-- real warm
-- side-by-side compare
+Do not use it as a production mutation button. It is a migration rehearsal and
+decision surface.
 
 ## Where It Lives
 
@@ -64,131 +27,245 @@ On the same admin host and port:
 - Spring Boot: `/cachedb-admin/migration-planner`
 - Native admin server: `/migration-planner`
 
-## What It Asks
+Spring Boot example:
 
-The first version models one hot route at a time.
+```text
+http://127.0.0.1:8090/cachedb-admin/migration-planner
+```
 
-You can still describe a route manually, but the preferred flow is now:
+## Recommended UI Flow
 
-1. discover the PostgreSQL schema
-2. apply a suggested root/child route to the form
-3. adjust only the route-specific behavior flags that discovery cannot know
+### 1. Discover PostgreSQL Schema
 
-When you continue manually, the planner still asks for:
+Click the schema discovery action first.
 
-- root table/entity
-- child table/entity
-- relation column
-- sort column and sort direction
-- current root and child row counts
-- typical and worst-case child fan-out per root
+Expected result:
+
+- user tables appear
+- primary keys appear
+- foreign key relationships appear
+- route candidates are listed
+- suggested root/child pairs can be applied to the form
+
+If discovery fails, check that the Spring `DataSource` points to the database
+you expect and that the application user can read metadata from
+`information_schema`.
+
+### 2. Choose A Route Candidate
+
+Pick one route candidate from the suggested list.
+
+Examples:
+
+- `customers -> orders` for customer timeline screens
+- `orders -> order_lines` for order detail previews
+- `products -> inventory_events` for stock history
+- `accounts -> transactions` for financial timeline screens
+
+Click `Apply to form`.
+
+Expected result:
+
+- root table/entity is filled
+- child table/entity is filled
+- primary key columns are filled when discovery knows them
+- relation column is filled from the foreign key
+- sort candidates are suggested
+- row count and fan-out hints are prefilled when available
+
+### 3. Adjust Route Behavior
+
+Discovery can read schema metadata, but it cannot fully know product behavior.
+Review these fields manually:
+
 - first page size
-- desired hot window per root
-- whether the route is list-heavy, globally sorted, threshold/range driven, or eager-loading heavy
-- whether full history must stay hot
+- hot window per root
+- typical children per root
+- maximum children per root
+- whether archive history must stay available
+- whether detail lookup is hot
+- whether the route is list-heavy
+- whether the current ORM uses eager loading
+- whether side-by-side comparison is required
 
-## What It Produces
+Rule of thumb:
 
-The wizard returns a concrete migration plan and a staging warm execution shape:
+- list screen: prefer summary projection
+- detail screen: full entity can be loaded on demand
+- global sorted screen: prefer ranked projection
+- high fan-out child table: keep only a bounded hot window in Redis
+
+### 4. Generate Plan
+
+Click `Generate plan`.
+
+Expected result:
 
 - recommended CacheDB surface
-- whether a projection is required
-- whether a ranked projection is required
-- bounded Redis hot-window recommendation
-- Redis placement guidance
-- PostgreSQL placement guidance
+- Redis placement decision
+- PostgreSQL placement decision
+- projection requirement
+- ranked projection requirement
+- hot-window size
 - warm-up steps
 - staging comparison checklist
-- sample child warm SQL for building the first hot window from PostgreSQL
-- sample root warm SQL template for referenced root rows
+- sample child SQL
+- sample root SQL
 
-## What It Can Generate Now
+If no plan appears, the page should now show a server-side error instead of
+silently leaving the result area empty.
 
-The planner can now generate a binding-ready scaffold from the discovered route.
+### 5. Generate Scaffold
 
-That scaffold includes:
+Use scaffold generation when you want a starting point for Java code.
+
+Expected result:
 
 - root `@CacheEntity` skeleton
-- child `@CacheEntity` skeleton with a hot-list named query
+- child `@CacheEntity` skeleton
+- hot-list named query
 - optional relation loader skeleton
 - optional projection support skeleton
-- a usage snippet that shows the generated binding surface expected after compilation
+- generated binding usage snippet
 
-The output is intentionally conservative. It helps a team start from a real
-route shape instead of hand-writing entity metadata from scratch.
+This is a starting point, not a production-ready domain model. Review column
+types, naming, nullability, and index assumptions before committing the code.
 
-## What It Can Execute Now
+### 6. Run Dry-Run Warm
 
-The planner can now run a real staging warm execution.
+Click dry-run before mutating Redis.
 
-That warm path:
+Expected result:
 
-- reads the selected hot window from PostgreSQL
-- hydrates Redis entities directly without enqueueing PostgreSQL write-behind
-- refreshes registered projections inline so the warmed route is readable immediately
-- optionally warms the referenced root rows for the same hot child window
-- supports dry-run mode before any Redis mutation
+- PostgreSQL child rows are counted
+- referenced root rows are counted
+- generated warm SQL is visible
+- Redis is not changed
+- missing root IDs or unexpected row counts are shown
 
-This is meant for staging and migration rehearsal. It is not a production cutover
-button.
+Use this step to validate the query shape and row counts.
 
-The planner can also run a side-by-side comparison against the current
-PostgreSQL route.
+### 7. Run Staging Warm
 
-That comparison can:
+Run real warm only in staging or a safe test environment.
 
-- measure baseline PostgreSQL list latency
-- measure the resolved CacheDB route latency
-- compare the first-page membership/order on representative sample roots
-- optionally warm the Redis working set immediately before the comparison
-- keep the baseline SQL explicit so the team can inspect or override it
+Expected result:
 
-The comparison result now also includes an automatic migration assessment. That
-assessment summarizes:
+- selected child hot window is read from PostgreSQL
+- Redis entity surfaces are hydrated directly
+- registered projections are refreshed inline
+- optional referenced root rows are warmed
+- warm statistics show root rows, child rows, skipped rows, and duration
 
-- whether the route is ready, needs review, or is not ready yet
-- whether the sample pages matched PostgreSQL exactly
-- whether CacheDB stayed within the expected latency envelope
-- which blockers still need to be resolved before cutover
-- which next steps the team should take in staging
+If the warm step says `No registered CacheDB entity found`, the selected route
+has not been registered in the running application. Generate or wire the entity
+binding first, rebuild the app, and run the planner again.
 
-## Recommended Use
+### 8. Run Side-By-Side Comparison
 
-Use it as part of a staged migration:
+Click comparison after warm.
 
-1. baseline the current ORM route
-2. model the route in the planner
-3. build the recommended projection/hot window in staging
-4. generate the entity/projection scaffold for the route
-5. run a dry-run warm and inspect the generated SQL
-6. run the real staging warm for the recommended Redis working set
-7. run the side-by-side comparison in staging
-8. cut over only after ordering, latency, and load shape look correct
+Expected result:
+
+- baseline PostgreSQL latency
+- CacheDB route latency
+- route label such as `entity:...` or `projection:...`
+- first-page ID parity for sampled roots
+- readiness assessment
+- blockers and next steps
+
+Do not cut over if:
+
+- matched samples are not exact
+- CacheDB route falls back to entity when planner requires projection
+- ordering differs
+- p95 latency is materially worse than baseline
+- warm set does not represent the production hot window
+
+### 9. Download Migration Report
+
+Download the report after comparison.
+
+The report should include:
+
+- route summary
+- selected design
+- warm results
+- comparison results
+- readiness status
+- cutover action plan
+- blockers
+- rollback notes
+
+## Full-System Migration Coverage
+
+The planner models one hot route at a time. That is intentional. A safe
+full-system migration needs route inventory, not one large automatic conversion.
+
+For 100% coverage:
+
+1. list every production screen, API, batch, worker, and report route
+2. map each route to its root table, child table, sort, filter, and page size
+3. classify each route as generated CRUD, projection, ranked projection, direct repository, or PostgreSQL cold path
+4. run planner flow for every route with Redis-first hot-path intent
+5. keep a coverage table with owner, readiness, blockers, and rollback plan
+6. do not call the migration complete until every route has an explicit decision
+
+Recommended coverage columns:
+
+| Column | Meaning |
+| --- | --- |
+| Route name | Human-readable screen/API/job name |
+| Root table | Main entity/table |
+| Child table | Optional child/fan-out table |
+| Query shape | filter, sort, page, range, threshold |
+| CacheDB shape | generated, projection, ranked projection, repository, cold path |
+| Warm status | not started, dry-run ok, warm ok |
+| Compare status | not run, matched, mismatch |
+| Cutover status | blocked, ready, canary, live |
+| Rollback plan | exact fallback path |
+
+## Interactive Demo Bootstrap
+
+The Spring Boot demo includes a one-click PostgreSQL migration dataset for the
+planner.
+
+From `/cachedb-admin/migration-planner` you can:
+
+1. create a demo customer/order schema
+2. seed customer and order history
+3. create PK/FK constraints and supporting indexes
+4. create inspection views
+5. refresh discovery and continue with scaffold, warm, and compare
+
+Prepared demo objects:
+
+- `cachedb_migration_demo_customers`
+- `cachedb_migration_demo_orders`
+- `cachedb_migration_demo_customer_order_timeline_v`
+- `cachedb_migration_demo_customer_metrics_v`
+- `cachedb_migration_demo_ranked_orders_v`
 
 ## Current Scope
 
-The current planner is intentionally conservative even though it can now execute
-the staging warm.
+The planner does:
 
-It does:
+- discover PostgreSQL schema metadata
+- suggest root/child route candidates
+- generate a migration plan
+- generate Java scaffold
+- run dry-run warm
+- run staging warm into Redis
+- refresh registered projections inline during warm
+- run side-by-side PostgreSQL vs CacheDB comparison
+- produce migration assessment and report content
 
-- produce the target shape
-- produce a warm-up plan
-- produce a comparison checklist
-- generate sample SQL backfill queries
-- generate binding-ready entity/relation/projection scaffolds
-- execute a real staging warm into Redis
-- execute a side-by-side PostgreSQL vs CacheDB comparison
-- produce an automatic migration assessment from the comparison result
-- support dry-run validation before warming Redis
-
-It does not yet:
+The planner does not yet:
 
 - mutate PostgreSQL
-- mutate production data
 - import existing ORM source classes automatically
-- perform a one-click production cutover
+- guarantee full-system coverage without a route inventory
+- perform one-click production cutover
 
-That boundary is intentional. The goal is to help teams make the right
-architecture decision, rehearse the move in staging, and only then automate the
-rest of the migration.
+That boundary is deliberate. The planner is meant to make architecture decisions
+visible before traffic is moved.
