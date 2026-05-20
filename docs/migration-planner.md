@@ -225,6 +225,18 @@ Recommended coverage columns:
 | Cutover status | blocked, ready, canary, live |
 | Rollback plan | exact fallback path |
 
+For GA validation, copy
+[ga-migration-coverage-template.csv](ga-migration-coverage-template.csv) to
+`docs/ga-migration-coverage.csv`, fill every production route, and run:
+
+```powershell
+pwsh ./tools/ci/validate-migration-coverage-report.ps1 `
+  -CoverageCsvPath docs/ga-migration-coverage.csv
+```
+
+The validator fails if any route lacks an owner, shape decision, warm result,
+comparison result, cutover state, or rollback path.
+
 ## Interactive Demo Bootstrap
 
 The Spring Boot demo includes a one-click PostgreSQL migration dataset for the

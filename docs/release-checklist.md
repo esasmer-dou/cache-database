@@ -30,13 +30,17 @@ Use this checklist before the first public beta and for later releases.
 
 - production evidence workflow is green
 - coordination evidence workflow is green
+- staging Redis HA workflow is green for the target Redis/PostgreSQL topology
+- full migration route coverage CSV is committed and passes validation
 - any new runtime hotspot changes have fresh benchmark or smoke evidence
 
 ## Publishing
 
 - verify the `oss-release` Maven profile builds sources and javadocs
+- verify the Linux release package path passes, not only the local developer machine
 - confirm signing configuration and secrets for the chosen release channel
 - confirm the target release workflow and credentials
+- confirm signed publish succeeds before any GA announcement
 
 ## GitHub / Repo Settings
 

@@ -67,7 +67,8 @@ jobs:
         run: ./tools/ci/check-tr-docs.ps1 -SummaryPath ./target/tr-docs-quality-summary.md
 
       - name: Verify OSS release packaging
-        run: mvn -B -P oss-release -DskipTests -Dgpg.skip=true package
+        shell: pwsh
+        run: mvn -B -P oss-release -DskipTests "-Dgpg.skip=true" package
 
       - name: Check public API compatibility
         shell: pwsh

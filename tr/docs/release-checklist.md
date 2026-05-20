@@ -30,13 +30,17 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 
 - production evidence workflow yeşil
 - coordination evidence workflow yeşil
+- hedef Redis/PostgreSQL topolojisi için staging Redis HA workflow yeşil
+- tam migration akış kapsamı CSV olarak commit edildi ve doğrulama geçti
 - runtime hotspot değişiklikleri için güncel benchmark veya smoke kanıtı var
 
 ## Publishing
 
 - `oss-release` Maven profilinin sources ve javadocs üretebildiğini doğrula
+- Linux release package yolunun geçtiğini doğrula; yalnızca geliştirici makinesindeki build yeterli değildir
 - seçilen release kanalı için signing config ve secret'ları doğrula
 - hedef release workflow ve credential'ları doğrula
+- GA duyurusu öncesinde signed publish sonucunun başarılı olduğunu doğrula
 
 ## GitHub / Repo Ayarları
 

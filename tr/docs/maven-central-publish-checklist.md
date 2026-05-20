@@ -34,6 +34,8 @@
 
 - production evidence workflow yeşil
 - coordination evidence workflow yeşil
+- GA hedefleniyorsa staging Redis HA workflow yeşil
+- GA hedefleniyorsa tam migration akış kapsamı doğrulaması yeşil
 - public-beta readiness workflow yeşil
 - performans hassas değişiklikler için güncel benchmark kanıtı mevcut
 

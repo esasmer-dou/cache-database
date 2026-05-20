@@ -1,6 +1,6 @@
 param(
     [string]$DocsRoot = "tr",
-    [string]$SummaryPath = ".\target\tr-docs-quality-summary.md"
+    [string]$SummaryPath = "target/tr-docs-quality-summary.md"
 )
 
 $ErrorActionPreference = "Stop"

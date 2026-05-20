@@ -228,6 +228,19 @@ envanterinden gelir.
 | Canlıya geçiş durumu | blocked, ready, canary, live |
 | Geri dönüş planı | net geri dönüş yolu |
 
+GA doğrulaması için
+[../../docs/ga-migration-coverage-template.csv](../../docs/ga-migration-coverage-template.csv)
+dosyasını `docs/ga-migration-coverage.csv` olarak kopyala, tüm production
+akışlarını doldur ve şu komutu çalıştır:
+
+```powershell
+pwsh ./tools/ci/validate-migration-coverage-report.ps1 `
+  -CoverageCsvPath docs/ga-migration-coverage.csv
+```
+
+Doğrulama; sahip, CacheDB tasarım kararı, ön ısıtma sonucu, karşılaştırma
+sonucu, canlıya geçiş durumu veya geri dönüş yolu eksik olan her akışı bloklar.
+
 ## Demo Bootstrap
 
 Spring Boot demo, planner için tek tıkla kurulabilen PostgreSQL migration veri

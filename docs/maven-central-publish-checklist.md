@@ -34,6 +34,8 @@ Use this checklist before the first Maven Central publication.
 
 - production evidence workflow green
 - coordination evidence workflow green
+- staging Redis HA workflow green when targeting GA
+- full migration route coverage validation green when targeting GA
 - public-beta readiness workflow green
 - any recent performance-sensitive change has fresh benchmark evidence
 

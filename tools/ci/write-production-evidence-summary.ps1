@@ -9,8 +9,8 @@ Set-StrictMode -Version Latest
 if ([string]::IsNullOrWhiteSpace($ReportsDirectory)) {
     $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $candidateDirectories = @(
-        (Join-Path $repoRoot "target\cachedb-prodtest-reports"),
-        (Join-Path $repoRoot "cachedb-production-tests\target\cachedb-prodtest-reports")
+        (Join-Path (Join-Path $repoRoot "target") "cachedb-prodtest-reports"),
+        (Join-Path (Join-Path (Join-Path $repoRoot "cachedb-production-tests") "target") "cachedb-prodtest-reports")
     )
     $ReportsDirectory = $candidateDirectories | Where-Object {
         (Test-Path (Join-Path $_ "repository-recipe-comparison.json")) -and

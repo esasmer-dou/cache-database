@@ -1,5 +1,5 @@
 param(
-    [string]$SummaryPath = ".\target\public-beta-readiness-summary.md"
+    [string]$SummaryPath = "target/public-beta-readiness-summary.md"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,14 +17,14 @@ $requiredFiles = @(
     "SUPPORT.md",
     "CHANGELOG.md",
     "PRODUCTION_GA_CRITERIA.md",
-    ".github\ISSUE_TEMPLATE\bug_report.md",
-    ".github\ISSUE_TEMPLATE\feature_request.md",
-    ".github\ISSUE_TEMPLATE\config.yml",
-    ".github\pull_request_template.md",
-    "docs\release-checklist.md",
-    "tr\docs\release-checklist.md",
-    "docs\public-beta-readiness.md",
-    "tr\docs\public-beta-readiness.md"
+    ".github/ISSUE_TEMPLATE/bug_report.md",
+    ".github/ISSUE_TEMPLATE/feature_request.md",
+    ".github/ISSUE_TEMPLATE/config.yml",
+    ".github/pull_request_template.md",
+    "docs/release-checklist.md",
+    "tr/docs/release-checklist.md",
+    "docs/public-beta-readiness.md",
+    "tr/docs/public-beta-readiness.md"
 )
 
 $missing = @()

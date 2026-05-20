@@ -1,0 +1,100 @@
+name: Production GA Staging Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      externalFailoverWaitSeconds:
+        description: Seconds to wait while an operator triggers managed Redis failover
+        required: true
+        default: "120"
+      migrationCoverageCsvPath:
+        description: Committed CSV path for full production route coverage
+        required: true
+        default: docs/ga-migration-coverage.csv
+
+permissions:
+  contents: read
+
+jobs:
+  staging-redis-ha:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Validate staging secrets
+        shell: pwsh
+        env:
+          STAGING_REDIS_URI: ${{ secrets.STAGING_REDIS_URI }}
+          STAGING_POSTGRES_URL: ${{ secrets.STAGING_POSTGRES_URL }}
+          STAGING_POSTGRES_USER: ${{ secrets.STAGING_POSTGRES_USER }}
+          STAGING_POSTGRES_PASSWORD: ${{ secrets.STAGING_POSTGRES_PASSWORD }}
+        run: |
+          foreach ($name in @("STAGING_REDIS_URI", "STAGING_POSTGRES_URL", "STAGING_POSTGRES_USER", "STAGING_POSTGRES_PASSWORD")) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "$name secret is required for Production GA Staging Evidence."
+            }
+          }
+
+      - name: Run staging Redis HA evidence
+        shell: pwsh
+        env:
+          STAGING_REDIS_URI: ${{ secrets.STAGING_REDIS_URI }}
+          STAGING_POSTGRES_URL: ${{ secrets.STAGING_POSTGRES_URL }}
+          STAGING_POSTGRES_USER: ${{ secrets.STAGING_POSTGRES_USER }}
+          STAGING_POSTGRES_PASSWORD: ${{ secrets.STAGING_POSTGRES_PASSWORD }}
+        run: >
+          ./tools/ci/run-staging-redis-ha-evidence.ps1
+          -MavenExecutable mvn
+          -RedisUri "$env:STAGING_REDIS_URI"
+          -PostgresUrl "$env:STAGING_POSTGRES_URL"
+          -PostgresUser "$env:STAGING_POSTGRES_USER"
+          -PostgresPassword "$env:STAGING_POSTGRES_PASSWORD"
+          -ExternalFailoverWaitSeconds ${{ inputs.externalFailoverWaitSeconds }}
+
+      - name: Publish staging HA summary
+        shell: pwsh
+        run: Get-Content ./target/cachedb-staging-ha-reports/staging-redis-ha-evidence.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload staging HA evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-redis-ha-evidence
+          path: |
+            target/cachedb-staging-ha-reports/**
+            cachedb-production-tests/target/surefire-reports/**
+          if-no-files-found: error
+          retention-days: 30
+
+  migration-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate full migration route coverage
+        shell: pwsh
+        run: ./tools/ci/validate-migration-coverage-report.ps1 -CoverageCsvPath "${{ inputs.migrationCoverageCsvPath }}" -SummaryPath ./target/migration-coverage-summary.md
+
+      - name: Publish migration coverage summary
+        shell: pwsh
+        run: Get-Content ./target/migration-coverage-summary.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload migration coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-coverage
+          path: target/migration-coverage-summary.md
+          if-no-files-found: error
+          retention-days: 30

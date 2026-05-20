@@ -1,7 +1,7 @@
 param(
     [switch]$UpdateBaseline,
-    [string]$BaselinePath = "tools\ci\public-api-baseline.txt",
-    [string]$OutputPath = "target\public-api-signature.txt",
+    [string]$BaselinePath = "tools/ci/public-api-baseline.txt",
+    [string]$OutputPath = "target/public-api-signature.txt",
     [string[]]$Modules = @(
         "cachedb-annotations",
         "cachedb-core",
@@ -27,7 +27,7 @@ if (-not (Test-Path $outputDirectory)) {
 
 $classPathEntries = @()
 foreach ($module in $Modules) {
-    $classesDirectory = Join-Path $repoRoot (Join-Path $module "target\classes")
+    $classesDirectory = Join-Path (Join-Path (Join-Path $repoRoot $module) "target") "classes"
     if (-not (Test-Path $classesDirectory)) {
         throw "Missing compiled classes for $module. Run mvn -DskipTests package before public API compatibility check."
     }
@@ -41,12 +41,12 @@ $lines.Add("# Regenerate intentionally with: pwsh ./tools/ci/check-public-api-co
 $lines.Add("")
 
 foreach ($module in $Modules) {
-    $classesDirectory = Join-Path $repoRoot (Join-Path $module "target\classes")
+    $classesDirectory = Join-Path (Join-Path (Join-Path $repoRoot $module) "target") "classes"
     $classFiles = Get-ChildItem -Path $classesDirectory -Recurse -Filter "*.class" |
             Where-Object {
                 $_.Name -ne "module-info.class" -and
                 $_.Name -notmatch '\$' -and
-                $_.FullName -notmatch [Regex]::Escape("\target\classes\META-INF\")
+                $_.FullName -notmatch ([Regex]::Escape([System.IO.Path]::DirectorySeparatorChar + "target" + [System.IO.Path]::DirectorySeparatorChar + "classes" + [System.IO.Path]::DirectorySeparatorChar + "META-INF" + [System.IO.Path]::DirectorySeparatorChar))
             } |
             Sort-Object FullName
 

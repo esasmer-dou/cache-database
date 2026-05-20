@@ -6,8 +6,8 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$rootReportsDir = Join-Path $repoRoot "target\cachedb-prodtest-reports"
-$moduleReportsDir = Join-Path $repoRoot "cachedb-production-tests\target\cachedb-prodtest-reports"
+$rootReportsDir = Join-Path (Join-Path $repoRoot "target") "cachedb-prodtest-reports"
+$moduleReportsDir = Join-Path (Join-Path (Join-Path $repoRoot "cachedb-production-tests") "target") "cachedb-prodtest-reports"
 
 function Invoke-Maven {
     param(

@@ -10,9 +10,10 @@ PostgreSQL volume.
 | Gate | GA requirement | Evidence |
 | --- | --- | --- |
 | Redis HA and failover | Multi-pod coordination, consumer identity, leader lease, pending claim, and post-outage recovery must pass. | `Production Evidence / redis-failover-evidence` workflow artifact. |
+| Staging Redis HA | The same coordination path must pass against the real staging Redis/PostgreSQL topology while a managed Redis failover is triggered externally. | `Production GA Staging Evidence / staging-redis-ha` workflow artifact. |
 | Admin HTTP exposure | Admin HTTP must be explicitly enabled and must be protected by gateway auth or CacheDB token auth. It must not be exposed directly to the public internet. | `cachedb.admin.http-enabled=true` is explicit; gateway route or `cachedb.admin.auth-enabled=true` is documented in deployment config. |
 | TLS boundary | Application-level TLS is not required when the service is behind a managed gateway or reverse proxy. | Gateway/proxy owns TLS termination, request authentication, and network exposure policy. |
-| Migration coverage | Every selected route report must include the mandatory 100% coverage checklist. | Migration report contains `Full Conversion Coverage Plan` and `100% Coverage Gate`. |
+| Migration coverage | Every production screen, API, batch, worker, and report route must have an explicit CacheDB shape, warm decision, comparison result, owner, cutover state, and rollback plan. | `Production GA Staging Evidence / migration-coverage` validates `docs/ga-migration-coverage.csv` or the supplied CSV path. |
 | Public API compatibility | Public API signatures must be compared against the committed baseline. | `tools/ci/check-public-api-compatibility.ps1` passes. |
 | Maven Central release | Release artifacts must be source/javadoc attached and signed before publication. | `Maven Central Publish` workflow succeeds with Central and GPG secrets. |
 | Benchmark regressions | Benchmark JSON reports must be checked by a CI threshold gate, not only uploaded as artifacts. | `tools/ci/check-benchmark-thresholds.ps1` passes in `Production Evidence`. |
@@ -45,3 +46,8 @@ signed and reproducible.
   leader, retry, and claim behavior; it does not replace Redis high availability.
 - Treat every relation-heavy or global sorted screen as projection/read-model
   work, not as a full aggregate first-paint read.
+- Before GA, run `Production GA Staging Evidence` with real staging secrets and
+  trigger managed Redis failover during the wait window.
+- Before GA, commit a full route coverage CSV using
+  [docs/ga-migration-coverage-template.csv](docs/ga-migration-coverage-template.csv)
+  as the schema and make the coverage workflow pass.

@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$reportsDir = Join-Path $repoRoot "target\cachedb-redis-failover-reports"
+$reportsDir = Join-Path (Join-Path $repoRoot "target") "cachedb-redis-failover-reports"
 $beforeDir = Join-Path $reportsDir "before-outage"
 $afterDir = Join-Path $reportsDir "after-outage"
 

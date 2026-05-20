@@ -12,7 +12,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if ([string]::IsNullOrWhiteSpace($ReportsDir)) {
-    $reportsDir = Join-Path $repoRoot "target\cachedb-prodtest-reports"
+    $reportsDir = Join-Path (Join-Path $repoRoot "target") "cachedb-prodtest-reports"
 } elseif ([System.IO.Path]::IsPathRooted($ReportsDir)) {
     $reportsDir = $ReportsDir
 } else {
@@ -122,5 +122,5 @@ Invoke-Maven @(
 Write-Host ""
 Write-Host "Multi-instance coordination evidence run completed."
 Write-Host "Reports:"
-Write-Host " - $reportsDir\multi-instance-coordination-smoke.json"
-Write-Host " - $reportsDir\multi-instance-coordination-smoke.md"
+Write-Host " - $(Join-Path $reportsDir "multi-instance-coordination-smoke.json")"
+Write-Host " - $(Join-Path $reportsDir "multi-instance-coordination-smoke.md")"
