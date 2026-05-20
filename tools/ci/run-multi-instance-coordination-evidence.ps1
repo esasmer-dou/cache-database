@@ -1,6 +1,6 @@
 param(
     [string]$MavenExecutable = "",
-    [string]$RedisUri = "redis://default:welcome1@127.0.0.1:56379",
+    [string]$RedisUri = "redis://127.0.0.1:56379",
     [string]$PostgresUrl = "jdbc:postgresql://127.0.0.1:55432/postgres",
     [string]$PostgresUser = "postgres",
     [string]$PostgresPassword = "postgresql",

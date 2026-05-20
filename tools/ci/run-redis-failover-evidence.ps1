@@ -1,6 +1,6 @@
 param(
     [string]$MavenExecutable = "",
-    [string]$RedisUri = "redis://default:welcome1@127.0.0.1:56379",
+    [string]$RedisUri = "redis://127.0.0.1:56379",
     [string]$RedisContainerId = "",
     [int]$OutageSeconds = 5,
     [string]$PostgresUrl = "jdbc:postgresql://127.0.0.1:55432/postgres",
@@ -16,15 +16,41 @@ $reportsDir = Join-Path $repoRoot "target\cachedb-redis-failover-reports"
 $beforeDir = Join-Path $reportsDir "before-outage"
 $afterDir = Join-Path $reportsDir "after-outage"
 
+function Resolve-RedisHostPort {
+    try {
+        $uri = [Uri]$RedisUri
+        if ($uri.Port -gt 0) {
+            return $uri.Port
+        }
+    } catch {
+    }
+    return 56379
+}
+
+function Resolve-RedisCliPingArguments {
+    try {
+        $uri = [Uri]$RedisUri
+        if (-not [string]::IsNullOrWhiteSpace($uri.UserInfo) -and $uri.UserInfo.Contains(":")) {
+            $password = $uri.UserInfo.Split(":", 2)[1]
+            if (-not [string]::IsNullOrWhiteSpace($password)) {
+                return @("-a", $password, "ping")
+            }
+        }
+    } catch {
+    }
+    return @("ping")
+}
+
 function Resolve-RedisContainer {
     if (-not [string]::IsNullOrWhiteSpace($RedisContainerId)) {
         return $RedisContainerId
     }
-    $byPort = docker ps --filter "publish=56379" --format "{{.ID}}" | Select-Object -First 1
+    $redisHostPort = Resolve-RedisHostPort
+    $byPort = docker ps --filter "publish=$redisHostPort" --format "{{.ID}}" | Select-Object -First 1
     if (-not [string]::IsNullOrWhiteSpace($byPort)) {
         return $byPort
     }
-    $byImage = docker ps --filter "ancestor=bitnami/redis:7.2" --format "{{.ID}}" | Select-Object -First 1
+    $byImage = docker ps --filter "ancestor=redis:7.2" --format "{{.ID}}" | Select-Object -First 1
     if (-not [string]::IsNullOrWhiteSpace($byImage)) {
         return $byImage
     }
@@ -34,18 +60,26 @@ function Resolve-RedisContainer {
 function Wait-RedisReady {
     param(
         [string]$ContainerId,
-        [int]$TimeoutSeconds = 30
+        [int]$TimeoutSeconds = 120
     )
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    [string[]]$pingArguments = @(Resolve-RedisCliPingArguments)
+    $lastState = ""
+    $lastPing = ""
+    $lastExitCode = 0
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         $global:LASTEXITCODE = 0
-        $ping = docker exec $ContainerId redis-cli -a welcome1 ping 2>$null
-        if ($global:LASTEXITCODE -eq 0 -and ($ping -join "").Trim() -eq "PONG") {
+        $lastState = (docker inspect -f "{{.State.Status}} paused={{.State.Paused}}" $ContainerId 2>$null) -join ""
+        $global:LASTEXITCODE = 0
+        $ping = docker exec $ContainerId redis-cli @pingArguments 2>$null
+        $lastExitCode = $global:LASTEXITCODE
+        $lastPing = ($ping -join "").Trim()
+        if ($lastExitCode -eq 0 -and $lastPing -eq "PONG") {
             return
         }
         Start-Sleep -Seconds 1
     }
-    throw "Redis did not become healthy after outage."
+    throw "Redis did not become healthy after outage. Last state: $lastState. Last redis-cli exit: $lastExitCode. Last redis-cli output: $lastPing"
 }
 
 function Run-CoordinationSmoke {

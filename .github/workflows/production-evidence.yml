@@ -85,14 +85,11 @@ jobs:
 
     services:
       redis:
-        image: bitnami/redis:7.2
-        env:
-          REDIS_PASSWORD: welcome1
-          ALLOW_EMPTY_PASSWORD: "no"
+        image: redis:7.2
         ports:
           - 56379:6379
         options: >-
-          --health-cmd "redis-cli -a welcome1 ping || exit 1"
+          --health-cmd "redis-cli ping || exit 1"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -123,7 +120,7 @@ jobs:
 
       - name: Run multi-instance coordination smoke
         shell: pwsh
-        run: ./tools/ci/run-multi-instance-coordination-evidence.ps1 -MavenExecutable mvn
+        run: ./tools/ci/run-multi-instance-coordination-evidence.ps1 -MavenExecutable mvn -RedisUri redis://127.0.0.1:56379
 
       - name: Publish coordination summary
         shell: pwsh
@@ -145,14 +142,11 @@ jobs:
 
     services:
       redis:
-        image: bitnami/redis:7.2
-        env:
-          REDIS_PASSWORD: welcome1
-          ALLOW_EMPTY_PASSWORD: "no"
+        image: redis:7.2
         ports:
           - 56379:6379
         options: >-
-          --health-cmd "redis-cli -a welcome1 ping || exit 1"
+          --health-cmd "redis-cli ping || exit 1"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -183,7 +177,7 @@ jobs:
 
       - name: Run Redis outage and recovery evidence
         shell: pwsh
-        run: ./tools/ci/run-redis-failover-evidence.ps1 -MavenExecutable mvn
+        run: ./tools/ci/run-redis-failover-evidence.ps1 -MavenExecutable mvn -RedisUri redis://127.0.0.1:56379
 
       - name: Publish Redis failover summary
         shell: pwsh
