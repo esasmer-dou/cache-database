@@ -57,7 +57,6 @@
                 <version>3.2.5</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
-                    <jvm>${java.home}/bin/java.exe</jvm>
                 </configuration>
             </plugin>
         </plugins>
