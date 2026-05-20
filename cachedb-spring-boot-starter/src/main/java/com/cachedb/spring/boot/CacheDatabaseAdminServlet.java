@@ -8,7 +8,11 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 final class CacheDatabaseAdminServlet extends HttpServlet {
 
@@ -29,13 +33,21 @@ final class CacheDatabaseAdminServlet extends HttpServlet {
 
     @Override
     protected void service(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        Map<String, List<String>> requestHeaders = extractRequestHeaders(request);
+        if (!adminHandler.isRequestAuthorized(requestHeaders)) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            response.setHeader("WWW-Authenticate", adminHandler.authenticationChallenge());
+            response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+            response.getWriter().write("Unauthorized");
+            return;
+        }
         if (isBasePathRequest(request)) {
             response.sendRedirect(request.getContextPath() + basePath + "/dashboard");
             return;
         }
         URI targetUri = resolveTargetUri(request);
         byte[] requestBody = request.getInputStream().readAllBytes();
-        AdminHttpResponse adminResponse = adminHandler.dispatch(request.getMethod(), targetUri, requestBody);
+        AdminHttpResponse adminResponse = adminHandler.dispatch(request.getMethod(), targetUri, requestBody, requestHeaders);
         response.setStatus(adminResponse.statusCode());
         copyResponseHeaders(request, response, adminResponse.headers());
         byte[] body = adminResponse.body();
@@ -113,5 +125,13 @@ final class CacheDatabaseAdminServlet extends HttpServlet {
             normalized = normalized.substring(0, normalized.length() - 1);
         }
         return normalized;
+    }
+
+    private Map<String, List<String>> extractRequestHeaders(HttpServletRequest request) {
+        Map<String, List<String>> headers = new LinkedHashMap<>();
+        Collections.list(request.getHeaderNames()).forEach(name ->
+                headers.put(name, new ArrayList<>(Collections.list(request.getHeaders(name))))
+        );
+        return headers;
     }
 }

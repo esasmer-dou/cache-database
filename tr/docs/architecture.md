@@ -306,7 +306,7 @@ Bu sayede restart sonrası explain planı tamamen sıfırdan başlamak zorunda k
 
 ## 13. Önerilen Sonraki Adımlar
 
-1. Admin HTTP yüzeyini auth/role modeliyle sertleştirmek
+1. Admin HTTP rol modelini genişletmek; token/gateway auth sınırı artık üretim varsayımıdır
 2. Explain ve diagnostics için daha zengin dashboard/REST filtreleri eklemek
 3. Failure injection ve load testlerle Redis/PostgreSQL hattını zorlamak
 4. Planner istatistiklerini daha gelişmiş cardinality modeli ve domain heuristics ile zenginleştirmek

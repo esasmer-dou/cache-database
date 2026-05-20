@@ -28,6 +28,7 @@ import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpContext;
 import com.sun.net.httpserver.HttpPrincipal;
 import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpHandler;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -39,6 +40,7 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -128,63 +130,73 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         server = HttpServer.create(new InetSocketAddress(config.host(), config.port()), config.backlog());
         executor = Executors.newFixedThreadPool(Math.max(1, config.workerThreads()), new AdminHttpThreadFactory());
         server.setExecutor(executor);
-        server.createContext("/", this::handleRoot);
-        server.createContext("/dashboard", this::handleDashboard);
-        server.createContext("/dashboard-v3", this::handleLegacyDashboard);
-        server.createContext("/migration-planner", this::handleMigrationPlanner);
-        server.createContext("/api/health", this::handleHealth);
-        server.createContext("/api/metrics", this::handleMetrics);
-        server.createContext("/api/dashboard/hot", this::handleDashboardHot);
-        server.createContext("/api/performance", this::handlePerformance);
-        server.createContext("/api/performance/history", this::handlePerformanceHistory);
-        server.createContext("/api/performance/reset", this::handlePerformanceReset);
-        server.createContext("/api/prometheus", this::handlePrometheus);
-        server.createContext("/api/prometheus/rules", this::handlePrometheusRules);
-        server.createContext("/api/alert-rules", this::handleAlertRules);
-        server.createContext("/api/incidents", this::handleIncidents);
-        server.createContext("/api/incident-history", this::handleIncidentHistory);
-        server.createContext("/api/incident-severity/history", this::handleIncidentSeverityHistory);
-        server.createContext("/api/failing-signals", this::handleFailingSignals);
-        server.createContext("/api/diagnostics", this::handleDiagnostics);
-        server.createContext("/api/profile-churn", this::handleProfileChurn);
-        server.createContext("/api/query-index/rebuild", this::handleQueryIndexRebuild);
-        server.createContext("/api/deployment", this::handleDeployment);
-        server.createContext("/api/schema/status", this::handleSchemaStatus);
-        server.createContext("/api/registry", this::handleRegistry);
-        server.createContext("/api/tuning", this::handleTuning);
-        server.createContext("/api/tuning/export", this::handleTuningExport);
-        server.createContext("/api/tuning/flags", this::handleTuningFlags);
-        server.createContext("/api/runtime-profile", this::handleRuntimeProfile);
-        server.createContext("/api/certification", this::handleCertification);
-        server.createContext("/api/schema/plan", this::handleSchemaPlan);
-        server.createContext("/api/schema/history", this::handleSchemaHistory);
-        server.createContext("/api/schema/ddl", this::handleSchemaDdl);
-        server.createContext("/api/profiles", this::handleProfiles);
-        server.createContext("/api/triage", this::handleTriage);
-        server.createContext("/api/services", this::handleServices);
-        server.createContext("/api/background-errors", this::handleBackgroundErrors);
-        server.createContext("/api/alert-routing", this::handleAlertRouting);
-        server.createContext("/api/alert-routing/history", this::handleAlertRouteHistory);
-        server.createContext("/api/runbooks", this::handleRunbooks);
-        server.createContext("/api/history", this::handleHistory);
-        server.createContext("/api/projection-refresh", this::handleProjectionRefresh);
-        server.createContext("/api/projection-refresh/failed", this::handleProjectionRefreshFailures);
-        server.createContext("/api/projection-refresh/replay", this::handleProjectionRefreshReplay);
-        server.createContext("/api/telemetry/reset", this::handleTelemetryReset);
-        server.createContext("/api/explain", this::handleExplain);
-        server.createContext("/api/explain/note", this::handleExplainNote);
-        server.createContext("/api/migration-planner/template", this::handleMigrationPlannerTemplate);
-        server.createContext("/api/migration-planner/demo", this::handleMigrationPlannerDemo);
-        server.createContext("/api/migration-planner/discovery", this::handleMigrationPlannerDiscovery);
-        server.createContext("/api/migration-planner/plan", this::handleMigrationPlannerPlan);
-        server.createContext("/api/migration-planner/warm", this::handleMigrationPlannerWarm);
-        server.createContext("/api/migration-planner/warm/start", this::handleMigrationPlannerWarmStart);
-        server.createContext("/api/migration-planner/warm/status", this::handleMigrationPlannerWarmStatus);
-        server.createContext("/api/migration-planner/scaffold", this::handleMigrationPlannerScaffold);
-        server.createContext("/api/migration-planner/compare", this::handleMigrationPlannerCompare);
-        server.createContext("/api/migration-planner/compare/start", this::handleMigrationPlannerCompareStart);
-        server.createContext("/api/migration-planner/compare/status", this::handleMigrationPlannerCompareStatus);
+        createSecuredContext("/", this::handleRoot);
+        createSecuredContext("/dashboard", this::handleDashboard);
+        createSecuredContext("/dashboard-v3", this::handleLegacyDashboard);
+        createSecuredContext("/migration-planner", this::handleMigrationPlanner);
+        createSecuredContext("/api/health", this::handleHealth);
+        createSecuredContext("/api/metrics", this::handleMetrics);
+        createSecuredContext("/api/dashboard/hot", this::handleDashboardHot);
+        createSecuredContext("/api/performance", this::handlePerformance);
+        createSecuredContext("/api/performance/history", this::handlePerformanceHistory);
+        createSecuredContext("/api/performance/reset", this::handlePerformanceReset);
+        createSecuredContext("/api/prometheus", this::handlePrometheus);
+        createSecuredContext("/api/prometheus/rules", this::handlePrometheusRules);
+        createSecuredContext("/api/alert-rules", this::handleAlertRules);
+        createSecuredContext("/api/incidents", this::handleIncidents);
+        createSecuredContext("/api/incident-history", this::handleIncidentHistory);
+        createSecuredContext("/api/incident-severity/history", this::handleIncidentSeverityHistory);
+        createSecuredContext("/api/failing-signals", this::handleFailingSignals);
+        createSecuredContext("/api/diagnostics", this::handleDiagnostics);
+        createSecuredContext("/api/profile-churn", this::handleProfileChurn);
+        createSecuredContext("/api/query-index/rebuild", this::handleQueryIndexRebuild);
+        createSecuredContext("/api/deployment", this::handleDeployment);
+        createSecuredContext("/api/schema/status", this::handleSchemaStatus);
+        createSecuredContext("/api/registry", this::handleRegistry);
+        createSecuredContext("/api/tuning", this::handleTuning);
+        createSecuredContext("/api/tuning/export", this::handleTuningExport);
+        createSecuredContext("/api/tuning/flags", this::handleTuningFlags);
+        createSecuredContext("/api/runtime-profile", this::handleRuntimeProfile);
+        createSecuredContext("/api/certification", this::handleCertification);
+        createSecuredContext("/api/schema/plan", this::handleSchemaPlan);
+        createSecuredContext("/api/schema/history", this::handleSchemaHistory);
+        createSecuredContext("/api/schema/ddl", this::handleSchemaDdl);
+        createSecuredContext("/api/profiles", this::handleProfiles);
+        createSecuredContext("/api/triage", this::handleTriage);
+        createSecuredContext("/api/services", this::handleServices);
+        createSecuredContext("/api/background-errors", this::handleBackgroundErrors);
+        createSecuredContext("/api/alert-routing", this::handleAlertRouting);
+        createSecuredContext("/api/alert-routing/history", this::handleAlertRouteHistory);
+        createSecuredContext("/api/runbooks", this::handleRunbooks);
+        createSecuredContext("/api/history", this::handleHistory);
+        createSecuredContext("/api/projection-refresh", this::handleProjectionRefresh);
+        createSecuredContext("/api/projection-refresh/failed", this::handleProjectionRefreshFailures);
+        createSecuredContext("/api/projection-refresh/replay", this::handleProjectionRefreshReplay);
+        createSecuredContext("/api/telemetry/reset", this::handleTelemetryReset);
+        createSecuredContext("/api/explain", this::handleExplain);
+        createSecuredContext("/api/explain/note", this::handleExplainNote);
+        createSecuredContext("/api/migration-planner/template", this::handleMigrationPlannerTemplate);
+        createSecuredContext("/api/migration-planner/demo", this::handleMigrationPlannerDemo);
+        createSecuredContext("/api/migration-planner/discovery", this::handleMigrationPlannerDiscovery);
+        createSecuredContext("/api/migration-planner/plan", this::handleMigrationPlannerPlan);
+        createSecuredContext("/api/migration-planner/warm", this::handleMigrationPlannerWarm);
+        createSecuredContext("/api/migration-planner/warm/start", this::handleMigrationPlannerWarmStart);
+        createSecuredContext("/api/migration-planner/warm/status", this::handleMigrationPlannerWarmStatus);
+        createSecuredContext("/api/migration-planner/scaffold", this::handleMigrationPlannerScaffold);
+        createSecuredContext("/api/migration-planner/compare", this::handleMigrationPlannerCompare);
+        createSecuredContext("/api/migration-planner/compare/start", this::handleMigrationPlannerCompareStart);
+        createSecuredContext("/api/migration-planner/compare/status", this::handleMigrationPlannerCompareStatus);
         server.start();
+    }
+
+    private HttpContext createSecuredContext(String path, HttpHandler handler) {
+        return server.createContext(path, exchange -> {
+            if (!isRequestAuthorized(exchange.getRequestHeaders())) {
+                sendUnauthorized(exchange);
+                return;
+            }
+            handler.handle(exchange);
+        });
     }
 
     public int port() {
@@ -196,9 +208,34 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     }
 
     public AdminHttpResponse dispatch(String method, URI requestUri, byte[] requestBody) throws IOException {
-        InMemoryHttpExchange exchange = new InMemoryHttpExchange(method, requestUri, requestBody);
+        return dispatch(method, requestUri, requestBody, Map.of());
+    }
+
+    public AdminHttpResponse dispatch(
+            String method,
+            URI requestUri,
+            byte[] requestBody,
+            Map<String, List<String>> requestHeaders
+    ) throws IOException {
+        InMemoryHttpExchange exchange = new InMemoryHttpExchange(method, requestUri, requestBody, requestHeaders);
         handleDispatched(exchange);
         return exchange.toResponse();
+    }
+
+    public boolean isRequestAuthorized(Map<String, List<String>> requestHeaders) {
+        if (!config.authEnabled()) {
+            return true;
+        }
+        String configuredHeaderName = config.authHeaderName();
+        if (hasMatchingToken(requestHeaders, configuredHeaderName)) {
+            return true;
+        }
+        return !"Authorization".equalsIgnoreCase(configuredHeaderName)
+                && hasMatchingToken(requestHeaders, "Authorization");
+    }
+
+    public String authenticationChallenge() {
+        return "Bearer realm=\"CacheDB Admin\"";
     }
 
     public DashboardTemplateModel renderDashboardTemplateModel(String language, String dashboardPath) {
@@ -262,6 +299,10 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     }
 
     private void handleDispatched(HttpExchange exchange) throws IOException {
+        if (!isRequestAuthorized(exchange.getRequestHeaders())) {
+            sendUnauthorized(exchange);
+            return;
+        }
         String path = exchange.getRequestURI().getPath();
         switch (path) {
             case "/" -> handleRoot(exchange);
@@ -7088,6 +7129,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         sendText(exchange, statusCode, "application/json", body);
     }
 
+    private void sendUnauthorized(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("WWW-Authenticate", authenticationChallenge());
+        sendText(exchange, 401, "text/plain; charset=utf-8", "Unauthorized");
+    }
+
     private void sendText(HttpExchange exchange, int statusCode, String contentType, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", contentType);
@@ -7100,6 +7146,37 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         exchange.sendResponseHeaders(statusCode, bytes.length);
         exchange.getResponseBody().write(bytes);
         exchange.close();
+    }
+
+    private boolean hasMatchingToken(Map<String, List<String>> requestHeaders, String headerName) {
+        if (requestHeaders == null || headerName == null || headerName.isBlank()) {
+            return false;
+        }
+        for (Map.Entry<String, List<String>> entry : requestHeaders.entrySet()) {
+            if (entry.getKey() == null || !entry.getKey().equalsIgnoreCase(headerName)) {
+                continue;
+            }
+            for (String value : entry.getValue()) {
+                if (constantTimeEquals(normalizeAuthHeaderValue(value), config.authToken())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private String normalizeAuthHeaderValue(String value) {
+        String normalized = defaultString(value).trim();
+        if (normalized.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())) {
+            return normalized.substring("Bearer ".length()).trim();
+        }
+        return normalized;
+    }
+
+    private boolean constantTimeEquals(String left, String right) {
+        byte[] leftBytes = defaultString(left).getBytes(StandardCharsets.UTF_8);
+        byte[] rightBytes = defaultString(right).getBytes(StandardCharsets.UTF_8);
+        return MessageDigest.isEqual(leftBytes, rightBytes);
     }
 
     private void sendMethodNotAllowed(HttpExchange exchange) throws IOException {
@@ -7507,10 +7584,22 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         private final Map<String, Object> attributes = new LinkedHashMap<>();
         private int statusCode = 200;
 
-        private InMemoryHttpExchange(String method, URI requestUri, byte[] requestBody) {
+        private InMemoryHttpExchange(
+                String method,
+                URI requestUri,
+                byte[] requestBody,
+                Map<String, List<String>> headers
+        ) {
             this.method = method == null || method.isBlank() ? "GET" : method;
             this.requestUri = requestUri;
             this.requestBody = new ByteArrayInputStream(requestBody == null ? new byte[0] : requestBody);
+            if (headers != null) {
+                headers.forEach((name, values) -> {
+                    if (name != null && values != null) {
+                        requestHeaders.put(name, new ArrayList<>(values));
+                    }
+                });
+            }
         }
 
         private AdminHttpResponse toResponse() {

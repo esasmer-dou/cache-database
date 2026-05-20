@@ -12,7 +12,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @Controller
 @RequestMapping("${cachedb.admin.base-path:/cachedb-admin}")
@@ -38,6 +43,9 @@ final class CacheDatabaseAdminPageController {
 
     @GetMapping("/migration-planner")
     public String migrationPlanner(HttpServletRequest request, HttpServletResponse response, Model model) {
+        if (!authorizeAdminRequest(request, response, model)) {
+            return "cachedb-admin/dashboard";
+        }
         String redirect = redirectToVersionedPath(request, basePath + "/migration-planner");
         if (redirect != null) {
             return redirect;
@@ -57,7 +65,10 @@ final class CacheDatabaseAdminPageController {
     }
 
     @GetMapping("/dashboard-v3")
-    public String legacyDashboard(HttpServletRequest request) {
+    public String legacyDashboard(HttpServletRequest request, HttpServletResponse response, Model model) {
+        if (!authorizeAdminRequest(request, response, model)) {
+            return "cachedb-admin/dashboard";
+        }
         return "redirect:" + appendQuery(basePath, request.getQueryString());
     }
 
@@ -67,6 +78,9 @@ final class CacheDatabaseAdminPageController {
             Model model,
             String requestPathForRedirect
     ) {
+        if (!authorizeAdminRequest(request, response, model)) {
+            return "cachedb-admin/dashboard";
+        }
         String redirect = redirectToVersionedPath(request, requestPathForRedirect);
         if (redirect != null) {
             return redirect;
@@ -143,5 +157,33 @@ final class CacheDatabaseAdminPageController {
         builder.append(URLEncoder.encode(name, StandardCharsets.UTF_8));
         builder.append('=');
         builder.append(URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8));
+    }
+
+    private boolean authorizeAdminRequest(HttpServletRequest request, HttpServletResponse response, Model model) {
+        if (adminHandler.isRequestAuthorized(extractRequestHeaders(request))) {
+            return true;
+        }
+        applyNoCache(response);
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setHeader("WWW-Authenticate", adminHandler.authenticationChallenge());
+        model.addAttribute("headMarkup", "<title>CacheDB Admin Unauthorized</title>");
+        model.addAttribute("bodyMarkup", """
+                <main class="container py-5">
+                  <section class="alert alert-warning" role="alert">
+                    <h1 class="h4">CacheDB Admin access requires authentication</h1>
+                    <p class="mb-0">Send the configured admin token with the request, or terminate authenticated access at the gateway before this path is exposed.</p>
+                  </section>
+                </main>
+                """);
+        model.addAttribute("htmlLang", "en");
+        return false;
+    }
+
+    private Map<String, List<String>> extractRequestHeaders(HttpServletRequest request) {
+        Map<String, List<String>> headers = new LinkedHashMap<>();
+        Collections.list(request.getHeaderNames()).forEach(name ->
+                headers.put(name, new ArrayList<>(Collections.list(request.getHeaders(name))))
+        );
+        return headers;
     }
 }

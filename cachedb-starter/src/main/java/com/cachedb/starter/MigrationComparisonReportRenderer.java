@@ -147,14 +147,19 @@ final class MigrationComparisonReportRenderer {
         markdown.append("| Required PostgreSQL artifacts | `").append(plan.recommendedPostgresArtifacts().size()).append("` artifact(s) |\n");
         markdown.append("| API shapes covered | `").append(plan.recommendedApiShapes().size()).append("` shape(s) |\n\n");
         markdown.append("### 100% Coverage Gate\n\n");
-        markdown.append("- Build a route inventory from the real application: every endpoint, service method, scheduled job, report query, external callback, and admin screen.\n");
-        markdown.append("- Map every inventory item to one CacheDB route plan: CRUD entity, bounded relation projection, ranked/global projection, detail lookup, aggregate/report path, or explicit out-of-scope archive path.\n");
-        markdown.append("- Reject unclassified routes. A route that is not in the inventory is not covered.\n");
-        markdown.append("- For each relation-heavy or sorted/range route, require a generated projection contract and a side-by-side comparison report.\n");
-        markdown.append("- For every write path, prove idempotency, primary-key ownership, Redis mutation path, PostgreSQL durability path, retry behavior, and rollback behavior.\n");
-        markdown.append("- For every table/view in PostgreSQL, assign an owner route and a migration decision: CacheDB entity, projection source, archive-only source, or removal candidate.\n");
-        markdown.append("- Raise comparison sample coverage before production. The demo `3 / 3` signal is useful for development; a full conversion needs representative samples across hot, cold, sparse, dense, boundary, and recently mutated records.\n");
-        markdown.append("- Do not declare 100% coverage until every inventory item has a ready report, no route falls back unexpectedly, and the final staging rehearsal runs with the old stack isolated.\n\n");
+        markdown.append("The following checklist is mandatory for a full-system conversion. A single unchecked item keeps the route out of GA cutover scope.\n\n");
+        markdown.append("| Coverage item | Required evidence | Gate |\n");
+        markdown.append("| --- | --- | --- |\n");
+        markdown.append("| Route inventory | Every endpoint, service method, scheduled job, report query, external callback, and admin screen is listed. | No unknown route remains. |\n");
+        markdown.append("| Table/view ownership | Every PostgreSQL table and view has one owner route and one migration decision. | No table/view is orphaned. |\n");
+        markdown.append("| Read-shape classification | Each route is classified as CRUD entity, bounded relation projection, ranked/global projection, detail lookup, aggregate/report path, or archive-only path. | No unclassified route remains. |\n");
+        markdown.append("| Projection contract | Every relation-heavy or sorted/range route has an explicit projection/read-model contract. | No required projection falls back to `entity:*`. |\n");
+        markdown.append("| Warm evidence | Dry-run and warm execution exist for each Redis hot set. | Hydrated rows match read rows; missing referenced roots are `0`. |\n");
+        markdown.append("| Side-by-side parity | PostgreSQL baseline and CacheDB route are compared with representative samples. | Exact parity is required for membership and order. |\n");
+        markdown.append("| Performance budget | p95/p99 budgets are documented per route and checked after warm. | CacheDB latency stays inside the accepted route budget. |\n");
+        markdown.append("| Write semantics | Every write path proves idempotency, primary-key ownership, Redis mutation, PostgreSQL durability, retry, poison visibility, and rollback behavior. | No write path is undocumented. |\n");
+        markdown.append("| Staging rehearsal | The full conversion is rehearsed with the old stack stopped or isolated because hybrid runtime is not the target. | Final rehearsal is green before production switch. |\n\n");
+        markdown.append("Do not declare 100% coverage until every inventory item has a ready report, no route falls back unexpectedly, and the final staging rehearsal passes with representative production data.\n\n");
     }
 
     private static void appendMetricsRow(StringBuilder markdown, String label, MigrationComparisonRunner.Metrics metrics) {

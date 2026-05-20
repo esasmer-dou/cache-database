@@ -1,5 +1,5 @@
 param(
-    [string]$MavenExecutable = "mvn.cmd"
+    [string]$MavenExecutable = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,10 +14,15 @@ function Invoke-Maven {
         [string[]]$Arguments
     )
 
+    $effectiveMavenExecutable = $MavenExecutable
+    if ([string]::IsNullOrWhiteSpace($effectiveMavenExecutable)) {
+        $effectiveMavenExecutable = if ($IsWindows) { "mvn.cmd" } else { "mvn" }
+    }
+
     Write-Host ""
-    Write-Host "==> $MavenExecutable $($Arguments -join ' ')"
+    Write-Host "==> $effectiveMavenExecutable $($Arguments -join ' ')"
     $global:LASTEXITCODE = 0
-    if ($IsWindows -and [System.IO.Path]::GetExtension($MavenExecutable).Equals(".cmd", [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($IsWindows -and [System.IO.Path]::GetExtension($effectiveMavenExecutable).Equals(".cmd", [System.StringComparison]::OrdinalIgnoreCase)) {
         $quotedArguments = $Arguments | ForEach-Object {
             if ($_ -match '[\s"]') {
                 '"' + ($_.Replace('"', '\"')) + '"'
@@ -26,7 +31,7 @@ function Invoke-Maven {
             }
         }
 
-        $command = '"' + $MavenExecutable + '" ' + ($quotedArguments -join ' ')
+        $command = '"' + $effectiveMavenExecutable + '" ' + ($quotedArguments -join ' ')
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $cmdExecutable = $env:ComSpec
         if ([string]::IsNullOrWhiteSpace($cmdExecutable)) {
@@ -74,7 +79,7 @@ function Invoke-Maven {
 
         $exitCode = $process.ExitCode
     } else {
-        & $MavenExecutable @Arguments
+        & $effectiveMavenExecutable @Arguments
         $exitCode = $global:LASTEXITCODE
     }
     if ($exitCode -ne 0) {
@@ -98,6 +103,8 @@ Invoke-Maven @(
     "-Dcachedb.prod.reportDir=$rootReportsDir",
     "-Dsurefire.failIfNoSpecifiedTests=false"
 )
+
+& (Join-Path $PSScriptRoot "check-benchmark-thresholds.ps1") -ReportsDirectory $rootReportsDir
 
 Write-Host ""
 Write-Host "Production evidence run completed."

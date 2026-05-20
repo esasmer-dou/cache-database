@@ -8,8 +8,21 @@ public record AdminHttpConfig(
         int workerThreads,
         boolean dashboardEnabled,
         boolean corsEnabled,
-        String dashboardTitle
+        String dashboardTitle,
+        boolean authEnabled,
+        String authToken,
+        String authHeaderName
 ) {
+    public AdminHttpConfig {
+        host = host == null || host.isBlank() ? "127.0.0.1" : host.trim();
+        dashboardTitle = dashboardTitle == null || dashboardTitle.isBlank() ? "CacheDB Admin" : dashboardTitle.trim();
+        authToken = authToken == null ? "" : authToken.trim();
+        authHeaderName = authHeaderName == null || authHeaderName.isBlank() ? "Authorization" : authHeaderName.trim();
+        if (authEnabled && authToken.isBlank()) {
+            throw new IllegalArgumentException("Admin HTTP auth is enabled but authToken is blank.");
+        }
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -27,6 +40,9 @@ public record AdminHttpConfig(
         private boolean dashboardEnabled = true;
         private boolean corsEnabled;
         private String dashboardTitle = "CacheDB Admin";
+        private boolean authEnabled;
+        private String authToken = "";
+        private String authHeaderName = "Authorization";
 
         public Builder enabled(boolean enabled) {
             this.enabled = enabled;
@@ -68,6 +84,21 @@ public record AdminHttpConfig(
             return this;
         }
 
+        public Builder authEnabled(boolean authEnabled) {
+            this.authEnabled = authEnabled;
+            return this;
+        }
+
+        public Builder authToken(String authToken) {
+            this.authToken = authToken;
+            return this;
+        }
+
+        public Builder authHeaderName(String authHeaderName) {
+            this.authHeaderName = authHeaderName;
+            return this;
+        }
+
         public AdminHttpConfig build() {
             return new AdminHttpConfig(
                     enabled,
@@ -77,7 +108,10 @@ public record AdminHttpConfig(
                     workerThreads,
                     dashboardEnabled,
                     corsEnabled,
-                    dashboardTitle
+                    dashboardTitle,
+                    authEnabled,
+                    authToken,
+                    authHeaderName
             );
         }
     }

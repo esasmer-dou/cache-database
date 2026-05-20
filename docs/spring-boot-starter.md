@@ -470,6 +470,7 @@ cachedb:
     uri: redis://127.0.0.1:6379
   admin:
     enabled: true
+    http-enabled: true
     base-path: /cachedb-admin
     dashboard-enabled: true
     title: My CacheDB Admin
@@ -478,9 +479,15 @@ cachedb:
 With this setup:
 
 - your Spring Boot app still serves on `server.port`
-- CacheDB admin UI is available on the same port
+- CacheDB admin UI is available on the same port because `http-enabled` is explicit
 - public dashboard URL becomes:
   - `http://127.0.0.1:8080/cachedb-admin`
+
+Production exposure rule:
+
+- keep `/cachedb-admin/**` behind your gateway or operations network
+- terminate TLS at the gateway or reverse proxy when that is your platform standard
+- use gateway authentication, or enable CacheDB token auth with `cachedb.admin.auth-enabled=true`
 
 ## Production Redis Topology Default
 
@@ -564,8 +571,8 @@ If missing, the starter creates:
 - `JedisPooled`
 - `CacheDatabaseConfig`
 - `CacheDatabase`
-- a native admin servlet that serves CacheDB admin APIs through your Spring Boot server
-- a Thymeleaf-backed dashboard page exposed from the same base path
+- a native admin servlet when `cachedb.admin.http-enabled=true`
+- a Thymeleaf-backed dashboard page when `cachedb.admin.http-enabled=true`
 
 This design keeps the external surface same-port without starting a second internal admin HTTP listener.
 
@@ -580,7 +587,7 @@ Behavior:
 - `/dashboard-v3` remains as a legacy redirect for older bookmarks
 - `/api/*` stays on the same port and is served by the native admin servlet
 
-Default external URLs:
+External URLs when admin HTTP is explicitly enabled:
 
 - dashboard: `/cachedb-admin`
 - health JSON: `/cachedb-admin/api/health`

@@ -21,7 +21,9 @@ class MigrationComparisonReportRendererTest {
         assertTrue(report.markdown().contains("Full cutover rehearsal"));
         assertTrue(report.markdown().contains("## Full Conversion Coverage Plan"));
         assertTrue(report.markdown().contains("This report is not a whole-system conversion certificate."));
-        assertTrue(report.markdown().contains("Reject unclassified routes."));
+        assertTrue(report.markdown().contains("### 100% Coverage Gate"));
+        assertTrue(report.markdown().contains("A single unchecked item keeps the route out of GA cutover scope."));
+        assertTrue(report.markdown().contains("| Projection contract |"));
         assertTrue(report.markdown().contains("## Latency Snapshot"));
         assertTrue(report.markdown().contains("## Sample Parity"));
     }

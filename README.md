@@ -162,13 +162,20 @@ cachedb:
   profile: production
   redis:
     uri: redis://127.0.0.1:6379
+  admin:
+    http-enabled: true
 ```
 
-After startup, the admin UI is available on the same application port:
+After startup, the admin UI is available on the same application port only when
+`cachedb.admin.http-enabled=true` is set explicitly:
 
 - dashboard: `/cachedb-admin`
 - migration planner: `/cachedb-admin/migration-planner`
 - health API: `/cachedb-admin/api/health`
+
+Production rule: do not expose `/cachedb-admin/**` directly to the public
+internet. Put it behind your gateway/auth layer, or enable CacheDB token auth
+with `cachedb.admin.auth-enabled=true` and a non-empty admin token.
 
 ## Day-One Implementation Flow
 

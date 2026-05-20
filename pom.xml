@@ -58,6 +58,7 @@
         <maven.javadoc.plugin.version>3.7.0</maven.javadoc.plugin.version>
         <maven.gpg.plugin.version>3.2.4</maven.gpg.plugin.version>
         <maven.deploy.plugin.version>3.1.2</maven.deploy.plugin.version>
+        <central.publishing.maven.plugin.version>0.7.0</central.publishing.maven.plugin.version>
         <gpg.skip>true</gpg.skip>
         <!-- Replace maintainer identity fields before the first public release. -->
         <cachedb.release.projectUrl>https://github.com/esasmer-dou/cache-database</cachedb.release.projectUrl>
@@ -168,6 +169,17 @@
                                 </configuration>
                             </execution>
                         </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>${central.publishing.maven.plugin.version}</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
                     </plugin>
                 </plugins>
             </build>

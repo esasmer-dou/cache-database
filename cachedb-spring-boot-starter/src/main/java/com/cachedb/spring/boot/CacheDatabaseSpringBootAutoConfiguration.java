@@ -70,6 +70,9 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                         .enabled(false)
                         .dashboardEnabled(properties.getAdmin().isDashboardEnabled())
                         .dashboardTitle(properties.getAdmin().getTitle())
+                        .authEnabled(properties.getAdmin().isAuthEnabled())
+                        .authToken(properties.getAdmin().getAuthToken())
+                        .authHeaderName(properties.getAdmin().getAuthHeaderName())
                         .build());
         for (CacheDatabaseConfigCustomizer customizer : customizers.orderedStream().toList()) {
             customizer.customize(builder, properties);
@@ -117,7 +120,7 @@ public class CacheDatabaseSpringBootAutoConfiguration {
 
     @Bean(destroyMethod = "close")
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    @ConditionalOnProperty(prefix = "cachedb.admin", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "cachedb.admin", name = "http-enabled", havingValue = "true")
     public CacheDatabaseAdminHttpServer cacheDatabaseSpringBootAdminHandler(
             CacheDatabase cacheDatabase,
             CacheDbSpringProperties properties
@@ -131,13 +134,16 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                 .workerThreads(1)
                 .dashboardEnabled(adminProperties.isDashboardEnabled())
                 .dashboardTitle(adminProperties.getTitle())
+                .authEnabled(adminProperties.isAuthEnabled())
+                .authToken(adminProperties.getAuthToken())
+                .authHeaderName(adminProperties.getAuthHeaderName())
                 .build();
         return cacheDatabase.adminHttpServer(adminHttpConfig);
     }
 
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    @ConditionalOnProperty(prefix = "cachedb.admin", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "cachedb.admin", name = "http-enabled", havingValue = "true")
     @ConditionalOnMissingBean
     public CacheDatabaseAdminPageController cacheDatabaseAdminPageController(
             CacheDatabaseAdminHttpServer adminHandler,
@@ -148,7 +154,7 @@ public class CacheDatabaseSpringBootAutoConfiguration {
 
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    @ConditionalOnProperty(prefix = "cachedb.admin", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "cachedb.admin", name = "http-enabled", havingValue = "true")
     public ServletRegistrationBean<CacheDatabaseAdminServlet> cacheDatabaseAdminServlet(
             CacheDatabaseAdminHttpServer adminHandler,
             CacheDbSpringProperties properties

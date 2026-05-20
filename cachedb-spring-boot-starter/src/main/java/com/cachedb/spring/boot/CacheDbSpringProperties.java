@@ -255,9 +255,13 @@ public class CacheDbSpringProperties {
 
     public static final class AdminUiProperties {
         private boolean enabled = true;
+        private boolean httpEnabled;
         private String basePath = "/cachedb-admin";
         private boolean dashboardEnabled = true;
         private String title = "CacheDB Admin";
+        private boolean authEnabled;
+        private String authToken = "";
+        private String authHeaderName = "Authorization";
 
         public boolean isEnabled() {
             return enabled;
@@ -265,6 +269,14 @@ public class CacheDbSpringProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public boolean isHttpEnabled() {
+            return httpEnabled;
+        }
+
+        public void setHttpEnabled(boolean httpEnabled) {
+            this.httpEnabled = httpEnabled;
         }
 
         public String getBasePath() {
@@ -289,6 +301,30 @@ public class CacheDbSpringProperties {
 
         public void setTitle(String title) {
             this.title = title;
+        }
+
+        public boolean isAuthEnabled() {
+            return authEnabled;
+        }
+
+        public void setAuthEnabled(boolean authEnabled) {
+            this.authEnabled = authEnabled;
+        }
+
+        public String getAuthToken() {
+            return authToken;
+        }
+
+        public void setAuthToken(String authToken) {
+            this.authToken = authToken;
+        }
+
+        public String getAuthHeaderName() {
+            return authHeaderName;
+        }
+
+        public void setAuthHeaderName(String authHeaderName) {
+            this.authHeaderName = authHeaderName;
         }
     }
 

@@ -37,6 +37,10 @@ class CacheDbSpringPropertiesTest {
         assertEquals(15_000L, properties.getRuntime().getLeaderLeaseTtlMillis());
         assertEquals(5_000L, properties.getRuntime().getLeaderLeaseRenewIntervalMillis());
         assertTrue(properties.getRegistration().isEnabled());
+        assertTrue(properties.getAdmin().isEnabled());
+        assertFalse(properties.getAdmin().isHttpEnabled());
+        assertFalse(properties.getAdmin().isAuthEnabled());
+        assertEquals("Authorization", properties.getAdmin().getAuthHeaderName());
     }
 
     @Test

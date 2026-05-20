@@ -427,6 +427,9 @@ public final class CacheDatabaseConfigOverrides {
                 .dashboardEnabled(lookup.bool("dashboardEnabled", base.dashboardEnabled()))
                 .corsEnabled(lookup.bool("corsEnabled", base.corsEnabled()))
                 .dashboardTitle(lookup.string("dashboardTitle", base.dashboardTitle()))
+                .authEnabled(lookup.bool("authEnabled", base.authEnabled()))
+                .authToken(lookup.string("authToken", base.authToken()))
+                .authHeaderName(lookup.string("authHeaderName", base.authHeaderName()))
                 .build();
     }
 

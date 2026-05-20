@@ -43,3 +43,23 @@ durability behavior. Production deployments should treat:
 - private admin surfaces
 
 as part of the security boundary, not just performance tuning.
+
+## Admin UI Exposure
+
+The Spring Boot admin HTTP surface is not published unless
+`cachedb.admin.http-enabled=true` is configured explicitly.
+
+Production deployments must keep `/cachedb-admin/**` behind a gateway,
+operations network, or equivalent access-control boundary. Application-level
+TLS is not mandatory when TLS terminates at the gateway or reverse proxy, but
+direct public exposure is not an accepted production posture.
+
+If gateway authentication is not used, enable CacheDB token auth:
+
+```yaml
+cachedb:
+  admin:
+    http-enabled: true
+    auth-enabled: true
+    auth-token: ${CACHEDB_ADMIN_TOKEN}
+```

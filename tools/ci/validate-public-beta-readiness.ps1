@@ -16,6 +16,7 @@ $requiredFiles = @(
     "CODE_OF_CONDUCT.md",
     "SUPPORT.md",
     "CHANGELOG.md",
+    "PRODUCTION_GA_CRITERIA.md",
     ".github\ISSUE_TEMPLATE\bug_report.md",
     ".github\ISSUE_TEMPLATE\feature_request.md",
     ".github\ISSUE_TEMPLATE\config.yml",

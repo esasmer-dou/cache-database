@@ -3,14 +3,21 @@ param(
     [string]$RedisUri = "redis://default:welcome1@127.0.0.1:56379",
     [string]$PostgresUrl = "jdbc:postgresql://127.0.0.1:55432/postgres",
     [string]$PostgresUser = "postgres",
-    [string]$PostgresPassword = "postgresql"
+    [string]$PostgresPassword = "postgresql",
+    [string]$ReportsDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$reportsDir = Join-Path $repoRoot "target\cachedb-prodtest-reports"
+if ([string]::IsNullOrWhiteSpace($ReportsDir)) {
+    $reportsDir = Join-Path $repoRoot "target\cachedb-prodtest-reports"
+} elseif ([System.IO.Path]::IsPathRooted($ReportsDir)) {
+    $reportsDir = $ReportsDir
+} else {
+    $reportsDir = Join-Path $repoRoot $ReportsDir
+}
 
 function Invoke-Maven {
     param(

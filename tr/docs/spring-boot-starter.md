@@ -482,6 +482,7 @@ cachedb:
     uri: redis://127.0.0.1:6379
   admin:
     enabled: true
+    http-enabled: true
     base-path: /cachedb-admin
     dashboard-enabled: true
     title: Benim CacheDB Admin
@@ -490,9 +491,15 @@ cachedb:
 Bu kurulumla:
 
 - Spring Boot uygulaman aynı `server.port` üzerinde çalışmaya devam eder
-- CacheDB yönetim paneli aynı porttan yayınlanır
+- CacheDB yönetim paneli aynı porttan yayınlanır; çünkü `http-enabled` açıkça verilmiştir
 - dış yönetim paneli URL'i şu olur:
   - `http://127.0.0.1:8080/cachedb-admin`
+
+Üretim erişim kuralı:
+
+- `/cachedb-admin/**` yollarını gateway veya operasyon ağı arkasında tut
+- platform standardın buysa TLS'i gateway veya reverse proxy üzerinde sonlandır
+- gateway authentication kullan veya CacheDB token auth için `cachedb.admin.auth-enabled=true` tanımla
 
 ## Üretim İçin Varsayılan Redis Topolojisi
 
@@ -579,8 +586,8 @@ Eksikse starter şu bean ve bileşenleri oluşturur:
 - `JedisPooled`
 - `CacheDatabaseConfig`
 - `CacheDatabase`
-- Spring Boot servlet konteyneri içinde aynı porttan çalışan native CacheDB admin API servlet'i
-- aynı base path altında Thymeleaf ile render edilen yönetim paneli sayfası
+- `cachedb.admin.http-enabled=true` ise Spring Boot servlet konteyneri içinde aynı porttan çalışan native CacheDB admin API servlet'i
+- `cachedb.admin.http-enabled=true` ise aynı base path altında Thymeleaf ile render edilen yönetim paneli sayfası
 
 Bu tasarım sayesinde yönetim paneli aynı porttan gelir ve Spring Boot modunda
 ikinci bir dahili HTTP sunucusu açılmaz.
@@ -596,7 +603,7 @@ Davranış:
 - `/dashboard-v3` eski bookmark'lar için legacy redirect olarak kalır
 - `/api/*` aynı portta native admin servlet tarafından servis edilir
 
-Varsayılan dış URL'ler:
+Admin HTTP açıkça etkinleştirildiğinde dış URL'ler:
 
 - yönetim paneli: `/cachedb-admin`
 - health JSON: `/cachedb-admin/api/health`

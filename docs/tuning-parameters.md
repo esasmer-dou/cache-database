@@ -420,6 +420,9 @@ Operational notes:
 | `cachedb.config.adminHttp.dashboardEnabled` | `true` | Serves the HTML dashboard. |
 | `cachedb.config.adminHttp.corsEnabled` | `false` | Enables permissive CORS headers. |
 | `cachedb.config.adminHttp.dashboardTitle` | `CacheDB Admin` | Dashboard title text. |
+| `cachedb.config.adminHttp.authEnabled` | `false` | Requires an admin token for native admin HTTP requests. |
+| `cachedb.config.adminHttp.authToken` | empty | Admin token used when auth is enabled. |
+| `cachedb.config.adminHttp.authHeaderName` | `Authorization` | Header checked for the admin token. `Authorization: Bearer <token>` is supported. |
 | `cachedb.config.schemaBootstrap.mode` | `DISABLED` | Schema bootstrap mode. |
 | `cachedb.config.schemaBootstrap.autoApplyOnStart` | `false` | Applies schema bootstrap on startup. |
 | `cachedb.config.schemaBootstrap.includeVersionColumn` | `true` | Includes version column in generated DDL. |

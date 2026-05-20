@@ -420,6 +420,9 @@ Operasyonel notlar:
 | `cachedb.config.adminHttp.dashboardEnabled` | `true` | HTML dashboard'u servis eder. |
 | `cachedb.config.adminHttp.corsEnabled` | `false` | Permissive CORS header'larini açar. |
 | `cachedb.config.adminHttp.dashboardTitle` | `CacheDB Admin` | Dashboard başlık metni. |
+| `cachedb.config.adminHttp.authEnabled` | `false` | Native admin HTTP isteklerinde admin token zorunlu olur. |
+| `cachedb.config.adminHttp.authToken` | boş | Auth açıkken kullanılan admin token. |
+| `cachedb.config.adminHttp.authHeaderName` | `Authorization` | Admin token'ın okunacağı header. `Authorization: Bearer <token>` desteklenir. |
 | `cachedb.config.schemaBootstrap.mode` | `DISABLED` | Schema bootstrap modu. |
 | `cachedb.config.schemaBootstrap.autoApplyOnStart` | `false` | Startup'ta schema bootstrap uygular. |
 | `cachedb.config.schemaBootstrap.includeVersionColumn` | `true` | Üretilen DDL'e version kolonu ekler. |

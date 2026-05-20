@@ -27,6 +27,7 @@ cachedb:
           maxWaitMillis: ${CACHEDB_DEMO_REDIS_BACKGROUND_POOL_MAX_WAIT_MILLIS:30000}
   admin:
     enabled: true
+    http-enabled: true
     base-path: /cachedb-admin
     dashboard-enabled: true
     title: CacheDB Operations Console

@@ -164,13 +164,20 @@ cachedb:
   profile: production
   redis:
     uri: redis://127.0.0.1:6379
+  admin:
+    http-enabled: true
 ```
 
-Uygulama açıldıktan sonra yönetim arayüzü aynı porttan gelir:
+Yönetim arayüzü aynı porttan yalnızca `cachedb.admin.http-enabled=true`
+açıkça verildiğinde yayınlanır:
 
 - yönetim paneli: `/cachedb-admin`
 - geçiş planlayıcı: `/cachedb-admin/migration-planner`
 - sağlık API'si: `/cachedb-admin/api/health`
+
+Üretim kuralı: `/cachedb-admin/**` yollarını internete doğrudan açma. Bu
+yüzeyi gateway/auth katmanının arkasına al veya CacheDB token auth için
+`cachedb.admin.auth-enabled=true` ve boş olmayan bir admin token tanımla.
 
 ## İlk Gün Uygulama Akışı
 
