@@ -16,39 +16,38 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
   - `cachedb.release.scmDeveloperConnection`
   - `cachedb.release.issueUrl`
   - `cachedb.release.ciUrl`
-  - maintainer identity alanlari
+  - maintainer identity alanları
 - artifact coordinate ve public package isimlerini doğrula
 
-## Surumleme
+## Sürümleme
 
-- `-SNAPSHOT` surumunu hedef release surumune çek
-- [../../CHANGELOG.md](../../CHANGELOG.md) dosyasini güncelle
+- `-SNAPSHOT` sürümünü hedef release sürümüne çek
+- [../../CHANGELOG.md](../../CHANGELOG.md) dosyasını güncelle
 - dokümanlardaki public beta vs GA metinlerini kontrol et
-- release sonrasında [release-flow.md](release-flow.md) üzerinden `main` branch'ini bir sonraki `-SNAPSHOT` surume ac
+- release sonrasında [release-flow.md](release-flow.md) üzerinden `main` branch'ini bir sonraki `-SNAPSHOT` sürüme aç
 
 ## Kanıt
 
-- production evidence workflow yesil
-- coordination evidence workflow yesil
-- runtime hotspot değisiklikleri için güncel benchmark veya smoke kanıti var
+- production evidence workflow yeşil
+- coordination evidence workflow yeşil
+- runtime hotspot değişiklikleri için güncel benchmark veya smoke kanıtı var
 
 ## Publishing
 
-- `oss-release` Maven profilinin sources ve javadocs üretebildigini doğrula
-- seçilen release kanali için signing config ve secret'ları doğrula
-- hedef release workflow ve credential'lari doğrula
+- `oss-release` Maven profilinin sources ve javadocs üretebildiğini doğrula
+- seçilen release kanalı için signing config ve secret'ları doğrula
+- hedef release workflow ve credential'ları doğrula
 
-## GitHub / Repo Ayarlari
+## GitHub / Repo Ayarları
 
-- private vulnerability reporting'i ac
+- private vulnerability reporting'i aç
 - default branch için branch protection tanımla
-- evidence workflow'larini required check yap
-- dış katilimcilar için label ve milestone'lari hazırla
+- evidence workflow'larını required check yap
+- dış katılımcılar için label ve milestone'ları hazırla
 
 ## Dokümantasyon
 
 - README ve Türkçe README güncel
 - production recipe rehberi güncel
 - yeni tuning parametreleri dokümante edildi
-- public beta sinirlari açıkça yazıli
-
+- public beta sınırları açıkça yazılı

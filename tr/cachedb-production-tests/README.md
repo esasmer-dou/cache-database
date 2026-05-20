@@ -1,10 +1,10 @@
 # cachedb-production-tests
 
-Bu modül, `cache-database` için production-benzeri e-ticaret DAO yuk ve kırma testlerini içerir.
+Bu modül, `cache-database` için production-benzeri e-ticaret DAO yük ve kırma testlerini içerir.
 
 Kapsam:
 
-- kampanya, SMS veya push bildirimi sonrasi ani trafik sıçramaları
+- kampanya, SMS veya push bildirimi sonrası ani trafik sıçramaları
 - browse, ürün detay, sepete ekleme ve checkout karışımı
 - sıcak SKU üzerinde inventory contention
 - write-behind backlog birikimi ve cache thrash kırma senaryoları
@@ -33,10 +33,10 @@ mvn -q -pl cachedb-production-tests -am -Dtest=EcommerceProductionScenarioSmokeT
 
 Notlar:
 
-- is yükleri 50k TPS sınıfi spike senaryoları için modellenmiştir; lokal ortamda `scaleFactor` ile küçültülür
+- iş yükleri 50k TPS sınıfı spike senaryoları için modellenmiştir; lokal ortamda `scaleFactor` ile küçültülür
 - raporlar `target/cachedb-prodtest-reports` altına JSON ve Markdown olarak yazılır
 - her scenario koşusu ayrıca `*-profile-churn.json` ve `*-profile-churn.md` dosyaları üretir
-- tablolar `cachedb_prodtest_*` on eki ile her koşuda yeniden oluşturulur
+- tablolar `cachedb_prodtest_*` ön eki ile her koşuda yeniden oluşturulur
 - ortak runtime/config tuning kataloğu: [../docs/tuning-parameters.md](../docs/tuning-parameters.md)
 
 Tam ölçek suite:
@@ -60,7 +60,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 - `write-behind-backpressure-50k`
 - `inventory-reconciliation-aftershock-50k`
 
-Bu suite `full-scale-50k-suite.json` ve `full-scale-50k-suite.md` dosyalarıni üretir.
+Bu suite `full-scale-50k-suite.json` ve `full-scale-50k-suite.md` dosyalarını üretir.
 
 Kademeli ölçek benchmark:
 
@@ -72,7 +72,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.postgres.url=jdbc:postgresql://127.0.0.1:5432/postgres"
 ```
 
-Bu koşu `full-scale-50k-scale-ladder.json` ve `full-scale-50k-scale-ladder.md` dosyalarıni üretir.
+Bu koşu `full-scale-50k-scale-ladder.json` ve `full-scale-50k-scale-ladder.md` dosyalarını üretir.
 
 Temsilci container-capacity benchmark:
 
@@ -87,9 +87,9 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
   "-Dcachedb.prod.fullSuite.maxHotProducts=5"
 ```
 
-Bu koşu `representative-container-capacity-benchmark.*` dosyalarıni üretir.
+Bu koşu `representative-container-capacity-benchmark.*` dosyalarını üretir.
 
-Guardrail-aware profil karşılastirmasi:
+Guardrail-aware profil karşılaştırması:
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -99,7 +99,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.guardrail.compareScenarios=campaign-push-spike-50k,weekend-browse-storm-50k,write-behind-backpressure-50k"
 ```
 
-Bu koşu `guardrail-profile-comparison.*` dosyalarıni üretir ve throughput, backlog, Redis memory, compaction pending ve balance score dengesini karşılastirir.
+Bu koşu `guardrail-profile-comparison.*` dosyalarını üretir ve throughput, backlog, Redis memory, compaction pending ve balance score dengesini karşılaştırır.
 
 Production certification:
 
@@ -110,35 +110,35 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.certification.scaleFactor=0.02"
 ```
 
-Bu koşu `production-certification-report.json` ve `production-certification-report.md` üretir. Certification raporu şunları birlestirir:
+Bu koşu `production-certification-report.json` ve `production-certification-report.md` üretir. Certification raporu şunları birleştirir:
 
 - representative benchmark koşusu
-- restart/recover doğrulamasi
-- crash/replay chaos doğrulamasi
-- fault injection doğrulamasi
-- TPS, backlog, hata, hard rejection, rebuild başarisi ve restart recovery için açık go/no-go gate'leri
+- restart/recover doğrulaması
+- crash/replay chaos doğrulaması
+- fault injection doğrulaması
+- TPS, backlog, hata, hard rejection, rebuild başarısı ve restart recovery için açık go/no-go gate'leri
 
 Admin gözlemlenebilirlik:
 
-- `/api/prometheus` write-behind, DLQ, planner, guardrail ve runtime-profile metriklerini Prometheus text formatinda verir
+- `/api/prometheus` write-behind, DLQ, planner, guardrail ve runtime-profile metriklerini Prometheus text formatında verir
 - `/api/query-index/rebuild` pressure düştükten sonra degraded namespace'leri recover etmek için kullanılabilir
-- `/api/deployment` canli deployment/runtime topology özetini verir
-- `/api/schema/status` bootstrap modu, validation özeti ve migration adım sayılarıni verir
+- `/api/deployment` canlı deployment/runtime topology özetini verir
+- `/api/schema/status` bootstrap modu, validation özeti ve migration adım sayılarını verir
 - `/api/schema/history` son schema plan/apply geçmişini migration görünürlüğü için verir
-- `/api/schema/ddl` entity bazlı üretilmiş bootstrap DDL çıktisini verir
-- `/api/registry` kayıtlı entity/API yüzeyini ve cache kontratini verir
+- `/api/schema/ddl` entity bazlı üretilmiş bootstrap DDL çıktısını verir
+- `/api/registry` kayıtlı entity/API yüzeyini ve cache kontratını verir
 - `/api/profiles` yerleşik starter runtime profillerini verir
-- `/api/triage` mevcut ana darboğaz adayini ve destekleyici kanıtlari verir
-- `/api/services` write-behind, recovery, guardrail, query, schema ve incident delivery için servis bazlı özet sağlik bilgisi verir
-- `/api/alert-routing` incident bildirim route'larini, retry policy'lerini, fallback yollarini, escalation seviyesini, delivery sayaçlarini ve son delivery/hata işaretlerini verir
+- `/api/triage` mevcut ana darboğaz adayını ve destekleyici kanıtları verir
+- `/api/services` write-behind, recovery, guardrail, query, schema ve incident delivery için servis bazlı özet sağlık bilgisi verir
+- `/api/alert-routing` incident bildirim route'larını, retry policy'lerini, fallback yollarını, escalation seviyesini, delivery sayaçlarını ve son delivery/hata işaretlerini verir
 - `/api/alert-routing/history` delivery/failed/dropped trend analizi için server-side kanal geçmişini verir
-- `/api/incident-severity/history` INFO/WARNING/CRITICAL sinyal sicrama trendleri için server-side incident severity bucket'larini verir
-- `/api/failing-signals` severity, aktif sayi ve son incident sıklığına göre sıralanmis en önemli failing signal özetini verir
-- `/api/history` backlog, Redis memory, dead-letter büyümesi, runtime profile ve health durumu için server-side sample edilmis trend/geçmis noktalarini verir
-- `/api/runbooks` yüksek sinyalli production sorunlari için varsayılan operator runbook'larini verir
-- `/api/certification` son production gate, certification, soak ve fault-injection artefaktlarini listeler
+- `/api/incident-severity/history` INFO/WARNING/CRITICAL sinyal sıçrama trendleri için server-side incident severity bucket'larını verir
+- `/api/failing-signals` severity, aktif sayı ve son incident sıklığına göre sıralanmış en önemli failing signal özetini verir
+- `/api/history` backlog, Redis memory, dead-letter büyümesi, runtime profile ve health durumu için server-side sample edilmiş trend/geçmiş noktalarını verir
+- `/api/runbooks` yüksek sinyalli production sorunları için varsayılan operator runbook'larını verir
+- `/api/certification` son production gate, certification, soak ve fault-injection artefaktlarını listeler
 - `/dashboard` artık Triage, Service Status, Alert Routing, Runbooks, Deployment, Schema Status, Schema History, Starter Profiles, API Registry, Schema DDL ve Certification bölümlerini admin UI üzerinde gösterir
-- `/dashboard` ayrıca AJAX auto-refresh kontrolu, manuel refresh, sayfayi tam yenilemeden backlog, Redis memory, dead-letter, kanal bazlı alert route trend/geçmisi, incident severity trendleri ve top failing signal kartlari sunar
+- `/dashboard` ayrıca AJAX auto-refresh kontrolü, manuel refresh, sayfayı tam yenilemeden backlog, Redis memory, dead-letter, kanal bazlı alert route trend/geçmişi, incident severity trendleri ve top failing signal kartları sunar
 
 Yüksek sinyalli çekirdek test matrisi:
 - kampanya tetikli browse ve checkout burst'leri
@@ -173,7 +173,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.soak.plans=soak-1h:campaign-push-spike:0.02:1:3600:false,soak-4h:campaign-push-spike:0.02:1:14400:false"
 ```
 
-Bu koşu `production-soak-plan-report.json` ve `production-soak-plan-report.md` dosyalarıni üretir.
+Bu koşu `production-soak-plan-report.json` ve `production-soak-plan-report.md` dosyalarını üretir.
 
 Restart recovery suite:
 
@@ -183,7 +183,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.restart.cycles=3"
 ```
 
-Bu koşu `restart-recovery-suite.json` ve `restart-recovery-suite.md` dosyalarıni üretir.
+Bu koşu `restart-recovery-suite.json` ve `restart-recovery-suite.md` dosyalarını üretir.
 
 Crash/replay chaos suite:
 
@@ -192,11 +192,11 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.CrashReplayChaosMain"
 ```
 
-Bu koşu `crash-replay-chaos-suite.json` ve `crash-replay-chaos-suite.md` dosyalarıni üretir. Şu senaryoları kapsar:
+Bu koşu `crash-replay-chaos-suite.json` ve `crash-replay-chaos-suite.md` dosyalarını üretir. Şu senaryoları kapsar:
 
-- latest-state delete restart sonrasi stale resurrection olmadan korunur
-- exact-sequence order durumu restart sonrasi son duruma converge eder
-- manual dead-letter replay restart sonrasi da erişilebilir kalır
+- latest-state delete restart sonrası stale resurrection olmadan korunur
+- exact-sequence order durumu restart sonrası son duruma converge eder
+- manual dead-letter replay restart sonrası da erişilebilir kalır
 
 Fault injection suite:
 
@@ -205,12 +205,12 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.FaultInjectionMain"
 ```
 
-Bu koşu `fault-injection-suite.json` ve `fault-injection-suite.md` dosyalarıni üretir. Şu senaryoları kapsar:
+Bu koşu `fault-injection-suite.json` ve `fault-injection-suite.md` dosyalarını üretir. Şu senaryoları kapsar:
 
-- yarım flush restart sonrasi toparlanir
-- geçici PostgreSQL kaybı DLQ oluşturur ve replay ile toparlanir
-- restart sonrasi stale replay ordering kurallarıyla reddedilir
-- tekrarlı outage/replay döngüleri bounded recovery-soak olarak doğrulanir
+- yarım flush restart sonrası toparlanır
+- geçici PostgreSQL kaybı DLQ oluşturur ve replay ile toparlanır
+- restart sonrası stale replay ordering kurallarıyla reddedilir
+- tekrarlı outage/replay döngüleri bounded recovery-soak olarak doğrulanır
 
 Production gate:
 
@@ -219,7 +219,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.ProductionGateMain"
 ```
 
-Bu koşu `production-gate-report.json` ve `production-gate-report.md` dosyalarıni üretir. Sunlari birlestirir:
+Bu koşu `production-gate-report.json` ve `production-gate-report.md` dosyalarını üretir. Şunları birleştirir:
 
 - production certification
 - crash/replay chaos suite
@@ -243,7 +243,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.gateLadder.profiles=baseline:campaign-push-spike:0.02:50:2000:false,heavy:campaign-push-spike:0.05:65:3000:true"
 ```
 
-Bu koşu `production-gate-ladder-report.json` ve `production-gate-ladder-report.md` dosyalarıni üretir.
+Bu koşu `production-gate-ladder-report.json` ve `production-gate-ladder-report.md` dosyalarını üretir.
 
 Yararlı override'lar:
 
@@ -307,7 +307,7 @@ Yararlı override'lar:
 - `cachedb.prod.readPathWorkerShare=0.60`
 - `cachedb.prod.scaleLadder=0.10,0.25,0.50,1.0`
 
-Catalog girdi formati:
+Catalog girdi formatı:
 
 ```text
 name;kind;description;targetTps;durationSeconds;workerThreads;customerCount;productCount;hotProductSetSize;browsePercent;productLookupPercent;cartWritePercent;inventoryReservePercent;checkoutPercent;customerTouchPercent;writeBehindWorkerThreads;writeBehindBatchSize;hotEntityLimit;pageSize;entityTtlSeconds;pageTtlSeconds
@@ -318,23 +318,23 @@ Birden fazla catalog girdisi `|` ile ayrılır.
 Flush notu:
 
 - benchmark profilleri PostgreSQL flush hattında entity-aware state compaction ve batch policy kullanır
-- `customer`, `inventory` ve `cart` upsert akışları daha agresif compaction ve copy yollarina itilir
-- `order` yazmalari daha tutucu tutulur ve daha doğrudan persist edilir
+- `customer`, `inventory` ve `cart` upsert akışları daha agresif compaction ve copy yollarına itilir
+- `order` yazmaları daha tutucu tutulur ve daha doğrudan persist edilir
 
 Entity semantics matrisi:
 
-| Entity | UPSERT semantigi | DELETE semantigi | Production niyeti |
+| Entity | UPSERT semantiği | DELETE semantiği | Production niyeti |
 | --- | --- | --- | --- |
-| `EcomCustomerEntity` | `LATEST_STATE` | `LATEST_STATE` | kampanya ve müşteri profil güncellemeleri son bilinen duruma katlanir |
+| `EcomCustomerEntity` | `LATEST_STATE` | `LATEST_STATE` | kampanya ve müşteri profil güncellemeleri son bilinen duruma katlanır |
 | `EcomInventoryEntity` | `LATEST_STATE` | `LATEST_STATE` | sıcak SKU stok güncellemelerinde tüm ara adımlar yerine son stok doğrusu öncelenir |
 | `EcomCartEntity` | `LATEST_STATE` | `LATEST_STATE` | sepet durumu değişebilir session state olarak ele alınır |
-| `EcomOrderEntity` | `EXACT_SEQUENCE` | `EXACT_SEQUENCE` | order yazmalari sıra önemli olduğu için daha tutucu tutulur |
+| `EcomOrderEntity` | `EXACT_SEQUENCE` | `EXACT_SEQUENCE` | order yazmaları sıra önemli olduğu için daha tutucu tutulur |
 
 Hard-limit shedding notu:
 
 - runtime hard-limit modunda page cache write, read-through cache fill, hot-set tracking, query index write, query index read ve planner learning özellikleri shed edilir
 - query index write shed olduğunda namespace degraded olarak işaretlenir ve sorgular entity key taraması ile residual evaluation fallback yoluna düşer
-- delete islemleri sinirli TTL ile Redis tombstone bırakir; okumalar tombstone'u dikkate aldigi için stale Redis payload silinmis entity'yi diriltemez
+- delete işlemleri sınırlı TTL ile Redis tombstone bırakır; okumalar tombstone'u dikkate aldığı için stale Redis payload silinmiş entity'yi diriltemez
 - query/index recovery admin katmanından tetiklenebilir; pressure düştükten sonra degraded namespace manual veya otomatik rebuild ile toparlanabilir
 
 Admin rebuild ve recovery:
@@ -342,15 +342,14 @@ Admin rebuild ve recovery:
 - `POST /api/query-index/rebuild?entity=UserEntity&note=manual-recover` tek entity namespace'i rebuild eder
 - `POST /api/query-index/rebuild?note=manual-recover-all` tüm kayıtlı entity namespace'lerini rebuild eder
 - rebuild beklerken degraded namespace okunabilir kalır; sorgular full-scan fallback ile çalışır
-- namespace ve query-class hard-limit policy'leri ile exact lookup açık tutulurken text, relation veya sort ağırlikli sorgular shed edilebilir
+- namespace ve query-class hard-limit policy'leri ile exact lookup açık tutulurken text, relation veya sort ağırlıklı sorgular shed edilebilir
 
 Runtime profile switching notu:
 
-- runtime switching production odaklı profillerde varsayılan olarak açıktir
+- runtime switching production odaklı profillerde varsayılan olarak açıktır
 - hedef geçişler `NORMAL -> STANDARD`, `WARN -> BALANCED`, `CRITICAL -> AGGRESSIVE` şeklindedir
 - switching tek sample ile değil, ardışık pressure sample sayılarıyla çalışır
-- comparison suite zorunlu profil kullandiginda runtime auto-switch kapatilir
-- scenario ve suite raporlari switch count ve timeline bilgisini yazar
-- ayrı profile churn raporlari her scenario için yapısal switch event'lerini üretir
+- comparison suite zorunlu profil kullandığında runtime auto-switch kapatılır
+- scenario ve suite raporları switch count ve timeline bilgisini yazar
+- ayrı profile churn raporları her scenario için yapısal switch event'lerini üretir
 - switch event'leri diagnostics stream'e `RUNTIME_PROFILE_SWITCH` olarak da yazılır
-

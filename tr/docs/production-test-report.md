@@ -1,60 +1,60 @@
 # Production Test Raporu
 
-Bu doküman, `cache-database` e-ticaret DAO modülu için şu ana kadar çalıştırilan production-benzeri smoke test sonuclarini ve bir sonraki full benchmark fazini özetler.
+Bu doküman, `cache-database` e-ticaret DAO modülü için şu ana kadar çalıştırılan production-benzeri smoke test sonuçlarını ve bir sonraki full benchmark aşamasını özetler.
 
-## Güncel Smoke Sonuclari
+## Güncel Smoke Sonuçları
 
-Doğrulama ortami:
+Doğrulama ortamı:
 
 - Redis: `redis://default:welcome1@127.0.0.1:56379`
 - PostgreSQL: `jdbc:postgresql://127.0.0.1:55432/postgres`
 - PostgreSQL kullanıcı bilgisi: `postgres / postgresql`
-- Test sınıfi: `EcommerceProductionScenarioSmokeTest`
+- Test sınıfı: `EcommerceProductionScenarioSmokeTest`
 
 Koşulan senaryolar:
 
-| Senaryo | Tip | Islem | Okuma | Yazma | Hata | Ort. Geçikme | Maks Geçikme | Write-Behind Backlog | DLQ | Health |
+| Senaryo | Tip | İşlem | Okuma | Yazma | Hata | Ort. Gecikme | Maks Gecikme | Write-Behind Backlog | DLQ | Health |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | `campaign-push-spike-smoke` | LOAD | 72 | 38 | 34 | 0 | 27,224 us | 107,732 us | 434 | 0 | `DEGRADED` |
 | `write-behind-backpressure-breaker-smoke` | BREAK | 42 | 10 | 32 | 0 | 48,305 us | 117,131 us | 432 | 0 | `DEGRADED` |
 
-## Bu Sonuclar Ne Soyluyor
+## Bu Sonuçlar Ne Söylüyor
 
 Olumlu sinyaller:
 
-- DAO katmanı karisik okuma/yazma trafiğini runtime hatasi olmadan isleyebildi.
+- DAO katmanı karışık okuma/yazma trafiğini runtime hatası olmadan işleyebildi.
 - Redis-first yol hem dengeli hem de yazma ağırlıklı trafiğe cevap verdi.
-- Her iki smoke koşusunda da dead-letter oluşmadi.
-- Production test modülu hem makine-okunur hem de insan-okunur rapor üretti.
+- Her iki smoke koşusunda da dead-letter oluşmadı.
+- Production test modülü hem makine-okunur hem de insan-okunur rapor üretti.
 
 Görülen darboğaz:
 
-- Her iki koşu sonunda da anlamli write-behind backlog oluştu.
-- Bu, kısa vadede asıl limitin Redis mutation hızi değil, PostgreSQL flush kapasitesi ve drain hızi olduğunu gösteriyor.
-- `BREAK` senaryosunda geçikme, karisik yuk senaryosuna göre belirgin şekilde daha kötü; bu da inventory/order yazma baskisiyla uyumlu.
+- Her iki koşu sonunda da anlamlı write-behind backlog oluştu.
+- Bu, kısa vadede asıl limitin Redis mutation hızı değil, PostgreSQL flush kapasitesi ve drain hızı olduğunu gösteriyor.
+- `BREAK` senaryosunda gecikme, karışık yük senaryosuna göre belirgin şekilde daha kötü; bu da inventory/order yazma baskısıyla uyumlu.
 
-Bugunku yorum:
+Bugünkü yorum:
 
-- Mimari smoke ölçeginde doğru çalışiyor.
-- Patlama trafiği için production hazırligi henüz kanıtlanmış değil.
-- Sistem bugunku haliyle aniden kirilmaktan çok, async flush backlog biriktirerek değrade olma egiliminde.
+- Mimari smoke ölçeğinde doğru çalışıyor.
+- Patlama trafiği için production hazırlığı henüz kanıtlanmış değil.
+- Sistem bugünkü haliyle aniden kırılmaktan çok, async flush backlog biriktirerek degrade olma eğiliminde.
 
 ## Production Öncesi Ana Riskler
 
 1. Write-behind saturation.
-   PostgreSQL flush worker'lari kampanya piklerinde geride kalabilir ve kalıci backlog üretebilir.
+   PostgreSQL flush worker'ları kampanya piklerinde geride kalabilir ve kalıcı backlog üretebilir.
 
-2. Sustained burst altında health değradation.
-   DLQ oluşmasa bile backlog çok uzun süre tasinirsa sistem uzun süre `DEGRADED` kalabilir.
+2. Sustained burst altında health degradation.
+   DLQ oluşmasa bile backlog çok uzun süre taşınırsa sistem uzun süre `DEGRADED` kalabilir.
 
 3. Hot SKU contention.
-   Flash-sale benzeri az sayıda SKU üzerindeki inventory yazmalari geçikmeyi artirabilir ve worker dagilimini bozabilir.
+   Flash-sale benzeri az sayıda SKU üzerindeki inventory yazmaları gecikmeyi artırabilir ve worker dağılımını bozabilir.
 
 4. Geniş katalog taramasında cache churn.
-   Düşük hot-set butcesiyle büyük browse firtinalari Redis verimini azaltip read-through baskisini arttirabilir.
+   Düşük hot-set bütçesiyle büyük browse fırtınaları Redis verimini azaltıp read-through baskısını arttırabilir.
 
-5. Benchmark boslugu.
-   Bugunku doğrulama bilerek kucultulmus smoke testtir. 10k, 25k veya 50k TPS sınıfinda davranış henüz kanıtlanmadi.
+5. Benchmark boşluğu.
+   Bugünkü doğrulama bilerek küçültülmüş smoke testtir. 10k, 25k veya 50k TPS sınıfında davranış henüz kanıtlanmadı.
 
 ## Guardrail Alert ve Runbook Seti
 
@@ -62,19 +62,19 @@ Bugunku yorum:
 
 | Alert | Warning Tetik | Critical Tetik | Ana Risk | İlk Operator Aksiyonu |
 | --- | --- | --- | --- | --- |
-| `WRITE_BEHIND_BACKLOG` | backlog warning eşiğini geçer | backlog critical eşiğini geçer | PostgreSQL drain saturation | producer'lari yavaslat, flush throughput ve drain durumunu kontrol et |
-| `COMPACTION_PENDING_BACKLOG` | pending compaction warning eşiğini geçer | pending compaction critical eşiğini geçer | Redis memory büyümesi ve stale flush geçikmesi | compaction worker sağligini ve runtime profile switching'i kontrol et |
-| `REDIS_MEMORY_PRESSURE` | used memory warning butcesini geçer | used memory critical butcesini geçer | Redis eviction baskisi ve degraded serving | daha sert guardrail profile'a geç, hot-set/page-cache butcelerini daralt |
-| `REDIS_HARD_REJECTIONS` | yok | herhangi bir rejected write | bounded-memory korumasi yazılari düşürüyor | kampanya trafiğini azalt ve drain kapasitesini geri kazan |
-| `QUERY_INDEX_DEGRADED` | namespace degraded işaretlenir | degraded namespace SLA içinde rebuild edilmez | full-scan fallback nedeniyle query latency artar | query-index rebuild tetikle ve hard-limit baskisinin bittigini doğrula |
-| `TOMBSTONE_BUILDUP` | tombstone sayısı delete baseline üstunde buyur | tombstone TTL ile bosalmiyor | delete ağırlikli churn veya drain lag | delete trafiğini, stale resurrection korumasini ve TTL cleanup'i kontrol et |
+| `WRITE_BEHIND_BACKLOG` | backlog warning eşiğini geçer | backlog critical eşiğini geçer | PostgreSQL drain saturation | producer'ları yavaşlat, flush throughput ve drain durumunu kontrol et |
+| `COMPACTION_PENDING_BACKLOG` | pending compaction warning eşiğini geçer | pending compaction critical eşiğini geçer | Redis memory büyümesi ve stale flush gecikmesi | compaction worker sağlığını ve runtime profile switching'i kontrol et |
+| `REDIS_MEMORY_PRESSURE` | used memory warning bütçesini geçer | used memory critical bütçesini geçer | Redis eviction baskısı ve degraded serving | daha sert guardrail profile'a geç, hot-set/page-cache bütçelerini daralt |
+| `REDIS_HARD_REJECTIONS` | yok | herhangi bir rejected write | bounded-memory koruması yazıları düşürüyor | kampanya trafiğini azalt ve drain kapasitesini geri kazan |
+| `QUERY_INDEX_DEGRADED` | namespace degraded işaretlenir | degraded namespace SLA içinde rebuild edilmez | full-scan fallback nedeniyle query latency artar | query-index rebuild tetikle ve hard-limit baskısının bittiğini doğrula |
+| `TOMBSTONE_BUILDUP` | tombstone sayısı delete baseline üstünde büyür | tombstone TTL ile boşalmıyor | delete ağırlıklı churn veya drain lag | delete trafiğini, stale resurrection korumasını ve TTL cleanup'i kontrol et |
 
 Önerilen operator runbook:
 
-1. Backlog ve memory birlikte yukseliyorsa önce Redis sizing değil PostgreSQL drain kapasitesini supheli kabul et.
-2. Hard rejection görülurse önce kritik olmayan kampanya trafiğini kis; sistem bounded memory korumasi için availability'den feragat ediyor olabilir.
-3. Bir namespace degraded query-index modundaysa hard-limit baskisinin düştugunu doğrula ve `/api/query-index/rebuild` tetikle.
-4. Pressure düştükten sonra tombstone yüksek kalmaya devam ediyorsa delete ağırlikli is yüklerini, write-behind drain'i ve tombstone TTL ayarlarıni incele.
+1. Backlog ve memory birlikte yükseliyorsa önce Redis sizing değil PostgreSQL drain kapasitesini şüpheli kabul et.
+2. Hard rejection görülürse önce kritik olmayan kampanya trafiğini kıs; sistem bounded memory koruması için availability'den feragat ediyor olabilir.
+3. Bir namespace degraded query-index modundaysa hard-limit baskısının düştüğünü doğrula ve `/api/query-index/rebuild` tetikle.
+4. Pressure düştükten sonra tombstone yüksek kalmaya devam ediyorsa delete ağırlıklı iş yüklerini, write-behind drain'i ve tombstone TTL ayarlarını incele.
 5. Throughput kazanmak için tombstone'u kapatma; bu stale resurrection riskini geri getirir.
 
 ## Admin Metrics Export
@@ -85,31 +85,31 @@ Admin HTTP artık Prometheus uyumlu scrape endpoint'i de açıyor:
 GET /api/prometheus
 ```
 
-Buradan şu metrik aileleri alinabilir:
+Buradan şu metrik aileleri alınabilir:
 
-- write-behind, DLQ, reconciliation ve diagnostics stream uzunluklari
-- write-behind worker flush/coalescing/dead-letter sayaclari
-- dead-letter recovery replay/failure sayaclari
+- write-behind, DLQ, reconciliation ve diagnostics stream uzunlukları
+- write-behind worker flush/coalescing/dead-letter sayaçları
+- dead-letter recovery replay/failure sayaçları
 - planner statistics key sayıları
 - Redis used memory, peak memory, compaction pending, payload count ve hard rejection sayıları
 - runtime profile etiketi ve switch sayısı
 
-Bu sayede production alerting yalnızca dashboard'a bağlı kalmadan Prometheus tarafına da tasinabilir.
+Bu sayede production alerting yalnızca dashboard'a bağlı kalmadan Prometheus tarafına da taşınabilir.
 
 ## Production Certification Runner
 
-Production test modülu artık certification giriş noktası da iceriyor:
+Production test modülü artık certification giriş noktası da içeriyor:
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.ProductionCertificationMain"
 ```
 
-Certification raporu şunları birlestirir:
+Certification raporu şunları birleştirir:
 
 - representative benchmark koşusu
-- gerçek Redis/PostgreSQL yigininda restart/recover doğrulamasi
-- throughput, backlog, hata, hard rejection, rebuild başarisi ve restart recovery için açık gate'ler
+- gerçek Redis/PostgreSQL yığınında restart/recover doğrulaması
+- throughput, backlog, hata, hard rejection, rebuild başarısı ve restart recovery için açık gate'ler
 
 Üretilen dosyalar:
 
@@ -118,18 +118,18 @@ Certification raporu şunları birlestirir:
 
 ## Semantics ve Shedding Matrisi
 
-| Entity / Query Sınıfi | Persistence Semantigi | Hard-Limit Davranisi | Recovery Yolu |
+| Entity / Query Sınıfı | Persistence Semantiği | Hard-Limit Davranışı | Recovery Yolu |
 | --- | --- | --- | --- |
 | `customer` | `LATEST_STATE` | cache, index ve learning daha agresif shed edilebilir | otomatik veya admin query-index rebuild |
-| `inventory` | `LATEST_STATE` | son stok doğrusunu korumak için cache ve index yollari agresif shed edilebilir | otomatik veya admin query-index rebuild |
+| `inventory` | `LATEST_STATE` | son stok doğrusunu korumak için cache ve index yolları agresif shed edilebilir | otomatik veya admin query-index rebuild |
 | `cart` | `LATEST_STATE` | mutable session state olduğu için agresif shedding kabul edilir | otomatik veya admin query-index rebuild |
-| `order` | `EXACT_SEQUENCE` | query index daha tutucu tutulabilir; write ordering korunur | persistence sıralamasi bozulmadan rebuild |
-| exact lookup query'leri | sağlikli durumda indexed | namespace policy izin verirse açık kalabilir | değrade değilse rebuild gerekmez |
-| text / relation / sort ağırlikli query'ler | sağlikli durumda indexed | hard-limit altında önce shed edilmesi tercih edilir | rebuild bitene kadar full-scan fallback |
+| `order` | `EXACT_SEQUENCE` | query index daha tutucu tutulabilir; write ordering korunur | persistence sıralaması bozulmadan rebuild |
+| exact lookup query'leri | sağlıklı durumda indexed | namespace policy izin verirse açık kalabilir | degrade değilse rebuild gerekmez |
+| text / relation / sort ağırlıklı query'ler | sağlıklı durumda indexed | hard-limit altında önce shed edilmesi tercih edilir | rebuild bitene kadar full-scan fallback |
 
-## Önerilen Full Benchmark Plani
+## Önerilen Full Benchmark Planı
 
-Repository artık doğrudan tam ölçek suite giriş noktası da iceriyor:
+Repository artık doğrudan tam ölçekli suite giriş noktası da içeriyor:
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -139,9 +139,9 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.postgres.url=jdbc:postgresql://127.0.0.1:5432/postgres"
 ```
 
-Tam ölçek suite şu an browse ağırlikli, checkout ağırlikli, contention, cache-thrash ve backpressure karakterli sekiz farklı `50k TPS` senaryo içerir.
+Tam ölçek suite şu an browse ağırlıklı, checkout ağırlıklı, contention, cache-thrash ve backpressure karakterli sekiz farklı `50k TPS` senaryo içerir.
 
-Ayrıca kademeli ölçek koşusu için ayrı bir giriş noktası vardir:
+Ayrıca kademeli ölçek koşusu için ayrı bir giriş noktası vardır:
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -153,33 +153,33 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 ### Faz 1: Kontrollü Yük Rampası
 
-Amac:
+Amaç:
 
-- güvenli throughput araligini bulmak
-- ilk kalıci değradation noktasıni görmek
+- güvenli throughput aralığını bulmak
+- ilk kalıcı degradation noktasını görmek
 
 Önerilen adımlar:
 
 1. `campaign-push-spike` senaryosunu `0.05`, `0.10`, `0.20` `scaleFactor` ile koş.
 2. Şu metrikleri kaydet:
-   - ops/seç
-   - ortalama ve p95 geçikme
-   - write-behind backlog artis hızi
-   - yuk bittikten sonraki drain süresi
+   - ops/sn
+   - ortalama ve p95 gecikme
+   - write-behind backlog artış hızı
+   - yük bittikten sonraki drain süresi
    - PostgreSQL CPU ve IO
-3. Backlog hedef iyilesme penceresinde bosalamiyorsa artık yuk arttirma.
+3. Backlog hedef iyileşme penceresinde boşalamıyorsa artık yükü artırma.
 
-Başari kriterleri:
+Başarı kriterleri:
 
-- DLQ oluşmamasi
-- backlog'un hedef sürede bosalmasi
-- health'in `DEGRADED` seviyesinden tekrar `UP` seviyesine donmesi
+- DLQ oluşmaması
+- backlog'un hedef sürede boşalması
+- health'in `DEGRADED` seviyesinden tekrar `UP` seviyesine dönmesi
 
-### Faz 2: Yazma Ağırlikli Esik Testi
+### Faz 2: Yazma Ağırlıklı Eşik Testi
 
-Amac:
+Amaç:
 
-- write-behind çokus noktasıni bulmak
+- write-behind çöküş noktasını bulmak
 
 Önerilen senaryolar:
 
@@ -188,22 +188,22 @@ Amac:
 
 Ölçülecekler:
 
-- queue length egimi
+- queue length eğimi
 - DLQ oluşumu
 - recovery worker claim sayısı
 - order/inventory persistence lag
 
-Başari kriterleri:
+Başarı kriterleri:
 
-- kalıci DLQ birikmemesi
-- recovery'nin kontrol edilebilir kalmasi
-- stale write'larin yeni durumu ezmemesi
+- kalıcı DLQ birikmemesi
+- recovery'nin kontrol edilebilir kalması
+- stale write'ların yeni durumu ezmemesi
 
-### Faz 3: Browse Firtinasinda Cache Verimi
+### Faz 3: Browse Fırtınasında Cache Verimi
 
-Amac:
+Amaç:
 
-- katalog ağırlikli donemlerde Redis hot-set ve page-cache davranışını görmek
+- katalog ağırlıklı dönemlerde Redis hot-set ve page-cache davranışını görmek
 
 Önerilen senaryo:
 
@@ -211,54 +211,52 @@ Amac:
 
 Ölçülecekler:
 
-- hot-set eviction hızi
-- page cache hit orani
+- hot-set eviction hızı
+- page cache hit oranı
 - planner learned-stat büyümesi
 - Redis bellek kullanımı
 
-Başari kriterleri:
+Başarı kriterleri:
 
-- eviction'in kontrol altında kalmasi
-- Redis belleginin butce içinde kalmasi
-- uzun taramalarda okuma geçikmesinin sert biçimde artmamasi
+- eviction'in kontrol altında kalması
+- Redis belleğinin bütçe içinde kalması
+- uzun taramalarda okuma gecikmesinin sert biçimde artmaması
 
-### Faz 4: Bilerek Kirma Testleri
+### Faz 4: Bilerek Kırma Testleri
 
-Amac:
+Amaç:
 
-- sistemi konfor alanınin dışına itince recovery davranışını doğrulamak
+- sistemi konfor alanının dışına itince recovery davranışını doğrulamak
 
 Önerilen kırma testleri:
 
 - write-behind worker sayısını `1`e düşürmek
-- batch size'i agresif şekilde kucultmek
+- batch size'i agresif şekilde küçültmek
 - hot-set limitlerini daraltmak
-- checkout ve inventory oranini arttirmak
-- yuk altında PostgreSQL'i kısa süre durdurmak
+- checkout ve inventory oranını arttırmak
+- yük altında PostgreSQL'i kısa süre durdurmak
 
-Beklenen çıktular:
+Beklenen çıktılar:
 
-- backlog buyur
-- health değrade olur
+- backlog büyür
+- health degrade olur
 - recovery yolu gözlemlenebilir kalır
 - veri tutarlılığı korumaları yine de çalışır
 
 ## Production Gate Önerisi
 
-Gerçek bir e-ticaret kampanya yolu için DAO katmanına production-ready denmeden önce şunlar sağlanmali:
+Gerçek bir e-ticaret kampanya yolu için DAO katmanına production-ready denmeden önce şunlar sağlanmalı:
 
-- birden fazla ölçekte sustained burst testleri koşulmus olmali
+- birden fazla ölçekte sustained burst testleri koşulmuş olmalı
 - write-behind drain süresi ölçülüp kabul edilmiş olmalı
-- browse storm altında Redis bellek butcesi doğrulanmis olmali
-- DLQ bos kalmalı ya da operasyonel olarak geri alinabilir olmali
+- browse storm altında Redis bellek bütçesi doğrulanmış olmalı
+- DLQ boş kalmalı ya da operasyonel olarak geri alınabilir olmalı
 - hot inventory contention güvensiz persistence lag üretmemeli
-- operasyon ekibinin `DEGRADED` ve `DOWN` esikleri net olmali
+- operasyon ekibinin `DEGRADED` ve `DOWN` eşikleri net olmalı
 
 ## Sonraki Somut Çıktılar
 
 1. `5m`, `15m`, `30m` gibi sabit süreli uzun benchmark profilleri ekle.
-2. Benchmark raporlarina p95/p99 geçikme ve backlog egimi ekle.
+2. Benchmark raporlarına p95/p99 gecikme ve backlog eğimi ekle.
 3. Resilience testi için opsiyonel PostgreSQL pause/fault injection ekle.
-4. Koşulari zaman içinde karşılastiracak benchmark karşılastirma dokümani ekle.
-
-
+4. Koşuları zaman içinde karşılaştıracak benchmark karşılaştırma dokümanı ekle.

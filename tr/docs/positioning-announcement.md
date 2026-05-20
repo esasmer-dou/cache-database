@@ -1,48 +1,48 @@
-# CacheDB Konumlandırma Taslagi
+# Konumlandırma Duyurusu Taslağı
 
-CacheDB, production runtime overhead'i önemseyen ama tüm kodu alt seviye altyapi stiline düşürmek istemeyen ekipler için Redis-first bir persistence kütüphanesidir.
+CacheDB, Redis merkezli sistemler için tasarlanmış düşük ek yüklü bir Java
+persistence kütüphanesidir. Amaç, ekipleri her yerde düşük seviye repository
+koduna zorlamadan, sıcak veri yollarını açık ve ölçülebilir tutmaktır.
 
-Kısa hikaye:
+## Tek Cümlelik Mesaj
 
-- Redis-first okuma ve yazma
-- async write-behind ile PostgreSQL kalıciligi
-- runtime reflection yerine compile-time generated metadata
-- kolay onboarding için generated domain ve binding surface
-- gerçek hotspot'lar için ölçülmüş kaçış hatları
+> CacheDB, Redis merkezli Java servisleri için düşük çalışma zamanı ek yükü,
+> açık okuma modeli kontrolü ve ORM'e yakın generated API deneyimi sunar.
 
-Bu konumlandırmayi güvenilir yapan şeyler:
+## Güvenilirlik Sınırı
 
-- proje, Hibernate/JPA'nin hala daha doğru tercih olduğu yerleri açıkça soyluyor
-- generated ergonomi yüzeyleri minimal repository kullanımına karşı benchmark'lanmis durumda
-- relation-ağır read pattern'ler sadece anlatiyla değil, ayrı bir read-shape benchmark ile destekleniyor
+> CacheDB persistence davranışını gizlemeye çalışmaz. Sıcak veri yolunu daha
+> açık, daha sınırlı ve daha kolay ölçülebilir hale getirir.
 
-Repo içindeki güncel kanıtlar:
+## Güçlü Olduğu Yerler
 
-- repository recipe benchmark:
-  - generated entity binding, minimal repository'ye göre ortalama yaklasik `+4.84%`
-  - JPA-style domain modüle, minimal repository'ye göre ortalama yaklasik `+16.83%`
-- read-shape benchmark:
-  - production'a çıkmadan önce summary/detail, preview ve full aggregate maliyetlerini görünur kilar
+- Redis'in production mimarisinde birinci sınıf bağımlılık olduğu servisler
+- düşük gecikmeli okuma yoluna ihtiyaç duyan ürün API'leri
+- projection kullanan dashboard ve liste ağırlıklı uygulamalar
+- runtime reflection istemeyen Java ekipleri
+- normal kodu ergonomik tutarken ölçülen darboğazlarda kaçış hattı isteyen ekipler
 
-Önerilen disa donuk konumlandırma cumlesi:
+## Uygun Olmadığı Yerler
 
-> CacheDB, Redis-merkezli sistemler için daha düşük production overhead, explicit read-model kontrolu ve ekipleri her yerde alt seviye repository koduna zorlamayan ergonomik bir ORM alternatifi sunar.
+- ana yükü SQL join ve ilişkisel raporlama olan uygulamalar
+- ORM davranışının büyük ölçüde görünmez kalmasını isteyen ekipler
+- Redis'in gerçek runtime tasarımının parçası olmadığı sistemler
+- okuma modeli ve projection disiplinini sahiplenmek istemeyen ekipler
 
-Önerilen guardrail cumlesi:
+## Kanıt Cümleleri
 
-> CacheDB persistence davranışını gizlemeye çalışmaz. Düşük-overhead yolunu daha kolay tüketilir hale getirmeye çalışır.
+- Repository recipe benchmark, generated API yüzeyinin doğrudan repository yoluna yakın kaldığını gösterir.
+- Read-shape benchmark, summary/detail ve preview desenlerinin full aggregate okumaya göre neden gerekli olduğunu görünür kılar.
+- Çok podlu koordinasyon smoke'u, Redis stream consumer kimliği ve singleton operasyon döngülerini doğrular.
 
-Önerilen hedef kitle:
+## Dışa Dönük Açıklama
 
-- sıcak read path'i olan ürün servişleri
-- Redis'i birinci sınıf bağımlilik olarak isleten ekipler
-- projection'dan fayda sağlayan dashboard ve liste-ağır uygulamalar
-- generated API yüzeyi isteyen ama hotspot kaçış hattına da ihtiyaç duyan ekipler
+CacheDB, PostgreSQL'i kalıcı kaynak olarak korurken sıcak okuma ve yazma yolunu
+Redis üzerinden kurar. Derleme zamanında üretilen metadata sayesinde runtime
+reflection'a ihtiyaç duymaz. Normal servis kodu generated API'lerle ergonomik
+kalır; çok ilişkili veya global sıralı ekranlarda ise projection ve okuma modeli
+disiplini kullanılır.
 
-Uygun olmayan hedef kitle:
-
-- ana yuku SQL join ve iliskisel raporlama olan uygulamalar
-- ORM davranışının büyük ölçude implicit kalmasini isteyen ekipler
-- Redis'in gerçek runtime tasarıminin parcasi olmadigi sistemler
-
-
+Bu nedenle CacheDB, "her şeyi otomatik gizleyen ORM" değil; sıcak veri yolunu
+bilinçli biçimde tasarlamak isteyen ekipler için düşük ek yüklü bir persistence
+katmanıdır.

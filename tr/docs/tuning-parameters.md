@@ -41,19 +41,19 @@ Kapsam bazlı bağlantı tuning:
 | Property | Varsayılan | Ne ise yarar |
 | --- | --- | --- |
 | `<scope>.redis.uri` | runtime'a göre | Redis hedef URI'si. |
-| `<scope>.redis.pool.maxTotal` | `64` | Havuzdaki maksimum Redis bağlantısi. |
-| `<scope>.redis.pool.maxIdle` | `16` | Sıcak tutulacak maksimum idle Redis bağlantısi. |
-| `<scope>.redis.pool.minIdle` | `4` | Hazır tutulacak minimum idle Redis bağlantısi. |
-| `<scope>.redis.pool.maxWaitMillis` | `5000` | Havuz doluyken caller'in ne kadar bekleyecegi. |
-| `<scope>.redis.pool.blockWhenExhausted` | `true` | Havuz doluyken hemen hata vermek yerine beklemeyi açıp kapatir. |
-| `<scope>.redis.pool.testOnBorrow` | `false` | Havuzdan alinan bağlantıyi validate eder. |
-| `<scope>.redis.pool.testWhileIdle` | `false` | Idle bağlantılari bakım döngüsunda validate eder. Varsayılan olarak kapali tutulur; arka planda `PING` maliyeti ve timeout gürültüsu üretmesin diye. |
+| `<scope>.redis.pool.maxTotal` | `64` | Havuzdaki maksimum Redis bağlantısı. |
+| `<scope>.redis.pool.maxIdle` | `16` | Sıcak tutulacak maksimum idle Redis bağlantısı. |
+| `<scope>.redis.pool.minIdle` | `4` | Hazır tutulacak minimum idle Redis bağlantısı. |
+| `<scope>.redis.pool.maxWaitMillis` | `5000` | Havuz doluyken caller'in ne kadar bekleyeceği. |
+| `<scope>.redis.pool.blockWhenExhausted` | `true` | Havuz doluyken hemen hata vermek yerine beklemeyi açıp kapatır. |
+| `<scope>.redis.pool.testOnBorrow` | `false` | Havuzdan alinan bağlantıyı validate eder. |
+| `<scope>.redis.pool.testWhileIdle` | `false` | Idle bağlantıları bakım döngüsünde validate eder. Varsayılan olarak kapalı tutulur; arka planda `PING` maliyeti ve timeout gürültüsu üretmesin diye. |
 | `<scope>.redis.pool.timeBetweenEvictionRunsMillis` | `30000` | Idle connection bakım periyodu. |
 | `<scope>.redis.pool.minEvictableIdleTimeMillis` | `60000` | Idle bağlantınin ne kadar sonra atilabilecegi. |
-| `<scope>.redis.pool.numTestsPerEvictionRun` | `3` | Her bakım döngüsunda test edilen idle bağlantı sayısı. |
+| `<scope>.redis.pool.numTestsPerEvictionRun` | `3` | Her bakım döngüsünde test edilen idle bağlantı sayısı. |
 | `<scope>.redis.pool.connectionTimeoutMillis` | `2000` | Yeni Redis soketleri için connect timeout. |
-| `<scope>.redis.pool.readTimeoutMillis` | `5000` | Normal Redis komutlari için read timeout. |
-| `<scope>.redis.pool.blockingReadTimeoutMillis` | `15000` | Stream read gibi blocking Redis komutlari için read timeout. Worker block timeout değerinin üstunde tutulmalidir; aksi halde sahte `Read timed out` görülebilir. |
+| `<scope>.redis.pool.readTimeoutMillis` | `5000` | Normal Redis komutları için read timeout. |
+| `<scope>.redis.pool.blockingReadTimeoutMillis` | `15000` | Stream read gibi blocking Redis komutları için read timeout. Worker block timeout değerinin üstünde tutulmalıdır; aksi halde sahte `Read timed out` görülebilir. |
 
 ## Spring Boot Starter Redis Topolojisi
 
@@ -68,64 +68,64 @@ Bu property'ler özellikle `cachedb-spring-boot-starter` için geçerlidir.
 | `cachedb.redis.pool.maxIdle` | `16` | Foreground repository havuzunun maksimum idle boyutu. |
 | `cachedb.redis.pool.minIdle` | `4` | Foreground repository havuzunun minimum idle boyutu. |
 | `cachedb.redis.pool.maxWaitMillis` | `5000` | Foreground repository havuzunda maksimum bekleme süresi. |
-| `cachedb.redis.pool.blockWhenExhausted` | `true` | Foreground havuz doluyken bekleme davranışını açıp kapatir. |
-| `cachedb.redis.pool.testOnBorrow` | `false` | Foreground bağlantılari borrow aninda validate eder. |
-| `cachedb.redis.pool.testWhileIdle` | `false` | Foreground idle bağlantılari bakım döngüsunde validate eder. Varsayılan olarak kapali; repository yoluna idle-validation `PING` gürültüsu bindirmemek için. |
+| `cachedb.redis.pool.blockWhenExhausted` | `true` | Foreground havuz doluyken bekleme davranışını açıp kapatır. |
+| `cachedb.redis.pool.testOnBorrow` | `false` | Foreground bağlantıları borrow anında validate eder. |
+| `cachedb.redis.pool.testWhileIdle` | `false` | Foreground idle bağlantıları bakım döngüsünde validate eder. Varsayılan olarak kapalı; repository yoluna idle-validation `PING` gürültüsu bindirmemek için. |
 | `cachedb.redis.pool.timeBetweenEvictionRunsMillis` | `30000` | Foreground idle-eviction bakım periyodu. |
-| `cachedb.redis.pool.minEvictableIdleTimeMillis` | `60000` | Foreground idle bağlantılarin atilma eşiği. |
-| `cachedb.redis.pool.numTestsPerEvictionRun` | `3` | Foreground bakım döngüsunda test edilen idle bağlantı sayısı. |
+| `cachedb.redis.pool.minEvictableIdleTimeMillis` | `60000` | Foreground idle bağlantıların atılma eşiği. |
+| `cachedb.redis.pool.numTestsPerEvictionRun` | `3` | Foreground bakım döngüsünde test edilen idle bağlantı sayısı. |
 | `cachedb.redis.pool.connectionTimeoutMillis` | `2000` | Foreground Redis connect timeout. |
 | `cachedb.redis.pool.readTimeoutMillis` | `5000` | Foreground Redis normal komut read timeout'u. |
 | `cachedb.redis.pool.blockingReadTimeoutMillis` | `15000` | Foreground Redis blocking komut read timeout'u. |
-| `cachedb.redis.background.enabled` | `true` | Background worker/admin havuzunu açar veya kapatir. |
+| `cachedb.redis.background.enabled` | `true` | Background worker/admin havuzunu açar veya kapatır. |
 | `cachedb.redis.background.uri` | `cachedb.redis.uri` fallback'i | Background worker/admin Redis URI'si. |
 | `cachedb.redis.background.pool.maxTotal` | `24` | Background worker/admin havuzunun maksimum boyutu. |
 | `cachedb.redis.background.pool.maxIdle` | `8` | Background worker/admin havuzunun maksimum idle boyutu. |
 | `cachedb.redis.background.pool.minIdle` | `2` | Background worker/admin havuzunun minimum idle boyutu. |
 | `cachedb.redis.background.pool.maxWaitMillis` | `5000` | Background havuzunda maksimum bekleme süresi. |
-| `cachedb.redis.background.pool.blockWhenExhausted` | `true` | Background havuz doluyken bekleme davranışını açıp kapatir. |
-| `cachedb.redis.background.pool.testOnBorrow` | `false` | Background bağlantılari borrow aninda validate eder. |
-| `cachedb.redis.background.pool.testWhileIdle` | `false` | Background idle bağlantılari bakım döngüsunde validate eder. Varsayılan olarak kapali; worker/admin havuzlari periyodik validation yerine reconnect ile toparlansin diye. |
+| `cachedb.redis.background.pool.blockWhenExhausted` | `true` | Background havuz doluyken bekleme davranışını açıp kapatır. |
+| `cachedb.redis.background.pool.testOnBorrow` | `false` | Background bağlantıları borrow anında validate eder. |
+| `cachedb.redis.background.pool.testWhileIdle` | `false` | Background idle bağlantıları bakım döngüsünde validate eder. Varsayılan olarak kapalı; worker/admin havuzları periyodik validation yerine reconnect ile toparlansın diye. |
 | `cachedb.redis.background.pool.timeBetweenEvictionRunsMillis` | `30000` | Background idle-eviction bakım periyodu. |
-| `cachedb.redis.background.pool.minEvictableIdleTimeMillis` | `60000` | Background idle bağlantılarin atilma eşiği. |
-| `cachedb.redis.background.pool.numTestsPerEvictionRun` | `3` | Background bakım döngüsunda test edilen idle bağlantı sayısı. |
+| `cachedb.redis.background.pool.minEvictableIdleTimeMillis` | `60000` | Background idle bağlantıların atılma eşiği. |
+| `cachedb.redis.background.pool.numTestsPerEvictionRun` | `3` | Background bakım döngüsünde test edilen idle bağlantı sayısı. |
 | `cachedb.redis.background.pool.connectionTimeoutMillis` | `2000` | Background Redis connect timeout. |
 | `cachedb.redis.background.pool.readTimeoutMillis` | `10000` | Background Redis normal komut read timeout'u. |
-| `cachedb.redis.background.pool.blockingReadTimeoutMillis` | `30000` | Background Redis blocking stream ve recovery komutlari için read timeout. |
+| `cachedb.redis.background.pool.blockingReadTimeoutMillis` | `30000` | Background Redis blocking stream ve recovery komutları için read timeout. |
 
 ## Runtime Coordination
 
-Bu property'ler çok pod'lu ortamda worker kimliğini ve singleton operasyonel loop'lari ayarlar.
+Bu property'ler çok pod'lu ortamda worker kimliğini ve singleton operasyonel döngüleri ayarlar.
 
 ### Core Override'lar
 
 | Property | Varsayılan | Ne ise yarar |
 | --- | --- | --- |
-| `cachedb.config.runtimeCoordination.instanceId` | bos | Açık runtime instance id. Bos bırakilirsa CacheDB bunu environment'tan çözer ve gerekirse UUID üretir. |
-| `cachedb.config.runtimeCoordination.appendInstanceIdToConsumerNames` | `true` | Çözulen instance id'yi worker consumer name prefix'lerine ekler. Kubernetes'te ortak consumer group kullanımında açık tutulmalidir. |
+| `cachedb.config.runtimeCoordination.instanceId` | boş | Açık runtime instance id. Bos bırakilirsa CacheDB bunu environment'tan çözer ve gerekirse UUID üretir. |
+| `cachedb.config.runtimeCoordination.appendInstanceIdToConsumerNames` | `true` | Çözulen instance id'yi worker consumer name prefix'lerine ekler. Kubernetes'te ortak consumer group kullanımında açık tutulmalıdır. |
 | `cachedb.config.runtimeCoordination.leaderLeaseEnabled` | `true` | Cleanup/report/history benzeri singleton loop'lar için Redis leader lease'i açar. |
 | `cachedb.config.runtimeCoordination.leaderLeaseSegment` | `coordination:leader` | Ana key prefix altında leader lease key'leri için kullanılan Redis segment'i. |
 | `cachedb.config.runtimeCoordination.leaderLeaseTtlMillis` | `15000` | Singleton operasyonel loop'lar için Redis lease TTL süresi. |
-| `cachedb.config.runtimeCoordination.leaderLeaseRenewIntervalMillis` | `5000` | Lider pod'un lease'i ne siklikta yenileyecegi. |
+| `cachedb.config.runtimeCoordination.leaderLeaseRenewIntervalMillis` | `5000` | Lider pod'un lease'i ne sıklıkta yenileyecegi. |
 
-### Spring Boot Starter Kısayollari
+### Spring Boot Starter Kısayolları
 
 | Property | Varsayılan | Ne ise yarar |
 | --- | --- | --- |
-| `cachedb.runtime.instance-id` | bos | Runtime instance id için starter dostu alias. |
+| `cachedb.runtime.instance-id` | boş | Runtime instance id için starter dostu alias. |
 | `cachedb.runtime.append-instance-id-to-consumer-names` | `true` | Pod-unique consumer adları için starter dostu bayrak. |
-| `cachedb.runtime.leader-lease-enabled` | `true` | Singleton ops loop'lari için Redis leader lease'i acan starter dostu bayrak. |
+| `cachedb.runtime.leader-lease-enabled` | `true` | Singleton ops döngüleri için Redis leader lease'i açan starter dostu bayrak. |
 | `cachedb.runtime.leader-lease-segment` | `coordination:leader` | Leader lease key'leri için starter dostu Redis segment'i. |
 | `cachedb.runtime.leader-lease-ttl-millis` | `15000` | Leader lease TTL süresi. |
-| `cachedb.runtime.leader-lease-renew-interval-millis` | `5000` | Leader lease yenileme araligi. |
+| `cachedb.runtime.leader-lease-renew-interval-millis` | `5000` | Leader lease yenileme aralığı. |
 
 Operasyonel notlar:
 
 - consumer group'lar pod'lar arasinda ortak kalır; sadece consumer adları pod-unique olur
 - otomatik instance id çözme sırası `cachedb.runtime.instance-id`, `CACHE_DB_INSTANCE_ID`, `HOSTNAME`, `POD_NAME`, `COMPUTERNAME`, sonra üretilen UUID şeklindedir
-- leader lease bugun cleanup/report/history benzeri loop'lari kapsar; ana consumer-group worker'lar bu yolla singleton yapılmaz
+- leader lease bugun cleanup/report/history benzeri döngüleri kapsar; ana consumer-group worker'lar bu yolla singleton yapılmaz
 - tek Redis hâlâ koordinasyon katmanının merkezi bağımlılığıdır; production'da durable/HA Redis kullan
-- worker thread sayısını pod bazlı değil, cluster toplami olarak düşün
+- worker thread sayısını pod bazlı değil, cluster toplamı olarak düşün
 - aynı host üzerinde local smoke koşarken açık `cachedb.runtime.instance-id` değerleri ver ya da `tools/ops/cluster/run-multi-instance-coordination-smoke.ps1` script'ini kullan; çünkü `HOSTNAME` genelde tüm local process'lerde ortaktır
 
 ## PostgreSQL Client Tuning
@@ -133,16 +133,16 @@ Operasyonel notlar:
 | Property | Varsayılan | Ne ise yarar |
 | --- | --- | --- |
 | `<scope>.postgres.jdbcUrl` | runtime'a göre | PostgreSQL JDBC URL'i. |
-| `<scope>.postgres.user` | runtime'a göre | Veritabani kullanıcısi. |
-| `<scope>.postgres.password` | runtime'a göre | Veritabani sifresi. |
+| `<scope>.postgres.user` | runtime'a göre | Veritabanı kullanıcısı. |
+| `<scope>.postgres.password` | runtime'a göre | Veritabanı şifresi. |
 | `<scope>.postgres.connectTimeoutSeconds` | `30` | PostgreSQL connect timeout. |
 | `<scope>.postgres.socketTimeoutSeconds` | `300` | PostgreSQL socket read timeout. |
-| `<scope>.postgres.tcpKeepAlive` | `true` | PostgreSQL bağlantılarinda TCP keepalive açar. |
+| `<scope>.postgres.tcpKeepAlive` | `true` | PostgreSQL bağlantılarında TCP keepalive açar. |
 | `<scope>.postgres.rewriteBatchedInserts` | `true` | JDBC'nin batch insert'leri daha hızlı multi-value insert'e dönüştürmesini sağlar. |
 | `<scope>.postgres.prepareThreshold` | `5` | Server-prepared statement moduna geçiş eşiği. |
 | `<scope>.postgres.defaultRowFetchSize` | `0` | Varsayılan row fetch size. `0` driver default davranışını korur. |
 | `<scope>.postgres.applicationName` | `cache-database` | PostgreSQL oturumundaki application name. |
-| `<scope>.postgres.additionalParameters` | bos | `key=value;key=value` formatinda ek JDBC query parametreleri. |
+| `<scope>.postgres.additionalParameters` | boş | `key=value;key=value` formatında ek JDBC query parametreleri. |
 
 ## Core Runtime Tuning
 
@@ -150,20 +150,20 @@ Operasyonel notlar:
 
 | Property | Varsayılan | Ne ise yarar |
 | --- | --- | --- |
-| `cachedb.config.writeBehind.enabled` | `true` | Write-behind hattıni açar/kapatir. |
+| `cachedb.config.writeBehind.enabled` | `true` | Write-behind hattını açar/kapatır. |
 | `cachedb.config.writeBehind.workerThreads` | `max(1, cpu/2)` | Write-behind worker sayısı. |
-| `cachedb.config.writeBehind.batchSize` | `128` | Stream'den çekilen temel batch boyu. Eslı zamanlı yazma trafiğinde drain hızini artirmak için hafif yukseltilmistir. |
-| `cachedb.config.writeBehind.dedicatedWriteConsumerGroupEnabled` | `true` | Ayrik compaction consumer group kullanır. |
+| `cachedb.config.writeBehind.batchSize` | `128` | Stream'den çekilen temel batch boyu. Eş zamanlı yazma trafiğinde drain hızını artırmak için hafif yükseltilmiştir. |
+| `cachedb.config.writeBehind.dedicatedWriteConsumerGroupEnabled` | `true` | Ayrık compaction consumer group kullanır. |
 | `cachedb.config.writeBehind.durableCompactionEnabled` | `true` | Redis tarafında durable compaction state tutar. |
 | `cachedb.config.writeBehind.batchFlushEnabled` | `true` | Batch flush davranışını açar. |
-| `cachedb.config.writeBehind.tableAwareBatchingEnabled` | `true` | Flush gruplarini tablo/entity tipine göre ayirir. |
-| `cachedb.config.writeBehind.flushGroupParallelism` | `4` | Paralel flush grup sayısı. PostgreSQL flush overlap'ini arttirir. |
-| `cachedb.config.writeBehind.flushPipelineDepth` | `4` | Aynı anda ilerleyen flush dalga derinligi. Backlog altında worker'in daha dolu çalışmasini sağlar. |
-| `cachedb.config.writeBehind.coalescingEnabled` | `true` | Geçersizlesmis yazılari tek son state'e indirger. |
+| `cachedb.config.writeBehind.tableAwareBatchingEnabled` | `true` | Flush gruplarını tablo/entity tipine göre ayırır. |
+| `cachedb.config.writeBehind.flushGroupParallelism` | `4` | Paralel flush grup sayısı. PostgreSQL flush overlap'ini arttırır. |
+| `cachedb.config.writeBehind.flushPipelineDepth` | `4` | Aynı anda ilerleyen flush dalga derinliği. Backlog altında worker'in daha dolu çalışmasını sağlar. |
+| `cachedb.config.writeBehind.coalescingEnabled` | `true` | Geçersizleşmiş yazıları tek son state'e indirger. |
 | `cachedb.config.writeBehind.maxFlushBatchSize` | `128` | Tek flush batch'indeki maksimum satır. |
-| `cachedb.config.writeBehind.batchStaleCheckEnabled` | `true` | PostgreSQL flush öncesi stale batch kayitlarini eler. |
+| `cachedb.config.writeBehind.batchStaleCheckEnabled` | `true` | PostgreSQL flush öncesi stale batch kayıtlarını eler. |
 | `cachedb.config.writeBehind.adaptiveBacklogHighWatermark` | `250` | Yüksek backlog profiline geçiş eşiği. |
-| `cachedb.config.writeBehind.adaptiveBacklogCriticalWatermark` | `750` | Kritik backlog profiline geçiş eşiği. Worker'in süren baskida daha erken büyümesi için düşürülmüştür. |
+| `cachedb.config.writeBehind.adaptiveBacklogCriticalWatermark` | `750` | Kritik backlog profiline geçiş eşiği. Worker'in süren baskıda daha erken büyümesi için düşürülmüştür. |
 | `cachedb.config.writeBehind.adaptiveHighFlushBatchSize` | `256` | Yüksek backlog altındaki flush batch boyu. |
 | `cachedb.config.writeBehind.adaptiveCriticalFlushBatchSize` | `512` | Kritik backlog altındaki flush batch boyu. |
 | `cachedb.config.writeBehind.postgresMultiRowFlushEnabled` | `true` | Multi-row PostgreSQL upsert/delete yolunu açar. |
@@ -173,7 +173,7 @@ Operasyonel notlar:
 | `cachedb.config.writeBehind.blockTimeoutMillis` | `2000` | Redis stream block timeout. |
 | `cachedb.config.writeBehind.idleSleepMillis` | `250` | Worker idle sleep süresi. |
 | `cachedb.config.writeBehind.maxFlushRetries` | `3` | Genel flush retry sayısı. |
-| `cachedb.config.writeBehind.retryBackoffMillis` | `1000` | Retry arasindaki bekleme. |
+| `cachedb.config.writeBehind.retryBackoffMillis` | `1000` | Retry arasındaki bekleme. |
 | `cachedb.config.writeBehind.streamKey` | `cachedb:stream:write-behind` | Temel write-behind stream key'i. |
 | `cachedb.config.writeBehind.consumerGroup` | `cachedb-write-behind` | Temel consumer group. |
 | `cachedb.config.writeBehind.consumerNamePrefix` | `cachedb-worker` | Temel consumer name prefix. |
@@ -181,17 +181,17 @@ Operasyonel notlar:
 | `cachedb.config.writeBehind.compactionConsumerGroup` | `cachedb-write-behind-compaction` | Compaction consumer group. |
 | `cachedb.config.writeBehind.compactionConsumerNamePrefix` | `cachedb-compaction-worker` | Compaction consumer name prefix. |
 | `cachedb.config.writeBehind.compactionShardCount` | `4` | Compaction shard sayısı. Eszamanli yazmalarda durable compaction stream hot-spot'unu azaltir. |
-| `cachedb.config.writeBehind.autoCreateConsumerGroup` | `true` | Redis consumer group'lari otomatik oluşturur. |
+| `cachedb.config.writeBehind.autoCreateConsumerGroup` | `true` | Redis consumer group'ları otomatik oluşturur. |
 | `cachedb.config.writeBehind.shutdownAwaitMillis` | `10000` | Graceful shutdown bekleme süresi. |
-| `cachedb.config.writeBehind.daemonThreads` | `true` | Worker thread'lerini daemon olarak çalıştırir. |
+| `cachedb.config.writeBehind.daemonThreads` | `true` | Worker thread'lerini daemon olarak çalıştırır. |
 | `cachedb.config.writeBehind.recoverPendingEntries` | `true` | Startup'ta orphaned pending entry'leri claim eder. |
 | `cachedb.config.writeBehind.claimIdleMillis` | `5000` | Claim için idle eşiği. |
 | `cachedb.config.writeBehind.claimBatchSize` | `100` | Her döngüde claim edilen entry sayısı. |
 | `cachedb.config.writeBehind.deadLetterMaxLength` | `10000` | Write-behind DLQ stream trim hedefi. |
 | `cachedb.config.writeBehind.deadLetterStreamKey` | `cachedb:stream:write-behind:dlq` | Write-behind DLQ stream key'i. |
 | `cachedb.config.writeBehind.compactionMaxLength` | `10000` | Compaction stream trim hedefi. |
-| `cachedb.config.writeBehind.retryOverrides` | bos | Entity bazlı retry override. Format aşağıda. |
-| `cachedb.config.writeBehind.entityFlushPolicies` | bos | Entity bazlı PostgreSQL flush policy. Format aşağıda. |
+| `cachedb.config.writeBehind.retryOverrides` | boş | Entity bazlı retry override. Format aşağıda. |
+| `cachedb.config.writeBehind.entityFlushPolicies` | boş | Entity bazlı PostgreSQL flush policy. Format aşağıda. |
 
 ### Resource Limits ve Default Cache Policy
 
@@ -199,7 +199,7 @@ Operasyonel notlar:
 | --- | --- | --- |
 | `cachedb.config.resourceLimits.maxRegisteredEntities` | `1000` | Tek `CacheDatabase` içinde kaydedilebilecek maksimum entity sayısı. |
 | `cachedb.config.resourceLimits.maxColumnsPerOperation` | `256` | Tek mutation içinde takip edilen maksimum kolon sayısı. |
-| `cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit` | `1000` | Varsayılan hot entity butcesi. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit` | `1000` | Varsayılan hot entity bütçesi. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.pageSize` | `100` | Varsayılan page cache boyu. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.lruEvictionEnabled` | `true` | LRU benzeri eviction davranışını açar. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.entityTtlSeconds` | `0` | Entity TTL. `0` TTL yok demektir. |
@@ -219,16 +219,16 @@ Operasyonel notlar:
 | `cachedb.config.keyspace.compactionSegment` | `compaction` | Compaction segment'i. |
 | `cachedb.config.redisFunctions.enabled` | `true` | Redis Functions yolunu açar. |
 | `cachedb.config.redisFunctions.autoLoadLibrary` | `true` | Startup'ta Redis Function library yükler. |
-| `cachedb.config.redisFunctions.replaceLibraryOnLoad` | `true` | Yükleme sırasında mevcut library'yi değistirir. |
-| `cachedb.config.redisFunctions.strictLoading` | `true` | Function loading temiz tamamlanamazsa fail-fast davranir. |
-| `cachedb.config.redisFunctions.libraryName` | `cachedb` | Redis Function library adi. |
+| `cachedb.config.redisFunctions.replaceLibraryOnLoad` | `true` | Yükleme sırasında mevcut library'yi değiştirir. |
+| `cachedb.config.redisFunctions.strictLoading` | `true` | Function loading temiz tamamlanamazsa fail-fast davranır. |
+| `cachedb.config.redisFunctions.libraryName` | `cachedb` | Redis Function library adı. |
 | `cachedb.config.redisFunctions.upsertFunctionName` | `entity_upsert` | Upsert function giriş noktası. |
 | `cachedb.config.redisFunctions.deleteFunctionName` | `entity_delete` | Delete function giriş noktası. |
 | `cachedb.config.redisFunctions.compactionCompleteFunctionName` | `compaction_complete` | Compaction-complete function giriş noktası. |
 | `cachedb.config.redisFunctions.templateResourcePath` | `/functions/cachedb-functions.lua` | Function kaynak template yolu. |
-| `cachedb.config.redisFunctions.sourceOverride` | bos | Library için tam kaynak override'i. |
+| `cachedb.config.redisFunctions.sourceOverride` | boş | Library için tam kaynak override'i. |
 | `cachedb.config.relations.batchSize` | `250` | Varsayılan relation batch boyu. |
-| `cachedb.config.relations.maxFetchDepth` | `3` | Maksimum relation fetch derinligi. |
+| `cachedb.config.relations.maxFetchDepth` | `3` | Maksimum relation fetch derinliği. |
 | `cachedb.config.relations.failOnMissingPreloader` | `false` | Eksik relation preloader durumunda fail davranışını belirler. |
 | `cachedb.config.pageCache.readThroughEnabled` | `true` | Page-cache read-through davranışını açar. |
 | `cachedb.config.pageCache.failOnMissingPageLoader` | `false` | Read-through için page loader yoksa fail olup olmayacagini belirler. |
@@ -243,7 +243,7 @@ Operasyonel notlar:
 | `cachedb.config.queryIndex.prefixIndexEnabled` | `true` | Prefix index'lerini açar. |
 | `cachedb.config.queryIndex.textIndexEnabled` | `true` | Text index'lerini açar. |
 | `cachedb.config.queryIndex.plannerStatisticsEnabled` | `true` | Planner statistics toplamayi açar. |
-| `cachedb.config.queryIndex.plannerStatisticsPersisted` | `true` | Planner statistics'i Redis'te kalıci tutar. |
+| `cachedb.config.queryIndex.plannerStatisticsPersisted` | `true` | Planner statistics'i Redis'te kalıcı tutar. |
 | `cachedb.config.queryIndex.plannerStatisticsTtlMillis` | `60000` | Planner statistics TTL süresi. |
 | `cachedb.config.queryIndex.plannerStatisticsSampleSize` | `32` | Planner statistics sample boyu. |
 | `cachedb.config.queryIndex.learnedStatisticsEnabled` | `true` | Learned planner weighting'i açar. |
@@ -253,7 +253,7 @@ Operasyonel notlar:
 | `cachedb.config.queryIndex.prefixMaxLength` | `12` | Indexlenen maksimum prefix uzunlugu. |
 | `cachedb.config.queryIndex.textTokenMinLength` | `2` | Indexlenen minimum token uzunlugu. |
 | `cachedb.config.queryIndex.textTokenMaxLength` | `32` | Indexlenen maksimum token uzunlugu. |
-| `cachedb.config.queryIndex.textMaxTokensPerValue` | `16` | Alan basi maksimum token sayısı. |
+| `cachedb.config.queryIndex.textMaxTokensPerValue` | `16` | Alan başı maksimum token sayısı. |
 
 ### Projection Refresh
 
@@ -261,35 +261,35 @@ Bu property'ler `EntityProjection.asyncRefresh()` tarafında kullanılan durable
 
 | Property | Varsayılan | Ne ise yarar |
 | --- | --- | --- |
-| `cachedb.config.projectionRefresh.enabled` | `true` | Projection refresh stream ve worker hattıni açar/kapatir. |
-| `cachedb.config.projectionRefresh.streamKey` | `cachedb:stream:projection-refresh` | Projection refresh event'lerinin yazıldigi Redis stream key'i. |
-| `cachedb.config.projectionRefresh.consumerGroup` | `cachedb-projection-refresh` | Projection refresh worker'larinin kullandigi Redis consumer group. |
+| `cachedb.config.projectionRefresh.enabled` | `true` | Projection refresh stream ve worker hattını açar/kapatır. |
+| `cachedb.config.projectionRefresh.streamKey` | `cachedb:stream:projection-refresh` | Projection refresh event'lerinin yazıldığı Redis stream key'i. |
+| `cachedb.config.projectionRefresh.consumerGroup` | `cachedb-projection-refresh` | Projection refresh worker'larının kullandığı Redis consumer group. |
 | `cachedb.config.projectionRefresh.consumerNamePrefix` | `projection-refresh` | Worker consumer name'leri üretilirken kullanılan prefix. |
 | `cachedb.config.projectionRefresh.batchSize` | `100` | Tek worker batch'indeki maksimum refresh event sayısı. |
 | `cachedb.config.projectionRefresh.blockTimeoutMillis` | `1000` | Redis stream blocking read timeout süresi. |
-| `cachedb.config.projectionRefresh.idleSleepMillis` | `250` | Refresh isi yokken worker sleep süresi. |
+| `cachedb.config.projectionRefresh.idleSleepMillis` | `250` | Refresh işi yokken worker sleep süresi. |
 | `cachedb.config.projectionRefresh.autoCreateConsumerGroup` | `true` | Consumer group yoksa otomatik oluşturur. |
 | `cachedb.config.projectionRefresh.recoverPendingEntries` | `true` | Stale pending projection event'lerini recover etmeye çalışır. |
 | `cachedb.config.projectionRefresh.claimIdleMillis` | `30000` | Pending projection event'inin claim edilmesi için idle eşiği. |
 | `cachedb.config.projectionRefresh.claimBatchSize` | `100` | Tek turda claim edilen maksimum pending projection event sayısı. |
-| `cachedb.config.projectionRefresh.maxStreamLength` | `100000` | Projection refresh stream için yaklasik trim hedefi. |
-| `cachedb.config.projectionRefresh.deadLetterEnabled` | `true` | Projection refresh poison/dead-letter stream hattıni açar/kapatir. |
-| `cachedb.config.projectionRefresh.deadLetterStreamKey` | `cachedb:stream:projection-refresh-dlq` | Poison projection refresh event'lerinin yazıldigi Redis stream key'i. |
-| `cachedb.config.projectionRefresh.deadLetterMaxLength` | `25000` | Projection refresh dead-letter stream için yaklasik trim hedefi. |
-| `cachedb.config.projectionRefresh.maxAttempts` | `3` | Bir projection refresh event'i dead-letter'a düşmeden önce denenebilecek maksimum isleme sayısı. |
+| `cachedb.config.projectionRefresh.maxStreamLength` | `100000` | Projection refresh stream için yaklaşık trim hedefi. |
+| `cachedb.config.projectionRefresh.deadLetterEnabled` | `true` | Projection refresh poison/dead-letter stream hattını açar/kapatır. |
+| `cachedb.config.projectionRefresh.deadLetterStreamKey` | `cachedb:stream:projection-refresh-dlq` | Poison projection refresh event'lerinin yazıldığı Redis stream key'i. |
+| `cachedb.config.projectionRefresh.deadLetterMaxLength` | `25000` | Projection refresh dead-letter stream için yaklaşık trim hedefi. |
+| `cachedb.config.projectionRefresh.maxAttempts` | `3` | Bir projection refresh event'i dead-letter'a düşmeden önce denenebilecek maksimum işleme sayısı. |
 | `cachedb.config.projectionRefresh.deadLetterWarnThreshold` | `1` | Admin incidents/services tarafında projection refresh dead-letter backlog için warning eşiği. |
 | `cachedb.config.projectionRefresh.deadLetterCriticalThreshold` | `25` | Admin incidents/services tarafında projection refresh dead-letter backlog için critical eşiği. |
 | `cachedb.config.projectionRefresh.shutdownAwaitMillis` | `5000` | Projection refresh worker graceful shutdown bekleme süresi. |
-| `cachedb.config.projectionRefresh.daemonThreads` | `true` | Projection refresh worker'i daemon thread olarak çalıştırir. |
+| `cachedb.config.projectionRefresh.daemonThreads` | `true` | Projection refresh worker'i daemon thread olarak çalıştırır. |
 
 Operasyonel notlar:
 
 - async projection refresh artık Redis Stream seviyesinde durable'dir
 - refresh event'leri process restart sonrasında kaybolmaz ve birden fazla uygulama node'u tarafından tüketilebilir
-- model tasarım geregi hala eventual consistency tabanlıdir
-- poison projection refresh event'leri ayrik bir Redis Stream dead-letter queue'ya tasinir
-- replay islemi admin API ve birlikte gelen ops script'leri üzerinden yapılabilir
-- ama henüz poison queue, replay tooling veya ayrik admin telemetry içeren tam bir projection platformu değildir
+- model tasarım gereği hala eventual consistency tabanlıdır
+- poison projection refresh event'leri ayrık bir Redis Stream dead-letter queue'ya taşınır
+- replay işlemi admin API ve birlikte gelen ops script'leri üzerinden yapılabilir
+- ama henüz poison queue, replay tooling veya ayrık admin telemetry içeren tam bir projection platformu değildir
 - runtime coordination suffix açıkken projection refresh consumer adları varsayılan olarak pod-unique olur
 
 ### Redis Guardrails
@@ -297,17 +297,17 @@ Operasyonel notlar:
 | Property | Varsayılan | Ne ise yarar |
 | --- | --- | --- |
 | `cachedb.config.redisGuardrail.enabled` | `true` | Redis guardrail davranışını açar. |
-| `cachedb.config.redisGuardrail.producerBackpressureEnabled` | `true` | Producer'larin pressure altında yavaşlamasıni sağlar. |
-| `cachedb.config.redisGuardrail.usedMemoryWarnBytes` | `0` | Redis memory warning eşiği. `0` devre disi demektir. |
-| `cachedb.config.redisGuardrail.usedMemoryCriticalBytes` | `0` | Redis memory critical eşiği. `0` devre disi demektir. |
+| `cachedb.config.redisGuardrail.producerBackpressureEnabled` | `true` | Producer'ların pressure altında yavaşlamasını sağlar. |
+| `cachedb.config.redisGuardrail.usedMemoryWarnBytes` | `0` | Redis memory warning eşiği. `0` devre dışı demektir. |
+| `cachedb.config.redisGuardrail.usedMemoryCriticalBytes` | `0` | Redis memory critical eşiği. `0` devre dışı demektir. |
 | `cachedb.config.redisGuardrail.writeBehindBacklogWarnThreshold` | `250` | Write-behind backlog warning eşiği. |
 | `cachedb.config.redisGuardrail.writeBehindBacklogCriticalThreshold` | `750` | Write-behind backlog critical eşiği. |
 | `cachedb.config.redisGuardrail.compactionPendingWarnThreshold` | `1000` | Compaction pending warning eşiği. |
 | `cachedb.config.redisGuardrail.compactionPendingCriticalThreshold` | `5000` | Compaction pending critical eşiği. |
-| `cachedb.config.redisGuardrail.writeBehindBacklogHardLimit` | `0` | Write-behind hard cap. `0` kapali. |
-| `cachedb.config.redisGuardrail.compactionPendingHardLimit` | `0` | Compaction pending hard cap. `0` kapali. |
-| `cachedb.config.redisGuardrail.compactionPayloadHardLimit` | `0` | Compaction payload hard cap. `0` kapali. |
-| `cachedb.config.redisGuardrail.rejectWritesOnHardLimit` | `false` | Hard limitte sadece değrade etmek yerine yaziyi reddeder. |
+| `cachedb.config.redisGuardrail.writeBehindBacklogHardLimit` | `0` | Write-behind hard cap. `0` kapalı. |
+| `cachedb.config.redisGuardrail.compactionPendingHardLimit` | `0` | Compaction pending hard cap. `0` kapalı. |
+| `cachedb.config.redisGuardrail.compactionPayloadHardLimit` | `0` | Compaction payload hard cap. `0` kapalı. |
+| `cachedb.config.redisGuardrail.rejectWritesOnHardLimit` | `false` | Hard limitte sadece degrade etmek yerine yazıyı reddeder. |
 | `cachedb.config.redisGuardrail.shedPageCacheWritesOnHardLimit` | `true` | Hard limitte page-cache write'i keser. |
 | `cachedb.config.redisGuardrail.shedReadThroughCacheOnHardLimit` | `true` | Hard limitte read-through cache fill'i keser. |
 | `cachedb.config.redisGuardrail.shedHotSetTrackingOnHardLimit` | `true` | Hard limitte hot-set tracking'i keser. |
@@ -328,8 +328,8 @@ Operasyonel notlar:
 | `cachedb.config.redisGuardrail.tombstoneTtlSeconds` | `86400` | Tombstone TTL süresi. |
 | `cachedb.config.redisGuardrail.autoRecoverDegradedIndexesEnabled` | `true` | Pressure düştugunde degraded index'leri otomatik rebuild eder. |
 | `cachedb.config.redisGuardrail.degradedIndexRebuildCooldownMillis` | `30000` | Yeni rebuild denemesi için cooldown. |
-| `cachedb.config.redisGuardrail.entityPolicies` | bos | Namespace bazlı hard-limit shedding policy. Format aşağıda. |
-| `cachedb.config.redisGuardrail.queryPolicies` | bos | Query-class bazlı shedding policy. Format aşağıda. |
+| `cachedb.config.redisGuardrail.entityPolicies` | boş | Namespace bazlı hard-limit shedding policy. Format aşağıda. |
+| `cachedb.config.redisGuardrail.queryPolicies` | boş | Query-class bazlı shedding policy. Format aşağıda. |
 
 ### Dead-Letter Recovery
 
@@ -343,78 +343,78 @@ Operasyonel notlar:
 | `cachedb.config.deadLetterRecovery.consumerNamePrefix` | `cachedb-dlq-worker` | DLQ consumer name prefix. |
 | `cachedb.config.deadLetterRecovery.autoCreateConsumerGroup` | `true` | DLQ consumer group otomatik oluşturur. |
 | `cachedb.config.deadLetterRecovery.shutdownAwaitMillis` | `10000` | DLQ worker graceful shutdown süresi. |
-| `cachedb.config.deadLetterRecovery.daemonThreads` | `true` | DLQ worker thread'lerini daemon çalıştırir. |
+| `cachedb.config.deadLetterRecovery.daemonThreads` | `true` | DLQ worker thread'lerini daemon çalıştırır. |
 | `cachedb.config.deadLetterRecovery.claimIdleMillis` | `5000` | Claim için pending idle eşiği. |
 | `cachedb.config.deadLetterRecovery.claimBatchSize` | `100` | Bir döngüde claim edilen DLQ entry sayısı. |
 | `cachedb.config.deadLetterRecovery.maxReplayRetries` | `3` | DLQ replay retry sayısı. |
 | `cachedb.config.deadLetterRecovery.replayBackoffMillis` | `1000` | DLQ replay backoff süresi. |
 | `cachedb.config.deadLetterRecovery.reconciliationStreamKey` | `cachedb:stream:write-behind:reconciliation` | Reconciliation stream key. |
-| `cachedb.config.deadLetterRecovery.archiveResolvedEntries` | `true` | Çözulmus entry'leri archive eder. |
+| `cachedb.config.deadLetterRecovery.archiveResolvedEntries` | `true` | Çözülmüş entry'leri archive eder. |
 | `cachedb.config.deadLetterRecovery.archiveStreamKey` | `cachedb:stream:write-behind:archive` | Archive stream key. |
 | `cachedb.config.deadLetterRecovery.cleanupEnabled` | `true` | Retention cleanup davranışını açar. |
 | `cachedb.config.deadLetterRecovery.cleanupIntervalMillis` | `60000` | Cleanup periyodu. |
 | `cachedb.config.deadLetterRecovery.cleanupBatchSize` | `250` | Cleanup batch boyu. |
-| `cachedb.config.deadLetterRecovery.cleanupEnabled` | `true` | Retention cleanup loop'unu açar. Çok pod'lu modda bu loop artık leader lease altında çalışır; cleanup isi aynı anda sadece tek node tarafından yapılir. |
+| `cachedb.config.deadLetterRecovery.cleanupEnabled` | `true` | Retention cleanup loop'unu açar. Çok pod'lu modda bu loop artık leader lease altında çalışır; cleanup işi aynı anda sadece tek node tarafından yapılır. |
 | `cachedb.config.deadLetterRecovery.deadLetterRetentionMillis` | `0` | DLQ retention. `0` sonsuz tutar. |
 | `cachedb.config.deadLetterRecovery.reconciliationRetentionMillis` | `604800000` | Reconciliation retention süresi. |
 | `cachedb.config.deadLetterRecovery.archiveRetentionMillis` | `2592000000` | Archive retention süresi. |
 | `cachedb.config.deadLetterRecovery.deadLetterMaxLength` | `10000` | DLQ stream max length. |
 | `cachedb.config.deadLetterRecovery.reconciliationMaxLength` | `10000` | Reconciliation stream max length. |
 | `cachedb.config.deadLetterRecovery.archiveMaxLength` | `10000` | Archive stream max length. |
-| `cachedb.config.deadLetterRecovery.retryOverrides` | bos | Entity bazlı replay retry override. Format aşağıda. |
+| `cachedb.config.deadLetterRecovery.retryOverrides` | boş | Entity bazlı replay retry override. Format aşağıda. |
 
 ### Admin Monitoring, Reporting, HTTP ve Schema Bootstrap
 
 | Property | Varsayılan | Ne ise yarar |
 | --- | --- | --- |
-| `cachedb.config.adminMonitoring.writeBehindWarnThreshold` | `250` | Write-behind backlog warning incident eşiği. Kısa süreli burst'lerde gereksiz DEGRADED sinyali üretmemesi için varsayılan Redis guardrail warning seviyesiyle hızalidir. |
-| `cachedb.config.adminMonitoring.writeBehindCriticalThreshold` | `750` | Write-behind backlog critical incident eşiği. Varsayılan Redis guardrail critical seviyesiyle hızalidir. |
+| `cachedb.config.adminMonitoring.writeBehindWarnThreshold` | `250` | Write-behind backlog warning incident eşiği. Kısa süreli burst'lerde gereksiz DEGRADED sinyali üretmemesi için varsayılan Redis guardrail warning seviyesiyle hizalıdır. |
+| `cachedb.config.adminMonitoring.writeBehindCriticalThreshold` | `750` | Write-behind backlog critical incident eşiği. Varsayılan Redis guardrail critical seviyesiyle hizalıdır. |
 | `cachedb.config.adminMonitoring.deadLetterWarnThreshold` | `10` | DLQ boyu warning eşiği. |
 | `cachedb.config.adminMonitoring.deadLetterCriticalThreshold` | `100` | DLQ boyu critical eşiği. |
 | `cachedb.config.adminMonitoring.recoveryFailedWarnThreshold` | `10` | Recovery fail warning eşiği. |
 | `cachedb.config.adminMonitoring.recoveryFailedCriticalThreshold` | `100` | Recovery fail critical eşiği. |
 | `cachedb.config.adminMonitoring.recentErrorWindowMillis` | `60000` | Recent worker error incident penceresi. |
 | `cachedb.config.adminMonitoring.historySampleIntervalMillis` | `5000` | Server-side monitoring sample periyodu. |
-| `cachedb.config.adminMonitoring.historyMinSampleIntervalMillis` | `1000` | Override sonrasi history sample periyodu için alt sinir. |
+| `cachedb.config.adminMonitoring.historyMinSampleIntervalMillis` | `1000` | Override sonrası history sample periyodu için alt sınır. |
 | `cachedb.config.adminMonitoring.historyMaxSamples` | `720` | Redis monitoring-history stream'inde tutulacak maksimum sample sayısı. |
-| `cachedb.config.adminMonitoring.historyMinSamples` | `32` | Monitoring-history retention'i için alt sample siniri. |
-| `cachedb.config.adminMonitoring.alertRouteHistoryMinSamples` | `64` | Alert-route history buffer'i için alt sample siniri. |
-| `cachedb.config.adminMonitoring.alertRouteHistorySampleMultiplier` | `4` | Alert-route history buffer boyutunu monitoring history'ye göre buyuten carpandir. |
-| `cachedb.config.adminMonitoring.telemetryTtlSeconds` | `86400` | Redis tabanlı admin telemetry key'leri için varsayılan TTL. Kullanıcı override etmezse telemetry 1 gun içinde silinir. |
-| `cachedb.config.adminMonitoring.monitoringHistoryStreamKey` | `cachedb:stream:admin:monitoring-history` | Monitoring history sample'lari için Redis stream key'i. |
-| `cachedb.config.adminMonitoring.alertRouteHistoryStreamKey` | `cachedb:stream:admin:alert-route-history` | Alert route history sample'lari için Redis stream key'i. |
-| `cachedb.config.adminMonitoring.performanceHistoryStreamKey` | `cachedb:stream:admin:performance-history` | Performance history sample'lari için Redis stream key'i. |
-| `cachedb.config.adminMonitoring.performanceSnapshotKey` | `cachedb:hash:admin:performance` | Güncel storage-performance snapshot'i ve scenario breakdown'lari için Redis hash key'i. |
+| `cachedb.config.adminMonitoring.historyMinSamples` | `32` | Monitoring-history retention'i için alt sample sınırı. |
+| `cachedb.config.adminMonitoring.alertRouteHistoryMinSamples` | `64` | Alert-route history buffer'i için alt sample sınırı. |
+| `cachedb.config.adminMonitoring.alertRouteHistorySampleMultiplier` | `4` | Alert-route history buffer boyutunu monitoring history'ye göre büyüten çarpandır. |
+| `cachedb.config.adminMonitoring.telemetryTtlSeconds` | `86400` | Redis tabanlı admin telemetry key'leri için varsayılan TTL. Kullanıcı override etmezse telemetry 1 gün içinde silinir. |
+| `cachedb.config.adminMonitoring.monitoringHistoryStreamKey` | `cachedb:stream:admin:monitoring-history` | Monitoring history sample'ları için Redis stream key'i. |
+| `cachedb.config.adminMonitoring.alertRouteHistoryStreamKey` | `cachedb:stream:admin:alert-route-history` | Alert route history sample'ları için Redis stream key'i. |
+| `cachedb.config.adminMonitoring.performanceHistoryStreamKey` | `cachedb:stream:admin:performance-history` | Performance history sample'ları için Redis stream key'i. |
+| `cachedb.config.adminMonitoring.performanceSnapshotKey` | `cachedb:hash:admin:performance` | Güncel storage-performance snapshot'i ve scenario breakdown'ları için Redis hash key'i. |
 | `cachedb.config.adminMonitoring.incidentTtlSeconds` | `86400` | Incident stream entry'leri ve cooldown key'leri için TTL. |
 | `cachedb.config.adminMonitoring.incidentStreamKey` | `cachedb:stream:admin:incidents` | Incident stream key'i. |
 | `cachedb.config.adminMonitoring.incidentMaxLength` | `2000` | Incident stream trim hedefi. |
 | `cachedb.config.adminMonitoring.incidentCooldownMillis` | `30000` | Aynı incident'in tekrar emit edilmesi için cooldown. |
-| `cachedb.config.adminMonitoring.incidentDeliveryQueueFloor` | `64` | Incident delivery worker'lari için bellek ici kuyruk alt siniri. |
-| `cachedb.config.adminMonitoring.incidentDeliveryPollTimeoutMillis` | `500` | Incident delivery kuyrugu bosken worker poll bekleme süresi. |
-| `cachedb.config.adminMonitoring.incidentWebhook.*` | kod default'lari | Webhook incident delivery tuning'i. |
-| `cachedb.config.adminMonitoring.incidentQueue.*` | kod default'lari | Redis queue incident delivery tuning'i. |
-| `cachedb.config.adminMonitoring.incidentEmail.*` | kod default'lari | SMTP incident delivery tuning'i. |
-| `cachedb.config.adminMonitoring.incidentDeliveryDlq.*` | kod default'lari | Incident-delivery DLQ ve replay tuning'i. |
+| `cachedb.config.adminMonitoring.incidentDeliveryQueueFloor` | `64` | Incident delivery worker'ları için bellek içi kuyruk alt sınırı. |
+| `cachedb.config.adminMonitoring.incidentDeliveryPollTimeoutMillis` | `500` | Incident delivery kuyrugu boşken worker poll bekleme süresi. |
+| `cachedb.config.adminMonitoring.incidentWebhook.*` | kod default'ları | Webhook incident delivery tuning'i. |
+| `cachedb.config.adminMonitoring.incidentQueue.*` | kod default'ları | Redis queue incident delivery tuning'i. |
+| `cachedb.config.adminMonitoring.incidentEmail.*` | kod default'ları | SMTP incident delivery tuning'i. |
+| `cachedb.config.adminMonitoring.incidentDeliveryDlq.*` | kod default'ları | Incident-delivery DLQ ve replay tuning'i. |
 | `cachedb.config.adminReportJob.enabled` | `false` | Admin report job'unu açar. |
 | `cachedb.config.adminReportJob.intervalMillis` | `300000` | Report job periyodu. |
 | `cachedb.config.adminReportJob.outputDirectory` | `build/reports/cachedb-admin` | Report output dizini. |
 | `cachedb.config.adminReportJob.format` | `JSON` | Report export format'i. |
-| `cachedb.config.adminReportJob.queryLimit` | `500` | Her report bölümu için maksimum kayit. |
+| `cachedb.config.adminReportJob.queryLimit` | `500` | Her report bölümü için maksimum kayit. |
 | `cachedb.config.adminReportJob.writeDeadLetters` | `true` | Dead-letter export'unu dahil eder. |
 | `cachedb.config.adminReportJob.writeReconciliation` | `true` | Reconciliation export'unu dahil eder. |
 | `cachedb.config.adminReportJob.writeArchive` | `true` | Archive export'unu dahil eder. |
 | `cachedb.config.adminReportJob.writeIncidents` | `true` | Incident export'unu dahil eder. |
 | `cachedb.config.adminReportJob.writeDiagnostics` | `true` | Diagnostics export'unu dahil eder. |
-| `cachedb.config.adminReportJob.includeTimestampInFileName` | `true` | Report dosya adina timestamp ekler. |
+| `cachedb.config.adminReportJob.includeTimestampInFileName` | `true` | Report dosya adına timestamp ekler. |
 | `cachedb.config.adminReportJob.maxRetainedFilesPerReport` | `10` | Report tipi başına maksimum saklanan dosya. |
 | `cachedb.config.adminReportJob.fileRetentionMillis` | `604800000` | Admin report retention süresi. |
-| `cachedb.config.adminReportJob.persistDiagnostics` | `true` | Diagnostics'i Redis stream'e kalıci yazar. |
+| `cachedb.config.adminReportJob.persistDiagnostics` | `true` | Diagnostics'i Redis stream'e kalıcı yazar. |
 | `cachedb.config.adminReportJob.diagnosticsStreamKey` | `cachedb:stream:admin:diagnostics` | Diagnostics stream key'i. |
 | `cachedb.config.adminReportJob.diagnosticsMaxLength` | `2000` | Diagnostics stream trim hedefi. |
 | `cachedb.config.adminReportJob.diagnosticsTtlSeconds` | `86400` | Diagnostics stream entry'leri için TTL. |
 | `cachedb.config.adminHttp.enabled` | `false` | Admin HTTP server'i açar. |
 | `cachedb.config.adminHttp.host` | `127.0.0.1` | Admin HTTP bind host. |
-| `cachedb.config.adminHttp.port` | `0` | Admin HTTP portu. `0` ise çağırici explicit set eder. |
+| `cachedb.config.adminHttp.port` | `0` | Admin HTTP portu. `0` ise çağırıcı explicit set eder. |
 | `cachedb.config.adminHttp.backlog` | `64` | HTTP socket backlog. |
 | `cachedb.config.adminHttp.workerThreads` | `2` | HTTP worker thread sayısı. |
 | `cachedb.config.adminHttp.dashboardEnabled` | `true` | HTML dashboard'u servis eder. |
@@ -424,9 +424,9 @@ Operasyonel notlar:
 | `cachedb.config.schemaBootstrap.autoApplyOnStart` | `false` | Startup'ta schema bootstrap uygular. |
 | `cachedb.config.schemaBootstrap.includeVersionColumn` | `true` | Üretilen DDL'e version kolonu ekler. |
 | `cachedb.config.schemaBootstrap.includeDeletedColumn` | `true` | Üretilen DDL'e deleted kolonu ekler. |
-| `cachedb.config.schemaBootstrap.schemaName` | bos | Hedef PostgreSQL schema adi. |
+| `cachedb.config.schemaBootstrap.schemaName` | boş | Hedef PostgreSQL schema adı. |
 
-## Yapısal Override Formatlari
+## Yapısal Override Formatları
 
 `retryOverrides`:
 
@@ -464,14 +464,14 @@ value1,value2,value3
 key=value;key=value
 ```
 
-## Diger Tuning Alanlari Nerede
+## Diğer Tuning Alanları Nerede
 
-- Benchmark ve certification'a özel yuk parametreleri [cachedb-production-tests/README.md](/E:/ReactorRepository/cache-database/tr/cachedb-production-tests/README.md) içinde kalmaya devam eder.
-- Demo'ya özel URL, port ve yuk profili ayarları [cachedb-examples/README.md](/E:/ReactorRepository/cache-database/tr/cachedb-examples/README.md) içinde ayrıca listelenir.
+- Benchmark ve certification'a özel yük parametreleri [cachedb-production-tests/README.md](/E:/ReactorRepository/cache-database/tr/cachedb-production-tests/README.md) içinde kalmaya devam eder.
+- Demo'ya özel URL, port ve yük profili ayarları [cachedb-examples/README.md](/E:/ReactorRepository/cache-database/tr/cachedb-examples/README.md) içinde ayrıca listelenir.
 
 ## Demo Runtime Tuning
 
-Bu property'ler basit load demo davranışını kod değistirmeden ayarlamak için kullanılir.
+Bu property'ler basit load demo davranışını kod değiştirmeden ayarlamak için kullanılır.
 
 | Property | Default | Ne ise yarar |
 | --- | --- | --- |
@@ -491,13 +491,13 @@ Bu property'ler basit load demo davranışını kod değistirmeden ayarlamak iç
 | `cachedb.demo.seed.carts` | `32` | Seed edilecek demo cart sayısı. |
 | `cachedb.demo.seed.orders` | `32` | Seed edilecek demo order sayısı. |
 | `cachedb.demo.view.pageSize` | `12` | Demo tablolarinda gösterilen satır sayısı. |
-| `cachedb.demo.view.countPageSize` | `500` | Demo ekranindaki sayaclar için repository'den çekilen page boyutu. |
-| `cachedb.demo.view.readerPageSize` | `10` | Reader thread'lerinin paging read işlerinde kullandigi page boyutu. |
-| `cachedb.demo.view.readerPageWindowVariants` | `3` | Reader thread'lerinin dondugu page window sayısı. |
-| `cachedb.demo.stop.awaitTerminationMillis` | `5000` | Demo worker'larinin düzgun kapanmasi için beklenen süre. |
-| `cachedb.demo.error.backoffMillis` | `50` | Demo worker hatasindan sonra beklenen geri çekilme süresi. |
+| `cachedb.demo.view.countPageSize` | `500` | Demo ekranındaki sayaçlar için repository'den çekilen page boyutu. |
+| `cachedb.demo.view.readerPageSize` | `10` | Reader thread'lerinin paging read işlerinde kullandığı page boyutu. |
+| `cachedb.demo.view.readerPageWindowVariants` | `3` | Reader thread'lerinin döndüğü page window sayısı. |
+| `cachedb.demo.stop.awaitTerminationMillis` | `5000` | Demo worker'larının düzgün kapanması için beklenen süre. |
+| `cachedb.demo.error.backoffMillis` | `50` | Demo worker hatasından sonra beklenen geri çekilme süresi. |
 | `cachedb.demo.ui.workerThreads` | `2` | Demo UI HTTP worker thread sayısı. |
-| `cachedb.demo.ui.autoRefreshMillis` | `3000` | Demo UI tarayici auto-refresh araligi. `0` olursa timer bazlı refresh kapanir. |
+| `cachedb.demo.ui.autoRefreshMillis` | `3000` | Demo UI tarayıcı auto-refresh aralığı. `0` olursa timer bazlı refresh kapanir. |
 | `cachedb.demo.load.low.readers` | `4` | LOW profilindeki reader thread sayısı. |
 | `cachedb.demo.load.low.writers` | `2` | LOW profilindeki writer thread sayısı. |
 | `cachedb.demo.load.low.readerPauseMillis` | `18` | LOW profilindeki reader cycle bekleme süresi. |
@@ -513,106 +513,106 @@ Bu property'ler basit load demo davranışını kod değistirmeden ayarlamak iç
 
 ## Admin Dashboard UI Tuning
 
-Bu property'ler yerleşik HTTP dashboard metinlerini ve stilini Java koduna girmeden ayarlamak için kullanılir.
+Bu property'ler yerleşik HTTP dashboard metinlerini ve stilini Java koduna girmeden ayarlamak için kullanılır.
 
 Admin dashboard ayrıca aktif effective tuning değerlerini şu yüzeylerden gösterir:
 
 - `/api/tuning`
 - `/api/tuning/export?format=json|markdown`
 - `/api/tuning/flags`
-- `/dashboard` içindeki `Current Effective Tuning` bölümu
+- `/dashboard` içindeki `Current Effective Tuning` bölümü
 
-Bu görünüm iki kaynagi birlestirir:
+Bu görünüm iki kaynağı birleştirir:
 
 - aktif `CacheDatabaseConfig` üzerinden türetilen effective core değerler
 - `cachedb.` ile başlayan explicit JVM/system-property override'ları
 
 | Property | Default | Ne ise yarar |
 | --- | --- | --- |
-| `cachedb.admin.ui.bootstrapCssUrl` | Bootstrap 5.3.3 CDN URL'i | Admin dashboard'un kullandigi CSS URL'i. |
-| `cachedb.admin.ui.themeCss` | yerleşik dashboard CSS'i | Admin dashboard sayfasina inject edilen tam CSS bloğu. |
+| `cachedb.admin.ui.bootstrapCssUrl` | Bootstrap 5.3.3 CDN URL'i | Admin dashboard'un kullandığı CSS URL'i. |
+| `cachedb.admin.ui.themeCss` | yerleşik dashboard CSS'i | Admin dashboard sayfasına inject edilen tam CSS bloğu. |
 | `cachedb.admin.ui.navbarSubtitle` | `Simple HTTP admin dashboard with Bootstrap + AJAX` | Üst navbar'da gösterilen alt başlık. |
 | `cachedb.admin.ui.loadingText` | `Loading…` | AJAX bölümleri dolmadan önce gösterilen placeholder metin. |
-| `cachedb.admin.ui.resetToolsTitle` | `Admin Reset Tools` | Reset tools karti başlığı. |
+| `cachedb.admin.ui.resetToolsTitle` | `Admin Reset Tools` | Reset tools kartı başlığı. |
 | `cachedb.admin.ui.resetTelemetryLabel` | `Reset Telemetry History` | Telemetry reset buton/bölüm etiketi. |
-| `cachedb.admin.ui.resetTelemetryDescription` | yerleşik reset açıklamasi | Reset tools kartinda gösterilen özet metin. |
-| `cachedb.admin.ui.resetTelemetryExplainTitle` | `Reset Telemetry History ne yapar?` | Inline reset açıklamasi başlığı. |
-| `cachedb.admin.ui.resetTelemetryExplainBody` | yerleşik reset açıklamasi | Live refresh karti altındaki açıklama metni. |
-| `cachedb.admin.ui.liveRefreshTitle` | `Live Refresh` | Refresh kontrol karti başlığı. |
+| `cachedb.admin.ui.resetTelemetryDescription` | yerleşik reset açıklaması | Reset tools kartında gösterilen özet metin. |
+| `cachedb.admin.ui.resetTelemetryExplainTitle` | `Reset Telemetry History ne yapar?` | Inline reset açıklaması başlığı. |
+| `cachedb.admin.ui.resetTelemetryExplainBody` | yerleşik reset açıklaması | Live refresh kartı altındaki açıklama metni. |
+| `cachedb.admin.ui.liveRefreshTitle` | `Live Refresh` | Refresh kontrol kartı başlığı. |
 | `cachedb.admin.ui.refreshNowLabel` | `Refresh Now` | Manuel refresh butonu etiketi. |
 | `cachedb.admin.ui.toggleRefreshLabel` | `Pause` | Pause/resume butonu etiketi. |
-| `cachedb.admin.ui.refreshOptions` | `0:Paused,5000:5 seconds,10000:10 seconds,30000:30 seconds,60000:60 seconds` | Refresh dropdown seçenekleri `millis:label` formatinda. |
-| `cachedb.admin.ui.defaultRefreshMillis` | `5000` | Varsayılan seçili auto-refresh araligi. |
-| `cachedb.admin.ui.autoRefreshLabel` | `Auto Refresh` | Auto-refresh dropdown'u üstundeki etiket. |
-| `cachedb.admin.ui.lastUpdatedLabel` | `Last Updated` | Last-updated alanınin üstundeki etiket. |
+| `cachedb.admin.ui.refreshOptions` | `0:Paused,5000:5 seconds,10000:10 seconds,30000:30 seconds,60000:60 seconds` | Refresh dropdown seçenekleri `millis:label` formatında. |
+| `cachedb.admin.ui.defaultRefreshMillis` | `5000` | Varsayılan seçili auto-refresh aralığı. |
+| `cachedb.admin.ui.autoRefreshLabel` | `Auto Refresh` | Auto-refresh dropdown'u üstündeki etiket. |
+| `cachedb.admin.ui.lastUpdatedLabel` | `Last Updated` | Last-updated alanının üstündeki etiket. |
 | `cachedb.admin.ui.lastUpdatedNever` | `never` | İlk AJAX refresh öncesi gösterilen placeholder. |
 | `cachedb.admin.ui.resetTelemetryNotRunYet` | `No telemetry reset has been run yet.` | İlk telemetry reset öncesi gösterilen durum metni. |
 | `cachedb.admin.ui.resetTelemetryInProgress` | `Resetting admin telemetry...` | Telemetry reset çalışırken gösterilen durum metni. |
-| `cachedb.admin.ui.resetTelemetryResultPrefix` | `Cleared: diagnostics ` | Başarili reset özetinin başlangıç metni. |
-| `cachedb.admin.ui.resetTelemetryIncidentsSegment` | `, incidents ` | Temizlenen incident sayısı parcasi. |
-| `cachedb.admin.ui.resetTelemetryHistorySegment` | `, history ` | Temizlenen monitoring-history sayısı parcasi. |
-| `cachedb.admin.ui.resetTelemetryRouteHistorySegment` | `, route history ` | Temizlenen alert-route-history sayısı parcasi. |
-| `cachedb.admin.ui.resetTelemetryErrorPrefix` | `Reset failed: ` | Telemetry reset hata mesaji prefix'i. |
+| `cachedb.admin.ui.resetTelemetryResultPrefix` | `Cleared: diagnostics ` | Başarılı reset özetinin başlangıç metni. |
+| `cachedb.admin.ui.resetTelemetryIncidentsSegment` | `, incidents ` | Temizlenen incident sayısı parçası. |
+| `cachedb.admin.ui.resetTelemetryHistorySegment` | `, history ` | Temizlenen monitoring-history sayısı parçası. |
+| `cachedb.admin.ui.resetTelemetryRouteHistorySegment` | `, route history ` | Temizlenen alert-route-history sayısı parçası. |
+| `cachedb.admin.ui.resetTelemetryErrorPrefix` | `Reset failed: ` | Telemetry reset hata mesajı prefix'i. |
 | `cachedb.admin.ui.resumeLabel` | `Resume` | Auto-refresh toggle butonunun resume etiketi. |
 | `cachedb.admin.ui.pauseLabel` | `Pause` | Auto-refresh toggle butonunun pause etiketi. |
-| `cachedb.admin.ui.howToReadTitle` | `How To Read This Dashboard` | Dashboard nasıl okunur bölümu başlığı. |
+| `cachedb.admin.ui.howToReadTitle` | `How To Read This Dashboard` | Dashboard nasıl okunur bölümü başlığı. |
 | `cachedb.admin.ui.howToRead.step1Title` | `1. First look` | İlk operator yönlendirme adımı başlığı. |
-| `cachedb.admin.ui.howToRead.step1Body` | yerleşik yardım metni | İlk operator yönlendirme adımı açıklamasi. |
+| `cachedb.admin.ui.howToRead.step1Body` | yerleşik yardım metni | İlk operator yönlendirme adımı açıklaması. |
 | `cachedb.admin.ui.howToRead.step2Title` | `2. Where is the problem?` | İkinci operator yönlendirme adımı başlığı. |
-| `cachedb.admin.ui.howToRead.step2Body` | yerleşik yardım metni | İkinci operator yönlendirme adımı açıklamasi. |
+| `cachedb.admin.ui.howToRead.step2Body` | yerleşik yardım metni | İkinci operator yönlendirme adımı açıklaması. |
 | `cachedb.admin.ui.howToRead.step3Title` | `3. What should I do next?` | Üçüncü operator yönlendirme adımı başlığı. |
-| `cachedb.admin.ui.howToRead.step3Body` | yerleşik yardım metni | Üçüncü operator yönlendirme adımı açıklamasi. |
-| `cachedb.admin.ui.sectionGuideTitle` | `Section Guide` | Seçtion guide bölümu başlığı. |
+| `cachedb.admin.ui.howToRead.step3Body` | yerleşik yardım metni | Üçüncü operator yönlendirme adımı açıklaması. |
+| `cachedb.admin.ui.sectionGuideTitle` | `Section Guide` | Seçtion guide bölümü başlığı. |
 | `cachedb.admin.ui.sectionGuide.liveTrendsTitle` | `Live Trends` | Seçtion guide içindeki live-trends başlığı. |
-| `cachedb.admin.ui.sectionGuide.liveTrendsBody` | yerleşik guide metni | Seçtion guide içindeki live-trends açıklamasi. |
+| `cachedb.admin.ui.sectionGuide.liveTrendsBody` | yerleşik guide metni | Seçtion guide içindeki live-trends açıklaması. |
 | `cachedb.admin.ui.sectionGuide.triageTitle` | `Triage` | Seçtion guide içindeki triage başlığı. |
-| `cachedb.admin.ui.sectionGuide.triageBody` | yerleşik guide metni | Seçtion guide içindeki triage açıklamasi. |
+| `cachedb.admin.ui.sectionGuide.triageBody` | yerleşik guide metni | Seçtion guide içindeki triage açıklaması. |
 | `cachedb.admin.ui.sectionGuide.topSignalsTitle` | `Top Failing Signals` | Seçtion guide içindeki top-signals başlığı. |
-| `cachedb.admin.ui.sectionGuide.topSignalsBody` | yerleşik guide metni | Seçtion guide içindeki top-signals açıklamasi. |
+| `cachedb.admin.ui.sectionGuide.topSignalsBody` | yerleşik guide metni | Seçtion guide içindeki top-signals açıklaması. |
 | `cachedb.admin.ui.sectionGuide.routingTitle` | `Alert Routing / Runbooks` | Seçtion guide içindeki routing/runbooks başlığı. |
-| `cachedb.admin.ui.sectionGuide.routingBody` | yerleşik guide metni | Seçtion guide içindeki routing/runbooks açıklamasi. |
-| `cachedb.admin.ui.liveTrendsTitle` | `Live Trends` | Live trend bölümu başlığı. |
-| `cachedb.admin.ui.liveTrends.backlogLabel` | `Write-behind backlog` | Backlog sparkline üstundeki etiket. |
-| `cachedb.admin.ui.liveTrends.redisMemoryLabel` | `Redis memory` | Memory sparkline üstundeki etiket. |
-| `cachedb.admin.ui.liveTrends.deadLetterLabel` | `Dead-letter backlog` | DLQ sparkline üstundeki etiket. |
-| `cachedb.admin.ui.alertRouteTrendsTitle` | `Alert Route Trends` | Alert-route trend bölümu başlığı. |
-| `cachedb.admin.ui.alertRouteTrends.deliveredLabel` | `Channel delivered count` | Route-delivered trend grafigi üstundeki etiket. |
-| `cachedb.admin.ui.alertRouteTrends.failedLabel` | `Channel failed count` | Route-failed trend grafigi üstundeki etiket. |
-| `cachedb.admin.ui.incidentSeverityTrendsTitle` | `Incident Severity Trends` | Incident severity trend bölümu başlığı. |
-| `cachedb.admin.ui.topFailingSignalsTitle` | `Top Failing Signals` | Top failing signals bölümu başlığı. |
-| `cachedb.admin.ui.failingSignals.activeRecentPrefix` | `active ` | Active failing-signal sayısı on eki. |
-| `cachedb.admin.ui.failingSignals.activeRecentSeparator` | ` / recent ` | Active ve recent sayıları arasindaki ayirici. |
-| `cachedb.admin.ui.failingSignals.lastSeenPrefix` | `last seen ` | Failing-signal son görülme zamani on eki. |
-| `cachedb.admin.ui.triageTitle` | `Triage` | Triage karti başlığı. |
+| `cachedb.admin.ui.sectionGuide.routingBody` | yerleşik guide metni | Seçtion guide içindeki routing/runbooks açıklaması. |
+| `cachedb.admin.ui.liveTrendsTitle` | `Live Trends` | Live trend bölümü başlığı. |
+| `cachedb.admin.ui.liveTrends.backlogLabel` | `Write-behind backlog` | Backlog sparkline üstündeki etiket. |
+| `cachedb.admin.ui.liveTrends.redisMemoryLabel` | `Redis memory` | Memory sparkline üstündeki etiket. |
+| `cachedb.admin.ui.liveTrends.deadLetterLabel` | `Dead-letter backlog` | DLQ sparkline üstündeki etiket. |
+| `cachedb.admin.ui.alertRouteTrendsTitle` | `Alert Route Trends` | Alert-route trend bölümü başlığı. |
+| `cachedb.admin.ui.alertRouteTrends.deliveredLabel` | `Channel delivered count` | Route-delivered trend grafiği üstündeki etiket. |
+| `cachedb.admin.ui.alertRouteTrends.failedLabel` | `Channel failed count` | Route-failed trend grafiği üstündeki etiket. |
+| `cachedb.admin.ui.incidentSeverityTrendsTitle` | `Incident Severity Trends` | Incident severity trend bölümü başlığı. |
+| `cachedb.admin.ui.topFailingSignalsTitle` | `Top Failing Signals` | Top failing signals bölümü başlığı. |
+| `cachedb.admin.ui.failingSignals.activeRecentPrefix` | `active ` | Active failing-signal sayısı ön eki. |
+| `cachedb.admin.ui.failingSignals.activeRecentSeparator` | ` / recent ` | Active ve recent sayıları arasındaki ayırıcı. |
+| `cachedb.admin.ui.failingSignals.lastSeenPrefix` | `last seen ` | Failing-signal son görülme zamanı ön eki. |
+| `cachedb.admin.ui.triageTitle` | `Triage` | Triage kartı başlığı. |
 | `cachedb.admin.ui.triage.primaryBottleneckPrefix` | `Primary bottleneck: ` | Mevcut darboğaz değerinden önce gösterilen prefix. |
-| `cachedb.admin.ui.serviceStatusTitle` | `Service Status` | Service-status karti başlığı. |
-| `cachedb.admin.ui.healthTitle` | `Health` | Health karti başlığı. |
-| `cachedb.admin.ui.incidentsTitle` | `Incidents` | Incidents karti başlığı. |
-| `cachedb.admin.ui.deploymentTitle` | `Deployment` | Deployment bölümu başlığı. |
-| `cachedb.admin.ui.schemaStatusTitle` | `Schema Status` | Schema-status bölümu başlığı. |
-| `cachedb.admin.ui.schemaHistoryTitle` | `Schema History` | Schema-history bölümu başlığı. |
-| `cachedb.admin.ui.starterProfilesTitle` | `Starter Profiles` | Starter-profiles bölümu başlığı. |
-| `cachedb.admin.ui.apiRegistryTitle` | `API Registry` | API-registry bölümu başlığı. |
-| `cachedb.admin.ui.currentEffectiveTuningTitle` | `Current Effective Tuning` | Effective-tuning bölümu başlığı. |
-| `cachedb.admin.ui.tuning.capturedAtLabel` | `Captured at` | Tuning snapshot zamani üstundeki etiket. |
-| `cachedb.admin.ui.tuning.overrideCountLabel` | `Explicit overrides` | Explicit override sayısı üstundeki etiket. |
-| `cachedb.admin.ui.tuning.entryCountLabel` | `Visible entries` | Gösterilen tuning satıri sayısı üstundeki etiket. |
+| `cachedb.admin.ui.serviceStatusTitle` | `Service Status` | Service-status kartı başlığı. |
+| `cachedb.admin.ui.healthTitle` | `Health` | Health kartı başlığı. |
+| `cachedb.admin.ui.incidentsTitle` | `Incidents` | Incidents kartı başlığı. |
+| `cachedb.admin.ui.deploymentTitle` | `Deployment` | Deployment bölümü başlığı. |
+| `cachedb.admin.ui.schemaStatusTitle` | `Schema Status` | Schema-status bölümü başlığı. |
+| `cachedb.admin.ui.schemaHistoryTitle` | `Schema History` | Schema-history bölümü başlığı. |
+| `cachedb.admin.ui.starterProfilesTitle` | `Starter Profiles` | Starter-profiles bölümü başlığı. |
+| `cachedb.admin.ui.apiRegistryTitle` | `API Registry` | API-registry bölümü başlığı. |
+| `cachedb.admin.ui.currentEffectiveTuningTitle` | `Current Effective Tuning` | Effective-tuning bölümü başlığı. |
+| `cachedb.admin.ui.tuning.capturedAtLabel` | `Captured at` | Tuning snapshot zamanı üstündeki etiket. |
+| `cachedb.admin.ui.tuning.overrideCountLabel` | `Explicit overrides` | Explicit override sayısı üstündeki etiket. |
+| `cachedb.admin.ui.tuning.entryCountLabel` | `Visible entries` | Gösterilen tuning satırı sayısı üstündeki etiket. |
 | `cachedb.admin.ui.tuning.exportJsonLabel` | `Export JSON` | JSON tuning export buton etiketi. |
 | `cachedb.admin.ui.tuning.exportMarkdownLabel` | `Export Markdown` | Markdown tuning export buton etiketi. |
 | `cachedb.admin.ui.tuning.copyFlagsLabel` | `Copy Startup Flags` | Effective tuning'i `-D...` flag olarak kopyalama buton etiketi. |
-| `cachedb.admin.ui.tuning.exportStatusIdle` | `Choose an export action.` | Tuning export alanı için ilk yardım metni. |
+| `cachedb.admin.ui.tuning.exportStatusIdle` | `Choose an export açtion.` | Tuning export alanı için ilk yardım metni. |
 | `cachedb.admin.ui.tuning.exportLoading` | `Loading export...` | Export yüklenirken gösterilen durum metni. |
 | `cachedb.admin.ui.tuning.exportJsonSuccess` | `JSON export loaded below.` | JSON export yüklendikten sonra gösterilen durum metni. |
 | `cachedb.admin.ui.tuning.exportMarkdownSuccess` | `Markdown export loaded below.` | Markdown export yüklendikten sonra gösterilen durum metni. |
-| `cachedb.admin.ui.tuning.copyFlagsSuccess` | `Startup flags copied to clipboard.` | Startup flag'lar panoya kopyalandiktan sonra gösterilen durum metni. |
+| `cachedb.admin.ui.tuning.copyFlagsSuccess` | `Startup flags copied to clipboard.` | Startup flag'lar panoya kopyalandıktan sonra gösterilen durum metni. |
 | `cachedb.admin.ui.tuning.exportErrorPrefix` | `Export failed: ` | Tuning export hata prefix'i. |
-| `cachedb.admin.ui.certificationTitle` | `Certification` | Certification bölümu başlığı. |
-| `cachedb.admin.ui.alertRoutingTitle` | `Alert Routing` | Alert-routing bölümu başlığı. |
-| `cachedb.admin.ui.runbooksTitle` | `Runbooks` | Runbooks bölümu başlığı. |
-| `cachedb.admin.ui.alertRouteHistoryTitle` | `Alert Route History` | Alert-route history bölümu başlığı. |
-| `cachedb.admin.ui.schemaDdlTitle` | `Schema DDL` | Schema DDL bölümu başlığı. |
-| `cachedb.admin.ui.runtimeProfileChurnTitle` | `Runtime Profile Churn` | Runtime profile churn bölümu başlığı. |
-| `cachedb.admin.ui.explainTitle` | `Explain` | Explain bölümu başlığı. |
+| `cachedb.admin.ui.certificationTitle` | `Certification` | Certification bölümü başlığı. |
+| `cachedb.admin.ui.alertRoutingTitle` | `Alert Routing` | Alert-routing bölümü başlığı. |
+| `cachedb.admin.ui.runbooksTitle` | `Runbooks` | Runbooks bölümü başlığı. |
+| `cachedb.admin.ui.alertRouteHistoryTitle` | `Alert Route History` | Alert-route history bölümü başlığı. |
+| `cachedb.admin.ui.schemaDdlTitle` | `Schema DDL` | Schema DDL bölümü başlığı. |
+| `cachedb.admin.ui.runtimeProfileChurnTitle` | `Runtime Profile Churn` | Runtime profile churn bölümü başlığı. |
+| `cachedb.admin.ui.explainTitle` | `Explain` | Explain bölümü başlığı. |
 | `cachedb.admin.ui.explain.entityLabel` | `Entity` | Explain entity alanı etiketi. |
 | `cachedb.admin.ui.explain.filterLabel` | `Filter` | Explain filter alanı etiketi. |
 | `cachedb.admin.ui.explain.sortLabel` | `Sort` | Explain sort alanı etiketi. |
@@ -632,34 +632,34 @@ Bu görünüm iki kaynagi birlestirir:
 | `cachedb.admin.ui.metric.alertDroppedTitle` | `Alert Dropped` | En üstteki dropped alert metrik kart etiketi. |
 | `cachedb.admin.ui.metric.criticalSignalsTitle` | `Critical Signals` | En üstteki critical-signal metrik kart etiketi. |
 | `cachedb.admin.ui.metric.warningSignalsTitle` | `Warning Signals` | En üstteki warning-signal metrik kart etiketi. |
-| `cachedb.admin.ui.empty.highSignalFailures` | `No high-signal failures detected.` | Top-failing-signals bölümu bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.triageEvidence` | `No triage evidence` | Triage evidence tablosu bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.services` | `No services` | Service status bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.activeIssues` | `No active issues` | Health issue listesi bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.activeIncidents` | `No active incidents` | Incident listesi bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.profileSwitches` | `No profile switches` | Runtime-profile churn bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.deploymentData` | `No deployment data` | Deployment satırları bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.schemaData` | `No schema data` | Schema status bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.migrationHistory` | `No migration history` | Schema history bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.starterProfiles` | `No starter profiles` | Starter profiles bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.registeredEntities` | `No registered entities` | Registry bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.tuning` | `No tuning data` | Effective-tuning tablosu bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.certificationReports` | `No certification reports` | Certification artefact bölümu bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.alertRoutes` | `No alert routes` | Alert routing bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.routeHistory` | `No route history` | Alert-route history bosken gösterilen metin. |
-| `cachedb.admin.ui.empty.runbooks` | `No runbooks` | Runbooks bosken gösterilen metin. |
+| `cachedb.admin.ui.empty.highSignalFailures` | `No high-signal failures detected.` | Top-failing-signals bölümü boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.triageEvidence` | `No triage evidence` | Triage evidence tablosu boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.services` | `No services` | Service status boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.activeIssues` | `No açtive issues` | Health issue listesi boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.activeIncidents` | `No açtive incidents` | Incident listesi boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.profileSwitches` | `No profile switches` | Runtime-profile churn boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.deploymentData` | `No deployment data` | Deployment satırları boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.schemaData` | `No schema data` | Schema status boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.migrationHistory` | `No migration history` | Schema history boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.starterProfiles` | `No starter profiles` | Starter profiles boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.registeredEntities` | `No registered entities` | Registry boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.tuning` | `No tuning data` | Effective-tuning tablosu boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.certificationReports` | `No certification reports` | Certification artifact bölümü boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.alertRoutes` | `No alert routes` | Alert routing boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.routeHistory` | `No route history` | Alert-route history boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.runbooks` | `No runbooks` | Runbooks boşken gösterilen metin. |
 | `cachedb.admin.ui.deployment.autoApplyLabel` | `auto-apply` | Schema auto-apply açıkken deployment satır etiketi. |
 | `cachedb.admin.ui.deployment.manualLabel` | `manual` | Schema apply manuelken deployment satır etiketi. |
 | `cachedb.admin.ui.deployment.writeBehindOnLabel` | `write-behind on` | Write-behind açıkken deployment satır etiketi. |
-| `cachedb.admin.ui.deployment.writeBehindOffLabel` | `write-behind off` | Write-behind kapaliyken deployment satır etiketi. |
+| `cachedb.admin.ui.deployment.writeBehindOffLabel` | `write-behind off` | Write-behind kapalıyken deployment satır etiketi. |
 | `cachedb.admin.ui.deployment.workersSuffix` | ` workers` | Write-behind worker sayısına eklenen sonek. |
 | `cachedb.admin.ui.deployment.durableCompactionLabel` | `durable compaction` | Durable compaction açıkken deployment satır etiketi. |
-| `cachedb.admin.ui.deployment.noCompactionLabel` | `no compaction` | Durable compaction kapaliyken deployment satır etiketi. |
-| `cachedb.admin.ui.deployment.activeStreamsSuffix` | ` active streams` | Active stream sayısına eklenen sonek. |
+| `cachedb.admin.ui.deployment.noCompactionLabel` | `no compaction` | Durable compaction kapalıyken deployment satır etiketi. |
+| `cachedb.admin.ui.deployment.activeStreamsSuffix` | ` açtive streams` | Active stream sayısına eklenen sonek. |
 | `cachedb.admin.ui.deployment.guardrailsOnLabel` | `guardrails on` | Guardrails açıkken deployment satır etiketi. |
-| `cachedb.admin.ui.deployment.guardrailsOffLabel` | `guardrails off` | Guardrails kapaliyken deployment satır etiketi. |
+| `cachedb.admin.ui.deployment.guardrailsOffLabel` | `guardrails off` | Guardrails kapalıyken deployment satır etiketi. |
 | `cachedb.admin.ui.deployment.autoProfileSwitchLabel` | `auto profile switch` | Otomatik profile switching açıkken deployment satır etiketi. |
-| `cachedb.admin.ui.deployment.manualProfileLabel` | `manual profile` | Otomatik profile switching kapaliyken deployment satır etiketi. |
+| `cachedb.admin.ui.deployment.manualProfileLabel` | `manual profile` | Otomatik profile switching kapalıyken deployment satır etiketi. |
 | `cachedb.admin.ui.deployment.keyPrefixLabel` | `key prefix` | Aktif key prefix satır etiketi. |
 | `cachedb.admin.ui.schema.migrationStepsLabel` | `migration steps` | Schema-status içindeki migration-steps etiketi. |
 | `cachedb.admin.ui.schema.createTableStepsLabel` | `create table steps` | Schema-status içindeki create-table-steps etiketi. |
@@ -667,18 +667,18 @@ Bu görünüm iki kaynagi birlestirir:
 | `cachedb.admin.ui.schema.ddlEntitiesLabel` | `ddl entities` | Schema-status içindeki ddl-entities etiketi. |
 | `cachedb.admin.ui.schema.stepsPrefix` | `steps=` | Schema-history step özetlerinde kullanılan prefix. |
 | `cachedb.admin.ui.profiles.guardrailsEnabledLabel` | `guardrails` | Guardrails açıkken starter-profile satır etiketi. |
-| `cachedb.admin.ui.profiles.guardrailsDisabledLabel` | `no guardrails` | Guardrails kapaliyken starter-profile satır etiketi. |
+| `cachedb.admin.ui.profiles.guardrailsDisabledLabel` | `no guardrails` | Guardrails kapalıyken starter-profile satır etiketi. |
 | `cachedb.admin.ui.registry.columnsPrefix` | `cols=` | Registry kolon sayısı özet prefix'i. |
 | `cachedb.admin.ui.registry.hotPrefix` | `hot=` | Registry hot-entity özet prefix'i. |
 | `cachedb.admin.ui.registry.pagePrefix` | `page=` | Registry page-size özet prefix'i. |
 | `cachedb.admin.ui.alertRouting.deliveredLabel` | `delivered` | Route son durum fallback etiketi, delivered aktivite varsa. |
 | `cachedb.admin.ui.alertRouting.idleLabel` | `idle` | Route son durum fallback etiketi, aktivite yoksa. |
-| `cachedb.admin.ui.chart.trend.backlogColor` | `#9c3f2b` | Backlog trend sparkline cizgi rengi. |
-| `cachedb.admin.ui.chart.trend.memoryColor` | `#2563eb` | Memory trend sparkline cizgi rengi. |
-| `cachedb.admin.ui.chart.trend.deadLetterColor` | `#dc2626` | DLQ trend sparkline cizgi rengi. |
-| `cachedb.admin.ui.chart.backgroundColor` | `#fbf7ef` | Yerlesik grafiklerde kullanılan ortak SVG arka plan rengi. |
-| `cachedb.admin.ui.chart.axisColor` | `#c9baa2` | Yerlesik grafiklerde kullanılan ortak eksen/kilavuz rengi. |
-| `cachedb.admin.ui.chart.mutedTextColor` | `#7b8794` | Yerlesik grafiklerde kullanılan soluk açıklama rengi. |
+| `cachedb.admin.ui.chart.trend.backlogColor` | `#9c3f2b` | Backlog trend sparkline çizgi rengi. |
+| `cachedb.admin.ui.chart.trend.memoryColor` | `#2563eb` | Memory trend sparkline çizgi rengi. |
+| `cachedb.admin.ui.chart.trend.deadLetterColor` | `#dc2626` | DLQ trend sparkline çizgi rengi. |
+| `cachedb.admin.ui.chart.backgroundColor` | `#fbf7ef` | Yerleşik grafiklerde kullanılan ortak SVG arka plan rengi. |
+| `cachedb.admin.ui.chart.axisColor` | `#c9baa2` | Yerleşik grafiklerde kullanılan ortak eksen/kılavuz rengi. |
+| `cachedb.admin.ui.chart.mutedTextColor` | `#7b8794` | Yerleşik grafiklerde kullanılan soluk açıklama rengi. |
 | `cachedb.admin.ui.chart.route.webhookColor` | `#9c3f2b` | `webhook` route trend rengi. |
 | `cachedb.admin.ui.chart.route.queueColor` | `#2563eb` | `queue` route trend rengi. |
 | `cachedb.admin.ui.chart.route.smtpColor` | `#0f766e` | `smtp` route trend rengi. |
@@ -687,29 +687,27 @@ Bu görünüm iki kaynagi birlestirir:
 | `cachedb.admin.ui.chart.severity.criticalColor` | `#dc2626` | `critical` incident severity trend rengi. |
 | `cachedb.admin.ui.chart.severity.warningColor` | `#d97706` | `warning` incident severity trend rengi. |
 | `cachedb.admin.ui.chart.severity.infoColor` | `#2563eb` | `info` incident severity trend rengi. |
-| `cachedb.admin.ui.chart.churn.lineColor` | `#9c3f2b` | Runtime-profile churn cizgi rengi. |
+| `cachedb.admin.ui.chart.churn.lineColor` | `#9c3f2b` | Runtime-profile churn çizgi rengi. |
 | `cachedb.admin.ui.chart.churn.dotColor` | `#1d2525` | Runtime-profile churn nokta rengi. |
-| `cachedb.admin.ui.chart.churn.axisTextColor` | `#6d5e49` | Runtime-profile churn eksen yazi rengi. |
+| `cachedb.admin.ui.chart.churn.axisTextColor` | `#6d5e49` | Runtime-profile churn eksen yazı rengi. |
 | `cachedb.admin.ui.chart.profile.aggressiveLabel` | `AGGRESSIVE` | Aggressive profile eksen etiketi. |
 | `cachedb.admin.ui.chart.profile.balancedLabel` | `BALANCED` | Balanced profile eksen etiketi. |
 | `cachedb.admin.ui.chart.profile.standardLabel` | `STANDARD` | Standard profile eksen etiketi. |
 
 ## Benchmark Catalog Tuning
 
-Bu property'ler production-test senaryo kataloglarini yerleşik değerler yerine tamamen dışaridan tanımlamani sağlar.
+Bu property'ler production-test senaryo kataloglarını yerleşik değerler yerine tamamen dışarıdan tanımlamanı sağlar.
 
 | Property | Default | Ne ise yarar |
 | --- | --- | --- |
-| `cachedb.prod.catalog.scenarios` | yerleşik base scenario catalog | `ScenarioCatalog` listesini tamamen değistirir. |
-| `cachedb.prod.catalog.fullScaleScenarios` | yerleşik 50k scenario catalog | `FullScaleBenchmarkCatalog` listesini tamamen değistirir. |
-| `cachedb.prod.catalog.representativeScenarioNames` | `campaign-push-spike-50k,weekend-browse-storm-50k,write-behind-backpressure-50k` | Representative benchmark senaryo seçimini değistirir. |
+| `cachedb.prod.catalog.scenarios` | yerleşik base scenario catalog | `ScenarioCatalog` listesini tamamen değiştirir. |
+| `cachedb.prod.catalog.fullScaleScenarios` | yerleşik 50k scenario catalog | `FullScaleBenchmarkCatalog` listesini tamamen değiştirir. |
+| `cachedb.prod.catalog.representativeScenarioNames` | `campaign-push-spike-50k,weekend-browse-storm-50k,write-behind-backpressure-50k` | Representative benchmark senaryo seçimini değiştirir. |
 
-`cachedb.prod.catalog.scenarios` ve `cachedb.prod.catalog.fullScaleScenarios` formati:
+`cachedb.prod.catalog.scenarios` ve `cachedb.prod.catalog.fullScaleScenarios` formatı:
 
 ```text
 name;kind;description;targetTps;durationSeconds;workerThreads;customerCount;productCount;hotProductSetSize;browsePercent;productLookupPercent;cartWritePercent;inventoryReservePercent;checkoutPercent;customerTouchPercent;writeBehindWorkerThreads;writeBehindBatchSize;hotEntityLimit;pageSize;entityTtlSeconds;pageTtlSeconds
 ```
 
 Birden fazla senaryo `|` ile ayrılır.
-
-

@@ -4,13 +4,13 @@
 
 `GO`
 
-Mevcut build, kanıtlanmış kampanya envelope'i içinde production rollout için onaylandi.
+Mevcut build, kanıtlanmış kampanya envelope'i içinde production rollout için onaylandı.
 
 ## Neden
 
 Daha önce blokaj yaratan alanlar artık geçen kanıtlarla destekleniyor:
 
-| Kanıt | Sonuc | Temel gözlemler |
+| Kanıt | Sonuç | Temel gözlemler |
 | --- | --- | --- |
 | Strict heavy production gate | `PASS` | certification `PASS`, `TPS=68.76`, backlog `0`, drain `PASS`, hard rejection `0` |
 | 1h soak | `PASS` | `TPS=63.35`, backlog `0`, `drainCompleted=true`, final health `DEGRADED` |
@@ -20,30 +20,30 @@ Daha önce blokaj yaratan alanlar artık geçen kanıtlarla destekleniyor:
 
 ## Yorum
 
-Bu kanıtlar önceki ana blokajlari kapatiyor:
+Bu kanıtlar önceki ana blokajları kapatıyor:
 
-- uzun koşu steady-state backlog artık kontrolsuz buyumuyor
+- uzun koşu steady-state backlog artık kontrolsüz büyümüyor
 - uzun soak artık `DOWN` ile bitmiyor
 - certification koşularında drain completion stabil
-- hard producer rejection kalmadi
+- hard producer rejection kalmadı
 - restart, replay, rebuild ve fault recovery akışları geçmeye devam ediyor
 
-Sistem, test ettiğimiz yüksek baskili e-ticaret rollout profili için artık kabul edilebilir durumda.
+Sistem, test ettiğimiz yüksek baskılı e-ticaret rollout profili için artık kabul edilebilir durumda.
 
-## Rollout Kapsami
+## Rollout Kapsamı
 
-Bu `GO` karari doğru yorumlanmali:
+Bu `GO` kararı doğru yorumlanmalı:
 
-1. Mevcut certification ve soak senaryolarınin temsil ettiği kampanya tipi workload ailesi için geçerlidir.
-2. Validation sırasındaki operasyonel durusu varsayar: Redis/PostgreSQL monitoring, aktif alerting ve rollback hazırligi.
-3. Test edilmeyen ve bu envelope'i asan tüm olasi workload karisimlarini otomatik olarak sertifikalamaz.
+1. Mevcut certification ve soak senaryolarının temsil ettiği kampanya tipi workload ailesi için geçerlidir.
+2. Validation sırasındaki operasyonel duruşu varsayar: Redis/PostgreSQL monitoring, aktif alerting ve rollback hazırlığı.
+3. Test edilmeyen ve bu envelope'i aşan tüm olası workload karışımlarını otomatik olarak sertifikalamaz.
 
-## Önerilen Rollout Yaklasimi
+## Önerilen Rollout Yaklaşımı
 
-- Validasyonu yapılmis production profili ve mevcut guardrail'lerle başla.
-- Backlog, memory, DLQ ve recovery metrikleri için Prometheus alerting aktif kalsin.
-- Restart/recovery ve production gate raporlarini release artefact'i ile birlikte sakla.
-- Workload karışımı, donanim envelope'i veya persistence policy matrisi anlamli şekilde değisirse gate'i yeniden koş.
+- Validasyonu yapılmış production profili ve mevcut guardrail'lerle başla.
+- Backlog, memory, DLQ ve recovery metrikleri için Prometheus alerting aktif kalsın.
+- Restart/recovery ve production gate raporlarını release artifact'i ile birlikte sakla.
+- Workload karışımı, donanım envelope'i veya persistence policy matrisi anlamlı şekilde değişirse gate'i yeniden koş.
 
 ## Destekleyici Raporlar
 
@@ -52,4 +52,3 @@ Bu `GO` karari doğru yorumlanmali:
 - `target/cachedb-prodtest-reports/production-gate-ladder-report.md`
 - `target/cachedb-prodtest-reports/campaign-push-spike-soak-1h.md`
 - `target/cachedb-prodtest-reports/campaign-push-spike-soak-4h.md`
-

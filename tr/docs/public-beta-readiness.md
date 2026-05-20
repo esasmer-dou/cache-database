@@ -1,22 +1,22 @@
-# Public Beta Readiness
+# Açık Beta Hazırlık Durumu
 
-Bu doküman, public beta için yeterince olgun olan kısımları ve GA duyurusunu
-hâlâ bloke eden konuları özetler.
+Bu doküman, açık beta için yeterince olgun olan alanları ve GA duyurusunu
+hâlâ engelleyen konuları özetler.
 
-## Public Beta İçin Hazır Olanlar
+## Açık Beta İçin Hazır Olanlar
 
-- çekirdek production hikayesi için ölçülmüş runtime kanıtı var
-- multi-instance coordination için resmi smoke ve CI lane mevcut
-- generated ergonomi, minimal repository overhead'ine yakın kalıyor
-- relation-heavy read recipe'leri dokümante ve benchmark'lı
-- Türkçe ve İngilizce ürün odaklı dokümanlar var
+- çekirdek production hikâyesi için ölçülmüş çalışma zamanı kanıtı var
+- çok instance'lı koordinasyon için resmi smoke testi ve CI hattı mevcut
+- üretilmiş API kullanımı, doğrudan repository kullanımına yakın düşük ek yükte kalıyor
+- çok ilişkili okuma ekranları için reçeteler ve benchmark kanıtları var
+- Türkçe ve İngilizce ürün odaklı dokümanlar hazırlanmış durumda
 
-## Repo'yu Public Açmadan Önce Hâlen Gerekenler
+## Repoyu Açık Hale Getirmeden Önce Gerekenler
 
 - [../../pom.xml](../../pom.xml) içindeki repo URL ve maintainer metadata alanlarını gerçek değerlerle doldur
-- GitHub security reporting ve branch protection'ı aç
-- mevcut beta lisans seçiminin korunup korunmayacagina karar ver
-- seçilen publish/release kanalı ve credential'ları doğrula
+- GitHub security reporting ve branch protection ayarlarını aç
+- mevcut beta lisans seçiminin korunup korunmayacağına karar ver
+- seçilen publish/release kanalını ve credential'ları doğrula
 
 ## GA İçin Hâlen Eksik Olanlar
 
@@ -27,5 +27,5 @@ hâlâ bloke eden konuları özetler.
 
 ## Özet Hüküm
 
-`cache-database` güçlü bir public beta seviyesinde. Ancak henüz "koşulsuz GA"
+`cache-database` güçlü bir açık beta seviyesinde. Ancak henüz "koşulsuz GA"
 duyurusu için konumlanmış değil.

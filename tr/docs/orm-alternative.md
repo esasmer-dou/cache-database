@@ -1,162 +1,164 @@
 # CacheDB Bir ORM Alternatifi Olarak
 
-Bu sayfa tek bir soruya dışarıya dönük kısa bir cevap verir:
+Bu sayfa şu soruya cevap verir:
 
-Bir ekip, geleneksel JPA/Hibernate benzeri ORM yerine ne zaman CacheDB seçmeli?
+Bir ekip, geleneksel JPA/Hibernate benzeri ORM yerine ne zaman CacheDB
+kullanmalı?
 
-Cevap, projenin birinci önceliğiyle uyumlu kalmalıdır:
+Kısa cevap: Redis production mimarisinin gerçek bir parçasıysa, düşük gecikmeli
+okumalar önemliyse ve ekip okuma modelini açık biçimde tasarlamaya hazırsa
+CacheDB güçlü bir alternatiftir.
 
-- production runtime overhead düşük olmalı
-- kütüphane, gerçek bir ORM alternatifi olacak kadar kolay kullanılabilmeli
+## Ne Zaman CacheDB Seçilir?
 
-## Kısa Cevap
+Şu durumlarda CacheDB iyi uyum verir:
 
-Şu durumlarda CacheDB seç:
+- Redis zaten gerçek production mimarisinin parçasıysa.
+- Düşük gecikmeli okuma yolu ürün için önemliyse.
+- İlişki yükleme, projection ve sıcak veri penceresi açıkça tasarlanabiliyorsa.
+- Runtime reflection istemiyor, derleme zamanında üretilen metadata istiyorsan.
+- Normal servis kodu ergonomik kalsın ama ölçülen darboğazlarda daha düşük seviyeye inilebilsin istiyorsan.
 
-- Redis gerçek production mimarisinin parçasıysa, sonradan eklenmiş bir detay değilse
-- düşük gecikmeli okuma, saydam ilişkisel soyutlamadan daha önemliyse
-- ekip relation loading, projection ve hot path konusunda explicit olmayı kabul ediyorsa
-- production overhead, sade startup ve kaçış hattı önemliyse
+## Ne Zaman ORM'de Kalmak Daha Doğru?
 
-Şu durumlarda Hibernate/JPA tarafında kal:
+Şu durumlarda JPA/Hibernate tarafında kalmak daha doğal olabilir:
 
-- uygulamanın ana okuma modeli ağır biçimde ilişkisel join'lere dayanıyorsa
-- ekip explicit runtime kontrolden çok saydam ORM davranışı istiyorsa
-- lazy loading ve entity graph davranışının büyük ölçüde görünmez kalması bekleniyorsa
-- production darboğazlarının çoğu read-path latency değil SQL modellemesi ise
+- Uygulamanın ana okuma modeli yoğun SQL join ve raporlama üzerine kuruluysa.
+- Ekip persistence davranışının büyük ölçüde görünmez kalmasını istiyorsa.
+- Lazy loading ve entity graph davranışları ürün geliştirme modelinin parçasıysa.
+- Redis production runtime planının parçası değilse.
+- Darboğazlar okuma gecikmesinden çok SQL modelleme veya raporlama tarafındaysa.
 
-## CacheDB Nedir
+Bu ayrım zayıflık değildir. CacheDB'nin hangi problem için tasarlandığını açık
+tutmak, ürünü daha güvenilir konumlandırır.
+
+## CacheDB Nedir?
 
 CacheDB, Hibernate'in birebir kopyası olmaya çalışmaz.
 
-Bu kütüphane Redis-first bir persistence kütüphanesidir:
+CacheDB şu modeli kullanır:
 
-- uygulama okuma ve yazmalari önce Redis'e gider
-- PostgreSQL kalıcı depo olarak kalır
-- metadata derleme anında üretilir
-- relation loading explicit olur
-- write-behind, kalıcılık işini foreground path dışına taşır
+- Uygulamanın sıcak okuma/yazma yolu Redis üzerinden ilerler.
+- PostgreSQL kalıcı veri deposu olarak kalır.
+- Entity metadata'sı derleme zamanında üretilir.
+- İlişki yükleme açık fetch plan ve loader'larla yapılır.
+- Write-behind, kalıcı yazımı foreground uygulama yolunun dışına taşır.
 
-Bu nedenle CacheDB şu gözle değerlendirilmelidir:
+Bu nedenle CacheDB şu şekilde değerlendirilmelidir:
 
-- explicit kontrol isteyen ekipler için düşük-overhead bir ORM alternatifi
-- Redis-first uygulamalar için production-odaklı persistence kütüphanesi
-- gerçek hotspot'lar için net bir kaçış hattı bırakan bir library
+- açık kontrol isteyen ekipler için düşük ek yüklü bir ORM alternatifi
+- Redis merkezli uygulamalar için production odaklı persistence kütüphanesi
+- gerçek darboğazlarda daha düşük seviyeli repository kullanımına izin veren bir çalışma modeli
 
-## Hızli Karşılastirma
+## Karşılaştırma
 
 | Konu | CacheDB | Geleneksel JPA / Hibernate |
 | --- | --- | --- |
-| Birincil okuma yolu | Redis-first | Database-first |
-| Metadata modeli | Compile-time generated | Genelde runtime reflection ve ORM metadata |
-| Varsayılan felsefe | Explicit kontrol | Saydam soyutlama |
-| Relation loading | Explicit `FetchPlan`, loader, projection | Çoğu zaman implicit lazy/eager graph davranışi |
-| Hotspot kaçış hattı | Binding veya doğrudan repository'ye inebilirsin | Çoğu zaman ORM içinde kalınır veya custom SQL yazılır |
-| En iyi uyum | Düşük geçikmeli servisler, read-ağır API'ler, Redis-merkezli sistemler | Iliskisel alanlar, SQL-merkezli sistemler, join-ağır uygulamalar |
-| Runtime overhead hedefi | Çok düşük | Genelde kabul edilebilir, ama birincil tasarım hedefi değil |
+| Birincil okuma yolu | Redis öncelikli | Veritabanı öncelikli |
+| Metadata modeli | Derleme zamanında üretilir | Genelde runtime reflection ve ORM metadata |
+| İlişki yükleme | Açık `FetchPlan`, loader ve projection | Çoğu zaman implicit lazy/eager graph davranışı |
+| Darboğaz kaçış yolu | Binding veya doğrudan repository'ye inilebilir | Çoğu zaman ORM içinde kalınır veya custom SQL yazılır |
+| En iyi uyum | Düşük gecikmeli servisler, read-heavy API'ler, Redis merkezli sistemler | İlişkisel alanlar, SQL merkezli sistemler, join-heavy uygulamalar |
+| Runtime ek yük hedefi | Çok düşük | Genelde kabul edilebilir, ama birincil tasarım hedefi değil |
 
-## CacheDB En Çok Nerede Güçlü
+## CacheDB En Çok Nerede Güçlü?
 
-CacheDB şu alanlarda guclu bir uyum verir:
+CacheDB şu alanlarda güçlü uyum verir:
 
-- sıcak read path'i olan ürün servişleri
-- projection kullanan dashboard ve liste-ağır uygulamalar
-- Redis'i zaten production'da birinci sınıf bağımlilik olarak isleten sistemler
-- reflection-ağır runtime davranış istemeyen ama generated ergonomi isteyen ekipler
-- normal kod ile ölçülmüş hotspot'ları net ayırmak isteyen servisler
+- sıcak okuma yolu olan ürün servisleri
+- projection kullanan yönetim paneli ve liste ağırlıklı uygulamalar
+- Redis'i production'da birinci sınıf bağımlılık olarak işleten sistemler
+- runtime reflection istemeyen ama generated API ergonomisi isteyen ekipler
+- normal kod ile ölçülmüş darboğazları net ayırmak isteyen servisler
 
-## Nerede Daha Kötü Bir Uyumluluk Gösterir
+## Nerede Daha Zayıf Uyum Verir?
 
-Ekip şu şeyleri istiyorsa CacheDB daha kötü bir uyum verir:
+Ekip şu beklentilere sahipse CacheDB doğru araç olmayabilir:
 
-- read-model şeklini büyük oranda gizleyen bir ORM
-- ekranları varsayılan olarak geniş relational join ile kurmak
-- payload boyutunu düşünmeden otomatik graph traversal beklemek
-- temel uygulama paterni olarak ağır iliskisel raporlama
+- persistence davranışının tamamen görünmez kalması
+- ekranların varsayılan olarak geniş relational join'lerle kurulması
+- payload boyutu düşünülmeden otomatik graph traversal beklenmesi
+- ana uygulama deseninin ağır ilişkisel raporlama olması
 
-Bu tip durumlarda Hibernate/JPA daha doğal araç olabilir.
+Bu durumda Hibernate/JPA daha doğal ve daha az sürtünmeli araç olabilir.
 
-Bu mesaji açık vermek zayiflik değil; konumlandırmayi daha güvenilir hale getirir.
+## Production Ekipleri Ne Beklemeli?
 
-## Production Ekipleri Neyi Beklemeli
+CacheDB doğru kullanıldığında production resmi genelde şöyle olur:
 
-Bir ekip CacheDB'yi doğru kullanırsa production resmi genelde söyle olur:
+- normal iş kodu generated domain veya binding yüzeyini kullanır
+- sıcak okuma yolları projection ve açık fetch limitleriyle kurulur
+- global sorted/range ekranları geniş entity sorgusu yerine projection'a özel ranked alan kullanır
+- ranked alanlar `rankedBy(...)` ile tanımlanır ve projection repository top-window yolunu kullanabilir
+- yalnızca kanıtlanmış darboğazlar doğrudan repository'ye iner
+- foreground repository trafiği, background worker ve admin trafiğinden ayrılır
 
-- varsayılan iş kodu generated domain veya binding surface kullanır
-- sıcak path'ler projection ve explicit fetch limit ile kurulur
-- global sorted/range ekranları, geniş multi-sort entity query yerine projection'a özel ranked alan kullanır
-- bu ranked alanlar `rankedBy(...)` ile tanımlanir; boylece projection repository top-window fast path kullanabilir
-- sadece kanıtlanmış hotspot'lar doğrudan repository'ye iner
-- foreground repository trafiği background worker/admin trafiğinden ayrılır
+CacheDB kötü kullanıldığında sorun genelde şöyle görünür:
 
-Bir ekip CacheDB'yi kötü kullanırsa sorun genelde söyle görünur:
+- liste ekranlarında geniş aggregate hydrate edilir
+- Redis sihirli ve bedava cache gibi düşünülür
+- projection kullanılmaz
+- foreground ve background yolları aynı Redis pool'da toplanır
+- tüm kod ölçüm yapılmadan minimal repository stiline indirilir
 
-- liste ekranlarında geniş aggregate hydrate eder
-- Redis'i sihirli ve bedava sanir
-- projection kullanmaz
-- foreground ve background yollarini aynı Redis pool'da toplar
-- tüm kodu ölçmeden minimal repository stiline indirir
+CacheDB açıklığı ödüllendirir. Object graph'ın bedelsiz olduğunu varsaymayı
+ödüllendirmez.
 
-CacheDB explicitligi odullendirir. Object graph'in bedelsiz olduğunu varsaymayi odullendirmez.
+## Önerilen Geçiş Yolu
 
-## Önerilen Geçis Yolu
+JPA/Hibernate'ten gelen ekipler için önerilen geçiş:
 
-Bir ekip JPA/Hibernate'ten geliyorsa şu geçiş yolunu izle:
+1. `GeneratedCacheModule.using(session)...` ile başla.
+2. CRUD ve normal servis endpoint'lerini generated yüzeyde bırak.
+3. Liste ekranlarını projection ve summary/detail modeline çek.
+4. Önizleme ilişkilerine `withRelationLimit(...)` ekle.
+5. Sadece ölçülmüş darboğazları `*CacheBinding.using(session)...` tarafına indir.
+6. Doğrudan repository'yi ancak profiling hâlâ gerekli diyorsa kullan.
 
-1. `GeneratedCacheModule.using(session)...` ile başla
-2. CRUD ve normal servis endpoint'lerini generated surface üzerinde bırak
-3. Liste ekranlarıni projection ve summary/detail pattern'ine çek
-4. Preview relation'lara `withRelationLimit(...)` ekle
-5. Sadece ölçülmüş hotspot'ları `*CacheBinding.using(session)...` tarafına indir
-6. Doğrudan repository'yi ancak profiling hala gerekli diyorsa kullan
+Bu yol onboarding'i kolay tutarken düşük ek yük hedefini de korur.
 
-Bu yol onboarding'i kolay tutarken düşük-overhead hedefini de korur.
+## Ekip Tipine Göre Kısa Kural
 
-## Surface Seçimi
-
-Bunu ekipler için varsayılan kural seti gibi kullan:
-
-| Ekip veya yuk tipi | Önerilen surface |
+| Ekip veya yük tipi | Önerilen yüzey |
 | --- | --- |
-| Normal ürün serviş kodu | `GeneratedCacheModule.using(session)...` |
-| Explicit sıcak endpoint'ler | `*CacheBinding.using(session)...` |
-| Worker, replay, recovery, infra kodu | doğrudan `EntityRepository` / `ProjectionRepository` |
-| Relation-ağır liste veya dashboard okumasi | projection + `withRelationLimit(...)` |
+| Normal ürün servis kodu | `GeneratedCacheModule.using(session)...` |
+| Açıkça sıcak olduğu ölçülmüş endpoint'ler | `*CacheBinding.using(session)...` |
+| Worker, replay, recovery, altyapı kodu | doğrudan `EntityRepository` / `ProjectionRepository` |
+| Çok ilişkili liste veya yönetim paneli okumaları | projection + `withRelationLimit(...)` |
+| Global sıralı veya ranked ekranlar | ranked projection |
 
-## Benchmark Dürüstlüğü
+## Benchmark Nasıl Okunmalı?
 
-Bu repo içindeki recipe benchmark bilerek dar kapsamli.
+Repo içindeki recipe benchmark dar kapsamlıdır.
 
-Kanıtledigi şey şu:
+Kanıtladığı şey:
 
-- generated ergonomi, doğrudan repository kullanımıyla aynı düşük-overhead bandinda kalabiliyor
+- generated ergonomi, doğrudan repository kullanımıyla aynı düşük ek yük bandında kalabiliyor
+- API yüzeyi maliyeti ölçülebiliyor
 
-Kanıtlemadigi şey ise şu:
+Kanıtlamadığı şey:
 
 - CacheDB'nin her yükte Hibernate'den hızlı olduğu
-- Redis latency'nin ortadan kalktigi
-- relation-ağır ekranların read-model disiplini olmadan ucuz olacagi
+- Redis gecikmesinin ortadan kalktığı
+- çok ilişkili ekranların okuma modeli disiplini olmadan ucuz olacağı
 
-Bu benchmark'i marketing masali için değil, API-surface dürüstlüğü için kullan.
+Bu benchmark'i marketing iddiası için değil, API yüzeyi dürüstlüğü için kullan.
 
-## Repo İçindeki Güncel Kanıt
+Son yerel ölçüm özeti:
 
-Son recipe benchmark özeti:
+- `Generated entity binding`: bu yerel koşuda ortalamada en hızlı yüzey
+- `Minimal repository`: bu yerel koşuda en düşük p95
+- `JPA-style domain module`: gruplanmış ergonomik yüzey, makul wrapper maliyeti
 
-- `Generated entity binding`: güncel yerel koşuda ortalamada en hızlı
-- `Minimal repository`: güncel yerel koşuda en düşük p95
-- `JPA-style domain modüle`: gruplanmis ergonomik surface, makul wrapper maliyeti
+Çıkarım:
 
-Buradaki asıl sonuc:
+- ergonomik yüzeyler bedelsiz değildir
+- ama doğrudan repository yoluna yeterince yakındır
+- bu yüzden çoğu ekip okunabilirlikten erken vazgeçmemelidir
 
-- ergonomik surface bedelsiz değil
-- ama doğrudan repository yoluna yeterince yakın; bu yüzden çoğu ekip okunabilirlikten erken vazgecmemeli
-
-## Sonraki Okuma
+## Devam Et
 
 - [Production Recipes](./production-recipes.md)
 - [Spring Boot Starter](./spring-boot-starter.md)
 - [Tuning Parameters](./tuning-parameters.md)
 - [Production Tests](../../cachedb-production-tests/README.md)
-
-

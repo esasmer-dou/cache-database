@@ -1,6 +1,8 @@
-# Public Beta Launch Kit
+# Public Beta Yayın Paketi
 
-Bu doküman, repo'yu dış dünyaya açarken kullanılacak en kısa launch paketidir.
+Bu doküman, repoyu dış dünyaya açarken kullanılacak kısa ve tutarlı yayın
+paketini toplar. Amaç, CacheDB'yi olduğundan büyük göstermeden, hangi
+problem için tasarlandığını net anlatmaktır.
 
 ## GitHub About
 
@@ -10,13 +12,13 @@ Bu doküman, repo'yu dış dünyaya açarken kullanılacak en kısa launch paket
 
 ### Kısa açıklama
 
-`Redis-first Java persistence with async PostgreSQL write-behind and compile-time generated ORM-like APIs.`
+`Redis merkezli Java persistence kütüphanesi: PostgreSQL kalıcı kaynak olarak kalır, ORM benzeri API'ler derleme zamanında üretilir.`
 
 ### Website
 
-Ayrıca bir site yoksa repo URL'si veya ana doküman landing sayfasi kullanılabilir.
+Ayrı bir site yoksa repo URL'si veya ana doküman giriş sayfası kullanılabilir.
 
-### Önerilen topics
+### Önerilen etiketler
 
 - `java`
 - `redis`
@@ -31,76 +33,78 @@ Ayrıca bir site yoksa repo URL'si veya ana doküman landing sayfasi kullanılab
 - `projection`
 - `cache`
 
-## Public Beta Konumlandırma
+## Açık Beta Konumlandırması
 
 Önerilen ana mesaj:
 
-`cache-database is a Redis-first persistence library for Java teams that care about production runtime overhead and still want an ORM-like developer experience.`
+`cache-database, düşük gecikme ve ölçülebilir çalışma zamanı maliyeti isteyen Java ekipleri için Redis merkezli bir persistence katmanıdır. PostgreSQL kalıcı veri kaynağı olarak kalır; sıcak okuma ve yazma yolu Redis üzerinden tasarlanır.`
 
-Önerilen caveat:
+Mutlaka korunması gereken sınır:
 
-`Public beta: projection/read-model discipline is part of the intended design, especially for relation-heavy and globally ranked screens.`
+`Açık beta: çok ilişkili ekranlarda, büyük liste ekranlarında ve global sıralı iş ekranlarında projection/okuma modeli disiplini isteğe bağlı bir iyileştirme değil, tasarımın parçasıdır.`
 
-## Güncel Public Beta Release Başlığı
+## Güncel Açık Beta Sürüm Başlığı
 
 `cache-database v0.1.0-beta.2`
 
-Güncel tag:
+Güncel etiket:
 
 `v0.1.0-beta.2`
 
-## İlk Public Release Note Taslağı
+## İlk Açık Beta Sürüm Notu Taslağı
 
 ```md
-## cache-database public beta
+## cache-database açık beta
 
-Bu, `cache-database` için ilk public beta release'idir.
+Bu sürüm, `cache-database` için ilk açık beta yayınıdır.
 
 ### CacheDB nedir
 
-CacheDB, PostgreSQL'i durable store olarak korurken uygulama yolunu Redis-first
-şekilde kuran bir Java persistence kütüphanesidir. Hedefi, runtime overhead'ini
-düşük tutarken güçlü bir ORM-benzeri geliştirici deneyimi sunmaktır.
+CacheDB, PostgreSQL'i kalıcı veri kaynağı olarak korurken uygulamanın sıcak
+okuma ve yazma yolunu Redis üzerinden kuran bir Java persistence
+kütüphanesidir. Hedefi, çalışma zamanı ek yükünü düşük tutmak ve buna rağmen
+ORM benzeri, üretilebilir bir geliştirici deneyimi sunmaktır.
 
 ### Şimdiden güçlü olan taraflar
 
-- Redis-first read/write path ve PostgreSQL durability
-- compile-time generated entity metadata ve generated ergonomik API'ler
+- Redis merkezli okuma/yazma yolu ve PostgreSQL kalıcılığı
+- derleme zamanında üretilen entity metadata'sı ve ergonomik API'ler
 - Spring Boot starter ve plain Java bootstrap yolu
-- relation-heavy ekranlar için projection/read-model guidance
-- global sorted business ekranları için ranked projection desteği
-- production evidence workflow'ları ve multi-instance coordination smoke kapsamı
+- çok ilişkili ekranlar için projection/okuma modeli rehberi
+- global sıralı iş ekranları için ranked projection desteği
+- production kanıt iş akışları ve çok instance'lı koordinasyon smoke kapsamı
 
-### Public beta kapsamı
+### Açık beta kapsamı
 
-CacheDB, public beta kullanımı için hazırdır; ancak henüz "koşulsuz GA" seviyesinde duyurulmamalıdır.
+CacheDB açık beta kullanımı için hazırdır; ancak henüz "koşulsuz GA" olarak
+duyurulmamalıdır.
 
-Buradaki temel tasarım ilkesi explicit read-model shape yaklaşımıdır:
+Temel tasarım ilkesi açıktır:
 
-- önce generated modüle/binding surface ile başla
-- relation-ağır liste ekranlarında projection ve relation limit kullan
-- global sorted/range-driven görünümlerde ranked projection kullan
-- yalnızca ölçülmüş hotspot'ları doğrudan repository seviyesine indir
+- normal CRUD için önce üretilmiş module/binding API'leriyle başla
+- ilişki yükü yüksek liste ekranlarında projection ve ilişki limiti kullan
+- global sıralı veya aralık tabanlı ekranlarda ranked projection kullan
+- yalnızca ölçümle kanıtlanmış darboğazları doğrudan repository seviyesine indir
 
-### Production rollout öncesi
+### Production yayına geçmeden önce
 
-- production recipe rehberini oku
+- production reçeteleri rehberini oku
 - tuning parameters dokümanını oku
-- production evidence workflow'unu çalıştır
-- shared Redis/PostgreSQL kullanımında multi-instance coordination smoke'u çalıştır
+- production kanıt iş akışını çalıştır
+- ortak Redis/PostgreSQL kullanımında çok instance'lı koordinasyon smoke'unu çalıştır
 
 ### Önemli not
 
-Relation-heavy ve global sorted ekranlarda projection/read-model disiplini
-CacheDB için optional değil, tasarımın bir parçasıdır.
+Çok ilişkili ve global sıralı ekranlarda projection/okuma modeli disiplini
+CacheDB için opsiyonel değildir; tasarımın parçasıdır.
 ```
 
-## Launch Checklist
+## Yayın Kontrol Listesi
 
-- repo visibility bilinçli şekilde değiştirildi
-- README ve docs linkleri kontrol edildi
+- repo görünürlüğü bilinçli şekilde değiştirildi
+- README ve doküman bağlantıları kontrol edildi
 - release checklist gözden geçirildi
-- `pom.xml` içindeki placeholder maintainer alanları güncellendi
+- `pom.xml` içindeki geçici maintainer alanları güncellendi
 - GitHub security reporting açıldı
-- branch protection açıldi
-- `oss-release` ile artifact build alindi
+- branch protection açıldı
+- `oss-release` ile artifact build alındı

@@ -44,4 +44,3 @@ Bu komut şunları yapar:
 
 Public release sonrasında `main` branch'ini önceki beta sürümünde bırakma.
 Bir sonraki döngüyü hemen aç ki dependency kullanan ekipler ve dış katkıcılar aktif geliştirme hattını görebilsin.
-

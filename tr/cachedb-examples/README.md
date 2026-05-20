@@ -2,10 +2,10 @@
 
 Bu modül, `cache-database` için çalıştırılabilir örnekler içerir.
 
-İki amaç için kullan:
+İki amaç için kullanılır:
 
-- demo yük altında Redis-first runtime davranışını gözlemlemek
-- gerçek bir PostgreSQL demo şeması üzerinde migration planner akışını prova etmek
+- Demo yük altında Redis öncelikli çalışma davranışını gözlemlemek.
+- Gerçek bir PostgreSQL demo şeması üzerinde geçiş planlayıcı akışını prova etmek.
 
 ## Spring Boot Demo
 
@@ -17,19 +17,19 @@ Bu modül, `cache-database` için çalıştırılabilir örnekler içerir.
 
 Açılacak adresler:
 
-- demo load UI: `http://127.0.0.1:8090/demo-load`
-- admin dashboard: `http://127.0.0.1:8090/cachedb-admin?lang=tr`
+- demo yük arayüzü: `http://127.0.0.1:8090/demo-load`
+- yönetim paneli: `http://127.0.0.1:8090/cachedb-admin?lang=tr`
 - geçiş planlayıcı: `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`
 
-Load UI ve admin dashboard aynı Spring Boot uygulama portunu kullanır. Bu modda
-ikinci bir public admin server açılmaz.
+Yük arayüzü ve yönetim paneli aynı Spring Boot uygulama portunu kullanır. Bu
+modda ikinci bir public admin server açılmaz.
 
 ## Yük Senaryosu Çalışma Alanı
 
-Load workspace şunları içerir:
+Demo çalışma alanı şunları içerir:
 
-- veri seed etmek ve yük profillerini başlatmak için Bootstrap + AJAX kontrol UI
-- backlog, incident, memory, routing ve migration planning için CacheDB admin dashboard sayfaları
+- veri seed etmek ve yük profillerini başlatmak için Bootstrap + AJAX kontrol arayüzü
+- backlog, incident, memory, routing ve geçiş planlama sayfalarını içeren CacheDB yönetim paneli
 
 Demo domain:
 
@@ -48,44 +48,44 @@ Varsayılan seed hacmi:
 - order lines: `54,000`
 - toplam: `65,300`
 
-Bu hacim relation-heavy davranışı gösterecek kadar büyük, lokal demo tekrarlarını
-zorlamayacak kadar sınırlı tutulmuştur.
+Bu hacim, ilişki-ağır davranışı gösterecek kadar büyük; lokal demo tekrarlarını
+zorlamayacak kadar sınırlıdır.
 
 ## Hangi Düğmeye Basmalıyım?
 
-Normal load demo için:
+Normal yük demosu için:
 
 1. `http://127.0.0.1:8090/demo-load` adresini aç.
 2. `Seed Demo Data` düğmesine bas.
-3. `LOW` yükünü başlat ve admin metriklerini izle.
-4. Sonra `MEDIUM` yüküne geç.
-5. `HIGH` yüküne ancak önceki profil stabil görünüyorsa geç.
+3. `LOW` yükünü başlat ve yönetim panelindeki metrikleri izle.
+4. Sistem stabil görünüyorsa `MEDIUM` yüküne geç.
+5. `HIGH` yüküne yalnızca önceki profil stabil kaldıysa geç.
 6. Write-behind backlog, Redis memory, incident ve runtime profile alanlarını izle.
 
-Veri hazır değilken `LOW / MEDIUM / HIGH` başlatırsan UI hata verir ve önce seed
-ister. Load düğmeleri artık arka planda gizlice seed başlatmaz.
+Veri hazır değilken `LOW / MEDIUM / HIGH` başlatırsan arayüz hata verir ve önce
+seed ister. Yük düğmeleri artık arka planda gizlice seed başlatmaz.
 
 Yük profilleri:
 
 - `LOW`: katalog gezme, tüm müşteri taraması ve hafif toplu sepet/ürün güncellemesi
-- `MEDIUM`: daha büyük okumalar, top-customer order lookup ve dengeli toplu yazmalar
-- `HIGH`: kampanya saati davranışı, full customer scan, high-line order read ve yoğun stok/sepet/sipariş dalgalanması
+- `MEDIUM`: daha büyük okumalar, en çok sipariş veren müşteri sorguları ve dengeli toplu yazmalar
+- `HIGH`: kampanya saati davranışı, full customer scan, çok satırlı sipariş okumaları ve yoğun stok/sepet/sipariş dalgalanması
 
-## Migration Planner Demo Akışı
+## Geçiş Planlayıcı Demo Akışı
 
 Mevcut PostgreSQL geçiş davranışını denemek için:
 
 1. `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr` adresini aç.
 2. `Demo şemayı kur ve seed et` düğmesine bas.
 3. PostgreSQL şema keşfini çalıştır.
-4. Customer to orders gibi önerilen bir route seç.
+4. Müşteri-sipariş gibi önerilen bir akış seç.
 5. `Forma uygula` düğmesine bas.
 6. `Planı oluştur` düğmesine bas.
 7. Java iskeleti istiyorsan scaffold üret.
-8. Dry-run warm çalıştır.
-9. Gerçek staging warm çalıştır.
-10. Side-by-side compare çalıştır.
-11. Migration report indir.
+8. Dry-run ön ısıtma çalıştır.
+9. Gerçek staging ön ısıtma çalıştır.
+10. Yan yana karşılaştırma çalıştır.
+11. Geçiş raporunu indir.
 
 Hazırlanan demo nesneleri:
 
@@ -95,9 +95,9 @@ Hazırlanan demo nesneleri:
 - `cachedb_migration_demo_customer_metrics_v`
 - `cachedb_migration_demo_ranked_orders_v`
 
-Comparison sonucu route hazır değil diyorsa önce raporu incele. CacheDB tarafı
+Karşılaştırma sonuç akış hazır değil diyorsa önce raporu incele. CacheDB tarafı
 hızlı görünse bile PostgreSQL ile ilk sayfa üyeliği ve sıralaması eşleşmeden
-cutover yapılmamalıdır.
+canlıya geçilmemelidir.
 
 ## Standalone Demo
 
@@ -114,21 +114,21 @@ mvn -q -pl cachedb-examples -am exec:java `
 
 Varsayılan standalone URL'ler:
 
-- demo load UI: `http://127.0.0.1:8090`
-- admin dashboard: `http://127.0.0.1:8080/dashboard`
+- demo yük arayüzü: `http://127.0.0.1:8090`
+- yönetim paneli: `http://127.0.0.1:8080/dashboard`
 
 ## Read-Model Örneği
 
-Production benzeri relation-heavy ekran deseni için:
+Production benzeri ilişki-ağır ekran deseni için:
 
 - [src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java](../../cachedb-examples/src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java)
 
 Bu örnek, yaygın "müşterinin çok siparişi var" problemini temsil eder:
 
-- önce summary query çalışır
-- kullanıcı satırı açınca detail ayrıca yüklenir
-- preview gerekiyorsa relation preload sınırlandırılır
-- geniş base entity decode etmek yerine projection-specific Redis index kullanılır
+- önce özet sorgu çalışır
+- kullanıcı satırı açınca detay ayrıca yüklenir
+- önizleme gerekiyorsa ilişki yükleme sınırlandırılır
+- geniş base entity decode etmek yerine projection'a özel Redis index'i kullanılır
 - `EntityProjection.asyncRefresh()` ile read-model bakımı foreground write path dışına taşınır
 
 Örnekte gösterilen generated helper'lar:
@@ -146,7 +146,7 @@ Tutarlılık notu:
 - async projection refresh Redis Stream tabanlı ve durable çalışır
 - refresh event'leri process restart sonrasında kaybolmaz
 - projection okumaları tasarım gereği eventual consistency taşır
-- migration cutover kararları yine side-by-side parity check ile verilmelidir
+- migration cutover kararları yine yan yana parity check ile verilmelidir
 
 ## Runtime Tuning
 
