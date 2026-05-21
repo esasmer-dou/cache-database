@@ -267,6 +267,7 @@ Sonra şu adresleri aç:
 
 - [Spring Boot Starter](./spring-boot-starter.md)
 - [Geçiş Planlayıcı](./migration-planner.md)
+- [Kullanım Senaryosu Örnekleri](./use-case-examples.md)
 - [Production Reçeteleri](./production-recipes.md)
 - [Tuning Parametreleri](./tuning-parameters.md)
 - [ORM Alternatifi](./orm-alternative.md)

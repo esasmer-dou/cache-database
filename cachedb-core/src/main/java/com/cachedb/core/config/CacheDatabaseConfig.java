@@ -8,6 +8,7 @@ public record CacheDatabaseConfig(
         RedisFunctionsConfig redisFunctions,
         RelationConfig relations,
         PageCacheConfig pageCache,
+        ReadShapeGuardrailConfig readShapeGuardrail,
         QueryIndexConfig queryIndex,
         ProjectionRefreshConfig projectionRefresh,
         RedisGuardrailConfig redisGuardrail,
@@ -34,6 +35,7 @@ public record CacheDatabaseConfig(
                 .redisFunctions(redisFunctions)
                 .relations(relations)
                 .pageCache(pageCache)
+                .readShapeGuardrail(readShapeGuardrail)
                 .queryIndex(queryIndex)
                 .projectionRefresh(projectionRefresh)
                 .redisGuardrail(redisGuardrail)
@@ -52,6 +54,7 @@ public record CacheDatabaseConfig(
         private RedisFunctionsConfig redisFunctions = RedisFunctionsConfig.defaults();
         private RelationConfig relations = RelationConfig.defaults();
         private PageCacheConfig pageCache = PageCacheConfig.defaults();
+        private ReadShapeGuardrailConfig readShapeGuardrail = ReadShapeGuardrailConfig.defaults();
         private QueryIndexConfig queryIndex = QueryIndexConfig.defaults();
         private ProjectionRefreshConfig projectionRefresh = ProjectionRefreshConfig.defaults();
         private RedisGuardrailConfig redisGuardrail = RedisGuardrailConfig.defaults();
@@ -93,6 +96,11 @@ public record CacheDatabaseConfig(
 
         public Builder pageCache(PageCacheConfig pageCache) {
             this.pageCache = pageCache;
+            return this;
+        }
+
+        public Builder readShapeGuardrail(ReadShapeGuardrailConfig readShapeGuardrail) {
+            this.readShapeGuardrail = readShapeGuardrail;
             return this;
         }
 
@@ -145,6 +153,7 @@ public record CacheDatabaseConfig(
                     redisFunctions,
                     relations,
                     pageCache,
+                    readShapeGuardrail,
                     queryIndex,
                     projectionRefresh,
                     redisGuardrail,

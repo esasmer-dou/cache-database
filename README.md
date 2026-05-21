@@ -315,6 +315,7 @@ Rule of thumb:
 - [Getting Started](docs/getting-started.md)
 - [Spring Boot Starter](docs/spring-boot-starter.md)
 - [Migration Planner](docs/migration-planner.md)
+- [Use Case Examples](docs/use-case-examples.md)
 - [Production Recipes](docs/production-recipes.md)
 - [ORM Alternative Guide](docs/orm-alternative.md)
 - [Tuning Parameters](docs/tuning-parameters.md)

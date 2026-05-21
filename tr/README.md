@@ -321,6 +321,7 @@ Pratik kural:
 - [Başlangıç Rehberi](docs/getting-started.md)
 - [Spring Boot Starter](docs/spring-boot-starter.md)
 - [Geçiş Planlayıcı](docs/migration-planner.md)
+- [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md)
 - [Production Reçeteleri](docs/production-recipes.md)
 - [ORM Alternatifi Rehberi](docs/orm-alternative.md)
 - [Tuning Parametreleri](docs/tuning-parameters.md)

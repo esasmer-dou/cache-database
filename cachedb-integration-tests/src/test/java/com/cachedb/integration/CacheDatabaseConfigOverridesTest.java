@@ -23,6 +23,13 @@ class CacheDatabaseConfigOverridesTest {
         properties.setProperty("cachedb.config.adminHttp.dashboardTitle", "Tuned Admin");
         properties.setProperty("cachedb.config.adminMonitoring.enabled", "true");
         properties.setProperty("cachedb.config.redisGuardrail.usedMemoryWarnBytes", "1048576");
+        properties.setProperty("cachedb.config.redisGuardrail.usedMemoryWarnMaxmemoryPercent", "75");
+        properties.setProperty("cachedb.config.redisGuardrail.usedMemoryCriticalMaxmemoryPercent", "88");
+        properties.setProperty("cachedb.config.redisGuardrail.expectedMaxmemoryPolicy", "volatile-lru");
+        properties.setProperty("cachedb.config.redisGuardrail.warnOnUnexpectedMaxmemoryPolicy", "false");
+        properties.setProperty("cachedb.config.redisGuardrail.warnOnMissingMaxmemory", "true");
+        properties.setProperty("cachedb.config.readShapeGuardrail.maxProjectionQueryLimit", "750");
+        properties.setProperty("cachedb.config.readShapeGuardrail.hotSetHeadroom", "25");
         properties.setProperty("cachedb.config.adminMonitoring.historyMinSamples", "48");
         properties.setProperty("cachedb.config.adminMonitoring.incidentDeliveryPollTimeoutMillis", "900");
         properties.setProperty("cachedb.config.adminMonitoring.telemetryTtlSeconds", "43200");
@@ -40,6 +47,13 @@ class CacheDatabaseConfigOverridesTest {
         assertEquals("Tuned Admin", config.adminHttp().dashboardTitle());
         assertTrue(config.adminMonitoring().enabled());
         assertEquals(1_048_576L, config.redisGuardrail().usedMemoryWarnBytes());
+        assertEquals(75, config.redisGuardrail().usedMemoryWarnMaxmemoryPercent());
+        assertEquals(88, config.redisGuardrail().usedMemoryCriticalMaxmemoryPercent());
+        assertEquals("volatile-lru", config.redisGuardrail().expectedMaxmemoryPolicy());
+        assertFalse(config.redisGuardrail().warnOnUnexpectedMaxmemoryPolicy());
+        assertTrue(config.redisGuardrail().warnOnMissingMaxmemory());
+        assertEquals(750, config.readShapeGuardrail().maxProjectionQueryLimit());
+        assertEquals(25, config.readShapeGuardrail().hotSetHeadroom());
         assertEquals(48, config.adminMonitoring().historyMinSamples());
         assertEquals(900L, config.adminMonitoring().incidentDeliveryPollTimeoutMillis());
         assertEquals(43_200L, config.adminMonitoring().telemetryTtlSeconds());

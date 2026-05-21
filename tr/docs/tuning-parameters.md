@@ -234,6 +234,24 @@ Operasyonel notlar:
 | `cachedb.config.pageCache.failOnMissingPageLoader` | `false` | Read-through için page loader yoksa fail olup olmayacagini belirler. |
 | `cachedb.config.pageCache.evictionBatchSize` | `100` | Page-cache eviction batch boyu. |
 
+### Okuma Şekli Guardrail'ları
+
+Bu ayarlar Redis'i yanlışlıkla geniş okuma yüküyle doldurmayı engeller. Varsayılan kural sıkıdır: full entity okumalarda page/result boyutu, sıcak pencerenin içine headroom bırakarak sığmalıdır. Büyük liste ekranları full entity hydration yerine projection veya okuma modeli penceresi kullanmalıdır.
+
+| Property | Varsayılan | Ne işe yarar |
+| --- | --- | --- |
+| `cachedb.config.readShapeGuardrail.enabled` | `true` | Okuma şekli güvenlik kontrollerini açar. |
+| `cachedb.config.readShapeGuardrail.rejectPageRequestOverLimit` | `true` | Güvenli entity page limitinden büyük `PageWindow` isteklerini reddeder. |
+| `cachedb.config.readShapeGuardrail.rejectLoadedPageOverLimit` | `true` | Güvenli page limitinden fazla satır döndüren read-through loader'ları reddeder. |
+| `cachedb.config.readShapeGuardrail.skipLoadedPageCacheOverLimit` | `true` | Fazla büyük read-through sonucunun Redis page cache'e yazılmasını engeller. |
+| `cachedb.config.readShapeGuardrail.rejectEntityQueryOverLimit` | `true` | Geniş full-entity `query(...)` limitlerini reddeder. |
+| `cachedb.config.readShapeGuardrail.rejectProjectionQueryOverLimit` | `true` | Ayarlı projection penceresinden büyük projection sorgularını reddeder. |
+| `cachedb.config.readShapeGuardrail.hotSetHeadroom` | `1` | Tek page/result isteğinin `hotEntityLimit` altında kalması için sıcak pencerede bırakılan boşluktur. |
+| `cachedb.config.readShapeGuardrail.maxPageRequestSize` | `0` | Açık page request üst sınırı. `0`, değeri `pageSize` ve `hotEntityLimit - hotSetHeadroom` üzerinden türetir. |
+| `cachedb.config.readShapeGuardrail.maxLoadedPageSize` | `0` | Açık read-through loaded page üst sınırı. `0`, güvenli page request limitini kullanır. |
+| `cachedb.config.readShapeGuardrail.maxEntityQueryLimit` | `0` | Açık full-entity query üst sınırı. `0`, değeri `pageSize` ve `hotEntityLimit - hotSetHeadroom` üzerinden türetir. |
+| `cachedb.config.readShapeGuardrail.maxProjectionQueryLimit` | `1000` | Projection/okuma modeli sorgu penceresi üst sınırı. Müşteri sipariş özetleri gibi sınırlı sıcak pencerelerde kullanılır. |
+
 ### Query Index
 
 | Property | Varsayılan | Ne ise yarar |
@@ -300,6 +318,11 @@ Operasyonel notlar:
 | `cachedb.config.redisGuardrail.producerBackpressureEnabled` | `true` | Producer'ların pressure altında yavaşlamasını sağlar. |
 | `cachedb.config.redisGuardrail.usedMemoryWarnBytes` | `0` | Redis memory warning eşiği. `0` devre dışı demektir. |
 | `cachedb.config.redisGuardrail.usedMemoryCriticalBytes` | `0` | Redis memory critical eşiği. `0` devre dışı demektir. |
+| `cachedb.config.redisGuardrail.usedMemoryWarnMaxmemoryPercent` | `80` | Redis `maxmemory` değerinin yüzdesi olarak warning eşiği. Redis `maxmemory` ayarlıysa çalışır. |
+| `cachedb.config.redisGuardrail.usedMemoryCriticalMaxmemoryPercent` | `90` | Redis `maxmemory` değerinin yüzdesi olarak critical eşiği. Critical pressure durumunda aşağıdaki shedding ayarlarına göre cache/index yazımları kesilir. |
+| `cachedb.config.redisGuardrail.expectedMaxmemoryPolicy` | `noeviction` | CacheDB'ye ayrılmış Redis için beklenen `maxmemory-policy` değeri. |
+| `cachedb.config.redisGuardrail.warnOnUnexpectedMaxmemoryPolicy` | `true` | Redis'teki gerçek `maxmemory-policy` beklenen değerden farklıysa guardrail pressure seviyesini `WARN` yapar. |
+| `cachedb.config.redisGuardrail.warnOnMissingMaxmemory` | `false` | Redis `maxmemory` ayarlı değilse guardrail pressure seviyesini `WARN` yapar. Redis belleği production'da sınırlı olmak zorundaysa açılmalıdır. |
 | `cachedb.config.redisGuardrail.writeBehindBacklogWarnThreshold` | `250` | Write-behind backlog warning eşiği. |
 | `cachedb.config.redisGuardrail.writeBehindBacklogCriticalThreshold` | `750` | Write-behind backlog critical eşiği. |
 | `cachedb.config.redisGuardrail.compactionPendingWarnThreshold` | `1000` | Compaction pending warning eşiği. |

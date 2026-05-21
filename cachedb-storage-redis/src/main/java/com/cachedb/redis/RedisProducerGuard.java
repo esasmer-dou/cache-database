@@ -35,7 +35,7 @@ public final class RedisProducerGuard {
     private final AtomicBoolean samplingInProgress = new AtomicBoolean(false);
     private final AtomicLong nextSampleAllowedAtEpochMillis = new AtomicLong();
     private final AtomicReference<RedisGuardrailSnapshot> lastSnapshot = new AtomicReference<>(
-            new RedisGuardrailSnapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, "NORMAL")
+            new RedisGuardrailSnapshot(0L, 0L, 0L, "unknown", false, true, 0L, 0L, 0L, 0L, 0L, 0L, 0L, "NORMAL")
     );
     private final AtomicReference<RedisRuntimeProfileSnapshot> runtimeProfileSnapshot = new AtomicReference<>(
             new RedisRuntimeProfileSnapshot("STANDARD", "NORMAL", 0L, 0L, 0L, 0L, 0L)
@@ -232,6 +232,8 @@ public final class RedisProducerGuard {
         long usedMemory = parseLong(memoryStats.get("used_memory"));
         long usedMemoryPeak = parseLong(memoryStats.get("used_memory_peak"));
         long maxMemory = parseLong(memoryStats.get("maxmemory"));
+        String maxMemoryPolicy = memoryStats.getOrDefault("maxmemory_policy", "unknown");
+        boolean maxMemoryPolicyExpected = maxmemoryPolicyExpected(maxMemoryPolicy);
         Map<String, String> compactionStats = jedis.hgetAll(keyStrategy.compactionStatsKey());
         long pendingCount = parseLong(compactionStats.get("pendingCount"));
         long payloadCount = parseLong(compactionStats.get("payloadCount"));
@@ -241,11 +243,19 @@ public final class RedisProducerGuard {
         String pressureLevel = "NORMAL";
         if (config.usedMemoryCriticalBytes() > 0 && usedMemory >= config.usedMemoryCriticalBytes()) {
             pressureLevel = "CRITICAL";
+        } else if (memoryPercentExceeded(usedMemory, maxMemory, config.usedMemoryCriticalMaxmemoryPercent())) {
+            pressureLevel = "CRITICAL";
         } else if (config.writeBehindBacklogCriticalThreshold() > 0 && backlog >= config.writeBehindBacklogCriticalThreshold()) {
             pressureLevel = "CRITICAL";
         } else if (config.compactionPendingCriticalThreshold() > 0 && pendingCount >= config.compactionPendingCriticalThreshold()) {
             pressureLevel = "CRITICAL";
         } else if (config.usedMemoryWarnBytes() > 0 && usedMemory >= config.usedMemoryWarnBytes()) {
+            pressureLevel = "WARN";
+        } else if (memoryPercentExceeded(usedMemory, maxMemory, config.usedMemoryWarnMaxmemoryPercent())) {
+            pressureLevel = "WARN";
+        } else if (config.warnOnMissingMaxmemory() && maxMemory <= 0L) {
+            pressureLevel = "WARN";
+        } else if (!maxMemoryPolicyExpected) {
             pressureLevel = "WARN";
         } else if (config.writeBehindBacklogWarnThreshold() > 0 && backlog >= config.writeBehindBacklogWarnThreshold()) {
             pressureLevel = "WARN";
@@ -257,6 +267,9 @@ public final class RedisProducerGuard {
                 usedMemory,
                 usedMemoryPeak,
                 maxMemory,
+                maxMemoryPolicy,
+                maxMemory > 0L,
+                maxMemoryPolicyExpected,
                 backlog,
                 pendingCount,
                 payloadCount,
@@ -395,6 +408,17 @@ public final class RedisProducerGuard {
 
     private boolean isHardLimitActive() {
         RedisGuardrailSnapshot snapshot = sampleSafely();
+        if (config.usedMemoryCriticalBytes() > 0
+                && snapshot.usedMemoryBytes() >= config.usedMemoryCriticalBytes()) {
+            return true;
+        }
+        if (memoryPercentExceeded(
+                snapshot.usedMemoryBytes(),
+                snapshot.maxMemoryBytes(),
+                config.usedMemoryCriticalMaxmemoryPercent()
+        )) {
+            return true;
+        }
         if (config.writeBehindBacklogHardLimit() > 0
                 && snapshot.writeBehindBacklog() >= config.writeBehindBacklogHardLimit()) {
             return true;
@@ -405,6 +429,24 @@ public final class RedisProducerGuard {
         }
         return config.compactionPayloadHardLimit() > 0
                 && snapshot.compactionPayloadCount() >= config.compactionPayloadHardLimit();
+    }
+
+    private boolean memoryPercentExceeded(long usedMemoryBytes, long maxMemoryBytes, int thresholdPercent) {
+        return thresholdPercent > 0
+                && maxMemoryBytes > 0
+                && usedMemoryBytes > 0
+                && usedMemoryBytes * 100L >= maxMemoryBytes * (long) thresholdPercent;
+    }
+
+    private boolean maxmemoryPolicyExpected(String actualPolicy) {
+        if (!config.warnOnUnexpectedMaxmemoryPolicy()) {
+            return true;
+        }
+        String expectedPolicy = config.expectedMaxmemoryPolicy();
+        if (expectedPolicy == null || expectedPolicy.isBlank()) {
+            return true;
+        }
+        return actualPolicy != null && expectedPolicy.trim().equalsIgnoreCase(actualPolicy.trim());
     }
 
     private HardLimitEntityPolicy entityPolicy(String namespace) {

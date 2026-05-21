@@ -7,6 +7,11 @@ public record RedisGuardrailConfig(
         boolean producerBackpressureEnabled,
         long usedMemoryWarnBytes,
         long usedMemoryCriticalBytes,
+        int usedMemoryWarnMaxmemoryPercent,
+        int usedMemoryCriticalMaxmemoryPercent,
+        String expectedMaxmemoryPolicy,
+        boolean warnOnUnexpectedMaxmemoryPolicy,
+        boolean warnOnMissingMaxmemory,
         long writeBehindBacklogWarnThreshold,
         long writeBehindBacklogCriticalThreshold,
         long compactionPendingWarnThreshold,
@@ -51,6 +56,11 @@ public record RedisGuardrailConfig(
         private boolean producerBackpressureEnabled = true;
         private long usedMemoryWarnBytes = 0L;
         private long usedMemoryCriticalBytes = 0L;
+        private int usedMemoryWarnMaxmemoryPercent = 80;
+        private int usedMemoryCriticalMaxmemoryPercent = 90;
+        private String expectedMaxmemoryPolicy = "noeviction";
+        private boolean warnOnUnexpectedMaxmemoryPolicy = true;
+        private boolean warnOnMissingMaxmemory = false;
         private long writeBehindBacklogWarnThreshold = 250L;
         private long writeBehindBacklogCriticalThreshold = 750L;
         private long compactionPendingWarnThreshold = 1_000L;
@@ -99,6 +109,31 @@ public record RedisGuardrailConfig(
 
         public Builder usedMemoryCriticalBytes(long usedMemoryCriticalBytes) {
             this.usedMemoryCriticalBytes = usedMemoryCriticalBytes;
+            return this;
+        }
+
+        public Builder usedMemoryWarnMaxmemoryPercent(int usedMemoryWarnMaxmemoryPercent) {
+            this.usedMemoryWarnMaxmemoryPercent = usedMemoryWarnMaxmemoryPercent;
+            return this;
+        }
+
+        public Builder usedMemoryCriticalMaxmemoryPercent(int usedMemoryCriticalMaxmemoryPercent) {
+            this.usedMemoryCriticalMaxmemoryPercent = usedMemoryCriticalMaxmemoryPercent;
+            return this;
+        }
+
+        public Builder expectedMaxmemoryPolicy(String expectedMaxmemoryPolicy) {
+            this.expectedMaxmemoryPolicy = expectedMaxmemoryPolicy;
+            return this;
+        }
+
+        public Builder warnOnUnexpectedMaxmemoryPolicy(boolean warnOnUnexpectedMaxmemoryPolicy) {
+            this.warnOnUnexpectedMaxmemoryPolicy = warnOnUnexpectedMaxmemoryPolicy;
+            return this;
+        }
+
+        public Builder warnOnMissingMaxmemory(boolean warnOnMissingMaxmemory) {
+            this.warnOnMissingMaxmemory = warnOnMissingMaxmemory;
             return this;
         }
 
@@ -258,6 +293,11 @@ public record RedisGuardrailConfig(
                     producerBackpressureEnabled,
                     usedMemoryWarnBytes,
                     usedMemoryCriticalBytes,
+                    usedMemoryWarnMaxmemoryPercent,
+                    usedMemoryCriticalMaxmemoryPercent,
+                    expectedMaxmemoryPolicy,
+                    warnOnUnexpectedMaxmemoryPolicy,
+                    warnOnMissingMaxmemory,
                     writeBehindBacklogWarnThreshold,
                     writeBehindBacklogCriticalThreshold,
                     compactionPendingWarnThreshold,

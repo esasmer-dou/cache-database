@@ -2,6 +2,8 @@ package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.cache.PageWindow;
+import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
+import com.reactor.cachedb.core.guardrail.ReadShapeGuardrails;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import redis.clients.jedis.JedisPooled;
@@ -20,6 +22,7 @@ public final class RedisPageCacheManager<T, ID> {
     private final RedisHotSetManager hotSetManager;
     private final RedisQueryIndexManager<T, ID> queryIndexManager;
     private final RedisProducerGuard producerGuard;
+    private final ReadShapeGuardrailConfig readShapeGuardrailConfig;
 
     public RedisPageCacheManager(
             JedisPooled jedis,
@@ -29,7 +32,8 @@ public final class RedisPageCacheManager<T, ID> {
             RedisKeyStrategy keyStrategy,
             RedisHotSetManager hotSetManager,
             RedisQueryIndexManager<T, ID> queryIndexManager,
-            RedisProducerGuard producerGuard
+            RedisProducerGuard producerGuard,
+            ReadShapeGuardrailConfig readShapeGuardrailConfig
     ) {
         this.jedis = jedis;
         this.metadata = metadata;
@@ -39,6 +43,7 @@ public final class RedisPageCacheManager<T, ID> {
         this.hotSetManager = hotSetManager;
         this.queryIndexManager = queryIndexManager;
         this.producerGuard = producerGuard;
+        this.readShapeGuardrailConfig = readShapeGuardrailConfig;
     }
 
     public void recordEntityAccess(ID id) {
@@ -100,6 +105,11 @@ public final class RedisPageCacheManager<T, ID> {
         if (producerGuard != null && producerGuard.shouldShedPageCacheWrites(metadata.redisNamespace())) {
             return;
         }
+        CachePolicy effectiveCachePolicy = effectiveCachePolicy();
+        ReadShapeGuardrails.validateLoadedPage(metadata.entityName(), entities.size(), effectiveCachePolicy, readShapeGuardrailConfig);
+        if (!ReadShapeGuardrails.shouldCacheLoadedPage(entities.size(), effectiveCachePolicy, readShapeGuardrailConfig)) {
+            return;
+        }
         String pageKey = keyStrategy.pageKey(metadata.redisNamespace(), pageWindow.pageNumber());
         jedis.del(pageKey);
         if (entities.isEmpty()) {
@@ -114,7 +124,6 @@ public final class RedisPageCacheManager<T, ID> {
         }
 
         jedis.rpush(pageKey, ids.toArray(String[]::new));
-        CachePolicy effectiveCachePolicy = effectiveCachePolicy();
         if (effectiveCachePolicy.pageTtlSeconds() > 0) {
             jedis.expire(pageKey, effectiveCachePolicy.pageTtlSeconds());
         }

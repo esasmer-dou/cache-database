@@ -234,6 +234,24 @@ Operational notes:
 | `cachedb.config.pageCache.failOnMissingPageLoader` | `false` | Fails when page read-through has no loader. |
 | `cachedb.config.pageCache.evictionBatchSize` | `100` | Page-cache eviction work chunk size. |
 
+### Read-Shape Guardrails
+
+These properties protect Redis from accidental wide reads. The default rule is strict: page/result sizes for full-entity reads must fit inside the hot window with headroom. Large list screens should use projection/read-model windows instead of full entity hydration.
+
+| Property | Default | What it does |
+| --- | --- | --- |
+| `cachedb.config.readShapeGuardrail.enabled` | `true` | Enables read-shape safety checks. |
+| `cachedb.config.readShapeGuardrail.rejectPageRequestOverLimit` | `true` | Rejects `PageWindow` requests larger than the safe entity page limit. |
+| `cachedb.config.readShapeGuardrail.rejectLoadedPageOverLimit` | `true` | Rejects read-through loaders that return more rows than the safe page limit. |
+| `cachedb.config.readShapeGuardrail.skipLoadedPageCacheOverLimit` | `true` | Prevents oversized read-through results from being written to Redis page cache. |
+| `cachedb.config.readShapeGuardrail.rejectEntityQueryOverLimit` | `true` | Rejects broad full-entity `query(...)` result limits. |
+| `cachedb.config.readShapeGuardrail.rejectProjectionQueryOverLimit` | `true` | Rejects projection query limits above the configured projection window. |
+| `cachedb.config.readShapeGuardrail.hotSetHeadroom` | `1` | Keeps at least this many rows outside one page/result so the request stays below `hotEntityLimit`. |
+| `cachedb.config.readShapeGuardrail.maxPageRequestSize` | `0` | Explicit max page request size. `0` derives from `pageSize` and `hotEntityLimit - hotSetHeadroom`. |
+| `cachedb.config.readShapeGuardrail.maxLoadedPageSize` | `0` | Explicit max read-through loaded page size. `0` derives from the safe page request limit. |
+| `cachedb.config.readShapeGuardrail.maxEntityQueryLimit` | `0` | Explicit max full-entity query limit. `0` derives from `pageSize` and `hotEntityLimit - hotSetHeadroom`. |
+| `cachedb.config.readShapeGuardrail.maxProjectionQueryLimit` | `1000` | Max projection/read-model query window. Use this for bounded hot windows such as customer order summaries. |
+
 ### Query Index
 
 | Property | Default | What it does |
@@ -300,6 +318,11 @@ Operational notes:
 | `cachedb.config.redisGuardrail.producerBackpressureEnabled` | `true` | Lets producers slow down under pressure. |
 | `cachedb.config.redisGuardrail.usedMemoryWarnBytes` | `0` | Redis memory warning threshold. `0` disables it. |
 | `cachedb.config.redisGuardrail.usedMemoryCriticalBytes` | `0` | Redis memory critical threshold. `0` disables it. |
+| `cachedb.config.redisGuardrail.usedMemoryWarnMaxmemoryPercent` | `80` | Warning threshold as a percentage of Redis `maxmemory`. Active only when Redis `maxmemory` is configured. |
+| `cachedb.config.redisGuardrail.usedMemoryCriticalMaxmemoryPercent` | `90` | Critical threshold as a percentage of Redis `maxmemory`. Critical pressure sheds cache/index writes according to the shedding flags below. |
+| `cachedb.config.redisGuardrail.expectedMaxmemoryPolicy` | `noeviction` | Expected Redis `maxmemory-policy` for a CacheDB-owned Redis. |
+| `cachedb.config.redisGuardrail.warnOnUnexpectedMaxmemoryPolicy` | `true` | Marks Redis guardrail pressure as `WARN` when the actual `maxmemory-policy` differs from the expected policy. |
+| `cachedb.config.redisGuardrail.warnOnMissingMaxmemory` | `false` | Marks Redis guardrail pressure as `WARN` when Redis has no `maxmemory` configured. Enable this in production validation if Redis memory must be capped. |
 | `cachedb.config.redisGuardrail.writeBehindBacklogWarnThreshold` | `250` | Warning threshold for pending write-behind work. |
 | `cachedb.config.redisGuardrail.writeBehindBacklogCriticalThreshold` | `750` | Critical threshold for pending write-behind work. |
 | `cachedb.config.redisGuardrail.compactionPendingWarnThreshold` | `1000` | Warning threshold for compaction pending keys. |

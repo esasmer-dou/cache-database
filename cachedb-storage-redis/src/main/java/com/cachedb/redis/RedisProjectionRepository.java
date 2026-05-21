@@ -1,6 +1,8 @@
 package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.api.ProjectionRepository;
+import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
+import com.reactor.cachedb.core.guardrail.ReadShapeGuardrails;
 import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QueryEvaluator;
@@ -35,6 +37,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     private final Function<Collection<String>, Map<String, P>> missingByRawIdsLoader;
     private final Function<QuerySpec, List<P>> queryWarmupLoader;
     private final StoragePerformanceCollector performanceCollector;
+    private final ReadShapeGuardrailConfig readShapeGuardrailConfig;
     private final ProjectionQueryCache<P> queryCache = new ProjectionQueryCache<>(HOT_QUERY_CACHE_LIMIT, HOT_QUERY_CACHE_TTL_MILLIS);
 
     public RedisProjectionRepository(
@@ -44,7 +47,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             Function<String, Optional<P>> missingByRawIdLoader,
             Function<Collection<String>, Map<String, P>> missingByRawIdsLoader,
             Function<QuerySpec, List<P>> queryWarmupLoader,
-            StoragePerformanceCollector performanceCollector
+            StoragePerformanceCollector performanceCollector,
+            ReadShapeGuardrailConfig readShapeGuardrailConfig
     ) {
         this.readRuntime = Objects.requireNonNull(readRuntime, "readRuntime");
         this.refreshRuntime = Objects.requireNonNull(refreshRuntime, "refreshRuntime");
@@ -53,6 +57,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         this.missingByRawIdsLoader = Objects.requireNonNull(missingByRawIdsLoader, "missingByRawIdsLoader");
         this.queryWarmupLoader = Objects.requireNonNull(queryWarmupLoader, "queryWarmupLoader");
         this.performanceCollector = performanceCollector;
+        this.readShapeGuardrailConfig = readShapeGuardrailConfig;
         this.readRuntime.attachQueryCacheInvalidator(queryCache::clear);
         this.refreshRuntime.attachQueryCacheInvalidator(queryCache::clear);
     }
@@ -105,6 +110,11 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     public List<P> query(QuerySpec querySpec) {
         long startedAt = System.nanoTime();
         try {
+            ReadShapeGuardrails.validateProjectionQuery(
+                    readRuntime.binding().projection().name(),
+                    querySpec,
+                    readShapeGuardrailConfig
+            );
             String hotQueryCacheKey = hotQueryCacheKey(querySpec);
             if (hotQueryCacheKey != null) {
                 List<P> cached = queryCache.get(hotQueryCacheKey);

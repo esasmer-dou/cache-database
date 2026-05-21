@@ -269,6 +269,7 @@ Then open:
 
 - [Spring Boot Starter](./spring-boot-starter.md)
 - [Migration Planner](./migration-planner.md)
+- [Use Case Examples](./use-case-examples.md)
 - [Production Recipes](./production-recipes.md)
 - [Tuning Parameters](./tuning-parameters.md)
 - [ORM Alternative](./orm-alternative.md)

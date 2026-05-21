@@ -38,6 +38,7 @@ public final class CacheDatabaseConfigOverrides {
                 .redisFunctions(applyRedisFunctions(baseConfig.redisFunctions(), root.child("redisFunctions.")))
                 .relations(applyRelations(baseConfig.relations(), root.child("relations.")))
                 .pageCache(applyPageCache(baseConfig.pageCache(), root.child("pageCache.")))
+                .readShapeGuardrail(applyReadShapeGuardrail(baseConfig.readShapeGuardrail(), root.child("readShapeGuardrail.")))
                 .queryIndex(applyQueryIndex(baseConfig.queryIndex(), root.child("queryIndex.")))
                 .projectionRefresh(applyProjectionRefresh(baseConfig.projectionRefresh(), root.child("projectionRefresh.")))
                 .redisGuardrail(applyRedisGuardrail(baseConfig.redisGuardrail(), root.child("redisGuardrail.")))
@@ -175,6 +176,22 @@ public final class CacheDatabaseConfigOverrides {
                 .build();
     }
 
+    private static ReadShapeGuardrailConfig applyReadShapeGuardrail(ReadShapeGuardrailConfig base, Lookup lookup) {
+        return ReadShapeGuardrailConfig.builder()
+                .enabled(lookup.bool("enabled", base.enabled()))
+                .rejectPageRequestOverLimit(lookup.bool("rejectPageRequestOverLimit", base.rejectPageRequestOverLimit()))
+                .rejectLoadedPageOverLimit(lookup.bool("rejectLoadedPageOverLimit", base.rejectLoadedPageOverLimit()))
+                .skipLoadedPageCacheOverLimit(lookup.bool("skipLoadedPageCacheOverLimit", base.skipLoadedPageCacheOverLimit()))
+                .rejectEntityQueryOverLimit(lookup.bool("rejectEntityQueryOverLimit", base.rejectEntityQueryOverLimit()))
+                .rejectProjectionQueryOverLimit(lookup.bool("rejectProjectionQueryOverLimit", base.rejectProjectionQueryOverLimit()))
+                .hotSetHeadroom(lookup.integer("hotSetHeadroom", base.hotSetHeadroom()))
+                .maxPageRequestSize(lookup.integer("maxPageRequestSize", base.maxPageRequestSize()))
+                .maxLoadedPageSize(lookup.integer("maxLoadedPageSize", base.maxLoadedPageSize()))
+                .maxEntityQueryLimit(lookup.integer("maxEntityQueryLimit", base.maxEntityQueryLimit()))
+                .maxProjectionQueryLimit(lookup.integer("maxProjectionQueryLimit", base.maxProjectionQueryLimit()))
+                .build();
+    }
+
     private static QueryIndexConfig applyQueryIndex(QueryIndexConfig base, Lookup lookup) {
         return QueryIndexConfig.builder()
                 .exactIndexEnabled(lookup.bool("exactIndexEnabled", base.exactIndexEnabled()))
@@ -227,6 +244,17 @@ public final class CacheDatabaseConfigOverrides {
                 .producerBackpressureEnabled(lookup.bool("producerBackpressureEnabled", base.producerBackpressureEnabled()))
                 .usedMemoryWarnBytes(lookup.longValue("usedMemoryWarnBytes", base.usedMemoryWarnBytes()))
                 .usedMemoryCriticalBytes(lookup.longValue("usedMemoryCriticalBytes", base.usedMemoryCriticalBytes()))
+                .usedMemoryWarnMaxmemoryPercent(lookup.integer("usedMemoryWarnMaxmemoryPercent", base.usedMemoryWarnMaxmemoryPercent()))
+                .usedMemoryCriticalMaxmemoryPercent(lookup.integer(
+                        "usedMemoryCriticalMaxmemoryPercent",
+                        base.usedMemoryCriticalMaxmemoryPercent()
+                ))
+                .expectedMaxmemoryPolicy(lookup.string("expectedMaxmemoryPolicy", base.expectedMaxmemoryPolicy()))
+                .warnOnUnexpectedMaxmemoryPolicy(lookup.bool(
+                        "warnOnUnexpectedMaxmemoryPolicy",
+                        base.warnOnUnexpectedMaxmemoryPolicy()
+                ))
+                .warnOnMissingMaxmemory(lookup.bool("warnOnMissingMaxmemory", base.warnOnMissingMaxmemory()))
                 .writeBehindBacklogWarnThreshold(lookup.longValue("writeBehindBacklogWarnThreshold", base.writeBehindBacklogWarnThreshold()))
                 .writeBehindBacklogCriticalThreshold(lookup.longValue("writeBehindBacklogCriticalThreshold", base.writeBehindBacklogCriticalThreshold()))
                 .compactionPendingWarnThreshold(lookup.longValue("compactionPendingWarnThreshold", base.compactionPendingWarnThreshold()))

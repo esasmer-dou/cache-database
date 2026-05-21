@@ -556,6 +556,16 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.redisGuardrail().usedMemoryWarnBytes(), "Warning threshold for Redis used memory.");
         addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.usedMemoryCriticalBytes",
                 cacheDatabaseConfig.redisGuardrail().usedMemoryCriticalBytes(), "Critical threshold for Redis used memory.");
+        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.usedMemoryWarnMaxmemoryPercent",
+                cacheDatabaseConfig.redisGuardrail().usedMemoryWarnMaxmemoryPercent(), "Warning threshold as percentage of Redis maxmemory.");
+        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.usedMemoryCriticalMaxmemoryPercent",
+                cacheDatabaseConfig.redisGuardrail().usedMemoryCriticalMaxmemoryPercent(), "Critical threshold as percentage of Redis maxmemory.");
+        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.expectedMaxmemoryPolicy",
+                cacheDatabaseConfig.redisGuardrail().expectedMaxmemoryPolicy(), "Expected Redis maxmemory-policy for CacheDB-owned Redis.");
+        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.warnOnUnexpectedMaxmemoryPolicy",
+                cacheDatabaseConfig.redisGuardrail().warnOnUnexpectedMaxmemoryPolicy(), "Warns when Redis maxmemory-policy differs from the expected policy.");
+        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.warnOnMissingMaxmemory",
+                cacheDatabaseConfig.redisGuardrail().warnOnMissingMaxmemory(), "Warns when Redis maxmemory is not configured.");
         addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.writeBehindBacklogWarnThreshold",
                 cacheDatabaseConfig.redisGuardrail().writeBehindBacklogWarnThreshold(), "Warning threshold for write-behind backlog.");
         addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.writeBehindBacklogCriticalThreshold",
@@ -590,6 +600,14 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.pageCache().readThroughEnabled(), "Enables page-cache read-through.");
         addTuning(items, modeledProperties, "page-cache", "cachedb.config.pageCache.evictionBatchSize",
                 cacheDatabaseConfig.pageCache().evictionBatchSize(), "Page-cache eviction batch size.");
+        addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.enabled",
+                cacheDatabaseConfig.readShapeGuardrail().enabled(), "Enables read-shape safety guardrails.");
+        addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.maxEntityQueryLimit",
+                cacheDatabaseConfig.readShapeGuardrail().maxEntityQueryLimit(), "Maximum full-entity query limit. 0 derives it from page size and hot window.");
+        addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.maxProjectionQueryLimit",
+                cacheDatabaseConfig.readShapeGuardrail().maxProjectionQueryLimit(), "Maximum projection query limit.");
+        addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.hotSetHeadroom",
+                cacheDatabaseConfig.readShapeGuardrail().hotSetHeadroom(), "Hot-window headroom kept outside one page/result.");
         addTuning(items, modeledProperties, "keyspace", "cachedb.config.keyspace.keyPrefix",
                 cacheDatabaseConfig.keyspace().keyPrefix(), "Global Redis key prefix.");
         addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.writeBehindWarnThreshold",

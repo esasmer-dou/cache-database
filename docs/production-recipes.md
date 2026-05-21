@@ -267,6 +267,7 @@ Recommended pattern:
 3. Keep relation previews bounded with `withRelationLimit(...)`
 4. For global top-N or threshold-driven screens, prefer a projection-specific ranked field over a wide multi-sort entity query
 5. Mark that ranked field with `rankedBy(...)` so the projection repository can use the projection-specific top-window path
+6. Keep full-entity page/result sizes below `hotEntityLimit`; if the window must be large, make it a projection window instead
 
 Example:
 
@@ -282,6 +283,13 @@ EntityRepository<DemoOrderEntity, Long> previewRepository =
 ```
 
 If the screen is something like "top orders by line count, then revenue" across the whole dataset, do not keep pushing the full entity query harder. Add a projection-specific rank field and query that projection through a single sorted index.
+
+For customer timelines, a production-safe shape is:
+
+- Redis keeps the customer root entity hot
+- Redis keeps a bounded per-customer order-summary projection window, for example the latest 1,000 summaries
+- PostgreSQL remains the durable home for full order history and archive reads
+- detail screens fetch one explicit order or a small preview relation, not the whole customer aggregate
 
 Why:
 
@@ -332,6 +340,9 @@ No matter which recipe you choose, these remain the production defaults we recom
 - prefer summary query + explicit detail fetch over eager wide relations
 - use `withRelationLimit(...)` on preview screens
 - treat global sorted/range list screens as projection-first, and prefer pre-ranked projection fields when exact business ranking matters
+- keep page/result size below the entity hot window; the default read-shape guardrail enforces this with `hotSetHeadroom`
+- use `readShapeGuardrail.maxProjectionQueryLimit` for bounded projection windows such as "latest 1,000 orders per customer"
+- set Redis `maxmemory` and keep `maxmemory-policy=noeviction` for a CacheDB-owned Redis; let CacheDB guardrails shed page-cache, read-through, hot-set, and query-index writes intentionally
 - keep generated ergonomics for normal code, and reserve minimal repository style for measured hotspots
 - treat admin UI as secondary; it should observe the system, not shape the primary runtime path
 
@@ -341,6 +352,8 @@ Avoid these patterns in production:
 
 - full aggregate hydration for every list endpoint
 - one-shot loading of hundreds of relation children into the first query
+- increasing `hotEntityLimit` to hide a bad list shape instead of introducing a projection/read-model
+- relying on Redis random or all-keys eviction to control CacheDB memory
 - sharing one Redis pool between foreground repository traffic and background workers
 - dropping directly to minimal repository style everywhere before measuring
 - assuming Redis latency is only about Redis itself; query shape and hydration cost usually dominate
@@ -414,6 +427,7 @@ Related docs:
 
 - [Spring Boot Starter](./spring-boot-starter.md)
 - [Tuning Parameters](./tuning-parameters.md)
+- [Use Case Examples](./use-case-examples.md)
 - [Production Tests](../cachedb-production-tests/README.md)
 - [CI production evidence workflow](../.github/workflows/production-evidence.yml)
 - [CI local runner](../tools/ci/run-production-evidence.ps1)

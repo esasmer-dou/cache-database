@@ -4,10 +4,12 @@ import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.api.ProjectionRepository;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.QueryIndexConfig;
+import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.RelationConfig;
 import com.reactor.cachedb.core.config.PageCacheConfig;
 import com.reactor.cachedb.core.cache.PageWindow;
+import com.reactor.cachedb.core.guardrail.ReadShapeGuardrails;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.model.OperationType;
@@ -65,6 +67,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     private final QueryIndexConfig queryIndexConfig;
     private final EntityPageLoader<T> pageLoader;
     private final PageCacheConfig pageCacheConfig;
+    private final ReadShapeGuardrailConfig readShapeGuardrailConfig;
     private final RedisPageCacheManager<T, ID> pageCacheManager;
     private final QueryEvaluator queryEvaluator;
     private final RedisQueryIndexManager<T, ID> queryIndexManager;
@@ -93,6 +96,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             QueryIndexConfig queryIndexConfig,
             EntityPageLoader<T> pageLoader,
             PageCacheConfig pageCacheConfig,
+            ReadShapeGuardrailConfig readShapeGuardrailConfig,
             RedisPageCacheManager<T, ID> pageCacheManager,
             QueryEvaluator queryEvaluator,
             RedisQueryIndexManager<T, ID> queryIndexManager,
@@ -121,6 +125,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         this.queryIndexConfig = queryIndexConfig;
         this.pageLoader = pageLoader;
         this.pageCacheConfig = pageCacheConfig;
+        this.readShapeGuardrailConfig = readShapeGuardrailConfig;
         this.pageCacheManager = pageCacheManager;
         this.queryEvaluator = queryEvaluator;
         this.queryIndexManager = queryIndexManager;
@@ -189,6 +194,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     public List<T> findPage(PageWindow pageWindow) {
         long startedAt = System.nanoTime();
         try {
+            ReadShapeGuardrails.validatePageRequest(metadata.entityName(), pageWindow, effectiveCachePolicy(), readShapeGuardrailConfig);
             Optional<List<T>> cachedPage = pageCacheManager.getCachedPage(pageWindow);
             if (cachedPage.isPresent()) {
                 List<T> entities = cachedPage.get();
@@ -205,12 +211,16 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             }
             if (producerGuard != null && producerGuard.shouldShedReadThroughCache(metadata.redisNamespace())) {
                 List<T> loaded = effectivePageLoader.load(pageWindow);
+                ReadShapeGuardrails.validateLoadedPage(metadata.entityName(), loaded.size(), effectiveCachePolicy(), readShapeGuardrailConfig);
                 applyFetchPlan(loaded);
                 return loaded;
             }
 
             List<T> loaded = effectivePageLoader.load(pageWindow);
-            pageCacheManager.cachePage(pageWindow, loaded);
+            ReadShapeGuardrails.validateLoadedPage(metadata.entityName(), loaded.size(), effectiveCachePolicy(), readShapeGuardrailConfig);
+            if (ReadShapeGuardrails.shouldCacheLoadedPage(loaded.size(), effectiveCachePolicy(), readShapeGuardrailConfig)) {
+                pageCacheManager.cachePage(pageWindow, loaded);
+            }
             applyFetchPlan(loaded);
             return loaded;
         } finally {
@@ -227,6 +237,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     public List<T> query(QuerySpec querySpec) {
         long startedAt = System.nanoTime();
         try {
+            ReadShapeGuardrails.validateEntityQuery(metadata.entityName(), querySpec, effectiveCachePolicy(), readShapeGuardrailConfig);
             queryIndexManager.warm(querySpec);
             boolean sortedIndexScan = queryIndexManager.supportsSortedIndexScan(querySpec);
             boolean primarySortedScan = !sortedIndexScan && queryIndexManager.shouldUsePrimarySortedScan(querySpec);
@@ -629,6 +640,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 queryIndexConfig,
                 pageLoader,
                 pageCacheConfig,
+                readShapeGuardrailConfig,
                 pageCacheManager,
                 queryEvaluator,
                 queryIndexManager,
@@ -653,7 +665,8 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 rawId -> loadProjectionFromBaseEntityPayload(rawId, projection),
                 rawIds -> loadProjectionMapFromBaseEntityPayload(rawIds, projection),
                 querySpec -> projectQueryFromBaseEntities(querySpec, projection),
-                performanceCollector
+                performanceCollector,
+                readShapeGuardrailConfig
         );
     }
 

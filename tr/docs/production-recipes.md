@@ -276,6 +276,7 @@ Neden:
 3. Relation önizlemelerini `withRelationLimit(...)` ile sınırla.
 4. Global top-N veya threshold odaklı ekranlarda geniş entity query yerine projection'a özel ranked alan kullan.
 5. Bu ranked alanı `rankedBy(...)` ile işaretle.
+6. Full entity page/result boyutunu `hotEntityLimit` altında tut; pencere büyük olmak zorundaysa bunu projection penceresi olarak tasarla.
 
 Örnek:
 
@@ -289,6 +290,13 @@ List<OrderSummaryReadModel> topOrders =
 EntityRepository<DemoOrderEntity, Long> previewRepository =
         DemoOrderEntityCacheBinding.using(session).fetches().orderLinesPreview(8);
 ```
+
+Müşteri timeline ekranı için production'a uygun şekil şudur:
+
+- Redis müşteri root entity'sini sıcak tutar
+- Redis müşteri başına sınırlı order summary projection penceresini sıcak tutar; örneğin son 1.000 özet
+- PostgreSQL bütün order geçmişi ve arşiv okumaları için kalıcı kaynak olarak kalır
+- detay ekranı bütün müşteri veri grafiğini değil, tek order'ı veya küçük bir relation önizlemesini açıkça okur
 
 Neden:
 
@@ -339,6 +347,9 @@ Hangi reçeteyi seçersen seç, production için şu kurallar geçerlidir:
 - önizleme ekranlarında `withRelationLimit(...)` kullan
 - global sorted/range liste ekranlarını projection-first ele al
 - iş sırası önemliyse pre-ranked projection alanı tercih et
+- page/result boyutunu entity hot window altında tut; varsayılan read-shape guardrail bunu `hotSetHeadroom` ile zorlar
+- "müşteri başına son 1.000 order" gibi sınırlı projection pencereleri için `readShapeGuardrail.maxProjectionQueryLimit` kullan
+- CacheDB'ye ayrılmış Redis'te `maxmemory` ayarla ve `maxmemory-policy=noeviction` kullan; page-cache, read-through, hot-set ve query-index yazımlarını Redis'in rastgele eviction davranışına değil CacheDB guardrail'larına bırak
 - üretilmiş API ergonomisini normal kod için koru
 - minimal repository stilini yalnızca ölçülmüş darboğazlara sakla
 - yönetim arayüzünü ana runtime path'i şekillendiren yer değil, gözlem ve kontrol yüzeyi olarak düşün
@@ -349,6 +360,8 @@ Hangi reçeteyi seçersen seç, production için şu kurallar geçerlidir:
 
 - her liste endpoint'inde tam veri grafiğini yüklemek
 - ilk sorgu içinde yüzlerce relation child'ı tek seferde çekmek
+- kötü liste şeklini projection'a taşımak yerine `hotEntityLimit` değerini sürekli büyütmek
+- CacheDB belleğini kontrol etmek için Redis random veya all-keys eviction davranışına güvenmek
 - foreground repository trafiği ile background worker'ları aynı Redis pool'da toplamak
 - ölçmeden tüm kodu minimal repository stiline indirmek
 - Redis gecikmesini yalnızca Redis'in kendisiyle açıklamak
@@ -427,6 +440,7 @@ Bir engineering playbook'a kopyalanacak kısa kural seti:
 
 - [Spring Boot Starter](./spring-boot-starter.md)
 - [Tuning Parameters](./tuning-parameters.md)
+- [Kullanım Senaryosu Örnekleri](./use-case-examples.md)
 - [Production Tests](../../cachedb-production-tests/README.md)
 - [CI production evidence workflow](../../.github/workflows/production-evidence.yml)
 - [CI local runner](../../tools/ci/run-production-evidence.ps1)
