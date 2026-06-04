@@ -52,7 +52,7 @@ tercih et.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.2</cachedb.version>
+    <cachedb.version>0.1.0-beta.3</cachedb.version>
 </properties>
 
 <dependencies>
@@ -106,7 +106,7 @@ Uygulama zaten `spring-boot-starter-data-jpa` veya başka bir starter üzerinden
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.2</cachedb.version>
+    <cachedb.version>0.1.0-beta.3</cachedb.version>
 </properties>
 
 <dependencies>

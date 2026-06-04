@@ -18,6 +18,30 @@ The format is intentionally simple during public beta.
 
 - _TBD_
 
+## 0.1.0-beta.3 - 2026-06-04
+
+### Added
+
+- production scenario certification lane for strict projection contracts, tenant quota, payload-level memory accounting, and PostgreSQL outbox polling
+- concrete `PostgresOutboxExternalChangeFeedAdapter` with checkpointed polling for outbox/CDC migration paths
+- route-level cache contracts with tenant quota context for production hot routes
+- composite hot policy model for count, time, state, and custom predicate admission rules
+- migration warm checkpoint/resume support and Redis memory calibration output
+- cache admission telemetry surfaced through storage performance snapshots
+
+### Changed
+
+- tenant memory budget now counts measured Redis entity payload bytes instead of only tenant tracking keys
+- production evidence workflow now runs against explicit Redis/PostgreSQL service containers
+- read-shape benchmark gates now keep structural materialization checks authoritative and avoid failing on unstable microbenchmark fastest-shape noise
+- English and Turkish production recipes now document route contracts, payload-level tenant budget, and concrete outbox adapter usage
+
+### Fixed
+
+- tenant quota accounting no longer double-counts repeated writes of the same entity
+- warm batch hydration now carries tenant columns and payload estimates into admission tracking
+- release bundle script now copies release notes for the selected version instead of a hard-coded beta note
+
 ## 0.1.0-beta.2 - 2026-05-19
 
 ### Added

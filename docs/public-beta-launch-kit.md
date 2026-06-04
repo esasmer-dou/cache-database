@@ -47,11 +47,11 @@ Recommended caveat:
 
 ## Current Public Beta Release Title
 
-`cache-database v0.1.0-beta.2`
+`cache-database v0.1.0-beta.3`
 
 Current tag:
 
-`v0.1.0-beta.2`
+`v0.1.0-beta.3`
 
 ## First Public Release Notes
 

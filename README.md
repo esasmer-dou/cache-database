@@ -50,7 +50,7 @@ Spring `DataSource`.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.2</cachedb.version>
+    <cachedb.version>0.1.0-beta.3</cachedb.version>
 </properties>
 
 <dependencies>
@@ -104,7 +104,7 @@ Use this when you want to bootstrap `CacheDatabase` yourself.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.2</cachedb.version>
+    <cachedb.version>0.1.0-beta.3</cachedb.version>
 </properties>
 
 <dependencies>

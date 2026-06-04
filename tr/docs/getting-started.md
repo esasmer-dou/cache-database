@@ -26,7 +26,7 @@ uygulama portundan yayınlamasını istiyorsan bu yolu kullan.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.2</cachedb.version>
+    <cachedb.version>0.1.0-beta.3</cachedb.version>
 </properties>
 
 <dependencies>
@@ -81,7 +81,7 @@ Bağımlılık kuralı:
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.2</cachedb.version>
+    <cachedb.version>0.1.0-beta.3</cachedb.version>
 </properties>
 
 <dependencies>

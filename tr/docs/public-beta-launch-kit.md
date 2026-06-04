@@ -45,11 +45,11 @@ Mutlaka korunması gereken sınır:
 
 ## Güncel Açık Beta Sürüm Başlığı
 
-`cache-database v0.1.0-beta.2`
+`cache-database v0.1.0-beta.3`
 
 Güncel etiket:
 
-`v0.1.0-beta.2`
+`v0.1.0-beta.3`
 
 ## İlk Açık Beta Sürüm Notu Taslağı
 
