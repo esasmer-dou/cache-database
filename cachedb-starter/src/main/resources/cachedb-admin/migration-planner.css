@@ -700,6 +700,68 @@ body {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+.planner-memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  color: #486581;
+  font-size: 0.82rem;
+}
+.planner-memory-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.34rem 0.58rem;
+  border: 1px solid #dbe7f3;
+  border-radius: 999px;
+  background: #f8fbff;
+  overflow-wrap: anywhere;
+}
+.planner-memory-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e4edf5;
+  border-radius: 1rem;
+  background: #fff;
+}
+.planner-memory-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+.planner-memory-table th,
+.planner-memory-table td {
+  padding: 0.78rem 0.85rem;
+  border-bottom: 1px solid #e4edf5;
+  vertical-align: top;
+}
+.planner-memory-table th {
+  background: #f8fbff;
+  color: #52606d;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.planner-memory-table td {
+  color: #243b53;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.planner-memory-table tr:last-child td {
+  border-bottom: 0;
+}
+.planner-memory-row-copy {
+  margin-top: 0.22rem;
+  color: #627d98;
+  font-size: 0.78rem;
+  line-height: 1.38;
+}
+.mono {
+  font-family: "IBM Plex Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.9em;
+}
 .result-list {
   margin: 0;
   padding-left: 1.15rem;

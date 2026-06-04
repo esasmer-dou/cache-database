@@ -106,6 +106,7 @@ Beklenen sonuç:
 - önerilen CacheDB kullanım yüzeyi
 - Redis yerleşim kararı
 - PostgreSQL yerleşim kararı
+- seçilen sıcak pencere ayarlarına göre Redis bellek tahmini
 - projection gerekli mi bilgisi
 - ranked projection gerekli mi bilgisi
 - sıcak pencere boyutu
@@ -116,6 +117,13 @@ Beklenen sonuç:
 
 Plan görünmüyorsa ekranın sessiz kalması doğru değildir; hata varsa açık biçimde
 gösterilmelidir.
+
+Redis bellek tahmini yaklaşık bir kapasite hesabıdır. Ekran, PostgreSQL'den
+sınırlı sayıda satır örneği alır, planner'daki satır sayısı ve sıcak pencere
+değerlerini kullanır; ardından payload, projection, hot-set/index, page-cache,
+stream ve güvenlik payını ayrı ayrı gösterir. Bu değeri staging öncesi kapasite
+fikri olarak kullan. Staging ön ısıtma bittikten sonra tahmini Redis
+`used_memory` ve `MEMORY USAGE` örnekleriyle doğrula.
 
 ### 5. Scaffold Üret
 
@@ -158,10 +166,33 @@ Beklenen sonuç:
 - kayıtlı projection'lar aynı akış içinde yenilenir
 - seçildiyse ilişkili kök satırlar da doldurulur
 - warm istatistiklerinde kök satır, çocuk satır, atlanan satır ve süre görünür
+- job id ve resume seçeneği kullanıldıysa devam edilebilir warm bilgisi görünür
+- Redis memory calibration, warm öncesi tahmin ile warm sonrası gerçek Redis key kullanımını karşılaştırır
 
 `No registered CacheDB entity found` hatası alırsan seçilen entity çalışan
 uygulamada kayıtlı değildir. Önce entity binding'i üret veya bağla, uygulamayı
 yeniden build et, sonra planlayıcıyı tekrar çalıştır.
+
+Büyük hot set'lerde warm işini sınırsız tek seferlik iş gibi çalıştırma. Şu
+alanları açık ayarla:
+
+- sabit warm job id
+- resume seçeneği
+- checkpoint aralığı
+- JDBC fetch size
+- batch size
+- row-rate limit
+
+Böylece süreç, pod veya veritabanı bağlantısı kesilirse warm işi kaldığı yerden
+devam edebilir. Aynı pencere tekrar çalıştırıldığında CacheDB yüzeyi
+idempotent davranır; aynı hot key ve projection kayıtları yeniden yazılır,
+ikinci bir mantıksal kopya oluşmaz.
+
+Dry-run olmayan warm sonrasında Redis calibration bloğunu kontrol et. Bu blok
+Redis `MEMORY USAGE` örneklerini entity, projection, index, hot set, page cache,
+stream/ops, compaction ve diğer key gruplarına ayırır. Tahmin ile gerçek değer
+arasındaki farkı hot-window boyutu, projection payload şekli ve Redis
+`maxmemory` ayarı için kullan.
 
 ### 8. Yan Yana Karşılaştırma Çalıştır
 
@@ -180,6 +211,37 @@ Beklenen sonuç:
 
 - örnekler birebir eşleşmiyorsa
 - planner projection isterken CacheDB entity yoluna geri düşüyorsa
+- sıralama farklıysa
+- p95 gecikmesi PostgreSQL referansından belirgin biçimde kötüyse
+- warm set production sıcak pencereyi temsil etmiyorsa
+
+### 9. Migration Raporunu İndir
+
+Karşılaştırma sonrasında raporu indir.
+
+Beklenen sonuç:
+
+- route kararı
+- veri eşleşmesi sonucu
+- gecikme sonucu
+- blokajlar
+- cutover aksiyon planı
+- rollback notları
+- coverage checklist
+
+Hedef hibrit çalışma değil de tüm sistemi dönüştürmekse coverage checklist
+zorunludur. Kullanıcıya temas eden her okuma ve yazma route'u şu sonuçlardan
+birine bağlanmalıdır:
+
+- CacheDB entity route
+- CacheDB projection route
+- CacheDB ranked projection route
+- command/write route
+- PostgreSQL cold/archive route
+- bilinçli olarak kapsam dışı bırakılmış route
+
+Eşlenmemiş route sayısı sıfır olmadan ve her route için parity kanıtı ya da
+açık manuel kabul notu olmadan `%100 migration coverage` iddiası doğru değildir.
 - sıralama farklıysa
 - p95 gecikme PostgreSQL referansından belirgin şekilde kötüyse
 - sıcak veri seti production'daki gerçek sıcak pencereyi temsil etmiyorsa

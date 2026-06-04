@@ -116,6 +116,30 @@ Certification raporu şunları birleştirir:
 - `target/cachedb-prodtest-reports/production-certification-report.json`
 - `target/cachedb-prodtest-reports/production-certification-report.md`
 
+## Production Scenario Certification Lane
+
+Production evidence workflow içinde daha odaklı bir senaryo kapısı da vardır:
+
+```powershell
+.\tools\ci\run-production-scenario-certification.ps1 `
+  -RedisUri "redis://default:welcome1@127.0.0.1:56379" `
+  -PostgresUrl "jdbc:postgresql://127.0.0.1:55432/postgres"
+```
+
+Bu koşu ağır certification runner'ın yerine geçmez. API geliştirmeleri sırasında
+kolay bozulabilecek production contract'larını hızlıca doğrulamak için vardır:
+
+- projection zorunlu route, entity fallback yolunu strict mode'da reddeder
+- tenant başına hot-row quota en eski tenant üyesini çıkarır
+- tenant memory budget gerçek Redis payload byte ölçümünü içerir
+- PostgreSQL outbox adapter sınırlı batch okur
+- outbox checkpoint yalnız kabul edilen event'lerden sonra ilerler
+
+Üretilen dosyalar:
+
+- `target/cachedb-prodtest-reports/production-scenario-certification.json`
+- `target/cachedb-prodtest-reports/production-scenario-certification.md`
+
 ## Semantics ve Shedding Matrisi
 
 | Entity / Query Sınıfı | Persistence Semantiği | Hard-Limit Davranışı | Recovery Yolu |

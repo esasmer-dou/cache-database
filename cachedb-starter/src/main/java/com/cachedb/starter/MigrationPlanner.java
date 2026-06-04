@@ -2,6 +2,9 @@ package com.reactor.cachedb.starter;
 
 import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
+import com.reactor.cachedb.core.route.RouteCacheContract;
+import com.reactor.cachedb.core.route.RouteCacheStrictMode;
+import com.reactor.cachedb.core.route.TenantCacheQuota;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -74,6 +77,24 @@ public final class MigrationPlanner {
                 + " hot in Redis, but still prefer " + summaryProjectionName + " for the first paint list.";
         String postgresPlacement = "PostgreSQL remains the durable source of truth for the full "
                 + normalized.childTableOrEntity() + " history and all archive or replay reads.";
+        long routeMemoryBudgetBytes = estimateRouteMemoryBudgetBytes(
+                normalized,
+                recommendedHotWindow,
+                projectionRequired,
+                fullEntityHotWindowRecommended
+        );
+        RouteCacheContract routeCacheContract = RouteCacheContract.builder()
+                .routeName(normalized.workloadName())
+                .entityName(normalized.childTableOrEntity())
+                .projectionName(projectionRequired ? summaryProjectionName : "")
+                .pageSize(firstPageSize)
+                .hotWindow(recommendedHotWindow)
+                .projectionRequired(projectionRequired)
+                .maxColdReadSize(projectionRequired ? firstPageSize : Math.max(firstPageSize, normalized.hotWindowPerRoot()))
+                .memoryBudgetBytes(routeMemoryBudgetBytes)
+                .strictMode(projectionRequired ? RouteCacheStrictMode.FAIL_FAST : RouteCacheStrictMode.WARN)
+                .tenantQuota(TenantCacheQuota.unbounded())
+                .build();
 
         ArrayList<String> reasoning = new ArrayList<>();
         if (projectionRequired) {
@@ -242,8 +263,45 @@ public final class MigrationPlanner {
                 List.copyOf(warnings),
                 buildChildWarmSql(normalized, recommendedHotWindow, rankedProjectionRequired, normalized.childTableOrEntity()),
                 buildRootWarmSqlTemplate(normalized, normalized.rootTableOrEntity()),
-                buildComparisonSummary(projectionRequired, rankedProjectionRequired, recommendedHotWindow)
+                buildComparisonSummary(projectionRequired, rankedProjectionRequired, recommendedHotWindow),
+                routeCacheContract
         );
+    }
+
+    private long estimateRouteMemoryBudgetBytes(
+            Request request,
+            int recommendedHotWindow,
+            boolean projectionRequired,
+            boolean fullEntityHotWindowRecommended
+    ) {
+        long rootRows = Math.max(1L, request.rootRowCount());
+        long childRows = Math.max(1L, request.childRowCount());
+        long hotChildRows = request.globalSortedScreen() || request.thresholdOrRangeScreen()
+                ? Math.min(childRows, Math.max(request.firstPageSize(), recommendedHotWindow))
+                : Math.min(childRows, multiplySaturated(rootRows, recommendedHotWindow));
+        long rootBytes = multiplySaturated(rootRows, 544L);
+        long childProjectionBytes = projectionRequired ? multiplySaturated(hotChildRows, 448L) : 0L;
+        long childEntityBytes = (!projectionRequired || fullEntityHotWindowRecommended) ? multiplySaturated(hotChildRows, 896L) : 0L;
+        long indexBytes = multiplySaturated(hotChildRows, 176L);
+        long subtotal = saturatingAdd(saturatingAdd(rootBytes, childProjectionBytes), saturatingAdd(childEntityBytes, indexBytes));
+        return saturatingAdd(subtotal, Math.max(8L * 1024L * 1024L, subtotal / 3L));
+    }
+
+    private long multiplySaturated(long left, long right) {
+        if (left <= 0L || right <= 0L) {
+            return 0L;
+        }
+        if (left > Long.MAX_VALUE / right) {
+            return Long.MAX_VALUE;
+        }
+        return left * right;
+    }
+
+    private long saturatingAdd(long left, long right) {
+        if (left < 0L || right < 0L || Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     static String buildChildWarmSql(
@@ -478,7 +536,8 @@ public final class MigrationPlanner {
             List<String> warnings,
             String sampleWarmSql,
             String sampleRootWarmSql,
-            String comparisonSummary
+            String comparisonSummary,
+            RouteCacheContract routeCacheContract
     ) {
     }
 

@@ -22,6 +22,7 @@ public class StoragePerformanceCollector {
     private final ConcurrentHashMap<String, LatencyAccumulator> redisWriteBreakdown = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, LatencyAccumulator> postgresReadBreakdown = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, LatencyAccumulator> postgresWriteBreakdown = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheAdmissionAccumulator> cacheAdmissionBreakdown = new ConcurrentHashMap<>();
 
     public static StoragePerformanceCollector noop() {
         return NO_OP;
@@ -59,6 +60,24 @@ public class StoragePerformanceCollector {
         record(postgresWrite, postgresWriteBreakdown, tag, elapsedMicros);
     }
 
+    public void recordCacheAdmission(String tag, boolean admitted) {
+        String normalized = normalizeTag(tag);
+        if (normalized.isBlank()) {
+            return;
+        }
+        cacheAdmissionBreakdown.computeIfAbsent(normalized, ignored -> new CacheAdmissionAccumulator())
+                .recordAdmission(admitted);
+    }
+
+    public void recordCacheEviction(String tag, long evictedCount) {
+        String normalized = normalizeTag(tag);
+        if (normalized.isBlank() || evictedCount <= 0L) {
+            return;
+        }
+        cacheAdmissionBreakdown.computeIfAbsent(normalized, ignored -> new CacheAdmissionAccumulator())
+                .recordEviction(evictedCount);
+    }
+
     public StoragePerformanceSnapshot snapshot() {
         return new StoragePerformanceSnapshot(
                 redisRead.snapshot(),
@@ -68,7 +87,8 @@ public class StoragePerformanceCollector {
                 snapshot(redisReadBreakdown),
                 snapshot(redisWriteBreakdown),
                 snapshot(postgresReadBreakdown),
-                snapshot(postgresWriteBreakdown)
+                snapshot(postgresWriteBreakdown),
+                snapshotAdmission(cacheAdmissionBreakdown)
         );
     }
 
@@ -82,6 +102,7 @@ public class StoragePerformanceCollector {
         clear(redisWriteBreakdown);
         clear(postgresReadBreakdown);
         clear(postgresWriteBreakdown);
+        clearAdmission(cacheAdmissionBreakdown);
         return snapshot;
     }
 
@@ -114,6 +135,23 @@ public class StoragePerformanceCollector {
 
     private void clear(ConcurrentHashMap<String, LatencyAccumulator> accumulators) {
         for (LatencyAccumulator accumulator : accumulators.values()) {
+            accumulator.clear();
+        }
+        accumulators.clear();
+    }
+
+    private Map<String, CacheAdmissionMetricSnapshot> snapshotAdmission(ConcurrentHashMap<String, CacheAdmissionAccumulator> accumulators) {
+        ArrayList<String> keys = new ArrayList<>(accumulators.keySet());
+        Collections.sort(keys);
+        LinkedHashMap<String, CacheAdmissionMetricSnapshot> snapshot = new LinkedHashMap<>();
+        for (String key : keys) {
+            snapshot.put(key, accumulators.get(key).snapshot());
+        }
+        return Map.copyOf(snapshot);
+    }
+
+    private void clearAdmission(ConcurrentHashMap<String, CacheAdmissionAccumulator> accumulators) {
+        for (CacheAdmissionAccumulator accumulator : accumulators.values()) {
             accumulator.clear();
         }
         accumulators.clear();
@@ -188,6 +226,49 @@ public class StoragePerformanceCollector {
         }
     }
 
+    private static final class CacheAdmissionAccumulator {
+        private final AtomicLong admittedCount = new AtomicLong();
+        private final AtomicLong rejectedCount = new AtomicLong();
+        private final AtomicLong evictedCount = new AtomicLong();
+        private final AtomicLong lastObservedAtEpochMillis = new AtomicLong();
+
+        void recordAdmission(boolean admitted) {
+            if (admitted) {
+                admittedCount.incrementAndGet();
+            } else {
+                rejectedCount.incrementAndGet();
+            }
+            lastObservedAtEpochMillis.set(System.currentTimeMillis());
+        }
+
+        void recordEviction(long count) {
+            evictedCount.addAndGet(Math.max(0L, count));
+            lastObservedAtEpochMillis.set(System.currentTimeMillis());
+        }
+
+        CacheAdmissionMetricSnapshot snapshot() {
+            long admitted = admittedCount.get();
+            long rejected = rejectedCount.get();
+            long evicted = evictedCount.get();
+            if (admitted == 0L && rejected == 0L && evicted == 0L) {
+                return CacheAdmissionMetricSnapshot.empty();
+            }
+            return new CacheAdmissionMetricSnapshot(
+                    admitted,
+                    rejected,
+                    evicted,
+                    lastObservedAtEpochMillis.get()
+            );
+        }
+
+        void clear() {
+            admittedCount.set(0L);
+            rejectedCount.set(0L);
+            evictedCount.set(0L);
+            lastObservedAtEpochMillis.set(0L);
+        }
+    }
+
     private static final class NoOpStoragePerformanceCollector extends StoragePerformanceCollector {
         private static final StoragePerformanceSnapshot EMPTY = new StoragePerformanceSnapshot(
                 LatencyMetricSnapshot.empty(),
@@ -226,6 +307,14 @@ public class StoragePerformanceCollector {
 
         @Override
         public void recordPostgresWrite(String tag, long elapsedMicros) {
+        }
+
+        @Override
+        public void recordCacheAdmission(String tag, boolean admitted) {
+        }
+
+        @Override
+        public void recordCacheEviction(String tag, long evictedCount) {
         }
 
         @Override

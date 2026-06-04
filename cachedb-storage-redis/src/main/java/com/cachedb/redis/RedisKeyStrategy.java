@@ -1,5 +1,8 @@
 package com.reactor.cachedb.redis;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+
 public final class RedisKeyStrategy {
     private final String keyPrefix;
     private final String entitySegment;
@@ -72,6 +75,20 @@ public final class RedisKeyStrategy {
 
     public String hotSetKey(String namespace) {
         return keyPrefix + ":" + namespace + ":" + hotSetSegment;
+    }
+
+    public String tenantHotSetKey(String namespace, String tenantColumn, Object tenantValue) {
+        return keyPrefix + ":" + namespace + ":" + hotSetSegment
+                + ":tenant:" + encodeKeyPart(tenantColumn)
+                + ":" + encodeKeyPart(String.valueOf(tenantValue));
+    }
+
+    public String tenantHotPayloadBytesKey(String namespace, String tenantColumn, Object tenantValue) {
+        return tenantHotSetKey(namespace, tenantColumn, tenantValue) + ":payload-bytes";
+    }
+
+    public String tenantHotOwnerKey(String namespace, Object id) {
+        return keyPrefix + ":" + namespace + ":" + hotSetSegment + ":tenant-owner:" + id;
     }
 
     public String indexAllKey(String namespace) {
@@ -159,5 +176,10 @@ public final class RedisKeyStrategy {
             return baseStreamKey;
         }
         return baseStreamKey + ":" + compactionShard(namespace, id, shardCount);
+    }
+
+    private String encodeKeyPart(String value) {
+        String normalized = value == null ? "" : value;
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(normalized.getBytes(StandardCharsets.UTF_8));
     }
 }

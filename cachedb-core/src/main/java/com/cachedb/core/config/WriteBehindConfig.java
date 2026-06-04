@@ -57,7 +57,8 @@ public record WriteBehindConfig(
         if (compactionShardCount <= 1) {
             return List.of(compactionStreamKey);
         }
-        java.util.ArrayList<String> streamKeys = new java.util.ArrayList<>(compactionShardCount);
+        java.util.ArrayList<String> streamKeys = new java.util.ArrayList<>(compactionShardCount + 1);
+        streamKeys.add(compactionStreamKey);
         for (int shard = 0; shard < compactionShardCount; shard++) {
             streamKeys.add(compactionStreamKey + ":" + shard);
         }
@@ -112,6 +113,8 @@ public record WriteBehindConfig(
         private String compactionConsumerGroup = "cachedb-write-behind-compaction";
         private String compactionConsumerNamePrefix = "cachedb-compaction-worker";
         private int compactionShardCount = 4;
+        private boolean compactionStreamKeyExplicit;
+        private boolean dedicatedWriteConsumerGroupExplicit;
         private boolean autoCreateConsumerGroup = true;
         private long shutdownAwaitMillis = 10_000;
         private boolean daemonThreads = true;
@@ -141,6 +144,7 @@ public record WriteBehindConfig(
 
         public Builder dedicatedWriteConsumerGroupEnabled(boolean dedicatedWriteConsumerGroupEnabled) {
             this.dedicatedWriteConsumerGroupEnabled = dedicatedWriteConsumerGroupEnabled;
+            this.dedicatedWriteConsumerGroupExplicit = true;
             return this;
         }
 
@@ -246,6 +250,12 @@ public record WriteBehindConfig(
 
         public Builder streamKey(String streamKey) {
             this.streamKey = streamKey;
+            if (!compactionStreamKeyExplicit && streamKey != null && !streamKey.isBlank()) {
+                this.compactionStreamKey = streamKey + ":compaction";
+                if (!dedicatedWriteConsumerGroupExplicit && !"cachedb:stream:write-behind".equals(streamKey)) {
+                    this.dedicatedWriteConsumerGroupEnabled = false;
+                }
+            }
             return this;
         }
 
@@ -261,6 +271,7 @@ public record WriteBehindConfig(
 
         public Builder compactionStreamKey(String compactionStreamKey) {
             this.compactionStreamKey = compactionStreamKey;
+            this.compactionStreamKeyExplicit = true;
             return this;
         }
 

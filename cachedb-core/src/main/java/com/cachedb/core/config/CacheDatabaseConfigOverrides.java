@@ -1,6 +1,9 @@
 package com.reactor.cachedb.core.config;
 
 import com.reactor.cachedb.core.cache.CachePolicy;
+import com.reactor.cachedb.core.cache.EntityHotPolicy;
+import com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator;
+import com.reactor.cachedb.core.cache.EntityHotPolicyMode;
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.query.HardLimitQueryClass;
 import com.reactor.cachedb.core.queue.AdminExportFormat;
@@ -129,6 +132,31 @@ public final class CacheDatabaseConfigOverrides {
                 .lruEvictionEnabled(lookup.bool("lruEvictionEnabled", base.lruEvictionEnabled()))
                 .entityTtlSeconds(lookup.longValue("entityTtlSeconds", base.entityTtlSeconds()))
                 .pageTtlSeconds(lookup.longValue("pageTtlSeconds", base.pageTtlSeconds()))
+                .hotPolicy(applyEntityHotPolicy(base.hotPolicy(), lookup.child("hotPolicy.")))
+                .build();
+    }
+
+    private static EntityHotPolicy applyEntityHotPolicy(EntityHotPolicy base, Lookup lookup) {
+        EntityHotPolicy safeBase = base == null ? EntityHotPolicy.countWindow() : base;
+        EntityHotPolicyMode mode = lookup.enumValue("mode", EntityHotPolicyMode.class, safeBase.mode());
+        EntityHotPolicyCompositeOperator compositeOperator = lookup.enumValue(
+                "compositeOperator",
+                EntityHotPolicyCompositeOperator.class,
+                safeBase.compositeOperator()
+        );
+        return EntityHotPolicy.builder()
+                .mode(mode)
+                .timeColumn(lookup.string("timeColumn", safeBase.timeColumn()))
+                .hotForSeconds(lookup.longValue("hotForSeconds", safeBase.hotForSeconds()))
+                .stateColumn(lookup.string("stateColumn", safeBase.stateColumn()))
+                .stateValues(parseStringList(lookup.string("stateValues"), safeBase.stateValues()))
+                .admitOnWrite(lookup.bool("admitOnWrite", safeBase.admitOnWrite()))
+                .admitOnRead(lookup.bool("admitOnRead", safeBase.admitOnRead()))
+                .admitOnWarm(lookup.bool("admitOnWarm", safeBase.admitOnWarm()))
+                .evictWhenRejected(lookup.bool("evictWhenRejected", safeBase.evictWhenRejected()))
+                .customPredicate(safeBase.customPredicate())
+                .compositeOperator(compositeOperator)
+                .children(parseEntityHotPolicyChildren(lookup.string("children"), safeBase.children()))
                 .build();
     }
 
@@ -557,6 +585,44 @@ public final class CacheDatabaseConfigOverrides {
             return fallback;
         }
         return List.copyOf(splitSimpleList(rawValue));
+    }
+
+    private static List<EntityHotPolicy> parseEntityHotPolicyChildren(String rawValue, List<EntityHotPolicy> fallback) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return fallback == null ? List.of() : fallback;
+        }
+        ArrayList<EntityHotPolicy> policies = new ArrayList<>();
+        for (String entry : rawValue.split(";", -1)) {
+            String normalized = entry == null ? "" : entry.trim();
+            if (normalized.isEmpty()) {
+                continue;
+            }
+            String[] parts = normalized.split(":", 3);
+            EntityHotPolicyMode mode = EntityHotPolicyMode.valueOf(required(parts[0], "hotPolicy.children.mode").toUpperCase(Locale.ROOT));
+            EntityHotPolicy.Builder builder = EntityHotPolicy.builder().mode(mode);
+            switch (mode) {
+                case COUNT_WINDOW -> {
+                }
+                case TIME_WINDOW -> {
+                    if (parts.length < 3) {
+                        throw new IllegalArgumentException("TIME_WINDOW child policy must be TIME_WINDOW:<timeColumn>:<hotForSeconds>");
+                    }
+                    builder.timeColumn(required(parts[1], "timeColumn"));
+                    builder.hotForSeconds(parseRequiredLong(parts[2], "hotForSeconds"));
+                }
+                case STATE_WINDOW -> {
+                    if (parts.length < 3) {
+                        throw new IllegalArgumentException("STATE_WINDOW child policy must be STATE_WINDOW:<stateColumn>:<value1|value2>");
+                    }
+                    builder.stateColumn(required(parts[1], "stateColumn"));
+                    builder.stateValues(splitSimpleList(parts[2].replace('|', ',')));
+                }
+                case CUSTOM_PREDICATE -> throw new IllegalArgumentException("CUSTOM_PREDICATE hot policy children cannot be created from system properties");
+                case COMPOSITE -> throw new IllegalArgumentException("Nested COMPOSITE hot policy children are not supported in property overrides");
+            }
+            policies.add(builder.build());
+        }
+        return List.copyOf(policies);
     }
 
     private static List<String> splitEntries(String rawValue) {

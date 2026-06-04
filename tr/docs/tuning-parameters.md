@@ -38,7 +38,7 @@ Kapsam bazlı bağlantı tuning:
 
 ## Redis Client Tuning
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `<scope>.redis.uri` | runtime'a göre | Redis hedef URI'si. |
 | `<scope>.redis.pool.maxTotal` | `64` | Havuzdaki maksimum Redis bağlantısı. |
@@ -204,6 +204,45 @@ Operasyonel notlar:
 | `cachedb.config.resourceLimits.defaultCachePolicy.lruEvictionEnabled` | `true` | LRU benzeri eviction davranışını açar. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.entityTtlSeconds` | `0` | Entity TTL. `0` TTL yok demektir. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.pageTtlSeconds` | `60` | Page cache TTL süresi. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode` | `COUNT_WINDOW` | Entity'nin Redis'e kabul kuralını belirler: `COUNT_WINDOW`, `TIME_WINDOW`, `STATE_WINDOW`, `COMPOSITE` veya `CUSTOM_PREDICATE`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.timeColumn` | boş | `TIME_WINDOW` için kullanılan iş tarihi kolonu. Örnek: `order_date`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds` | `0` | `TIME_WINDOW` için sıcak kabul edilen iş zamanı aralığı. `7776000`, 90 gün anlamına gelir. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateColumn` | boş | `STATE_WINDOW` için kullanılan durum kolonu. Örnek: `status`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateValues` | boş | `STATE_WINDOW` için sıcak kabul edilen durumlar. Örnek: `OPEN,PENDING`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.compositeOperator` | `ALL` | `COMPOSITE` alt kurallarının nasıl değerlendirileceğini belirler. `ALL`, tüm alt kurallar uymalı demektir; `ANY`, bir alt kuralın uymasını yeterli görür. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.children` | boş | `COMPOSITE` için noktalı virgülle ayrılmış alt kurallar. Örnek: `TIME_WINDOW:order_date:7776000;STATE_WINDOW:status:OPEN\|PENDING`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnWrite` | `true` | Kurala uyan yazmaların entity cache'e girmesine izin verir. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead` | `true` | Read-through veya hydrate ile gelen satırların entity cache'e girmesine izin verir. Eski arşiv okumaları Redis'i kirletmesin istiyorsan `false` kullan. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnWarm` | `true` | Staging/backfill warm satırlarının entity cache'e girmesine izin verir. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.evictWhenRejected` | `true` | Satır artık hot policy'ye uymuyorsa mevcut cached entity ve index kaydını temizler. |
+
+`entityTtlSeconds` iş zamanı penceresi değildir. 90 günlük TTL, "bu kayıt Redis'e yazıldıktan 90 gün sonra expire olsun" demektir; "`order_date` son 90 gün içindeyse Redis'te kalsın" demek değildir. Hot set iş kolonuyla tanımlanıyorsa `TIME_WINDOW` kullan.
+
+"Son 90 günlük order kayıtları sıcak olsun, eski arşiv okumaları Redis'i kirletmesin" örneği:
+
+```properties
+cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit=100000
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode=TIME_WINDOW
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.timeColumn=order_date
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds=7776000
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead=false
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.evictWhenRejected=true
+```
+
+"Son 90 gün içinde ve hâlâ açık/bekleyen order kayıtları sıcak olsun" örneği:
+
+```properties
+cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit=100000
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode=COMPOSITE
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.compositeOperator=ALL
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.children=TIME_WINDOW:order_date:7776000;STATE_WINDOW:status:OPEN|PENDING
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead=false
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.evictWhenRejected=true
+```
+
+Composite alt kurallar yalnızca yerel ve deterministik kontroller için
+tasarlanmıştır. Tenant veya VIP gibi kurallar time/state ile ifade
+edilemiyorsa kayıtlı Java predicate kullan.
 
 ### Keyspace, Functions, Relations, Page Cache
 
@@ -231,7 +270,7 @@ Operasyonel notlar:
 | `cachedb.config.relations.maxFetchDepth` | `3` | Maksimum relation fetch derinliği. |
 | `cachedb.config.relations.failOnMissingPreloader` | `false` | Eksik relation preloader durumunda fail davranışını belirler. |
 | `cachedb.config.pageCache.readThroughEnabled` | `true` | Page-cache read-through davranışını açar. |
-| `cachedb.config.pageCache.failOnMissingPageLoader` | `false` | Read-through için page loader yoksa fail olup olmayacagini belirler. |
+| `cachedb.config.pageCache.failOnMissingPageLoader` | `false` | Read-through için page loader yoksa fail olup olmayacağını belirler. |
 | `cachedb.config.pageCache.evictionBatchSize` | `100` | Page-cache eviction batch boyu. |
 
 ### Okuma Şekli Guardrail'ları
@@ -254,18 +293,18 @@ Bu ayarlar Redis'i yanlışlıkla geniş okuma yüküyle doldurmayı engeller. V
 
 ### Query Index
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.config.queryIndex.exactIndexEnabled` | `true` | Exact-match index'lerini açar. |
 | `cachedb.config.queryIndex.rangeIndexEnabled` | `true` | Range index'lerini açar. |
 | `cachedb.config.queryIndex.prefixIndexEnabled` | `true` | Prefix index'lerini açar. |
 | `cachedb.config.queryIndex.textIndexEnabled` | `true` | Text index'lerini açar. |
-| `cachedb.config.queryIndex.plannerStatisticsEnabled` | `true` | Planner statistics toplamayi açar. |
+| `cachedb.config.queryIndex.plannerStatisticsEnabled` | `true` | Planner statistics toplamayı açar. |
 | `cachedb.config.queryIndex.plannerStatisticsPersisted` | `true` | Planner statistics'i Redis'te kalıcı tutar. |
 | `cachedb.config.queryIndex.plannerStatisticsTtlMillis` | `60000` | Planner statistics TTL süresi. |
 | `cachedb.config.queryIndex.plannerStatisticsSampleSize` | `32` | Planner statistics sample boyu. |
 | `cachedb.config.queryIndex.learnedStatisticsEnabled` | `true` | Learned planner weighting'i açar. |
-| `cachedb.config.queryIndex.learnedStatisticsWeight` | `0.35` | Learned statistics ağırligi. |
+| `cachedb.config.queryIndex.learnedStatisticsWeight` | `0.35` | Learned statistics ağırlığı. |
 | `cachedb.config.queryIndex.cacheWarmingEnabled` | `true` | Index ve planner warming davranışını açar. |
 | `cachedb.config.queryIndex.rangeHistogramBuckets` | `8` | Range histogram bucket sayısı. |
 | `cachedb.config.queryIndex.prefixMaxLength` | `12` | Indexlenen maksimum prefix uzunlugu. |

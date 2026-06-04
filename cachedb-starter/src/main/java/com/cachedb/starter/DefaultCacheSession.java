@@ -142,7 +142,8 @@ public final class DefaultCacheSession implements CacheSession {
                         hotSetManager,
                         queryIndexManager,
                         producerGuard,
-                        config.readShapeGuardrail()
+                        config.readShapeGuardrail(),
+                        performanceCollector
                 ),
                 queryEvaluator,
                 queryIndexManager,

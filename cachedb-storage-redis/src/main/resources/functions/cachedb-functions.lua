@@ -10,32 +10,37 @@ redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
     local compactionStreamKey = keys[7]
     local compactionStatsKey = keys[8]
     local payload = args[1]
-    local ttl = tonumber(args[2])
-    local compactionPayloadTtl = tonumber(args[3])
-    local compactionPendingTtl = tonumber(args[4])
-    local versionKeyTtl = tonumber(args[5])
-    local observationTag = args[7]
-    local operationType = args[8]
-    local entityName = args[9]
-    local tableName = args[10]
-    local namespace = args[11]
-    local idColumn = args[12]
-    local versionColumn = args[13]
-    local deletedColumn = args[14]
-    local activeMarkerValue = args[15]
-    local id = args[16]
-    local createdAt = args[17]
-    local columnCount = tonumber(args[18])
+    local cacheEntity = args[2] == '1'
+    local ttl = tonumber(args[3])
+    local compactionPayloadTtl = tonumber(args[4])
+    local compactionPendingTtl = tonumber(args[5])
+    local versionKeyTtl = tonumber(args[6])
+    local observationTag = args[8]
+    local operationType = args[9]
+    local entityName = args[10]
+    local tableName = args[11]
+    local namespace = args[12]
+    local idColumn = args[13]
+    local versionColumn = args[14]
+    local deletedColumn = args[15]
+    local activeMarkerValue = args[16]
+    local id = args[17]
+    local createdAt = args[18]
+    local columnCount = tonumber(args[19])
     local version = redis.call('INCR', versionKey)
 
     if versionKeyTtl ~= nil and versionKeyTtl > 0 then
         redis.call('EXPIRE', versionKey, versionKeyTtl)
     end
 
-    if ttl ~= nil and ttl > 0 then
-        redis.call('SETEX', entityKey, ttl, payload)
+    if cacheEntity then
+        if ttl ~= nil and ttl > 0 then
+            redis.call('SETEX', entityKey, ttl, payload)
+        else
+            redis.call('SET', entityKey, payload)
+        end
     else
-        redis.call('SET', entityKey, payload)
+        redis.call('DEL', entityKey)
     end
     redis.call('DEL', tombstoneKey)
 
@@ -61,7 +66,7 @@ redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
         table.insert(fields, activeMarkerValue)
     end
 
-    local index = 19
+    local index = 20
     for i = 1, columnCount do
         local columnName = args[index]
         local columnValue = args[index + 1]

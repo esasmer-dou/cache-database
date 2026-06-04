@@ -116,6 +116,30 @@ Generated files:
 - `target/cachedb-prodtest-reports/production-certification-report.json`
 - `target/cachedb-prodtest-reports/production-certification-report.md`
 
+## Production Scenario Certification Lane
+
+The production evidence workflow also has a focused scenario lane:
+
+```powershell
+.\tools\ci\run-production-scenario-certification.ps1 `
+  -RedisUri "redis://default:welcome1@127.0.0.1:56379" `
+  -PostgresUrl "jdbc:postgresql://127.0.0.1:55432/postgres"
+```
+
+This lane is intentionally narrower than the heavy certification runner. It
+checks the production contracts that are easy to regress during API work:
+
+- projection-required route strict mode rejects entity fallback
+- per-tenant hot-row quota evicts the oldest tenant member
+- tenant memory budget includes measured Redis payload bytes
+- PostgreSQL outbox adapter polls a bounded batch
+- outbox checkpoint advances only after accepted events
+
+Generated files:
+
+- `target/cachedb-prodtest-reports/production-scenario-certification.json`
+- `target/cachedb-prodtest-reports/production-scenario-certification.md`
+
 ## Semantics And Shedding Matrix
 
 | Entity / Query Class | Persistence Semantics | Hard-Limit Behavior | Recovery Path |

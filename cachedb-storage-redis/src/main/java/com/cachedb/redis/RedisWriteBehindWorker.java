@@ -120,7 +120,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
         for (String streamKey : config.activeStreamKeys()) {
             try {
-                jedis.xgroupCreate(streamKey, config.activeConsumerGroup(), StreamEntryID.LAST_ENTRY, true);
+                jedis.xgroupCreate(streamKey, config.activeConsumerGroup(), new StreamEntryID("0-0"), true);
             } catch (JedisDataException exception) {
                 if (!exception.getMessage().contains("BUSYGROUP")) {
                     throw exception;

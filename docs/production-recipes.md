@@ -291,6 +291,104 @@ For customer timelines, a production-safe shape is:
 - PostgreSQL remains the durable home for full order history and archive reads
 - detail screens fetch one explicit order or a small preview relation, not the whole customer aggregate
 
+For entity hot sets, choose the admission rule explicitly:
+
+- `COUNT_WINDOW` is the default and keeps the most recently accessed/written entity ids up to `hotEntityLimit`
+- `TIME_WINDOW` is the right fit when the business rule is "orders from the last 90 days are hot"
+- `STATE_WINDOW` is the right fit when only states such as `OPEN` and `PENDING` should stay hot
+- `COMPOSITE` is the production fit when hotness is a combination, for example "last 90 days and `OPEN/PENDING`"
+- `CUSTOM_PREDICATE` is reserved for explicit Java predicates, for example VIP customers or tenant-specific rules
+
+Example:
+
+```java
+CachePolicy recentOrders = CachePolicy.builder()
+        .hotEntityLimit(100_000)
+        .pageSize(100)
+        .hotPolicy(EntityHotPolicy.builder()
+                .mode(EntityHotPolicyMode.TIME_WINDOW)
+                .timeColumn("order_date")
+                .hotForDays(90)
+                .admitOnRead(false)
+                .evictWhenRejected(true)
+                .build())
+        .build();
+```
+
+This is different from `entityTtlSeconds`. TTL is based on when the row is written to Redis. `TIME_WINDOW` is based on the business column in the entity payload.
+
+Production hot sets are often multi-factor. Model that explicitly instead of
+encoding a hidden if/else in application code:
+
+```java
+CachePolicy activeRecentOrders = CachePolicy.builder()
+        .hotEntityLimit(100_000)
+        .hotPolicy(EntityHotPolicy.allOf(List.of(
+                EntityHotPolicy.timeWindow("order_date", Duration.ofDays(90).toSeconds()),
+                EntityHotPolicy.stateWindow("status", List.of("OPEN", "PENDING"))
+        )))
+        .build();
+```
+
+If one of several routes can make a row hot, use `EntityHotPolicy.anyOf(...)`.
+For example: "recent order" OR "VIP customer's order" OR "manual support hold".
+Keep `CUSTOM_PREDICATE` narrow and deterministic; it should not call a database,
+remote service, or allocate large helper objects.
+
+### Route-Level Cache Contract
+
+Entity policy tells CacheDB which row may enter Redis. It does not describe the
+route. Production routes need an explicit contract:
+
+```java
+RouteCacheContract customerOrdersTimeline = RouteCacheContract.builder()
+        .routeName("CustomerOrdersTimelineRoute")
+        .entityName("OrderEntity")
+        .projectionName("CustomerOrderSummaryHot")
+        .pageSize(100)
+        .hotWindow(1_000)
+        .projectionRequired(true)
+        .maxColdReadSize(100)
+        .memoryBudgetBytes(256L * 1024L * 1024L)
+        .strictMode(RouteCacheStrictMode.FAIL_FAST)
+        .tenantQuota(new TenantCacheQuota("tenant_id", 50_000, 128L * 1024L * 1024L, true))
+        .build();
+```
+
+Use a route contract when:
+
+- the endpoint has a known first-page size
+- Redis should keep a bounded hot window, not the whole table
+- falling back from projection to entity scan would be unsafe
+- one tenant or customer can otherwise dominate Redis memory
+
+In production strict mode, a route that requires projection must fail fast if
+the resolved path is `entity:...`. "It worked but used the expensive path" is a
+staging-only behavior, not a safe production default.
+
+Apply the contract around the route execution when you want runtime quota and
+admission telemetry to be attributed to that route:
+
+```java
+List<OrderSummaryReadModel> page = RouteCacheContext.supplyWithContract(
+        customerOrdersTimeline,
+        () -> summaries.query(customerOrdersQuery(customerId, 100))
+);
+```
+
+When `tenantQuota(...)` is bounded, CacheDB tracks tenant hot-set membership for
+the current route context. If the tenant row limit is exceeded, the oldest
+tenant member is evicted when `evictOnBreach=true`; otherwise the new row is not
+admitted into Redis. The memory budget includes tenant tracking keys and the
+measured Redis payload bytes for cached entities. CacheDB measures the entity key
+with Redis `MEMORY USAGE` after admission and maintains a tenant payload counter
+so repeated updates do not double-count the same entity.
+
+Use the memory budget as a route guardrail, not as the only capacity plan. After
+staging warm, still compare planner estimates with actual Redis usage because
+Redis object overhead, index keys, projections, and page-cache keys also consume
+memory.
+
 Why:
 
 - avoids wide object graphs on first read
@@ -302,6 +400,55 @@ Measured support:
 - use `ReadShapeBenchmarkMain` in `cachedb-production-tests` when you want a repo-local comparison of summary list, preview list, and full aggregate list materialization cost
 - use `RankedProjectionBenchmarkMain` when you want a repo-local comparison of a ranked projection top-window path versus a wide candidate scan
 - this benchmark is intentionally application-side, so it complements rather than replaces end-to-end Redis/PostgreSQL scenario runs
+
+### PostgreSQL Outbox / CDC Adapter Example
+
+If PostgreSQL can be changed outside CacheDB, do not rely on Redis staying fresh
+by luck. Use a real feed: outbox, Debezium, Kafka, or another CDC source. The
+starter now includes a concrete PostgreSQL outbox adapter for the simplest
+production migration path.
+
+Expected outbox shape:
+
+```sql
+CREATE TABLE cachedb_outbox (
+    id BIGSERIAL PRIMARY KEY,
+    entity_name TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT,
+    entity_version BIGINT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_source TEXT NOT NULL
+);
+```
+
+Adapter usage:
+
+```java
+PostgresOutboxExternalChangeFeedAdapter adapter =
+        PostgresOutboxExternalChangeFeedAdapter.builder(dataSource)
+                .adapterName("orders-cachedb-feed")
+                .outboxTable("cachedb_outbox")
+                .checkpointTable("cachedb_outbox_adapter_checkpoint")
+                .batchSize(500)
+                .pollIntervalMillis(1_000)
+                .build();
+
+adapter.start(event -> {
+    // Map ExternalChangeEvent to an explicit CacheDB upsert/delete or projection refresh.
+    // Keep the sink idempotent because CDC feeds can replay after failures.
+});
+```
+
+Production rules:
+
+- keep `id` monotonically increasing
+- keep the sink idempotent
+- use a stable `adapterName` per logical consumer
+- use a singleton/leader-elected runner if duplicate feed processing is not safe
+- keep `payload_json` flat for the built-in parser, or carry the raw payload under `_payload`
+- do not mutate domain tables from the adapter; it only reads the outbox and writes its checkpoint table
 
 ### Recipe 4: Proven Hotspot Or Batch Loop
 
@@ -341,6 +488,12 @@ No matter which recipe you choose, these remain the production defaults we recom
 - use `withRelationLimit(...)` on preview screens
 - treat global sorted/range list screens as projection-first, and prefer pre-ranked projection fields when exact business ranking matters
 - keep page/result size below the entity hot window; the default read-shape guardrail enforces this with `hotSetHeadroom`
+- use `hotPolicy.mode=TIME_WINDOW` or `STATE_WINDOW` when hotness is driven by business time or state, not just by recent access count
+- use `hotPolicy.mode=COMPOSITE` when business hotness combines time, state, tenant, or custom predicates
+- define route-level cache contracts for critical screens: page size, hot window, projection requirement, cold-read cap, memory budget, and tenant quota
+- run warm/backfill jobs with checkpoint, resume, batch-size, fetch-size, and row-rate limits when the hot set is large
+- calibrate planner estimates after staging warm with Redis `MEMORY USAGE` and key-prefix breakdown
+- use a CDC, Debezium, Kafka, or outbox adapter when PostgreSQL can be mutated outside CacheDB
 - use `readShapeGuardrail.maxProjectionQueryLimit` for bounded projection windows such as "latest 1,000 orders per customer"
 - set Redis `maxmemory` and keep `maxmemory-policy=noeviction` for a CacheDB-owned Redis; let CacheDB guardrails shed page-cache, read-through, hot-set, and query-index writes intentionally
 - keep generated ergonomics for normal code, and reserve minimal repository style for measured hotspots
@@ -353,6 +506,7 @@ Avoid these patterns in production:
 - full aggregate hydration for every list endpoint
 - one-shot loading of hundreds of relation children into the first query
 - increasing `hotEntityLimit` to hide a bad list shape instead of introducing a projection/read-model
+- treating `entityTtlSeconds` as "last 90 business days"; use `TIME_WINDOW` for that rule
 - relying on Redis random or all-keys eviction to control CacheDB memory
 - sharing one Redis pool between foreground repository traffic and background workers
 - dropping directly to minimal repository style everywhere before measuring

@@ -104,6 +104,7 @@ Expected result:
 - recommended CacheDB surface
 - Redis placement decision
 - PostgreSQL placement decision
+- Redis memory estimate based on selected hot-window parameters
 - projection requirement
 - ranked projection requirement
 - hot-window size
@@ -114,6 +115,12 @@ Expected result:
 
 If no plan appears, the page should now show a server-side error instead of
 silently leaving the result area empty.
+
+The Redis memory estimate is intentionally approximate. It samples a bounded
+number of PostgreSQL rows, uses planner row-count/hot-window inputs, then
+separates payload, projection, hot-set/index, page-cache, stream, and safety
+headroom components. Treat it as pre-warm capacity guidance. After staging warm,
+validate the estimate with Redis `used_memory` and `MEMORY USAGE` samples.
 
 ### 5. Generate Scaffold
 
@@ -156,10 +163,32 @@ Expected result:
 - registered projections are refreshed inline
 - optional referenced root rows are warmed
 - warm statistics show root rows, child rows, skipped rows, and duration
+- resumable warm metadata is available when a job id and resume option are used
+- Redis memory calibration can compare the pre-warm estimate with actual Redis key usage after warm
 
 If the warm step says `No registered CacheDB entity found`, the selected route
 has not been registered in the running application. Generate or wire the entity
 binding first, rebuild the app, and run the planner again.
+
+For large hot sets, do not run warm as an unbounded one-shot job. Use:
+
+- a stable warm job id
+- resume enabled
+- checkpoint interval
+- JDBC fetch size
+- batch size
+- row-rate limit
+
+This makes the warm job restartable if the process, pod, or database connection
+is interrupted. The job is idempotent at the CacheDB surface: rerunning the same
+window rewrites the same hot keys and projection entries instead of creating a
+second logical copy.
+
+After a non-dry-run warm, inspect the Redis calibration block. It groups actual
+Redis `MEMORY USAGE` samples by component: entity, projection, index, hot set,
+page cache, stream/ops, compaction, and other keys. Use the "estimate versus
+actual" gap to tune hot-window size, projection payload shape, and Redis
+`maxmemory`.
 
 ### 8. Run Side-By-Side Comparison
 
@@ -181,6 +210,34 @@ Do not cut over if:
 - ordering differs
 - p95 latency is materially worse than baseline
 - warm set does not represent the production hot window
+
+### 9. Download Migration Report
+
+Download the report after comparison.
+
+Expected result:
+
+- route decision
+- parity result
+- latency result
+- blockers
+- cutover action plan
+- rollback notes
+- coverage checklist
+
+If the goal is a full system conversion rather than a hybrid route-by-route
+cutover, treat the coverage checklist as mandatory. Every user-facing read and
+write route must be mapped to one of these outcomes:
+
+- CacheDB entity route
+- CacheDB projection route
+- CacheDB ranked projection route
+- command/write route
+- PostgreSQL cold/archive route
+- intentionally out of scope
+
+Do not claim 100% migration coverage until unmapped routes are zero and every
+mapped route has either parity evidence or an explicit manual acceptance note.
 
 ### 9. Download Migration Report
 

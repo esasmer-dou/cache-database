@@ -107,9 +107,25 @@ public interface com.reactor.cachedb.core.api.ProjectionRepository<P, ID> {
   public default java.util.List<P> query(com.reactor.cachedb.core.query.QueryNode, int, com.reactor.cachedb.core.query.QuerySort...);
 }
 
+## cachedb-core :: com.reactor.cachedb.core.cache.CacheAdmissionPredicate
+public interface com.reactor.cachedb.core.cache.CacheAdmissionPredicate {
+  public abstract boolean admit(java.util.Map<java.lang.String, java.lang.Object>);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.cache.CacheAdmissionSource
+public final class com.reactor.cachedb.core.cache.CacheAdmissionSource extends java.lang.Enum<com.reactor.cachedb.core.cache.CacheAdmissionSource> {
+  public static final com.reactor.cachedb.core.cache.CacheAdmissionSource WRITE;
+  public static final com.reactor.cachedb.core.cache.CacheAdmissionSource READ;
+  public static final com.reactor.cachedb.core.cache.CacheAdmissionSource WARM;
+  public static final com.reactor.cachedb.core.cache.CacheAdmissionSource SERVE;
+  public static com.reactor.cachedb.core.cache.CacheAdmissionSource[] values();
+  public static com.reactor.cachedb.core.cache.CacheAdmissionSource valueOf(java.lang.String);
+}
+
 ## cachedb-core :: com.reactor.cachedb.core.cache.CachePolicy
 public final class com.reactor.cachedb.core.cache.CachePolicy extends java.lang.Record {
   public com.reactor.cachedb.core.cache.CachePolicy(int, int, boolean, long, long);
+  public com.reactor.cachedb.core.cache.CachePolicy(int, int, boolean, long, long, com.reactor.cachedb.core.cache.EntityHotPolicy);
   public static com.reactor.cachedb.core.cache.CachePolicy$Builder builder();
   public static com.reactor.cachedb.core.cache.CachePolicy defaults();
   public final java.lang.String toString();
@@ -120,6 +136,56 @@ public final class com.reactor.cachedb.core.cache.CachePolicy extends java.lang.
   public boolean lruEvictionEnabled();
   public long entityTtlSeconds();
   public long pageTtlSeconds();
+  public com.reactor.cachedb.core.cache.EntityHotPolicy hotPolicy();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.cache.EntityHotPolicy
+public final class com.reactor.cachedb.core.cache.EntityHotPolicy extends java.lang.Record {
+  public com.reactor.cachedb.core.cache.EntityHotPolicy(com.reactor.cachedb.core.cache.EntityHotPolicyMode, java.lang.String, long, java.lang.String, java.util.List<java.lang.String>, boolean, boolean, boolean, boolean, com.reactor.cachedb.core.cache.CacheAdmissionPredicate);
+  public com.reactor.cachedb.core.cache.EntityHotPolicy(com.reactor.cachedb.core.cache.EntityHotPolicyMode, java.lang.String, long, java.lang.String, java.util.List<java.lang.String>, boolean, boolean, boolean, boolean, com.reactor.cachedb.core.cache.CacheAdmissionPredicate, com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator, java.util.List<com.reactor.cachedb.core.cache.EntityHotPolicy>);
+  public static com.reactor.cachedb.core.cache.EntityHotPolicy countWindow();
+  public static com.reactor.cachedb.core.cache.EntityHotPolicy timeWindow(java.lang.String, long);
+  public static com.reactor.cachedb.core.cache.EntityHotPolicy stateWindow(java.lang.String, java.util.Collection<java.lang.String>);
+  public static com.reactor.cachedb.core.cache.EntityHotPolicy customPredicate(com.reactor.cachedb.core.cache.CacheAdmissionPredicate);
+  public static com.reactor.cachedb.core.cache.EntityHotPolicy allOf(java.util.Collection<com.reactor.cachedb.core.cache.EntityHotPolicy>);
+  public static com.reactor.cachedb.core.cache.EntityHotPolicy anyOf(java.util.Collection<com.reactor.cachedb.core.cache.EntityHotPolicy>);
+  public static com.reactor.cachedb.core.cache.EntityHotPolicy$Builder builder();
+  public boolean shouldAdmit(java.util.Map<java.lang.String, java.lang.Object>, com.reactor.cachedb.core.cache.CacheAdmissionSource);
+  public boolean shouldAdmit(java.util.Map<java.lang.String, java.lang.Object>, com.reactor.cachedb.core.cache.CacheAdmissionSource, java.time.Instant);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public com.reactor.cachedb.core.cache.EntityHotPolicyMode mode();
+  public java.lang.String timeColumn();
+  public long hotForSeconds();
+  public java.lang.String stateColumn();
+  public java.util.List<java.lang.String> stateValues();
+  public boolean admitOnWrite();
+  public boolean admitOnRead();
+  public boolean admitOnWarm();
+  public boolean evictWhenRejected();
+  public com.reactor.cachedb.core.cache.CacheAdmissionPredicate customPredicate();
+  public com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator compositeOperator();
+  public java.util.List<com.reactor.cachedb.core.cache.EntityHotPolicy> children();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator
+public final class com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator extends java.lang.Enum<com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator> {
+  public static final com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator ALL;
+  public static final com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator ANY;
+  public static com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator[] values();
+  public static com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator valueOf(java.lang.String);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.cache.EntityHotPolicyMode
+public final class com.reactor.cachedb.core.cache.EntityHotPolicyMode extends java.lang.Enum<com.reactor.cachedb.core.cache.EntityHotPolicyMode> {
+  public static final com.reactor.cachedb.core.cache.EntityHotPolicyMode COUNT_WINDOW;
+  public static final com.reactor.cachedb.core.cache.EntityHotPolicyMode TIME_WINDOW;
+  public static final com.reactor.cachedb.core.cache.EntityHotPolicyMode STATE_WINDOW;
+  public static final com.reactor.cachedb.core.cache.EntityHotPolicyMode CUSTOM_PREDICATE;
+  public static final com.reactor.cachedb.core.cache.EntityHotPolicyMode COMPOSITE;
+  public static com.reactor.cachedb.core.cache.EntityHotPolicyMode[] values();
+  public static com.reactor.cachedb.core.cache.EntityHotPolicyMode valueOf(java.lang.String);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.cache.PageWindow
@@ -131,6 +197,40 @@ public final class com.reactor.cachedb.core.cache.PageWindow extends java.lang.R
   public final boolean equals(java.lang.Object);
   public int pageNumber();
   public int pageSize();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeEvent
+public final class com.reactor.cachedb.core.change.ExternalChangeEvent extends java.lang.Record {
+  public com.reactor.cachedb.core.change.ExternalChangeEvent(java.lang.String, java.lang.Object, com.reactor.cachedb.core.change.ExternalChangeType, java.util.Map<java.lang.String, java.lang.Object>, long, java.time.Instant, java.lang.String);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String entityName();
+  public java.lang.Object id();
+  public com.reactor.cachedb.core.change.ExternalChangeType type();
+  public java.util.Map<java.lang.String, java.lang.Object> columns();
+  public long version();
+  public java.time.Instant occurredAt();
+  public java.lang.String source();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeFeedAdapter
+public interface com.reactor.cachedb.core.change.ExternalChangeFeedAdapter extends java.lang.AutoCloseable {
+  public abstract void start(com.reactor.cachedb.core.change.ExternalChangeSink);
+  public abstract void close();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeSink
+public interface com.reactor.cachedb.core.change.ExternalChangeSink {
+  public abstract void accept(com.reactor.cachedb.core.change.ExternalChangeEvent);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeType
+public final class com.reactor.cachedb.core.change.ExternalChangeType extends java.lang.Enum<com.reactor.cachedb.core.change.ExternalChangeType> {
+  public static final com.reactor.cachedb.core.change.ExternalChangeType UPSERT;
+  public static final com.reactor.cachedb.core.change.ExternalChangeType DELETE;
+  public static com.reactor.cachedb.core.change.ExternalChangeType[] values();
+  public static com.reactor.cachedb.core.change.ExternalChangeType valueOf(java.lang.String);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.codec.FieldValueCodec
@@ -787,6 +887,7 @@ public final class com.reactor.cachedb.core.guardrail.ReadShapeGuardrails {
   public static boolean shouldCacheLoadedPage(int, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
   public static void validateEntityQuery(java.lang.String, com.reactor.cachedb.core.query.QuerySpec, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
   public static void validateProjectionQuery(java.lang.String, com.reactor.cachedb.core.query.QuerySpec, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
+  public static void validateRouteContract(com.reactor.cachedb.core.route.RouteCacheContract, java.lang.String);
   public static int effectivePageRequestLimit(com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
   public static int effectiveLoadedPageLimit(com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
   public static int effectiveEntityQueryLimit(com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
@@ -1294,6 +1395,19 @@ public final class com.reactor.cachedb.core.queue.BulkDeadLetterActionResult ext
   public java.util.List<com.reactor.cachedb.core.queue.DeadLetterActionResult> results();
 }
 
+## cachedb-core :: com.reactor.cachedb.core.queue.CacheAdmissionMetricSnapshot
+public final class com.reactor.cachedb.core.queue.CacheAdmissionMetricSnapshot extends java.lang.Record {
+  public com.reactor.cachedb.core.queue.CacheAdmissionMetricSnapshot(long, long, long, long);
+  public static com.reactor.cachedb.core.queue.CacheAdmissionMetricSnapshot empty();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public long admittedCount();
+  public long rejectedCount();
+  public long evictedCount();
+  public long lastObservedAtEpochMillis();
+}
+
 ## cachedb-core :: com.reactor.cachedb.core.queue.DeadLetterActionResult
 public final class com.reactor.cachedb.core.queue.DeadLetterActionResult extends java.lang.Record {
   public com.reactor.cachedb.core.queue.DeadLetterActionResult(java.lang.String, java.lang.String, boolean, java.lang.String);
@@ -1781,6 +1895,8 @@ public class com.reactor.cachedb.core.queue.StoragePerformanceCollector {
   public void recordPostgresRead(java.lang.String, long);
   public void recordPostgresWrite(long);
   public void recordPostgresWrite(java.lang.String, long);
+  public void recordCacheAdmission(java.lang.String, boolean);
+  public void recordCacheEviction(java.lang.String, long);
   public com.reactor.cachedb.core.queue.StoragePerformanceSnapshot snapshot();
   public com.reactor.cachedb.core.queue.StoragePerformanceSnapshot reset();
   public boolean enabled();
@@ -1788,8 +1904,9 @@ public class com.reactor.cachedb.core.queue.StoragePerformanceCollector {
 
 ## cachedb-core :: com.reactor.cachedb.core.queue.StoragePerformanceSnapshot
 public final class com.reactor.cachedb.core.queue.StoragePerformanceSnapshot extends java.lang.Record {
-  public com.reactor.cachedb.core.queue.StoragePerformanceSnapshot(com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot);
   public com.reactor.cachedb.core.queue.StoragePerformanceSnapshot(com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot>, java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot>, java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot>, java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot>);
+  public com.reactor.cachedb.core.queue.StoragePerformanceSnapshot(com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot);
+  public com.reactor.cachedb.core.queue.StoragePerformanceSnapshot(com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, com.reactor.cachedb.core.queue.LatencyMetricSnapshot, java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot>, java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot>, java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot>, java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot>, java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.CacheAdmissionMetricSnapshot>);
   public final java.lang.String toString();
   public final int hashCode();
   public final boolean equals(java.lang.Object);
@@ -1801,6 +1918,7 @@ public final class com.reactor.cachedb.core.queue.StoragePerformanceSnapshot ext
   public java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot> redisWriteBreakdown();
   public java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot> postgresReadBreakdown();
   public java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.LatencyMetricSnapshot> postgresWriteBreakdown();
+  public java.util.Map<java.lang.String, com.reactor.cachedb.core.queue.CacheAdmissionMetricSnapshot> cacheAdmissionBreakdown();
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.queue.StreamPage
@@ -1978,6 +2096,59 @@ public interface com.reactor.cachedb.core.relation.RelationBatchLoader<T> {
   public abstract void preload(java.util.List<T>, com.reactor.cachedb.core.relation.RelationBatchContext);
 }
 
+## cachedb-core :: com.reactor.cachedb.core.route.RouteCacheContext
+public final class com.reactor.cachedb.core.route.RouteCacheContext {
+  public static com.reactor.cachedb.core.route.RouteCacheContract currentContract();
+  public static void runWithContract(com.reactor.cachedb.core.route.RouteCacheContract, java.lang.Runnable);
+  public static <T> T supplyWithContract(com.reactor.cachedb.core.route.RouteCacheContract, java.util.function.Supplier<T>);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.route.RouteCacheContract
+public final class com.reactor.cachedb.core.route.RouteCacheContract extends java.lang.Record {
+  public com.reactor.cachedb.core.route.RouteCacheContract(java.lang.String, java.lang.String, java.lang.String, int, int, boolean, int, long, com.reactor.cachedb.core.route.RouteCacheStrictMode, com.reactor.cachedb.core.route.TenantCacheQuota);
+  public static com.reactor.cachedb.core.route.RouteCacheContract$Builder builder();
+  public boolean strictProjectionRequired();
+  public boolean allowsColdReadSize(int);
+  public boolean matchesResolvedRoute(java.lang.String);
+  public void validateResolvedRoute(java.lang.String);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String routeName();
+  public java.lang.String entityName();
+  public java.lang.String projectionName();
+  public int pageSize();
+  public int hotWindow();
+  public boolean projectionRequired();
+  public int maxColdReadSize();
+  public long memoryBudgetBytes();
+  public com.reactor.cachedb.core.route.RouteCacheStrictMode strictMode();
+  public com.reactor.cachedb.core.route.TenantCacheQuota tenantQuota();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.route.RouteCacheStrictMode
+public final class com.reactor.cachedb.core.route.RouteCacheStrictMode extends java.lang.Enum<com.reactor.cachedb.core.route.RouteCacheStrictMode> {
+  public static final com.reactor.cachedb.core.route.RouteCacheStrictMode OFF;
+  public static final com.reactor.cachedb.core.route.RouteCacheStrictMode WARN;
+  public static final com.reactor.cachedb.core.route.RouteCacheStrictMode FAIL_FAST;
+  public static com.reactor.cachedb.core.route.RouteCacheStrictMode[] values();
+  public static com.reactor.cachedb.core.route.RouteCacheStrictMode valueOf(java.lang.String);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.route.TenantCacheQuota
+public final class com.reactor.cachedb.core.route.TenantCacheQuota extends java.lang.Record {
+  public com.reactor.cachedb.core.route.TenantCacheQuota(java.lang.String, long, long, boolean);
+  public static com.reactor.cachedb.core.route.TenantCacheQuota unbounded();
+  public boolean bounded();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String tenantColumn();
+  public long maxHotRows();
+  public long memoryBudgetBytes();
+  public boolean evictOnBreach();
+}
+
 ## cachedb-processor :: com.reactor.cachedb.processor.CacheEntityProcessor
 public final class com.reactor.cachedb.processor.CacheEntityProcessor extends javax.annotation.processing.AbstractProcessor {
   public com.reactor.cachedb.processor.CacheEntityProcessor();
@@ -2045,7 +2216,7 @@ public final class com.reactor.cachedb.redis.RedisEntityRepository<T, ID> implem
 ## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisFunctionArgsMapper
 public final class com.reactor.cachedb.redis.RedisFunctionArgsMapper {
   public com.reactor.cachedb.redis.RedisFunctionArgsMapper();
-  public <T, ID> java.util.List<java.lang.String> upsertArgs(com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.RedisGuardrailConfig);
+  public <T, ID> java.util.List<java.lang.String> upsertArgs(com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.RedisGuardrailConfig, boolean);
   public <T, ID> java.util.List<java.lang.String> deleteArgs(com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.config.RedisGuardrailConfig);
 }
 
@@ -2053,7 +2224,7 @@ public final class com.reactor.cachedb.redis.RedisFunctionArgsMapper {
 public final class com.reactor.cachedb.redis.RedisFunctionExecutor {
   public com.reactor.cachedb.redis.RedisFunctionExecutor(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.redis.RedisFunctionArgsMapper);
   public boolean enabled();
-  public <T, ID> long upsert(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.cache.CachePolicy);
+  public <T, ID> long upsert(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.cache.CachePolicy, boolean);
   public <T, ID> long delete(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, com.reactor.cachedb.core.model.WriteOperation<T, ID>);
   public java.lang.String compactionComplete(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, long);
 }
@@ -2099,6 +2270,9 @@ public final class com.reactor.cachedb.redis.RedisKeyStrategy {
   public java.lang.String tombstoneKey(java.lang.String, java.lang.Object);
   public java.lang.String entityPattern(java.lang.String);
   public java.lang.String hotSetKey(java.lang.String);
+  public java.lang.String tenantHotSetKey(java.lang.String, java.lang.String, java.lang.Object);
+  public java.lang.String tenantHotPayloadBytesKey(java.lang.String, java.lang.String, java.lang.Object);
+  public java.lang.String tenantHotOwnerKey(java.lang.String, java.lang.Object);
   public java.lang.String indexAllKey(java.lang.String);
   public java.lang.String indexMetaKey(java.lang.String, java.lang.Object);
   public java.lang.String indexDegradedKey(java.lang.String);
@@ -2133,12 +2307,17 @@ public final class com.reactor.cachedb.redis.RedisLeaderLease implements java.la
 ## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisPageCacheManager
 public final class com.reactor.cachedb.redis.RedisPageCacheManager<T, ID> {
   public com.reactor.cachedb.redis.RedisPageCacheManager(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.redis.RedisKeyStrategy, com.reactor.cachedb.redis.RedisHotSetManager, com.reactor.cachedb.redis.RedisQueryIndexManager<T, ID>, com.reactor.cachedb.redis.RedisProducerGuard, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
+  public com.reactor.cachedb.redis.RedisPageCacheManager(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.redis.RedisKeyStrategy, com.reactor.cachedb.redis.RedisHotSetManager, com.reactor.cachedb.redis.RedisQueryIndexManager<T, ID>, com.reactor.cachedb.redis.RedisProducerGuard, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.core.queue.StoragePerformanceCollector);
   public void recordEntityAccess(ID);
+  public void recordEntityAccess(ID, java.util.Map<java.lang.String, java.lang.Object>);
+  public void recordEntityAccess(ID, java.util.Map<java.lang.String, java.lang.Object>, long);
   public void cacheEntity(T, java.lang.String);
+  public void cacheEntity(T, java.lang.String, com.reactor.cachedb.core.cache.CacheAdmissionSource);
   public void removeEntity(ID);
   public java.util.Optional<java.util.List<T>> getCachedPage(com.reactor.cachedb.core.cache.PageWindow);
   public void cachePage(com.reactor.cachedb.core.cache.PageWindow, java.util.List<T>);
   public java.util.List<java.lang.String> hotEntityIds();
+  public boolean shouldServeCachedEntity(T);
 }
 
 ## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisProducerGuard
@@ -2827,6 +3006,16 @@ public final class com.reactor.cachedb.starter.PostgresConnectionConfig extends 
   public int defaultRowFetchSize();
   public java.lang.String applicationName();
   public java.lang.String additionalParameters();
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.PostgresOutboxExternalChangeFeedAdapter
+public final class com.reactor.cachedb.starter.PostgresOutboxExternalChangeFeedAdapter implements com.reactor.cachedb.core.change.ExternalChangeFeedAdapter {
+  public static com.reactor.cachedb.starter.PostgresOutboxExternalChangeFeedAdapter$Builder builder(javax.sql.DataSource);
+  public void start(com.reactor.cachedb.core.change.ExternalChangeSink);
+  public int pollOnce(com.reactor.cachedb.core.change.ExternalChangeSink);
+  public void initialize() throws java.sql.SQLException;
+  public java.lang.RuntimeException lastFailure();
+  public void close();
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.ProductionReportSnapshot

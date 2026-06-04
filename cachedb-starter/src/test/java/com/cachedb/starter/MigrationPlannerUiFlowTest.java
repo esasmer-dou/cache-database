@@ -76,7 +76,10 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("plannerCompareReportPanel"));
             assertTrue(body.contains("plannerCompareReportPreview"));
             assertTrue(body.contains("plannerCompareCopyReportAction"));
+            assertTrue(body.contains("plannerMemoryEstimateCard"));
+            assertTrue(body.contains("plannerMemoryRows"));
             assertTrue(body.contains("function renderComparisonReportPreview"));
+            assertTrue(body.contains("function renderMemoryEstimate"));
             assertTrue(body.contains("function copyComparisonReport"));
             assertTrue(body.contains("function ensureRegisteredSurfacesForExecution"));
             assertTrue(body.contains("function canonicalizeDiscoveredSurface"));
@@ -162,6 +165,8 @@ class MigrationPlannerUiFlowTest {
             String planJson = body(planResponse);
             assertTrue(planJson.contains("\"projectionRequired\":true"));
             assertTrue(planJson.contains("CustomerAccountCustomerOrderSummaryHot"));
+            assertTrue(planJson.contains("\"redisMemoryEstimate\""));
+            assertTrue(planJson.contains("\"recommendedMaxmemoryBytes\""));
 
             CacheDatabaseAdminHttpServer.AdminHttpResponse scaffoldResponse = harness.adminHttpServer.dispatch(
                     "POST",
@@ -247,6 +252,8 @@ class MigrationPlannerUiFlowTest {
             assertTrue(body.contains("planner-empty d-none"));
             assertTrue(body.contains("id=\"plannerResults\" class=\"\""));
             assertTrue(body.contains("id=\"plannerSurface\" class=\"result-metric-value\">Use GeneratedCacheModule for normal CRUD and a ProjectionRepository for the hot list screen."));
+            assertTrue(body.contains("id=\"plannerMemoryEstimateCard\" class=\"result-card\""));
+            assertTrue(body.contains("Redis bellek tahmini"));
             assertFalse(body.contains("plannerServerPlanFallback"));
         }
     }

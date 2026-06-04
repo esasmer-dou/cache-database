@@ -204,6 +204,45 @@ Operational notes:
 | `cachedb.config.resourceLimits.defaultCachePolicy.lruEvictionEnabled` | `true` | Enables LRU-like eviction for the hot set. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.entityTtlSeconds` | `0` | Entity TTL. `0` means no TTL. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.pageTtlSeconds` | `60` | Page-cache TTL in seconds. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode` | `COUNT_WINDOW` | Entity hot admission mode: `COUNT_WINDOW`, `TIME_WINDOW`, `STATE_WINDOW`, `COMPOSITE`, or `CUSTOM_PREDICATE`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.timeColumn` | empty | Business timestamp/date column used by `TIME_WINDOW`, for example `order_date`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds` | `0` | Business-time window size for `TIME_WINDOW`. `7776000` means 90 days. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateColumn` | empty | State column used by `STATE_WINDOW`, for example `status`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateValues` | empty | Comma-separated hot states used by `STATE_WINDOW`, for example `OPEN,PENDING`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.compositeOperator` | `ALL` | How `COMPOSITE` evaluates children. `ALL` means every child must admit the row; `ANY` means one child is enough. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.children` | empty | Semicolon-separated child rules for `COMPOSITE`, for example `TIME_WINDOW:order_date:7776000;STATE_WINDOW:status:OPEN\|PENDING`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnWrite` | `true` | Allows matching writes to enter the entity cache. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead` | `true` | Allows read-through/hydrated rows to enter the entity cache. Set `false` when cold historical reads must not pollute Redis. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnWarm` | `true` | Allows staging/backfill warm rows to enter the entity cache. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.evictWhenRejected` | `true` | Removes an existing cached entity/index entry when the row no longer matches the hot policy. |
+
+`entityTtlSeconds` is not a business-time window. A 90-day TTL means "expire 90 days after this Redis write", not "keep rows where `order_date` is within the last 90 days". Use `TIME_WINDOW` when the hot set is defined by a business column.
+
+Example for "orders from the last 90 days are hot, older read-through rows should not pollute Redis":
+
+```properties
+cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit=100000
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode=TIME_WINDOW
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.timeColumn=order_date
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds=7776000
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead=false
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.evictWhenRejected=true
+```
+
+Example for "orders from the last 90 days and still open/pending are hot":
+
+```properties
+cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit=100000
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode=COMPOSITE
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.compositeOperator=ALL
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.children=TIME_WINDOW:order_date:7776000;STATE_WINDOW:status:OPEN|PENDING
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead=false
+cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.evictWhenRejected=true
+```
+
+Composite child rules intentionally support only deterministic local checks.
+Keep tenant/VIP logic in a registered Java predicate when it cannot be expressed
+as time or state.
 
 ### Keyspace, Functions, Relations, Page Cache
 

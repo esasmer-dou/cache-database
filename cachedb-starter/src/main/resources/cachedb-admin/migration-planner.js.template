@@ -207,6 +207,63 @@
     }
     return String(Math.round(value)) + " ns";
   }
+  function formatBytes(bytes) {
+    const value = Number(bytes || 0);
+    if (!Number.isFinite(value) || value <= 0) {
+      return "0 B";
+    }
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let scaled = value;
+    let unitIndex = 0;
+    while (scaled >= 1024 && unitIndex < units.length - 1) {
+      scaled /= 1024;
+      unitIndex++;
+    }
+    const fixed =
+      scaled >= 100 ? scaled.toFixed(0) : scaled >= 10 ? scaled.toFixed(1) : scaled.toFixed(2);
+    return fixed + " " + units[unitIndex];
+  }
+  function formatCount(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) {
+      return "0";
+    }
+    return Math.max(0, Math.round(number)).toLocaleString("en-US");
+  }
+  function memoryConfidenceLabel(value) {
+    const labels = {
+      HIGH: "__CACHEDB_MIGRATION_PLANNER_TOKEN_204__",
+      MEDIUM: "__CACHEDB_MIGRATION_PLANNER_TOKEN_205__",
+      LOW: "__CACHEDB_MIGRATION_PLANNER_TOKEN_206__",
+    };
+    return labels[String(value || "").toUpperCase()] || String(value || "-");
+  }
+  function memoryComponentLabel(code) {
+    const labels = {
+      ROOT_ENTITY: "__CACHEDB_MIGRATION_PLANNER_TOKEN_207__",
+      CHILD_PROJECTION: "__CACHEDB_MIGRATION_PLANNER_TOKEN_208__",
+      CHILD_ENTITY: "__CACHEDB_MIGRATION_PLANNER_TOKEN_209__",
+      INDEX_AND_HOTSET: "__CACHEDB_MIGRATION_PLANNER_TOKEN_210__",
+      PAGE_CACHE: "__CACHEDB_MIGRATION_PLANNER_TOKEN_211__",
+      STREAM_OPS: "__CACHEDB_MIGRATION_PLANNER_TOKEN_212__",
+      HEADROOM: "__CACHEDB_MIGRATION_PLANNER_TOKEN_213__",
+    };
+    return labels[String(code || "")] || String(code || "-");
+  }
+  function memoryComponentDescription(component) {
+    const code = String((component && component.code) || "");
+    const fallback = String((component && component.description) || "");
+    const labels = {
+      ROOT_ENTITY: "__CACHEDB_MIGRATION_PLANNER_TOKEN_214__",
+      CHILD_PROJECTION: "__CACHEDB_MIGRATION_PLANNER_TOKEN_215__",
+      CHILD_ENTITY: "__CACHEDB_MIGRATION_PLANNER_TOKEN_216__",
+      INDEX_AND_HOTSET: "__CACHEDB_MIGRATION_PLANNER_TOKEN_217__",
+      PAGE_CACHE: "__CACHEDB_MIGRATION_PLANNER_TOKEN_218__",
+      STREAM_OPS: "__CACHEDB_MIGRATION_PLANNER_TOKEN_219__",
+      HEADROOM: "__CACHEDB_MIGRATION_PLANNER_TOKEN_220__",
+    };
+    return labels[code] || fallback;
+  }
   async function fetchJson(url, options) {
     const response = await fetch(url, options);
     const text = await response.text();
@@ -1009,6 +1066,85 @@
       })
       .join("");
   }
+  function renderMemoryEstimate(estimate) {
+    const card = document.getElementById("plannerMemoryEstimateCard");
+    if (!card) {
+      return;
+    }
+    if (!estimate) {
+      card.classList.add("d-none");
+      return;
+    }
+    card.classList.remove("d-none");
+    setMetric("plannerMemorySubtotal", formatBytes(estimate.subtotalBytes));
+    setMetric("plannerMemoryHeadroom", formatBytes(estimate.headroomBytes));
+    setMetric("plannerMemoryTotal", formatBytes(estimate.estimatedTotalBytes));
+    setMetric(
+      "plannerMemoryMaxmemory",
+      formatBytes(estimate.recommendedMaxmemoryBytes),
+    );
+    const source = document.getElementById("plannerMemorySource");
+    const confidence = document.getElementById("plannerMemoryConfidence");
+    const rootRows = document.getElementById("plannerMemoryRootRows");
+    const childRows = document.getElementById("plannerMemoryChildRows");
+    if (source) {
+      source.textContent = estimate.source || "-";
+    }
+    if (confidence) {
+      confidence.textContent = memoryConfidenceLabel(estimate.confidence);
+    }
+    if (rootRows) {
+      rootRows.textContent = formatCount(estimate.rootHotRows);
+    }
+    if (childRows) {
+      childRows.textContent = formatCount(estimate.childHotRows);
+    }
+    const rows = document.getElementById("plannerMemoryRows");
+    if (rows) {
+      const components = estimate.components || [];
+      rows.innerHTML = components.length
+        ? components
+            .map(function (component) {
+              return (
+                "<tr><td><strong>" +
+                escapeHtml(memoryComponentLabel(component.code)) +
+                '</strong><div class="planner-memory-row-copy">' +
+                escapeHtml(memoryComponentDescription(component)) +
+                '</div></td><td class="mono">' +
+                escapeHtml(component.surface || "") +
+                "</td><td>" +
+                escapeHtml(formatCount(component.rowCount)) +
+                "</td><td>" +
+                escapeHtml(formatBytes(component.averageBytes)) +
+                "</td><td><strong>" +
+                escapeHtml(formatBytes(component.estimatedBytes)) +
+                "</strong></td></tr>"
+              );
+            })
+            .join("")
+        : '<tr><td colspan="5" class="text-muted">__CACHEDB_MIGRATION_PLANNER_TOKEN_221__</td></tr>';
+    }
+    renderList(
+      "plannerMemoryAssumptions",
+      estimate.assumptions,
+      "__CACHEDB_MIGRATION_PLANNER_TOKEN_222__",
+    );
+    const warningBox = document.getElementById("plannerMemoryWarningsBox");
+    const warningRoot = document.getElementById("plannerMemoryWarnings");
+    const warnings = estimate.warnings || [];
+    if (warningBox) {
+      warningBox.classList.toggle("d-none", !warnings.length);
+    }
+    if (warningRoot) {
+      warningRoot.innerHTML = warnings
+        .map(function (item) {
+          return (
+            '<div class="planner-warning mb-2">' + escapeHtml(item) + "</div>"
+          );
+        })
+        .join("");
+    }
+  }
   function renderScaffoldFiles(items) {
     const root = document.getElementById("plannerScaffoldFiles");
     if (!items || !items.length) {
@@ -1497,6 +1633,7 @@
       plan.redisPlacement;
     document.getElementById("plannerPostgresPlacement").textContent =
       plan.postgresPlacement;
+    renderMemoryEstimate(plan.redisMemoryEstimate);
     renderList("plannerReasoning", plan.reasoning);
     renderList("plannerRedisArtifacts", plan.recommendedRedisArtifacts);
     renderList("plannerPostgresArtifacts", plan.recommendedPostgresArtifacts);

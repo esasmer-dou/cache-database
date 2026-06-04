@@ -1,5 +1,9 @@
 param(
-    [string]$MavenExecutable = ""
+    [string]$MavenExecutable = "",
+    [string]$RedisUri = "redis://127.0.0.1:6379",
+    [string]$PostgresUrl = "jdbc:postgresql://127.0.0.1:5432/postgres",
+    [string]$PostgresUser = "postgres",
+    [string]$PostgresPassword = "postgresql"
 )
 
 $ErrorActionPreference = "Stop"
@@ -101,6 +105,10 @@ Invoke-Maven @(
     "-DforkCount=0",
     "-Dtest=RepositoryRecipeBenchmarkSmokeTest,ReadShapeBenchmarkSmokeTest,RankedProjectionBenchmarkSmokeTest,BenchmarkReportGenerationTest",
     "-Dcachedb.prod.reportDir=$rootReportsDir",
+    "-Dcachedb.prod.redis.uri=$RedisUri",
+    "-Dcachedb.prod.postgres.url=$PostgresUrl",
+    "-Dcachedb.prod.postgres.user=$PostgresUser",
+    "-Dcachedb.prod.postgres.password=$PostgresPassword",
     "-Dsurefire.failIfNoSpecifiedTests=false"
 )
 

@@ -1141,12 +1141,110 @@ BEST:
 - Redis `maxmemory` ile sınırlandırılır.
 - CacheDB guardrail'ları güvensiz full-entity okumalarını durdurur.
 
+Entity hot policy örnekleri:
+
+```java
+CachePolicy latestAccessed = CachePolicy.builder()
+        .hotEntityLimit(10_000)
+        .hotPolicy(EntityHotPolicy.countWindow())
+        .build();
+```
+
+`COUNT_WINDOW`, sıcak set son erişilen veya son yazılan kayıtlardan oluşuyorsa kullanılır.
+
+```java
+CachePolicy recentOrders = CachePolicy.builder()
+        .hotEntityLimit(100_000)
+        .hotPolicy(EntityHotPolicy.builder()
+                .mode(EntityHotPolicyMode.TIME_WINDOW)
+                .timeColumn("order_date")
+                .hotForDays(90)
+                .admitOnRead(false)
+                .evictWhenRejected(true)
+                .build())
+        .build();
+```
+
+`TIME_WINDOW`, sıcak set iş zamanına göre belirleniyorsa kullanılır. Örnek: "son 90 günün order kayıtları". Bu kural için `entityTtlSeconds` kullanma; TTL, Redis'e yazılma anından itibaren işler.
+
+```java
+CachePolicy openTickets = CachePolicy.builder()
+        .hotEntityLimit(50_000)
+        .hotPolicy(EntityHotPolicy.stateWindow("status", List.of("OPEN", "PENDING")))
+        .build();
+```
+
+`STATE_WINDOW`, yalnız belirli iş durumlarının sıcak kalması gerektiğinde kullanılır.
+
+```java
+CachePolicy activeRecentOrders = CachePolicy.builder()
+        .hotEntityLimit(100_000)
+        .hotPolicy(EntityHotPolicy.allOf(List.of(
+                EntityHotPolicy.timeWindow("order_date", Duration.ofDays(90).toSeconds()),
+                EntityHotPolicy.stateWindow("status", List.of("OPEN", "PENDING"))
+        )))
+        .build();
+```
+
+`COMPOSITE`, gerçek route birden fazla sıcaklık kuralına bağlıysa kullanılır.
+Örnek: destek ekranında "son 90 gün" tek başına yeterli olmayabilir; son 90 gün
+içinde olan ve hâlâ `OPEN/PENDING` durumundaki order kayıtları Redis'te
+kalmalıdır. VIP müşteri kayıtları da sıcak kalacaksa VIP kuralını küçük ve
+deterministik bir custom predicate olarak `EntityHotPolicy.anyOf(...)` içine
+ekleyebilirsin.
+
+Müşteri order timeline route contract örneği:
+
+```java
+RouteCacheContract customerOrdersTimeline = RouteCacheContract.builder()
+        .routeName("CustomerOrdersTimelineRoute")
+        .entityName("OrderEntity")
+        .projectionName("CustomerOrderSummaryHot")
+        .pageSize(100)
+        .hotWindow(1_000)
+        .projectionRequired(true)
+        .maxColdReadSize(100)
+        .memoryBudgetBytes(256L * 1024L * 1024L)
+        .strictMode(RouteCacheStrictMode.FAIL_FAST)
+        .tenantQuota(new TenantCacheQuota("tenant_id", 50_000, 128L * 1024L * 1024L, true))
+        .build();
+```
+
+Route çalışırken contract'ı context'e bağla:
+
+```java
+List<OrderSummaryReadModel> page = RouteCacheContext.supplyWithContract(
+        customerOrdersTimeline,
+        () -> summaries.query(customerOrdersQuery(customerId, 100))
+);
+```
+
+Route contract, "projection yoksa entity query'ye düş" davranışının güvenli
+olmadığı ekranlarda kullanılır: müşteri timeline'ı, finansal hareket listesi,
+notification inbox, destek ticket kuyruğu, stok event akışı, leaderboard ve KPI
+dashboard gibi.
+
+BEST:
+
+- Page size sıcak pencerenin altında kalır.
+- Büyük liste route'larında projection zorunlu olur.
+- Tenant quota tek tenant'ın Redis bütçesini tüketmesini engeller.
+- Cold read üst sınırı bellidir ve eski veri PostgreSQL/archive yolundan okunur.
+- Staging warm sonrasında Redis bellek tahmini gerçek `MEMORY USAGE`
+  örnekleriyle kalibre edilir.
+- Route seviyesindeki tenant memory budget gerçek entity payload byte ölçümünü
+  sayar; aynı entity tekrar yazıldığında tenant bütçesi yapay olarak şişmez.
+
 ANTI-PATTERN:
 
 - Redis'i tüm veritabanının kopyası gibi görmek.
 - Ekran yavaşladıkça sürekli `hotEntityLimit` artırmak.
 - Dashboard ve raporlama sayfalarında full entity okumak.
 - Kötü okuma şeklini temizlemek için Redis eviction policy'ye güvenmek.
+- `entityTtlSeconds` değerini "son 90 iş günü" gibi yorumlamak.
+- Production route'un projection yerine sessizce entity scan'e düşmesine izin vermek.
+- Büyük backfill/warm işini checkpoint, resume ve rate limit olmadan çalıştırmak.
+- PostgreSQL CacheDB dışında güncellenirken CDC, outbox veya projection refresh feed'i kurmamak.
 
 ## Son Kontrol Listesi
 

@@ -14,11 +14,13 @@ public final class RedisFunctionArgsMapper {
     public <T, ID> List<String> upsertArgs(
             WriteOperation<T, ID> operation,
             CachePolicy cachePolicy,
-            RedisGuardrailConfig guardrailConfig
+            RedisGuardrailConfig guardrailConfig,
+            boolean cacheEntity
     ) {
         Map<String, Object> columns = filteredColumns(operation);
         List<String> args = new ArrayList<>(16 + (columns.size() * 2));
         args.add(operation.redisPayload());
+        args.add(cacheEntity ? "1" : "0");
         args.add(String.valueOf(cachePolicy.entityTtlSeconds()));
         args.add(String.valueOf(guardrailConfig.compactionPayloadTtlSeconds()));
         args.add(String.valueOf(guardrailConfig.compactionPendingTtlSeconds()));

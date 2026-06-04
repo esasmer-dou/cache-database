@@ -52,7 +52,10 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
                 streamKey + ":compaction",
                 mapper,
                 maxColumnsPerOperation,
-                WriteBehindConfig.defaults(),
+                WriteBehindConfig.builder()
+                        .streamKey(streamKey)
+                        .compactionStreamKey(streamKey + ":compaction")
+                        .build(),
                 RedisGuardrailConfig.defaults(),
                 new RedisKeyStrategy()
         );

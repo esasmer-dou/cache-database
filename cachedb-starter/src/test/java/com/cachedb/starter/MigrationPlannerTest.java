@@ -49,6 +49,10 @@ class MigrationPlannerTest {
         assertTrue(result.sampleWarmSql().contains("ROW_NUMBER() OVER"));
         assertTrue(result.sampleWarmSql().contains("PARTITION BY customer_id"));
         assertTrue(result.sampleRootWarmSql().contains(":referenced_root_ids"));
+        assertTrue(result.routeCacheContract().projectionRequired());
+        assertEquals("CustomerOrdersSummaryHot", result.routeCacheContract().projectionName());
+        assertEquals(100, result.routeCacheContract().pageSize());
+        assertEquals(1_000, result.routeCacheContract().hotWindow());
     }
 
     @Test

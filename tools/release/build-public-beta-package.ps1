@@ -54,7 +54,7 @@ $docFiles = @(
     "docs\release-checklist.md",
     "docs\public-beta-launch-kit.md",
     "docs\maven-central-publish-checklist.md",
-    "docs\releases\v0.1.0-beta.1.md"
+    "docs\releases\v$Version.md"
 )
 
 foreach ($file in $docFiles) {

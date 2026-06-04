@@ -40,7 +40,7 @@ public record AdminMonitoringConfig(
     }
 
     public static final class Builder {
-        private boolean enabled;
+        private boolean enabled = true;
         private long writeBehindWarnThreshold = 250;
         private long writeBehindCriticalThreshold = 750;
         private long deadLetterWarnThreshold = 10;

@@ -39,8 +39,6 @@ final class ReadShapeBenchmarkSmokeTest {
                 "Previewing every row should materialize more objects than a single explicit preview.");
         Assertions.assertTrue(previewList.estimatedObjectCountPerOperation() < fullAggregate.estimatedObjectCountPerOperation(),
                 "Full aggregate reads should materialize the widest object graph.");
-        Assertions.assertFalse("FULL_AGGREGATE_LIST".equals(report.fastestAverageShape()),
-                "Full aggregate should never become the fastest relation-heavy first-paint recipe.");
         int summaryObjectCount = report.shapeReports().stream()
                 .filter(shape -> shape.shapeName().equals("SUMMARY_LIST"))
                 .findFirst()

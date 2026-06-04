@@ -2,6 +2,8 @@ package com.reactor.cachedb.integration;
 
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.cache.CachePolicy;
+import com.reactor.cachedb.core.cache.EntityHotPolicy;
+import com.reactor.cachedb.core.cache.EntityHotPolicyMode;
 import com.reactor.cachedb.core.cache.PageWindow;
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.config.AdminReportJobConfig;
@@ -27,8 +29,10 @@ import com.reactor.cachedb.core.config.SchemaBootstrapConfig;
 import com.reactor.cachedb.core.config.SchemaBootstrapMode;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.config.WriteRetryPolicyOverride;
+import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.model.OperationType;
+import com.reactor.cachedb.core.model.RelationDefinition;
 import com.reactor.cachedb.core.model.WriteOperation;
 import com.reactor.cachedb.core.plan.FetchPlan;
 import com.reactor.cachedb.core.queue.AdminExportFormat;
@@ -44,6 +48,9 @@ import com.reactor.cachedb.core.query.QueryGroup;
 import com.reactor.cachedb.core.query.HardLimitQueryClass;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySpec;
+import com.reactor.cachedb.core.route.RouteCacheContext;
+import com.reactor.cachedb.core.route.RouteCacheContract;
+import com.reactor.cachedb.core.route.TenantCacheQuota;
 import com.reactor.cachedb.examples.entity.OrderEntity;
 import com.reactor.cachedb.examples.entity.OrderEntityCacheBinding;
 import com.reactor.cachedb.examples.entity.UserEntity;
@@ -80,6 +87,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -135,7 +143,7 @@ public final class CacheDatabaseIntegrationTest {
                         .build())
                 .resourceLimits(ResourceLimits.builder()
                         .defaultCachePolicy(CachePolicy.builder()
-                                .hotEntityLimit(2)
+                                .hotEntityLimit(3)
                                 .pageSize(2)
                                 .entityTtlSeconds(300)
                                 .pageTtlSeconds(300)
@@ -176,7 +184,7 @@ public final class CacheDatabaseIntegrationTest {
 
         UserEntityCacheBinding.register(
                 cacheDatabase,
-                CachePolicy.builder().hotEntityLimit(2).pageSize(2).entityTtlSeconds(300).pageTtlSeconds(300).build()
+                CachePolicy.builder().hotEntityLimit(3).pageSize(2).entityTtlSeconds(300).pageTtlSeconds(300).build()
         );
         cacheDatabase.start();
     }
@@ -213,11 +221,57 @@ public final class CacheDatabaseIntegrationTest {
     }
 
     @Test
+    void timeWindowHotPolicyShouldAdmitOnlyBusinessRecentEntities() throws Exception {
+        createHotPolicyOrdersTable();
+        EntityRepository<HotPolicyOrder, Long> repository = cacheDatabase.repository(
+                HOT_POLICY_ORDER_METADATA,
+                HOT_POLICY_ORDER_CODEC,
+                CachePolicy.builder()
+                        .hotEntityLimit(10)
+                        .pageSize(5)
+                        .entityTtlSeconds(300)
+                        .pageTtlSeconds(300)
+                        .hotPolicy(EntityHotPolicy.builder()
+                                .mode(EntityHotPolicyMode.TIME_WINDOW)
+                                .timeColumn("order_date")
+                                .hotForDays(90)
+                                .admitOnRead(false)
+                                .evictWhenRejected(true)
+                                .build())
+                        .build()
+        );
+
+        Instant now = Instant.now();
+        HotPolicyOrder recent = new HotPolicyOrder(4_101L, now.minus(10, ChronoUnit.DAYS), "RECENT");
+        HotPolicyOrder old = new HotPolicyOrder(4_102L, now.minus(120, ChronoUnit.DAYS), "OLD");
+
+        repository.save(recent);
+        repository.save(old);
+
+        String recentKey = keyPrefix + ":hot_policy_orders:entity:" + recent.id;
+        String oldKey = keyPrefix + ":hot_policy_orders:entity:" + old.id;
+        String hotSetKey = keyPrefix + ":hot_policy_orders:hotset";
+
+        Assertions.assertTrue(jedis.exists(recentKey));
+        Assertions.assertFalse(jedis.exists(oldKey));
+        Assertions.assertNotNull(jedis.zscore(hotSetKey, String.valueOf(recent.id)));
+        Assertions.assertNull(jedis.zscore(hotSetKey, String.valueOf(old.id)));
+        Assertions.assertTrue(repository.findById(recent.id).isPresent());
+        Assertions.assertTrue(repository.findById(old.id).isEmpty());
+
+        HotPolicyOrder cooled = new HotPolicyOrder(recent.id, now.minus(121, ChronoUnit.DAYS), "COOLED");
+        repository.save(cooled);
+
+        Assertions.assertFalse(jedis.exists(recentKey));
+        Assertions.assertNull(jedis.zscore(hotSetKey, String.valueOf(recent.id)));
+    }
+
+    @Test
     void pageReadThroughShouldCacheAndEvictHotSet() {
         EntityRepository<UserEntity, Long> repository = cacheDatabase.repository(
                 UserEntityCacheBinding.METADATA,
                 UserEntityCacheBinding.CODEC,
-                CachePolicy.builder().hotEntityLimit(2).pageSize(2).entityTtlSeconds(300).pageTtlSeconds(300).build()
+                CachePolicy.builder().hotEntityLimit(3).pageSize(2).entityTtlSeconds(300).pageTtlSeconds(300).build()
         );
 
         List<UserEntity> firstPage = repository.findPage(new PageWindow(0, 2));
@@ -229,7 +283,7 @@ public final class CacheDatabaseIntegrationTest {
         repository.findPage(new PageWindow(1, 2));
 
         Long hotSetSize = jedis.zcard(keyPrefix + ":users:hotset");
-        Assertions.assertTrue(hotSetSize <= 2);
+        Assertions.assertTrue(hotSetSize <= 3);
     }
 
     @Test
@@ -337,7 +391,7 @@ public final class CacheDatabaseIntegrationTest {
         List<UserEntity> result = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.eq("status", "ACTIVE"))
                 .sort(QuerySort.asc("username"))
-                .limit(10)
+                .limit(5)
                 .build());
 
         Assertions.assertEquals(2, result.size());
@@ -371,19 +425,103 @@ public final class CacheDatabaseIntegrationTest {
 
         List<UserEntity> prefixResult = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.startsWith("username", "ann"))
-                .limit(10)
+                .limit(5)
                 .build());
         Assertions.assertEquals(1, prefixResult.size());
         Assertions.assertEquals(351L, prefixResult.get(0).id);
 
         List<UserEntity> textResult = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.contains("username", "lane"))
-                .limit(10)
+                .limit(5)
                 .build());
         Assertions.assertEquals(1, textResult.size());
         Assertions.assertEquals(352L, textResult.get(0).id);
         Assertions.assertTrue(jedis.sismember(prefixIndexKey("username", "ann"), "351"));
         Assertions.assertTrue(jedis.sismember(tokenIndexKey("username", "lane"), "352"));
+    }
+
+    @Test
+    void routeTenantQuotaShouldEvictOldestTenantHotEntity() {
+        EntityRepository<UserEntity, Long> repository = cacheDatabase.repository(
+                UserEntityCacheBinding.METADATA,
+                UserEntityCacheBinding.CODEC,
+                CachePolicy.builder().hotEntityLimit(10).pageSize(5).entityTtlSeconds(300).pageTtlSeconds(300).build()
+        );
+        RouteCacheContract contract = RouteCacheContract.builder()
+                .routeName("TenantQuotaUsers")
+                .entityName("UserEntity")
+                .pageSize(5)
+                .hotWindow(10)
+                .tenantQuota(new TenantCacheQuota("status", 1, 0L, true))
+                .build();
+
+        RouteCacheContext.runWithContract(contract, () -> {
+            repository.save(user(361L, "tenant-old", "ACTIVE"));
+            repository.save(user(362L, "tenant-new", "ACTIVE"));
+            repository.save(user(363L, "tenant-other", "INACTIVE"));
+        });
+
+        Assertions.assertTrue(repository.findById(361L).isEmpty());
+        Assertions.assertTrue(repository.findById(362L).isPresent());
+        Assertions.assertTrue(repository.findById(363L).isPresent());
+        Assertions.assertTrue(cacheDatabase.storagePerformanceSnapshot().cacheAdmissionBreakdown().keySet().stream()
+                .anyMatch(key -> key.startsWith("tenant-quota:TenantQuotaUsers:UserEntity:ACTIVE")));
+    }
+
+    @Test
+    void routeTenantQuotaShouldRejectPayloadsOverMemoryBudget() {
+        EntityRepository<UserEntity, Long> repository = cacheDatabase.repository(
+                UserEntityCacheBinding.METADATA,
+                UserEntityCacheBinding.CODEC,
+                CachePolicy.builder().hotEntityLimit(10).pageSize(5).entityTtlSeconds(300).pageTtlSeconds(300).build()
+        );
+        RouteCacheContract contract = RouteCacheContract.builder()
+                .routeName("TenantPayloadBudgetUsers")
+                .entityName("UserEntity")
+                .pageSize(5)
+                .hotWindow(10)
+                .tenantQuota(new TenantCacheQuota("status", 10, 128L, false))
+                .build();
+
+        RouteCacheContext.runWithContract(contract, () ->
+                repository.save(user(364L, "payload-" + "x".repeat(2_048), "ACTIVE"))
+        );
+
+        RedisKeyStrategy keyStrategy = new RedisKeyStrategy(keyPrefix, "entity", "page", "version", "hotset", "index");
+        Assertions.assertNull(jedis.get(keyStrategy.entityKey(UserEntityCacheBinding.METADATA.redisNamespace(), 364L)));
+        Assertions.assertTrue(repository.findById(364L).isEmpty());
+        Assertions.assertTrue(cacheDatabase.storagePerformanceSnapshot().cacheAdmissionBreakdown().keySet().stream()
+                .anyMatch(key -> key.startsWith("tenant-quota:TenantPayloadBudgetUsers:UserEntity:ACTIVE")));
+    }
+
+    @Test
+    void routeTenantQuotaShouldTrackPayloadBytesWithoutDoubleCountingUpdates() {
+        EntityRepository<UserEntity, Long> repository = cacheDatabase.repository(
+                UserEntityCacheBinding.METADATA,
+                UserEntityCacheBinding.CODEC,
+                CachePolicy.builder().hotEntityLimit(10).pageSize(5).entityTtlSeconds(300).pageTtlSeconds(300).build()
+        );
+        RouteCacheContract contract = RouteCacheContract.builder()
+                .routeName("TenantPayloadAccountingUsers")
+                .entityName("UserEntity")
+                .pageSize(5)
+                .hotWindow(10)
+                .tenantQuota(new TenantCacheQuota("status", 10, 16_384L, false))
+                .build();
+        RedisKeyStrategy keyStrategy = new RedisKeyStrategy(keyPrefix, "entity", "page", "version", "hotset", "index");
+        String payloadBytesKey = keyStrategy.tenantHotPayloadBytesKey(
+                UserEntityCacheBinding.METADATA.redisNamespace(),
+                "status",
+                "ACTIVE"
+        );
+
+        RouteCacheContext.runWithContract(contract, () -> repository.save(user(365L, "payload-accounting", "ACTIVE")));
+        long firstPayloadBytes = Long.parseLong(jedis.get(payloadBytesKey));
+        RouteCacheContext.runWithContract(contract, () -> repository.save(user(365L, "payload-accounting", "ACTIVE")));
+        long secondPayloadBytes = Long.parseLong(jedis.get(payloadBytesKey));
+
+        Assertions.assertTrue(firstPayloadBytes > 0L);
+        Assertions.assertEquals(firstPayloadBytes, secondPayloadBytes);
     }
 
     @Test
@@ -428,7 +566,7 @@ public final class CacheDatabaseIntegrationTest {
         List<UserEntity> result = userRepository.query(QuerySpec.builder()
                 .filter(QueryFilter.eq("orders.status", "PAID"))
                 .sort(QuerySort.asc("username"))
-                .limit(10)
+                .limit(5)
                 .build());
 
         Assertions.assertEquals(1, result.size());
@@ -466,7 +604,7 @@ public final class CacheDatabaseIntegrationTest {
                 .filter(QueryFilter.startsWith("username", "ali"))
                 .sort(QuerySort.asc("username"))
                 .fetchPlan(FetchPlan.of("orders"))
-                .limit(10)
+                .limit(5)
                 .build());
 
         Assertions.assertEquals("UserEntity", plan.entityName());
@@ -509,7 +647,7 @@ public final class CacheDatabaseIntegrationTest {
                 )
                 .explain(QuerySpec.builder()
                         .fetchPlan(FetchPlan.of("orders"))
-                        .limit(10)
+                        .limit(5)
                         .build());
 
         Assertions.assertTrue(plan.relationStates().stream().anyMatch(state ->
@@ -530,7 +668,7 @@ public final class CacheDatabaseIntegrationTest {
 
         QueryExplainPlan plan = repository.explain(QuerySpec.builder()
                 .fetchPlan(FetchPlan.of("orders.user"))
-                .limit(10)
+                .limit(5)
                 .build());
 
         Assertions.assertTrue(plan.relationStates().stream().anyMatch(state ->
@@ -618,7 +756,7 @@ public final class CacheDatabaseIntegrationTest {
 
         QueryExplainPlan plan = earlyRepository.explain(QuerySpec.builder()
                 .fetchPlan(FetchPlan.of("orders"))
-                .limit(10)
+                .limit(5)
                 .build());
         Assertions.assertTrue(plan.relationStates().stream().anyMatch(state ->
                 "orders".equals(state.relationName())
@@ -639,7 +777,7 @@ public final class CacheDatabaseIntegrationTest {
         QueryExplainPlan unknownPlan = repository.explain(QuerySpec.builder()
                 .filter(QueryFilter.eq("missing.status", "PAID"))
                 .fetchPlan(FetchPlan.of("missing"))
-                .limit(10)
+                .limit(5)
                 .build());
 
         Assertions.assertTrue(unknownPlan.relationStates().stream().anyMatch(state ->
@@ -724,7 +862,7 @@ public final class CacheDatabaseIntegrationTest {
                 .explain(QuerySpec.builder()
                         .filter(QueryFilter.eq("brokenOrders.status", "PAID"))
                         .fetchPlan(FetchPlan.of("brokenOrders"))
-                        .limit(10)
+                        .limit(5)
                         .build());
 
         Assertions.assertTrue(unresolvedPlan.relationStates().stream().anyMatch(state ->
@@ -773,7 +911,7 @@ public final class CacheDatabaseIntegrationTest {
         QueryExplainPlan plan = repository.explain(QuerySpec.builder()
                 .filter(QueryFilter.gte("total_amount", 20.0))
                 .sort(QuerySort.asc("total_amount"))
-                .limit(10)
+                .limit(5)
                 .build());
 
         Assertions.assertEquals("SORTED_INDEX_SCAN", plan.sortStrategy());
@@ -1328,7 +1466,7 @@ public final class CacheDatabaseIntegrationTest {
                         QueryFilter.eq("status", "ACTIVE"),
                         QueryFilter.startsWith("username", "a")
                 ))
-                .limit(10)
+                .limit(5)
                 .build();
 
         List<UserEntity> results = repository.query(querySpec);
@@ -1358,31 +1496,31 @@ public final class CacheDatabaseIntegrationTest {
 
         List<UserEntity> oldPrefixMatches = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.startsWith("username", "alp"))
-                .limit(10)
+                .limit(5)
                 .build());
         List<UserEntity> newPrefixMatches = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.startsWith("username", "bet"))
-                .limit(10)
+                .limit(5)
                 .build());
         List<UserEntity> oldTokenMatches = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.contains("username", "lane"))
-                .limit(10)
+                .limit(5)
                 .build());
         List<UserEntity> newTokenMatches = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.contains("username", "route"))
-                .limit(10)
+                .limit(5)
                 .build());
         List<UserEntity> activeMatches = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.eq("status", "ACTIVE"))
-                .limit(10)
+                .limit(5)
                 .build());
         List<UserEntity> inactiveMatches = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.eq("status", "INACTIVE"))
-                .limit(10)
+                .limit(5)
                 .build());
         List<UserEntity> rangeMatches = repository.query(QuerySpec.builder()
                 .filter(QueryFilter.gte("id", 7150L))
-                .limit(10)
+                .limit(5)
                 .build());
 
         Assertions.assertTrue(oldPrefixMatches.isEmpty());
@@ -3069,14 +3207,14 @@ public final class CacheDatabaseIntegrationTest {
 
             List<UserEntity> result = repository.query(QuerySpec.builder()
                     .filter(QueryFilter.eq("status", "ACTIVE"))
-                    .limit(10)
+                    .limit(5)
                     .build());
             Assertions.assertEquals(1, result.size());
             Assertions.assertEquals(270L, result.get(0).id);
 
             QueryExplainPlan explainPlan = repository.explain(QuerySpec.builder()
                     .filter(QueryFilter.eq("status", "ACTIVE"))
-                    .limit(10)
+                    .limit(5)
                     .build());
             Assertions.assertEquals("DEGRADED_FULL_SCAN", explainPlan.plannerStrategy());
         }
@@ -3151,7 +3289,7 @@ public final class CacheDatabaseIntegrationTest {
 
             QueryExplainPlan plan = repository.explain(QuerySpec.builder()
                     .filter(QueryFilter.eq("status", "ACTIVE"))
-                    .limit(10)
+                    .limit(5)
                     .build());
             Assertions.assertNotEquals("DEGRADED_FULL_SCAN", plan.plannerStrategy());
         }
@@ -3223,19 +3361,19 @@ public final class CacheDatabaseIntegrationTest {
 
             QueryExplainPlan exactPlan = repository.explain(QuerySpec.builder()
                     .filter(QueryFilter.eq("status", "ACTIVE"))
-                    .limit(10)
+                    .limit(5)
                     .build());
             Assertions.assertNotEquals("DEGRADED_FULL_SCAN", exactPlan.plannerStrategy());
 
             List<UserEntity> textResult = repository.query(QuerySpec.builder()
                     .filter(QueryFilter.contains("username", "lane"))
-                    .limit(10)
+                    .limit(5)
                     .build());
             Assertions.assertEquals(1, textResult.size());
 
             QueryExplainPlan textPlan = repository.explain(QuerySpec.builder()
                     .filter(QueryFilter.contains("username", "lane"))
-                    .limit(10)
+                    .limit(5)
                     .build());
             Assertions.assertEquals("DEGRADED_FULL_SCAN", textPlan.plannerStrategy());
         }
@@ -3362,6 +3500,7 @@ public final class CacheDatabaseIntegrationTest {
     private void recreateTables() throws SQLException {
         try (Connection connection = DriverManager.getConnection(jdbcUrl, JDBC_USER, JDBC_PASSWORD);
              Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DROP TABLE IF EXISTS cachedb_hot_policy_orders");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_example_orders");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_example_users");
             statement.executeUpdate("""
@@ -3384,9 +3523,25 @@ public final class CacheDatabaseIntegrationTest {
         }
     }
 
+    private void createHotPolicyOrdersTable() throws SQLException {
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, JDBC_USER, JDBC_PASSWORD);
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DROP TABLE IF EXISTS cachedb_hot_policy_orders");
+            statement.executeUpdate("""
+                    CREATE TABLE cachedb_hot_policy_orders (
+                        id BIGINT PRIMARY KEY,
+                        order_date TIMESTAMPTZ,
+                        status TEXT,
+                        entity_version BIGINT
+                    )
+                    """);
+        }
+    }
+
     private void dropTables() throws SQLException {
         try (Connection connection = DriverManager.getConnection(jdbcUrl, JDBC_USER, JDBC_PASSWORD);
              Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DROP TABLE IF EXISTS cachedb_hot_policy_orders");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_example_orders");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_example_users");
         }
@@ -3507,6 +3662,86 @@ public final class CacheDatabaseIntegrationTest {
         user.username = username;
         user.status = status;
         return user;
+    }
+
+    private static final EntityMetadata<HotPolicyOrder, Long> HOT_POLICY_ORDER_METADATA = new EntityMetadata<>() {
+        @Override
+        public String entityName() {
+            return "HotPolicyOrder";
+        }
+
+        @Override
+        public String tableName() {
+            return "cachedb_hot_policy_orders";
+        }
+
+        @Override
+        public String redisNamespace() {
+            return "hot_policy_orders";
+        }
+
+        @Override
+        public String idColumn() {
+            return "id";
+        }
+
+        @Override
+        public Class<HotPolicyOrder> entityType() {
+            return HotPolicyOrder.class;
+        }
+
+        @Override
+        public java.util.function.Function<HotPolicyOrder, Long> idAccessor() {
+            return order -> order.id;
+        }
+
+        @Override
+        public List<String> columns() {
+            return List.of("id", "order_date", "status");
+        }
+
+        @Override
+        public Map<String, String> columnTypes() {
+            return Map.of(
+                    "id", "java.lang.Long",
+                    "order_date", "java.time.Instant",
+                    "status", "java.lang.String"
+            );
+        }
+
+        @Override
+        public List<RelationDefinition> relations() {
+            return List.of();
+        }
+    };
+
+    private static final EntityCodec<HotPolicyOrder> HOT_POLICY_ORDER_CODEC = new EntityCodec<>() {
+        @Override
+        public String toRedisValue(HotPolicyOrder entity) {
+            return entity.id + "|" + entity.orderDate + "|" + entity.status;
+        }
+
+        @Override
+        public HotPolicyOrder fromRedisValue(String encoded) {
+            String[] parts = encoded.split("\\|", -1);
+            return new HotPolicyOrder(
+                    Long.valueOf(parts[0]),
+                    Instant.parse(parts[1]),
+                    parts[2]
+            );
+        }
+
+        @Override
+        public Map<String, Object> toColumns(HotPolicyOrder entity) {
+            return Map.of(
+                    "id", entity.id,
+                    "order_date", entity.orderDate,
+                    "status", entity.status
+            );
+        }
+    };
+
+    private record HotPolicyOrder(Long id, Instant orderDate, String status) {
     }
 
     private void waitUntil(CheckedBooleanSupplier supplier, Duration timeout, String failureDetails) throws Exception {

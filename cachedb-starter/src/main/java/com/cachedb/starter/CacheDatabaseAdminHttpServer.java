@@ -17,6 +17,8 @@ import com.reactor.cachedb.core.queue.LatencyMetricSnapshot;
 import com.reactor.cachedb.core.queue.ProjectionRefreshFailureEntry;
 import com.reactor.cachedb.core.queue.ProjectionRefreshReplayResult;
 import com.reactor.cachedb.core.queue.ProjectionRefreshSnapshot;
+import com.reactor.cachedb.core.queue.CacheAdmissionMetricSnapshot;
+import com.reactor.cachedb.core.route.RouteCacheContract;
 import com.reactor.cachedb.core.queue.ReconciliationHealth;
 import com.reactor.cachedb.core.queue.ReconciliationMetrics;
 import com.reactor.cachedb.core.queue.RuntimeProfileChurnRecord;
@@ -928,7 +930,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         Map<String, List<String>> parameters = "POST".equalsIgnoreCase(exchange.getRequestMethod())
                 ? parseFormParameters(exchange)
                 : parseQuery(exchange.getRequestURI().getRawQuery());
-        sendJson(exchange, 200, renderMigrationPlannerResult(admin.planMigration(parseMigrationPlannerRequest(parameters))));
+        MigrationPlanner.Result plan = admin.planMigration(parseMigrationPlannerRequest(parameters));
+        sendJson(exchange, 200, renderMigrationPlannerResult(plan, admin.estimateMigrationRedisMemory(plan)));
     }
 
     private void handleMigrationPlannerWarm(HttpExchange exchange) throws IOException {
@@ -940,7 +943,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 ? parseFormParameters(exchange)
                 : parseQuery(exchange.getRequestURI().getRawQuery());
         try {
-            sendJson(exchange, 200, renderMigrationWarmResult(admin.warmMigration(parseMigrationWarmRequest(parameters))));
+            MigrationWarmRunner.Result result = admin.warmMigration(parseMigrationWarmRequest(parameters));
+            MigrationRedisMemoryCalibration.Result calibration = result.dryRun()
+                    ? null
+                    : admin.calibrateMigrationRedisMemory(admin.estimateMigrationRedisMemory(result.plan()));
+            sendJson(exchange, 200, renderMigrationWarmResult(result, calibration));
         } catch (IllegalArgumentException | IllegalStateException exception) {
             sendJson(exchange, 400, "{\"error\":\"" + escapeJson(exception.getMessage()) + "\"}");
         }
@@ -1181,7 +1188,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 parseBoolean(parameters.get("dryRun"), false),
                 parseInt(parameters.get("childFetchSize"), 500),
                 parseInt(parameters.get("rootFetchSize"), 500),
-                parseInt(parameters.get("rootBatchSize"), 250)
+                parseInt(parameters.get("rootBatchSize"), 250),
+                first(parameters, "warmJobId"),
+                parseBoolean(parameters.get("resumeWarm"), false),
+                parseInt(parameters.get("checkpointEveryRows"), 1_000),
+                parseInt(parameters.get("rateLimitRowsPerSecond"), 0)
         );
     }
 
@@ -1526,8 +1537,28 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "\"redisReadBreakdown\":" + renderLatencyMetricBreakdown(snapshot.redisReadBreakdown()) + ","
                 + "\"redisWriteBreakdown\":" + renderLatencyMetricBreakdown(snapshot.redisWriteBreakdown()) + ","
                 + "\"postgresReadBreakdown\":" + renderLatencyMetricBreakdown(snapshot.postgresReadBreakdown()) + ","
-                + "\"postgresWriteBreakdown\":" + renderLatencyMetricBreakdown(snapshot.postgresWriteBreakdown())
+                + "\"postgresWriteBreakdown\":" + renderLatencyMetricBreakdown(snapshot.postgresWriteBreakdown()) + ","
+                + "\"cacheAdmissionBreakdown\":" + renderCacheAdmissionBreakdown(snapshot.cacheAdmissionBreakdown())
                 + "}";
+    }
+
+    private String renderCacheAdmissionBreakdown(Map<String, CacheAdmissionMetricSnapshot> metrics) {
+        StringBuilder builder = new StringBuilder("{\"items\":[");
+        int index = 0;
+        for (Map.Entry<String, CacheAdmissionMetricSnapshot> entry : metrics.entrySet()) {
+            if (index++ > 0) {
+                builder.append(',');
+            }
+            CacheAdmissionMetricSnapshot metric = entry.getValue();
+            builder.append("{\"tag\":\"").append(escapeJson(entry.getKey())).append("\",")
+                    .append("\"admittedCount\":").append(metric.admittedCount()).append(',')
+                    .append("\"rejectedCount\":").append(metric.rejectedCount()).append(',')
+                    .append("\"evictedCount\":").append(metric.evictedCount()).append(',')
+                    .append("\"lastObservedAtEpochMillis\":").append(metric.lastObservedAtEpochMillis())
+                    .append('}');
+        }
+        builder.append("]}");
+        return builder.toString();
     }
 
     private String renderLatencyMetricBreakdown(Map<String, LatencyMetricSnapshot> metrics) {
@@ -2314,6 +2345,13 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     }
 
     private String renderMigrationPlannerResult(MigrationPlanner.Result result) {
+        return renderMigrationPlannerResult(result, null);
+    }
+
+    private String renderMigrationPlannerResult(
+            MigrationPlanner.Result result,
+            MigrationRedisMemoryEstimator.Result memoryEstimate
+    ) {
         return "{"
                 + "\"request\":" + renderMigrationPlannerRequest(result.request()) + ","
                 + "\"recommendedSurface\":\"" + escapeJson(result.recommendedSurface()) + "\","
@@ -2338,11 +2376,91 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "\"warnings\":" + toJsonStringArray(result.warnings()) + ","
                 + "\"sampleWarmSql\":\"" + escapeJson(result.sampleWarmSql()) + "\","
                 + "\"sampleRootWarmSql\":\"" + escapeJson(result.sampleRootWarmSql()) + "\","
-                + "\"comparisonSummary\":\"" + escapeJson(result.comparisonSummary()) + "\""
+                + "\"comparisonSummary\":\"" + escapeJson(result.comparisonSummary()) + "\","
+                + "\"routeCacheContract\":" + renderRouteCacheContract(result.routeCacheContract()) + ","
+                + "\"redisMemoryEstimate\":" + renderMigrationRedisMemoryEstimate(memoryEstimate)
                 + "}";
     }
 
+    private String renderRouteCacheContract(RouteCacheContract contract) {
+        if (contract == null) {
+            return "null";
+        }
+        return "{"
+                + "\"routeName\":\"" + escapeJson(contract.routeName()) + "\","
+                + "\"entityName\":\"" + escapeJson(contract.entityName()) + "\","
+                + "\"projectionName\":\"" + escapeJson(contract.projectionName()) + "\","
+                + "\"pageSize\":" + contract.pageSize() + ","
+                + "\"hotWindow\":" + contract.hotWindow() + ","
+                + "\"projectionRequired\":" + contract.projectionRequired() + ","
+                + "\"maxColdReadSize\":" + contract.maxColdReadSize() + ","
+                + "\"memoryBudgetBytes\":" + contract.memoryBudgetBytes() + ","
+                + "\"strictMode\":\"" + contract.strictMode().name() + "\","
+                + "\"tenantQuota\":{"
+                + "\"tenantColumn\":\"" + escapeJson(contract.tenantQuota().tenantColumn()) + "\","
+                + "\"maxHotRows\":" + contract.tenantQuota().maxHotRows() + ","
+                + "\"memoryBudgetBytes\":" + contract.tenantQuota().memoryBudgetBytes() + ","
+                + "\"evictOnBreach\":" + contract.tenantQuota().evictOnBreach()
+                + "}"
+                + "}";
+    }
+
+    private String renderMigrationRedisMemoryEstimate(MigrationRedisMemoryEstimator.Result estimate) {
+        if (estimate == null) {
+            return "null";
+        }
+        return "{"
+                + "\"source\":\"" + escapeJson(estimate.source()) + "\","
+                + "\"confidence\":\"" + escapeJson(estimate.confidence()) + "\","
+                + "\"rootTable\":\"" + escapeJson(estimate.rootTable()) + "\","
+                + "\"childTable\":\"" + escapeJson(estimate.childTable()) + "\","
+                + "\"estimatedRootRows\":" + estimate.estimatedRootRows() + ","
+                + "\"estimatedChildRows\":" + estimate.estimatedChildRows() + ","
+                + "\"rootHotRows\":" + estimate.rootHotRows() + ","
+                + "\"childHotRows\":" + estimate.childHotRows() + ","
+                + "\"childEntityHotRows\":" + estimate.childEntityHotRows() + ","
+                + "\"rootAveragePostgresRowBytes\":" + estimate.rootAveragePostgresRowBytes() + ","
+                + "\"childAveragePostgresRowBytes\":" + estimate.childAveragePostgresRowBytes() + ","
+                + "\"rootAverageMeasured\":" + estimate.rootAverageMeasured() + ","
+                + "\"childAverageMeasured\":" + estimate.childAverageMeasured() + ","
+                + "\"subtotalBytes\":" + estimate.subtotalBytes() + ","
+                + "\"headroomBytes\":" + estimate.headroomBytes() + ","
+                + "\"estimatedTotalBytes\":" + estimate.estimatedTotalBytes() + ","
+                + "\"recommendedMaxmemoryBytes\":" + estimate.recommendedMaxmemoryBytes() + ","
+                + "\"components\":" + renderMigrationRedisMemoryComponents(estimate.components()) + ","
+                + "\"assumptions\":" + toJsonStringArray(estimate.assumptions()) + ","
+                + "\"warnings\":" + toJsonStringArray(estimate.warnings()) + ","
+                + "\"estimatedAt\":\"" + estimate.estimatedAt() + "\""
+                + "}";
+    }
+
+    private String renderMigrationRedisMemoryComponents(List<MigrationRedisMemoryEstimator.Component> components) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < components.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationRedisMemoryEstimator.Component component = components.get(index);
+            builder.append("{\"code\":\"").append(escapeJson(component.code())).append("\",")
+                    .append("\"surface\":\"").append(escapeJson(component.surface())).append("\",")
+                    .append("\"rowCount\":").append(component.rowCount()).append(',')
+                    .append("\"averageBytes\":").append(component.averageBytes()).append(',')
+                    .append("\"estimatedBytes\":").append(component.estimatedBytes()).append(',')
+                    .append("\"description\":\"").append(escapeJson(component.description())).append("\"")
+                    .append("}");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
     private String renderMigrationWarmResult(MigrationWarmRunner.Result result) {
+        return renderMigrationWarmResult(result, null);
+    }
+
+    private String renderMigrationWarmResult(
+            MigrationWarmRunner.Result result,
+            MigrationRedisMemoryCalibration.Result memoryCalibration
+    ) {
         return "{"
                 + "\"dryRun\":" + result.dryRun() + ","
                 + "\"rootEntityName\":\"" + escapeJson(result.rootEntityName()) + "\","
@@ -2354,14 +2472,71 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "\"skippedDeletedRows\":" + result.skippedDeletedRows() + ","
                 + "\"distinctReferencedRootIds\":" + result.distinctReferencedRootIds() + ","
                 + "\"missingReferencedRootIds\":" + result.missingReferencedRootIds() + ","
+                + "\"warmJobId\":\"" + escapeJson(result.request().jobId()) + "\","
+                + "\"resumeRequested\":" + result.request().resume() + ","
+                + "\"checkpointEveryRows\":" + result.request().checkpointEveryRows() + ","
+                + "\"rateLimitRowsPerSecond\":" + result.request().rateLimitRowsPerSecond() + ","
+                + "\"resumedFromCheckpoint\":" + renderMigrationWarmCheckpoint(result.resumedFromCheckpoint()) + ","
                 + "\"childWarmSql\":\"" + escapeJson(result.childWarmSql()) + "\","
                 + "\"rootWarmSql\":\"" + escapeJson(result.rootWarmSql()) + "\","
                 + "\"notes\":" + toJsonStringArray(result.notes()) + ","
                 + "\"startedAt\":\"" + result.startedAt() + "\","
                 + "\"completedAt\":\"" + result.completedAt() + "\","
                 + "\"durationMillis\":" + result.durationMillis() + ","
+                + "\"redisMemoryCalibration\":" + renderMigrationRedisMemoryCalibration(memoryCalibration) + ","
                 + "\"plan\":" + renderMigrationPlannerResult(result.plan())
                 + "}";
+    }
+
+    private String renderMigrationWarmCheckpoint(MigrationWarmRunner.Checkpoint checkpoint) {
+        if (checkpoint == null) {
+            return "null";
+        }
+        return "{"
+                + "\"jobId\":\"" + escapeJson(checkpoint.jobId()) + "\","
+                + "\"phase\":\"" + escapeJson(checkpoint.phase()) + "\","
+                + "\"childRowsRead\":" + checkpoint.childRowsRead() + ","
+                + "\"childRowsHydrated\":" + checkpoint.childRowsHydrated() + ","
+                + "\"rootRowsRead\":" + checkpoint.rootRowsRead() + ","
+                + "\"rootRowsHydrated\":" + checkpoint.rootRowsHydrated() + ","
+                + "\"updatedAt\":\"" + checkpoint.updatedAt() + "\""
+                + "}";
+    }
+
+    private String renderMigrationRedisMemoryCalibration(MigrationRedisMemoryCalibration.Result calibration) {
+        if (calibration == null) {
+            return "null";
+        }
+        return "{"
+                + "\"keyPrefix\":\"" + escapeJson(calibration.keyPrefix()) + "\","
+                + "\"estimatedTotalBytes\":" + calibration.estimatedTotalBytes() + ","
+                + "\"actualTotalBytes\":" + calibration.actualTotalBytes() + ","
+                + "\"deltaBytes\":" + calibration.deltaBytes() + ","
+                + "\"actualToEstimateRatio\":" + calibration.actualToEstimateRatio() + ","
+                + "\"sampledKeyCount\":" + calibration.sampledKeyCount() + ","
+                + "\"truncated\":" + calibration.truncated() + ","
+                + "\"components\":" + renderMigrationRedisMemoryCalibrationComponents(calibration.components()) + ","
+                + "\"warnings\":" + toJsonStringArray(calibration.warnings()) + ","
+                + "\"calibratedAt\":\"" + calibration.calibratedAt() + "\""
+                + "}";
+    }
+
+    private String renderMigrationRedisMemoryCalibrationComponents(List<MigrationRedisMemoryCalibration.Component> components) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < components.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            MigrationRedisMemoryCalibration.Component component = components.get(index);
+            builder.append("{\"code\":\"").append(escapeJson(component.code())).append("\",")
+                    .append("\"keyCount\":").append(component.keyCount()).append(',')
+                    .append("\"actualBytes\":").append(component.actualBytes()).append(',')
+                    .append("\"largestKey\":\"").append(escapeJson(component.largestKey())).append("\",")
+                    .append("\"largestKeyBytes\":").append(component.largestKeyBytes())
+                    .append('}');
+        }
+        builder.append(']');
+        return builder.toString();
     }
 
     private String renderMigrationWarmJobStatus(MigrationPlannerWarmJob job) {
@@ -2736,6 +2911,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String bootstrapDemoError = pageState == null ? "" : defaultString(pageState.demoBootstrapError());
         MigrationPlanner.Result bootstrapPlanResult = pageState == null ? null : pageState.planResult();
         String bootstrapPlanError = pageState == null ? "" : defaultString(pageState.planError());
+        MigrationRedisMemoryEstimator.Result bootstrapMemoryEstimate = pageState == null ? null : pageState.memoryEstimate();
         String title = escapeHtml(uiString("migrationPlanner.pageTitle", localized(normalizedLanguage, "CacheDB Geçiş Planlayıcı", "CacheDB Migration Planner")));
         String basePath = resolveDashboardBasePath(plannerPath);
         String dashboardUrl = escapeHtml(appendQuery(
@@ -2745,7 +2921,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String apiBasePath = escapeJs(basePath);
         String bootstrapDiscoveryJson = bootstrapDiscovery == null ? "null" : renderMigrationSchemaDiscovery(bootstrapDiscovery);
         String bootstrapDemoJson = bootstrapDemoResult == null ? "null" : renderMigrationPlannerDemoBootstrapResult(bootstrapDemoResult);
-        String bootstrapPlanJson = bootstrapPlanResult == null ? "null" : renderMigrationPlannerResult(bootstrapPlanResult);
+        String bootstrapPlanJson = bootstrapPlanResult == null ? "null" : renderMigrationPlannerResult(bootstrapPlanResult, bootstrapMemoryEstimate);
         String bootstrapPlannerFormJson = renderPlannerFormValues(plannerValues);
         String discoveryFallbackAction = escapeHtml(basePath.isBlank() ? "/cachedb-admin/migration-planner" : basePath + "/migration-planner");
         String serverPlanFallbackCard = renderServerSidePlanFallbackCard(
@@ -2842,7 +3018,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String planResultsHtml = renderMigrationPlannerResultsCard(
                 normalizedLanguage,
                 hasServerPlanResult,
-                bootstrapPlanResult
+                bootstrapPlanResult,
+                bootstrapMemoryEstimate
         );
         String warmCardHtml = renderMigrationPlannerWarmCard(
                 normalizedLanguage,
@@ -3007,7 +3184,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + selectInput("sortDirection", localized(normalizedLanguage, "Sıralama yönü", "Sort direction"), localized(normalizedLanguage, "Sıralama yönünü seç", "Choose the sort direction"), "", List.of(new PlannerSelectOption("DESC", "DESC"), new PlannerSelectOption("ASC", "ASC")), plannerValues.get("sortDirection"))
                 + "</div></div>";
         String capacitySection = "<div class=\"full planner-form-section\"><div class=\"planner-form-section-title\">" + escapeHtml(localized(normalizedLanguage, "3. Hızlı kapasite kararı", "3. Quick capacity decision")) + "</div><div class=\"planner-form-section-copy\">"
-                + escapeHtml(localized(normalizedLanguage, "Buradaki değerler tam hesap olmak zorunda değil. Planner için kaba ölçek ve sıcak pencere hedefini vermen yeterli.", "These values do not need to be exact. A rough scale and hot-window target are enough for the planner."))
+                + escapeHtml(localized(normalizedLanguage, "Buradaki değerler tam hesap olmak zorunda değil. Plan üretildiğinde Redis bellek tahmini bu ölçekleri, PostgreSQL satır örneğini ve sıcak pencere hedefini birlikte kullanır.", "These values do not need to be exact. When the plan is generated, the Redis memory estimate combines this scale, PostgreSQL row sampling, and the hot-window target."))
                 + "</div><div class=\"planner-form-grid\">"
                 + fieldInput("rootRowCount", localized(normalizedLanguage, "Kök satır sayısı", "Root row count"), "100000", "", plannerValues.get("rootRowCount"))
                 + fieldInput("childRowCount", localized(normalizedLanguage, "Çocuk satır sayısı", "Child row count"), "5000000", "", plannerValues.get("childRowCount"))
@@ -3106,7 +3283,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private String renderMigrationPlannerResultsCard(
             String normalizedLanguage,
             boolean hasServerPlanResult,
-            MigrationPlanner.Result bootstrapPlanResult
+            MigrationPlanner.Result bootstrapPlanResult,
+            MigrationRedisMemoryEstimator.Result bootstrapMemoryEstimate
     ) {
         String planMetrics = metricShell("plannerSurface", localized(normalizedLanguage, "Önerilen yüzey", "Recommended surface"), hasServerPlanResult ? bootstrapPlanResult.recommendedSurface() : "")
                 + metricShell("plannerWindow", localized(normalizedLanguage, "Önerilen sıcak pencere", "Recommended hot window"), hasServerPlanResult ? bootstrapPlanResult.recommendedHotWindowPerRoot() + " " + localized(normalizedLanguage, "satır / kök", "rows / root") : "")
@@ -3124,6 +3302,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_HTML_REDIS_VALUE__", escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.redisPlacement()) : ""),
                 "__CACHEDB_HTML_POSTGRES_LABEL__", escapeHtml(localized(normalizedLanguage, "PostgreSQL yerleşimi", "PostgreSQL placement")),
                 "__CACHEDB_HTML_POSTGRES_VALUE__", escapeHtml(hasServerPlanResult ? defaultString(bootstrapPlanResult.postgresPlacement()) : ""),
+                "__CACHEDB_HTML_MEMORY_ESTIMATE_CARD__", renderMigrationMemoryEstimateCard(normalizedLanguage, bootstrapMemoryEstimate),
                 "__CACHEDB_HTML_LIST_CARDS__", listCards,
                 "__CACHEDB_HTML_WARM_PLAN_TITLE__", escapeHtml(localized(normalizedLanguage, "3. Warm-up planı", "3. Warm-up plan")),
                 "__CACHEDB_HTML_WARM_STEPS__", hasServerPlanResult ? renderPlannerStaticWarmSteps(bootstrapPlanResult.warmSteps()) : "",
@@ -3139,6 +3318,86 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_HTML_WARNINGS_TITLE__", escapeHtml(localized(normalizedLanguage, "Dikkat edilmesi gerekenler", "Things to watch")),
                 "__CACHEDB_HTML_WARNINGS__", hasServerPlanResult ? renderPlannerStaticWarnings(bootstrapPlanResult.warnings()) : ""
         );
+    }
+
+    private String renderMigrationMemoryEstimateCard(
+            String normalizedLanguage,
+            MigrationRedisMemoryEstimator.Result estimate
+    ) {
+        String cardClass = estimate == null ? "result-card d-none" : "result-card";
+        String metrics = metricShell("plannerMemorySubtotal", localized(normalizedLanguage, "Hot set tahmini", "Hot set estimate"), estimate == null ? "" : formatByteSize(estimate.subtotalBytes()))
+                + metricShell("plannerMemoryHeadroom", localized(normalizedLanguage, "Güvenlik payı", "Safety headroom"), estimate == null ? "" : formatByteSize(estimate.headroomBytes()))
+                + metricShell("plannerMemoryTotal", localized(normalizedLanguage, "Toplam tahmin", "Total estimate"), estimate == null ? "" : formatByteSize(estimate.estimatedTotalBytes()))
+                + metricShell("plannerMemoryMaxmemory", localized(normalizedLanguage, "Önerilen maxmemory", "Recommended maxmemory"), estimate == null ? "" : formatByteSize(estimate.recommendedMaxmemoryBytes()));
+        String rows = estimate == null ? "" : renderMigrationMemoryRows(normalizedLanguage, estimate.components());
+        String assumptions = estimate == null
+                ? ""
+                : renderPlannerStaticList(
+                estimate.assumptions(),
+                localized(normalizedLanguage, "Bellek tahmini varsayımı üretilmedi.", "No memory estimate assumption was generated.")
+        );
+        String warnings = estimate == null ? "" : renderPlannerStaticWarnings(estimate.warnings());
+        String warningsClass = estimate != null && estimate.warnings() != null && !estimate.warnings().isEmpty() ? "" : " d-none";
+        return "<div id=\"plannerMemoryEstimateCard\" class=\"" + cardClass + "\">"
+                + "<div class=\"result-card-header\">" + escapeHtml(localized(normalizedLanguage, "2.1 Redis bellek tahmini", "2.1 Redis memory estimate")) + "</div>"
+                + "<div class=\"result-card-body\">"
+                + "<div class=\"planner-status mb-3\">" + escapeHtml(localized(
+                normalizedLanguage,
+                "Bu tablo PostgreSQL'den sınırlı satır örneği alır, seçilen sıcak pencere değerleriyle Redis'te oluşacak yaklaşık payload, index, page cache ve güvenlik payını hesaplar.",
+                "This table samples a bounded set of PostgreSQL rows and estimates Redis payload, index, page cache, and safety headroom from the selected hot-window settings."
+        )) + "</div>"
+                + "<div class=\"result-grid mb-3\">" + metrics + "</div>"
+                + "<div class=\"planner-memory-meta\">"
+                + "<span>" + escapeHtml(localized(normalizedLanguage, "Kaynak", "Source")) + ": <strong id=\"plannerMemorySource\">"
+                + escapeHtml(estimate == null ? "" : estimate.source()) + "</strong></span>"
+                + "<span>" + escapeHtml(localized(normalizedLanguage, "Güven düzeyi", "Confidence")) + ": <strong id=\"plannerMemoryConfidence\">"
+                + escapeHtml(estimate == null ? "" : memoryConfidenceLabel(normalizedLanguage, estimate.confidence())) + "</strong></span>"
+                + "<span>" + escapeHtml(localized(normalizedLanguage, "Kök hot rows", "Root hot rows")) + ": <strong id=\"plannerMemoryRootRows\">"
+                + escapeHtml(estimate == null ? "" : formatCount(estimate.rootHotRows())) + "</strong></span>"
+                + "<span>" + escapeHtml(localized(normalizedLanguage, "Çocuk hot rows", "Child hot rows")) + ": <strong id=\"plannerMemoryChildRows\">"
+                + escapeHtml(estimate == null ? "" : formatCount(estimate.childHotRows())) + "</strong></span>"
+                + "</div>"
+                + "<div class=\"planner-memory-table-wrap mt-3\"><table class=\"planner-memory-table\">"
+                + "<thead><tr><th>" + escapeHtml(localized(normalizedLanguage, "Bileşen", "Component")) + "</th>"
+                + "<th>" + escapeHtml(localized(normalizedLanguage, "Yüzey", "Surface")) + "</th>"
+                + "<th>" + escapeHtml(localized(normalizedLanguage, "Satır", "Rows")) + "</th>"
+                + "<th>" + escapeHtml(localized(normalizedLanguage, "Ort. byte", "Avg bytes")) + "</th>"
+                + "<th>" + escapeHtml(localized(normalizedLanguage, "Tahmini bellek", "Estimated memory")) + "</th></tr></thead>"
+                + "<tbody id=\"plannerMemoryRows\">" + rows + "</tbody></table></div>"
+                + "<div class=\"row g-3 mt-2\">"
+                + "<div class=\"col-12 col-xl-6\"><div class=\"result-check h-100\"><div class=\"result-step-title\">"
+                + escapeHtml(localized(normalizedLanguage, "Varsayımlar", "Assumptions")) + "</div><div id=\"plannerMemoryAssumptions\">" + assumptions + "</div></div></div>"
+                + "<div class=\"col-12 col-xl-6\"><div id=\"plannerMemoryWarningsBox\" class=\"result-check h-100" + warningsClass + "\"><div class=\"result-step-title\">"
+                + escapeHtml(localized(normalizedLanguage, "Bellek uyarıları", "Memory warnings")) + "</div><div id=\"plannerMemoryWarnings\">" + warnings + "</div></div></div>"
+                + "</div></div></div>";
+    }
+
+    private String renderMigrationMemoryRows(
+            String normalizedLanguage,
+            List<MigrationRedisMemoryEstimator.Component> components
+    ) {
+        if (components == null || components.isEmpty()) {
+            return "<tr><td colspan=\"5\" class=\"text-muted\">"
+                    + escapeHtml(localized(normalizedLanguage, "Bellek bileşeni hesaplanmadı.", "No memory component was calculated."))
+                    + "</td></tr>";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (MigrationRedisMemoryEstimator.Component component : components) {
+            builder.append("<tr><td><strong>")
+                    .append(escapeHtml(memoryComponentLabel(normalizedLanguage, component.code())))
+                    .append("</strong><div class=\"planner-memory-row-copy\">")
+                    .append(escapeHtml(memoryComponentDescription(normalizedLanguage, component.code(), component.description())))
+                    .append("</div></td><td class=\"mono\">")
+                    .append(escapeHtml(defaultString(component.surface())))
+                    .append("</td><td>")
+                    .append(escapeHtml(formatCount(component.rowCount())))
+                    .append("</td><td>")
+                    .append(escapeHtml(formatByteSize(component.averageBytes())))
+                    .append("</td><td><strong>")
+                    .append(escapeHtml(formatByteSize(component.estimatedBytes())))
+                    .append("</strong></td></tr>");
+        }
+        return builder.toString();
     }
 
     private String renderMigrationPlannerWarmCard(
@@ -3494,7 +3753,26 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_200__", escapeJs(localized(normalizedLanguage, "Yüzey seçimi eksik", "Surface selection is incomplete")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_201__", escapeJs(localized(normalizedLanguage, "Warm ve compare için registered CacheDB entity gerekir.", "Warm and compare require a registered CacheDB entity.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_202__", escapeJs(localized(normalizedLanguage, "Kök/çocuk yüzeyi seç", "Choose root/child surfaces")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_203__", escapeJs(localized(normalizedLanguage, "orders gibi manuel placeholder değerler warm çalıştırmaz; keşiften gelen entity yüzeyini seç.", "Manual placeholder values such as orders cannot run warm; choose the entity surface from discovery."))
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_203__", escapeJs(localized(normalizedLanguage, "orders gibi manuel placeholder değerler warm çalıştırmaz; keşiften gelen entity yüzeyini seç.", "Manual placeholder values such as orders cannot run warm; choose the entity surface from discovery.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_204__", escapeJs(localized(normalizedLanguage, "Yüksek", "High")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_205__", escapeJs(localized(normalizedLanguage, "Orta", "Medium")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_206__", escapeJs(localized(normalizedLanguage, "Düşük", "Low")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_207__", escapeJs(localized(normalizedLanguage, "Kök entity payload", "Root entity payload")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_208__", escapeJs(localized(normalizedLanguage, "Çocuk summary projection", "Child summary projection")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_209__", escapeJs(localized(normalizedLanguage, "Çocuk entity payload", "Child entity payload")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_210__", escapeJs(localized(normalizedLanguage, "Hot set ve sıralı indeks", "Hot set and sorted index")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_211__", escapeJs(localized(normalizedLanguage, "Sayfa cache payı", "Page cache allowance")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_212__", escapeJs(localized(normalizedLanguage, "Operasyonel stream payı", "Operational stream allowance")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_213__", escapeJs(localized(normalizedLanguage, "Güvenlik payı", "Safety headroom")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_214__", escapeJs(localized(normalizedLanguage, "Route'un kök kayıtlarını, ilişki tutamacını ve tekil lookup yüzeyini sıcak tutmak için ayrılan payload.", "Payload reserved for hot root records, relation anchors, and direct lookup surface.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_215__", escapeJs(localized(normalizedLanguage, "Liste ilk boyamasında kullanılacak dar summary projection satırları.", "Narrow summary projection rows used by the list first paint.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_216__", escapeJs(localized(normalizedLanguage, "Projection dışında gerekli olan sıcak çocuk entity payload'ı. Projection-first route'ta bu değer sıfır olabilir.", "Hot child entity payload required outside the projection. This can be zero on projection-first routes.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_217__", escapeJs(localized(normalizedLanguage, "Payload taraması yapmadan pencere okumak için hot-set üyeliği ve sıralı indeks girdileri.", "Hot-set membership and sorted-index entries used to read the window without scanning payload keys.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_218__", escapeJs(localized(normalizedLanguage, "Route çalıştıkça oluşabilecek ilk sayfa sonuç referansları ve page key payı.", "First-page result references and page-key allowance that can appear as the route is exercised.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_219__", escapeJs(localized(normalizedLanguage, "Write-behind, projection refresh, admin telemetry ve kısa süreli queue metadata payı.", "Allowance for write-behind, projection refresh, admin telemetry, and short-lived queue metadata.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_220__", escapeJs(localized(normalizedLanguage, "Allocator fragmentation, codec farkı, key uzunluğu ve kısa süreli büyüme için ek pay.", "Extra margin for allocator fragmentation, codec variance, key length, and short burst growth.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_221__", escapeJs(localized(normalizedLanguage, "Bellek bileşeni hesaplanmadı.", "No memory component was calculated.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_222__", escapeJs(localized(normalizedLanguage, "Bellek tahmini varsayımı üretilmedi.", "No memory estimate assumption was generated."))
         );
     }
 
@@ -3508,6 +3786,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String demoBootstrapError = "";
         MigrationPlanner.Result planResult = null;
         String planError = "";
+        MigrationRedisMemoryEstimator.Result memoryEstimate = null;
         MigrationWarmRunner.Result warmResult = null;
         String warmError = "";
         boolean warmTriggered = false;
@@ -3530,6 +3809,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         if (shouldGeneratePlan(query)) {
             try {
                 planResult = admin.planMigration(parseMigrationPlannerRequest(toMultiValueParameters(values)));
+                memoryEstimate = admin.estimateMigrationRedisMemory(planResult);
             } catch (IllegalArgumentException | IllegalStateException exception) {
                 planError = defaultString(exception.getMessage());
             }
@@ -3556,6 +3836,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 demoBootstrapError,
                 planResult,
                 planError,
+                memoryEstimate,
                 warmResult,
                 warmError,
                 warmTriggered,
@@ -4377,6 +4658,57 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "</button>";
     }
 
+    private String memoryComponentLabel(String language, String code) {
+        return switch (defaultString(code)) {
+            case "ROOT_ENTITY" -> localized(language, "Kök entity payload", "Root entity payload");
+            case "CHILD_PROJECTION" -> localized(language, "Çocuk summary projection", "Child summary projection");
+            case "CHILD_ENTITY" -> localized(language, "Çocuk entity payload", "Child entity payload");
+            case "INDEX_AND_HOTSET" -> localized(language, "Hot set ve sıralı indeks", "Hot set and sorted index");
+            case "PAGE_CACHE" -> localized(language, "Sayfa cache payı", "Page cache allowance");
+            case "STREAM_OPS" -> localized(language, "Operasyonel stream payı", "Operational stream allowance");
+            case "HEADROOM" -> localized(language, "Güvenlik payı", "Safety headroom");
+            default -> defaultString(code);
+        };
+    }
+
+    private String memoryComponentDescription(String language, String code, String fallback) {
+        return switch (defaultString(code)) {
+            case "ROOT_ENTITY" -> localized(language, "Route'un kök kayıtlarını, ilişki tutamacını ve tekil lookup yüzeyini sıcak tutmak için ayrılan payload.", "Payload reserved for hot root records, relation anchors, and direct lookup surface.");
+            case "CHILD_PROJECTION" -> localized(language, "Liste ilk boyamasında kullanılacak dar summary projection satırları.", "Narrow summary projection rows used by the list first paint.");
+            case "CHILD_ENTITY" -> localized(language, "Projection dışında gerekli olan sıcak çocuk entity payload'ı. Projection-first route'ta bu değer sıfır olabilir.", "Hot child entity payload required outside the projection. This can be zero on projection-first routes.");
+            case "INDEX_AND_HOTSET" -> localized(language, "Payload taraması yapmadan pencere okumak için hot-set üyeliği ve sıralı indeks girdileri.", "Hot-set membership and sorted-index entries used to read the window without scanning payload keys.");
+            case "PAGE_CACHE" -> localized(language, "Route çalıştıkça oluşabilecek ilk sayfa sonuç referansları ve page key payı.", "First-page result references and page-key allowance that can appear as the route is exercised.");
+            case "STREAM_OPS" -> localized(language, "Write-behind, projection refresh, admin telemetry ve kısa süreli queue metadata payı.", "Allowance for write-behind, projection refresh, admin telemetry, and short-lived queue metadata.");
+            case "HEADROOM" -> localized(language, "Allocator fragmentation, codec farkı, key uzunluğu ve kısa süreli büyüme için ek pay.", "Extra margin for allocator fragmentation, codec variance, key length, and short burst growth.");
+            default -> defaultString(fallback);
+        };
+    }
+
+    private String memoryConfidenceLabel(String language, String confidence) {
+        return switch (defaultString(confidence).toUpperCase(Locale.ROOT)) {
+            case "HIGH" -> localized(language, "Yüksek", "High");
+            case "MEDIUM" -> localized(language, "Orta", "Medium");
+            case "LOW" -> localized(language, "Düşük", "Low");
+            default -> defaultString(confidence);
+        };
+    }
+
+    private String formatCount(long value) {
+        return String.format(Locale.US, "%,d", Math.max(0L, value));
+    }
+
+    private String formatByteSize(long value) {
+        double scaled = Math.max(0L, value);
+        String[] units = {"B", "KB", "MB", "GB", "TB"};
+        int unitIndex = 0;
+        while (scaled >= 1024d && unitIndex < units.length - 1) {
+            scaled /= 1024d;
+            unitIndex++;
+        }
+        String pattern = scaled >= 100d ? "%.0f %s" : scaled >= 10d ? "%.1f %s" : "%.2f %s";
+        return String.format(Locale.US, pattern, scaled, units[unitIndex]);
+    }
+
     private String metricShell(String id, String label) {
         return metricShell(id, label, "");
     }
@@ -5191,7 +5523,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + sectionIntro(signalDashboardIntro)
                 + "<div id=\"signalDashboardGrid\" class=\"signal-board\"></div>"
                 + "</div></div></div></div>"
-                + "<div class=\"row g-3 mb-3\" id=\"performance-section\"><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + performanceSectionTitle + "</div><div class=\"card-body\">"
+                + "<div class=\"row g-3 mb-3\" id=\"performance-section\" data-contract-title=\"Latency &amp; Performance\"><!-- Latency & Performance --><div class=\"col-12\"><div class=\"card section-card\"><div class=\"card-header\">" + performanceSectionTitle + "</div><div class=\"card-body\">"
                 + sectionIntro(performanceSectionIntro)
                 + "<div class=\"section-scope-note\">" + performanceScopeNote + "</div>"
                 + "<div class=\"performance-actions\">"
@@ -7362,6 +7694,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             String demoBootstrapError,
             MigrationPlanner.Result planResult,
             String planError,
+            MigrationRedisMemoryEstimator.Result memoryEstimate,
             MigrationWarmRunner.Result warmResult,
             String warmError,
             boolean warmTriggered,

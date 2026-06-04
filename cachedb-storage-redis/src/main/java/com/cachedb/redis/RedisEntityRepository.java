@@ -2,6 +2,7 @@ package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.api.ProjectionRepository;
+import com.reactor.cachedb.core.cache.CacheAdmissionSource;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.QueryIndexConfig;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
@@ -25,6 +26,7 @@ import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.query.QueryExplainPlan;
 import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.core.query.QuerySort;
+import com.reactor.cachedb.core.queue.PerformanceObservationContext;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.queue.WriteBehindQueue;
 import com.reactor.cachedb.core.registry.EntityBinding;
@@ -35,6 +37,7 @@ import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.Pipeline;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -149,6 +152,12 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 return Optional.empty();
             }
             T entity = codec.fromRedisValue(encoded);
+            if (!pageCacheManager.shouldServeCachedEntity(entity)) {
+                if (effectiveCachePolicy().hotPolicy().evictWhenRejected()) {
+                    pageCacheManager.removeEntity(id);
+                }
+                return Optional.empty();
+            }
             pageCacheManager.recordEntityAccess(id);
             applyFetchPlan(List.of(entity));
             return Optional.of(entity);
@@ -179,8 +188,14 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 String encoded = values.get(index);
                 String tombstone = values.get(keys.size() + index);
                 if (encoded != null && tombstone == null) {
-                    entities.add(codec.fromRedisValue(encoded));
-                    pageCacheManager.recordEntityAccess(idsList.get(index));
+                    T entity = codec.fromRedisValue(encoded);
+                    ID id = idsList.get(index);
+                    if (pageCacheManager.shouldServeCachedEntity(entity)) {
+                        entities.add(entity);
+                        pageCacheManager.recordEntityAccess(id);
+                    } else if (effectiveCachePolicy().hotPolicy().evictWhenRejected()) {
+                        pageCacheManager.removeEntity(id);
+                    }
                 }
             }
             applyFetchPlan(entities);
@@ -278,6 +293,12 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                     continue;
                 }
                 T entity = codec.fromRedisValue(payload);
+                if (!pageCacheManager.shouldServeCachedEntity(entity)) {
+                    if (effectiveCachePolicy().hotPolicy().evictWhenRejected()) {
+                        pageCacheManager.removeEntity((ID) payloadIds.get(index));
+                    }
+                    continue;
+                }
                 boolean matches = true;
                 if (requiresResidualEvaluation) {
                     Map<String, Object> columns = codec.toColumns(entity);
@@ -353,11 +374,14 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                     compactionShardCount
             );
             String encoded = codec.toRedisValue(entity);
+            Map<String, Object> columns = codec.toColumns(entity);
+            long estimatedPayloadBytes = estimatePayloadBytes(encoded);
+            boolean cacheEntity = shouldCacheEntity(id, columns, CacheAdmissionSource.WRITE, effectiveCachePolicy, estimatedPayloadBytes);
             WriteOperation<T, ID> operation = new WriteOperation<>(
                     OperationType.UPSERT,
                     metadata,
                     id,
-                    codec.toColumns(entity),
+                    columns,
                     encoded,
                     0L,
                     Instant.now()
@@ -374,15 +398,25 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                         targetCompactionStreamKey,
                         compactionStatsKey,
                         operation,
-                        effectiveCachePolicy
+                        effectiveCachePolicy,
+                        cacheEntity
                 );
-                queryIndexManager.reindex(entity);
+                if (cacheEntity) {
+                    queryIndexManager.reindex(entity);
+                    pageCacheManager.recordEntityAccess(id, columns, estimatedPayloadBytes);
+                } else if (effectiveCachePolicy.hotPolicy().evictWhenRejected()) {
+                    pageCacheManager.removeEntity(id);
+                }
             } else {
                 long version = jedis.incr(versionKey);
                 expireVersionKey(versionKey);
                 jedis.del(tombstoneKey);
                 Map<String, Object> persistedColumns = enrichColumnsForPersistence(operation.columns(), version, false);
-                pageCacheManager.cacheEntity(entity, encoded);
+                if (cacheEntity) {
+                    pageCacheManager.cacheEntity(entity, encoded, CacheAdmissionSource.WRITE);
+                } else if (effectiveCachePolicy.hotPolicy().evictWhenRejected()) {
+                    pageCacheManager.removeEntity(id);
+                }
                 writeBehindQueue.enqueue(new WriteOperation<>(
                         operation.type(),
                         metadata,
@@ -393,7 +427,6 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                         operation.createdAt()
                 ));
             }
-            pageCacheManager.recordEntityAccess(id);
             syncProjectionPayloads(entity, false);
             return entity;
         } finally {
@@ -402,11 +435,11 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     }
 
     public T hydrate(T entity, long version) {
-        return hydrateInternal(entity, version, true, true, true);
+        return hydrateInternal(entity, version, true, true, true, CacheAdmissionSource.READ);
     }
 
     public T hydrateWarm(T entity, long version) {
-        return hydrateInternal(entity, version, false, false, false);
+        return hydrateInternal(entity, version, false, false, false, CacheAdmissionSource.WARM);
     }
 
     public void hydrateWarmBatch(List<T> entities, List<Long> versions) {
@@ -432,22 +465,45 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         long startedAt = System.nanoTime();
         try {
             CachePolicy effectiveCachePolicy = effectiveCachePolicy();
-            ArrayList<ID> ids = new ArrayList<>(entities.size());
+            ArrayList<T> admittedEntities = new ArrayList<>(entities.size());
+            ArrayList<ID> admittedIds = new ArrayList<>(entities.size());
+            ArrayList<Long> admittedVersions = new ArrayList<>(entities.size());
+            ArrayList<Map<String, Object>> admittedColumns = new ArrayList<>(entities.size());
+            ArrayList<String> admittedPayloads = new ArrayList<>(entities.size());
+            ArrayList<Long> admittedPayloadBytes = new ArrayList<>(entities.size());
+            ArrayList<ID> rejectedIds = new ArrayList<>();
+            for (int index = 0; index < entities.size(); index++) {
+                T entity = entities.get(index);
+                ID id = metadata.idAccessor().apply(entity);
+                Map<String, Object> columns = codec.toColumns(entity);
+                String encoded = codec.toRedisValue(entity);
+                long estimatedPayloadBytes = estimatePayloadBytes(encoded);
+                if (shouldCacheEntity(id, columns, CacheAdmissionSource.WARM, effectiveCachePolicy, estimatedPayloadBytes)) {
+                    admittedEntities.add(entity);
+                    admittedIds.add(id);
+                    admittedVersions.add(versions.get(index));
+                    admittedColumns.add(columns);
+                    admittedPayloads.add(encoded);
+                    admittedPayloadBytes.add(estimatedPayloadBytes);
+                } else {
+                    rejectedIds.add(id);
+                }
+            }
             try (Pipeline pipeline = jedis.pipelined()) {
-                for (int index = 0; index < entities.size(); index++) {
-                    T entity = entities.get(index);
-                    ID id = metadata.idAccessor().apply(entity);
-                    ids.add(id);
+                for (int index = 0; index < admittedEntities.size(); index++) {
+                    T entity = admittedEntities.get(index);
+                    ID id = admittedIds.get(index);
                     String redisKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
                     String versionKey = keyStrategy.versionKey(metadata.redisNamespace(), id);
                     String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
-                    String encoded = codec.toRedisValue(entity);
+                    String encoded = admittedPayloads.get(index);
                     if (effectiveCachePolicy.entityTtlSeconds() > 0) {
                         pipeline.setex(redisKey, effectiveCachePolicy.entityTtlSeconds(), encoded);
                     } else {
                         pipeline.set(redisKey, encoded);
                     }
-                    long effectiveVersion = versions.get(index) != null && versions.get(index) > 0L ? versions.get(index) : 1L;
+                    Long requestedVersion = admittedVersions.get(index);
+                    long effectiveVersion = requestedVersion != null && requestedVersion > 0L ? requestedVersion : 1L;
                     pipeline.set(versionKey, String.valueOf(effectiveVersion));
                     if (guardrailConfig.versionKeyTtlSeconds() > 0) {
                         pipeline.expire(versionKey, guardrailConfig.versionKeyTtlSeconds());
@@ -456,13 +512,21 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 }
                 pipeline.sync();
             }
+            if (effectiveCachePolicy.hotPolicy().evictWhenRejected()) {
+                for (ID rejectedId : rejectedIds) {
+                    pageCacheManager.removeEntity(rejectedId);
+                }
+            }
             if (reindexQueryIndexes) {
-                queryIndexManager.reindexBatch(entities);
+                queryIndexManager.reindexBatch(admittedEntities);
+            }
+            for (int index = 0; index < admittedIds.size(); index++) {
+                pageCacheManager.recordEntityAccess(admittedIds.get(index), admittedColumns.get(index), admittedPayloadBytes.get(index));
             }
             if (forceImmediateProjectionRefresh) {
                 syncProjectionPayloadsBatch(entities, true);
             } else {
-                enqueueProjectionRefreshBatch(entities, ids);
+                enqueueProjectionRefreshBatch(admittedEntities, admittedIds);
             }
         } finally {
             recordRedisWrite(startedAt);
@@ -525,7 +589,8 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             long version,
             boolean forceImmediateProjectionRefresh,
             boolean reindexQueryIndexes,
-            boolean recordPageAccess
+            boolean recordPageAccess,
+            CacheAdmissionSource source
     ) {
         long startedAt = System.nanoTime();
         try {
@@ -535,6 +600,16 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
             String encoded = codec.toRedisValue(entity);
             CachePolicy effectiveCachePolicy = effectiveCachePolicy();
+            Map<String, Object> columns = codec.toColumns(entity);
+            long estimatedPayloadBytes = estimatePayloadBytes(encoded);
+            boolean cacheEntity = shouldCacheEntity(id, columns, source, effectiveCachePolicy, estimatedPayloadBytes);
+            if (!cacheEntity) {
+                if (effectiveCachePolicy.hotPolicy().evictWhenRejected()) {
+                    pageCacheManager.removeEntity(id);
+                }
+                syncProjectionPayloads(entity, forceImmediateProjectionRefresh);
+                return entity;
+            }
             if (effectiveCachePolicy.entityTtlSeconds() > 0) {
                 jedis.setex(redisKey, effectiveCachePolicy.entityTtlSeconds(), encoded);
             } else {
@@ -547,8 +622,8 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             if (reindexQueryIndexes) {
                 queryIndexManager.reindex(entity);
             }
-            if (recordPageAccess) {
-                pageCacheManager.recordEntityAccess(id);
+            if (recordPageAccess || source == CacheAdmissionSource.WARM) {
+                pageCacheManager.recordEntityAccess(id, columns, estimatedPayloadBytes);
             }
             syncProjectionPayloads(entity, forceImmediateProjectionRefresh);
             return entity;
@@ -694,6 +769,37 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
 
     private CachePolicy effectiveCachePolicy() {
         return producerGuard == null ? cachePolicy : producerGuard.effectiveCachePolicy(cachePolicy);
+    }
+
+    private boolean shouldCacheEntity(
+            ID id,
+            Map<String, Object> columns,
+            CacheAdmissionSource source,
+            CachePolicy effectiveCachePolicy,
+            long estimatedPayloadBytes
+    ) {
+        boolean admitted = effectiveCachePolicy.hotPolicy().shouldAdmit(columns, source)
+                && pageCacheManager.allowTenantQuota(id, columns, estimatedPayloadBytes);
+        recordCacheAdmission(source, admitted);
+        return admitted;
+    }
+
+    private long estimatePayloadBytes(String encoded) {
+        if (encoded == null || encoded.isEmpty()) {
+            return 1L;
+        }
+        return encoded.getBytes(StandardCharsets.UTF_8).length + 128L;
+    }
+
+    private void recordCacheAdmission(CacheAdmissionSource source, boolean admitted) {
+        if (performanceCollector == null) {
+            return;
+        }
+        String routeTag = PerformanceObservationContext.currentTag();
+        String tag = routeTag.isBlank()
+                ? "entity:" + metadata.entityName() + ":" + (source == null ? CacheAdmissionSource.READ : source).name()
+                : "route:" + routeTag + ":" + (source == null ? CacheAdmissionSource.READ : source).name();
+        performanceCollector.recordCacheAdmission(tag, admitted);
     }
 
     private Map<String, Object> enrichColumnsForPersistence(Map<String, Object> source, long version, boolean deleting) {

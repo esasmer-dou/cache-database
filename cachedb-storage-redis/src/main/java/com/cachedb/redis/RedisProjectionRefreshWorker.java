@@ -179,7 +179,7 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             return;
         }
         try {
-            jedis.xgroupCreate(config.streamKey(), config.consumerGroup(), StreamEntryID.LAST_ENTRY, true);
+            jedis.xgroupCreate(config.streamKey(), config.consumerGroup(), new StreamEntryID("0-0"), true);
         } catch (JedisDataException exception) {
             if (!exception.getMessage().contains("BUSYGROUP")) {
                 throw exception;

@@ -4,6 +4,7 @@ import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.cache.PageWindow;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.query.QuerySpec;
+import com.reactor.cachedb.core.route.RouteCacheContract;
 
 public final class ReadShapeGuardrails {
 
@@ -103,6 +104,13 @@ public final class ReadShapeGuardrails {
                     "Use an explicit bounded projection window or split the result into smaller windows."
             );
         }
+    }
+
+    public static void validateRouteContract(RouteCacheContract contract, String resolvedRouteLabel) {
+        if (contract == null) {
+            return;
+        }
+        contract.validateResolvedRoute(resolvedRouteLabel);
     }
 
     public static int effectivePageRequestLimit(CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {

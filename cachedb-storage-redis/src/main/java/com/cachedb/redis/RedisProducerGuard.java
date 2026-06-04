@@ -584,8 +584,8 @@ public final class RedisProducerGuard {
 
         private CachePolicy apply(CachePolicy basePolicy) {
             return CachePolicy.builder()
-                    .hotEntityLimit(Math.max(16, (int) Math.round(basePolicy.hotEntityLimit() * hotEntityLimitFactor)))
-                    .pageSize(Math.max(10, (int) Math.round(basePolicy.pageSize() * pageSizeFactor)))
+                    .hotEntityLimit(Math.max(1, (int) Math.round(basePolicy.hotEntityLimit() * hotEntityLimitFactor)))
+                    .pageSize(Math.max(1, (int) Math.round(basePolicy.pageSize() * pageSizeFactor)))
                     .lruEvictionEnabled(basePolicy.lruEvictionEnabled())
                     .entityTtlSeconds(basePolicy.entityTtlSeconds() <= 0L
                             ? 0L
@@ -593,6 +593,7 @@ public final class RedisProducerGuard {
                     .pageTtlSeconds(basePolicy.pageTtlSeconds() <= 0L
                             ? 0L
                             : Math.min(basePolicy.pageTtlSeconds(), pageTtlCapSeconds))
+                    .hotPolicy(basePolicy.hotPolicy())
                     .build();
         }
 

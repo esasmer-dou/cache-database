@@ -87,7 +87,7 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
             return;
         }
         try {
-            jedis.xgroupCreate(configAdapter.deadLetterStreamKey(), config.consumerGroup(), StreamEntryID.LAST_ENTRY, true);
+            jedis.xgroupCreate(configAdapter.deadLetterStreamKey(), config.consumerGroup(), new StreamEntryID("0-0"), true);
         } catch (JedisDataException exception) {
             if (!exception.getMessage().contains("BUSYGROUP")) {
                 throw exception;

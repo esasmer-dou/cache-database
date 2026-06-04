@@ -103,6 +103,8 @@ public final class CacheDatabaseAdmin {
     private final ProductionReportCatalog productionReportCatalog;
     private final MigrationPlanner migrationPlanner;
     private final MigrationSchemaDiscovery migrationSchemaDiscovery;
+    private final MigrationRedisMemoryEstimator migrationRedisMemoryEstimator;
+    private final MigrationRedisMemoryCalibration migrationRedisMemoryCalibration;
     private final MigrationScaffoldGenerator migrationScaffoldGenerator;
     private final MigrationWarmRunner migrationWarmRunner;
     private final MigrationComparisonRunner migrationComparisonRunner;
@@ -210,7 +212,13 @@ public final class CacheDatabaseAdmin {
         this.productionReportCatalog = productionReportCatalog;
         this.migrationPlanner = new MigrationPlanner();
         this.migrationSchemaDiscovery = new MigrationSchemaDiscovery(dataSource, entityRegistry);
-        this.migrationWarmRunner = new MigrationWarmRunner(dataSource, MigrationWarmRunner.using(entityRegistry, cacheSession));
+        this.migrationRedisMemoryEstimator = new MigrationRedisMemoryEstimator(dataSource, this.migrationSchemaDiscovery);
+        this.migrationRedisMemoryCalibration = new MigrationRedisMemoryCalibration(jedis, keyPrefix);
+        this.migrationWarmRunner = new MigrationWarmRunner(
+                dataSource,
+                MigrationWarmRunner.using(entityRegistry, cacheSession),
+                new RedisMigrationWarmCheckpointStore(jedis, keyPrefix)
+        );
         this.migrationScaffoldGenerator = new MigrationScaffoldGenerator(this.migrationSchemaDiscovery);
         this.migrationComparisonRunner = new MigrationComparisonRunner(
                 dataSource,
@@ -305,20 +313,29 @@ public final class CacheDatabaseAdmin {
     public ReconciliationMetrics metrics() {
         long now = System.currentTimeMillis();
         ReconciliationMetrics cached = lastMetricsSnapshot.get();
-        if (cached != null && (now - lastMetricsSampleAtEpochMillis.get()) < 1_000L) {
-            return cached;
-        }
         try {
-            ReconciliationMetrics fresh = collectMetrics();
-            lastMetricsSnapshot.set(fresh);
-            lastMetricsSampleAtEpochMillis.set(now);
-            return fresh;
+            return refreshMetrics(now);
         } catch (RuntimeException exception) {
             if (cached != null) {
                 return cached;
             }
             throw exception;
         }
+    }
+
+    private ReconciliationMetrics refreshMetrics(long now) {
+        ReconciliationMetrics fresh = collectMetrics();
+        lastMetricsSnapshot.set(fresh);
+        lastMetricsSampleAtEpochMillis.set(now);
+        return fresh;
+    }
+
+    private ReconciliationMetrics freshMetrics() {
+        return refreshMetrics(System.currentTimeMillis());
+    }
+
+    private void invalidateMetricsSnapshot() {
+        lastMetricsSampleAtEpochMillis.set(0L);
     }
 
     private <T> T cachedSnapshot(
@@ -462,6 +479,14 @@ public final class CacheDatabaseAdmin {
         return migrationPlanner.plan(request);
     }
 
+    MigrationRedisMemoryEstimator.Result estimateMigrationRedisMemory(MigrationPlanner.Result plan) {
+        return migrationRedisMemoryEstimator.estimate(plan);
+    }
+
+    MigrationRedisMemoryCalibration.Result calibrateMigrationRedisMemory(MigrationRedisMemoryEstimator.Result estimate) {
+        return migrationRedisMemoryCalibration.calibrate(estimate);
+    }
+
     public MigrationSchemaDiscovery.Result discoverMigrationSchema() {
         return migrationSchemaDiscovery.discover();
     }
@@ -596,6 +621,18 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.resourceLimits().defaultCachePolicy().entityTtlSeconds(), "Default entity TTL in seconds.");
         addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.pageTtlSeconds",
                 cacheDatabaseConfig.resourceLimits().defaultCachePolicy().pageTtlSeconds(), "Default page TTL in seconds.");
+        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().mode(), "Entity hot admission mode.");
+        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.timeColumn",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().timeColumn(), "Business-time column for TIME_WINDOW admission.");
+        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().hotForSeconds(), "Business-time hot window in seconds.");
+        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateColumn",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().stateColumn(), "State column for STATE_WINDOW admission.");
+        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateValues",
+                String.join(",", cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().stateValues()), "Comma-separated hot states for STATE_WINDOW admission.");
+        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().admitOnRead(), "Allows read-through rows to enter the entity cache.");
         addTuning(items, modeledProperties, "page-cache", "cachedb.config.pageCache.readThroughEnabled",
                 cacheDatabaseConfig.pageCache().readThroughEnabled(), "Enables page-cache read-through.");
         addTuning(items, modeledProperties, "page-cache", "cachedb.config.pageCache.evictionBatchSize",
@@ -757,6 +794,15 @@ public final class CacheDatabaseAdmin {
         } catch (RuntimeException ignored) {
             bufferReset = new AdminTelemetryResetSnapshot(0L, 0L, 0, 0, 0L, Instant.now());
         }
+        lastDiagnosticsSnapshot.set(List.of());
+        lastDiagnosticsSampleAtEpochMillis.set(System.currentTimeMillis());
+        lastIncidentHistory.set(List.of());
+        lastIncidentsSnapshot.set(List.of());
+        lastIncidentsSampleAtEpochMillis.set(System.currentTimeMillis());
+        lastFailingSignals.set(List.of());
+        lastRuntimeProfileChurnSnapshot.set(List.of());
+        lastRuntimeProfileChurnSampleAtEpochMillis.set(System.currentTimeMillis());
+        invalidateMetricsSnapshot();
         return new AdminTelemetryResetSnapshot(
                 diagnosticsEntriesCleared,
                 incidentEntriesCleared,
@@ -784,7 +830,14 @@ public final class CacheDatabaseAdmin {
     }
 
     public ReconciliationHealth health() {
-        ReconciliationMetrics metrics = metrics();
+        return buildHealth(metrics());
+    }
+
+    private ReconciliationHealth freshHealth() {
+        return buildHealth(freshMetrics());
+    }
+
+    private ReconciliationHealth buildHealth(ReconciliationMetrics metrics) {
         ArrayList<String> issues = new ArrayList<>();
         AdminHealthStatus status = AdminHealthStatus.UP;
 
@@ -871,7 +924,7 @@ public final class CacheDatabaseAdmin {
     }
 
     public AdminDiagnosticsRecord persistDiagnostics(String source, String note) {
-        ReconciliationHealth currentHealth = health();
+        ReconciliationHealth currentHealth = freshHealth();
         LinkedHashMap<String, String> fields = new LinkedHashMap<>();
         fields.put("source", source == null ? "" : source);
         fields.put("note", note == null ? "" : note);
@@ -887,12 +940,17 @@ public final class CacheDatabaseAdmin {
         fields.put("runtimePressureLevel", currentHealth.metrics().redisRuntimeProfileSnapshot().lastObservedPressureLevel());
         fields.put("runtimeProfileSwitchCount", String.valueOf(currentHealth.metrics().redisRuntimeProfileSnapshot().switchCount()));
         fields.put("runtimeProfileLastSwitchedAt", String.valueOf(currentHealth.metrics().redisRuntimeProfileSnapshot().lastSwitchedAtEpochMillis()));
-        String entryId = jedis.xadd(diagnosticsStreamKey, XAddParams.xAddParams(), fields).toString();
-        if (diagnosticsMaxLength > 0) {
-            jedis.xtrim(diagnosticsStreamKey, diagnosticsMaxLength, true);
+        String entryId = "unpersisted:" + System.currentTimeMillis();
+        try {
+            entryId = jedis.xadd(diagnosticsStreamKey, XAddParams.xAddParams(), fields).toString();
+            if (diagnosticsMaxLength > 0) {
+                jedis.xtrim(diagnosticsStreamKey, diagnosticsMaxLength, true);
+            }
+            RedisTelemetrySupport.expireIfNeeded(jedis, diagnosticsStreamKey, cacheDatabaseConfig.adminReportJob().diagnosticsTtlSeconds());
+        } catch (RuntimeException ignored) {
+            fields.put("persistenceWarning", "Diagnostics could not be written to Redis.");
         }
-        RedisTelemetrySupport.expireIfNeeded(jedis, diagnosticsStreamKey, cacheDatabaseConfig.adminReportJob().diagnosticsTtlSeconds());
-        return new AdminDiagnosticsRecord(
+        AdminDiagnosticsRecord record = new AdminDiagnosticsRecord(
                 entryId,
                 fields.get("source"),
                 fields.get("note"),
@@ -900,6 +958,28 @@ public final class CacheDatabaseAdmin {
                 Instant.parse(fields.get("recordedAt")),
                 Map.copyOf(fields)
         );
+        rememberDiagnosticsRecord(record);
+        invalidateMetricsSnapshot();
+        return record;
+    }
+
+    private void rememberDiagnosticsRecord(AdminDiagnosticsRecord record) {
+        int safeLimit = Math.max(20, cacheDatabaseConfig.adminReportJob().queryLimit());
+        ArrayList<AdminDiagnosticsRecord> records = new ArrayList<>();
+        records.add(record);
+        List<AdminDiagnosticsRecord> cached = lastDiagnosticsSnapshot.get();
+        if (cached != null) {
+            for (AdminDiagnosticsRecord cachedRecord : cached) {
+                if (!cachedRecord.entryId().equals(record.entryId())) {
+                    records.add(cachedRecord);
+                }
+                if (records.size() >= safeLimit) {
+                    break;
+                }
+            }
+        }
+        lastDiagnosticsSnapshot.set(List.copyOf(records));
+        lastDiagnosticsSampleAtEpochMillis.set(System.currentTimeMillis());
     }
 
     public List<AdminDiagnosticsRecord> diagnostics(int limit) {
@@ -1556,7 +1636,10 @@ public final class CacheDatabaseAdmin {
     }
 
     private List<AdminIncident> collectIncidents() {
-        ReconciliationMetrics metrics = metrics();
+        return collectIncidents(metrics());
+    }
+
+    private List<AdminIncident> collectIncidents(ReconciliationMetrics metrics) {
         ArrayList<AdminIncident> incidents = new ArrayList<>();
         Instant now = Instant.now();
 
@@ -1724,7 +1807,10 @@ public final class CacheDatabaseAdmin {
 
     public List<AdminIncidentRecord> persistIncidents(String source) {
         ArrayList<AdminIncidentRecord> persisted = new ArrayList<>();
-        for (AdminIncident incident : incidents()) {
+        List<AdminIncident> activeIncidents = collectIncidents(freshMetrics());
+        lastIncidentsSnapshot.set(activeIncidents);
+        lastIncidentsSampleAtEpochMillis.set(System.currentTimeMillis());
+        for (AdminIncident incident : activeIncidents) {
             String cooldownKey = monitoringConfig.incidentStreamKey() + ":cooldown:" + incident.code();
             String lastRecorded = jedis.get(cooldownKey);
             long now = System.currentTimeMillis();
@@ -1760,7 +1846,36 @@ public final class CacheDatabaseAdmin {
             ));
             incidentNotifier.accept(persisted.get(persisted.size() - 1));
         }
-        return List.copyOf(persisted);
+        List<AdminIncidentRecord> result = List.copyOf(persisted);
+        if (!result.isEmpty()) {
+            rememberIncidentRecords(result);
+            invalidateMetricsSnapshot();
+        }
+        return result;
+    }
+
+    private void rememberIncidentRecords(List<AdminIncidentRecord> records) {
+        int safeLimit = Math.max(24, records.size());
+        ArrayList<AdminIncidentRecord> merged = new ArrayList<>(records);
+        List<AdminIncidentRecord> cached = lastIncidentHistory.get();
+        if (cached != null) {
+            for (AdminIncidentRecord cachedRecord : cached) {
+                boolean alreadyPresent = false;
+                for (AdminIncidentRecord record : records) {
+                    if (record.entryId().equals(cachedRecord.entryId())) {
+                        alreadyPresent = true;
+                        break;
+                    }
+                }
+                if (!alreadyPresent) {
+                    merged.add(cachedRecord);
+                }
+                if (merged.size() >= safeLimit) {
+                    break;
+                }
+            }
+        }
+        lastIncidentHistory.set(List.copyOf(merged));
     }
 
     public AdminExportResult exportDiagnostics(AdminExportFormat format, int limit) {

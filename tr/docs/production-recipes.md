@@ -298,6 +298,106 @@ Müşteri timeline ekranı için production'a uygun şekil şudur:
 - PostgreSQL bütün order geçmişi ve arşiv okumaları için kalıcı kaynak olarak kalır
 - detay ekranı bütün müşteri veri grafiğini değil, tek order'ı veya küçük bir relation önizlemesini açıkça okur
 
+Entity hot set için kabul kuralını açık seç:
+
+- `COUNT_WINDOW` varsayılandır; son erişilen veya yazılan entity id'lerini `hotEntityLimit` sınırına kadar sıcak tutar
+- `TIME_WINDOW`, iş kuralı "son 90 günün order kayıtları sıcak olsun" ise doğru tercihtir
+- `STATE_WINDOW`, yalnız `OPEN` ve `PENDING` gibi durumların sıcak kalması gerektiğinde kullanılır
+- `COMPOSITE`, sıcaklık birden fazla kurala bağlıysa kullanılır; örneğin "son 90 gün içinde ve `OPEN/PENDING` durumunda"
+- `CUSTOM_PREDICATE`, VIP müşteri veya tenant bazlı özel Java predicate kuralları için ayrılır
+
+Örnek:
+
+```java
+CachePolicy recentOrders = CachePolicy.builder()
+        .hotEntityLimit(100_000)
+        .pageSize(100)
+        .hotPolicy(EntityHotPolicy.builder()
+                .mode(EntityHotPolicyMode.TIME_WINDOW)
+                .timeColumn("order_date")
+                .hotForDays(90)
+                .admitOnRead(false)
+                .evictWhenRejected(true)
+                .build())
+        .build();
+```
+
+Bu, `entityTtlSeconds` ile aynı şey değildir. TTL, kaydın Redis'e yazıldığı ana göre çalışır. `TIME_WINDOW` ise entity payload içindeki iş tarihine göre karar verir.
+
+Production hot set çoğu zaman tek kuralla açıklanmaz. Bunu uygulama kodunun
+içinde gizli if/else olarak bırakma; policy içinde açık tanımla:
+
+```java
+CachePolicy activeRecentOrders = CachePolicy.builder()
+        .hotEntityLimit(100_000)
+        .hotPolicy(EntityHotPolicy.allOf(List.of(
+                EntityHotPolicy.timeWindow("order_date", Duration.ofDays(90).toSeconds()),
+                EntityHotPolicy.stateWindow("status", List.of("OPEN", "PENDING"))
+        )))
+        .build();
+```
+
+Bir satırı birden fazla akış sıcak yapabiliyorsa `EntityHotPolicy.anyOf(...)`
+kullan. Örnek: "son 90 günün order'ı" veya "VIP müşterinin order'ı" veya
+"destek ekibinin manuel takip ettiği order". `CUSTOM_PREDICATE` kullanacaksan
+kural kısa, deterministik ve yerel kalmalıdır; predicate veritabanına veya uzak
+servise gitmemelidir.
+
+### Route Seviyesinde Cache Contract
+
+Entity policy hangi satırın Redis'e girebileceğini söyler. Bir ekranın nasıl
+okunacağını tek başına anlatmaz. Kritik production akışlarında route contract
+tanımla:
+
+```java
+RouteCacheContract customerOrdersTimeline = RouteCacheContract.builder()
+        .routeName("CustomerOrdersTimelineRoute")
+        .entityName("OrderEntity")
+        .projectionName("CustomerOrderSummaryHot")
+        .pageSize(100)
+        .hotWindow(1_000)
+        .projectionRequired(true)
+        .maxColdReadSize(100)
+        .memoryBudgetBytes(256L * 1024L * 1024L)
+        .strictMode(RouteCacheStrictMode.FAIL_FAST)
+        .tenantQuota(new TenantCacheQuota("tenant_id", 50_000, 128L * 1024L * 1024L, true))
+        .build();
+```
+
+Route contract şu durumlarda gereklidir:
+
+- endpoint'in ilk sayfa boyutu belliyse
+- Redis bütün tabloyu değil, sınırlı sıcak pencereyi tutacaksa
+- projection yerine entity scan'e düşmek production için riskliyse
+- tek tenant veya tek müşteri Redis belleğini tüketebilecekse
+
+Production strict mode'da projection isteyen route, `entity:...` yoluna düşerse
+fail-fast davranmalıdır. "Çalıştı ama pahalı yoldan çalıştı" staging sırasında
+görülebilir; production için güvenli davranış değildir.
+
+Runtime'da quota ve admission telemetry bu route'a yazılsın istiyorsan contract'ı
+route çalışırken context'e koy:
+
+```java
+List<OrderSummaryReadModel> page = RouteCacheContext.supplyWithContract(
+        customerOrdersTimeline,
+        () -> summaries.query(customerOrdersQuery(customerId, 100))
+);
+```
+
+`tenantQuota(...)` sınırlıysa CacheDB, mevcut route context'i için tenant hot-set
+üyeliğini takip eder. Tenant satır limiti aşılırsa `evictOnBreach=true` iken en
+eski tenant üyesi Redis'ten çıkarılır; aksi durumda yeni satır Redis'e kabul
+edilmez. Memory budget kontrolüne tenant takip key'leriyle birlikte Redis'teki
+gerçek entity payload byte ölçümü de dahildir. CacheDB kabul edilen entity key'i
+için Redis `MEMORY USAGE` değerini ölçer ve tenant bazında payload sayacı tutar;
+aynı entity tekrar yazıldığında bellek iki kez sayılmaz.
+
+Bu bütçeyi kapasite hesabının tek kaynağı olarak değil, route seviyesinde bir
+güvenlik sınırı olarak düşün. Staging warm bittikten sonra planner tahminini
+gerçek Redis kullanımıyla yine karşılaştır; çünkü Redis object overhead,
+projection key'leri, index key'leri ve page-cache key'leri de bellek tüketir.
+
 Neden:
 
 - ilk okumada geniş nesne grafiği oluşmasını engeller
@@ -308,6 +408,55 @@ Repo içi ölçüm yüzeyleri:
 
 - özet liste, önizleme listesi ve tam veri grafiği maliyeti için `ReadShapeBenchmarkMain`
 - ranked projection top-window ile geniş candidate scan farkı için `RankedProjectionBenchmarkMain`
+
+### PostgreSQL Outbox / CDC Adapter Örneği
+
+PostgreSQL CacheDB dışında da değişebiliyorsa Redis'in kendiliğinden güncel
+kalacağını varsayma. Gerçek bir feed kur: outbox, Debezium, Kafka veya başka bir
+CDC kaynağı. En sade geçiş yolu için starter içinde somut PostgreSQL outbox
+adapter'ı vardır.
+
+Beklenen outbox şekli:
+
+```sql
+CREATE TABLE cachedb_outbox (
+    id BIGSERIAL PRIMARY KEY,
+    entity_name TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT,
+    entity_version BIGINT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_source TEXT NOT NULL
+);
+```
+
+Kullanım:
+
+```java
+PostgresOutboxExternalChangeFeedAdapter adapter =
+        PostgresOutboxExternalChangeFeedAdapter.builder(dataSource)
+                .adapterName("orders-cachedb-feed")
+                .outboxTable("cachedb_outbox")
+                .checkpointTable("cachedb_outbox_adapter_checkpoint")
+                .batchSize(500)
+                .pollIntervalMillis(1_000)
+                .build();
+
+adapter.start(event -> {
+    // ExternalChangeEvent'i açık bir CacheDB upsert/delete veya projection refresh komutuna çevir.
+    // Sink idempotent olmalı; CDC feed'i hata sonrası aynı olayı tekrar verebilir.
+});
+```
+
+Production kuralları:
+
+- `id` monoton artmalı
+- sink idempotent olmalı
+- her mantıksal consumer için sabit bir `adapterName` kullanılmalı
+- duplicate işleme güvenli değilse runner singleton veya leader-elected çalışmalı
+- yerleşik parser için `payload_json` düz JSON olmalı; karmaşık payload gerekiyorsa ham değer `_payload` altında taşınır
+- adapter domain tablolarını değiştirmez; yalnız outbox okur ve checkpoint tablosunu yazar
 
 ## Reçete 4: Kanıtlanmış Hotspot veya Batch Döngüsü
 
@@ -320,7 +469,7 @@ Bunu yalnız şu durumda kullan:
 Önerilen yüzey:
 
 ```java
-List<UserEntity> açtiveUsers = userRepository.query(
+List<UserEntity> activeUsers = userRepository.query(
         QuerySpec.where(QueryFilter.eq("status", "ACTIVE"))
                 .orderBy(QuerySort.asc("username"))
                 .limitTo(25)
@@ -348,6 +497,12 @@ Hangi reçeteyi seçersen seç, production için şu kurallar geçerlidir:
 - global sorted/range liste ekranlarını projection-first ele al
 - iş sırası önemliyse pre-ranked projection alanı tercih et
 - page/result boyutunu entity hot window altında tut; varsayılan read-shape guardrail bunu `hotSetHeadroom` ile zorlar
+- hot kabul kuralı sadece son erişim sayısı değil, iş tarihi veya durum ise `hotPolicy.mode=TIME_WINDOW` ya da `STATE_WINDOW` kullan
+- sıcaklık iş tarihi, durum, tenant veya özel predicate birleşiminden oluşuyorsa `hotPolicy.mode=COMPOSITE` kullan
+- kritik ekranlar için route-level cache contract tanımla: page size, sıcak pencere, projection zorunluluğu, cold-read üst sınırı, memory budget ve tenant quota
+- büyük hot set'lerde warm/backfill işlerini checkpoint, resume, batch size, fetch size ve row-rate limit ile çalıştır
+- staging warm bittikten sonra planner tahminini Redis `MEMORY USAGE` ve key-prefix breakdown ile kalibre et
+- PostgreSQL CacheDB dışında da güncelleniyorsa CDC, Debezium, Kafka veya outbox adaptörü kullan
 - "müşteri başına son 1.000 order" gibi sınırlı projection pencereleri için `readShapeGuardrail.maxProjectionQueryLimit` kullan
 - CacheDB'ye ayrılmış Redis'te `maxmemory` ayarla ve `maxmemory-policy=noeviction` kullan; page-cache, read-through, hot-set ve query-index yazımlarını Redis'in rastgele eviction davranışına değil CacheDB guardrail'larına bırak
 - üretilmiş API ergonomisini normal kod için koru
@@ -361,6 +516,7 @@ Hangi reçeteyi seçersen seç, production için şu kurallar geçerlidir:
 - her liste endpoint'inde tam veri grafiğini yüklemek
 - ilk sorgu içinde yüzlerce relation child'ı tek seferde çekmek
 - kötü liste şeklini projection'a taşımak yerine `hotEntityLimit` değerini sürekli büyütmek
+- `entityTtlSeconds` değerini "son 90 iş günü" gibi yorumlamak; bunun için `TIME_WINDOW` kullan
 - CacheDB belleğini kontrol etmek için Redis random veya all-keys eviction davranışına güvenmek
 - foreground repository trafiği ile background worker'ları aynı Redis pool'da toplamak
 - ölçmeden tüm kodu minimal repository stiline indirmek

@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -235,6 +236,96 @@ class MigrationWarmRunnerTest {
         assertTrue(result.notes().stream().anyMatch(note -> note.contains("Dry run completed")));
     }
 
+    @Test
+    void shouldResumeChildWarmFromCheckpoint() throws SQLException {
+        DataSource dataSource = newDataSource("warm-resume");
+        initializeSchema(dataSource);
+        seedRows(dataSource, List.of(
+                "INSERT INTO customer_account (customer_id, customer_type, entity_version, deleted_flag) VALUES (1, 'CORP', 11, 'N')",
+                "INSERT INTO customer_account (customer_id, customer_type, entity_version, deleted_flag) VALUES (2, 'SMB', 12, 'N')",
+                "INSERT INTO customer_order (order_id, customer_id, order_date, order_amount, entity_version, deleted_flag) VALUES (101, 1, TIMESTAMP '2026-04-01 10:00:00', 150.00, 5, 'N')",
+                "INSERT INTO customer_order (order_id, customer_id, order_date, order_amount, entity_version, deleted_flag) VALUES (102, 2, TIMESTAMP '2026-04-02 10:00:00', 250.00, 6, 'N')",
+                "INSERT INTO customer_order (order_id, customer_id, order_date, order_amount, entity_version, deleted_flag) VALUES (103, 404, TIMESTAMP '2026-04-03 10:00:00', 350.00, 7, 'N')",
+                "INSERT INTO customer_order (order_id, customer_id, order_date, order_amount, entity_version, deleted_flag) VALUES (104, 1, TIMESTAMP '2026-04-04 10:00:00', 450.00, 8, 'Y')"
+        ));
+
+        RecordingHydrator rootHydrator = new RecordingHydrator(
+                "CustomerEntity",
+                "customer_account",
+                "customer_id",
+                "entity_version",
+                "deleted_flag",
+                "Y"
+        );
+        RecordingHydrator childHydrator = new RecordingHydrator(
+                "CustomerOrderEntity",
+                "customer_order",
+                "order_id",
+                "entity_version",
+                "deleted_flag",
+                "Y"
+        );
+        InMemoryCheckpointStore checkpointStore = new InMemoryCheckpointStore();
+        checkpointStore.save(new MigrationWarmRunner.Checkpoint(
+                "resume-job",
+                "CHILD",
+                2L,
+                2L,
+                0L,
+                0L,
+                Instant.now()
+        ));
+        MigrationWarmRunner runner = new MigrationWarmRunner(
+                dataSource,
+                new RecordingHydratorFactory(rootHydrator, childHydrator),
+                checkpointStore
+        );
+
+        MigrationWarmRunner.Result result = runner.execute(new MigrationWarmRunner.Request(
+                new MigrationPlanner.Request(
+                        "customer-orders",
+                        "customer_account",
+                        "customer_id",
+                        "customer_order",
+                        "order_id",
+                        "customer_id",
+                        "order_date",
+                        "DESC",
+                        2L,
+                        4L,
+                        3L,
+                        4L,
+                        2,
+                        2,
+                        true,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false,
+                        true,
+                        true,
+                        true
+                ),
+                true,
+                false,
+                25,
+                25,
+                50,
+                "resume-job",
+                true,
+                2,
+                0
+        ));
+
+        assertEquals(4L, result.childRowsRead());
+        assertEquals(1L, result.childRowsHydrated());
+        assertEquals(List.of(103L), childHydrator.hydratedIds());
+        assertTrue(result.resumedFromCheckpoint() != null);
+        assertTrue(result.notes().stream().anyMatch(note -> note.contains("resumed from checkpoint")));
+        assertFalse(checkpointStore.load("resume-job").isPresent());
+    }
+
     private DataSource newDataSource(String name) {
         JdbcDataSource dataSource = new JdbcDataSource();
         dataSource.setURL("jdbc:h2:mem:" + name + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
@@ -412,5 +503,28 @@ class MigrationWarmRunnerTest {
     }
 
     private record HydratedRow(long version, Map<String, Object> row, Instant hydratedAt) {
+    }
+
+    private static final class InMemoryCheckpointStore implements MigrationWarmCheckpointStore {
+        private final AtomicReference<MigrationWarmRunner.Checkpoint> checkpoint = new AtomicReference<>();
+
+        @Override
+        public Optional<MigrationWarmRunner.Checkpoint> load(String jobId) {
+            MigrationWarmRunner.Checkpoint value = checkpoint.get();
+            if (value == null || !value.jobId().equals(jobId)) {
+                return Optional.empty();
+            }
+            return Optional.of(value);
+        }
+
+        @Override
+        public void save(MigrationWarmRunner.Checkpoint checkpoint) {
+            this.checkpoint.set(checkpoint);
+        }
+
+        @Override
+        public void clear(String jobId) {
+            checkpoint.updateAndGet(current -> current != null && current.jobId().equals(jobId) ? null : current);
+        }
     }
 }

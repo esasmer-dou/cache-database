@@ -1144,12 +1144,107 @@ BEST:
 - Redis has `maxmemory` configured.
 - CacheDB guardrails stop unsafe full-entity reads.
 
+Entity hot policy examples:
+
+```java
+CachePolicy latestAccessed = CachePolicy.builder()
+        .hotEntityLimit(10_000)
+        .hotPolicy(EntityHotPolicy.countWindow())
+        .build();
+```
+
+Use `COUNT_WINDOW` when the latest accessed or latest written records are the hot set.
+
+```java
+CachePolicy recentOrders = CachePolicy.builder()
+        .hotEntityLimit(100_000)
+        .hotPolicy(EntityHotPolicy.builder()
+                .mode(EntityHotPolicyMode.TIME_WINDOW)
+                .timeColumn("order_date")
+                .hotForDays(90)
+                .admitOnRead(false)
+                .evictWhenRejected(true)
+                .build())
+        .build();
+```
+
+Use `TIME_WINDOW` when the hot set is defined by business time, such as "orders from the last 90 days". Do not use `entityTtlSeconds` for this rule; TTL counts from the Redis write time.
+
+```java
+CachePolicy openTickets = CachePolicy.builder()
+        .hotEntityLimit(50_000)
+        .hotPolicy(EntityHotPolicy.stateWindow("status", List.of("OPEN", "PENDING")))
+        .build();
+```
+
+Use `STATE_WINDOW` when only specific business states should stay hot.
+
+```java
+CachePolicy activeRecentOrders = CachePolicy.builder()
+        .hotEntityLimit(100_000)
+        .hotPolicy(EntityHotPolicy.allOf(List.of(
+                EntityHotPolicy.timeWindow("order_date", Duration.ofDays(90).toSeconds()),
+                EntityHotPolicy.stateWindow("status", List.of("OPEN", "PENDING"))
+        )))
+        .build();
+```
+
+Use `COMPOSITE` when a real route has multiple hotness rules. Example:
+"recent order" is not enough for a support desk; only recent and still active
+orders should stay in Redis. If VIP customer rows must also stay hot, use
+`EntityHotPolicy.anyOf(...)` with a small custom predicate for the VIP rule.
+
+Route contract example for a customer order timeline:
+
+```java
+RouteCacheContract customerOrdersTimeline = RouteCacheContract.builder()
+        .routeName("CustomerOrdersTimelineRoute")
+        .entityName("OrderEntity")
+        .projectionName("CustomerOrderSummaryHot")
+        .pageSize(100)
+        .hotWindow(1_000)
+        .projectionRequired(true)
+        .maxColdReadSize(100)
+        .memoryBudgetBytes(256L * 1024L * 1024L)
+        .strictMode(RouteCacheStrictMode.FAIL_FAST)
+        .tenantQuota(new TenantCacheQuota("tenant_id", 50_000, 128L * 1024L * 1024L, true))
+        .build();
+```
+
+Apply it around the route:
+
+```java
+List<OrderSummaryReadModel> page = RouteCacheContext.supplyWithContract(
+        customerOrdersTimeline,
+        () -> summaries.query(customerOrdersQuery(customerId, 100))
+);
+```
+
+Use route contracts for screens where "fall back to entity query" is not safe:
+customer timelines, financial transactions, notification inboxes, support
+ticket queues, stock event feeds, leaderboards, and KPI dashboards.
+
+BEST:
+
+- Page size stays below the hot window.
+- Projection is required for large list routes.
+- Tenant quota prevents one tenant from consuming the whole Redis budget.
+- Cold reads are capped and intentionally routed to PostgreSQL/archive paths.
+- Redis memory estimate is calibrated after staging warm with actual
+  `MEMORY USAGE` samples.
+- Route tenant memory budget counts measured entity payload bytes, so repeated
+  updates of the same entity do not inflate the tenant budget artificially.
+
 ANTI-PATTERN:
 
 - Treat Redis as a full database mirror.
 - Increase `hotEntityLimit` whenever a screen is slow.
 - Use full entity reads for dashboard/reporting pages.
 - Rely on Redis eviction policy to clean up poor read shapes.
+- Treat `entityTtlSeconds` as "last 90 business days".
+- Let a production route silently fall back from projection to entity scan.
+- Run a large backfill/warm job without checkpoint, resume, and rate limit.
+- Update PostgreSQL outside CacheDB without CDC, outbox, or a projection refresh feed.
 
 ## Final Checklist
 

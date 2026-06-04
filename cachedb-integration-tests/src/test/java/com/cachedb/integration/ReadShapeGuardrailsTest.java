@@ -5,6 +5,8 @@ import com.reactor.cachedb.core.cache.PageWindow;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.guardrail.ReadShapeGuardrails;
 import com.reactor.cachedb.core.query.QuerySpec;
+import com.reactor.cachedb.core.route.RouteCacheContract;
+import com.reactor.cachedb.core.route.RouteCacheStrictMode;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -119,6 +121,23 @@ class ReadShapeGuardrailsTest {
                         QuerySpec.builder().limit(1_001).build(),
                         ReadShapeGuardrailConfig.defaults()
                 )
+        );
+    }
+
+    @Test
+    void shouldFailFastWhenRouteRequiresProjectionButEntityFallbackResolved() {
+        RouteCacheContract contract = RouteCacheContract.builder()
+                .routeName("customer-orders-timeline")
+                .entityName("OrderEntity")
+                .projectionName("CustomerOrderSummaryHot")
+                .projectionRequired(true)
+                .strictMode(RouteCacheStrictMode.FAIL_FAST)
+                .build();
+
+        assertDoesNotThrow(() -> ReadShapeGuardrails.validateRouteContract(contract, "projection:CustomerOrderSummaryHot"));
+        assertThrows(
+                IllegalStateException.class,
+                () -> ReadShapeGuardrails.validateRouteContract(contract, "entity:OrderEntity")
         );
     }
 }

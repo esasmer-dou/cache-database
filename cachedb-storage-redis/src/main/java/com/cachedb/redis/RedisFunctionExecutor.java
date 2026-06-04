@@ -41,12 +41,13 @@ public final class RedisFunctionExecutor {
             String compactionStreamKey,
             String compactionStatsKey,
             WriteOperation<T, ID> operation,
-            CachePolicy cachePolicy
+            CachePolicy cachePolicy,
+            boolean cacheEntity
     ) {
         Object result = jedis.fcall(
                 config.upsertFunctionName(),
                 List.of(entityKey, versionKey, tombstoneKey, streamKey, compactionPayloadKey, compactionPendingKey, compactionStreamKey, compactionStatsKey),
-                argsMapper.upsertArgs(operation, cachePolicy, guardrailConfig)
+                argsMapper.upsertArgs(operation, cachePolicy, guardrailConfig, cacheEntity)
         );
         return toLong(result);
     }

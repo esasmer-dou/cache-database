@@ -94,7 +94,7 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
             return;
         }
         try {
-            jedis.xgroupCreate(config.streamKey(), config.consumerGroup(), StreamEntryID.LAST_ENTRY, true);
+            jedis.xgroupCreate(config.streamKey(), config.consumerGroup(), new StreamEntryID("0-0"), true);
         } catch (JedisDataException exception) {
             if (!exception.getMessage().contains("BUSYGROUP")) {
                 throw exception;
@@ -160,9 +160,9 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
         AdminIncidentRecord record = toIncidentRecord(fields);
         boolean delivered = deliveryManager.replay(channel, record);
         if (delivered) {
+            replayedCount.incrementAndGet();
             publishRecovery("REPLAYED", channel, record, attempts, fields);
             ackAndDelete(entry.getID());
-            replayedCount.incrementAndGet();
             return;
         }
         if (attempts >= Math.max(1, config.maxReplayAttempts())) {

@@ -3,6 +3,8 @@ package com.reactor.cachedb.integration;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfigOverrides;
 import com.reactor.cachedb.core.config.PersistenceSemantics;
+import com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator;
+import com.reactor.cachedb.core.cache.EntityHotPolicyMode;
 import com.reactor.cachedb.starter.PostgresConnectionConfig;
 import com.reactor.cachedb.starter.RedisConnectionConfig;
 import org.junit.jupiter.api.Test;
@@ -20,6 +22,10 @@ class CacheDatabaseConfigOverridesTest {
         Properties properties = new Properties();
         properties.setProperty("cachedb.config.writeBehind.workerThreads", "7");
         properties.setProperty("cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit", "222");
+        properties.setProperty("cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode", "TIME_WINDOW");
+        properties.setProperty("cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.timeColumn", "order_date");
+        properties.setProperty("cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds", "7776000");
+        properties.setProperty("cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead", "false");
         properties.setProperty("cachedb.config.adminHttp.dashboardTitle", "Tuned Admin");
         properties.setProperty("cachedb.config.adminMonitoring.enabled", "true");
         properties.setProperty("cachedb.config.redisGuardrail.usedMemoryWarnBytes", "1048576");
@@ -44,6 +50,10 @@ class CacheDatabaseConfigOverridesTest {
 
         assertEquals(7, config.writeBehind().workerThreads());
         assertEquals(222, config.resourceLimits().defaultCachePolicy().hotEntityLimit());
+        assertEquals(EntityHotPolicyMode.TIME_WINDOW, config.resourceLimits().defaultCachePolicy().hotPolicy().mode());
+        assertEquals("order_date", config.resourceLimits().defaultCachePolicy().hotPolicy().timeColumn());
+        assertEquals(7_776_000L, config.resourceLimits().defaultCachePolicy().hotPolicy().hotForSeconds());
+        assertFalse(config.resourceLimits().defaultCachePolicy().hotPolicy().admitOnRead());
         assertEquals("Tuned Admin", config.adminHttp().dashboardTitle());
         assertTrue(config.adminMonitoring().enabled());
         assertEquals(1_048_576L, config.redisGuardrail().usedMemoryWarnBytes());
@@ -126,6 +136,29 @@ class CacheDatabaseConfigOverridesTest {
         assertEquals("cart", config.redisGuardrail().entityPolicies().get(0).namespace());
         assertTrue(config.redisGuardrail().entityPolicies().get(0).shedQueryIndexReads());
         assertFalse(config.redisGuardrail().entityPolicies().get(1).shedPlannerLearning());
+    }
+
+    @Test
+    void shouldParseCompositeHotPolicyOverride() {
+        Properties properties = new Properties();
+        properties.setProperty("cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode", "COMPOSITE");
+        properties.setProperty("cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.compositeOperator", "ALL");
+        properties.setProperty(
+                "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.children",
+                "TIME_WINDOW:order_date:7776000;STATE_WINDOW:status:OPEN|PENDING"
+        );
+
+        CacheDatabaseConfig config = CacheDatabaseConfigOverrides.apply(
+                CacheDatabaseConfig.defaults(),
+                properties,
+                CacheDatabaseConfigOverrides.DEFAULT_PREFIX
+        );
+
+        assertEquals(EntityHotPolicyMode.COMPOSITE, config.resourceLimits().defaultCachePolicy().hotPolicy().mode());
+        assertEquals(EntityHotPolicyCompositeOperator.ALL, config.resourceLimits().defaultCachePolicy().hotPolicy().compositeOperator());
+        assertEquals(2, config.resourceLimits().defaultCachePolicy().hotPolicy().children().size());
+        assertEquals(EntityHotPolicyMode.TIME_WINDOW, config.resourceLimits().defaultCachePolicy().hotPolicy().children().get(0).mode());
+        assertEquals(EntityHotPolicyMode.STATE_WINDOW, config.resourceLimits().defaultCachePolicy().hotPolicy().children().get(1).mode());
     }
 
     @Test

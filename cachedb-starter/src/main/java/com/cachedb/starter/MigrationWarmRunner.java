@@ -26,16 +26,30 @@ final class MigrationWarmRunner {
 
     private final DataSource dataSource;
     private final WarmEntityHydratorFactory hydratorFactory;
+    private final MigrationWarmCheckpointStore checkpointStore;
     private final MigrationPlanner planner = new MigrationPlanner();
 
     MigrationWarmRunner(DataSource dataSource, WarmEntityHydratorFactory hydratorFactory) {
+        this(dataSource, hydratorFactory, MigrationWarmCheckpointStore.noop());
+    }
+
+    MigrationWarmRunner(
+            DataSource dataSource,
+            WarmEntityHydratorFactory hydratorFactory,
+            MigrationWarmCheckpointStore checkpointStore
+    ) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.hydratorFactory = Objects.requireNonNull(hydratorFactory, "hydratorFactory");
+        this.checkpointStore = checkpointStore == null ? MigrationWarmCheckpointStore.noop() : checkpointStore;
     }
 
     Result execute(Request request) {
         Request normalized = Objects.requireNonNull(request, "request").normalize();
         MigrationPlanner.Result plan = planner.plan(normalized.plannerRequest());
+        Optional<Checkpoint> loadedCheckpoint = normalized.resume()
+                ? loadCheckpoint(normalized.jobId())
+                : Optional.empty();
+        long childSkipRows = loadedCheckpoint.map(Checkpoint::childRowsRead).orElse(0L);
         WarmEntityHydrator childHydrator = hydratorFactory.resolve(plan.request().childTableOrEntity())
                 .orElseThrow(() -> missingRegisteredEntity("child", plan.request().childTableOrEntity()));
         WarmEntityHydrator rootHydrator = normalized.warmRootRows()
@@ -75,7 +89,10 @@ final class MigrationWarmRunner {
                     projectionOnlyChildWarm,
                     forceImmediateProjectionRefresh,
                     reindexQueryIndexes,
-                    referencedRootIds
+                    referencedRootIds,
+                    normalized,
+                    childSkipRows,
+                    startedAtNanos
             );
             if (rootHydrator != null && !referencedRootIds.isEmpty()) {
                 rootCounters = warmRootRows(
@@ -119,9 +136,19 @@ final class MigrationWarmRunner {
         if (plan.rankedProjectionRequired()) {
             notes.add("Ranked / global-sorted routes used a single top-window warm query instead of a per-parent partitioned warm query.");
         }
+        if (loadedCheckpoint.isPresent()) {
+            notes.add("Warm execution resumed from checkpoint " + normalized.jobId()
+                    + " at childRowsRead=" + loadedCheckpoint.get().childRowsRead() + ".");
+        }
+        if (!normalized.dryRun() && normalized.rateLimitRowsPerSecond() > 0) {
+            notes.add("Warm execution applied a row-rate limit of " + normalized.rateLimitRowsPerSecond() + " rows/sec.");
+        }
         long missingReferencedRoots = Math.max(0L, referencedRootIds.size() - rootCounters.hydratedRows());
         if (missingReferencedRoots > 0L) {
             notes.add("Some referenced root ids were not found in PostgreSQL during warm execution: " + missingReferencedRoots);
+        }
+        if (!normalized.dryRun()) {
+            clearCheckpoint(normalized.jobId());
         }
 
         return new Result(
@@ -142,7 +169,8 @@ final class MigrationWarmRunner {
                 List.copyOf(notes),
                 startedAt,
                 completedAt,
-                durationMillis
+                durationMillis,
+                loadedCheckpoint.orElse(null)
         );
     }
 
@@ -164,11 +192,16 @@ final class MigrationWarmRunner {
             boolean projectionOnlyWarm,
             boolean forceImmediateProjectionRefresh,
             boolean reindexQueryIndexes,
-            LinkedHashSet<Object> referencedRootIds
+            LinkedHashSet<Object> referencedRootIds,
+            Request request,
+            long skipRows,
+            long startedAtNanos
     ) throws SQLException {
-        long readRows = 0L;
+        long scannedRows = 0L;
+        long readRows = Math.max(0L, skipRows);
         long hydratedRows = 0L;
         long skippedDeletedRows = 0L;
+        long lastCheckpointAtRows = readRows;
         int hydrateBatchSize = Math.max(32, Math.min(fetchSize, 512));
         ArrayList<Map<String, Object>> pendingRows = dryRun ? null : new ArrayList<>(hydrateBatchSize);
         ArrayList<Long> pendingVersions = dryRun ? null : new ArrayList<>(hydrateBatchSize);
@@ -176,6 +209,10 @@ final class MigrationWarmRunner {
             statement.setFetchSize(Math.max(1, fetchSize));
             try (ResultSet resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
+                    scannedRows++;
+                    if (scannedRows <= skipRows) {
+                        continue;
+                    }
                     Map<String, Object> row = readRow(resultSet);
                     readRows++;
                     if (isDeleted(row, hydrator)) {
@@ -198,6 +235,16 @@ final class MigrationWarmRunner {
                                     forceImmediateProjectionRefresh,
                                     reindexQueryIndexes
                             );
+                            maybeRateLimit(request, startedAtNanos, hydratedRows);
+                            lastCheckpointAtRows = maybeSaveCheckpoint(
+                                    request,
+                                    "CHILD",
+                                    readRows,
+                                    hydratedRows,
+                                    0L,
+                                    0L,
+                                    lastCheckpointAtRows
+                            );
                             pendingRows.clear();
                             pendingVersions.clear();
                         }
@@ -215,6 +262,7 @@ final class MigrationWarmRunner {
                     forceImmediateProjectionRefresh,
                     reindexQueryIndexes
             );
+            maybeSaveCheckpoint(request, "CHILD", readRows, hydratedRows, 0L, 0L, lastCheckpointAtRows);
         }
         return new WarmCounters(readRows, hydratedRows, skippedDeletedRows);
     }
@@ -288,6 +336,68 @@ final class MigrationWarmRunner {
             }
         }
         return new WarmCounters(readRows, hydratedRows, skippedDeletedRows);
+    }
+
+    private Optional<Checkpoint> loadCheckpoint(String jobId) {
+        try {
+            return checkpointStore.load(jobId);
+        } catch (RuntimeException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private long maybeSaveCheckpoint(
+            Request request,
+            String phase,
+            long childRowsRead,
+            long childRowsHydrated,
+            long rootRowsRead,
+            long rootRowsHydrated,
+            long lastCheckpointAtRows
+    ) {
+        if (request.dryRun() || request.checkpointEveryRows() <= 0) {
+            return lastCheckpointAtRows;
+        }
+        if (childRowsRead - lastCheckpointAtRows < request.checkpointEveryRows()) {
+            return lastCheckpointAtRows;
+        }
+        try {
+            checkpointStore.save(MigrationWarmCheckpointStore.checkpoint(
+                    request.jobId(),
+                    phase,
+                    childRowsRead,
+                    childRowsHydrated,
+                    rootRowsRead,
+                    rootRowsHydrated
+            ));
+            return childRowsRead;
+        } catch (RuntimeException ignored) {
+            return lastCheckpointAtRows;
+        }
+    }
+
+    private void clearCheckpoint(String jobId) {
+        try {
+            checkpointStore.clear(jobId);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void maybeRateLimit(Request request, long startedAtNanos, long hydratedRows) {
+        if (request.dryRun() || request.rateLimitRowsPerSecond() <= 0 || hydratedRows <= 0L) {
+            return;
+        }
+        long expectedNanos = (hydratedRows * 1_000_000_000L) / Math.max(1, request.rateLimitRowsPerSecond());
+        long elapsedNanos = System.nanoTime() - startedAtNanos;
+        long sleepNanos = expectedNanos - elapsedNanos;
+        if (sleepNanos <= 0L) {
+            return;
+        }
+        try {
+            Thread.sleep(sleepNanos / 1_000_000L, (int) (sleepNanos % 1_000_000L));
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private String buildRootChunkSql(String tableName, String rootPrimaryKeyColumn, int parameterCount) {
@@ -407,17 +517,47 @@ final class MigrationWarmRunner {
             boolean dryRun,
             int childFetchSize,
             int rootFetchSize,
-            int rootBatchSize
+            int rootBatchSize,
+            String jobId,
+            boolean resume,
+            int checkpointEveryRows,
+            int rateLimitRowsPerSecond
     ) {
+        Request(
+                MigrationPlanner.Request plannerRequest,
+                boolean warmRootRows,
+                boolean dryRun,
+                int childFetchSize,
+                int rootFetchSize,
+                int rootBatchSize
+        ) {
+            this(plannerRequest, warmRootRows, dryRun, childFetchSize, rootFetchSize, rootBatchSize, "", false, 1_000, 0);
+        }
+
         Request normalize() {
+            MigrationPlanner.Request normalizedPlannerRequest = plannerRequest == null
+                    ? MigrationPlanner.Request.defaults()
+                    : plannerRequest.normalize();
             return new Request(
-                    plannerRequest == null ? MigrationPlanner.Request.defaults() : plannerRequest.normalize(),
+                    normalizedPlannerRequest,
                     warmRootRows,
                     dryRun,
                     Math.max(1, childFetchSize),
                     Math.max(1, rootFetchSize),
-                    Math.max(1, rootBatchSize)
+                    Math.max(1, rootBatchSize),
+                    normalizeJobId(jobId, normalizedPlannerRequest.workloadName()),
+                    resume,
+                    Math.max(0, checkpointEveryRows),
+                    Math.max(0, rateLimitRowsPerSecond)
             );
+        }
+
+        private static String normalizeJobId(String value, String fallback) {
+            String candidate = value == null || value.isBlank() ? fallback : value.trim();
+            if (candidate == null || candidate.isBlank()) {
+                return "migration-warm";
+            }
+            return candidate.replaceAll("[^A-Za-z0-9_.:-]", "_");
         }
     }
 
@@ -439,7 +579,19 @@ final class MigrationWarmRunner {
             List<String> notes,
             Instant startedAt,
             Instant completedAt,
-            long durationMillis
+            long durationMillis,
+            Checkpoint resumedFromCheckpoint
+    ) {
+    }
+
+    record Checkpoint(
+            String jobId,
+            String phase,
+            long childRowsRead,
+            long childRowsHydrated,
+            long rootRowsRead,
+            long rootRowsHydrated,
+            Instant updatedAt
     ) {
     }
 

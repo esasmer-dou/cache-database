@@ -45,6 +45,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    services:
+      redis:
+        image: redis:7.2
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgresql
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,7 +82,7 @@ jobs:
 
       - name: Run production smoke and benchmark evidence
         shell: pwsh
-        run: ./tools/ci/run-production-evidence.ps1
+        run: ./tools/ci/run-production-evidence.ps1 -MavenExecutable mvn -RedisUri redis://127.0.0.1:56379 -PostgresUrl jdbc:postgresql://127.0.0.1:55432/postgres
 
       - name: Build evidence summary
         shell: pwsh
@@ -189,6 +213,63 @@ jobs:
           name: redis-failover-evidence
           path: |
             target/cachedb-redis-failover-reports/**
+            cachedb-production-tests/target/surefire-reports/**
+          if-no-files-found: error
+          retention-days: 14
+
+  production-scenario-certification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      redis:
+        image: redis:7.2
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgresql
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run production scenario certification
+        shell: pwsh
+        run: ./tools/ci/run-production-scenario-certification.ps1 -MavenExecutable mvn -RedisUri redis://127.0.0.1:56379
+
+      - name: Publish scenario certification summary
+        shell: pwsh
+        run: Get-Content ./target/cachedb-prodtest-reports/production-scenario-certification.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload scenario certification evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-scenario-certification
+          path: |
+            target/cachedb-prodtest-reports/production-scenario-certification.*
             cachedb-production-tests/target/surefire-reports/**
           if-no-files-found: error
           retention-days: 14
