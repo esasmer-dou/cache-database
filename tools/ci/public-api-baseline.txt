@@ -199,6 +199,51 @@ public final class com.reactor.cachedb.core.cache.PageWindow extends java.lang.R
   public int pageSize();
 }
 
+## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeApplyException
+public final class com.reactor.cachedb.core.change.ExternalChangeApplyException extends java.lang.RuntimeException {
+  public com.reactor.cachedb.core.change.ExternalChangeApplyException(com.reactor.cachedb.core.change.ExternalChangeApplyResult);
+  public com.reactor.cachedb.core.change.ExternalChangeApplyException(com.reactor.cachedb.core.change.ExternalChangeApplyResult, java.lang.Throwable);
+  public com.reactor.cachedb.core.change.ExternalChangeApplyResult result();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeApplyMode
+public final class com.reactor.cachedb.core.change.ExternalChangeApplyMode extends java.lang.Enum<com.reactor.cachedb.core.change.ExternalChangeApplyMode> {
+  public static final com.reactor.cachedb.core.change.ExternalChangeApplyMode CACHE_ONLY;
+  public static final com.reactor.cachedb.core.change.ExternalChangeApplyMode CACHE_AND_WRITE_BEHIND;
+  public static com.reactor.cachedb.core.change.ExternalChangeApplyMode[] values();
+  public static com.reactor.cachedb.core.change.ExternalChangeApplyMode valueOf(java.lang.String);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeApplyResult
+public final class com.reactor.cachedb.core.change.ExternalChangeApplyResult extends java.lang.Record {
+  public com.reactor.cachedb.core.change.ExternalChangeApplyResult(com.reactor.cachedb.core.change.ExternalChangeApplyStatus, java.lang.String, java.lang.Object, com.reactor.cachedb.core.change.ExternalChangeType, com.reactor.cachedb.core.change.ExternalChangeApplyMode, java.lang.String, java.lang.String, java.lang.String);
+  public static com.reactor.cachedb.core.change.ExternalChangeApplyResult applied(com.reactor.cachedb.core.change.ExternalChangeEvent, java.lang.Object, com.reactor.cachedb.core.change.ExternalChangeApplyMode, java.lang.String);
+  public static com.reactor.cachedb.core.change.ExternalChangeApplyResult ignored(com.reactor.cachedb.core.change.ExternalChangeEvent, java.lang.Object, com.reactor.cachedb.core.change.ExternalChangeApplyMode, java.lang.String);
+  public static com.reactor.cachedb.core.change.ExternalChangeApplyResult failed(com.reactor.cachedb.core.change.ExternalChangeEvent, java.lang.Object, com.reactor.cachedb.core.change.ExternalChangeApplyMode, java.lang.String, java.lang.Throwable);
+  public boolean applied();
+  public boolean failed();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public com.reactor.cachedb.core.change.ExternalChangeApplyStatus status();
+  public java.lang.String entityName();
+  public java.lang.Object id();
+  public com.reactor.cachedb.core.change.ExternalChangeType type();
+  public com.reactor.cachedb.core.change.ExternalChangeApplyMode mode();
+  public java.lang.String detail();
+  public java.lang.String errorType();
+  public java.lang.String errorMessage();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeApplyStatus
+public final class com.reactor.cachedb.core.change.ExternalChangeApplyStatus extends java.lang.Enum<com.reactor.cachedb.core.change.ExternalChangeApplyStatus> {
+  public static final com.reactor.cachedb.core.change.ExternalChangeApplyStatus APPLIED;
+  public static final com.reactor.cachedb.core.change.ExternalChangeApplyStatus IGNORED;
+  public static final com.reactor.cachedb.core.change.ExternalChangeApplyStatus FAILED;
+  public static com.reactor.cachedb.core.change.ExternalChangeApplyStatus[] values();
+  public static com.reactor.cachedb.core.change.ExternalChangeApplyStatus valueOf(java.lang.String);
+}
+
 ## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeEvent
 public final class com.reactor.cachedb.core.change.ExternalChangeEvent extends java.lang.Record {
   public com.reactor.cachedb.core.change.ExternalChangeEvent(java.lang.String, java.lang.Object, com.reactor.cachedb.core.change.ExternalChangeType, java.util.Map<java.lang.String, java.lang.Object>, long, java.time.Instant, java.lang.String);
@@ -218,6 +263,12 @@ public final class com.reactor.cachedb.core.change.ExternalChangeEvent extends j
 public interface com.reactor.cachedb.core.change.ExternalChangeFeedAdapter extends java.lang.AutoCloseable {
   public abstract void start(com.reactor.cachedb.core.change.ExternalChangeSink);
   public abstract void close();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeHydrationRepository
+public interface com.reactor.cachedb.core.change.ExternalChangeHydrationRepository<T, ID> {
+  public abstract T hydrateExternalUpsert(T, long);
+  public abstract void hydrateExternalDelete(ID, long);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.change.ExternalChangeSink
@@ -2192,7 +2243,7 @@ public final class com.reactor.cachedb.redis.RedisDeadLetterRecoveryWorker imple
 }
 
 ## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisEntityRepository
-public final class com.reactor.cachedb.redis.RedisEntityRepository<T, ID> implements com.reactor.cachedb.core.api.EntityRepository<T, ID> {
+public final class com.reactor.cachedb.redis.RedisEntityRepository<T, ID> implements com.reactor.cachedb.core.api.EntityRepository<T, ID>, com.reactor.cachedb.core.change.ExternalChangeHydrationRepository<T, ID> {
   public com.reactor.cachedb.redis.RedisEntityRepository(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.queue.WriteBehindQueue, com.reactor.cachedb.redis.RedisKeyStrategy, com.reactor.cachedb.core.plan.FetchPlan, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.redis.RedisFunctionExecutor, com.reactor.cachedb.redis.RedisProducerGuard, com.reactor.cachedb.core.config.RedisGuardrailConfig, java.lang.String, java.lang.String, int, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.redis.RedisPageCacheManager<T, ID>, com.reactor.cachedb.core.query.QueryEvaluator, com.reactor.cachedb.redis.RedisQueryIndexManager<T, ID>, com.reactor.cachedb.core.queue.StoragePerformanceCollector, redis.clients.jedis.JedisPooled, com.reactor.cachedb.redis.ProjectionRefreshDispatcher, com.reactor.cachedb.redis.RedisProjectionRefreshQueue);
   public java.util.Optional<T> findById(ID);
   public java.util.List<T> findAll(java.util.Collection<ID>);
@@ -2202,6 +2253,7 @@ public final class com.reactor.cachedb.redis.RedisEntityRepository<T, ID> implem
   public T save(T);
   public T hydrate(T, long);
   public T hydrateWarm(T, long);
+  public T hydrateExternalUpsert(T, long);
   public void hydrateWarmBatch(java.util.List<T>, java.util.List<java.lang.Long>);
   public void hydrateWarmBatch(java.util.List<T>, java.util.List<java.lang.Long>, boolean);
   public void hydrateWarmBatch(java.util.List<T>, java.util.List<java.lang.Long>, boolean, boolean);
@@ -2211,6 +2263,7 @@ public final class com.reactor.cachedb.redis.RedisEntityRepository<T, ID> implem
   public <P> com.reactor.cachedb.core.api.ProjectionRepository<P, ID> projected(com.reactor.cachedb.core.projection.EntityProjection<T, P, ID>);
   public com.reactor.cachedb.core.plan.FetchPlan fetchPlan();
   public com.reactor.cachedb.core.cache.CachePolicy cachePolicy();
+  public void hydrateExternalDelete(ID, long);
 }
 
 ## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisFunctionArgsMapper
@@ -2861,6 +2914,13 @@ public final class com.reactor.cachedb.starter.EffectiveTuningSnapshot extends j
   public int explicitOverrideCount();
   public int entryCount();
   public java.util.List<com.reactor.cachedb.starter.EffectiveTuningEntry> items();
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.ExternalChangeApplyRunner
+public final class com.reactor.cachedb.starter.ExternalChangeApplyRunner implements com.reactor.cachedb.core.change.ExternalChangeSink {
+  public static com.reactor.cachedb.starter.ExternalChangeApplyRunner$Builder builder(com.reactor.cachedb.core.api.CacheSession, com.reactor.cachedb.core.registry.EntityRegistry);
+  public void accept(com.reactor.cachedb.core.change.ExternalChangeEvent);
+  public com.reactor.cachedb.core.change.ExternalChangeApplyResult apply(com.reactor.cachedb.core.change.ExternalChangeEvent);
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.FailingSignalSnapshot

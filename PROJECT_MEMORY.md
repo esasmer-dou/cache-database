@@ -190,6 +190,12 @@ explicitly.
   - cache-only UPSERT hydration
   - cache-only DELETE tombstone/index/projection cleanup
   - stale external event guard based on Redis version/tombstone version
+- Public API compatibility decision:
+  - the new `ExternalChangeApply*` and `ExternalChangeHydrationRepository`
+    types are an intentional public beta API expansion
+  - the baseline in `tools/ci/public-api-baseline.txt` must include these
+    signatures
+  - this is not a breaking change for existing users
 
 ### Production Evidence and CI
 
