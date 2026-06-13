@@ -14,7 +14,7 @@ kanıtı vardır.
 
 | Kavram | Kısa açıklama |
 | --- | --- |
-| Entity | PostgreSQL tablosunu ve Redis'teki hot entity payload'unu temsil eder |
+| Entity | Kaynak veritabanı tablosunu ve Redis'teki hot entity payload'unu temsil eder |
 | Repository | Entity üzerinde save, find, query ve delete işlemlerini yapar |
 | Hot set | Redis'te tutulmasına izin verilen sıcak veri kümesi |
 | Hot policy | Bir satırın Redis'e kabul edilip edilmeyeceğini belirleyen kural |
@@ -26,24 +26,24 @@ kanıtı vardır.
 | Route contract | Bir endpoint veya ekran için page size, hot window, projection zorunluluğu ve limit sözleşmesi |
 | Warm | Redis hot set'in production öncesi kontrollü doldurulması |
 | Dry-run warm | Redis'i değiştirmeden warm planının ve SQL maliyetinin görülmesi |
-| Side-by-side comparison | PostgreSQL baseline ile CacheDB sonucunun veri ve gecikme açısından karşılaştırılması |
+| Side-by-side comparison | Kaynak veritabanı baseline'ı ile CacheDB sonucunun veri ve gecikme açısından karşılaştırılması |
 | Cutover | Belirli bir route'un gerçek trafikte CacheDB yoluna alınması |
 
-## PostgreSQL ve Redis Rolleri
+## Kaynak Veritabanı ve Redis Rolleri
 
-CacheDB'de PostgreSQL ve Redis'in rolleri karışmamalıdır.
+CacheDB'de kalıcı kaynak veritabanı ve Redis'in rolleri karışmamalıdır.
 
 | Katman | Rol |
 | --- | --- |
-| PostgreSQL | Kalıcı doğruluk kaynağı, tam geçmiş, arşiv, replay ve reporting tabanı |
+| Kaynak veritabanı | Kalıcı doğruluk kaynağı, tam geçmiş, arşiv, replay ve reporting tabanı |
 | Redis | Sıcak entity, projection window, index, stream, coordination ve telemetry katmanı |
 
-PostgreSQL'i devreden çıkarmak hedef değildir. Redis, sıcak yolun düşük
-gecikmeli çalışması için kullanılır; kalıcı geçmiş PostgreSQL'de kalır.
+Kalıcı kaynak veritabanını devreden çıkarmak hedef değildir. Redis, sıcak yolun
+düşük gecikmeli çalışması için kullanılır; kalıcı geçmiş kaynak veritabanında kalır.
 
 ANTI-PATTERN: Tüm veritabanını Redis'e taşımaya çalışmak.
 
-BEST: Her production route için "Redis'te ne kalacak, PostgreSQL'de ne
+BEST: Her production route için "Redis'te ne kalacak, kaynak veritabanında ne
 kalacak?" kararını açıkça vermek.
 
 ## Entity
@@ -248,7 +248,7 @@ Route contract, bir ekran veya API için çalışma sözleşmesidir.
 | `/customers/{id}/orders` | Projection gerekli, müşteri başına son 1000 summary |
 | `/orders/{id}` | Tek `OrderEntity`, küçük line preview |
 | `/dashboard/risk` | Ranked projection, global top 100 |
-| `/reports/monthly` | PostgreSQL/reporting yolu, Redis hot set değil |
+| `/reports/monthly` | Kaynak veritabanı/reporting yolu, Redis hot set değil |
 
 ## Warm ve Dry-Run
 
@@ -270,7 +270,7 @@ BEST sıra:
 
 ## Side-by-Side Comparison
 
-Bu adım, PostgreSQL baseline sonucu ile CacheDB sonucunu karşılaştırır.
+Bu adım, kaynak veritabanı baseline sonucu ile CacheDB sonucunu karşılaştırır.
 
 Kontrol edilen ana başlıklar:
 
@@ -285,8 +285,8 @@ Veri eşleşmesi yoksa latency iyi olsa bile cutover yapılmamalıdır.
 
 ## Outbox ve CDC
 
-CacheDB dışındaki sistemler PostgreSQL'i değiştiriyorsa Redis hot set stale
-kalabilir. Bu durumda outbox/CDC gerekir.
+CacheDB dışındaki sistemler kaynak veritabanını değiştiriyorsa Redis hot set
+stale kalabilir. Bu durumda outbox/CDC gerekir.
 
 Kural:
 
@@ -294,19 +294,18 @@ Kural:
 - CacheDB dışından yazılan veri ancak outbox/CDC ile CacheDB'ye bildirilirse
   hot set güncel kalır.
 
-BEST: PostgreSQL değişikliklerini outbox tablosuna veya CDC stream'ine yaz,
-CacheDB adapter ile oku, idempotent apply runner ile entity/projection
-yenile.
+BEST: Kaynak veritabanı değişikliklerini outbox tablosuna veya CDC stream'ine
+yaz, CacheDB adapter ile oku, idempotent apply runner ile entity/projection yenile.
 
-ANTI-PATTERN: PostgreSQL'i başka sistemler değiştirirken Redis'in kendiliğinden
-güncel kalmasını beklemek.
+ANTI-PATTERN: Kaynak veritabanını başka sistemler değiştirirken Redis'in
+kendiliğinden güncel kalmasını beklemek.
 
 ## Production Kabulleri
 
 CacheDB production kullanımında şu kabuller geçerlidir:
 
 - Redis HA gerçek bir altyapı bağımlılığıdır.
-- PostgreSQL tam geçmişin ve kalıcı doğruluğun sahibidir.
+- Kaynak veritabanı tam geçmişin ve kalıcı doğruluğun sahibidir.
 - Admin UI güvenli ağ veya gateway arkasında olmalıdır.
 - Projection gereken route, production'da entity scan'e düşmemelidir.
 - Hot set büyümesi policy, quota ve Redis maxmemory ile sınırlandırılmalıdır.
@@ -326,7 +325,7 @@ ACCEPTABLE:
 
 - küçük detail ekranlarında sınırlı relation preview kullanmak
 - kontrollü pilotta yalnızca birkaç route'u CacheDB'ye almak
-- eski arşiv sorgularını PostgreSQL cold path'te bırakmak
+- eski arşiv sorgularını kaynak veritabanı cold path'inde bırakmak
 
 ANTI-PATTERN:
 

@@ -1,8 +1,8 @@
 # Migration Planner
 
 The Migration Planner is the admin UI flow for teams that already have
-PostgreSQL tables and an existing ORM route, but want to evaluate a Redis-first
-CacheDB path without guessing.
+supported JDBC source-database tables and an existing ORM route, but want to
+evaluate a Redis-first CacheDB path without guessing.
 
 It does not perform a blind production cutover. It helps you discover, plan,
 warm, compare, and report one route at a time.
@@ -11,7 +11,7 @@ warm, compare, and report one route at a time.
 
 Use the planner when:
 
-- you already have PostgreSQL tables
+- you already have PostgreSQL tables, or MSSQL tables on the explicit beta provider
 - the current route is served by JPA, Hibernate, MyBatis, JDBC, or another ORM/data layer
 - a list/detail route is getting expensive as child rows grow
 - you need to know whether a route should use entity reads, projection reads, or ranked projection reads
@@ -35,7 +35,7 @@ http://127.0.0.1:8090/cachedb-admin/migration-planner
 
 ## Recommended UI Flow
 
-### 1. Discover PostgreSQL Schema
+### 1. Discover Source Database Schema
 
 Click the schema discovery action first.
 
@@ -48,8 +48,8 @@ Expected result:
 - suggested root/child pairs can be applied to the form
 
 If discovery fails, check that the Spring `DataSource` points to the database
-you expect and that the application user can read metadata from
-`information_schema`.
+you expect and that the application user can read JDBC metadata for tables,
+primary keys, and foreign keys.
 
 ### 2. Choose A Route Candidate
 
@@ -103,7 +103,7 @@ Expected result:
 
 - recommended CacheDB surface
 - Redis placement decision
-- PostgreSQL placement decision
+- source database placement decision
 - Redis memory estimate based on selected hot-window parameters
 - projection requirement
 - ranked projection requirement
@@ -117,7 +117,7 @@ If no plan appears, the page should now show a server-side error instead of
 silently leaving the result area empty.
 
 The Redis memory estimate is intentionally approximate. It samples a bounded
-number of PostgreSQL rows, uses planner row-count/hot-window inputs, then
+number of source-database rows, uses planner row-count/hot-window inputs, then
 separates payload, projection, hot-set/index, page-cache, stream, and safety
 headroom components. Treat it as pre-warm capacity guidance. After staging warm,
 validate the estimate with Redis `used_memory` and `MEMORY USAGE` samples.
@@ -144,7 +144,7 @@ Click dry-run before mutating Redis.
 
 Expected result:
 
-- PostgreSQL child rows are counted
+- source-database child rows are counted
 - referenced root rows are counted
 - generated warm SQL is visible
 - Redis is not changed
@@ -158,7 +158,7 @@ Run real warm only in staging or a safe test environment.
 
 Expected result:
 
-- selected child hot window is read from PostgreSQL
+- selected child hot window is read from the source database
 - Redis entity surfaces are hydrated directly
 - registered projections are refreshed inline
 - optional referenced root rows are warmed
@@ -196,7 +196,7 @@ Click comparison after warm.
 
 Expected result:
 
-- baseline PostgreSQL latency
+- source-database baseline latency
 - CacheDB route latency
 - route label such as `entity:...` or `projection:...`
 - first-page ID parity for sampled roots
@@ -208,7 +208,7 @@ Do not cut over if:
 - matched samples are not exact
 - CacheDB route falls back to entity when planner requires projection
 - ordering differs
-- p95 latency is materially worse than baseline
+- p95 latency is materially worse than the source-database baseline
 - warm set does not represent the production hot window
 
 ### 9. Download Migration Report
@@ -233,7 +233,7 @@ write route must be mapped to one of these outcomes:
 - CacheDB projection route
 - CacheDB ranked projection route
 - command/write route
-- PostgreSQL cold/archive route
+- source-database cold/archive route
 - intentionally out of scope
 
 Do not claim 100% migration coverage until unmapped routes are zero and every
@@ -263,7 +263,7 @@ For 100% coverage:
 
 1. list every production screen, API, batch, worker, and report route
 2. map each route to its root table, child table, sort, filter, and page size
-3. classify each route as generated CRUD, projection, ranked projection, direct repository, or PostgreSQL cold path
+3. classify each route as generated CRUD, projection, ranked projection, direct repository, or source-database cold path
 4. run planner flow for every route with Redis-first hot-path intent
 5. keep a coverage table with owner, readiness, blockers, and rollback plan
 6. do not call the migration complete until every route has an explicit decision
@@ -319,19 +319,19 @@ Prepared demo objects:
 
 The planner does:
 
-- discover PostgreSQL schema metadata
+- discover supported JDBC source-database schema metadata
 - suggest root/child route candidates
 - generate a migration plan
 - generate Java scaffold
 - run dry-run warm
 - run staging warm into Redis
 - refresh registered projections inline during warm
-- run side-by-side PostgreSQL vs CacheDB comparison
+- run side-by-side source-database vs CacheDB comparison
 - produce migration assessment and report content
 
 The planner does not yet:
 
-- mutate PostgreSQL
+- mutate the source database
 - import existing ORM source classes automatically
 - guarantee full-system coverage without a route inventory
 - perform one-click production cutover

@@ -57,15 +57,8 @@ final class MigrationWarmRunner {
                 .orElseThrow(() -> missingRegisteredEntity("root", plan.request().rootTableOrEntity()))
                 : null;
 
-        String childWarmSql = MigrationPlanner.buildChildWarmSql(
-                plan.request(),
-                plan.recommendedHotWindowPerRoot(),
-                plan.rankedProjectionRequired(),
-                childHydrator.tableName()
-        );
-        String rootWarmSql = rootHydrator == null
-                ? ""
-                : MigrationPlanner.buildRootWarmSqlTemplate(plan.request(), rootHydrator.tableName());
+        String childWarmSql = "";
+        String rootWarmSql = "";
 
         Instant startedAt = Instant.now();
         long startedAtNanos = System.nanoTime();
@@ -74,6 +67,17 @@ final class MigrationWarmRunner {
         WarmCounters rootCounters = WarmCounters.empty();
         try (Connection connection = dataSource.getConnection()) {
             connection.setReadOnly(true);
+            MigrationSqlDialect dialect = MigrationSqlDialect.from(connection);
+            childWarmSql = MigrationPlanner.buildChildWarmSql(
+                    plan.request(),
+                    plan.recommendedHotWindowPerRoot(),
+                    plan.rankedProjectionRequired(),
+                    childHydrator.tableName(),
+                    dialect
+            );
+            rootWarmSql = rootHydrator == null
+                    ? ""
+                    : MigrationPlanner.buildRootWarmSqlTemplate(plan.request(), rootHydrator.tableName());
             boolean forceImmediateProjectionRefresh = !normalized.dryRun() && plan.projectionRequired();
             boolean reindexQueryIndexes = !normalized.dryRun() && !plan.projectionRequired();
             boolean projectionOnlyChildWarm = !normalized.dryRun()

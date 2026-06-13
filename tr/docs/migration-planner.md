@@ -1,19 +1,19 @@
 # Geçiş Planlayıcı
 
-Geçiş Planlayıcı, mevcut PostgreSQL tabloları ve çalışan bir ORM yapısı olan
-ekiplerin CacheDB'ye geçişi kanıta dayalı biçimde değerlendirmesi için yönetim
-arayüzünde sunulan akıştır.
+Geçiş Planlayıcı, desteklenen JDBC kaynak veritabanında mevcut tabloları ve
+çalışan bir ORM yapısı olan ekiplerin CacheDB'ye geçişi kanıta dayalı biçimde
+değerlendirmesi için yönetim arayüzünde sunulan akıştır.
 
 Bu ekran tek tıkla canlıya geçiş düğmesi değildir. Amacı, tek bir sıcak akışı
 keşfetmek, planlamak, Redis tarafını staging ortamında önceden doldurmak,
-PostgreSQL ve CacheDB sonuçlarını karşılaştırmak ve geçiş kararını görünür hale
-getirmektir.
+kaynak veritabanı ve CacheDB sonuçlarını karşılaştırmak ve geçiş kararını
+görünür hale getirmektir.
 
 ## Ne Zaman Kullanılır?
 
 Şu durumlarda planlayıcıyı kullan:
 
-- mevcut PostgreSQL tabloların varsa
+- mevcut PostgreSQL tabloların varsa veya açık beta MSSQL provider ile MSSQL tablolarını deneyeceksen
 - akış bugün JPA, Hibernate, MyBatis, JDBC veya başka bir veri erişim katmanı ile çalışıyorsa
 - çocuk satır sayısı arttıkça liste veya detay ekranı pahalılaşıyorsa
 - akışın entity read, projection read veya ranked projection read olarak mı tasarlanacağını netleştirmek istiyorsan
@@ -37,7 +37,7 @@ http://127.0.0.1:8090/cachedb-admin/migration-planner
 
 ## Önerilen UI Akışı
 
-### 1. PostgreSQL Şemasını Keşfet
+### 1. Kaynak Veritabanı Şemasını Keşfet
 
 Önce şema keşfi aksiyonunu çalıştır.
 
@@ -50,8 +50,8 @@ Beklenen sonuç:
 - önerilen kök/çocuk tablo çiftleri forma uygulanabilir hale gelir
 
 Keşif başarısız olursa Spring `DataSource` doğru veritabanına gidiyor mu ve
-uygulama kullanıcısı `information_schema` metadata'sını okuyabiliyor mu kontrol
-et.
+uygulama kullanıcısı tablo, primary key ve foreign key metadata'sını okuyabiliyor
+mu kontrol et.
 
 ### 2. Akış Adayı Seç
 
@@ -105,7 +105,7 @@ Beklenen sonuç:
 
 - önerilen CacheDB kullanım yüzeyi
 - Redis yerleşim kararı
-- PostgreSQL yerleşim kararı
+- kaynak veritabanı yerleşim kararı
 - seçilen sıcak pencere ayarlarına göre Redis bellek tahmini
 - projection gerekli mi bilgisi
 - ranked projection gerekli mi bilgisi
@@ -118,8 +118,8 @@ Beklenen sonuç:
 Plan görünmüyorsa ekranın sessiz kalması doğru değildir; hata varsa açık biçimde
 gösterilmelidir.
 
-Redis bellek tahmini yaklaşık bir kapasite hesabıdır. Ekran, PostgreSQL'den
-sınırlı sayıda satır örneği alır, planner'daki satır sayısı ve sıcak pencere
+Redis bellek tahmini yaklaşık bir kapasite hesabıdır. Ekran, kaynak
+veritabanından sınırlı sayıda satır örneği alır, planner'daki satır sayısı ve sıcak pencere
 değerlerini kullanır; ardından payload, projection, hot-set/index, page-cache,
 stream ve güvenlik payını ayrı ayrı gösterir. Bu değeri staging öncesi kapasite
 fikri olarak kullan. Staging ön ısıtma bittikten sonra tahmini Redis
@@ -147,7 +147,7 @@ Redis'i değiştirmeden önce dry-run çalıştır.
 
 Beklenen sonuç:
 
-- PostgreSQL çocuk satırları sayılır
+- kaynak veritabanındaki çocuk satırlar sayılır
 - ilişkili kök satırlar sayılır
 - üretilecek ön ısıtma SQL'i görünür
 - Redis değişmez
@@ -161,7 +161,7 @@ Gerçek ön ısıtmayı yalnızca staging veya güvenli test ortamında çalış
 
 Beklenen sonuç:
 
-- seçilen çocuk sıcak penceresi PostgreSQL'den okunur
+- seçilen çocuk sıcak penceresi kaynak veritabanından okunur
 - Redis entity yüzeyleri doğrudan doldurulur
 - kayıtlı projection'lar aynı akış içinde yenilenir
 - seçildiyse ilişkili kök satırlar da doldurulur
@@ -200,7 +200,7 @@ arasındaki farkı hot-window boyutu, projection payload şekli ve Redis
 
 Beklenen sonuç:
 
-- PostgreSQL referans gecikmesi
+- kaynak veritabanı referans gecikmesi
 - CacheDB akış gecikmesi
 - `entity:...` veya `projection:...` akış etiketi
 - örnek kök kayıtlarda ilk sayfa ID eşleşmesi
@@ -212,7 +212,7 @@ Beklenen sonuç:
 - örnekler birebir eşleşmiyorsa
 - planner projection isterken CacheDB entity yoluna geri düşüyorsa
 - sıralama farklıysa
-- p95 gecikmesi PostgreSQL referansından belirgin biçimde kötüyse
+- p95 gecikmesi kaynak veritabanı referansından belirgin biçimde kötüyse
 - warm set production sıcak pencereyi temsil etmiyorsa
 
 ### 9. Geçiş Raporunu İndir
@@ -237,7 +237,7 @@ birine bağlanmalıdır:
 - CacheDB projection route
 - CacheDB ranked projection route
 - command/write route
-- PostgreSQL cold/archive route
+- kaynak veritabanı cold/archive route
 - bilinçli olarak kapsam dışı bırakılmış route
 
 Eşlenmemiş route sayısı sıfır olmadan ve her route için parity kanıtı ya da
@@ -253,7 +253,7 @@ envanterinden gelir.
 
 1. tüm production ekran, API, batch, worker ve rapor akışlarını listele
 2. her akışı kök tablo, çocuk tablo, sort, filter ve page size ile eşleştir
-3. her akışı generated CRUD, projection, ranked projection, direct repository veya PostgreSQL soğuk veri yolu olarak sınıflandır
+3. her akışı generated CRUD, projection, ranked projection, direct repository veya kaynak veritabanı soğuk veri yolu olarak sınıflandır
 4. Redis öncelikli sıcak yol olacak her akış için planner sürecini çalıştır
 5. sahip, hazırlık durumu, blokaj ve geri dönüş planı içeren kapsam tablosu tut
 6. her akış için açık karar verilmeden migration tamamlandı deme
@@ -310,19 +310,19 @@ Hazırlanan demo nesneleri:
 
 Planner şunları yapar:
 
-- PostgreSQL şema metadata'sını keşfeder
+- desteklenen JDBC kaynak veritabanı şema metadata'sını keşfeder
 - kök/çocuk tablo adayları önerir
 - geçiş planı üretir
 - Java iskeleti üretir
 - dry-run ön ısıtma çalıştırır
 - Redis'e staging ön ısıtma çalıştırır
 - ön ısıtma sırasında kayıtlı projection'ları yeniler
-- PostgreSQL ve CacheDB arasında yan yana karşılaştırma çalıştırır
+- kaynak veritabanı ve CacheDB arasında yan yana karşılaştırma çalıştırır
 - karşılaştırma sonucundan geçiş değerlendirmesi ve rapor içeriği üretir
 
 Planner henüz şunları yapmaz:
 
-- PostgreSQL'i mutate etmez
+- kaynak veritabanını mutate etmez
 - mevcut ORM source class'larını otomatik içeri almaz
 - akış envanteri olmadan tam sistem coverage garanti etmez
 - tek tıkla production canlı geçişi yapmaz

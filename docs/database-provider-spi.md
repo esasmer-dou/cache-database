@@ -24,18 +24,21 @@ cachedb-storage-jdbc
 - JdbcDatabaseDialect
 - JdbcWriteBehindSupport
 - SqlFailureClassifierSupport
+- JdbcOutboxExternalChangeFeedAdapter
 - shared value conversion, row-limit, and batch partition helpers
 
 cachedb-storage-postgres
 - PostgresDatabaseDialect
 - PostgresWriteBehindFlusher
 - PostgresFailureClassifier
+- PostgresOutboxDialect
 - PostgreSQL ON CONFLICT and optional COPY path
 
 cachedb-storage-mssql
 - MssqlDatabaseDialect
 - MssqlWriteBehindFlusher
 - MssqlFailureClassifier
+- MssqlOutboxExternalChangeFeedAdapter
 - SQL Server update/existence/insert write path
 ```
 
@@ -92,6 +95,23 @@ CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
 This is intentionally explicit. It prevents an application from silently running
 PostgreSQL SQL against SQL Server.
 
+For database-originated events, use the MSSQL outbox adapter explicitly:
+
+```java
+import com.reactor.cachedb.mssql.MssqlOutboxExternalChangeFeedAdapter;
+
+MssqlOutboxExternalChangeFeedAdapter adapter =
+        MssqlOutboxExternalChangeFeedAdapter
+                .builder(mssqlDataSource)
+                .adapterName("orders-hotset")
+                .outboxTable("cachedb_outbox")
+                .checkpointTable("cachedb_outbox_adapter_checkpoint")
+                .batchSize(200)
+                .build();
+
+adapter.start(externalChangeApplyRunner);
+```
+
 ## MSSQL Write Semantics
 
 The MSSQL flusher does not use `MERGE` by default. The safer beta path is:
@@ -126,15 +146,23 @@ the version guard keeps retry behavior idempotent.
 ## Current MSSQL Gate
 
 MSSQL is usable for explicit beta testing of write-behind semantics, but it is
-not production-certified yet. Before calling MSSQL GA, these must pass:
+not production-certified yet.
+
+Now covered by the provider evidence lane:
 
 - real SQL Server integration lane, not only unit-level SQL recorder tests
 - parameter-limit and batch-size regression tests against a live SQL Server
-- stale version, duplicate id, deadlock, timeout, and lock-conflict tests
 - MSSQL outbox/checkpoint adapter
 - migration discovery, warm, and side-by-side comparison on SQL Server metadata
 - multi-pod apply runner smoke test with MSSQL as durable storage
+
+Still required before MSSQL GA:
+
+- stale version, duplicate id, deadlock, timeout, and lock-conflict tests at
+  larger concurrency, not only smoke scale
+- longer SQL Server soak/restart/retry evidence
+- MSSQL outbox ownership strategy for concurrent active-active pollers
+- MSSQL migration warm and comparison against realistic table volumes
 - dashboard/reporting labels that separate PostgreSQL and MSSQL storage metrics
 
-Until those gates are complete, PostgreSQL remains the only durability target
-supported for production-pilot use.
+Until those gates are complete, MSSQL remains an explicit beta provider.

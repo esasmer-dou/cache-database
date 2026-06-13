@@ -15,8 +15,8 @@ Geleneksel ORM kullanımına karşı daha üst seviyede konumlandırma için ayr
 Mevcut PostgreSQL + ORM geçişleri için ayrıca [Geçiş Planlayıcı](./migration-planner.md) dokümanına bak.
 Planlayıcı, seçilen akış için Redis çalışma setini dry-run modunda
 hesaplayabilir veya staging ortamında gerçekten önceden ısıtabilir. Ayrıca
-bağlı PostgreSQL şemasını inceleyip kök/çocuk tablo adaylarını çıkarabilir,
-binding'e hazır kod iskeleti üretebilir ve canlıya geçmeden önce PostgreSQL sonucuyla CacheDB sonucunu yan yana karşılaştırabilir.
+bağlı kaynak veritabanı şemasını inceleyip kök/çocuk tablo adaylarını çıkarabilir,
+binding'e hazır kod iskeleti üretebilir ve canlıya geçmeden önce kaynak veritabanı sonucuyla CacheDB sonucunu yan yana karşılaştırabilir.
 Açık beta repo hijyeni ve release hazırlığı için ayrıca [Açık Beta Hazırlık Durumu](./public-beta-readiness.md) ve [Release Checklist](./release-checklist.md) dokümanlarına bak.
 
 ## Önerilen Production Başlangıcı

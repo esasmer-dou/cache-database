@@ -4,7 +4,7 @@ Turkish version: [../tr/docs/use-case-examples.md](../tr/docs/use-case-examples.
 
 This page explains CacheDB behavior through practical use cases. It is written
 for application developers who need to decide when to use an entity repository,
-a projection repository, a command route, or a PostgreSQL cold path.
+a projection repository, a command route, or a source-database cold path.
 
 The examples use a common customer/order domain:
 
@@ -49,7 +49,7 @@ type:
 | Partial update risk | Partial Update Behavior |
 
 Rule: first define what the route shows to the user, then decide whether the
-route should use entity, projection, ranked projection, or PostgreSQL cold path.
+route should use entity, projection, ranked projection, or source-database cold path.
 
 ## End-To-End Real-World Scenarios
 
@@ -143,7 +143,7 @@ ANTI-PATTERN:
 | Read a small full-entity page | `EntityRepository.findPage(PageWindow)` | Bounded full payload read |
 | Read a large customer order list | `ProjectionRepository<OrderSummary>` | Summary payload, bounded hot window |
 | Read global top-N dashboard rows | Ranked projection | Single ranked index path |
-| Read old history or archive data | PostgreSQL cold path | Do not pollute Redis with cold history |
+| Read old history or archive data | Source-database cold path | Do not pollute Redis with cold history |
 | Change one field on an entity that may not be in Redis | Explicit command route | Avoid writing partial/invalid Redis entities |
 | Delete one entity | `deleteById(id)` | Idempotent delete, tombstone, PostgreSQL delete through write-behind |
 
@@ -373,7 +373,7 @@ BEST:
 
 - Ticket inbox screens should use `TicketSummaryProjection`.
 - Ticket detail should load the root ticket and the latest message preview.
-- Full message history can be paged from PostgreSQL if it is old or rarely read.
+- Full message history can be paged from the source database if it is old or rarely read.
 
 ```java
 ProjectionRepository<TicketSummary, Long> ticketSummaries =
@@ -436,7 +436,7 @@ BEST route:
 
 - `ProductEntity.findById(productId)` for stable product fields.
 - `ProductStockSummary` projection for current stock.
-- PostgreSQL cold path for old inventory movement history.
+- Source-database cold path for old inventory movement history.
 
 Why: product detail needs a small entity and one compact summary, not the full
 inventory ledger.
@@ -461,7 +461,7 @@ BEST route:
 
 - current shipment status from Redis.
 - latest 10 timeline events from projection.
-- full carrier history from PostgreSQL only when requested.
+- full carrier history from the source database only when requested.
 
 Why: tracking first paint is a bounded timeline, not a full archive export.
 
@@ -630,7 +630,7 @@ Runtime behavior:
 BEST: use `findById` for hot detail records.
 
 ACCEPTABLE: if the record is old and missing from Redis, call an explicit
-PostgreSQL cold-path repository.
+Source-database cold-path repository.
 
 ### Query 2: Read Latest 10 Orders From A 1,000-Row Hot Projection Window
 
@@ -1150,7 +1150,7 @@ ANTI-PATTERN: pull all monthly orders into Redis and aggregate in Java.
 
 ### Dashboard 4: Audit Trail
 
-Use PostgreSQL cold path for rare audit lookups.
+Use source-database cold path for rare audit lookups.
 
 ```sql
 SELECT *
@@ -1356,7 +1356,7 @@ Before adding a new CacheDB route, answer these questions:
 - Does the screen need full entity payload or only summary fields?
 - What is the max result size?
 - Should this route use entity, projection, ranked projection, command, or
-  PostgreSQL cold path?
+  source-database cold path?
 - What happens when Redis does not contain the record?
 - What happens when the operation is retried?
 - How will projection parity be verified before cutover?

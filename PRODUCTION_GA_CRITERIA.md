@@ -20,6 +20,7 @@ PostgreSQL volume.
 | Relation-heavy reads | Summary-first, preview/detail, and projection-first recipes must remain faster and lower-materialization than full aggregate first-paint. | Relation read-shape benchmark and migration side-by-side reports pass. |
 | Global sorted/range reads | Ranked projection top-window path must remain cheaper than wide candidate scan. | Ranked projection benchmark passes. |
 | Write durability | Write-behind retry, claim, DLQ, poison visibility, and PostgreSQL durability must be verified. | Integration tests and multi-instance coordination evidence pass. |
+| MSSQL provider readiness | MSSQL must remain explicit beta until live provider evidence, outbox checkpointing, migration SQL, multi-pod apply smoke, and longer SQL Server soak/failover tests are green. | `Production Evidence / mssql-provider-evidence` workflow artifact plus follow-up soak/failover evidence. |
 
 ## Classification
 

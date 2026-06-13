@@ -88,8 +88,8 @@ operasyonel gözlemlenebilirlik sınırlarını anlamak.
 - [Production Reçeteleri](docs/production-recipes.md)
 - [Production Tuning Rehberi](docs/production-tuning-rehberi.md)
 
-Hedef: PostgreSQL şemasını keşfetmek, hot route seçmek, Redis warm planı
-oluşturmak, PostgreSQL baseline ile CacheDB sonucunu karşılaştırmak ve cutover
+Hedef: kaynak veritabanı şemasını keşfetmek, hot route seçmek, Redis warm planı
+oluşturmak, kaynak veritabanı baseline'ı ile CacheDB sonucunu karşılaştırmak ve cutover
 kararını kanıtla vermek.
 
 ## Dokümanların Rolü

@@ -14,7 +14,7 @@ production evidence.
 
 | Concept | Meaning |
 | --- | --- |
-| Entity | The model bound to a PostgreSQL table and Redis hot entity payload |
+| Entity | The model bound to a source-database table and Redis hot entity payload |
 | Repository | The API for save, find, query, and delete operations |
 | Hot set | The bounded data set allowed to stay in Redis |
 | Hot policy | The rule that decides whether a row may enter Redis |
@@ -26,25 +26,25 @@ production evidence.
 | Route contract | A per-endpoint contract for page size, hot window, projection requirement, and limits |
 | Warm | Controlled preloading of the Redis hot set |
 | Dry-run warm | Warm planning without mutating Redis |
-| Side-by-side comparison | PostgreSQL baseline compared against CacheDB result and latency |
+| Side-by-side comparison | Source-database baseline compared against CacheDB result and latency |
 | Cutover | Moving a specific route to the CacheDB path |
 
-## PostgreSQL And Redis Roles
+## Source Database And Redis Roles
 
 The two stores have different responsibilities.
 
 | Layer | Responsibility |
 | --- | --- |
-| PostgreSQL | Durable source of truth, full history, archive, replay, reporting base |
+| Source database | Durable source of truth, full history, archive, replay, reporting base |
 | Redis | Hot entities, projection windows, indexes, streams, coordination, telemetry |
 
-CacheDB is not designed to remove PostgreSQL. Redis exists to serve the bounded
-hot path with low latency.
+CacheDB is not designed to remove the durable source database. Redis exists to
+serve the bounded hot path with low latency.
 
 ANTI-PATTERN: trying to move the entire database into Redis.
 
-BEST: decide explicitly what stays in Redis and what stays on the PostgreSQL
-cold/durable path for every production route.
+BEST: decide explicitly what stays in Redis and what stays on the
+source-database cold/durable path for every production route.
 
 ## Entity
 
@@ -246,7 +246,7 @@ Example decisions:
 | `/customers/{id}/orders` | Projection required, latest 1,000 summaries per customer |
 | `/orders/{id}` | Single `OrderEntity`, small line preview |
 | `/dashboard/risk` | Ranked projection, global top 100 |
-| `/reports/monthly` | PostgreSQL/reporting path, not Redis hot set |
+| `/reports/monthly` | Source-database/reporting path, not Redis hot set |
 
 ## Warm And Dry-Run
 
@@ -267,7 +267,7 @@ BEST sequence:
 
 ## Side-By-Side Comparison
 
-This step compares PostgreSQL baseline output with CacheDB output.
+This step compares source-database baseline output with CacheDB output.
 
 It checks:
 
@@ -282,7 +282,7 @@ If data does not match, do not cut over even when latency is excellent.
 
 ## Outbox And CDC
 
-If systems outside CacheDB mutate PostgreSQL, the Redis hot set can become
+If systems outside CacheDB mutate the source database, the Redis hot set can become
 stale. Outbox or CDC is required for that architecture.
 
 Rule:
@@ -291,8 +291,8 @@ Rule:
 - Writes outside CacheDB must be reported through outbox/CDC if Redis freshness
   matters.
 
-BEST: write PostgreSQL changes to an outbox table or CDC stream, read them with
-a CacheDB adapter, and apply them with an idempotent runner that refreshes
+BEST: write source-database changes to an outbox table or CDC stream, read them
+with a CacheDB adapter, and apply them with an idempotent runner that refreshes
 entities and projections.
 
 ANTI-PATTERN: expecting Redis to stay fresh while other systems mutate
@@ -303,7 +303,7 @@ PostgreSQL silently.
 Production use assumes:
 
 - Redis HA is a real infrastructure dependency.
-- PostgreSQL remains the durable source of truth.
+- The source database remains the durable source of truth.
 - Admin UI is behind a trusted network or gateway.
 - Projection-required routes do not fall back to entity scans in production.
 - Hot set growth is bounded by policy, quota, and Redis `maxmemory`.
@@ -323,7 +323,7 @@ ACCEPTABLE:
 
 - use bounded relation previews on small detail screens
 - pilot a few routes before wider rollout
-- leave old archive queries on PostgreSQL cold path
+- leave old archive queries on the source-database cold path
 
 ANTI-PATTERN:
 

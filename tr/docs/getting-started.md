@@ -335,7 +335,7 @@ Mevcut sistemde doğrudan kod yazmaya başlamadan önce Migration Planner kullan
 
 1. Uygulamayı admin UI açık şekilde başlat.
 2. `/cachedb-admin/migration-planner` ekranına git.
-3. "PostgreSQL şemasını keşfet" adımını çalıştır.
+3. "Kaynak veritabanı şemasını keşfet" adımını çalıştır.
 4. Önerilen route adaylarından birini seç.
 5. Adayı forma uygula.
 6. Planı oluştur.

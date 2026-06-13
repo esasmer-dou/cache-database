@@ -26,18 +26,21 @@ cachedb-storage-jdbc
 - JdbcDatabaseDialect
 - JdbcWriteBehindSupport
 - SqlFailureClassifierSupport
+- JdbcOutboxExternalChangeFeedAdapter
 - ortak value conversion, row-limit ve batch partition yardımcıları
 
 cachedb-storage-postgres
 - PostgresDatabaseDialect
 - PostgresWriteBehindFlusher
 - PostgresFailureClassifier
+- PostgresOutboxDialect
 - PostgreSQL ON CONFLICT ve opsiyonel COPY yolu
 
 cachedb-storage-mssql
 - MssqlDatabaseDialect
 - MssqlWriteBehindFlusher
 - MssqlFailureClassifier
+- MssqlOutboxExternalChangeFeedAdapter
 - SQL Server update/existence/insert yazma yolu
 ```
 
@@ -95,6 +98,23 @@ CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
 Bu açıklık bilinçli bir tasarım kararıdır. Amaç, bir uygulamanın farkında
 olmadan PostgreSQL SQL'ini SQL Server üzerinde çalıştırmasını engellemektir.
 
+Veritabanı kaynaklı event'ler için MSSQL outbox adapter'ını da açıkça kullan:
+
+```java
+import com.reactor.cachedb.mssql.MssqlOutboxExternalChangeFeedAdapter;
+
+MssqlOutboxExternalChangeFeedAdapter adapter =
+        MssqlOutboxExternalChangeFeedAdapter
+                .builder(mssqlDataSource)
+                .adapterName("orders-hotset")
+                .outboxTable("cachedb_outbox")
+                .checkpointTable("cachedb_outbox_adapter_checkpoint")
+                .batchSize(200)
+                .build();
+
+adapter.start(externalChangeApplyRunner);
+```
+
 ## MSSQL Yazma Semantiği
 
 MSSQL flusher varsayılan olarak `MERGE` kullanmaz. Public beta için daha güvenli
@@ -131,15 +151,23 @@ idempotent tutar.
 ## Mevcut MSSQL Kapısı
 
 MSSQL şu anda write-behind semantiğini bilinçli beta testlerine açar; production
-sertifikalı değildir. MSSQL için GA demeden önce şu kapılar kapanmalıdır:
+sertifikalı değildir.
+
+Provider evidence lane ile artık doğrulananlar:
 
 - yalnızca unit-level SQL recorder değil, gerçek SQL Server integration lane
 - canlı SQL Server üzerinde parameter-limit ve batch-size regresyon testleri
-- stale version, duplicate id, deadlock, timeout ve lock-conflict testleri
 - MSSQL outbox/checkpoint adapter
 - SQL Server metadata üstünde migration discovery, warm ve side-by-side comparison
 - MSSQL kalıcı storage iken çok pod'lu apply runner smoke testi
+
+MSSQL için GA demeden önce hâlâ kapanması gerekenler:
+
+- stale version, duplicate id, deadlock, timeout ve lock-conflict testlerinin
+  smoke ölçeği dışında, daha yüksek concurrency ile doğrulanması
+- daha uzun SQL Server soak/restart/retry kanıtı
+- aynı outbox stream'ini aktif-aktif poll eden pod'lar için sahiplik stratejisi
+- gerçekçi tablo hacimleriyle MSSQL migration warm ve comparison kanıtı
 - dashboard ve raporlarda PostgreSQL ile MSSQL storage metriklerini ayıran etiketler
 
-Bu kapılar tamamlanana kadar production pilot kullanımında desteklenen kalıcı
-storage hedefi PostgreSQL olarak kalır.
+Bu kapılar tamamlanana kadar MSSQL açıkça seçilen bir beta provider olarak kalır.

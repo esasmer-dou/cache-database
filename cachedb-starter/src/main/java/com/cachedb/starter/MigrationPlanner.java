@@ -149,7 +149,7 @@ public final class MigrationPlanner {
         ArrayList<WarmStep> warmSteps = new ArrayList<>();
         warmSteps.add(new WarmStep(
                 "Baseline the current route",
-                "Measure the existing ORM/PostgreSQL route before introducing CacheDB.",
+                "Measure the existing ORM/source-database route before introducing CacheDB.",
                 List.of(
                         "Capture p50/p95 for the list route and the detail route separately.",
                         "Capture current PostgreSQL query count, average rows scanned, and connection pool pressure.",
@@ -190,7 +190,7 @@ public final class MigrationPlanner {
                 "Compare and decide production cutover",
                 "Use side-by-side results before a full production move.",
                 List.of(
-                        "Compare Redis read latency against the baseline PostgreSQL route.",
+                        "Compare Redis read latency against the baseline source-database route.",
                         "Confirm PostgreSQL load dropped on the hot path instead of just moving cost elsewhere.",
                         "Confirm Redis memory stays inside the planned hot window."
                 )
@@ -310,19 +310,36 @@ public final class MigrationPlanner {
             boolean rankedProjectionRequired,
             String childTableName
     ) {
+        return buildChildWarmSql(
+                request,
+                hotWindowPerRoot,
+                rankedProjectionRequired,
+                childTableName,
+                MigrationSqlDialect.POSTGRES
+        );
+    }
+
+    static String buildChildWarmSql(
+            Request request,
+            int hotWindowPerRoot,
+            boolean rankedProjectionRequired,
+            String childTableName,
+            MigrationSqlDialect dialect
+    ) {
         String sortDirection = "ASC".equalsIgnoreCase(request.sortDirection()) ? "ASC" : "DESC";
+        MigrationSqlDialect effectiveDialect = dialect == null ? MigrationSqlDialect.POSTGRES : dialect;
         if (rankedProjectionRequired) {
             return """
                     SELECT *
                     FROM %s source
                     ORDER BY %s %s, %s DESC
-                    LIMIT %d;
+                    %s;
                     """.formatted(
                     childTableName,
                     request.sortColumn(),
                     sortDirection,
                     request.childPrimaryKeyColumn(),
-                    hotWindowPerRoot
+                    effectiveDialect.limitTail(hotWindowPerRoot)
             ).trim();
         }
         return """

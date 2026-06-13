@@ -35,7 +35,7 @@ final class MigrationComparisonAssessment {
         ArrayList<String> nextSteps = new ArrayList<>();
 
         if (parityStatus == ParityStatus.EXACT) {
-            strengths.add("Compared PostgreSQL and CacheDB samples returned the same first-page membership and order.");
+            strengths.add("Compared source database and CacheDB samples returned the same first-page membership and order.");
         }
         if (routeStatus == RouteStatus.RANKED_PROJECTION) {
             strengths.add("The comparison used the ranked projection route selected by the planner.");
@@ -53,7 +53,7 @@ final class MigrationComparisonAssessment {
             blockers.add("No representative sample routes were compared, so cutover readiness cannot be judged yet.");
             nextSteps.add("Provide a representative root id or seed enough child rows to produce comparison samples.");
         } else if (parityStatus != ParityStatus.EXACT) {
-            blockers.add("CacheDB did not fully match PostgreSQL for the compared first-page route membership/order.");
+            blockers.add("CacheDB did not fully match the source database for the compared first-page route membership/order.");
             nextSteps.add("Inspect the sample mismatch payloads, tighten the projection contract, and rerun the side-by-side comparison.");
         }
 
@@ -73,10 +73,10 @@ final class MigrationComparisonAssessment {
         }
 
         if (performanceStatus == PerformanceStatus.BLOCKER) {
-            blockers.add("CacheDB p95 latency is materially slower than the PostgreSQL baseline for this route.");
+            blockers.add("CacheDB p95 latency is materially slower than the source-database baseline for this route.");
             nextSteps.add("Tighten the hot window, ranking surface, or preview contract before attempting cutover.");
         } else if (performanceStatus == PerformanceStatus.SLOWER) {
-            nextSteps.add("CacheDB is slower than the current PostgreSQL baseline. Review the projection shape and rerun the warm plus comparison cycle.");
+            nextSteps.add("CacheDB is slower than the current source-database baseline. Review the projection shape and rerun the warm plus comparison cycle.");
         }
 
         if (containsWarning(comparison.warnings(), "threshold/range routes")) {
@@ -157,7 +157,7 @@ final class MigrationComparisonAssessment {
                 ? "at or below"
                 : "within";
         if (parityStatus == ParityStatus.EXACT) {
-            return "Compared samples matched PostgreSQL and the " + routePhrase + " route stayed " + performancePhrase + " the expected latency envelope.";
+            return "Compared samples matched the source database and the " + routePhrase + " route stayed " + performancePhrase + " the expected latency envelope.";
         }
         return "The measured route looks healthy, but it still needs another validation pass before cutover.";
     }

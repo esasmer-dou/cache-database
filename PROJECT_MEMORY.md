@@ -262,15 +262,23 @@ Upgrade note:
   - `cachedb-storage-postgres` uses `PostgresDatabaseDialect` behind the existing
     PostgreSQL flusher.
   - `cachedb-storage-mssql` contains `MssqlDatabaseDialect`,
-    `MssqlWriteBehindFlusher`, and `MssqlFailureClassifier`.
+    `MssqlWriteBehindFlusher`, `MssqlOutboxExternalChangeFeedAdapter`, and
+    `MssqlFailureClassifier`.
   - `CacheDatabaseConfig` and `CacheDatabaseBootstrap` expose an explicit
     `WriteBehindFlusherFactory`.
 - MSSQL support is explicit beta only:
   - applications must add `cachedb-storage-mssql`
   - applications must own the Microsoft SQL Server JDBC driver and `DataSource`
   - applications must call `writeBehindFlusherFactory(MssqlWriteBehindFlusher::new)`
-- MSSQL is not GA until live SQL Server integration, metadata discovery, outbox,
-  side-by-side comparison, and multi-pod apply runner lanes exist.
+- MSSQL now has a live provider evidence lane:
+  - SQL Server write-behind idempotency smoke
+  - SQL Server outbox checkpoint smoke
+  - SQL Server migration discovery, dry-run warm, and side-by-side comparison
+    SQL smoke
+  - two-pod outbox/apply-runner checkpoint smoke
+- MSSQL is still not GA until larger concurrency, soak/restart/retry, active-active
+  outbox ownership, realistic table-volume migration, and MSSQL-specific
+  dashboard/reporting evidence exist.
 - See `docs/database-provider-spi.md` and
   `tr/docs/veritabani-provider-spi.md`.
 
@@ -299,6 +307,10 @@ pwsh tools\ci\run-production-evidence.ps1 -MavenExecutable mvn.cmd -RedisUri red
 ```
 
 ```powershell
+pwsh tools\ci\run-mssql-provider-evidence.ps1 -MavenExecutable mvn.cmd -MssqlUrl 'jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true' -MssqlUser sa -MssqlPassword 'YourStrong!Passw0rd'
+```
+
+```powershell
 pwsh tools\ci\check-benchmark-thresholds.ps1
 pwsh tools\ci\check-public-api-compatibility.ps1
 pwsh tools\ci\check-tr-docs.ps1
@@ -322,6 +334,10 @@ Known caveat:
 - PostgreSQL URL: `jdbc:postgresql://127.0.0.1:5432/postgres`
 - PostgreSQL user: `postgres`
 - PostgreSQL password: `postgresql`
+- SQL Server container: `cachedb-it-mssql`
+- SQL Server URL: `jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true`
+- SQL Server user: `sa`
+- SQL Server password: `YourStrong!Passw0rd`
 
 These details are local development defaults only. Do not treat them as
 production secrets.

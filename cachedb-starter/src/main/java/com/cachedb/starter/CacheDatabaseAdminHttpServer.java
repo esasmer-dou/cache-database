@@ -2952,8 +2952,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 : localized(normalizedLanguage, "Planı üretince entity ve binding iskeletlerini bu ekranda görebilirsin.", "After generating the plan, you can preview the entity and binding skeletons here.");
         String plannerCompareDisabled = hasServerPlanResult ? "" : " disabled";
         String plannerCompareStatusText = hasServerPlanResult
-                ? localized(normalizedLanguage, "Plan hazır. PostgreSQL ve CacheDB route'unu şimdi yan yana ölçebilirsin.", "Plan ready. You can now compare the PostgreSQL and CacheDB routes side by side.")
-                : localized(normalizedLanguage, "Planı üretince PostgreSQL ve CacheDB route'unu yan yana ölçebilirsin.", "After generating the plan, you can measure the PostgreSQL and CacheDB routes side by side.");
+                ? localized(normalizedLanguage, "Plan hazır. Kaynak veritabanı ve CacheDB route'unu şimdi yan yana ölçebilirsin.", "Plan ready. You can now compare the source database and CacheDB routes side by side.")
+                : localized(normalizedLanguage, "Planı üretince kaynak veritabanı ve CacheDB route'unu yan yana ölçebilirsin.", "After generating the plan, you can measure the source database and CacheDB routes side by side.");
         String demoBootstrapStatus = escapeHtml(resolveDemoBootstrapStatusMessage(
                 normalizedLanguage,
                 bootstrapDemoResult,
@@ -2967,7 +2967,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         String bootstrapDiscoveryStatus = escapeHtml(localized(
                 normalizedLanguage,
                 bootstrapDiscovery == null
-                        ? "İstersen önce PostgreSQL şemasını keşfet. Uygun root/child route adaylarını ve tablo kolonlarını burada görebilirsin."
+                        ? "İstersen önce kaynak veritabanı şemasını keşfet. Uygun root/child route adaylarını ve tablo kolonlarını burada görebilirsin."
                         : "Şema keşfi server-side olarak hazırlandı. İstersen önerileri hemen kullanabilir ya da keşfi yeniden çalıştırabilirsin.",
                 bootstrapDiscovery == null
                         ? "Start by discovering the PostgreSQL schema. You can review root/child route candidates and table columns here before filling the planner."
@@ -3526,7 +3526,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_HTML_COMMAND_ARIA__", escapeHtml(localized(normalizedLanguage, "Planlayıcı hızlı aksiyonları", "Planner quick actions")),
                 "__CACHEDB_HTML_COMMAND_KICKER__", escapeHtml(localized(normalizedLanguage, "Sıradaki doğru adım", "Next best action")),
                 "__CACHEDB_HTML_NEXT_TITLE__", escapeHtml(localized(normalizedLanguage, "Demo veya canlı şema ile başla", "Start with demo or live schema")),
-                "__CACHEDB_HTML_NEXT_COPY__", escapeHtml(localized(normalizedLanguage, "Önce PostgreSQL şemasını keşfet; sonra bir route önerisini forma uygula ve planı AJAX ile üret.", "Discover the PostgreSQL schema first, apply a route suggestion to the form, then generate the plan over AJAX.")),
+                "__CACHEDB_HTML_NEXT_COPY__", escapeHtml(localized(normalizedLanguage, "Önce kaynak veritabanı şemasını keşfet; sonra bir route önerisini forma uygula ve planı AJAX ile üret.", "Discover the source database schema first, apply a route suggestion to the form, then generate the plan over AJAX.")),
                 "__CACHEDB_HTML_STATUS__", plannerStatusText,
                 "__CACHEDB_HTML_DEMO_BUTTON__", escapeHtml(localized(normalizedLanguage, "Demo hazırla", "Prepare demo")),
                 "__CACHEDB_HTML_DISCOVER_BUTTON__", escapeHtml(localized(normalizedLanguage, "Şemayı keşfet", "Discover schema")),
@@ -3574,13 +3574,13 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_021__", escapeJs(localized(normalizedLanguage, "İlişki kolonu seç", "Choose the relation column")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_022__", escapeJs(localized(normalizedLanguage, "Liste sıralama kolonunu seç", "Choose the list sort column")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_023__", escapeJs(localized(normalizedLanguage, "1. adım: Şemayı keşfet", "Step 1: Discover the schema")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_024__", escapeJs(localized(normalizedLanguage, "PostgreSQL şemasını keşfedip kök/çocuk adaylarını görünür hale getir.", "Discover the PostgreSQL schema and surface root/child candidates.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_024__", escapeJs(localized(normalizedLanguage, "Kaynak veritabanı şemasını keşfedip kök/çocuk adaylarını görünür hale getir.", "Discover the source database schema and surface root/child candidates.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_025__", escapeJs(localized(normalizedLanguage, "2. adım: Route'u seç", "Step 2: Select the route")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_026__", escapeJs(localized(normalizedLanguage, "Kök tabloyu, çocuk yüzeyi ve ekran tipini seç. Başlangıç modu bunu en az alanla yapar.", "Choose the root table, child surface, and screen profile. Beginner mode keeps this minimal.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_027__", escapeJs(localized(normalizedLanguage, "3. adım: Planı üret", "Step 3: Generate the plan")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_028__", escapeJs(localized(normalizedLanguage, "Projection, ranked surface ve bounded sıcak pencere kararı burada netleşir.", "Projection, ranked surface, and bounded hot-window decisions become explicit here.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_029__", escapeJs(localized(normalizedLanguage, "4. adım: Warm çalıştır", "Step 4: Run warm")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_030__", escapeJs(localized(normalizedLanguage, "Dry run ile başlayıp staging sıcak setini PostgreSQL'den besle.", "Start with a dry run, then populate the staging hot set from PostgreSQL.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_030__", escapeJs(localized(normalizedLanguage, "Dry run ile başlayıp staging sıcak setini kaynak veritabanından besle.", "Start with a dry run, then populate the staging hot set from the source database.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_031__", escapeJs(localized(normalizedLanguage, "5. adım: Compare ve rapor", "Step 5: Compare and report")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_032__", escapeJs(localized(normalizedLanguage, "CacheDB ile mevcut route'u yan yana ölç, assessment'ı oku ve migration raporunu indir.", "Measure CacheDB and the existing route side by side, read the assessment, and download the migration report.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_033__", escapeJs(localized(normalizedLanguage, "Akış tamamlandı", "Flow completed")),
@@ -3610,7 +3610,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_057__", escapeJs(localized(normalizedLanguage, "Örnek yok", "No samples")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_058__", escapeJs(localized(normalizedLanguage, "Demo seed notu üretilmedi.", "No demo seed note was generated.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_059__", escapeJs(localized(normalizedLanguage, "Demo veri hazır", "Demo data is ready")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_060__", escapeJs(localized(normalizedLanguage, "Şimdi PostgreSQL şemasını keşfet ve önerilen customer/order route'unu forma uygula.", "Now discover the PostgreSQL schema and apply the suggested customer/order route to the form.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_060__", escapeJs(localized(normalizedLanguage, "Şimdi kaynak veritabanı şemasını keşfet ve önerilen customer/order route'unu forma uygula.", "Now discover the source database schema and apply the suggested customer/order route to the form.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_061__", escapeJs(localized(normalizedLanguage, "Şemayı keşfet", "Discover the schema")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_062__", escapeJs(localized(normalizedLanguage, "Demo tabloları hazır. Keşif sonucu route adayları ve kolon seçimleri otomatik dolacak.", "Demo tables are ready. Discovery will populate route candidates and column selectors.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_063__", escapeJs(localized(normalizedLanguage, "zamansal sıra", "temporal sort")),
@@ -3645,8 +3645,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_092__", escapeJs(localized(normalizedLanguage, "Demo şema hazır. Discovery güncellendi ve planner formu seed edilen route ile dolduruldu.", "The demo schema is ready. Discovery was refreshed and the planner form was populated with the seeded route.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_093__", escapeJs(localized(normalizedLanguage, "Örnek kök id", "Sample root ids")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_094__", escapeJs(localized(normalizedLanguage, "Demo şema kurulamadı: ", "Demo schema bootstrap failed: ")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_095__", escapeJs(localized(normalizedLanguage, "PostgreSQL şeması yeniden keşfediliyor…", "Refreshing PostgreSQL schema discovery…")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_096__", escapeJs(localized(normalizedLanguage, "PostgreSQL şeması inceleniyor…", "Inspecting PostgreSQL schema…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_095__", escapeJs(localized(normalizedLanguage, "Kaynak veritabanı şeması yeniden keşfediliyor…", "Refreshing source database schema discovery…")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_096__", escapeJs(localized(normalizedLanguage, "Kaynak veritabanı şeması inceleniyor…", "Inspecting source database schema…")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_097__", escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. İstersen önerilerden birini forma uygula.", "Schema discovery is ready. You can apply one of the suggestions to the form.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_098__", escapeJs(localized(normalizedLanguage, "Şema keşfi hazır. Route adayını seçip planı oluşturabilirsin.", "Schema discovery is ready. Pick a route candidate and generate the plan.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_099__", escapeJs(localized(normalizedLanguage, "Şema keşfi başarısız oldu: ", "Schema discovery failed: ")),
@@ -3664,7 +3664,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_111__", escapeJs(localized(normalizedLanguage, "Dry run tamamlandı", "Dry run completed")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_112__", escapeJs(localized(normalizedLanguage, "Warm tamamlandı", "Warm completed")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_113__", escapeJs(localized(normalizedLanguage, "Redis değiştirilmedi. Satır sayıları doğruysa gerçek warm çalıştır.", "Redis was not mutated. If row counts look correct, run the real warm.")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_114__", escapeJs(localized(normalizedLanguage, "Staging hot set hazır. Şimdi PostgreSQL ve CacheDB sonucunu yan yana karşılaştır.", "The staging hot set is ready. Now compare PostgreSQL and CacheDB side by side.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_114__", escapeJs(localized(normalizedLanguage, "Staging hot set hazır. Şimdi kaynak veritabanı ve CacheDB sonucunu yan yana karşılaştır.", "The staging hot set is ready. Now compare the source database and CacheDB side by side.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_115__", escapeJs(localized(normalizedLanguage, "Warm çalıştır", "Run warm")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_116__", escapeJs(localized(normalizedLanguage, "Karşılaştırmayı çalıştır", "Run comparison")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_117__", escapeJs(localized(normalizedLanguage, "Dry run güvenli geçtiyse staging Redis hot set'i doldur.", "If the dry run looks safe, fill the staging Redis hot set.")),
@@ -3689,12 +3689,12 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_136__", escapeJs(localized(normalizedLanguage, "Migration report indirildi.", "Migration report downloaded.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_137__", escapeJs(localized(normalizedLanguage, "Planlayıcı şablonu yükleniyor…", "Loading planner template…")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_138__", escapeJs(localized(normalizedLanguage, "Şemayı keşfet", "Discover the schema")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_139__", escapeJs(localized(normalizedLanguage, "Canlı PostgreSQL şemasından tablo, view, PK/FK ve route adaylarını çek.", "Read tables, views, PK/FK metadata, and route candidates from live PostgreSQL.")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_140__", escapeJs(localized(normalizedLanguage, "Hazır. Önce PostgreSQL şemasını keşfet veya demo verisini hazırla.", "Ready. Discover the PostgreSQL schema first or prepare demo data.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_139__", escapeJs(localized(normalizedLanguage, "Canlı kaynak veritabanı şemasından tablo, view, PK/FK ve route adaylarını çek.", "Read tables, views, PK/FK metadata, and route candidates from the live source database.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_140__", escapeJs(localized(normalizedLanguage, "Hazır. Önce kaynak veritabanı şemasını keşfet veya demo verisini hazırla.", "Ready. Discover the source database schema first or prepare demo data.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_141__", escapeJs(localized(normalizedLanguage, "Örnek değerler yeniden yüklendi.", "Example defaults reloaded.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_142__", escapeJs(localized(normalizedLanguage, "Önce karşılaştırmayı çalıştır. Rapor, compare sonucundan üretilir.", "Run the comparison first. The report is generated from the compare result.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_143__", escapeJs(localized(normalizedLanguage, "Önce karşılaştırmayı çalıştır", "Run comparison first")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_144__", escapeJs(localized(normalizedLanguage, "CacheDB ve PostgreSQL route sonucu oluşmadan rapor indirilemez.", "The report cannot be downloaded before CacheDB and PostgreSQL route results exist.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_144__", escapeJs(localized(normalizedLanguage, "CacheDB ve kaynak veritabanı route sonucu oluşmadan rapor indirilemez.", "The report cannot be downloaded before CacheDB and source-database route results exist.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_145__", escapeJs(localized(normalizedLanguage, "Dry run kuyruğa alındı… ", "Dry run queued… ")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_146__", escapeJs(localized(normalizedLanguage, "Warm execution kuyruğa alındı… ", "Warm execution queued… ")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_147__", escapeJs(localized(normalizedLanguage, "Dry run arka planda çalışıyor… ", "Dry run is running in the background… ")),
@@ -3719,16 +3719,16 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_166__", escapeJs(localized(normalizedLanguage, "Scaffold üretimi başarısız oldu: ", "Scaffold generation failed: ")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_167__", escapeJs(localized(normalizedLanguage, "Karşılaştırma kuyruğa alındı… ", "Comparison queued… ")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_168__", escapeJs(localized(normalizedLanguage, "Karşılaştırma arka planda çalışıyor… ", "Comparison is running in the background… ")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_169__", escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. PostgreSQL ve CacheDB sonuçları yan yana hazır.", "Comparison completed. PostgreSQL and CacheDB results are ready side by side.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_169__", escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. Kaynak veritabanı ve CacheDB sonuçları yan yana hazır.", "Comparison completed. Source database and CacheDB results are ready side by side.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_170__", escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız oldu: ", "Comparison failed: ")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_171__", escapeJs(localized(normalizedLanguage, "Bilinmeyen hata", "Unknown error")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_172__", escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız", "Comparison failed")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_173__", escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. PostgreSQL ve CacheDB sonuçları yan yana hazır.", "Comparison completed. PostgreSQL and CacheDB results are ready side by side.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_173__", escapeJs(localized(normalizedLanguage, "Karşılaştırma tamamlandı. Kaynak veritabanı ve CacheDB sonuçları yan yana hazır.", "Comparison completed. Source database and CacheDB results are ready side by side.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_174__", escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız oldu: ", "Comparison failed: ")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_175__", escapeJs(localized(normalizedLanguage, "Karşılaştırma başarısız", "Comparison failed")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_176__", escapeJs(localized(normalizedLanguage, "Side-by-side comparison arka planda başlatılıyor…", "Starting side-by-side comparison in the background…")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_177__", escapeJs(localized(normalizedLanguage, "Karşılaştırma çalışıyor", "Comparison is running")),
-                "__CACHEDB_MIGRATION_PLANNER_TOKEN_178__", escapeJs(localized(normalizedLanguage, "PostgreSQL baseline ve CacheDB route'u aynı parametrelerle ölçülüyor. Uzun POST yerine job polling kullanılıyor.", "PostgreSQL baseline and CacheDB route are measured with the same parameters. Job polling is used instead of a long POST.")),
+                "__CACHEDB_MIGRATION_PLANNER_TOKEN_178__", escapeJs(localized(normalizedLanguage, "Kaynak veritabanı baseline ve CacheDB route'u aynı parametrelerle ölçülüyor. Uzun POST yerine job polling kullanılıyor.", "Source-database baseline and CacheDB route are measured with the same parameters. Job polling is used instead of a long POST.")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_179__", escapeJs(localized(normalizedLanguage, "Arka plan karşılaştırma başlatılamadı. Senkron çalıştırılıyor…", "Background comparison start failed. Falling back to synchronous execution…")),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_180__", escapeJs(normalizedLanguage),
                 "__CACHEDB_MIGRATION_PLANNER_TOKEN_181__", escapeJs(dashboardInstanceId),
@@ -4628,7 +4628,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "<div class=\"planner-progress-shell\">"
                 + "<div class=\"planner-progress-top\">"
                 + "<div><div id=\"plannerProgressTitle\" class=\"planner-progress-title\">" + escapeHtml(localized(language, "1. adım: Şemayı keşfet", "Step 1: Discover the schema")) + "</div>"
-                + "<div id=\"plannerProgressDetail\" class=\"planner-progress-copy\">" + escapeHtml(localized(language, "PostgreSQL şemasını okuyup önerilen root/child route adaylarını görünür hale getir.", "Read the PostgreSQL schema and surface the suggested root/child route candidates.")) + "</div></div>"
+                + "<div id=\"plannerProgressDetail\" class=\"planner-progress-copy\">" + escapeHtml(localized(language, "Kaynak veritabanı şemasını okuyup önerilen root/child route adaylarını görünür hale getir.", "Read the source database schema and surface the suggested root/child route candidates.")) + "</div></div>"
                 + "<div id=\"plannerProgressPercent\" class=\"planner-progress-percent\">0%</div>"
                 + "</div>"
                 + "<div class=\"planner-progress-track\"><div id=\"plannerProgressFill\" class=\"planner-progress-fill\"></div></div>"

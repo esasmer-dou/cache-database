@@ -48,6 +48,23 @@ PostgresOutboxExternalChangeFeedAdapter adapter =
 adapter.start(runner);
 ```
 
+Microsoft SQL Server için provider'a özel adapter'ı `cachedb-storage-mssql`
+modülünden bağla:
+
+```java
+MssqlOutboxExternalChangeFeedAdapter adapter =
+        MssqlOutboxExternalChangeFeedAdapter
+                .builder(mssqlDataSource)
+                .adapterName("orders-hotset")
+                .outboxTable("cachedb_outbox")
+                .checkpointTable("cachedb_outbox_adapter_checkpoint")
+                .batchSize(200)
+                .pollIntervalMillis(500)
+                .build();
+
+adapter.start(runner);
+```
+
 `CACHE_ONLY` şu anlama gelir:
 
 - UPSERT, external event payload'ından Redis'i hydrate eder.
@@ -150,6 +167,10 @@ ANTI-PATTERN: Version bilgisi olmayan ve sıralı gelmeyen external event akış
 
 `PostgresOutboxExternalChangeFeedAdapter`, checkpoint'i yalnızca
 `ExternalChangeSink.accept(...)` başarılı döndükten sonra ilerletir.
+
+`MssqlOutboxExternalChangeFeedAdapter` da aynı kuralı uygular. Checkpoint'i
+SQL Server üzerinde `MERGE` kullanmadan, lock-guarded update-then-insert
+ifadesiyle saklar.
 
 Apply runner başarısız olursa:
 

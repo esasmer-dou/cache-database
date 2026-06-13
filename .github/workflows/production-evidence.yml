@@ -9,7 +9,9 @@ on:
       - "cachedb-annotations/**"
       - "cachedb-processor/**"
       - "cachedb-storage-redis/**"
+      - "cachedb-storage-jdbc/**"
       - "cachedb-storage-postgres/**"
+      - "cachedb-storage-mssql/**"
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
       - "cachedb-examples/**"
@@ -29,7 +31,9 @@ on:
       - "cachedb-annotations/**"
       - "cachedb-processor/**"
       - "cachedb-storage-redis/**"
+      - "cachedb-storage-jdbc/**"
       - "cachedb-storage-postgres/**"
+      - "cachedb-storage-mssql/**"
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
       - "cachedb-examples/**"
@@ -271,5 +275,50 @@ jobs:
           path: |
             target/cachedb-prodtest-reports/production-scenario-certification.*
             cachedb-production-tests/target/surefire-reports/**
+          if-no-files-found: error
+          retention-days: 14
+
+  mssql-provider-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_PID: Developer
+          MSSQL_SA_PASSWORD: "YourStrong!Passw0rd"
+        ports:
+          - 14333:1433
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run MSSQL provider evidence
+        shell: pwsh
+        run: ./tools/ci/run-mssql-provider-evidence.ps1 -MavenExecutable mvn -MssqlUrl 'jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true' -MssqlUser sa -MssqlPassword 'YourStrong!Passw0rd'
+
+      - name: Publish MSSQL provider summary
+        shell: pwsh
+        run: Get-Content ./target/cachedb-mssql-provider-reports/mssql-provider-evidence.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload MSSQL provider evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mssql-provider-evidence
+          path: |
+            target/cachedb-mssql-provider-reports/**
+            cachedb-storage-mssql/target/surefire-reports/**
+            cachedb-starter/target/surefire-reports/**
+            cachedb-integration-tests/target/surefire-reports/**
           if-no-files-found: error
           retention-days: 14

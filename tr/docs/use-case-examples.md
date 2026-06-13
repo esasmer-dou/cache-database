@@ -1086,7 +1086,7 @@ BEST:
 Production route'u dönüştürmeden önce Migration Planner kullan.
 
 ```text
-1. PostgreSQL şemasını keşfet.
+1. Kaynak veritabanı şemasını keşfet.
 2. Root tablo ve child tablo seç.
 3. Entity ve projection scaffold üret.
 4. Dry-run warm çalıştır.

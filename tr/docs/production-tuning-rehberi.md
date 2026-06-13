@@ -39,7 +39,7 @@ property artırarak kalıcı biçimde düzelmez.
 | Küçük ve sınırlı liste | Entity page, guardrail ile |
 | Müşteri başına büyük child listesi | Projection window |
 | Global top-N veya iş sıralaması | Ranked projection |
-| Audit, arşiv, aylık rapor | PostgreSQL cold/reporting path |
+| Audit, arşiv, aylık rapor | Kaynak veritabanı cold/reporting path |
 | Worker/replay/repair | Doğrudan repository veya explicit SQL |
 
 BEST: Route contract yaz, sonra property ayarla.
@@ -389,7 +389,7 @@ Alarm örnekleri:
 | Projection lag artıyor | Refresh worker ve source write hızını kontrol et |
 | Tenant rejected artıyor | Hot policy, tenant quota ve route window uyumunu kontrol et |
 | Redis memory hızla artıyor | New key prefix, projection window ve entity TTL/hot policy kontrolü |
-| CacheDB p95 PostgreSQL baseline'dan kötü | Route projection mı, entity fallback mi bak |
+| CacheDB p95 kaynak veritabanı baseline'ından kötü | Route projection mı, entity fallback mi bak |
 
 ## 13. Production Profil Önerileri
 

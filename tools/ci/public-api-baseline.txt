@@ -2517,6 +2517,46 @@ public interface com.reactor.cachedb.jdbc.JdbcDatabaseDialect {
   public default int safeStatementRowLimit(int, int);
 }
 
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcOutboxDialect
+public interface com.reactor.cachedb.jdbc.JdbcOutboxDialect {
+  public abstract java.lang.String name();
+  public abstract java.lang.String createCheckpointTableSql(java.lang.String);
+  public default java.lang.String readCheckpointSql(java.lang.String);
+  public abstract java.lang.String readBatchSql(com.reactor.cachedb.jdbc.JdbcOutboxMapping, int);
+  public abstract void bindReadBatch(java.sql.PreparedStatement, long, int) throws java.sql.SQLException;
+  public abstract java.lang.String writeCheckpointSql(java.lang.String);
+  public abstract void bindWriteCheckpoint(java.sql.PreparedStatement, java.lang.String, long) throws java.sql.SQLException;
+}
+
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcOutboxExternalChangeFeedAdapter
+public final class com.reactor.cachedb.jdbc.JdbcOutboxExternalChangeFeedAdapter implements com.reactor.cachedb.core.change.ExternalChangeFeedAdapter {
+  public static com.reactor.cachedb.jdbc.JdbcOutboxExternalChangeFeedAdapter$Builder builder(javax.sql.DataSource, com.reactor.cachedb.jdbc.JdbcOutboxDialect);
+  public void start(com.reactor.cachedb.core.change.ExternalChangeSink);
+  public int pollOnce(com.reactor.cachedb.core.change.ExternalChangeSink);
+  public void initialize() throws java.sql.SQLException;
+  public java.lang.RuntimeException lastFailure();
+  public void close();
+}
+
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcOutboxMapping
+public final class com.reactor.cachedb.jdbc.JdbcOutboxMapping extends java.lang.Record {
+  public com.reactor.cachedb.jdbc.JdbcOutboxMapping(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
+  public static com.reactor.cachedb.jdbc.JdbcOutboxMapping defaults();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String outboxTable();
+  public java.lang.String checkpointTable();
+  public java.lang.String idColumn();
+  public java.lang.String entityColumn();
+  public java.lang.String entityIdColumn();
+  public java.lang.String typeColumn();
+  public java.lang.String payloadColumn();
+  public java.lang.String versionColumn();
+  public java.lang.String occurredAtColumn();
+  public java.lang.String sourceColumn();
+}
+
 ## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcWriteBehindSupport
 public final class com.reactor.cachedb.jdbc.JdbcWriteBehindSupport {
   public static java.lang.String columnValue(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.lang.String);
@@ -2553,6 +2593,17 @@ public final class com.reactor.cachedb.postgres.PostgresFailureClassifier {
   public com.reactor.cachedb.core.queue.WriteFailureDetails classify(java.lang.Exception);
 }
 
+## cachedb-storage-postgres :: com.reactor.cachedb.postgres.PostgresOutboxDialect
+public final class com.reactor.cachedb.postgres.PostgresOutboxDialect implements com.reactor.cachedb.jdbc.JdbcOutboxDialect {
+  public com.reactor.cachedb.postgres.PostgresOutboxDialect();
+  public java.lang.String name();
+  public java.lang.String createCheckpointTableSql(java.lang.String);
+  public java.lang.String readBatchSql(com.reactor.cachedb.jdbc.JdbcOutboxMapping, int);
+  public void bindReadBatch(java.sql.PreparedStatement, long, int) throws java.sql.SQLException;
+  public java.lang.String writeCheckpointSql(java.lang.String);
+  public void bindWriteCheckpoint(java.sql.PreparedStatement, java.lang.String, long) throws java.sql.SQLException;
+}
+
 ## cachedb-storage-postgres :: com.reactor.cachedb.postgres.PostgresWriteBehindFlusher
 public final class com.reactor.cachedb.postgres.PostgresWriteBehindFlusher implements com.reactor.cachedb.core.queue.FailureClassifyingFlusher {
   public com.reactor.cachedb.postgres.PostgresWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry);
@@ -2584,6 +2635,27 @@ public final class com.reactor.cachedb.mssql.MssqlDatabaseDialect implements com
 public final class com.reactor.cachedb.mssql.MssqlFailureClassifier {
   public com.reactor.cachedb.mssql.MssqlFailureClassifier();
   public com.reactor.cachedb.core.queue.WriteFailureDetails classify(java.lang.Exception);
+}
+
+## cachedb-storage-mssql :: com.reactor.cachedb.mssql.MssqlOutboxDialect
+public final class com.reactor.cachedb.mssql.MssqlOutboxDialect implements com.reactor.cachedb.jdbc.JdbcOutboxDialect {
+  public com.reactor.cachedb.mssql.MssqlOutboxDialect();
+  public java.lang.String name();
+  public java.lang.String createCheckpointTableSql(java.lang.String);
+  public java.lang.String readBatchSql(com.reactor.cachedb.jdbc.JdbcOutboxMapping, int);
+  public void bindReadBatch(java.sql.PreparedStatement, long, int) throws java.sql.SQLException;
+  public java.lang.String writeCheckpointSql(java.lang.String);
+  public void bindWriteCheckpoint(java.sql.PreparedStatement, java.lang.String, long) throws java.sql.SQLException;
+}
+
+## cachedb-storage-mssql :: com.reactor.cachedb.mssql.MssqlOutboxExternalChangeFeedAdapter
+public final class com.reactor.cachedb.mssql.MssqlOutboxExternalChangeFeedAdapter implements com.reactor.cachedb.core.change.ExternalChangeFeedAdapter {
+  public static com.reactor.cachedb.mssql.MssqlOutboxExternalChangeFeedAdapter$Builder builder(javax.sql.DataSource);
+  public void start(com.reactor.cachedb.core.change.ExternalChangeSink);
+  public int pollOnce(com.reactor.cachedb.core.change.ExternalChangeSink);
+  public void initialize() throws java.sql.SQLException;
+  public java.lang.RuntimeException lastFailure();
+  public void close();
 }
 
 ## cachedb-storage-mssql :: com.reactor.cachedb.mssql.MssqlWriteBehindFlusher

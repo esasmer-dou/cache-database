@@ -38,7 +38,7 @@ cannot be fixed permanently with larger pools.
 | Small bounded list | Entity page with guardrails |
 | Large child list per parent | Projection window |
 | Global top-N or business ranking | Ranked projection |
-| Audit, archive, monthly report | PostgreSQL cold/reporting path |
+| Audit, archive, monthly report | Source-database cold/reporting path |
 | Worker, replay, repair | Direct repository or explicit SQL |
 
 BEST: define the route contract, then tune properties.
@@ -386,7 +386,7 @@ Alarm examples:
 | Projection lag growing | Check refresh workers and source write rate |
 | Tenant rejected growing | Check hot policy, tenant quota, and route window |
 | Redis memory growing quickly | Inspect key prefixes, projection windows, entity TTL/hot policy |
-| CacheDB p95 worse than PostgreSQL baseline | Verify whether the route used projection or entity fallback |
+| CacheDB p95 worse than source-database baseline | Verify whether the route used projection or entity fallback |
 
 ## 13. Production Profiles
 

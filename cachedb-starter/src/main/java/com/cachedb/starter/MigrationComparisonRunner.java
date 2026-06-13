@@ -78,9 +78,7 @@ final class MigrationComparisonRunner {
         CacheRouteExecutor cacheRouteExecutor = cacheRouteExecutorFactory.resolve(plan, normalized)
                 .orElseThrow(() -> new IllegalArgumentException("Could not resolve a registered CacheDB route for child surface: " + plan.request().childTableOrEntity()));
 
-        String baselineSqlTemplate = normalized.baselineSqlOverride().isBlank()
-                ? buildDerivedBaselineSql(plan, childTable.qualifiedTableName())
-                : normalized.baselineSqlOverride().trim();
+        String baselineSqlTemplate = normalized.baselineSqlOverride().trim();
 
         Instant startedAt = Instant.now();
         long startedAtNanos = System.nanoTime();
@@ -92,12 +90,16 @@ final class MigrationComparisonRunner {
         if (!normalized.baselineSqlOverride().isBlank()) {
             notes.add("Baseline comparison used the explicit SQL override supplied from the planner form.");
         } else {
-            notes.add("Baseline comparison used a derived PostgreSQL list SQL built from the planner request.");
+            notes.add("Baseline comparison used a derived source-database list SQL built from the planner request.");
         }
 
         try (Connection connection = dataSource.getConnection()) {
             connection.setReadOnly(true);
-            List<SampleRoute> samples = resolveSamples(connection, childTable, relationColumn, normalized, plan);
+            MigrationSqlDialect dialect = MigrationSqlDialect.from(connection);
+            if (baselineSqlTemplate.isBlank()) {
+                baselineSqlTemplate = buildDerivedBaselineSql(plan, childTable.qualifiedTableName(), dialect);
+            }
+            List<SampleRoute> samples = resolveSamples(connection, childTable, relationColumn, normalized, plan, dialect);
             if (samples.isEmpty()) {
                 throw new IllegalStateException("No sample root ids were available for the requested route. Provide comparisonSampleRootId or seed representative child rows first.");
             }
@@ -127,7 +129,7 @@ final class MigrationComparisonRunner {
             Instant completedAt = Instant.now();
             long exactMatchCount = sampleComparisons.stream().filter(SampleComparison::exactMatch).count();
             if (exactMatchCount != sampleComparisons.size()) {
-                warnings.add("At least one sample route returned a different first-page membership/order between PostgreSQL and CacheDB. Inspect the baseline SQL and projection contract before cutover.");
+                warnings.add("At least one sample route returned a different first-page membership/order between the source database and CacheDB. Inspect the baseline SQL and projection contract before cutover.");
             }
             if (cacheRouteExecutor.usesProjection()) {
                 notes.add("CacheDB comparison route used projection surface: " + cacheRouteExecutor.routeLabel());
@@ -190,19 +192,25 @@ final class MigrationComparisonRunner {
                 .findFirst();
     }
 
-    private String buildDerivedBaselineSql(MigrationPlanner.Result plan, String childTableName) {
+    private String buildDerivedBaselineSql(
+            MigrationPlanner.Result plan,
+            String childTableName,
+            MigrationSqlDialect dialect
+    ) {
         String sortDirection = "ASC".equalsIgnoreCase(plan.request().sortDirection()) ? "ASC" : "DESC";
+        MigrationSqlDialect effectiveDialect = dialect == null ? MigrationSqlDialect.POSTGRES : dialect;
         if (plan.rankedProjectionRequired()) {
             return """
                     SELECT *
                     FROM %s source
                     ORDER BY %s %s, %s DESC
-                    LIMIT :page_size
+                    %s
                     """.formatted(
                     childTableName,
                     plan.request().sortColumn(),
                     sortDirection,
-                    plan.request().childPrimaryKeyColumn()
+                    plan.request().childPrimaryKeyColumn(),
+                    effectiveDialect.parameterizedLimitTail()
             ).trim();
         }
         return """
@@ -210,13 +218,14 @@ final class MigrationComparisonRunner {
                 FROM %s source
                 WHERE %s = :sample_root_id
                 ORDER BY %s %s, %s DESC
-                LIMIT :page_size
+                %s
                 """.formatted(
                 childTableName,
                 plan.request().relationColumn(),
                 plan.request().sortColumn(),
                 sortDirection,
-                plan.request().childPrimaryKeyColumn()
+                plan.request().childPrimaryKeyColumn(),
+                effectiveDialect.parameterizedLimitTail()
         ).trim();
     }
 
@@ -225,7 +234,8 @@ final class MigrationComparisonRunner {
             MigrationSchemaDiscovery.TableInfo childTable,
             MigrationSchemaDiscovery.ColumnInfo relationColumn,
             Request request,
-            MigrationPlanner.Result plan
+            MigrationPlanner.Result plan,
+            MigrationSqlDialect dialect
     ) throws SQLException {
         if (plan.rankedProjectionRequired()) {
             return List.of(new SampleRoute("global-top-window", null));
@@ -240,17 +250,17 @@ final class MigrationComparisonRunner {
                 WHERE %s IS NOT NULL
                 GROUP BY %s
                 ORDER BY COUNT(*) DESC, %s ASC
-                LIMIT ?
+                %s
                 """.formatted(
                 plan.request().relationColumn(),
                 childTable.qualifiedTableName(),
                 plan.request().relationColumn(),
                 plan.request().relationColumn(),
-                plan.request().relationColumn()
+                plan.request().relationColumn(),
+                (dialect == null ? MigrationSqlDialect.POSTGRES : dialect).sampleRootLimitTail(request.sampleRootCount())
         );
         ArrayList<SampleRoute> samples = new ArrayList<>();
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setInt(1, Math.max(1, request.sampleRootCount()));
             try (ResultSet resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
                     Object rootId = resultSet.getObject("cachedb_sample_root_id");

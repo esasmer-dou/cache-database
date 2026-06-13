@@ -52,7 +52,7 @@ final class MigrationComparisonReportRenderer {
         markdown.append("## Latency Snapshot\n\n");
         markdown.append("| Surface | Avg latency | p95 | p99 | Avg rows/op |\n");
         markdown.append("| --- | ---: | ---: | ---: | ---: |\n");
-        appendMetricsRow(markdown, "PostgreSQL baseline", comparison.baselineMetrics());
+        appendMetricsRow(markdown, "Source database baseline", comparison.baselineMetrics());
         appendMetricsRow(markdown, "CacheDB", comparison.cacheMetrics());
         markdown.append("\n");
 
@@ -155,7 +155,7 @@ final class MigrationComparisonReportRenderer {
         markdown.append("| Read-shape classification | Each route is classified as CRUD entity, bounded relation projection, ranked/global projection, detail lookup, aggregate/report path, or archive-only path. | No unclassified route remains. |\n");
         markdown.append("| Projection contract | Every relation-heavy or sorted/range route has an explicit projection/read-model contract. | No required projection falls back to `entity:*`. |\n");
         markdown.append("| Warm evidence | Dry-run and warm execution exist for each Redis hot set. | Hydrated rows match read rows; missing referenced roots are `0`. |\n");
-        markdown.append("| Side-by-side parity | PostgreSQL baseline and CacheDB route are compared with representative samples. | Exact parity is required for membership and order. |\n");
+        markdown.append("| Side-by-side parity | Source database baseline and CacheDB route are compared with representative samples. | Exact parity is required for membership and order. |\n");
         markdown.append("| Performance budget | p95/p99 budgets are documented per route and checked after warm. | CacheDB latency stays inside the accepted route budget. |\n");
         markdown.append("| Write semantics | Every write path proves idempotency, primary-key ownership, Redis mutation, PostgreSQL durability, retry, poison visibility, and rollback behavior. | No write path is undocumented. |\n");
         markdown.append("| Staging rehearsal | The full conversion is rehearsed with the old stack stopped or isolated because hybrid runtime is not the target. | Final rehearsal is green before production switch. |\n\n");

@@ -303,14 +303,14 @@ Amaç, her production route için şu soruları kanıtlamaktır:
 - Redis'e hangi hot window alınacak?
 - PostgreSQL tam geçmişte hangi rolü koruyacak?
 - Warm işlemi ne kadar veri okuyacak?
-- CacheDB sonucu PostgreSQL baseline ile aynı mı?
+- CacheDB sonucu kaynak veritabanı baseline'ı ile aynı mı?
 - Gecikme ve p95 değeri cutover için yeterli mi?
 - Rollback planı nedir?
 
 Önerilen sıra:
 
 1. Admin UI'da `/cachedb-admin/migration-planner` ekranını aç.
-2. PostgreSQL şemasını keşfet.
+2. Kaynak veritabanı şemasını keşfet.
 3. Route adaylarından birini seç ve forma uygula.
 4. Planı oluştur.
 5. Scaffold üret.
