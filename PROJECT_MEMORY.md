@@ -246,12 +246,18 @@ Upgrade note:
 ## Current Release Confidence State
 
 - GitHub `Production Evidence` and `Public Beta Readiness` workflows were green
-  on `main` at the last verification.
+  on `main` before the MSSQL HA-evidence hardening work.
+- MSSQL provider evidence now includes live SQL Server load/replay,
+  checkpoint-locking, multi-pod apply-runner, and container restart/reconnect
+  checks. Remote CI must be rechecked after every related commit.
 - GitHub release `v0.1.0-beta.3` exists with the public beta package asset.
 - Maven Central publishing is not complete until repository secrets for Central
   credentials and GPG signing are configured.
 - Staging Redis HA evidence is not complete until staging Redis/PostgreSQL
   secrets are configured and an operator-triggered failover window is executed.
+- Staging MSSQL HA evidence is not complete until staging SQL Server secrets are
+  configured and an operator-triggered managed SQL Server or Always On failover
+  window is executed.
 
 ## Provider SPI / MSSQL State
 
@@ -272,13 +278,23 @@ Upgrade note:
   - applications must call `writeBehindFlusherFactory(MssqlWriteBehindFlusher::new)`
 - MSSQL now has a live provider evidence lane:
   - SQL Server write-behind idempotency smoke
+  - high-volume SQL Server write-behind load with stale version and delete
+    checks
   - SQL Server outbox checkpoint smoke
   - SQL Server migration discovery, dry-run warm, and side-by-side comparison
     SQL smoke
   - two-pod outbox/apply-runner checkpoint smoke
-- MSSQL is still not GA until larger concurrency, soak/restart/retry, active-active
-  outbox ownership, realistic table-volume migration, and MSSQL-specific
-  dashboard/reporting evidence exist.
+  - lock-guarded checkpoint table bootstrap for concurrent pod startup
+  - duplicate-key safe checkpoint row bootstrap during concurrent polling
+  - concurrent same-`adapterName` outbox polling guarded by checkpoint row locks
+  - single-node SQL Server container restart/reconnect regression
+- Same `adapterName` means one serialized logical outbox consumer across pods.
+  This prevents duplicate apply; it is not a throughput scaling model.
+- Active-active MSSQL outbox throughput still requires explicit stream
+  partitioning with separate adapter names and checkpoints.
+- MSSQL is still not GA until larger concurrency, longer soak/retry, real SQL
+  Server HA or Always On failover, realistic table-volume migration, and
+  MSSQL-specific dashboard/reporting evidence exist.
 - See `docs/database-provider-spi.md` and
   `tr/docs/veritabani-provider-spi.md`.
 
@@ -308,6 +324,10 @@ pwsh tools\ci\run-production-evidence.ps1 -MavenExecutable mvn.cmd -RedisUri red
 
 ```powershell
 pwsh tools\ci\run-mssql-provider-evidence.ps1 -MavenExecutable mvn.cmd -MssqlUrl 'jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true' -MssqlUser sa -MssqlPassword 'YourStrong!Passw0rd'
+```
+
+```powershell
+pwsh tools\ci\run-mssql-provider-evidence.ps1 -MavenExecutable mvn.cmd -MssqlUrl 'jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true' -MssqlUser sa -MssqlPassword 'YourStrong!Passw0rd' -RestartSqlServerContainer
 ```
 
 ```powershell
@@ -374,8 +394,9 @@ The main remaining blockers for production GA are:
 - verify remote GitHub Actions for `v0.1.0-beta.3`
 - signed Maven Central publish pipeline
 - real staging Redis HA/failover validation
+- real staging SQL Server HA or Always On failover validation before MSSQL GA
 - full migration route coverage report for every screen/API/batch/report
-- outbox adapter apply runner
+- outbox apply runner retry and dead-letter visibility hardening
 - stricter production fail-fast behavior for projection-required routes
 - broader side-by-side comparison evidence across real schemas
 - final admin exposure defaults verified behind gateway/auth
@@ -396,10 +417,11 @@ Recommended order:
 2. Fix any CI failures until production evidence is green remotely.
 3. Complete signed Maven Central publishing.
 4. Run staging Redis HA/failover evidence against real infrastructure.
-5. Add Migration Planner full coverage report enforcement for a real migration
+5. Run staging SQL Server HA or Always On evidence before promoting MSSQL beyond
+   explicit beta.
+6. Add Migration Planner full coverage report enforcement for a real migration
    inventory.
-6. Implement outbox-to-CacheDB apply runner with idempotent upsert/delete,
-   retry, checkpoint, and dead-letter visibility.
+7. Harden outbox apply runner retry and dead-letter visibility.
 
 ## Files Future Sessions Should Inspect First
 

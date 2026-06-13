@@ -30,7 +30,10 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
     private final int batchSize;
     private final long pollIntervalMillis;
     private final boolean createCheckpointTable;
+    private final Object initializationMonitor = new Object();
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicBoolean checkpointTableInitialized = new AtomicBoolean(false);
+    private final AtomicBoolean checkpointRowEnsured = new AtomicBoolean(false);
     private final AtomicReference<RuntimeException> lastFailure = new AtomicReference<>();
     private volatile Thread worker;
 
@@ -74,23 +77,42 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         Objects.requireNonNull(sink, "sink");
         try {
             initialize();
-            long checkpoint = readCheckpoint();
-            List<OutboxRow> rows = readBatch(checkpoint);
-            long lastAcceptedId = checkpoint;
-            int accepted = 0;
-            try {
-                for (OutboxRow row : rows) {
-                    sink.accept(row.event());
-                    lastAcceptedId = row.id();
-                    accepted++;
+            try (Connection connection = dataSource.getConnection()) {
+                boolean previousAutoCommit = connection.getAutoCommit();
+                int previousIsolation = connection.getTransactionIsolation();
+                long checkpoint = 0L;
+                long lastAcceptedId = 0L;
+                int accepted = 0;
+                boolean ensuredCheckpoint = false;
+                try {
+                    connection.setAutoCommit(false);
+                    connection.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
+                    ensuredCheckpoint = ensureCheckpoint(connection);
+                    checkpoint = readCheckpointForUpdate(connection);
+                    List<OutboxRow> rows = readBatch(connection, checkpoint);
+                    lastAcceptedId = checkpoint;
+                    for (OutboxRow row : rows) {
+                        sink.accept(row.event());
+                        lastAcceptedId = row.id();
+                        accepted++;
+                    }
+                    if (lastAcceptedId > checkpoint) {
+                        writeCheckpoint(connection, lastAcceptedId);
+                    }
+                    connection.commit();
+                    if (ensuredCheckpoint) {
+                        checkpointRowEnsured.set(true);
+                    }
+                } catch (SQLException | RuntimeException exception) {
+                    rollbackQuietly(connection, exception);
+                    throw exception;
+                } finally {
+                    connection.setTransactionIsolation(previousIsolation);
+                    connection.setAutoCommit(previousAutoCommit);
                 }
-            } finally {
-                if (lastAcceptedId > checkpoint) {
-                    writeCheckpoint(lastAcceptedId);
-                }
+                lastFailure.set(null);
+                return accepted;
             }
-            lastFailure.set(null);
-            return accepted;
         } catch (SQLException exception) {
             RuntimeException failure = new IllegalStateException(
                     dialect.name() + " outbox polling failed for adapter " + adapterName,
@@ -104,13 +126,27 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         }
     }
 
+    private void rollbackQuietly(Connection connection, Exception original) {
+        try {
+            connection.rollback();
+        } catch (SQLException rollbackFailure) {
+            original.addSuppressed(rollbackFailure);
+        }
+    }
+
     public void initialize() throws SQLException {
-        if (!createCheckpointTable) {
+        if (!createCheckpointTable || checkpointTableInitialized.get()) {
             return;
         }
-        try (Connection connection = dataSource.getConnection();
-             Statement statement = connection.createStatement()) {
-            statement.executeUpdate(dialect.createCheckpointTableSql(mapping.checkpointTable()));
+        synchronized (initializationMonitor) {
+            if (checkpointTableInitialized.get()) {
+                return;
+            }
+            try (Connection connection = dataSource.getConnection();
+                 Statement statement = connection.createStatement()) {
+                statement.executeUpdate(dialect.createCheckpointTableSql(mapping.checkpointTable()));
+            }
+            checkpointTableInitialized.set(true);
         }
     }
 
@@ -158,9 +194,19 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         }
     }
 
-    private long readCheckpoint() throws SQLException {
-        try (Connection connection = dataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement(dialect.readCheckpointSql(mapping.checkpointTable()))) {
+    private boolean ensureCheckpoint(Connection connection) throws SQLException {
+        if (checkpointRowEnsured.get()) {
+            return false;
+        }
+        try (PreparedStatement statement = connection.prepareStatement(dialect.ensureCheckpointSql(mapping.checkpointTable()))) {
+            dialect.bindEnsureCheckpoint(statement, adapterName);
+            statement.executeUpdate();
+        }
+        return true;
+    }
+
+    private long readCheckpointForUpdate(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(dialect.readCheckpointForUpdateSql(mapping.checkpointTable()))) {
             statement.setString(1, adapterName);
             try (ResultSet resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
@@ -171,9 +217,8 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         }
     }
 
-    private List<OutboxRow> readBatch(long checkpoint) throws SQLException {
-        try (Connection connection = dataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement(dialect.readBatchSql(mapping, batchSize))) {
+    private List<OutboxRow> readBatch(Connection connection, long checkpoint) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(dialect.readBatchSql(mapping, batchSize))) {
             dialect.bindReadBatch(statement, checkpoint, batchSize);
             try (ResultSet resultSet = statement.executeQuery()) {
                 ArrayList<OutboxRow> rows = new ArrayList<>();
@@ -194,9 +239,8 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         }
     }
 
-    private void writeCheckpoint(long lastEventId) throws SQLException {
-        try (Connection connection = dataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement(dialect.writeCheckpointSql(mapping.checkpointTable()))) {
+    private void writeCheckpoint(Connection connection, long lastEventId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(dialect.writeCheckpointSql(mapping.checkpointTable()))) {
             dialect.bindWriteCheckpoint(statement, adapterName, lastEventId);
             statement.executeUpdate();
         }

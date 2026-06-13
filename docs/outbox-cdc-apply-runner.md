@@ -173,6 +173,21 @@ ANTI-PATTERN: unordered external events with no version field.
 checkpoint with a SQL Server lock-guarded update-then-insert statement instead
 of `MERGE`.
 
+For JDBC outbox adapters, `pollOnce(...)` reads, applies, and advances the
+checkpoint in one database transaction. Pollers that use the same `adapterName`
+share the same checkpoint row. The checkpoint row is locked before reading the
+next batch, so two Kubernetes pods do not apply the same range concurrently.
+The MSSQL adapter also serializes first-start checkpoint table creation with a
+short SQL Server application lock, and treats a concurrent duplicate checkpoint
+row insert as a successful ownership handoff. For controlled production
+environments, pre-creating the outbox and checkpoint tables through normal
+schema migration is still the cleaner option.
+
+This is a safety model, not a throughput model. One `adapterName` is one
+logical consumer. If a route needs active-active outbox throughput, partition
+the outbox stream and give every partition its own explicit adapter name and
+checkpoint.
+
 If the apply runner fails:
 
 - the adapter does not accept the event
@@ -192,5 +207,7 @@ This is intentional. Do not hide apply failures just to keep the outbox moving.
   payload for UPSERT events.
 - Add metrics for accepted, ignored, failed, and retried events.
 - Keep the outbox adapter name stable; changing it creates a new checkpoint.
-- In Kubernetes, run the adapter with leader election or a partitioned ownership
-  strategy so multiple pods do not apply the same stream unintentionally.
+- In Kubernetes, reuse the same `adapterName` only when you want one serialized
+  logical consumer across pods.
+- Use partitioned adapter names only when the outbox stream is explicitly split
+  and every partition has its own ownership boundary.

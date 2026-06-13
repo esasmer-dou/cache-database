@@ -3,7 +3,7 @@
 CacheDB can be public beta before every item here is green. It must not be
 announced as production GA until every gate below is green in CI and in a
 staging environment that resembles production traffic, Redis topology, and
-PostgreSQL volume.
+durable SQL volume.
 
 ## Go/No-Go Gates
 
@@ -20,7 +20,7 @@ PostgreSQL volume.
 | Relation-heavy reads | Summary-first, preview/detail, and projection-first recipes must remain faster and lower-materialization than full aggregate first-paint. | Relation read-shape benchmark and migration side-by-side reports pass. |
 | Global sorted/range reads | Ranked projection top-window path must remain cheaper than wide candidate scan. | Ranked projection benchmark passes. |
 | Write durability | Write-behind retry, claim, DLQ, poison visibility, and PostgreSQL durability must be verified. | Integration tests and multi-instance coordination evidence pass. |
-| MSSQL provider readiness | MSSQL must remain explicit beta until live provider evidence, outbox checkpointing, migration SQL, multi-pod apply smoke, and longer SQL Server soak/failover tests are green. | `Production Evidence / mssql-provider-evidence` workflow artifact plus follow-up soak/failover evidence. |
+| MSSQL provider readiness | MSSQL must remain explicit beta until live provider evidence, checkpoint locking, high-volume replay/load, migration SQL, multi-pod apply smoke, and longer SQL Server soak/failover tests are green. | `Production Evidence / mssql-provider-evidence` workflow artifact plus `Production GA Staging Evidence / staging-mssql-ha` artifact. |
 
 ## Classification
 
@@ -49,6 +49,10 @@ signed and reproducible.
   work, not as a full aggregate first-paint read.
 - Before GA, run `Production GA Staging Evidence` with real staging secrets and
   trigger managed Redis failover during the wait window.
+- Before MSSQL GA, run `Production GA Staging Evidence` with
+  `STAGING_MSSQL_URL`, `STAGING_MSSQL_USER`, and `STAGING_MSSQL_PASSWORD`, then
+  trigger a managed SQL Server HA or Always On failover during the MSSQL wait
+  window.
 - Before GA, commit a full route coverage CSV using
   [docs/ga-migration-coverage-template.csv](docs/ga-migration-coverage-template.csv)
   as the schema and make the coverage workflow pass.

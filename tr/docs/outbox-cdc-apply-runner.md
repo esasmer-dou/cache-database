@@ -172,6 +172,23 @@ ANTI-PATTERN: Version bilgisi olmayan ve sıralı gelmeyen external event akış
 SQL Server üzerinde `MERGE` kullanmadan, lock-guarded update-then-insert
 ifadesiyle saklar.
 
+JDBC outbox adapter'larında `pollOnce(...)` okuma, apply ve checkpoint
+ilerletme adımlarını tek veritabanı transaction'ı içinde yürütür. Aynı
+`adapterName` ile çalışan poller'lar aynı checkpoint satırını paylaşır.
+Adapter, sıradaki batch'i okumadan önce checkpoint satırını kilitlediği için iki
+Kubernetes pod'u aynı aralığı eşzamanlı uygulamaz.
+MSSQL adapter'ı ilk açılıştaki checkpoint tablo oluşturma adımını kısa süreli
+SQL Server application lock ile sıraya alır. Checkpoint satırı aynı anda başka
+bir pod tarafından oluşturulmuşsa duplicate-key sonucunu başarılı sahiplik
+devri kabul eder. Kontrollü production ortamlarında outbox ve checkpoint
+tablolarını normal şema migration süreciyle önceden oluşturmak yine daha temiz
+yoldur.
+
+Bu bir güvenlik modelidir; işleme kapasitesini artırma modeli değildir. Bir
+`adapterName`, tek mantıksal consumer anlamına gelir. Bir route gerçekten
+aktif-aktif outbox kapasitesi istiyorsa outbox stream partition edilmeli ve her
+partition için ayrı adapter adı ve ayrı checkpoint kullanılmalıdır.
+
 Apply runner başarısız olursa:
 
 - adapter event'i kabul etmiş saymaz
@@ -192,5 +209,7 @@ gizlemek doğru değildir.
   satır payload'ı bulunmalı.
 - Accepted, ignored, failed ve retried event metrikleri izlenmeli.
 - Outbox adapter adı sabit tutulmalı; ad değişirse yeni checkpoint oluşur.
-- Kubernetes'te adapter leader election veya partition ownership ile
-  çalışmalı; birden fazla pod aynı stream'i istemeden iki kez uygulamamalı.
+- Kubernetes'te aynı `adapterName` yalnızca pod'lar arasında tek, sıraya alınmış
+  mantıksal consumer istendiğinde paylaşılmalı.
+- Partitioned adapter adları yalnızca outbox stream açıkça bölündüyse ve her
+  partition'ın sahiplik sınırı netse kullanılmalı.

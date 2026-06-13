@@ -7,6 +7,10 @@ on:
         description: Seconds to wait while an operator triggers managed Redis failover
         required: true
         default: "120"
+      mssqlExternalFailoverWaitSeconds:
+        description: Seconds to wait while an operator triggers managed SQL Server or Always On failover
+        required: true
+        default: "120"
       migrationCoverageCsvPath:
         description: Committed CSV path for full production route coverage
         required: true
@@ -96,5 +100,63 @@ jobs:
         with:
           name: migration-coverage
           path: target/migration-coverage-summary.md
+          if-no-files-found: error
+          retention-days: 30
+
+  staging-mssql-ha:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Validate staging MSSQL secrets
+        shell: pwsh
+        env:
+          STAGING_MSSQL_URL: ${{ secrets.STAGING_MSSQL_URL }}
+          STAGING_MSSQL_USER: ${{ secrets.STAGING_MSSQL_USER }}
+          STAGING_MSSQL_PASSWORD: ${{ secrets.STAGING_MSSQL_PASSWORD }}
+        run: |
+          foreach ($name in @("STAGING_MSSQL_URL", "STAGING_MSSQL_USER", "STAGING_MSSQL_PASSWORD")) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "$name secret is required for Production GA MSSQL Staging Evidence."
+            }
+          }
+
+      - name: Run staging MSSQL HA evidence
+        shell: pwsh
+        env:
+          STAGING_MSSQL_URL: ${{ secrets.STAGING_MSSQL_URL }}
+          STAGING_MSSQL_USER: ${{ secrets.STAGING_MSSQL_USER }}
+          STAGING_MSSQL_PASSWORD: ${{ secrets.STAGING_MSSQL_PASSWORD }}
+        run: >
+          ./tools/ci/run-staging-mssql-ha-evidence.ps1
+          -MavenExecutable mvn
+          -MssqlUrl "$env:STAGING_MSSQL_URL"
+          -MssqlUser "$env:STAGING_MSSQL_USER"
+          -MssqlPassword "$env:STAGING_MSSQL_PASSWORD"
+          -ExternalFailoverWaitSeconds ${{ inputs.mssqlExternalFailoverWaitSeconds }}
+
+      - name: Publish staging MSSQL HA summary
+        shell: pwsh
+        run: Get-Content ./target/cachedb-staging-mssql-ha-reports/staging-mssql-ha-evidence.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload staging MSSQL HA evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-mssql-ha-evidence
+          path: |
+            target/cachedb-staging-mssql-ha-reports/**
+            cachedb-storage-mssql/target/surefire-reports/**
+            cachedb-starter/target/surefire-reports/**
+            cachedb-integration-tests/target/surefire-reports/**
           if-no-files-found: error
           retention-days: 30

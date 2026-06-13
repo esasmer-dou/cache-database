@@ -127,9 +127,9 @@ yol şudur:
 5. Satır yoksa insert yapılır.
 6. Bütün batch commit edilir veya tek parça roll back edilir.
 
-Bu tasarım, maksimum bulk throughput yerine correctness ve idempotency tarafını
-önceliklendirir. Bulk copy, table-valued parameter ve MSSQL'e özel outbox
-checkpoint SQL'i ayrı GA sertleştirme işleridir.
+Bu tasarım, maksimum toplu yazma kapasitesi yerine doğruluk ve idempotency
+tarafını önceliklendirir. Bulk copy ve table-valued parameter kullanımı ayrı GA
+sertleştirme işleridir.
 
 Büyük `flushBatch(...)` çağrıları `WriteBehindConfig.maxFlushBatchSize()`
 değerine göre parçalanır. Böylece SQL Server, Redis'ten gelen bütün batch için
@@ -150,23 +150,34 @@ idempotent tutar.
 
 ## Mevcut MSSQL Kapısı
 
-MSSQL şu anda write-behind semantiğini bilinçli beta testlerine açar; production
-sertifikalı değildir.
+MSSQL şu anda write-behind, outbox, migration planner ve çok pod'lu apply-runner
+davranışını bilinçli beta testlerine açar. Yine de henüz production sertifikalı
+değildir.
 
 Provider evidence lane ile artık doğrulananlar:
 
 - yalnızca unit-level SQL recorder değil, gerçek SQL Server integration lane
 - canlı SQL Server üzerinde parameter-limit ve batch-size regresyon testleri
+- yüksek hacimli write-behind yükü, eski sürüm ve silme kontrolleri
 - MSSQL outbox/checkpoint adapter
 - SQL Server metadata üstünde migration discovery, warm ve side-by-side comparison
 - MSSQL kalıcı storage iken çok pod'lu apply runner smoke testi
+- pod'lar eşzamanlı başlarken checkpoint tablosu bootstrap adımının kilit ile
+  korunması
+- eşzamanlı polling sırasında checkpoint satırı bootstrap adımının duplicate-key
+  sonucunu güvenli kabul etmesi
+- aynı `adapterName` ile çalışan eşzamanlı poller'ların checkpoint satırı
+  kilidiyle korunması
+- tek node SQL Server container restart/reconnect regresyonu
 
 MSSQL için GA demeden önce hâlâ kapanması gerekenler:
 
 - stale version, duplicate id, deadlock, timeout ve lock-conflict testlerinin
   smoke ölçeği dışında, daha yüksek concurrency ile doğrulanması
-- daha uzun SQL Server soak/restart/retry kanıtı
-- aynı outbox stream'ini aktif-aktif poll eden pod'lar için sahiplik stratejisi
+- production boyutuna yakın veriyle daha uzun SQL Server soak/retry kanıtı
+- staging ortamında gerçek SQL Server HA veya Always On failover kanıtı
+- route aktif-aktif polling kapasitesi istiyorsa partitioned outbox ownership;
+  aynı `adapterName` güvenlik için bilinçli olarak sıraya alınır
 - gerçekçi tablo hacimleriyle MSSQL migration warm ve comparison kanıtı
 - dashboard ve raporlarda PostgreSQL ile MSSQL storage metriklerini ayıran etiketler
 

@@ -2522,6 +2522,9 @@ public interface com.reactor.cachedb.jdbc.JdbcOutboxDialect {
   public abstract java.lang.String name();
   public abstract java.lang.String createCheckpointTableSql(java.lang.String);
   public default java.lang.String readCheckpointSql(java.lang.String);
+  public default java.lang.String ensureCheckpointSql(java.lang.String);
+  public default void bindEnsureCheckpoint(java.sql.PreparedStatement, java.lang.String) throws java.sql.SQLException;
+  public default java.lang.String readCheckpointForUpdateSql(java.lang.String);
   public abstract java.lang.String readBatchSql(com.reactor.cachedb.jdbc.JdbcOutboxMapping, int);
   public abstract void bindReadBatch(java.sql.PreparedStatement, long, int) throws java.sql.SQLException;
   public abstract java.lang.String writeCheckpointSql(java.lang.String);
@@ -2598,6 +2601,9 @@ public final class com.reactor.cachedb.postgres.PostgresOutboxDialect implements
   public com.reactor.cachedb.postgres.PostgresOutboxDialect();
   public java.lang.String name();
   public java.lang.String createCheckpointTableSql(java.lang.String);
+  public java.lang.String ensureCheckpointSql(java.lang.String);
+  public void bindEnsureCheckpoint(java.sql.PreparedStatement, java.lang.String) throws java.sql.SQLException;
+  public java.lang.String readCheckpointForUpdateSql(java.lang.String);
   public java.lang.String readBatchSql(com.reactor.cachedb.jdbc.JdbcOutboxMapping, int);
   public void bindReadBatch(java.sql.PreparedStatement, long, int) throws java.sql.SQLException;
   public java.lang.String writeCheckpointSql(java.lang.String);
@@ -2642,6 +2648,9 @@ public final class com.reactor.cachedb.mssql.MssqlOutboxDialect implements com.r
   public com.reactor.cachedb.mssql.MssqlOutboxDialect();
   public java.lang.String name();
   public java.lang.String createCheckpointTableSql(java.lang.String);
+  public java.lang.String ensureCheckpointSql(java.lang.String);
+  public void bindEnsureCheckpoint(java.sql.PreparedStatement, java.lang.String) throws java.sql.SQLException;
+  public java.lang.String readCheckpointForUpdateSql(java.lang.String);
   public java.lang.String readBatchSql(com.reactor.cachedb.jdbc.JdbcOutboxMapping, int);
   public void bindReadBatch(java.sql.PreparedStatement, long, int) throws java.sql.SQLException;
   public java.lang.String writeCheckpointSql(java.lang.String);

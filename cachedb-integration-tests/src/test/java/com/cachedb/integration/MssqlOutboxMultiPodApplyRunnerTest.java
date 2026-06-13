@@ -21,12 +21,21 @@ import org.junit.jupiter.api.Test;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -39,6 +48,7 @@ public final class MssqlOutboxMultiPodApplyRunnerTest {
     );
     private static final String JDBC_USER = System.getProperty("cachedb.it.mssql.user", "sa");
     private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.mssql.password", "YourStrong!Passw0rd");
+    private static final int HIGH_VOLUME_ROW_COUNT = Integer.getInteger("cachedb.it.mssql.outboxRows", 2_000);
 
     @BeforeEach
     void setUp() throws Exception {
@@ -108,13 +118,100 @@ public final class MssqlOutboxMultiPodApplyRunnerTest {
         podB.close();
     }
 
+    @Test
+    void concurrentPodsShouldReplayHighVolumeOutboxWithoutDuplicateApply() throws Exception {
+        replaceOutboxRows(HIGH_VOLUME_ROW_COUNT);
+        Set<String> appliedIds = ConcurrentHashMap.newKeySet();
+        AtomicInteger duplicateCount = new AtomicInteger();
+        ExternalChangeApplyRunner runner = ExternalChangeApplyRunner
+                .builder(noopSession(), emptyRegistry())
+                .mode(ExternalChangeApplyMode.CACHE_ONLY)
+                .handler("OrderEntity", event -> {
+                    if (!appliedIds.add(String.valueOf(event.id()))) {
+                        duplicateCount.incrementAndGet();
+                    }
+                    return ExternalChangeApplyResult.applied(
+                            event,
+                            event.id(),
+                            ExternalChangeApplyMode.CACHE_ONLY,
+                            "handled by mssql high-volume multi-pod smoke"
+                    );
+                })
+                .build();
+        MssqlOutboxExternalChangeFeedAdapter podA = adapter(127);
+        MssqlOutboxExternalChangeFeedAdapter podB = adapter(127);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            int emptyRounds = 0;
+            int guard = 0;
+            while (emptyRounds < 2) {
+                Future<Integer> first = executor.submit(pollTask(podA, runner));
+                Future<Integer> second = executor.submit(pollTask(podB, runner));
+                int accepted = first.get() + second.get();
+                emptyRounds = accepted == 0 ? emptyRounds + 1 : 0;
+                guard++;
+                if (guard > HIGH_VOLUME_ROW_COUNT) {
+                    fail("MSSQL high-volume outbox replay did not drain within the guard limit");
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(10, TimeUnit.SECONDS);
+            podA.close();
+            podB.close();
+        }
+
+        assertEquals(HIGH_VOLUME_ROW_COUNT, appliedIds.size());
+        assertEquals(0, duplicateCount.get());
+        assertEquals(
+                HIGH_VOLUME_ROW_COUNT,
+                scalarLong("SELECT last_event_id FROM cachedb_it_outbox_checkpoint WHERE adapter_name = 'shared-mssql-apply-runner'")
+        );
+    }
+
     private MssqlOutboxExternalChangeFeedAdapter adapter() {
+        return adapter(10);
+    }
+
+    private MssqlOutboxExternalChangeFeedAdapter adapter(int batchSize) {
         return MssqlOutboxExternalChangeFeedAdapter.builder(dataSource())
                 .adapterName("shared-mssql-apply-runner")
                 .outboxTable("cachedb_it_outbox")
                 .checkpointTable("cachedb_it_outbox_checkpoint")
-                .batchSize(10)
+                .batchSize(batchSize)
                 .build();
+    }
+
+    private Callable<Integer> pollTask(
+            MssqlOutboxExternalChangeFeedAdapter adapter,
+            ExternalChangeApplyRunner runner
+    ) {
+        return () -> adapter.pollOnce(runner);
+    }
+
+    private void replaceOutboxRows(int rowCount) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("IF OBJECT_ID(N'cachedb_it_outbox_checkpoint', N'U') IS NOT NULL DELETE FROM cachedb_it_outbox_checkpoint");
+            statement.executeUpdate("TRUNCATE TABLE cachedb_it_outbox");
+        }
+        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+             PreparedStatement statement = connection.prepareStatement("""
+                     INSERT INTO cachedb_it_outbox
+                     (entity_name, entity_id, event_type, payload_json, entity_version, event_source)
+                     VALUES ('OrderEntity', ?, 'UPSERT', ?, ?, 'orders-outbox-load')
+                     """)) {
+            for (int index = 1; index <= rowCount; index++) {
+                statement.setString(1, String.valueOf(index));
+                statement.setString(2, "{\"status\":\"OPEN\",\"sequence\":" + index + "}");
+                statement.setLong(3, index);
+                statement.addBatch();
+                if (index % 250 == 0) {
+                    statement.executeBatch();
+                }
+            }
+            statement.executeBatch();
+        }
     }
 
     private DataSource dataSource() {
@@ -203,5 +300,14 @@ public final class MssqlOutboxMultiPodApplyRunnerTest {
             fail("No reachable SQL Server test database found at " + JDBC_URL);
         }
         Assumptions.assumeTrue(reachable, "No reachable SQL Server test database found");
+    }
+
+    private long scalarLong(String sql) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+             Statement statement = connection.createStatement();
+             var resultSet = statement.executeQuery(sql)) {
+            resultSet.next();
+            return resultSet.getLong(1);
+        }
     }
 }

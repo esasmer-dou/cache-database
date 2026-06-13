@@ -22,6 +22,23 @@ public final class PostgresOutboxDialect implements JdbcOutboxDialect {
     }
 
     @Override
+    public String ensureCheckpointSql(String checkpointTable) {
+        return "INSERT INTO " + checkpointTable
+                + " (adapter_name, last_event_id, updated_at) VALUES (?, 0, now())"
+                + " ON CONFLICT (adapter_name) DO NOTHING";
+    }
+
+    @Override
+    public void bindEnsureCheckpoint(PreparedStatement statement, String adapterName) throws SQLException {
+        statement.setString(1, adapterName);
+    }
+
+    @Override
+    public String readCheckpointForUpdateSql(String checkpointTable) {
+        return "SELECT last_event_id FROM " + checkpointTable + " WHERE adapter_name = ? FOR UPDATE";
+    }
+
+    @Override
     public String readBatchSql(JdbcOutboxMapping mapping, int batchSize) {
         return "SELECT "
                 + mapping.idColumn() + ", "

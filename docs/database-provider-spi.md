@@ -123,9 +123,8 @@ The MSSQL flusher does not use `MERGE` by default. The safer beta path is:
 5. If the row does not exist, insert it.
 6. Commit or roll back the whole batch.
 
-This favors correctness and idempotency over maximum bulk throughput. Bulk copy,
-table-valued parameters, and MSSQL-specific outbox checkpoint SQL are separate
-GA hardening items.
+This favors correctness and idempotency over maximum bulk throughput. Bulk copy
+and table-valued parameters are separate GA hardening items.
 
 Large `flushBatch(...)` calls are split by `WriteBehindConfig.maxFlushBatchSize()`
 so SQL Server does not hold one oversized serializable transaction for the full
@@ -145,23 +144,31 @@ the version guard keeps retry behavior idempotent.
 
 ## Current MSSQL Gate
 
-MSSQL is usable for explicit beta testing of write-behind semantics, but it is
-not production-certified yet.
+MSSQL is usable for explicit beta testing of write-behind, outbox, migration
+planner, and multi-pod apply-runner behavior. It is still not
+production-certified.
 
 Now covered by the provider evidence lane:
 
 - real SQL Server integration lane, not only unit-level SQL recorder tests
 - parameter-limit and batch-size regression tests against a live SQL Server
+- high-volume write-behind load with stale version and delete checks
 - MSSQL outbox/checkpoint adapter
 - migration discovery, warm, and side-by-side comparison on SQL Server metadata
 - multi-pod apply runner smoke test with MSSQL as durable storage
+- lock-guarded checkpoint table bootstrap during concurrent pod startup
+- duplicate-key safe checkpoint row bootstrap during concurrent polling
+- concurrent same-`adapterName` polling protected by checkpoint row locks
+- single-node SQL Server container restart/reconnect regression
 
 Still required before MSSQL GA:
 
 - stale version, duplicate id, deadlock, timeout, and lock-conflict tests at
   larger concurrency, not only smoke scale
-- longer SQL Server soak/restart/retry evidence
-- MSSQL outbox ownership strategy for concurrent active-active pollers
+- longer SQL Server soak/retry evidence under production-sized data
+- real SQL Server HA or Always On failover evidence from staging
+- partitioned outbox ownership if a route needs active-active polling
+  throughput; same `adapterName` is intentionally serialized for safety
 - MSSQL migration warm and comparison against realistic table volumes
 - dashboard/reporting labels that separate PostgreSQL and MSSQL storage metrics
 
