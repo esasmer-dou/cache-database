@@ -10,8 +10,8 @@
         <version>0.1.0-beta.3</version>
     </parent>
 
-    <artifactId>cachedb-storage-postgres</artifactId>
-    <name>cachedb-storage-postgres</name>
+    <artifactId>cachedb-storage-mssql</artifactId>
+    <name>cachedb-storage-mssql</name>
 
     <dependencies>
         <dependency>
@@ -23,11 +23,6 @@
             <groupId>com.reactor.cachedb</groupId>
             <artifactId>cachedb-storage-jdbc</artifactId>
             <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <version>${postgresql.version}</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

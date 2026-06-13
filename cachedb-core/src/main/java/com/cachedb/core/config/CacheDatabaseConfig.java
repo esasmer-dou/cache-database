@@ -1,7 +1,10 @@
 package com.reactor.cachedb.core.config;
 
+import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
+
 public record CacheDatabaseConfig(
         WriteBehindConfig writeBehind,
+        WriteBehindFlusherFactory writeBehindFlusherFactory,
         ResourceLimits resourceLimits,
         KeyspaceConfig keyspace,
         RuntimeCoordinationConfig runtimeCoordination,
@@ -18,6 +21,45 @@ public record CacheDatabaseConfig(
         AdminHttpConfig adminHttp,
         SchemaBootstrapConfig schemaBootstrap
 ) {
+    public CacheDatabaseConfig(
+            WriteBehindConfig writeBehind,
+            ResourceLimits resourceLimits,
+            KeyspaceConfig keyspace,
+            RuntimeCoordinationConfig runtimeCoordination,
+            RedisFunctionsConfig redisFunctions,
+            RelationConfig relations,
+            PageCacheConfig pageCache,
+            ReadShapeGuardrailConfig readShapeGuardrail,
+            QueryIndexConfig queryIndex,
+            ProjectionRefreshConfig projectionRefresh,
+            RedisGuardrailConfig redisGuardrail,
+            DeadLetterRecoveryConfig deadLetterRecovery,
+            AdminMonitoringConfig adminMonitoring,
+            AdminReportJobConfig adminReportJob,
+            AdminHttpConfig adminHttp,
+            SchemaBootstrapConfig schemaBootstrap
+    ) {
+        this(
+                writeBehind,
+                null,
+                resourceLimits,
+                keyspace,
+                runtimeCoordination,
+                redisFunctions,
+                relations,
+                pageCache,
+                readShapeGuardrail,
+                queryIndex,
+                projectionRefresh,
+                redisGuardrail,
+                deadLetterRecovery,
+                adminMonitoring,
+                adminReportJob,
+                adminHttp,
+                schemaBootstrap
+        );
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -29,6 +71,7 @@ public record CacheDatabaseConfig(
     public Builder toBuilder() {
         return builder()
                 .writeBehind(writeBehind)
+                .writeBehindFlusherFactory(writeBehindFlusherFactory)
                 .resourceLimits(resourceLimits)
                 .keyspace(keyspace)
                 .runtimeCoordination(runtimeCoordination)
@@ -48,6 +91,7 @@ public record CacheDatabaseConfig(
 
     public static final class Builder {
         private WriteBehindConfig writeBehind = WriteBehindConfig.defaults();
+        private WriteBehindFlusherFactory writeBehindFlusherFactory;
         private ResourceLimits resourceLimits = ResourceLimits.defaults();
         private KeyspaceConfig keyspace = KeyspaceConfig.defaults();
         private RuntimeCoordinationConfig runtimeCoordination = RuntimeCoordinationConfig.defaults();
@@ -66,6 +110,11 @@ public record CacheDatabaseConfig(
 
         public Builder writeBehind(WriteBehindConfig writeBehind) {
             this.writeBehind = writeBehind;
+            return this;
+        }
+
+        public Builder writeBehindFlusherFactory(WriteBehindFlusherFactory writeBehindFlusherFactory) {
+            this.writeBehindFlusherFactory = writeBehindFlusherFactory;
             return this;
         }
 
@@ -147,6 +196,7 @@ public record CacheDatabaseConfig(
         public CacheDatabaseConfig build() {
             return new CacheDatabaseConfig(
                     writeBehind,
+                    writeBehindFlusherFactory,
                     resourceLimits,
                     keyspace,
                     runtimeCoordination,

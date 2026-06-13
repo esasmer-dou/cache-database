@@ -1,120 +1,145 @@
-# Veritabanı Provider SPI Yönü
+# Veritabanı Sağlayıcı SPI
 
 English version: [../../docs/database-provider-spi.md](../../docs/database-provider-spi.md)
 
-Bu sayfa, CacheDB'nin PostgreSQL odaklı durability katmanından Microsoft SQL
-Server gibi farklı SQL veritabanlarına nasıl genişlemesi gerektiğini tanımlar.
-
-Kural nettir: MSSQL desteği eklemek, kod tabanını `if (postgres) ... else if
-(mssql) ...` bloklarıyla doldurmamalıdır.
+CacheDB public beta aşamasında hâlâ PostgreSQL odaklıdır. Bu çalışmayla storage
+provider tarafına ilk açık SPI katmanı eklendi. Bu yüzden MSSQL desteği artık
+"JDBC URL'yi değiştir, aynı kod çalışır" gibi riskli ve yanıltıcı bir yaklaşım
+üzerinden ilerlemiyor.
 
 ## Karar
 
-BEST: Database-specific dialect modülleri olan bir JDBC provider SPI eklemek.
+BEST: Kalıcı SQL sağlayıcısını bilinçli olarak seçmek ve ona uygun
+write-behind flusher'ını açıkça bağlamak.
 
-ACCEPTABLE: SPI ve MSSQL test lane tamamlanana kadar GA seviyesinde sadece
-PostgreSQL durability provider sunmak.
+ACCEPTABLE: Uygulama yalnızca PostgreSQL kullanıyorsa starter'ın varsayılan
+PostgreSQL yolunu kullanmak.
 
-ANTI-PATTERN: Sadece JDBC URL değiştirerek plug-and-play MSSQL desteği varmış
-gibi davranmak.
+ANTI-PATTERN: PostgreSQL flusher'ını MSSQL JDBC URL'sine bağlayıp aynı SQL'in,
+aynı retry davranışının ve aynı parametre limitlerinin güvenli olduğunu
+varsaymak.
 
-## Neden Provider SPI Gerekli?
-
-PostgreSQL ve MSSQL production açısından kritik noktalarda farklı davranır:
-
-| Alan | PostgreSQL | MSSQL |
-| --- | --- | --- |
-| Upsert | `INSERT ... ON CONFLICT` | `MERGE` veya transaction içinde update-then-insert |
-| Bulk load | `COPY` | table-valued parameter, `BULK INSERT` veya batch statement |
-| Geçici tablo | `CREATE TEMP TABLE ... ON COMMIT DROP` | Connection scope'lu `#temp` tablo |
-| Pagination | `LIMIT/OFFSET` | `OFFSET ... FETCH` veya `TOP` |
-| Zaman tipi | `TIMESTAMPTZ` | `datetimeoffset` veya `datetime2` |
-| Identifier quoting | `"name"` | `[name]` |
-| Hata sınıflandırma | SQLSTATE odaklı | SQL Server error code odaklı |
-
-Bu farklar kozmetik değildir. Correctness, idempotency, retry davranışı ve
-yazma gecikmesini doğrudan etkiler.
-
-## Önerilen Modül Yapısı
-
-Hedef ayrım:
+## Mevcut Modül Yapısı
 
 ```text
 cachedb-storage-jdbc
-- JdbcWriteBehindFlusher
 - JdbcDatabaseDialect
-- JdbcFailureClassifier
-- JdbcOutboxFeedAdapter
-- ortak value binding ve statement batching
+- JdbcWriteBehindSupport
+- SqlFailureClassifierSupport
+- ortak value conversion, row-limit ve batch partition yardımcıları
 
 cachedb-storage-postgres
 - PostgresDatabaseDialect
+- PostgresWriteBehindFlusher
 - PostgresFailureClassifier
-- opsiyonel COPY optimizasyonu
+- PostgreSQL ON CONFLICT ve opsiyonel COPY yolu
 
 cachedb-storage-mssql
 - MssqlDatabaseDialect
+- MssqlWriteBehindFlusher
 - MssqlFailureClassifier
-- MSSQL'e özel upsert ve batch stratejisi
+- SQL Server update/existence/insert yazma yolu
 ```
 
-`cachedb-starter`, provider-agnostic kontratlara bağlı kalmalı ve provider'ı
-configuration üzerinden seçmelidir.
+`cachedb-starter`, geriye dönük uyumluluk için PostgreSQL flusher'ını varsayılan
+tutar. PostgreSQL dışındaki kullanıcılar `WriteBehindFlusherFactory` değerini
+açıkça vermelidir.
 
-## Gerekli SPI Yüzeyi
+## PostgreSQL Kullanımı
 
-İlk SPI versiyonu şunları kapsamalıdır:
+PostgreSQL kullanan uygulamalarda starter ile ek provider wiring gerekmez:
 
-- identifier quoting ve doğrulama
-- tek satır upsert SQL'i
-- çok satır upsert SQL'i veya desteklenen fallback
-- version guard ile delete
-- checkpoint tablo DDL'i
-- outbox checkpoint upsert
-- pagination clause
-- geçici tablo stratejisi
-- hata sınıflandırma
-- batch capability flag'leri
-- gerekiyorsa connection/session initialization
-
-## Configuration Hedefi
-
-Hedef kullanıcı deneyimi:
-
-```properties
-cachedb.database.provider=postgres
-cachedb.database.jdbcUrl=jdbc:postgresql://localhost:5432/app
+```java
+CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, postgresDataSource)
+        .register(db -> {
+            // generated entity ve projection kayıtları
+        })
+        .start();
 ```
 
-veya:
+Varsayılan flusher `PostgresWriteBehindFlusher` olarak kalır.
 
-```properties
-cachedb.database.provider=mssql
-cachedb.database.jdbcUrl=jdbc:sqlserver://localhost:1433;databaseName=app
+## MSSQL Kullanımı
+
+MSSQL için storage modülünü ve Microsoft SQL Server JDBC driver'ını ekleyin.
+CacheDB driver versiyonunu transitively zorlamaz; `DataSource` yönetimi
+uygulamanın sorumluluğundadır.
+
+```xml
+<dependency>
+  <groupId>com.reactor.cachedb</groupId>
+  <artifactId>cachedb-storage-mssql</artifactId>
+  <version>0.1.0-beta.3</version>
+</dependency>
+
+<dependency>
+  <groupId>com.microsoft.sqlserver</groupId>
+  <artifactId>mssql-jdbc</artifactId>
+  <version><!-- platformunuzun onayladığı versiyon --></version>
+</dependency>
 ```
 
-Provider açıkça seçilmelidir. URL'den otomatik tespit yardımcı olabilir; fakat
-production configuration okunabilir ve bilinçli olmalıdır.
+Flusher'ı açıkça bağlayın:
 
-## MSSQL GA Kapısı
+```java
+import com.reactor.cachedb.mssql.MssqlWriteBehindFlusher;
 
-MSSQL production-ready denmeden önce şu testler geçmelidir:
+CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
+        .writeBehindFlusherFactory(MssqlWriteBehindFlusher::new)
+        .register(db -> {
+            // generated entity ve projection kayıtları
+        })
+        .start();
+```
 
-- write-behind upsert/delete idempotency testleri
-- aynı batch içinde duplicate id testi
-- eski version event testi
-- outbox checkpoint retry testi
-- deadlock/retry sınıflandırma testi
-- batch-size ve parameter-count limit testi
-- MSSQL metadata üstünde migration discovery ve warm testi
-- MSSQL baseline SQL'e karşı side-by-side comparison testi
-- Kubernetes çok pod'lu apply runner smoke testi
+Bu açıklık bilinçli bir tasarım kararıdır. Amaç, bir uygulamanın farkında
+olmadan PostgreSQL SQL'ini SQL Server üzerinde çalıştırmasını engellemektir.
 
-## Mevcut Sınır
+## MSSQL Yazma Semantiği
 
-Public beta davranışı şu an PostgreSQL-first durumdadır.
+MSSQL flusher varsayılan olarak `MERGE` kullanmaz. Public beta için daha güvenli
+yol şudur:
 
-Bu pakette tamamlanan adım, PostgreSQL CacheDB dışında değiştiğinde Redis'i
-güncel tutan outbox/CDC apply desteğidir. MSSQL desteği bir sonraki storage
-provider iş akışı olmalı ve PostgreSQL sınıflarına yerinde yamalar eklenerek
-değil, yukarıdaki SPI ile geliştirilmelidir.
+1. Tek transaction açılır.
+2. Isolation seviyesi `SERIALIZABLE` yapılır.
+3. Version guard ile `UPDATE ... WITH (UPDLOCK, HOLDLOCK)` denenir.
+4. Satır güncellenmediyse aynı lock hint'leriyle satır var mı diye bakılır.
+5. Satır yoksa insert yapılır.
+6. Bütün batch commit edilir veya tek parça roll back edilir.
+
+Bu tasarım, maksimum bulk throughput yerine correctness ve idempotency tarafını
+önceliklendirir. Bulk copy, table-valued parameter ve MSSQL'e özel outbox
+checkpoint SQL'i ayrı GA sertleştirme işleridir.
+
+Büyük `flushBatch(...)` çağrıları `WriteBehindConfig.maxFlushBatchSize()`
+değerine göre parçalanır. Böylece SQL Server, Redis'ten gelen bütün batch için
+tek ve büyük bir serializable transaction tutmaz. Sonraki parçalardan biri hata
+alırsa önceki parçalar commit edilmiş olabilir; version guard retry davranışını
+idempotent tutar.
+
+## Önemli Provider Farkları
+
+| Alan | PostgreSQL | MSSQL |
+| --- | --- | --- |
+| Upsert | `INSERT ... ON CONFLICT` | version guard'lı update/existence/insert transaction |
+| Bulk load | opsiyonel `COPY` yolu | bu beta SPI'da açık değil |
+| Parametre limiti | 65.535 parametre | 2.100 parametre |
+| Geçici tablo | PostgreSQL temp table semantiği | SQL Server `#temp` semantiği, henüz bağlanmadı |
+| Hata sınıflandırma | SQLSTATE odaklı | SQL Server vendor code odaklı |
+| Production durumu | varsayılan public beta provider | açıkça seçilen beta provider, GA değil |
+
+## Mevcut MSSQL Kapısı
+
+MSSQL şu anda write-behind semantiğini bilinçli beta testlerine açar; production
+sertifikalı değildir. MSSQL için GA demeden önce şu kapılar kapanmalıdır:
+
+- yalnızca unit-level SQL recorder değil, gerçek SQL Server integration lane
+- canlı SQL Server üzerinde parameter-limit ve batch-size regresyon testleri
+- stale version, duplicate id, deadlock, timeout ve lock-conflict testleri
+- MSSQL outbox/checkpoint adapter
+- SQL Server metadata üstünde migration discovery, warm ve side-by-side comparison
+- MSSQL kalıcı storage iken çok pod'lu apply runner smoke testi
+- dashboard ve raporlarda PostgreSQL ile MSSQL storage metriklerini ayıran etiketler
+
+Bu kapılar tamamlanana kadar production pilot kullanımında desteklenen kalıcı
+storage hedefi PostgreSQL olarak kalır.

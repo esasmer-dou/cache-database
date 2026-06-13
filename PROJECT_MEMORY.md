@@ -253,16 +253,24 @@ Upgrade note:
 - Staging Redis HA evidence is not complete until staging Redis/PostgreSQL
   secrets are configured and an operator-triggered failover window is executed.
 
-## Provider SPI / MSSQL Direction
+## Provider SPI / MSSQL State
 
 - Current public beta remains PostgreSQL-first.
 - MSSQL must not be added by changing only the JDBC URL.
-- The accepted direction is a provider SPI:
-  - shared JDBC storage contracts
-  - PostgreSQL dialect module
-  - MSSQL dialect module
-  - provider selection by explicit configuration
-  - MSSQL-specific idempotency, retry, parameter-limit, and metadata tests
+- The first provider SPI layer now exists:
+  - `cachedb-storage-jdbc` contains shared JDBC dialect and write-behind helpers.
+  - `cachedb-storage-postgres` uses `PostgresDatabaseDialect` behind the existing
+    PostgreSQL flusher.
+  - `cachedb-storage-mssql` contains `MssqlDatabaseDialect`,
+    `MssqlWriteBehindFlusher`, and `MssqlFailureClassifier`.
+  - `CacheDatabaseConfig` and `CacheDatabaseBootstrap` expose an explicit
+    `WriteBehindFlusherFactory`.
+- MSSQL support is explicit beta only:
+  - applications must add `cachedb-storage-mssql`
+  - applications must own the Microsoft SQL Server JDBC driver and `DataSource`
+  - applications must call `writeBehindFlusherFactory(MssqlWriteBehindFlusher::new)`
+- MSSQL is not GA until live SQL Server integration, metadata discovery, outbox,
+  side-by-side comparison, and multi-pod apply runner lanes exist.
 - See `docs/database-provider-spi.md` and
   `tr/docs/veritabani-provider-spi.md`.
 

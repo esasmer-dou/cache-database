@@ -1,12 +1,15 @@
 package com.reactor.cachedb.starter;
 
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
+import com.reactor.cachedb.core.queue.WriteBehindFlusher;
+import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import org.junit.jupiter.api.Test;
 
 import javax.sql.DataSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CacheDatabaseBootstrapTest {
@@ -35,6 +38,27 @@ class CacheDatabaseBootstrapTest {
         assertFalse(config.adminMonitoring().enabled());
         assertFalse(config.adminHttp().enabled());
         assertEquals("app-cache", config.keyspace().keyPrefix());
+    }
+
+    @Test
+    void shouldPreviewCustomWriteBehindFlusherFactory() {
+        WriteBehindFlusherFactory factory = (dataSource, registry, writeBehindConfig, collector) -> noOpFlusher();
+
+        CacheDatabaseConfig config = CacheDatabaseBootstrap
+                .using(noOpDataSource())
+                .writeBehindFlusherFactory(factory)
+                .previewConfig();
+
+        assertSame(factory, config.writeBehindFlusherFactory());
+        assertSame(factory, config.toBuilder().build().writeBehindFlusherFactory());
+    }
+
+    private static WriteBehindFlusher noOpFlusher() {
+        return new WriteBehindFlusher() {
+            @Override
+            public void flush(com.reactor.cachedb.core.queue.QueuedWriteOperation operation) {
+            }
+        };
     }
 
     private static DataSource noOpDataSource() {

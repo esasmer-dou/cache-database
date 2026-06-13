@@ -387,6 +387,7 @@ public final class com.reactor.cachedb.core.config.AdminReportJobConfig extends 
 ## cachedb-core :: com.reactor.cachedb.core.config.CacheDatabaseConfig
 public final class com.reactor.cachedb.core.config.CacheDatabaseConfig extends java.lang.Record {
   public com.reactor.cachedb.core.config.CacheDatabaseConfig(com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.config.ResourceLimits, com.reactor.cachedb.core.config.KeyspaceConfig, com.reactor.cachedb.core.config.RuntimeCoordinationConfig, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.config.ProjectionRefreshConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.DeadLetterRecoveryConfig, com.reactor.cachedb.core.config.AdminMonitoringConfig, com.reactor.cachedb.core.config.AdminReportJobConfig, com.reactor.cachedb.core.config.AdminHttpConfig, com.reactor.cachedb.core.config.SchemaBootstrapConfig);
+  public com.reactor.cachedb.core.config.CacheDatabaseConfig(com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.queue.WriteBehindFlusherFactory, com.reactor.cachedb.core.config.ResourceLimits, com.reactor.cachedb.core.config.KeyspaceConfig, com.reactor.cachedb.core.config.RuntimeCoordinationConfig, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.config.ProjectionRefreshConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.DeadLetterRecoveryConfig, com.reactor.cachedb.core.config.AdminMonitoringConfig, com.reactor.cachedb.core.config.AdminReportJobConfig, com.reactor.cachedb.core.config.AdminHttpConfig, com.reactor.cachedb.core.config.SchemaBootstrapConfig);
   public static com.reactor.cachedb.core.config.CacheDatabaseConfig$Builder builder();
   public static com.reactor.cachedb.core.config.CacheDatabaseConfig defaults();
   public com.reactor.cachedb.core.config.CacheDatabaseConfig$Builder toBuilder();
@@ -394,6 +395,7 @@ public final class com.reactor.cachedb.core.config.CacheDatabaseConfig extends j
   public final int hashCode();
   public final boolean equals(java.lang.Object);
   public com.reactor.cachedb.core.config.WriteBehindConfig writeBehind();
+  public com.reactor.cachedb.core.queue.WriteBehindFlusherFactory writeBehindFlusherFactory();
   public com.reactor.cachedb.core.config.ResourceLimits resourceLimits();
   public com.reactor.cachedb.core.config.KeyspaceConfig keyspace();
   public com.reactor.cachedb.core.config.RuntimeCoordinationConfig runtimeCoordination();
@@ -2023,6 +2025,11 @@ public interface com.reactor.cachedb.core.queue.WriteBehindFlusher {
   public default void flushBatch(java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>) throws java.sql.SQLException;
 }
 
+## cachedb-core :: com.reactor.cachedb.core.queue.WriteBehindFlusherFactory
+public interface com.reactor.cachedb.core.queue.WriteBehindFlusherFactory {
+  public abstract com.reactor.cachedb.core.queue.WriteBehindFlusher create(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.queue.StoragePerformanceCollector);
+}
+
 ## cachedb-core :: com.reactor.cachedb.core.queue.WriteBehindQueue
 public interface com.reactor.cachedb.core.queue.WriteBehindQueue {
   public abstract <T, ID> void enqueue(com.reactor.cachedb.core.model.WriteOperation<T, ID>);
@@ -2496,6 +2503,50 @@ public final class com.reactor.cachedb.redis.RedisWriteOperationMapper {
   public com.reactor.cachedb.core.queue.QueuedWriteOperation fromBody(java.util.Map<java.lang.String, java.lang.String>);
 }
 
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcDatabaseDialect
+public interface com.reactor.cachedb.jdbc.JdbcDatabaseDialect {
+  public abstract java.lang.String name();
+  public abstract int maxParametersPerStatement();
+  public default boolean supportsMultiRowUpsert();
+  public default boolean supportsBulkCopy();
+  public abstract java.lang.String deleteSql(com.reactor.cachedb.core.queue.QueuedWriteOperation);
+  public abstract java.lang.String deleteMultiRowSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, int);
+  public abstract java.lang.String upsertSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>);
+  public abstract java.lang.String upsertMultiRowSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>, int);
+  public abstract java.lang.String sqlCastType(java.lang.String);
+  public default int safeStatementRowLimit(int, int);
+}
+
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcWriteBehindSupport
+public final class com.reactor.cachedb.jdbc.JdbcWriteBehindSupport {
+  public static java.lang.String columnValue(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.lang.String);
+  public static java.util.List<java.lang.String> orderedColumnValues(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>);
+  public static void bindUpsert(java.sql.PreparedStatement, com.reactor.cachedb.core.queue.QueuedWriteOperation, com.reactor.cachedb.core.registry.EntityRegistry, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>) throws java.sql.SQLException;
+  public static java.lang.Object convertValue(java.lang.String, java.lang.String);
+  public static java.lang.String columnType(com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.queue.QueuedWriteOperation, java.lang.String);
+  public static java.util.List<java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>> partitionDistinctIdentityBatches(java.util.Collection<com.reactor.cachedb.core.queue.QueuedWriteOperation>, int);
+}
+
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.SqlFailureClassifierSupport
+public final class com.reactor.cachedb.jdbc.SqlFailureClassifierSupport {
+  public static java.lang.Throwable rootCause(java.lang.Throwable);
+  public static java.sql.SQLException rootSqlException(java.lang.Exception);
+  public static java.lang.String blankToEmpty(java.lang.String);
+}
+
+## cachedb-storage-postgres :: com.reactor.cachedb.postgres.PostgresDatabaseDialect
+public final class com.reactor.cachedb.postgres.PostgresDatabaseDialect implements com.reactor.cachedb.jdbc.JdbcDatabaseDialect {
+  public com.reactor.cachedb.postgres.PostgresDatabaseDialect();
+  public java.lang.String name();
+  public int maxParametersPerStatement();
+  public boolean supportsBulkCopy();
+  public java.lang.String deleteSql(com.reactor.cachedb.core.queue.QueuedWriteOperation);
+  public java.lang.String deleteMultiRowSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, int);
+  public java.lang.String upsertSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>);
+  public java.lang.String upsertMultiRowSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>, int);
+  public java.lang.String sqlCastType(java.lang.String);
+}
+
 ## cachedb-storage-postgres :: com.reactor.cachedb.postgres.PostgresFailureClassifier
 public final class com.reactor.cachedb.postgres.PostgresFailureClassifier {
   public com.reactor.cachedb.postgres.PostgresFailureClassifier();
@@ -2507,6 +2558,39 @@ public final class com.reactor.cachedb.postgres.PostgresWriteBehindFlusher imple
   public com.reactor.cachedb.postgres.PostgresWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry);
   public com.reactor.cachedb.postgres.PostgresWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig);
   public com.reactor.cachedb.postgres.PostgresWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.queue.StoragePerformanceCollector);
+  public void flush(com.reactor.cachedb.core.queue.QueuedWriteOperation) throws java.sql.SQLException;
+  public void flushBatch(java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>) throws java.sql.SQLException;
+  public com.reactor.cachedb.core.queue.WriteFailureDetails classify(java.lang.Exception);
+}
+
+## cachedb-storage-mssql :: com.reactor.cachedb.mssql.MssqlDatabaseDialect
+public final class com.reactor.cachedb.mssql.MssqlDatabaseDialect implements com.reactor.cachedb.jdbc.JdbcDatabaseDialect {
+  public static final int MSSQL_PARAMETER_LIMIT;
+  public com.reactor.cachedb.mssql.MssqlDatabaseDialect();
+  public java.lang.String name();
+  public int maxParametersPerStatement();
+  public boolean supportsMultiRowUpsert();
+  public java.lang.String deleteSql(com.reactor.cachedb.core.queue.QueuedWriteOperation);
+  public java.lang.String deleteMultiRowSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, int);
+  public java.lang.String upsertSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>);
+  public java.lang.String upsertMultiRowSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>, int);
+  public java.lang.String updateSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>);
+  public java.lang.String existsSql(com.reactor.cachedb.core.queue.QueuedWriteOperation);
+  public java.lang.String insertSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>);
+  public java.lang.String sqlCastType(java.lang.String);
+}
+
+## cachedb-storage-mssql :: com.reactor.cachedb.mssql.MssqlFailureClassifier
+public final class com.reactor.cachedb.mssql.MssqlFailureClassifier {
+  public com.reactor.cachedb.mssql.MssqlFailureClassifier();
+  public com.reactor.cachedb.core.queue.WriteFailureDetails classify(java.lang.Exception);
+}
+
+## cachedb-storage-mssql :: com.reactor.cachedb.mssql.MssqlWriteBehindFlusher
+public final class com.reactor.cachedb.mssql.MssqlWriteBehindFlusher implements com.reactor.cachedb.core.queue.FailureClassifyingFlusher {
+  public com.reactor.cachedb.mssql.MssqlWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry);
+  public com.reactor.cachedb.mssql.MssqlWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig);
+  public com.reactor.cachedb.mssql.MssqlWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.queue.StoragePerformanceCollector);
   public void flush(com.reactor.cachedb.core.queue.QueuedWriteOperation) throws java.sql.SQLException;
   public void flushBatch(java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>) throws java.sql.SQLException;
   public com.reactor.cachedb.core.queue.WriteFailureDetails classify(java.lang.Exception);
@@ -2808,6 +2892,7 @@ public final class com.reactor.cachedb.starter.CacheDatabaseBootstrap {
   public com.reactor.cachedb.starter.CacheDatabaseBootstrap redis(java.lang.String, java.lang.String);
   public com.reactor.cachedb.starter.CacheDatabaseBootstrap config(com.reactor.cachedb.core.config.CacheDatabaseConfig);
   public com.reactor.cachedb.starter.CacheDatabaseBootstrap customize(java.util.function.Consumer<com.reactor.cachedb.core.config.CacheDatabaseConfig$Builder>);
+  public com.reactor.cachedb.starter.CacheDatabaseBootstrap writeBehindFlusherFactory(com.reactor.cachedb.core.queue.WriteBehindFlusherFactory);
   public com.reactor.cachedb.starter.CacheDatabaseBootstrap development();
   public com.reactor.cachedb.starter.CacheDatabaseBootstrap production();
   public com.reactor.cachedb.starter.CacheDatabaseBootstrap benchmark();

@@ -1,119 +1,140 @@
-# Database Provider SPI Direction
+# Database Provider SPI
 
 Turkish version: [../tr/docs/veritabani-provider-spi.md](../tr/docs/veritabani-provider-spi.md)
 
-This page defines how CacheDB should grow from PostgreSQL-only durability to
-multiple SQL databases such as Microsoft SQL Server.
-
-It is intentionally strict: adding MSSQL support must not turn the codebase into
-a large set of `if (postgres) ... else if (mssql) ...` branches.
+CacheDB is still PostgreSQL-first in the public beta. The storage provider work
+now has a first explicit SPI layer, so adding MSSQL is no longer a fake
+"change the JDBC URL" story.
 
 ## Decision
 
-BEST: introduce a JDBC provider SPI with database-specific dialect modules.
+BEST: choose the durable SQL provider explicitly and wire the matching
+write-behind flusher.
 
-ACCEPTABLE: keep PostgreSQL as the only GA durability provider until the SPI and
-MSSQL test lane are complete.
+ACCEPTABLE: use the default starter path for PostgreSQL while the application is
+PostgreSQL-only.
 
-ANTI-PATTERN: claim plug-and-play MSSQL support by only changing the JDBC URL.
+ANTI-PATTERN: point a PostgreSQL flusher at an MSSQL JDBC URL and assume the
+same SQL, retry rules, and parameter limits are safe.
 
-## Why A Provider SPI Is Required
-
-PostgreSQL and MSSQL differ in production-critical behavior:
-
-| Area | PostgreSQL | MSSQL |
-| --- | --- | --- |
-| Upsert | `INSERT ... ON CONFLICT` | `MERGE` or update-then-insert transaction |
-| Bulk load | `COPY` | table-valued parameters, `BULK INSERT`, or batched statements |
-| Temporary table | `CREATE TEMP TABLE ... ON COMMIT DROP` | `#temp` tables scoped to connection |
-| Pagination | `LIMIT/OFFSET` | `OFFSET ... FETCH` or `TOP` |
-| Timestamp type | `TIMESTAMPTZ` | `datetimeoffset` or `datetime2` |
-| Identifier quoting | `"name"` | `[name]` |
-| Failure classification | SQLSTATE-oriented | SQL Server error-code oriented |
-
-These are not cosmetic differences. They affect correctness, idempotency,
-retry behavior, and write latency.
-
-## Proposed Module Shape
-
-Target module split:
+## Current Module Shape
 
 ```text
 cachedb-storage-jdbc
-- JdbcWriteBehindFlusher
 - JdbcDatabaseDialect
-- JdbcFailureClassifier
-- JdbcOutboxFeedAdapter
-- common value binding and statement batching
+- JdbcWriteBehindSupport
+- SqlFailureClassifierSupport
+- shared value conversion, row-limit, and batch partition helpers
 
 cachedb-storage-postgres
 - PostgresDatabaseDialect
+- PostgresWriteBehindFlusher
 - PostgresFailureClassifier
-- optional COPY optimization
+- PostgreSQL ON CONFLICT and optional COPY path
 
 cachedb-storage-mssql
 - MssqlDatabaseDialect
+- MssqlWriteBehindFlusher
 - MssqlFailureClassifier
-- MSSQL-specific upsert and batch strategy
+- SQL Server update/existence/insert write path
 ```
 
-`cachedb-starter` should depend on provider-agnostic contracts and select the
-provider from configuration.
+`cachedb-starter` keeps PostgreSQL as the default flusher for backward
+compatibility. Non-PostgreSQL users must provide a `WriteBehindFlusherFactory`
+explicitly.
 
-## Required SPI Surface
+## PostgreSQL Usage
 
-The first SPI version should cover:
+PostgreSQL users do not need extra provider wiring when using the starter:
 
-- identifier quoting and validation
-- single-row upsert SQL
-- multi-row upsert SQL or supported fallback
-- delete with version guard
-- checkpoint table DDL
-- outbox checkpoint upsert
-- pagination clause
-- temporary table strategy
-- failure classification
-- batch capability flags
-- connection/session initialization if needed
-
-## Configuration Goal
-
-Target user experience:
-
-```properties
-cachedb.database.provider=postgres
-cachedb.database.jdbcUrl=jdbc:postgresql://localhost:5432/app
+```java
+CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, postgresDataSource)
+        .register(db -> {
+            // register generated entities and projections
+        })
+        .start();
 ```
 
-or:
+The default flusher remains `PostgresWriteBehindFlusher`.
 
-```properties
-cachedb.database.provider=mssql
-cachedb.database.jdbcUrl=jdbc:sqlserver://localhost:1433;databaseName=app
+## MSSQL Usage
+
+Add the MSSQL storage module and a Microsoft SQL Server JDBC driver. CacheDB does
+not force a driver version transitively; the application owns the `DataSource`.
+
+```xml
+<dependency>
+  <groupId>com.reactor.cachedb</groupId>
+  <artifactId>cachedb-storage-mssql</artifactId>
+  <version>0.1.0-beta.3</version>
+</dependency>
+
+<dependency>
+  <groupId>com.microsoft.sqlserver</groupId>
+  <artifactId>mssql-jdbc</artifactId>
+  <version><!-- choose the version approved by your platform --></version>
+</dependency>
 ```
 
-The provider must be explicit. Auto-detecting from URL can be useful as a
-convenience, but production configuration should be clear.
+Wire the flusher explicitly:
 
-## MSSQL GA Gate
+```java
+import com.reactor.cachedb.mssql.MssqlWriteBehindFlusher;
 
-MSSQL should not be marked production-ready until these pass:
+CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
+        .writeBehindFlusherFactory(MssqlWriteBehindFlusher::new)
+        .register(db -> {
+            // register generated entities and projections
+        })
+        .start();
+```
 
-- write-behind upsert/delete idempotency tests
-- duplicate id in one batch test
-- stale version event test
-- outbox checkpoint retry test
-- deadlock/retry classification test
-- batch-size and parameter-count limit test
-- migration discovery and warm test on MSSQL metadata
-- side-by-side comparison test against MSSQL baseline SQL
-- Kubernetes multi-pod apply runner smoke test
+This is intentionally explicit. It prevents an application from silently running
+PostgreSQL SQL against SQL Server.
 
-## Current Boundary
+## MSSQL Write Semantics
 
-Current public beta behavior remains PostgreSQL-first.
+The MSSQL flusher does not use `MERGE` by default. The safer beta path is:
 
-The immediate completed step is external outbox/CDC apply support for keeping
-Redis fresh when PostgreSQL changes outside CacheDB. MSSQL support should be the
-next storage-provider workstream, implemented through the SPI above rather than
-by patching PostgreSQL classes in place.
+1. Open one transaction.
+2. Set isolation to `SERIALIZABLE`.
+3. Try `UPDATE ... WITH (UPDLOCK, HOLDLOCK)` with a version guard.
+4. If no row was updated, check row existence with the same lock hints.
+5. If the row does not exist, insert it.
+6. Commit or roll back the whole batch.
+
+This favors correctness and idempotency over maximum bulk throughput. Bulk copy,
+table-valued parameters, and MSSQL-specific outbox checkpoint SQL are separate
+GA hardening items.
+
+Large `flushBatch(...)` calls are split by `WriteBehindConfig.maxFlushBatchSize()`
+so SQL Server does not hold one oversized serializable transaction for the full
+Redis batch. If a later chunk fails, earlier chunks may already be committed;
+the version guard keeps retry behavior idempotent.
+
+## Provider Differences That Matter
+
+| Area | PostgreSQL | MSSQL |
+| --- | --- | --- |
+| Upsert | `INSERT ... ON CONFLICT` | version-guarded update/existence/insert transaction |
+| Bulk load | optional `COPY` path | not enabled in this beta SPI |
+| Parameter limit | 65,535 parameters | 2,100 parameters |
+| Temporary table | PostgreSQL temp table semantics | SQL Server `#temp` semantics, not wired yet |
+| Failure classification | SQLSTATE-oriented | SQL Server vendor-code-oriented |
+| Production status | default public beta provider | explicit beta provider, not GA |
+
+## Current MSSQL Gate
+
+MSSQL is usable for explicit beta testing of write-behind semantics, but it is
+not production-certified yet. Before calling MSSQL GA, these must pass:
+
+- real SQL Server integration lane, not only unit-level SQL recorder tests
+- parameter-limit and batch-size regression tests against a live SQL Server
+- stale version, duplicate id, deadlock, timeout, and lock-conflict tests
+- MSSQL outbox/checkpoint adapter
+- migration discovery, warm, and side-by-side comparison on SQL Server metadata
+- multi-pod apply runner smoke test with MSSQL as durable storage
+- dashboard/reporting labels that separate PostgreSQL and MSSQL storage metrics
+
+Until those gates are complete, PostgreSQL remains the only durability target
+supported for production-pilot use.

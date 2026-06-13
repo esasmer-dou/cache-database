@@ -2,6 +2,7 @@ package com.reactor.cachedb.starter;
 
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.KeyspaceConfig;
+import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
@@ -82,6 +83,11 @@ public final class CacheDatabaseBootstrap {
     public CacheDatabaseBootstrap customize(Consumer<CacheDatabaseConfig.Builder> customizer) {
         this.configCustomizers.add(Objects.requireNonNull(customizer, "customizer"));
         return this;
+    }
+
+    public CacheDatabaseBootstrap writeBehindFlusherFactory(WriteBehindFlusherFactory factory) {
+        Objects.requireNonNull(factory, "factory");
+        return customize(builder -> builder.writeBehindFlusherFactory(factory));
     }
 
     public CacheDatabaseBootstrap development() {

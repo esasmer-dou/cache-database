@@ -7,7 +7,9 @@ param(
         "cachedb-core",
         "cachedb-processor",
         "cachedb-storage-redis",
+        "cachedb-storage-jdbc",
         "cachedb-storage-postgres",
+        "cachedb-storage-mssql",
         "cachedb-starter",
         "cachedb-spring-boot-starter"
     )

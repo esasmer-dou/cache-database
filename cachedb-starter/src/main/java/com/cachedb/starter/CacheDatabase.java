@@ -31,6 +31,7 @@ import com.reactor.cachedb.core.queue.ProjectionRefreshReplayResult;
 import com.reactor.cachedb.core.queue.ProjectionRefreshSnapshot;
 import com.reactor.cachedb.core.queue.RecoveryCleanupSnapshot;
 import com.reactor.cachedb.core.queue.WriteBehindFlusher;
+import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import com.reactor.cachedb.core.relation.RelationBatchLoader;
 import com.reactor.cachedb.postgres.PostgresWriteBehindFlusher;
@@ -238,11 +239,12 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         producerGuard
                 )
                 : null;
-        WriteBehindFlusher flusher = new PostgresWriteBehindFlusher(
+        WriteBehindFlusher flusher = createWriteBehindFlusher(
                 dataSource,
                 entityRegistry,
                 effectiveWriteBehindConfig,
-                storagePerformanceCollector
+                storagePerformanceCollector,
+                config.writeBehindFlusherFactory()
         );
         this.functionLoader = new RedisFunctionLoader(
                 backgroundJedis,
@@ -499,6 +501,24 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 binding.cachePolicy(),
                 binding.relationBatchLoader(),
                 binding.pageLoader()
+        );
+    }
+
+    private WriteBehindFlusher createWriteBehindFlusher(
+            DataSource dataSource,
+            EntityRegistry entityRegistry,
+            WriteBehindConfig writeBehindConfig,
+            StoragePerformanceCollector performanceCollector,
+            WriteBehindFlusherFactory flusherFactory
+    ) {
+        if (flusherFactory != null) {
+            return flusherFactory.create(dataSource, entityRegistry, writeBehindConfig, performanceCollector);
+        }
+        return new PostgresWriteBehindFlusher(
+                dataSource,
+                entityRegistry,
+                writeBehindConfig,
+                performanceCollector
         );
     }
 

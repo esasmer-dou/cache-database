@@ -76,7 +76,9 @@
         <module>cachedb-processor</module>
         <module>cachedb-core</module>
         <module>cachedb-storage-redis</module>
+        <module>cachedb-storage-jdbc</module>
         <module>cachedb-storage-postgres</module>
+        <module>cachedb-storage-mssql</module>
         <module>cachedb-starter</module>
         <module>cachedb-spring-boot-starter</module>
         <module>cachedb-examples</module>
@@ -186,4 +188,3 @@
         </profile>
     </profiles>
 </project>
-

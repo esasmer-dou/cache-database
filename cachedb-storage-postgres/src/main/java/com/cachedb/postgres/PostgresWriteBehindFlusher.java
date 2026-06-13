@@ -10,6 +10,7 @@ import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.queue.WriteBehindFlusher;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
+import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
 import org.postgresql.copy.CopyManager;
 import org.postgresql.core.BaseConnection;
 
@@ -19,10 +20,6 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -36,6 +33,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
     private final DataSource dataSource;
     private final EntityRegistry entityRegistry;
     private final PostgresFailureClassifier failureClassifier;
+    private final PostgresDatabaseDialect dialect;
     private final WriteBehindConfig config;
     private final StoragePerformanceCollector performanceCollector;
 
@@ -56,6 +54,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         this.dataSource = dataSource;
         this.entityRegistry = entityRegistry;
         this.failureClassifier = new PostgresFailureClassifier();
+        this.dialect = new PostgresDatabaseDialect();
         this.config = config;
         this.performanceCollector = performanceCollector;
     }
@@ -154,11 +153,9 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
     }
 
     private void delete(Connection connection, QueuedWriteOperation operation) throws SQLException {
-        String sql = "DELETE FROM " + operation.tableName()
-                + " WHERE " + operation.idColumn() + " = ?"
-                + " AND (" + operation.versionColumn() + " IS NULL OR " + operation.versionColumn() + " <= ?)";
+        String sql = dialect.deleteSql(operation);
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setObject(1, convertValue(operation.id(), columnType(operation, operation.idColumn())));
+            statement.setObject(1, JdbcWriteBehindSupport.convertValue(operation.id(), columnType(operation, operation.idColumn())));
             statement.setLong(2, operation.version());
             statement.executeUpdate();
         }
@@ -178,12 +175,10 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                 continue;
             }
             QueuedWriteOperation template = chunk.get(0);
-            String sql = "DELETE FROM " + template.tableName()
-                    + " WHERE " + template.idColumn() + " = ?"
-                    + " AND (" + template.versionColumn() + " IS NULL OR " + template.versionColumn() + " <= ?)";
+            String sql = dialect.deleteSql(template);
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 for (QueuedWriteOperation operation : chunk) {
-                    statement.setObject(1, convertValue(operation.id(), columnType(operation, operation.idColumn())));
+                    statement.setObject(1, JdbcWriteBehindSupport.convertValue(operation.id(), columnType(operation, operation.idColumn())));
                     statement.setLong(2, operation.version());
                     statement.addBatch();
                 }
@@ -240,19 +235,11 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             int end = Math.min(operations.size(), start + rowLimit);
             List<QueuedWriteOperation> chunk = operations.subList(start, end);
             QueuedWriteOperation template = chunk.get(0);
-            StringJoiner valuesJoiner = new StringJoiner(", ");
-            for (int index = 0; index < chunk.size(); index++) {
-                valuesJoiner.add("(?, ?)");
-            }
-            String sql = "DELETE FROM " + template.tableName() + " target USING (VALUES " + valuesJoiner + ") AS staged("
-                    + template.idColumn() + ", " + template.versionColumn() + ") "
-                    + "WHERE target." + template.idColumn() + " = staged." + template.idColumn()
-                    + " AND (target." + template.versionColumn() + " IS NULL OR target." + template.versionColumn()
-                    + " <= staged." + template.versionColumn() + ")";
+            String sql = dialect.deleteMultiRowSql(template, chunk.size());
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 int parameterIndex = 1;
                 for (QueuedWriteOperation operation : chunk) {
-                    statement.setObject(parameterIndex++, convertValue(operation.id(), columnType(operation, operation.idColumn())));
+                    statement.setObject(parameterIndex++, JdbcWriteBehindSupport.convertValue(operation.id(), columnType(operation, operation.idColumn())));
                     statement.setLong(parameterIndex++, operation.version());
                 }
                 statement.executeUpdate();
@@ -275,7 +262,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                     for (int valueIndex = 0; valueIndex < values.size(); valueIndex++) {
                         statement.setObject(
                                 parameterIndex++,
-                                convertValue(values.get(valueIndex), columnType(operation, entries.get(valueIndex).getKey()))
+                                JdbcWriteBehindSupport.convertValue(values.get(valueIndex), columnType(operation, entries.get(valueIndex).getKey()))
                         );
                     }
                 }
@@ -285,24 +272,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
     }
 
     static List<List<QueuedWriteOperation>> partitionDistinctIdentityBatches(List<QueuedWriteOperation> operations, int rowLimitOverride) {
-        int rowLimit = Math.max(1, rowLimitOverride);
-        ArrayList<List<QueuedWriteOperation>> partitions = new ArrayList<>();
-        ArrayList<QueuedWriteOperation> current = new ArrayList<>(Math.min(rowLimit, operations.size()));
-        LinkedHashSet<EntityOperationKey> seenKeys = new LinkedHashSet<>();
-        for (QueuedWriteOperation operation : operations) {
-            EntityOperationKey key = EntityOperationKey.of(operation);
-            if (!current.isEmpty() && (current.size() >= rowLimit || seenKeys.contains(key))) {
-                partitions.add(List.copyOf(current));
-                current.clear();
-                seenKeys.clear();
-            }
-            current.add(operation);
-            seenKeys.add(key);
-        }
-        if (!current.isEmpty()) {
-            partitions.add(List.copyOf(current));
-        }
-        return partitions;
+        return JdbcWriteBehindSupport.partitionDistinctIdentityBatches(operations, rowLimitOverride);
     }
 
     private void flushDeleteCopy(Connection connection, List<QueuedWriteOperation> operations) throws SQLException {
@@ -364,24 +334,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
     }
 
     private String upsertSql(QueuedWriteOperation operation, List<Map.Entry<String, String>> entries) {
-        StringJoiner insertColumns = new StringJoiner(", ");
-        StringJoiner insertValues = new StringJoiner(", ");
-        StringJoiner updateSet = new StringJoiner(", ");
-
-        for (Map.Entry<String, String> entry : entries) {
-            insertColumns.add(entry.getKey());
-            insertValues.add("?");
-            if (!entry.getKey().equals(operation.idColumn())) {
-                updateSet.add(entry.getKey() + " = EXCLUDED." + entry.getKey());
-            }
-        }
-
-        return "INSERT INTO " + operation.tableName()
-                + " (" + insertColumns + ") VALUES (" + insertValues + ") "
-                + "ON CONFLICT (" + operation.idColumn() + ") DO UPDATE SET " + updateSet
-                + " WHERE " + operation.tableName() + "." + operation.versionColumn()
-                + " IS NULL OR EXCLUDED." + operation.versionColumn()
-                + " > " + operation.tableName() + "." + operation.versionColumn();
+        return dialect.upsertSql(operation, entries);
     }
 
     private String upsertMultiRowSql(
@@ -389,30 +342,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             List<Map.Entry<String, String>> entries,
             int rowCount
     ) {
-        StringJoiner insertColumns = new StringJoiner(", ");
-        StringJoiner valuesRows = new StringJoiner(", ");
-        StringJoiner updateSet = new StringJoiner(", ");
-
-        for (Map.Entry<String, String> entry : entries) {
-            insertColumns.add(entry.getKey());
-            if (!entry.getKey().equals(operation.idColumn())) {
-                updateSet.add(entry.getKey() + " = EXCLUDED." + entry.getKey());
-            }
-        }
-        for (int row = 0; row < rowCount; row++) {
-            StringJoiner rowValues = new StringJoiner(", ", "(", ")");
-            for (int index = 0; index < entries.size(); index++) {
-                rowValues.add("?");
-            }
-            valuesRows.add(rowValues.toString());
-        }
-
-        return "INSERT INTO " + operation.tableName()
-                + " (" + insertColumns + ") VALUES " + valuesRows
-                + " ON CONFLICT (" + operation.idColumn() + ") DO UPDATE SET " + updateSet
-                + " WHERE " + operation.tableName() + "." + operation.versionColumn()
-                + " IS NULL OR EXCLUDED." + operation.versionColumn()
-                + " > " + operation.tableName() + "." + operation.versionColumn();
+        return dialect.upsertMultiRowSql(operation, entries, rowCount);
     }
 
     private void bindUpsert(
@@ -420,47 +350,23 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             QueuedWriteOperation operation,
             List<Map.Entry<String, String>> entries
     ) throws SQLException {
-        List<String> values = orderedColumnValues(operation, entries);
-        for (int i = 0; i < values.size(); i++) {
-            statement.setObject(
-                    i + 1,
-                    convertValue(values.get(i), columnType(operation, entries.get(i).getKey()))
-            );
-        }
+        JdbcWriteBehindSupport.bindUpsert(statement, operation, entityRegistry, entries);
     }
 
     static String columnValue(QueuedWriteOperation operation, String columnName) {
-        return operation.columns().get(columnName);
+        return JdbcWriteBehindSupport.columnValue(operation, columnName);
     }
 
     static List<String> orderedColumnValues(QueuedWriteOperation operation, List<Map.Entry<String, String>> entries) {
-        ArrayList<String> values = new ArrayList<>(entries.size());
-        for (Map.Entry<String, String> entry : entries) {
-            values.add(columnValue(operation, entry.getKey()));
-        }
-        return List.copyOf(values);
+        return JdbcWriteBehindSupport.orderedColumnValues(operation, entries);
     }
 
     private String columnType(QueuedWriteOperation operation, String columnName) {
-        if (operation.versionColumn() != null && operation.versionColumn().equals(columnName)) {
-            return "java.lang.Long";
-        }
-        return entityRegistry.find(operation.entityName())
-                .map(binding -> binding.metadata().columnTypes().get(columnName))
-                .orElse("java.lang.String");
+        return JdbcWriteBehindSupport.columnType(entityRegistry, operation, columnName);
     }
 
     private String sqlCastType(QueuedWriteOperation operation, String columnName) {
-        return switch (columnType(operation, columnName)) {
-            case "int", "java.lang.Integer" -> "INTEGER";
-            case "long", "java.lang.Long" -> "BIGINT";
-            case "boolean", "java.lang.Boolean" -> "BOOLEAN";
-            case "double", "java.lang.Double" -> "DOUBLE PRECISION";
-            case "float", "java.lang.Float" -> "REAL";
-            case "short", "java.lang.Short" -> "SMALLINT";
-            case "byte", "java.lang.Byte" -> "SMALLINT";
-            default -> "TEXT";
-        };
+        return dialect.sqlCastType(columnType(operation, columnName));
     }
 
     private void copyCsv(
@@ -586,28 +492,6 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                 matchedPolicy.statementRowLimit() > 0 ? matchedPolicy.statementRowLimit() : config.postgresMultiRowStatementRowLimit(),
                 matchedPolicy.copyThreshold() > 0 ? matchedPolicy.copyThreshold() : config.postgresCopyThreshold()
         );
-    }
-
-    private Object convertValue(String value, String typeName) {
-        if (value == null) {
-            return null;
-        }
-
-        return switch (typeName) {
-            case "java.lang.String" -> value;
-            case "int", "java.lang.Integer" -> Integer.valueOf(value);
-            case "long", "java.lang.Long" -> Long.valueOf(value);
-            case "boolean", "java.lang.Boolean" -> Boolean.valueOf(value);
-            case "double", "java.lang.Double" -> Double.valueOf(value);
-            case "float", "java.lang.Float" -> Float.valueOf(value);
-            case "short", "java.lang.Short" -> Short.valueOf(value);
-            case "byte", "java.lang.Byte" -> Byte.valueOf(value);
-            case "java.time.Instant" -> Instant.parse(value);
-            case "java.time.LocalDate" -> LocalDate.parse(value);
-            case "java.time.LocalDateTime" -> LocalDateTime.parse(value);
-            case "java.time.OffsetDateTime" -> OffsetDateTime.parse(value);
-            default -> value;
-        };
     }
 
     @Override
