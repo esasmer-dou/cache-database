@@ -1,6 +1,6 @@
 # CacheDB Project Memory
 
-Last updated: 2026-06-09
+Last updated: 2026-06-13
 
 Purpose: this file is an internal handoff note for future Codex/chat sessions.
 It summarizes the product direction, completed work, validation evidence, and
@@ -9,7 +9,7 @@ remaining production gates. It is not release marketing copy.
 ## Repository State
 
 - Repository path: `E:\ReactorRepository\cache-database`
-- Remote: `https://github.com/esasmer-dou/cache-database.git`
+- Remote: `ssh://git@ssh.github.com:443/esasmer-dou/cache-database.git`
 - Main branch status at the time of this note: clean and aligned with `origin/main`
 - Latest release prepared and published: `v0.1.0-beta.3`
 - Latest release asset: `cache-database-0.1.0-beta.3-public-beta.zip`
@@ -48,6 +48,9 @@ explicitly.
 - Singleton operational loops should use Redis leader lease behavior.
 - External PostgreSQL writes require outbox/CDC input, otherwise Redis can go
   stale.
+- Database-originated outbox/CDC events must apply in cache-only mode by
+  default; they must not be sent back into PostgreSQL write-behind as if they
+  were new CacheDB commands.
 - Production strict mode should fail fast if a projection-required route falls
   back to broad entity scanning.
 
@@ -165,6 +168,9 @@ explicitly.
   - `ExternalChangeType`
   - `ExternalChangeSink`
   - `ExternalChangeFeedAdapter`
+  - `ExternalChangeApplyMode`
+  - `ExternalChangeApplyResult`
+  - `ExternalChangeHydrationRepository`
 - Added concrete PostgreSQL outbox adapter:
   - `PostgresOutboxExternalChangeFeedAdapter`
   - checkpoint table support
@@ -172,9 +178,18 @@ explicitly.
   - background daemon loop
   - safe identifier validation
   - basic JSON payload parsing
-- Current limitation: adapter reads outbox events, but the next production step
-  is a CacheDB apply runner that maps those events to registered entity
-  upsert/delete/projection refresh operations.
+- Added `ExternalChangeApplyRunner`:
+  - default `CACHE_ONLY` mode for database-originated events
+  - optional `CACHE_AND_WRITE_BEHIND` mode for trusted command-originated events
+  - generated `EntityCodec.fromColumns(...)` support for default UPSERT and
+    DELETE id resolution
+  - custom handler hook for partial payload semantics
+  - fail-fast sink behavior so outbox checkpoint does not advance on failed
+    apply
+- Added Redis repository external hydration:
+  - cache-only UPSERT hydration
+  - cache-only DELETE tombstone/index/projection cleanup
+  - stale external event guard based on Redis version/tombstone version
 
 ### Production Evidence and CI
 
@@ -208,6 +223,8 @@ Key fixes:
 - repeated writes of the same entity no longer double-count tenant payload bytes
 - warm batch hydration now carries tenant columns and payload estimates
 - release bundle copies the release note for the selected version
+- PostgreSQL outbox/CDC events can now be applied to Redis hot state through
+  `ExternalChangeApplyRunner` without re-enqueuing write-behind
 
 Upgrade note:
 
@@ -215,8 +232,33 @@ Upgrade note:
 - Use version `0.1.0-beta.3`
 - If PostgreSQL can be changed outside CacheDB, configure outbox/CDC before
   relying on Redis hot-set freshness
+- Use `ExternalChangeApplyRunner` in `CACHE_ONLY` mode for database-originated
+  outbox/CDC events
 - For relation-heavy/global sorted screens, use route contracts and
   projection-required strict mode
+
+## Current Release Confidence State
+
+- GitHub `Production Evidence` and `Public Beta Readiness` workflows were green
+  on `main` at the last verification.
+- GitHub release `v0.1.0-beta.3` exists with the public beta package asset.
+- Maven Central publishing is not complete until repository secrets for Central
+  credentials and GPG signing are configured.
+- Staging Redis HA evidence is not complete until staging Redis/PostgreSQL
+  secrets are configured and an operator-triggered failover window is executed.
+
+## Provider SPI / MSSQL Direction
+
+- Current public beta remains PostgreSQL-first.
+- MSSQL must not be added by changing only the JDBC URL.
+- The accepted direction is a provider SPI:
+  - shared JDBC storage contracts
+  - PostgreSQL dialect module
+  - MSSQL dialect module
+  - provider selection by explicit configuration
+  - MSSQL-specific idempotency, retry, parameter-limit, and metadata tests
+- See `docs/database-provider-spi.md` and
+  `tr/docs/veritabani-provider-spi.md`.
 
 ## Validation Already Run
 

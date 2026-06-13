@@ -4,6 +4,7 @@ import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.api.ProjectionRepository;
 import com.reactor.cachedb.core.cache.CacheAdmissionSource;
 import com.reactor.cachedb.core.cache.CachePolicy;
+import com.reactor.cachedb.core.change.ExternalChangeHydrationRepository;
 import com.reactor.cachedb.core.config.QueryIndexConfig;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
@@ -48,7 +49,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-public final class RedisEntityRepository<T, ID> implements EntityRepository<T, ID> {
+public final class RedisEntityRepository<T, ID> implements EntityRepository<T, ID>, ExternalChangeHydrationRepository<T, ID> {
 
     private final JedisPooled jedis;
     private final JedisPooled backgroundJedis;
@@ -435,11 +436,24 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     }
 
     public T hydrate(T entity, long version) {
-        return hydrateInternal(entity, version, true, true, true, CacheAdmissionSource.READ);
+        return hydrateInternal(entity, version, true, true, true, CacheAdmissionSource.WRITE);
     }
 
     public T hydrateWarm(T entity, long version) {
         return hydrateInternal(entity, version, false, false, false, CacheAdmissionSource.WARM);
+    }
+
+    @Override
+    public T hydrateExternalUpsert(T entity, long version) {
+        if (entity == null) {
+            throw new IllegalArgumentException("entity must not be null");
+        }
+        producerGuard.applyBackpressure();
+        ID id = metadata.idAccessor().apply(entity);
+        if (shouldSkipExternalVersion(id, version)) {
+            return entity;
+        }
+        return hydrateInternal(entity, version, true, true, true, CacheAdmissionSource.READ);
     }
 
     public void hydrateWarmBatch(List<T> entities, List<Long> versions) {
@@ -759,6 +773,28 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         }
     }
 
+    private boolean shouldSkipExternalVersion(ID id, long eventVersion) {
+        if (eventVersion <= 0L) {
+            return false;
+        }
+        String versionKey = keyStrategy.versionKey(metadata.redisNamespace(), id);
+        String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
+        List<String> values = jedis.mget(versionKey, tombstoneKey);
+        long currentVersion = Math.max(parseExternalVersion(values.get(0)), parseExternalVersion(values.get(1)));
+        return currentVersion > eventVersion;
+    }
+
+    private long parseExternalVersion(String value) {
+        if (value == null || value.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
     private void writeTombstoneKey(String tombstoneKey, long version) {
         if (guardrailConfig.tombstoneTtlSeconds() > 0) {
             jedis.setex(tombstoneKey, guardrailConfig.tombstoneTtlSeconds(), String.valueOf(version));
@@ -877,6 +913,32 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         }
         for (com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?> rawBinding : bindings) {
             syncProjectionPayload(rawBinding, entity, forceImmediateRefresh);
+        }
+    }
+
+    @Override
+    public void hydrateExternalDelete(ID id, long version) {
+        if (id == null) {
+            throw new IllegalArgumentException("id must not be null");
+        }
+        long startedAt = System.nanoTime();
+        try {
+            producerGuard.applyBackpressure();
+            if (shouldSkipExternalVersion(id, version)) {
+                return;
+            }
+            String versionKey = keyStrategy.versionKey(metadata.redisNamespace(), id);
+            String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
+            long effectiveVersion = version > 0L ? version : jedis.incr(versionKey);
+            if (version > 0L) {
+                jedis.set(versionKey, String.valueOf(effectiveVersion));
+            }
+            expireVersionKey(versionKey);
+            writeTombstoneKey(tombstoneKey, effectiveVersion);
+            pageCacheManager.removeEntity(id);
+            deleteProjectionPayloads(id, false);
+        } finally {
+            recordRedisWrite(startedAt);
         }
     }
 

@@ -33,6 +33,8 @@ production tuning should be approached.
 | How do I control Redis memory? | [Production Tuning Guide](docs/production-tuning-guide.md) |
 | Where are all config properties? | [Tuning Parameters](docs/tuning-parameters.md) |
 | How do I migrate an existing PostgreSQL + ORM app? | [Migration Planner](docs/migration-planner.md) |
+| How do I keep Redis fresh when PostgreSQL changes outside CacheDB? | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
+| Can CacheDB support MSSQL or another SQL database? | [Database Provider SPI Direction](docs/database-provider-spi.md) |
 | What must be proven before production? | [Production Test Report](docs/production-test-report.md) |
 | Public beta or GA? | [Public Beta Readiness](docs/public-beta-readiness.md) and [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) |
 | How do I cut a release? | [Release Flow](docs/release-flow.md) |
@@ -79,6 +81,7 @@ and observability boundaries.
 Start with:
 
 - [Migration Planner](docs/migration-planner.md)
+- [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md)
 - [Use Case Examples](docs/use-case-examples.md)
 - [Production Recipes](docs/production-recipes.md)
 - [Production Tuning Guide](docs/production-tuning-guide.md)
@@ -97,6 +100,8 @@ compare against PostgreSQL baseline, and make cutover decisions with evidence.
 | [Production Tuning Guide](docs/production-tuning-guide.md) | Redis memory, hot policy, route contract, write-behind, Kubernetes tuning |
 | [Tuning Parameters](docs/tuning-parameters.md) | Property reference and defaults |
 | [Migration Planner](docs/migration-planner.md) | Migration flow from existing PostgreSQL systems |
+| [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) | External database changes, outbox/CDC events, cache-only apply behavior |
+| [Database Provider SPI Direction](docs/database-provider-spi.md) | Storage provider boundary for PostgreSQL, MSSQL, and future SQL dialects |
 | [Production Recipes](docs/production-recipes.md) | BEST/ACCEPTABLE/ANTI-PATTERN production usage patterns |
 | [Architecture](docs/architecture.md) | Internal architecture, data flow, registry, relation loading |
 | [Production Test Report](docs/production-test-report.md) | Test evidence, smoke results, benchmark, certification lane |
