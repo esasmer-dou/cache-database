@@ -53,7 +53,7 @@ class MigrationComparisonAssessmentTest {
         assertEquals(MigrationComparisonAssessment.ParityStatus.PARTIAL, assessment.parityStatus());
         assertEquals(MigrationComparisonAssessment.PerformanceStatus.BLOCKER, assessment.performanceStatus());
         assertTrue(assessment.blockers().stream().anyMatch(item -> item.contains("projection route")));
-        assertTrue(assessment.blockers().stream().anyMatch(item -> item.contains("did not fully match PostgreSQL")));
+        assertTrue(assessment.blockers().stream().anyMatch(item -> item.contains("did not fully match the source database")));
     }
 
     private MigrationComparisonRunner.Result comparisonResult(
