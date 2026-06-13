@@ -641,8 +641,8 @@ Operational hooks:
 
 Bundled tooling:
 
-- [list-projection-refresh-failures.ps1](/E:/ReactorRepository/cache-database/tools/ops/projection/list-projection-refresh-failures.ps1)
-- [replay-projection-refresh-failure.ps1](/E:/ReactorRepository/cache-database/tools/ops/projection/replay-projection-refresh-failure.ps1)
+- [list-projection-refresh-failures.ps1](../tools/ops/projection/list-projection-refresh-failures.ps1)
+- [replay-projection-refresh-failure.ps1](../tools/ops/projection/replay-projection-refresh-failure.ps1)
 
 ## Production Read Pattern
 

@@ -34,6 +34,109 @@ Production kuralı basittir:
 - Büyük liste ekranları projection/okuma modeli penceresi kullanmalıdır.
 - Kısmi değişiklikler full entity update veya açık command route ile yapılmalıdır.
 
+## Bu Sayfayı Nasıl Okumalısın?
+
+Bu belgeyi baştan sona okumak zorunda değilsin. Önce kendi route tipini bul:
+
+| Eğer aradığın şey buysa | Önce oku |
+| --- | --- |
+| Tek kayıt oluşturma, güncelleme veya silme | Insert, Update ve Delete örnekleri |
+| Müşteri detayında son siparişler | Query 2 ve Projection 1 |
+| Sipariş detayında satır önizleme | Relation Örneği 1 ve Projection 2 |
+| Dashboard veya top-N ekranı | Projection 3 ve Dashboard örnekleri |
+| Eski arşiv verisi | Query 4 ve Dashboard 3 |
+| Redis memory davranışı | Bellek ve Sıcak Pencere Kuralları |
+| Partial update riski | Partial Update Davranışı |
+
+Kural: Önce route'un kullanıcıya ne gösterdiğini netleştir, sonra entity mi
+projection mı kullanılacağına karar ver.
+
+## Uçtan Uca Gerçek Hayat Senaryoları
+
+### Senaryo A: E-Ticaret Müşteri Detayı
+
+Ekran:
+
+- müşteri kartı
+- son 10 sipariş
+- son 3 destek talebi
+- toplam açık bakiye
+
+BEST tasarım:
+
+- `CustomerEntity` müşteri kartı için kullanılır.
+- Son siparişler `CustomerOrderSummaryProjection` ile okunur.
+- Destek talepleri `CustomerTicketSummaryProjection` veya küçük relation preview
+  ile gösterilir.
+- Açık bakiye ayrı bir finans projection'ı veya PostgreSQL reporting yolundan
+  gelir.
+
+ANTI-PATTERN:
+
+- Müşteri açılırken tüm siparişler, tüm sipariş satırları, tüm ticket mesajları
+  ve tüm ödemeleri tek graph olarak yüklemek.
+
+### Senaryo B: Operasyon Dashboard'u
+
+Ekran:
+
+- SLA riski en yüksek 100 ticket
+- stok riski olan 50 ürün
+- son 15 dakikadaki başarısız ödeme denemeleri
+
+BEST tasarım:
+
+- Ticket listesi ranked projection olmalıdır.
+- Stok kartları `ProductStockSummary` projection'ından gelmelidir.
+- Ödeme denemeleri time-window projection veya PostgreSQL event query ile
+  okunmalıdır.
+- Dashboard ilk açılışında full entity hydration yapılmamalıdır.
+
+ANTI-PATTERN:
+
+- Dashboard render sırasında milyonlarca satırdan uygulama içinde top-N
+  hesaplamak.
+
+### Senaryo C: Finans veya Fatura Sistemi
+
+Ekran:
+
+- fatura detay
+- son ödeme denemeleri
+- aylık mutabakat raporu
+
+BEST tasarım:
+
+- Fatura detayında `InvoiceEntity` kullanılır.
+- Son ödeme denemeleri `withRelationLimit("payments", 5)` veya payment preview
+  projection ile gösterilir.
+- Aylık mutabakat PostgreSQL/reporting yolunda kalır.
+
+ANTI-PATTERN:
+
+- Aylık raporu CacheDB entity query'leriyle üretmeye çalışmak.
+
+### Senaryo D: Çok Tenant SaaS
+
+Ekran:
+
+- tenant bazlı aktif işler
+- kullanıcı başına bildirim kutusu
+- admin için global health dashboard
+
+BEST tasarım:
+
+- Her hot route tenant bilgisini taşımalıdır.
+- Tenant quota ile tek tenant'ın Redis memory'yi tüketmesi engellenmelidir.
+- Kullanıcı notification inbox projection window olarak tutulmalıdır.
+- Admin global dashboard ranked projection veya ayrı telemetry projection ile
+  beslenmelidir.
+
+ANTI-PATTERN:
+
+- Tenant ayrımı olmayan global hot entity limit ile tüm müşterileri aynı Redis
+  bütçesine koymak.
+
 ## Route Karar Haritası
 
 | İhtiyaç | BEST route | Neden |

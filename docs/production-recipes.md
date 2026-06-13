@@ -4,8 +4,13 @@ This guide answers one practical question:
 
 Which CacheDB surface should a production team use for a given workload?
 
-If you first need the higher-level positioning story, read [CacheDB As An ORM Alternative](./orm-alternative.md).
-If you are preparing the repository itself for outside users, also read
+If you first need the higher-level positioning story, read
+[CacheDB As An ORM Alternative](./orm-alternative.md). For definitions,
+relation/projection differences, and route contracts, read
+[Concepts and Assumptions](./concepts-and-assumptions.md). If you need the
+decision logic before choosing properties, start with the
+[Production Tuning Guide](./production-tuning-guide.md). If you are preparing
+the repository itself for outside users, also read
 [Public Beta Readiness](./public-beta-readiness.md) and the
 [Release Checklist](./release-checklist.md).
 
@@ -579,7 +584,9 @@ If you want a short production rule set to copy into an engineering playbook, us
 
 Related docs:
 
+- [Concepts and Assumptions](./concepts-and-assumptions.md)
 - [Spring Boot Starter](./spring-boot-starter.md)
+- [Production Tuning Guide](./production-tuning-guide.md)
 - [Tuning Parameters](./tuning-parameters.md)
 - [Use Case Examples](./use-case-examples.md)
 - [Production Tests](../cachedb-production-tests/README.md)

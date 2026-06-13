@@ -5,9 +5,12 @@ Bu rehber tek bir soruya cevap verir:
 Production'da çalışan ekip hangi durumda hangi CacheDB kullanım yüzeyini seçmeli?
 
 Daha üst seviye konumlandırma için [CacheDB Bir ORM Alternatifi Olarak](./orm-alternative.md)
-dokümanını oku. Repo'yu dış kullanıcıya açma hazırlığı için
-[Açık Beta Hazırlık Durumu](./public-beta-readiness.md) ve
-[Release Checklist](./release-checklist.md) dokümanlarına bak.
+dokümanını oku. Kavramlar, relation/projection farkı ve route contract tanımı
+için [Kavramlar ve Kabuller](./kavramlar-ve-kabuller.md) sayfasına bak.
+Property seçmeden önce production ayar mantığını görmek istiyorsan
+[Production Tuning Rehberi](./production-tuning-rehberi.md) ile başla.
+Repo'yu dış kullanıcıya açma hazırlığı için [Açık Beta Hazırlık Durumu](./public-beta-readiness.md)
+ve [Release Checklist](./release-checklist.md) dokümanlarına bak.
 
 CacheDB'nin temel önceliği değişmez:
 
@@ -594,8 +597,10 @@ Bir engineering playbook'a kopyalanacak kısa kural seti:
 
 İlgili dokümanlar:
 
+- [Kavramlar ve Kabuller](./kavramlar-ve-kabuller.md)
 - [Spring Boot Starter](./spring-boot-starter.md)
-- [Tuning Parameters](./tuning-parameters.md)
+- [Production Tuning Rehberi](./production-tuning-rehberi.md)
+- [Tuning Parametreleri](./tuning-parameters.md)
 - [Kullanım Senaryosu Örnekleri](./use-case-examples.md)
 - [Production Tests](../../cachedb-production-tests/README.md)
 - [CI production evidence workflow](../../.github/workflows/production-evidence.yml)

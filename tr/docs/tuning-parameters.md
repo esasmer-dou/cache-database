@@ -1,6 +1,8 @@
 # Tuning Parametreleri
 
-Bu doküman, artık kod değiştirmeden ayarlanabilen runtime parametrelerini toplar.
+Bu doküman, kod değiştirmeden ayarlanabilen runtime parametrelerini toplar.
+Karar verme rehberi arıyorsan önce [Production Tuning Rehberi](production-tuning-rehberi.md)
+sayfasını oku; bu sayfa daha çok property referansı olarak kullanılmalıdır.
 
 İki katman vardır:
 
@@ -44,12 +46,12 @@ Kapsam bazlı bağlantı tuning:
 | `<scope>.redis.pool.maxTotal` | `64` | Havuzdaki maksimum Redis bağlantısı. |
 | `<scope>.redis.pool.maxIdle` | `16` | Sıcak tutulacak maksimum idle Redis bağlantısı. |
 | `<scope>.redis.pool.minIdle` | `4` | Hazır tutulacak minimum idle Redis bağlantısı. |
-| `<scope>.redis.pool.maxWaitMillis` | `5000` | Havuz doluyken caller'in ne kadar bekleyeceği. |
+| `<scope>.redis.pool.maxWaitMillis` | `5000` | Havuz doluyken çağrının ne kadar bekleyeceği. |
 | `<scope>.redis.pool.blockWhenExhausted` | `true` | Havuz doluyken hemen hata vermek yerine beklemeyi açıp kapatır. |
-| `<scope>.redis.pool.testOnBorrow` | `false` | Havuzdan alinan bağlantıyı validate eder. |
-| `<scope>.redis.pool.testWhileIdle` | `false` | Idle bağlantıları bakım döngüsünde validate eder. Varsayılan olarak kapalı tutulur; arka planda `PING` maliyeti ve timeout gürültüsu üretmesin diye. |
+| `<scope>.redis.pool.testOnBorrow` | `false` | Havuzdan alınan bağlantıyı validate eder. |
+| `<scope>.redis.pool.testWhileIdle` | `false` | Idle bağlantıları bakım döngüsünde validate eder. Varsayılan olarak kapalı tutulur; arka planda `PING` maliyeti ve timeout gürültüsü üretmemesi için kapalıdır. |
 | `<scope>.redis.pool.timeBetweenEvictionRunsMillis` | `30000` | Idle connection bakım periyodu. |
-| `<scope>.redis.pool.minEvictableIdleTimeMillis` | `60000` | Idle bağlantınin ne kadar sonra atilabilecegi. |
+| `<scope>.redis.pool.minEvictableIdleTimeMillis` | `60000` | Idle bağlantının ne kadar sonra atılabileceği. |
 | `<scope>.redis.pool.numTestsPerEvictionRun` | `3` | Her bakım döngüsünde test edilen idle bağlantı sayısı. |
 | `<scope>.redis.pool.connectionTimeoutMillis` | `2000` | Yeni Redis soketleri için connect timeout. |
 | `<scope>.redis.pool.readTimeoutMillis` | `5000` | Normal Redis komutları için read timeout. |
@@ -59,7 +61,7 @@ Kapsam bazlı bağlantı tuning:
 
 Bu property'ler özellikle `cachedb-spring-boot-starter` için geçerlidir.
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.profile` | `default` | Starter profil kısayolu. `default`, `development`, `production`, `benchmark`, `memory-constrained` ve `minimal-overhead` değerlerini destekler. |
 | `cachedb.redis.uri` | `redis://127.0.0.1:6379` | Starter içindeki foreground repository Redis URI'si. |
@@ -70,7 +72,7 @@ Bu property'ler özellikle `cachedb-spring-boot-starter` için geçerlidir.
 | `cachedb.redis.pool.maxWaitMillis` | `5000` | Foreground repository havuzunda maksimum bekleme süresi. |
 | `cachedb.redis.pool.blockWhenExhausted` | `true` | Foreground havuz doluyken bekleme davranışını açıp kapatır. |
 | `cachedb.redis.pool.testOnBorrow` | `false` | Foreground bağlantıları borrow anında validate eder. |
-| `cachedb.redis.pool.testWhileIdle` | `false` | Foreground idle bağlantıları bakım döngüsünde validate eder. Varsayılan olarak kapalı; repository yoluna idle-validation `PING` gürültüsu bindirmemek için. |
+| `cachedb.redis.pool.testWhileIdle` | `false` | Foreground idle bağlantıları bakım döngüsünde validate eder. Varsayılan olarak kapalıdır; repository yoluna idle-validation `PING` gürültüsü bindirmemek için kapalı tutulur. |
 | `cachedb.redis.pool.timeBetweenEvictionRunsMillis` | `30000` | Foreground idle-eviction bakım periyodu. |
 | `cachedb.redis.pool.minEvictableIdleTimeMillis` | `60000` | Foreground idle bağlantıların atılma eşiği. |
 | `cachedb.redis.pool.numTestsPerEvictionRun` | `3` | Foreground bakım döngüsünde test edilen idle bağlantı sayısı. |
@@ -99,18 +101,18 @@ Bu property'ler çok pod'lu ortamda worker kimliğini ve singleton operasyonel d
 
 ### Core Override'lar
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
-| `cachedb.config.runtimeCoordination.instanceId` | boş | Açık runtime instance id. Bos bırakilirsa CacheDB bunu environment'tan çözer ve gerekirse UUID üretir. |
+| `cachedb.config.runtimeCoordination.instanceId` | boş | Açık runtime instance id. Boş bırakılırsa CacheDB bunu environment'tan çözer ve gerekirse UUID üretir. |
 | `cachedb.config.runtimeCoordination.appendInstanceIdToConsumerNames` | `true` | Çözulen instance id'yi worker consumer name prefix'lerine ekler. Kubernetes'te ortak consumer group kullanımında açık tutulmalıdır. |
 | `cachedb.config.runtimeCoordination.leaderLeaseEnabled` | `true` | Cleanup/report/history benzeri singleton loop'lar için Redis leader lease'i açar. |
 | `cachedb.config.runtimeCoordination.leaderLeaseSegment` | `coordination:leader` | Ana key prefix altında leader lease key'leri için kullanılan Redis segment'i. |
 | `cachedb.config.runtimeCoordination.leaderLeaseTtlMillis` | `15000` | Singleton operasyonel loop'lar için Redis lease TTL süresi. |
-| `cachedb.config.runtimeCoordination.leaderLeaseRenewIntervalMillis` | `5000` | Lider pod'un lease'i ne sıklıkta yenileyecegi. |
+| `cachedb.config.runtimeCoordination.leaderLeaseRenewIntervalMillis` | `5000` | Lider pod'un lease'i ne sıklıkta yenileyeceği. |
 
 ### Spring Boot Starter Kısayolları
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.runtime.instance-id` | boş | Runtime instance id için starter dostu alias. |
 | `cachedb.runtime.append-instance-id-to-consumer-names` | `true` | Pod-unique consumer adları için starter dostu bayrak. |
@@ -121,16 +123,16 @@ Bu property'ler çok pod'lu ortamda worker kimliğini ve singleton operasyonel d
 
 Operasyonel notlar:
 
-- consumer group'lar pod'lar arasinda ortak kalır; sadece consumer adları pod-unique olur
+- consumer group'lar pod'lar arasında ortak kalır; sadece consumer adları pod-unique olur
 - otomatik instance id çözme sırası `cachedb.runtime.instance-id`, `CACHE_DB_INSTANCE_ID`, `HOSTNAME`, `POD_NAME`, `COMPUTERNAME`, sonra üretilen UUID şeklindedir
-- leader lease bugun cleanup/report/history benzeri döngüleri kapsar; ana consumer-group worker'lar bu yolla singleton yapılmaz
+- leader lease bugün cleanup/report/history benzeri döngüleri kapsar; ana consumer-group worker'lar bu yolla singleton yapılmaz
 - tek Redis hâlâ koordinasyon katmanının merkezi bağımlılığıdır; production'da durable/HA Redis kullan
 - worker thread sayısını pod bazlı değil, cluster toplamı olarak düşün
 - aynı host üzerinde local smoke koşarken açık `cachedb.runtime.instance-id` değerleri ver ya da `tools/ops/cluster/run-multi-instance-coordination-smoke.ps1` script'ini kullan; çünkü `HOSTNAME` genelde tüm local process'lerde ortaktır
 
 ## PostgreSQL Client Tuning
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `<scope>.postgres.jdbcUrl` | runtime'a göre | PostgreSQL JDBC URL'i. |
 | `<scope>.postgres.user` | runtime'a göre | Veritabanı kullanıcısı. |
@@ -148,7 +150,7 @@ Operasyonel notlar:
 
 ### Write-Behind
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.config.writeBehind.enabled` | `true` | Write-behind hattını açar/kapatır. |
 | `cachedb.config.writeBehind.workerThreads` | `max(1, cpu/2)` | Write-behind worker sayısı. |
@@ -180,7 +182,7 @@ Operasyonel notlar:
 | `cachedb.config.writeBehind.compactionStreamKey` | `cachedb:stream:write-behind:compaction` | Compaction stream key'i. |
 | `cachedb.config.writeBehind.compactionConsumerGroup` | `cachedb-write-behind-compaction` | Compaction consumer group. |
 | `cachedb.config.writeBehind.compactionConsumerNamePrefix` | `cachedb-compaction-worker` | Compaction consumer name prefix. |
-| `cachedb.config.writeBehind.compactionShardCount` | `4` | Compaction shard sayısı. Eszamanli yazmalarda durable compaction stream hot-spot'unu azaltir. |
+| `cachedb.config.writeBehind.compactionShardCount` | `4` | Compaction shard sayısı. Eş zamanlı yazmalarda durable compaction stream hot-spot'unu azaltır. |
 | `cachedb.config.writeBehind.autoCreateConsumerGroup` | `true` | Redis consumer group'ları otomatik oluşturur. |
 | `cachedb.config.writeBehind.shutdownAwaitMillis` | `10000` | Graceful shutdown bekleme süresi. |
 | `cachedb.config.writeBehind.daemonThreads` | `true` | Worker thread'lerini daemon olarak çalıştırır. |
@@ -195,7 +197,7 @@ Operasyonel notlar:
 
 ### Resource Limits ve Default Cache Policy
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.config.resourceLimits.maxRegisteredEntities` | `1000` | Tek `CacheDatabase` içinde kaydedilebilecek maksimum entity sayısı. |
 | `cachedb.config.resourceLimits.maxColumnsPerOperation` | `256` | Tek mutation içinde takip edilen maksimum kolon sayısı. |
@@ -246,7 +248,7 @@ edilemiyorsa kayıtlı Java predicate kullan.
 
 ### Keyspace, Functions, Relations, Page Cache
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.config.keyspace.keyPrefix` | `cachedb` | Global Redis key prefix. |
 | `cachedb.config.keyspace.entitySegment` | `entity` | Entity key segment'i. |
@@ -316,7 +318,7 @@ Bu ayarlar Redis'i yanlışlıkla geniş okuma yüküyle doldurmayı engeller. V
 
 Bu property'ler `EntityProjection.asyncRefresh()` tarafında kullanılan durable Redis Stream tabanlı projection refresh worker'ini ayarlar.
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.config.projectionRefresh.enabled` | `true` | Projection refresh stream ve worker hattını açar/kapatır. |
 | `cachedb.config.projectionRefresh.streamKey` | `cachedb:stream:projection-refresh` | Projection refresh event'lerinin yazıldığı Redis stream key'i. |
@@ -351,7 +353,7 @@ Operasyonel notlar:
 
 ### Redis Guardrails
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.config.redisGuardrail.enabled` | `true` | Redis guardrail davranışını açar. |
 | `cachedb.config.redisGuardrail.producerBackpressureEnabled` | `true` | Producer'ların pressure altında yavaşlamasını sağlar. |
@@ -395,7 +397,7 @@ Operasyonel notlar:
 
 ### Dead-Letter Recovery
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.config.deadLetterRecovery.enabled` | `true` | DLQ recovery worker'i açar. |
 | `cachedb.config.deadLetterRecovery.workerThreads` | `1` | DLQ worker sayısı. |
@@ -427,7 +429,7 @@ Operasyonel notlar:
 
 ### Admin Monitoring, Reporting, HTTP ve Schema Bootstrap
 
-| Property | Varsayılan | Ne ise yarar |
+| Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.config.adminMonitoring.writeBehindWarnThreshold` | `250` | Write-behind backlog warning incident eşiği. Kısa süreli burst'lerde gereksiz DEGRADED sinyali üretmemesi için varsayılan Redis guardrail warning seviyesiyle hizalıdır. |
 | `cachedb.config.adminMonitoring.writeBehindCriticalThreshold` | `750` | Write-behind backlog critical incident eşiği. Varsayılan Redis guardrail critical seviyesiyle hizalıdır. |
@@ -531,14 +533,14 @@ key=value;key=value
 
 ## Diğer Tuning Alanları Nerede
 
-- Benchmark ve certification'a özel yük parametreleri [cachedb-production-tests/README.md](/E:/ReactorRepository/cache-database/tr/cachedb-production-tests/README.md) içinde kalmaya devam eder.
-- Demo'ya özel URL, port ve yük profili ayarları [cachedb-examples/README.md](/E:/ReactorRepository/cache-database/tr/cachedb-examples/README.md) içinde ayrıca listelenir.
+- Benchmark ve certification'a özel yük parametreleri [cachedb-production-tests/README.md](../cachedb-production-tests/README.md) içinde kalmaya devam eder.
+- Demo'ya özel URL, port ve yük profili ayarları [cachedb-examples/README.md](../cachedb-examples/README.md) içinde ayrıca listelenir.
 
 ## Demo Runtime Tuning
 
 Bu property'ler basit load demo davranışını kod değiştirmeden ayarlamak için kullanılır.
 
-| Property | Default | Ne ise yarar |
+| Property | Default | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.demo.cache.hotEntityLimit` | `100` | Demo entity hot-set limiti. |
 | `cachedb.demo.cache.pageSize` | `20` | Demo repository page boyutu. |
@@ -592,7 +594,7 @@ Bu görünüm iki kaynağı birleştirir:
 - aktif `CacheDatabaseConfig` üzerinden türetilen effective core değerler
 - `cachedb.` ile başlayan explicit JVM/system-property override'ları
 
-| Property | Default | Ne ise yarar |
+| Property | Default | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.admin.ui.bootstrapCssUrl` | Bootstrap 5.3.3 CDN URL'i | Admin dashboard'un kullandığı CSS URL'i. |
 | `cachedb.admin.ui.themeCss` | yerleşik dashboard CSS'i | Admin dashboard sayfasına inject edilen tam CSS bloğu. |
@@ -763,7 +765,7 @@ Bu görünüm iki kaynağı birleştirir:
 
 Bu property'ler production-test senaryo kataloglarını yerleşik değerler yerine tamamen dışarıdan tanımlamanı sağlar.
 
-| Property | Default | Ne ise yarar |
+| Property | Default | Ne işe yarar |
 | --- | --- | --- |
 | `cachedb.prod.catalog.scenarios` | yerleşik base scenario catalog | `ScenarioCatalog` listesini tamamen değiştirir. |
 | `cachedb.prod.catalog.fullScaleScenarios` | yerleşik 50k scenario catalog | `FullScaleBenchmarkCatalog` listesini tamamen değiştirir. |

@@ -163,7 +163,7 @@ cachedb:
 
 Aynı host üzerinde local multi-instance smoke koşarken bunun tersini yap: her
 process için açık `cachedb.runtime.instance-id` ver ya da
-[../tools/ops/cluster/run-multi-instance-coordination-smoke.ps1](../tools/ops/cluster/run-multi-instance-coordination-smoke.ps1)
+[run-multi-instance-coordination-smoke.ps1](../../tools/ops/cluster/run-multi-instance-coordination-smoke.ps1)
 script'ini kullan. Tek workstation genelde tek `HOSTNAME` paylaştığı için,
 sadece hostname çözümüyle ilerlemek gerçek pod davranışında görmeyeceğin
 consumer kimliği sorunlarını saklayabilir.
@@ -658,8 +658,8 @@ Operasyonel yüzeyler:
 
 Birlikte gelen araçlar:
 
-- [list-projection-refresh-failures.ps1](/E:/ReactorRepository/cache-database/tools/ops/projection/list-projection-refresh-failures.ps1)
-- [replay-projection-refresh-failure.ps1](/E:/ReactorRepository/cache-database/tools/ops/projection/replay-projection-refresh-failure.ps1)
+- [list-projection-refresh-failures.ps1](../../tools/ops/projection/list-projection-refresh-failures.ps1)
+- [replay-projection-refresh-failure.ps1](../../tools/ops/projection/replay-projection-refresh-failure.ps1)
 
 ## Production Read Deseni
 

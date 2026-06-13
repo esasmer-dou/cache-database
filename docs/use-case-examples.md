@@ -33,6 +33,107 @@ The production rule is simple:
 - Large list screens must use projection/read-model windows.
 - Partial changes must use explicit command routes or full entity updates.
 
+## How To Read This Page
+
+You do not need to read this document from top to bottom. Start with your route
+type:
+
+| If you need this | Start here |
+| --- | --- |
+| Create, update, or delete one record | Insert, Update, and Delete examples |
+| Customer detail with latest orders | Query 2 and Projection 1 |
+| Order detail with line preview | Relation Example 1 and Projection 2 |
+| Dashboard or top-N screen | Projection 3 and Dashboard examples |
+| Old archive data | Query 4 and Dashboard 3 |
+| Redis memory behavior | Memory and Hot Window Rules |
+| Partial update risk | Partial Update Behavior |
+
+Rule: first define what the route shows to the user, then decide whether the
+route should use entity, projection, ranked projection, or PostgreSQL cold path.
+
+## End-To-End Real-World Scenarios
+
+### Scenario A: E-Commerce Customer Detail
+
+Screen:
+
+- customer card
+- latest 10 orders
+- latest 3 support tickets
+- current open balance
+
+BEST design:
+
+- `CustomerEntity` serves the customer card.
+- Latest orders come from `CustomerOrderSummaryProjection`.
+- Support tickets come from `CustomerTicketSummaryProjection` or a small
+  relation preview.
+- Open balance comes from a finance projection or PostgreSQL reporting path.
+
+ANTI-PATTERN:
+
+- load all orders, all order lines, all ticket messages, and all payments as one
+  object graph when the customer screen opens.
+
+### Scenario B: Operations Dashboard
+
+Screen:
+
+- 100 tickets with the highest SLA risk
+- 50 products with stock risk
+- failed payment attempts from the last 15 minutes
+
+BEST design:
+
+- Ticket list is a ranked projection.
+- Stock cards come from `ProductStockSummary`.
+- Payment attempts come from a time-window projection or PostgreSQL event query.
+- Dashboard first paint should not hydrate full entities.
+
+ANTI-PATTERN:
+
+- compute top-N from millions of rows in application memory during dashboard
+  render.
+
+### Scenario C: Finance Or Invoicing System
+
+Screen:
+
+- invoice detail
+- latest payment attempts
+- monthly reconciliation report
+
+BEST design:
+
+- Invoice detail uses `InvoiceEntity`.
+- Latest payment attempts use `withRelationLimit("payments", 5)` or a payment
+  preview projection.
+- Monthly reconciliation stays on PostgreSQL/reporting path.
+
+ANTI-PATTERN:
+
+- generate monthly finance reports through CacheDB entity queries.
+
+### Scenario D: Multi-Tenant SaaS
+
+Screen:
+
+- active work by tenant
+- notification inbox per user
+- global health dashboard for admins
+
+BEST design:
+
+- Every hot route carries tenant information.
+- Tenant quota prevents one tenant from consuming Redis memory.
+- User notification inbox is a projection window.
+- Global admin dashboard is backed by ranked projection or telemetry
+  projection.
+
+ANTI-PATTERN:
+
+- use one global hot entity limit without tenant isolation.
+
 ## Route Decision Map
 
 | Need | BEST route | Why |

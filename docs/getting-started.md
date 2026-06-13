@@ -1,28 +1,37 @@
 # Getting Started
 
-This guide takes you from a new project or an existing PostgreSQL app to a
+Turkish version: [../tr/docs/getting-started.md](../tr/docs/getting-started.md)
+
+This guide takes a new project, or an existing PostgreSQL application, to a
 working CacheDB integration.
 
-If you are already running a production ORM route, do not start by rewriting
-everything. Start by discovering one route, warming it in staging, and comparing
-PostgreSQL vs CacheDB before cutover.
+The day-one goal is to:
 
-## 1. Pick The Right Entry Point
+- add dependencies correctly
+- configure Redis and PostgreSQL
+- model the first entity with compile-time generated bindings
+- run the first save/read/delete flow
+- avoid starting relation-heavy screens with the wrong shape
+- use the Migration Planner when an existing ORM system is already in place
 
-| Your situation | Use | Notes |
-| --- | --- | --- |
-| New Spring Boot app | `cachedb-spring-boot-starter` | Recommended default for most teams |
-| Existing Spring Boot app with JPA | `cachedb-spring-boot-starter` plus existing `DataSource` | Do not duplicate JDBC auto-config if JPA already creates the `DataSource` |
-| Plain Java service | `cachedb-starter` | You own bootstrap and lifecycle |
-| Existing PostgreSQL + ORM app | Migration Planner first | Discover schema, plan hot routes, warm Redis, compare results |
-| Relation-heavy screen | Projection/read-model | Avoid loading full aggregates for the first page |
+## 1. Choose The Entry Point
 
-## 2. Add Dependencies
+| Situation | Start with |
+| --- | --- |
+| New Spring Boot service | `cachedb-spring-boot-starter` |
+| Existing Spring Boot service with JPA | Starter plus the existing `DataSource` |
+| Non-Spring Java service | `cachedb-starter` |
+| Existing PostgreSQL + ORM system | Migration Planner first |
+| A few known hot endpoints | One-route pilot first |
+| Relation-heavy dashboard or list | Projection/read-model design first |
 
-### Spring Boot
+BEST: prove one hot route before expanding.
 
-Use this when Spring Boot should create the `CacheDatabase` bean and publish the
-admin UI on the same application port.
+ANTI-PATTERN: model every table and move every route to CacheDB at once.
+
+## 2. Spring Boot Dependencies
+
+Use this path for most Spring Boot applications.
 
 ```xml
 <properties>
@@ -69,15 +78,18 @@ admin UI on the same application port.
 </build>
 ```
 
-Dependency rule:
+JDBC rule:
 
-- add `spring-boot-starter-jdbc` if your app does not already create a Spring `DataSource`
-- skip it if `spring-boot-starter-data-jpa` or another starter already creates the `DataSource`
-- always keep `cachedb-annotations` and the `cachedb-processor` annotation processor
+- Add `spring-boot-starter-jdbc` if the application does not already create a
+  Spring `DataSource`.
+- If `spring-boot-starter-data-jpa` or another starter already creates a
+  `DataSource`, do not add the JDBC starter again.
+- Keep the PostgreSQL driver as a runtime dependency.
+- Configure `cachedb-processor` as an annotation processor.
 
-### Plain Java
+## 3. Plain Java Dependencies
 
-Use this when you want direct bootstrap control.
+Use this path when you do not use Spring Boot.
 
 ```xml
 <properties>
@@ -106,28 +118,13 @@ Use this when you want direct bootstrap control.
         <version>42.7.4</version>
     </dependency>
 </dependencies>
-
-<build>
-    <plugins>
-        <plugin>
-            <artifactId>maven-compiler-plugin</artifactId>
-            <configuration>
-                <annotationProcessorPaths>
-                    <path>
-                        <groupId>com.reactor.cachedb</groupId>
-                        <artifactId>cachedb-processor</artifactId>
-                        <version>${cachedb.version}</version>
-                    </path>
-                </annotationProcessorPaths>
-            </configuration>
-        </plugin>
-    </plugins>
-</build>
 ```
 
-## 3. Configure Redis And PostgreSQL
+In Plain Java mode, you own the `CacheDatabase` lifecycle.
 
-### Spring Boot `application.yml`
+## 4. Configure Connections
+
+Spring Boot:
 
 ```yaml
 spring:
@@ -141,111 +138,217 @@ cachedb:
   profile: production
   redis:
     uri: redis://127.0.0.1:6379
+  admin:
+    http-enabled: true
 ```
 
-### Plain Java Bootstrap
+Plain Java:
 
 ```java
 JedisPooled jedis = new JedisPooled("redis://127.0.0.1:6379");
-DataSource dataSource = ...;
+DataSource dataSource = createDataSource();
 
 try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .production()
         .keyPrefix("app-cache")
-        .register(com.reactor.cachedb.examples.entity.GeneratedCacheBindings::register)
+        .register(com.example.cache.GeneratedCacheBindings::register)
         .start()) {
     // application code
 }
 ```
 
-## 4. Model Your First Entity
+Production note: if the admin UI is enabled, `/cachedb-admin/**` must not be
+exposed directly to the public internet. Put it behind a gateway, reverse proxy,
+or CacheDB token auth.
 
-Start with one entity that is actually hot in the application. Do not start by
-mapping the whole database.
+## 5. Model The First Entity
+
+Example table:
+
+```sql
+CREATE TABLE customers (
+    customer_id BIGINT PRIMARY KEY,
+    tax_number VARCHAR(32) NOT NULL,
+    customer_type VARCHAR(32) NOT NULL,
+    status VARCHAR(32) NOT NULL
+);
+```
+
+Entity:
 
 ```java
 @CacheEntity(table = "customers", redisNamespace = "customers")
 public class CustomerEntity {
-    private Long customerId;
-    private String taxNumber;
-    private String customerType;
+    @CacheId(column = "customer_id")
+    public Long customerId;
+
+    @CacheColumn("tax_number")
+    public String taxNumber;
+
+    @CacheColumn("customer_type")
+    public String customerType;
+
+    @CacheColumn("status")
+    public String status;
+
+    public CustomerEntity() {
+    }
 }
 ```
 
-Then compile the project. The annotation processor creates generated binding
-classes that your application can use without runtime reflection.
+Important:
 
-## 5. Use The Recommended API First
+- Persisted fields must not be `private` or `final`.
+- Table and column names should be explicit.
+- Keep the entity small.
+- Add relation fields only when there is a clear read requirement.
 
-The default application surface is:
+## 6. First Save And Read
 
 ```java
-var domain = GeneratedCacheModule.using(session);
+var customers = CustomerEntityCacheBinding.using(session).repository();
+
+CustomerEntity customer = new CustomerEntity();
+customer.customerId = 1001L;
+customer.taxNumber = "1234567890";
+customer.customerType = "RETAIL";
+customer.status = "ACTIVE";
+
+customers.save(customer);
+
+CustomerEntity loaded = customers.findById(1001L).orElseThrow();
 ```
 
-Use this for normal service code because it keeps onboarding simple while still
-staying close to the low-overhead repository path.
+Expected behavior:
 
-Drop lower only when profiling justifies it:
+- `save` writes to the Redis hot entity path.
+- PostgreSQL persistence enters the write-behind path.
+- `findById` reads the hot entity from Redis.
+- The entity may be rejected from Redis if it does not satisfy the hot policy.
 
-- `GeneratedCacheModule.using(session)...` for normal business code
-- `*CacheBinding.using(session)...` for measured hot endpoints
-- direct repository for workers, replay, repair, or proven hotspots
+## 7. First Delete
 
-## 6. Handle Relation-Heavy Screens Deliberately
+```java
+customers.deleteById(1001L);
+```
 
-Example: a customer has many orders and the UI needs the latest 1,000 orders by
-`order_date DESC`.
+Behavior:
 
-Use this design:
+- Redis entity and index entries are removed.
+- Tombstone behavior prevents stale cached values from being served.
+- PostgreSQL delete is sent to the write-behind path.
+- Repeating the delete should be idempotent.
 
-1. keep `CustomerEntity` as the root
-2. keep the full order history durable in PostgreSQL
-3. keep only the bounded hot order window in Redis
-4. use an order summary projection for the list
-5. fetch full order detail only when the user opens one order
+## 8. First Query
 
-Avoid this design:
+Small bounded query:
 
-- loading the full customer aggregate for every list render
-- loading all order lines just to show a list row
-- sorting a large entity payload in memory after the first page is requested
+```java
+List<CustomerEntity> activeCustomers = customers.query(
+        QuerySpec.where(QueryFilter.eq("status", "ACTIVE"))
+                .orderBy(QuerySort.asc("customer_id"))
+                .limitTo(100)
+);
+```
 
-## 7. Existing PostgreSQL + ORM Migration Flow
+Rules:
 
-If you already have tables and an ORM, start in the admin UI:
+- Keep queries bounded.
+- Use projections for large list screens.
+- Design sort and filter fields deliberately.
 
-1. open `/cachedb-admin/migration-planner`
-2. click PostgreSQL schema discovery
-3. choose one suggested route from the discovered root/child candidates
-4. apply it to the form
-5. generate the plan
-6. generate scaffold if you need entity/projection skeletons
-7. run dry-run warm and inspect the SQL
-8. run real staging warm
-9. run side-by-side comparison
-10. download the migration report
+## 9. Start Relations Correctly
 
-For 100% migration coverage, repeat this for every production route. The planner
-models one route at a time on purpose; full-system coverage comes from a route
-inventory, not from one global button.
+Example: customer and orders.
 
-## 8. Add A Root `.gitignore`
+```java
+@CacheEntity(table = "orders", redisNamespace = "orders")
+public class OrderEntity {
+    @CacheId(column = "order_id")
+    public Long orderId;
 
-This repository ships a ready-to-use root [.gitignore](../.gitignore) that
-covers:
+    @CacheColumn("customer_id")
+    public Long customerId;
 
-- Maven and Java outputs
-- module `target/` directories
-- IDE files
-- local logs and temp output
-- `tools/tmp` evidence files
-- local secret files
+    @CacheColumn("order_date")
+    public Instant orderDate;
 
-Use the same baseline in application repositories that embed CacheDB if you do
-not already have an equivalent Java/Maven ignore policy.
+    @CacheColumn("order_amount")
+    public BigDecimal orderAmount;
+}
+```
 
-## 9. Verify Locally
+Parent relation:
+
+```java
+@CacheRelation(
+        targetEntity = "OrderEntity",
+        mappedBy = "customerId",
+        kind = CacheRelation.RelationKind.ONE_TO_MANY,
+        batchLoadOnly = true
+)
+public List<OrderEntity> orders;
+```
+
+Read:
+
+```java
+CustomerEntity customer = customerRepository
+        .withRelationLimit("orders", 10)
+        .findById(customerId)
+        .orElseThrow();
+```
+
+This is acceptable for a small preview. Use a projection when hundreds or
+thousands of orders may be shown per customer.
+
+## 10. First Projection Decision
+
+Example requirement:
+
+- customer detail shows the latest 10 orders
+- Redis keeps the latest 1,000 order summaries per customer
+- full `OrderEntity` is fetched only after the user opens an order
+
+Use this read model:
+
+```text
+CustomerOrderSummary
+- order_id
+- customer_id
+- order_date
+- order_amount
+- currency_code
+- status
+```
+
+BEST: list reads from projection, detail reads from entity.
+
+ANTI-PATTERN: load every order and every order line for the first screen.
+
+## 11. First Trial In An Existing PostgreSQL + ORM App
+
+Use the Migration Planner before writing integration code:
+
+1. Start the application with admin UI enabled.
+2. Open `/cachedb-admin/migration-planner`.
+3. Run PostgreSQL schema discovery.
+4. Pick one route candidate.
+5. Apply it to the form.
+6. Generate the plan.
+7. Generate scaffold.
+8. Run dry-run warm.
+9. Run staging warm.
+10. Run side-by-side comparison.
+11. Download the report.
+
+Decision rule:
+
+- Do not cut over if data does not match.
+- Do not cut over if a projection-required route falls back to entity scanning.
+- Do not cut over if CacheDB p95 does not meet the route target.
+
+## 12. Verify Locally
 
 Run at least:
 
@@ -253,23 +356,37 @@ Run at least:
 mvn -q -DskipTests package
 ```
 
-For the demo application:
+Turkish documentation quality check:
 
 ```powershell
-./tools/ops/demo/run-spring-boot-load-demo.ps1
+pwsh tools\ci\check-tr-docs.ps1
 ```
 
-Then open:
+Production evidence:
 
-- demo load UI: `http://127.0.0.1:8090/demo-load`
-- admin dashboard: `http://127.0.0.1:8090/cachedb-admin`
-- migration planner: `http://127.0.0.1:8090/cachedb-admin/migration-planner`
+```powershell
+pwsh tools\ci\run-production-evidence.ps1
+pwsh tools\ci\run-production-scenario-certification.ps1
+```
 
-## 10. Read Next
+## 13. Day-One Exit Criteria
 
-- [Spring Boot Starter](./spring-boot-starter.md)
-- [Migration Planner](./migration-planner.md)
-- [Use Case Examples](./use-case-examples.md)
-- [Production Recipes](./production-recipes.md)
-- [Tuning Parameters](./tuning-parameters.md)
-- [ORM Alternative](./orm-alternative.md)
+At the end of the first day you should have:
+
+- one entity compiling
+- generated bindings produced
+- Redis and PostgreSQL connections working
+- save/read/delete tested
+- first hot route selected
+- projection need identified for any large list screen
+- Migration Planner report captured if this is an existing system
+- production notes for admin exposure, Redis HA, and route contract decisions
+
+## Read Next
+
+- [Concepts and Assumptions](concepts-and-assumptions.md)
+- [Use Case Examples](use-case-examples.md)
+- [Spring Boot Starter](spring-boot-starter.md)
+- [Production Tuning Guide](production-tuning-guide.md)
+- [Migration Planner](migration-planner.md)
+- [Production Recipes](production-recipes.md)

@@ -1,6 +1,9 @@
 # Tuning Parameters
 
 This document collects the runtime knobs that can now be changed without editing code.
+If you need decision guidance before choosing properties, read the
+[Production Tuning Guide](production-tuning-guide.md) first; this page is the
+property reference.
 
 There are two layers:
 
@@ -531,8 +534,8 @@ key=value;key=value
 
 ## Where the Other Tunables Live
 
-- Benchmark- and certification-specific load knobs stay documented in [cachedb-production-tests/README.md](/E:/ReactorRepository/cache-database/cachedb-production-tests/README.md).
-- Demo-specific URLs, ports, and profile controls stay documented in [cachedb-examples/README.md](/E:/ReactorRepository/cache-database/cachedb-examples/README.md).
+- Benchmark- and certification-specific load knobs stay documented in [cachedb-production-tests/README.md](../cachedb-production-tests/README.md).
+- Demo-specific URLs, ports, and profile controls stay documented in [cachedb-examples/README.md](../cachedb-examples/README.md).
 
 ## Demo Runtime Tuning
 

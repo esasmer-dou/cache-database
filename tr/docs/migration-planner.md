@@ -215,7 +215,7 @@ Beklenen sonuç:
 - p95 gecikmesi PostgreSQL referansından belirgin biçimde kötüyse
 - warm set production sıcak pencereyi temsil etmiyorsa
 
-### 9. Migration Raporunu İndir
+### 9. Geçiş Raporunu İndir
 
 Karşılaştırma sonrasında raporu indir.
 
@@ -242,24 +242,6 @@ birine bağlanmalıdır:
 
 Eşlenmemiş route sayısı sıfır olmadan ve her route için parity kanıtı ya da
 açık manuel kabul notu olmadan `%100 migration coverage` iddiası doğru değildir.
-- sıralama farklıysa
-- p95 gecikme PostgreSQL referansından belirgin şekilde kötüyse
-- sıcak veri seti production'daki gerçek sıcak pencereyi temsil etmiyorsa
-
-### 9. Geçiş Raporunu İndir
-
-Karşılaştırma sonrasında raporu indir.
-
-Rapor şunları içermelidir:
-
-- akış özeti
-- seçilen tasarım
-- ön ısıtma sonuçları
-- karşılaştırma sonuçları
-- geçişe hazırlık durumu
-- canlıya geçiş aksiyon planı
-- blokajlar
-- geri dönüş notları
 
 ## Tam Sistem Migration Coverage
 
