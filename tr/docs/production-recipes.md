@@ -24,7 +24,7 @@ CacheDB'nin temel önceliği değişmez:
 Kısa kural:
 
 - Yeni production servislerinde `GeneratedCacheModule.using(session)...` ile başla.
-- Kanıtlanmış sıcak endpoint'i `*CacheBinding.using(session)...` tarafına indir.
+- Kanıtlanmış kritik endpoint'i `*CacheBinding.using(session)...` tarafına indir.
 - Worker, replay ve altyapı kodlarında doğrudan repository kullan.
 - Çok ilişkili liste ve yönetim paneli ekranlarında projection + `withRelationLimit(...)` kullan.
 - Global sıralı ekranlarda ranked projection kullan.
@@ -33,10 +33,10 @@ Kısa kural:
 
 | Senaryo | Önerilen tasarım | Kaçınılacak tasarım |
 | --- | --- | --- |
-| Müşteri detayında 1.000+ sipariş | Customer root entity, order summary projection, root başına sınırlı sıcak pencere | İlk ekranda tam müşteri veri grafiğini ve tüm order line'ları yüklemek |
+| Müşteri detayında 1.000+ sipariş | Customer root entity, order summary projection, root başına sınırlı Redis penceresi | İlk ekranda tam müşteri veri grafiğini ve tüm order line'ları yüklemek |
 | Çok satırlı sipariş detayı | Order detail'i açıkça yükle, yalnızca küçük `orderLines` önizlemesi preload et | Kullanıcı istemeden yüzlerce/binlerce satırı yüklemek |
 | Global "en yüksek değerli siparişler" yönetim paneli | Önceden hesaplanmış iş skoru olan ranked projection | Geniş entity scan yapıp bellek içinde sıralamak |
-| Admin CRUD ekranı | Generated module veya binding | Sıcak olmayan admin path için erken direct repository kodu yazmak |
+| Admin CRUD ekranı | Generated module veya binding | Kritik olmayan admin path için erken direct repository kodu yazmak |
 | Write-behind repair veya replay worker | Açık limit ve retry içeren direct repository | Operasyonel işi yüksek seviye domain helper arkasına saklamak |
 | Mevcut ORM akışının geçişi | Geçiş Planlayıcı, dry-run ön ısıtma, staging ön ısıtma, yan yana karşılaştırma | Sadece Redis hızlı diye kör canlı geçiş yapmak |
 
@@ -76,7 +76,7 @@ top-window yolunu kullanabilir.
 ```mermaid
 flowchart TD
     A["Normal servis endpoint'i mi?"] -->|Evet| B["GeneratedCacheModule.using(session) ile başla"]
-    A -->|Hayır| C["Kanıtlanmış sıcak endpoint veya operasyon akışı mı?"]
+    A -->|Hayır| C["Kanıtlanmış kritik endpoint veya operasyon akışı mı?"]
     C -->|Evet| D["*CacheBinding veya direct repository kullan"]
     C -->|Hayır| E["Ekran çok ilişkili veya liste ağırlıklı mı?"]
     E -->|Evet| F["Projection ve withRelationLimit(...) kullan"]
@@ -89,7 +89,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | Tipik iş CRUD'u ve normal servis kodu | `GeneratedCacheModule.using(session)...` | En az glue kodu, en kolay başlangıç | Gerçek darboğaz ölçülürse |
 | Package-level grouping istemeyen ama generated helper isteyen ekip | `*CacheBinding.using(session)...` | Daha açık entity sahipliği, hâlâ düşük ceremony | Tekil endpoint gecikme hassas hale gelirse |
-| Bilinen sıcak read/write endpoint'i | doğrudan `EntityRepository` / `ProjectionRepository` | En küçük wrapper yüzeyi, en net kontrol | Sadece ölçülmüş sıcak yollarda kal |
+| Bilinen kritik read/write endpoint'i | doğrudan `EntityRepository` / `ProjectionRepository` | En küçük wrapper yüzeyi, en net kontrol | Sadece ölçülmüş kritik yollarda kal |
 | Çok ilişkili okuma ekranı | generated binding + projection + relation limit | Büyük nesne grafiği maliyetini düşürür | Özet/detay hâlâ hedefi tutmuyorsa |
 | İç admin veya reporting akışı | generated module veya binding | Geliştirici hızı çoğu zaman nanosaniye kazancından değerlidir | Nadiren gerekir |
 | Replay, recovery, worker kodu | direct repository | Operasyonel kod açık ve tahmin edilebilir kalır | Genelde daha üst soyutlama gerekmez |
@@ -97,7 +97,7 @@ flowchart TD
 ## Resmi Öneri Merdiveni
 
 1. `GeneratedCacheModule.using(session)...` ile başla.
-2. Sıcak endpoint'leri gerekirse `*CacheBinding.using(session)...` tarafına çek.
+2. Kritik endpoint'leri gerekirse `*CacheBinding.using(session)...` tarafına çek.
 3. Yalnızca kanıtlanmış darboğazları doğrudan repository/projection kullanımına indir.
 
 Bu yaklaşım uygulama kodunun büyük bölümünü okunabilir tutar. Gerçekten gereken
@@ -186,7 +186,7 @@ Bu yol şunları birlikte verir:
 - derleme zamanında üretilen API ergonomisi
 - normal production API'leri için düşük wrapper maliyeti
 
-### Birkaç Sıcak Endpoint'i Olan Ekipler
+### Birkaç Kritik Endpoint'i Olan Ekipler
 
 Kodun büyük bölümünü generated domain module üzerinde bırak. Yalnızca ölçülmüş
 darboğazı `*CacheBinding.using(session)...` tarafına çek.
@@ -194,7 +194,7 @@ darboğazı `*CacheBinding.using(session)...` tarafına çek.
 Bu genelde en iyi orta noktadır:
 
 - kodun geri kalanı okunabilir kalır
-- sıcak endpoint daha küçük wrapper yüzeyi kullanır
+- kritik endpoint daha küçük wrapper yüzeyi kullanır
 - tüm kod gereksiz yere düşük seviye repository stiline indirilmez
 
 ### Platform, Worker ve Operasyon Ekipleri
@@ -245,7 +245,7 @@ Neden varsayılan:
 - çalışma zamanında metadata keşfi yok
 - wrapper maliyeti production için yeterince düşük
 
-## Reçete 2: Sıcak Endpoint, Daha Açık Entity Sahipliği
+## Reçete 2: Kritik Endpoint, Daha Açık Entity Sahipliği
 
 Şu durumda kullan:
 
@@ -298,17 +298,17 @@ EntityRepository<DemoOrderEntity, Long> previewRepository =
 
 Müşteri timeline ekranı için production'a uygun şekil şudur:
 
-- Redis müşteri root entity'sini sıcak tutar
-- Redis müşteri başına sınırlı order summary projection penceresini sıcak tutar; örneğin son 1.000 özet
+- Redis müşteri root entity'sini tutar
+- Redis müşteri başına sınırlı order summary projection penceresini tutar; örneğin son 1.000 özet
 - Seçilen SQL provider bütün order geçmişi ve arşiv okumaları için kalıcı kaynak olarak kalır
 - detay ekranı bütün müşteri veri grafiğini değil, tek order'ı veya küçük bir relation önizlemesini açıkça okur
 
 Entity hot set için kabul kuralını açık seç:
 
-- `COUNT_WINDOW` varsayılandır; son erişilen veya yazılan entity id'lerini `hotEntityLimit` sınırına kadar sıcak tutar
-- `TIME_WINDOW`, iş kuralı "son 90 günün order kayıtları sıcak olsun" ise doğru tercihtir
-- `STATE_WINDOW`, yalnız `OPEN` ve `PENDING` gibi durumların sıcak kalması gerektiğinde kullanılır
-- `COMPOSITE`, sıcaklık birden fazla kurala bağlıysa kullanılır; örneğin "son 90 gün içinde ve `OPEN/PENDING` durumunda"
+- `COUNT_WINDOW` varsayılandır; son erişilen veya yazılan entity id'lerini `hotEntityLimit` sınırına kadar Redis'te tutar
+- `TIME_WINDOW`, iş kuralı "son 90 günün order kayıtları Redis'te tutulsun" ise doğru tercihtir
+- `STATE_WINDOW`, yalnız `OPEN` ve `PENDING` gibi durumların Redis'te kalması gerektiğinde kullanılır
+- `COMPOSITE`, Redis kabul kararı birden fazla kurala bağlıysa kullanılır; örneğin "son 90 gün içinde ve `OPEN/PENDING` durumunda"
 - `CUSTOM_PREDICATE`, VIP müşteri veya tenant bazlı özel Java predicate kuralları için ayrılır
 
 Örnek:
@@ -342,7 +342,7 @@ CachePolicy activeRecentOrders = CachePolicy.builder()
         .build();
 ```
 
-Bir satırı birden fazla akış sıcak yapabiliyorsa `EntityHotPolicy.anyOf(...)`
+Bir satır birden fazla akış nedeniyle Redis'e alınabiliyorsa `EntityHotPolicy.anyOf(...)`
 kullan. Örnek: "son 90 günün order'ı" veya "VIP müşterinin order'ı" veya
 "destek ekibinin manuel takip ettiği order". `CUSTOM_PREDICATE` kullanacaksan
 kural kısa, deterministik ve yerel kalmalıdır; predicate veritabanına veya uzak
@@ -372,7 +372,7 @@ RouteCacheContract customerOrdersTimeline = RouteCacheContract.builder()
 Route contract şu durumlarda gereklidir:
 
 - endpoint'in ilk sayfa boyutu belliyse
-- Redis bütün tabloyu değil, sınırlı sıcak pencereyi tutacaksa
+- Redis bütün tabloyu değil, sınırlı pencereyi tutacaksa
 - projection yerine entity scan'e düşmek production için riskliyse
 - tek tenant veya tek müşteri Redis belleğini tüketebilecekse
 
@@ -468,7 +468,7 @@ Production kuralları:
 
 Bunu yalnız şu durumda kullan:
 
-- profiling bu endpoint'in hâlâ sıcak olduğunu gösteriyorsa
+- profiling bu endpoint'in hâlâ kritik olduğunu gösteriyorsa
 - sorgu ve fetch plan üzerinde tam kontrol istiyorsan
 - kod daha çok altyapı veya operasyonel karakterdeyse
 
@@ -504,8 +504,8 @@ Hangi reçeteyi seçersen seç, production için şu kurallar geçerlidir:
 - iş sırası önemliyse pre-ranked projection alanı tercih et
 - page/result boyutunu entity hot window altında tut; varsayılan read-shape guardrail bunu `hotSetHeadroom` ile zorlar
 - hot kabul kuralı sadece son erişim sayısı değil, iş tarihi veya durum ise `hotPolicy.mode=TIME_WINDOW` ya da `STATE_WINDOW` kullan
-- sıcaklık iş tarihi, durum, tenant veya özel predicate birleşiminden oluşuyorsa `hotPolicy.mode=COMPOSITE` kullan
-- kritik ekranlar için route-level cache contract tanımla: page size, sıcak pencere, projection zorunluluğu, cold-read üst sınırı, memory budget ve tenant quota
+- Redis kabul kararı iş tarihi, durum, tenant veya özel predicate birleşiminden oluşuyorsa `hotPolicy.mode=COMPOSITE` kullan
+- kritik ekranlar için route-level cache contract tanımla: page size, Redis penceresi, projection zorunluluğu, cold-read üst sınırı, memory budget ve tenant quota
 - büyük hot set'lerde warm/backfill işlerini checkpoint, resume, batch size, fetch size ve row-rate limit ile çalıştır
 - staging warm bittikten sonra planner tahminini Redis `MEMORY USAGE` ve key-prefix breakdown ile kalibre et
 - kaynak veritabanı CacheDB dışında da güncelleniyorsa CDC, Debezium, Kafka veya outbox adaptörü kullan
@@ -592,7 +592,7 @@ Değişmeyen gerçekler:
 Bir engineering playbook'a kopyalanacak kısa kural seti:
 
 - varsayılan uygulama kodu: `GeneratedCacheModule.using(session)...`
-- sıcak endpoint kaçış hattı: `*CacheBinding.using(session)...`
+- kritik endpoint kaçış hattı: `*CacheBinding.using(session)...`
 - worker ve replay kodu: doğrudan repository
 - liste ve yönetim paneli okumaları: önce projection, sonra gerekirse tam veri grafiği
 - relation önizleme ekranları: `withRelationLimit(...)`

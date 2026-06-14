@@ -75,7 +75,7 @@ Bu release, CacheDB'nin ilk beta olmayan framework release'idir.
 ### Production kullanımı
 
 Bu release'i production odaklı pilotlar ve kontrollü cutover'lar için kullan.
-Ancak her sıcak route için route contract, warm-up evidence, side-by-side
+Ancak her kritik route için route contract, warm-up evidence, side-by-side
 comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
 ```
 

@@ -2,7 +2,7 @@
 
 CacheDB, Redis merkezli sistemler için tasarlanmış düşük ek yüklü bir Java
 persistence kütüphanesidir. Amaç, ekipleri her yerde düşük seviye repository
-koduna zorlamadan, sıcak veri yollarını açık ve ölçülebilir tutmaktır.
+koduna zorlamadan, düşük gecikmeli veri akışlarını açık ve ölçülebilir tutmaktır.
 
 ## Tek Cümlelik Mesaj
 
@@ -11,7 +11,7 @@ koduna zorlamadan, sıcak veri yollarını açık ve ölçülebilir tutmaktır.
 
 ## Güvenilirlik Sınırı
 
-> CacheDB persistence davranışını gizlemeye çalışmaz. Sıcak veri yolunu daha
+> CacheDB persistence davranışını gizlemeye çalışmaz. Sık erişilen veri yolunu daha
 > açık, daha sınırlı ve daha kolay ölçülebilir hale getirir.
 
 ## Güçlü Olduğu Yerler
@@ -37,7 +37,7 @@ koduna zorlamadan, sıcak veri yollarını açık ve ölçülebilir tutmaktır.
 
 ## Dışa Dönük Açıklama
 
-CacheDB, sıcak okuma ve yazma yolunu Redis üzerinden kurar; kalıcı doğruluk
+CacheDB, düşük gecikmeli okuma/yazma katmanını Redis üzerinden kurar; kalıcı doğruluk
 kaynağını ise seçilen SQL provider üzerinde tutar. PostgreSQL varsayılan
 provider yoludur, MSSQL desteği açık beta provider olarak bilinçli şekilde
 seçilmelidir. Derleme zamanında üretilen metadata sayesinde runtime reflection'a
@@ -45,6 +45,6 @@ ihtiyaç duymaz. Normal servis kodu generated API'lerle ergonomik kalır; çok
 ilişkili veya global sıralı ekranlarda ise projection ve okuma modeli disiplini
 kullanılır.
 
-Bu nedenle CacheDB, "her şeyi otomatik gizleyen ORM" değil; sıcak veri yolunu
+Bu nedenle CacheDB, "her şeyi otomatik gizleyen ORM" değil; düşük gecikmeli veri yolunu
 bilinçli biçimde tasarlamak isteyen ekipler için düşük ek yüklü bir persistence
 katmanıdır.

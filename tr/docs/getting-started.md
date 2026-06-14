@@ -27,7 +27,7 @@ Hedef, ilk gün şunları başarmaktır:
 | Sadece birkaç hot endpoint var | Önce tek route pilotu |
 | Çok ilişkili dashboard veya liste var | Önce projection/read-model tasarımı |
 
-BEST: İlk denemeyi tek sıcak route ile yap.
+BEST: İlk denemeyi tek kritik route ile yap.
 
 ANTI-PATTERN: Tüm tabloları modelleyip tüm trafiği bir anda CacheDB'ye almak.
 
@@ -228,7 +228,7 @@ Beklenen davranış:
 
 - `save` Redis hot entity yoluna yazar.
 - Kalıcı yazım seçilen SQL write-behind hattına alınır.
-- `findById` Redis'teki sıcak entity'yi okur.
+- `findById` Redis'teki entity'yi okur.
 - Entity hot policy'ye uymuyorsa Redis'e kabul edilmeyebilir.
 
 ## 7. İlk Delete
@@ -312,7 +312,7 @@ binlerce sipariş gösterilecekse projection kullan.
 Örnek ihtiyaç:
 
 - müşteri detay ekranında son 10 sipariş gösterilecek
-- müşteri başına Redis'te son 1000 sipariş summary sıcak kalacak
+- müşteri başına son 1000 sipariş özeti Redis'te tutulacak
 - sipariş detayına girilince full `OrderEntity` okunacak
 
 Doğru model:
@@ -387,7 +387,7 @@ En az şunları tamamlamış olmalısın:
 - generated binding oluşuyor
 - Redis ve SQL `DataSource` bağlantısı çalışıyor
 - save/read/delete akışı denenmiş
-- ilk sıcak route seçilmiş
+- ilk kritik route seçilmiş
 - büyük liste varsa projection ihtiyacı belirlenmiş
 - mevcut sistemden geçiliyorsa Migration Planner raporu alınmış
 - production için admin exposure, Redis HA ve route contract notları yazılmış

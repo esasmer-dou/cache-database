@@ -751,7 +751,7 @@ Production tarafında neden önemli:
 
 - Redis key/value okuma hızlı olsa bile ilişki yükü yüksek sorgu yine aday filtreleme, decode, sort ve nesne grafiği oluşturma maliyeti öder
 - pahalı kısım genellikle tek bir `GET` değil, ne kadar büyük veri grafiği yüklediğindir
-- daha küçük özet sorguları p95'i gerçek sıcak repository yoluna daha yakın tutar
+- daha küçük özet sorguları p95'i gerçek düşük gecikmeli repository yoluna daha yakın tutar
 
 Projection refresh tuning ayarları `cachedb.config.projectionRefresh.*` altındadır.
 

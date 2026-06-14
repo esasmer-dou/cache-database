@@ -7,7 +7,7 @@ kabullerini açıklar. Amaç, yeni bir kullanıcının "hangi davranış otomati
 davranış bilinçli tasarım gerektiriyor?" sorusunu netleştirmektir.
 
 CacheDB, klasik ORM davranışını bire bir kopyalamaz. Tasarımın merkezinde açık
-route kararı, sınırlı sıcak veri, projection/read-model disiplini ve production
+route kararı, Redis'te sınırlı veri tutma, projection/read-model disiplini ve production
 kanıtı vardır.
 
 ## En Kısa Özet
@@ -16,7 +16,7 @@ kanıtı vardır.
 | --- | --- |
 | Entity | Kaynak veritabanı tablosunu ve Redis'teki hot entity payload'unu temsil eder |
 | Repository | Entity üzerinde save, find, query ve delete işlemlerini yapar |
-| Hot set | Redis'te tutulmasına izin verilen sıcak veri kümesi |
+| Hot set | Redis'te tutulmasına izin verilen sık erişilen veri kümesi |
 | Hot policy | Bir satırın Redis'e kabul edilip edilmeyeceğini belirleyen kural |
 | Projection | Ekranın ihtiyaç duyduğu küçük okuma modeli |
 | Ranked projection | Global sıralama veya top-N ekranı için önceden sıralanmış okuma modeli |
@@ -36,10 +36,11 @@ CacheDB'de kalıcı kaynak veritabanı ve Redis'in rolleri karışmamalıdır.
 | Katman | Rol |
 | --- | --- |
 | Kaynak veritabanı | Kalıcı doğruluk kaynağı, tam geçmiş, arşiv, replay ve reporting tabanı |
-| Redis | Sıcak entity, projection window, index, stream, coordination ve telemetry katmanı |
+| Redis | Redis'te tutulan entity, projection window, index, stream, coordination ve telemetry katmanı |
 
-Kalıcı kaynak veritabanını devreden çıkarmak hedef değildir. Redis, sıcak yolun
-düşük gecikmeli çalışması için kullanılır; kalıcı geçmiş kaynak veritabanında kalır.
+Kalıcı kaynak veritabanını devreden çıkarmak hedef değildir. Redis, düşük
+gecikme hedeflenen veri yolu için kullanılır; kalıcı geçmiş kaynak
+veritabanında kalır.
 
 ANTI-PATTERN: Tüm veritabanını Redis'e taşımaya çalışmak.
 
@@ -89,7 +90,7 @@ Repository, entity üzerinde temel veri işlemlerini yapar:
 Davranış:
 
 - Yazma Redis'e girer ve SQL provider write-behind hattına alınır.
-- Okuma önce Redis sıcak yolundan yapılır.
+- Okuma önce Redis katmanından yapılır.
 - Read-through veya hydrate ile gelen veri hot policy'ye göre Redis'e kabul
   edilir ya da reddedilir.
 - Büyük page/query talepleri guardrail ile sınırlandırılmalıdır.
@@ -99,7 +100,7 @@ Davranış:
 Hot set, Redis'te kalmasına izin verilen veri kümesidir. Bu küme sınırsız
 olmamalıdır.
 
-Gerçek hayatta sıcaklık genelde tek kriter değildir:
+Gerçek hayatta Redis'e alınacak veri genelde tek kriterle seçilmez:
 
 - son 90 gün
 - açık veya bekleyen durumlar
@@ -108,7 +109,7 @@ Gerçek hayatta sıcaklık genelde tek kriter değildir:
 - dashboard için ilk 1000 satır
 - kullanıcı başına son 50 bildirim
 
-Bu yüzden CacheDB'de sıcak veri sadece TTL ile düşünülmemelidir.
+Bu yüzden CacheDB'de Redis'te tutulacak veri sadece TTL ile düşünülmemelidir.
 
 ## Hot Policy
 
@@ -119,7 +120,7 @@ Hot policy, bir entity'nin Redis'e kabul edilip edilmeyeceğini belirler.
 | `COUNT_WINDOW` | En yeni veya en sık kullanılan belirli sayıda kayıt hot kalacaksa |
 | `TIME_WINDOW` | İş tarihine göre son 7 gün, 30 gün, 90 gün gibi pencere gerekiyorsa |
 | `STATE_WINDOW` | Sadece `OPEN`, `PENDING`, `ACTIVE` gibi durumlar hot olacaksa |
-| `COMPOSITE` | Birden fazla sıcaklık kuralı birlikte gerekiyorsa |
+| `COMPOSITE` | Birden fazla Redis kabul kuralı birlikte gerekiyorsa |
 | `CUSTOM_PREDICATE` | Domain'e özel admission kararı gerekiyorsa |
 
 Örnek karar:
@@ -316,7 +317,7 @@ CacheDB production kullanımında şu kabuller geçerlidir:
 
 BEST:
 
-- sıcak route'u açıkça seçmek
+- kritik route'u açıkça seçmek
 - projection gereken yerde projection kullanmak
 - hot policy ve route contract tanımlamak
 - staging warm ve side-by-side comparison ile cutover yapmak

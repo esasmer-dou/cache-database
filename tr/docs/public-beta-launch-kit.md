@@ -12,7 +12,7 @@ problem için tasarlandığını net anlatmaktır.
 
 ### Kısa açıklama
 
-`Redis merkezli Java data-layer kütüphanesi: sıcak veri Redis'te, kalıcı doğruluk seçilen SQL veritabanında, ORM benzeri API'ler derleme zamanında üretilir.`
+`Redis merkezli Java data-layer kütüphanesi: sık erişilen veri Redis'te, kalıcı doğruluk seçilen SQL veritabanında, ORM benzeri API'ler derleme zamanında üretilir.`
 
 ### Website
 
@@ -37,7 +37,7 @@ Ayrı bir site yoksa repo URL'si veya ana doküman giriş sayfası kullanılabil
 
 Önerilen ana mesaj:
 
-`cache-database, düşük gecikme ve ölçülebilir çalışma zamanı maliyeti isteyen Java ekipleri için Redis merkezli bir data-layer katmanıdır. PostgreSQL varsayılan kalıcı provider'dır; MSSQL açıkça seçilen beta provider olarak desteklenir. Sıcak okuma ve yazma yolu Redis üzerinden bilinçli şekilde tasarlanır.`
+`cache-database, düşük gecikme ve ölçülebilir çalışma zamanı maliyeti isteyen Java ekipleri için Redis merkezli bir data-layer katmanıdır. PostgreSQL varsayılan kalıcı provider'dır; MSSQL açıkça seçilen beta provider olarak desteklenir. Düşük gecikmeli okuma/yazma katmanı Redis üzerinden bilinçli şekilde tasarlanır.`
 
 Mutlaka korunması gereken sınır:
 
@@ -72,7 +72,7 @@ Bu sürüm, `cache-database` için ilk açık beta yayınıdır.
 ### CacheDB nedir
 
 CacheDB, kalıcı doğruluk kaynağını seçilen SQL veritabanında tutarken
-uygulamanın sıcak okuma ve yazma yolunu Redis üzerinden kuran bir Java
+uygulamanın düşük gecikmeli okuma/yazma katmanını Redis üzerinden kuran bir Java
 data-layer kütüphanesidir. PostgreSQL varsayılan provider'dır; MSSQL açıkça
 seçilen beta provider olarak desteklenir. Hedefi, çalışma zamanı ek yükünü
 düşük tutmak ve buna rağmen ORM benzeri, üretilebilir bir geliştirici deneyimi

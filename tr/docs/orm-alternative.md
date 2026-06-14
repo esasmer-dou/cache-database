@@ -15,7 +15,7 @@ CacheDB güçlü bir alternatiftir.
 
 - Redis zaten gerçek production mimarisinin parçasıysa.
 - Düşük gecikmeli okuma yolu ürün için önemliyse.
-- İlişki yükleme, projection ve sıcak veri penceresi açıkça tasarlanabiliyorsa.
+- İlişki yükleme, projection ve sık erişilen veri penceresi açıkça tasarlanabiliyorsa.
 - Runtime reflection istemiyor, derleme zamanında üretilen metadata istiyorsan.
 - Normal servis kodu ergonomik kalsın ama ölçülen darboğazlarda daha düşük seviyeye inilebilsin istiyorsan.
 
@@ -38,7 +38,7 @@ CacheDB, Hibernate'in birebir kopyası olmaya çalışmaz.
 
 CacheDB şu modeli kullanır:
 
-- Uygulamanın sıcak okuma/yazma yolu Redis üzerinden ilerler.
+- Uygulamanın düşük gecikmeli okuma/yazma katmanı Redis üzerinden ilerler.
 - Seçilen SQL provider kalıcı veri deposu olarak kalır.
 - Entity metadata'sı derleme zamanında üretilir.
 - İlişki yükleme açık fetch plan ve loader'larla yapılır.
@@ -65,7 +65,7 @@ Bu nedenle CacheDB şu şekilde değerlendirilmelidir:
 
 CacheDB şu alanlarda güçlü uyum verir:
 
-- sıcak okuma yolu olan ürün servisleri
+- düşük gecikmeli okuma ihtiyacı olan ürün servisleri
 - projection kullanan yönetim paneli ve liste ağırlıklı uygulamalar
 - Redis'i production'da birinci sınıf bağımlılık olarak işleten sistemler
 - runtime reflection istemeyen ama generated API ergonomisi isteyen ekipler
@@ -87,7 +87,7 @@ Bu durumda Hibernate/JPA daha doğal ve daha az sürtünmeli araç olabilir.
 CacheDB doğru kullanıldığında production resmi genelde şöyle olur:
 
 - normal iş kodu generated domain veya binding yüzeyini kullanır
-- sıcak okuma yolları projection ve açık fetch limitleriyle kurulur
+- düşük gecikmeli okuma akışları projection ve açık fetch limitleriyle kurulur
 - global sorted/range ekranları geniş entity sorgusu yerine projection'a özel ranked alan kullanır
 - ranked alanlar `rankedBy(...)` ile tanımlanır ve projection repository top-window yolunu kullanabilir
 - yalnızca kanıtlanmış darboğazlar doğrudan repository'ye iner
@@ -122,7 +122,7 @@ Bu yol onboarding'i kolay tutarken düşük ek yük hedefini de korur.
 | Ekip veya yük tipi | Önerilen yüzey |
 | --- | --- |
 | Normal ürün servis kodu | `GeneratedCacheModule.using(session)...` |
-| Açıkça sıcak olduğu ölçülmüş endpoint'ler | `*CacheBinding.using(session)...` |
+| Açıkça kritik olduğu ölçülmüş endpoint'ler | `*CacheBinding.using(session)...` |
 | Worker, replay, recovery, altyapı kodu | doğrudan `EntityRepository` / `ProjectionRepository` |
 | Çok ilişkili liste veya yönetim paneli okumaları | projection + `withRelationLimit(...)` |
 | Global sıralı veya ranked ekranlar | ranked projection |

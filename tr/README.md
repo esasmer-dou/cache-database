@@ -2,17 +2,18 @@
 
 English version: [../README.md](../README.md)
 
-CacheDB, Redis'i sıcak okuma/yazma yolu olarak kullanan ve kalıcı doğruluk
-kaynağını seçilen SQL veritabanında tutan bir Java data-layer kütüphanesidir.
+CacheDB, Redis'i düşük gecikmeli okuma/yazma katmanı olarak kullanan ve kalıcı
+doğruluk kaynağını seçilen SQL veritabanında tutan bir Java data-layer
+kütüphanesidir.
 Bugün PostgreSQL varsayılan provider'dır; MSSQL ise açıkça seçilen beta provider
-olarak desteklenir. Amaç, ORM'e benzeyen geliştirme ergonomisini korurken sıcak
-veri yolunu açık, sınırlı, ölçülebilir ve production ortamında yönetilebilir
-hale getirmektir.
+olarak desteklenir. Amaç, ORM'e benzeyen geliştirme ergonomisini korurken sık
+erişilen veri yolunu açık, sınırlı, ölçülebilir ve production ortamında
+yönetilebilir hale getirmektir.
 
 CacheDB şu iddiayla konumlanır:
 
 - verinin tamamını Redis'e taşımak gerekmez
-- sıcak olan veri ve route açıkça tanımlanmalıdır
+- sık erişilen veri ve kritik route açıkça tanımlanmalıdır
 - seçilen SQL provider kalıcı geçmişin sahibi olmaya devam etmelidir
 - ilişki yoğun ve global sıralı ekranlarda projection/read-model tasarımın
   parçasıdır
@@ -21,7 +22,7 @@ CacheDB şu iddiayla konumlanır:
 
 Kısa karar: CacheDB core ve varsayılan PostgreSQL provider yolu, açık production
 sınırlarıyla stable framework release seviyesine taşınmıştır. Buna rağmen her
-sıcak route için staging warm-up, side-by-side comparison, route contract, Redis
+kritik route için staging warm-up, side-by-side comparison, route contract, Redis
 bellek limiti ve rollback planı kanıtlanmadan production cutover yapılmamalıdır.
 MSSQL hâlâ açıkça seçilen beta provider olarak ele alınmalıdır.
 
@@ -67,7 +68,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | Çok ilişkili liste ekranı | Projection/read-model | İlk ekranda bütün object graph yüklenmez |
 | Worker, replay, repair veya batch job | Doğrudan repository | Daha az soyutlama, daha açık performans davranışı |
 
-BEST: Önce tek sıcak route seç, Redis hot-set kararını ver, staging ortamında
+BEST: Önce tek kritik route seç, Redis hot-set kararını ver, staging ortamında
 warm ve compare çalıştır, sonra production cutover kararı al.
 
 ANTI-PATTERN: Tüm veritabanını entity olarak işaretleyip Redis'in her şeyi
@@ -213,7 +214,7 @@ CustomerEntity loaded = domain.customers()
 
 Davranış:
 
-- `save` sıcak entity'yi Redis'e yazar.
+- `save` entity'yi Redis'e yazar.
 - Kalıcı yazım seçilen SQL write-behind hattına girer.
 - `findById` önce Redis'teki hot entity'yi okur.
 - Entity hot policy'ye uymuyorsa Redis'e kabul edilmeyebilir veya Redis'ten
@@ -336,7 +337,7 @@ Amaç, her production route için şu soruları kanıtlamaktır:
 - Redis HA/failover planı var mı?
 - Seçilen SQL provider kalıcı doğruluk kaynağı olarak korunuyor mu?
 - Dış sistemler kaynak veritabanını değiştiriyorsa outbox/CDC var mı?
-- Her sıcak route için route contract yazıldı mı?
+- Her kritik route için route contract yazıldı mı?
 - Projection gereken route production strict mode'da entity scan'e düşüyor mu?
 - Hot policy ve tenant quota bellek bütçesini koruyor mu?
 - Warm işlemi checkpoint/resume destekli mi?
@@ -348,12 +349,12 @@ Amaç, her production route için şu soruları kanıtlamaktır:
 
 | Konu | CacheDB | Geleneksel ORM |
 | --- | --- | --- |
-| Birincil sıcak okuma yolu | Redis | Veritabanı |
+| Birincil düşük gecikmeli okuma katmanı | Redis | Veritabanı |
 | Kalıcı veri kaynağı | SQL veritabanı | Veritabanı |
 | Metadata | Derleme zamanında üretilir | Genelde runtime metadata/reflection |
 | Relation davranışı | Açık `FetchPlan`, loader ve projection | Çoğu zaman lazy/eager graph |
 | Büyük liste ekranı | Projection/read-model | Sıklıkla entity graph veya join |
-| En iyi kullanım alanı | Düşük gecikmeli sıcak route'lar | SQL merkezli geniş ilişkisel işlemler |
+| En iyi kullanım alanı | Düşük gecikmeli kritik route'lar | SQL merkezli geniş ilişkisel işlemler |
 | Ana risk | Yanlış hot-set ve projection tasarımı | N+1, geniş join ve runtime ORM maliyeti |
 
 ## Ölçülmüş Kanıt Nasıl Okunmalı?
@@ -362,7 +363,7 @@ Benchmark sonuçları "her zaman CacheDB daha hızlıdır" diye okunmamalıdır.
 Doğru okuma şudur:
 
 - generated binding yüzeyi düşük ek yük bandında kalabilir
-- minimal repository kritik sıcak yollarda daha fazla kontrol verir
+- minimal repository kritik düşük gecikmeli yollarda daha fazla kontrol verir
 - gerçek production maliyeti çoğu zaman query shape, relation hydration, Redis
   contention ve write-behind baskısından gelir
 - relation-heavy ekranlarda ölçümden önce projection tasarımı yapılmalıdır

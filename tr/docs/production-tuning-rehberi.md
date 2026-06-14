@@ -54,7 +54,7 @@ Redis belleği tek bir ayarla yönetilmez. Dört katman birlikte düşünülmeli
 | Katman | Ne kontrol eder? |
 | --- | --- |
 | Hot policy | Hangi satır Redis'e kabul edilir? |
-| Hot entity limit | Kaç entity sıcak kalabilir? |
+| Hot entity limit | Kaç entity Redis'te tutulabilir? |
 | Tenant quota | Tek tenant/müşteri Redis'i tüketebilir mi? |
 | Redis `maxmemory` | Altyapıdaki mutlak bellek sınırı |
 
@@ -108,7 +108,7 @@ temizlenmelidir.
 İstek:
 
 - Tek büyük müşteri tüm Redis memory'yi tüketmemeli.
-- Her tenant için sıcak payload bütçesi olmalı.
+- Her tenant için Redis payload bütçesi olmalı.
 
 BEST:
 
@@ -128,7 +128,7 @@ Karar:
 ## 3. Page Size ve Hot Window
 
 Page size, hot window'dan küçük olmalıdır. Aksi halde bir istek, route'un
-tasarlanan sıcak sınırını tek başına aşar.
+tasarlanan Redis sınırını tek başına aşar.
 
 Örnek:
 
@@ -399,7 +399,7 @@ Alarm örnekleri:
 
 ### Küçük Pilot
 
-- 1-3 sıcak route
+- 1-3 kritik route
 - projection-required route'larda strict mode
 - admin UI sadece iç ağda
 - staging compare zorunlu

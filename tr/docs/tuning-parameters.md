@@ -45,7 +45,7 @@ Kapsam bazlı bağlantı tuning:
 | --- | --- | --- |
 | `<scope>.redis.uri` | runtime'a göre | Redis hedef URI'si. |
 | `<scope>.redis.pool.maxTotal` | `64` | Havuzdaki maksimum Redis bağlantısı. |
-| `<scope>.redis.pool.maxIdle` | `16` | Sıcak tutulacak maksimum idle Redis bağlantısı. |
+| `<scope>.redis.pool.maxIdle` | `16` | Hazır tutulacak maksimum idle Redis bağlantısı. |
 | `<scope>.redis.pool.minIdle` | `4` | Hazır tutulacak minimum idle Redis bağlantısı. |
 | `<scope>.redis.pool.maxWaitMillis` | `5000` | Havuz doluyken çağrının ne kadar bekleyeceği. |
 | `<scope>.redis.pool.blockWhenExhausted` | `true` | Havuz doluyken hemen hata vermek yerine beklemeyi açıp kapatır. |
@@ -209,9 +209,9 @@ Operasyonel notlar:
 | `cachedb.config.resourceLimits.defaultCachePolicy.pageTtlSeconds` | `60` | Page cache TTL süresi. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode` | `COUNT_WINDOW` | Entity'nin Redis'e kabul kuralını belirler: `COUNT_WINDOW`, `TIME_WINDOW`, `STATE_WINDOW`, `COMPOSITE` veya `CUSTOM_PREDICATE`. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.timeColumn` | boş | `TIME_WINDOW` için kullanılan iş tarihi kolonu. Örnek: `order_date`. |
-| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds` | `0` | `TIME_WINDOW` için sıcak kabul edilen iş zamanı aralığı. `7776000`, 90 gün anlamına gelir. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds` | `0` | `TIME_WINDOW` için Redis'e kabul edilen iş zamanı aralığı. `7776000`, 90 gün anlamına gelir. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateColumn` | boş | `STATE_WINDOW` için kullanılan durum kolonu. Örnek: `status`. |
-| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateValues` | boş | `STATE_WINDOW` için sıcak kabul edilen durumlar. Örnek: `OPEN,PENDING`. |
+| `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateValues` | boş | `STATE_WINDOW` için Redis'e kabul edilen durumlar. Örnek: `OPEN,PENDING`. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.compositeOperator` | `ALL` | `COMPOSITE` alt kurallarının nasıl değerlendirileceğini belirler. `ALL`, tüm alt kurallar uymalı demektir; `ANY`, bir alt kuralın uymasını yeterli görür. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.children` | boş | `COMPOSITE` için noktalı virgülle ayrılmış alt kurallar. Örnek: `TIME_WINDOW:order_date:7776000;STATE_WINDOW:status:OPEN\|PENDING`. |
 | `cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnWrite` | `true` | Kurala uyan yazmaların entity cache'e girmesine izin verir. |
@@ -221,7 +221,7 @@ Operasyonel notlar:
 
 `entityTtlSeconds` iş zamanı penceresi değildir. 90 günlük TTL, "bu kayıt Redis'e yazıldıktan 90 gün sonra expire olsun" demektir; "`order_date` son 90 gün içindeyse Redis'te kalsın" demek değildir. Hot set iş kolonuyla tanımlanıyorsa `TIME_WINDOW` kullan.
 
-"Son 90 günlük order kayıtları sıcak olsun, eski arşiv okumaları Redis'i kirletmesin" örneği:
+"Son 90 günlük order kayıtları Redis'te tutulsun, eski arşiv okumaları Redis'i kirletmesin" örneği:
 
 ```properties
 cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit=100000
@@ -232,7 +232,7 @@ cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead=false
 cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.evictWhenRejected=true
 ```
 
-"Son 90 gün içinde ve hâlâ açık/bekleyen order kayıtları sıcak olsun" örneği:
+"Son 90 gün içinde ve hâlâ açık/bekleyen order kayıtları Redis'te tutulsun" örneği:
 
 ```properties
 cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit=100000
@@ -278,7 +278,7 @@ edilemiyorsa kayıtlı Java predicate kullan.
 
 ### Okuma Şekli Guardrail'ları
 
-Bu ayarlar Redis'i yanlışlıkla geniş okuma yüküyle doldurmayı engeller. Varsayılan kural sıkıdır: full entity okumalarda page/result boyutu, sıcak pencerenin içine headroom bırakarak sığmalıdır. Büyük liste ekranları full entity hydration yerine projection veya okuma modeli penceresi kullanmalıdır.
+Bu ayarlar Redis'i yanlışlıkla geniş okuma yüküyle doldurmayı engeller. Varsayılan kural sıkıdır: full entity okumalarda page/result boyutu, Redis penceresinin içine headroom bırakarak sığmalıdır. Büyük liste ekranları full entity hydration yerine projection veya okuma modeli penceresi kullanmalıdır.
 
 | Property | Varsayılan | Ne işe yarar |
 | --- | --- | --- |
@@ -288,11 +288,11 @@ Bu ayarlar Redis'i yanlışlıkla geniş okuma yüküyle doldurmayı engeller. V
 | `cachedb.config.readShapeGuardrail.skipLoadedPageCacheOverLimit` | `true` | Fazla büyük read-through sonucunun Redis page cache'e yazılmasını engeller. |
 | `cachedb.config.readShapeGuardrail.rejectEntityQueryOverLimit` | `true` | Geniş full-entity `query(...)` limitlerini reddeder. |
 | `cachedb.config.readShapeGuardrail.rejectProjectionQueryOverLimit` | `true` | Ayarlı projection penceresinden büyük projection sorgularını reddeder. |
-| `cachedb.config.readShapeGuardrail.hotSetHeadroom` | `1` | Tek page/result isteğinin `hotEntityLimit` altında kalması için sıcak pencerede bırakılan boşluktur. |
+| `cachedb.config.readShapeGuardrail.hotSetHeadroom` | `1` | Tek page/result isteğinin `hotEntityLimit` altında kalması için Redis penceresinde bırakılan boşluktur. |
 | `cachedb.config.readShapeGuardrail.maxPageRequestSize` | `0` | Açık page request üst sınırı. `0`, değeri `pageSize` ve `hotEntityLimit - hotSetHeadroom` üzerinden türetir. |
 | `cachedb.config.readShapeGuardrail.maxLoadedPageSize` | `0` | Açık read-through loaded page üst sınırı. `0`, güvenli page request limitini kullanır. |
 | `cachedb.config.readShapeGuardrail.maxEntityQueryLimit` | `0` | Açık full-entity query üst sınırı. `0`, değeri `pageSize` ve `hotEntityLimit - hotSetHeadroom` üzerinden türetir. |
-| `cachedb.config.readShapeGuardrail.maxProjectionQueryLimit` | `1000` | Projection/okuma modeli sorgu penceresi üst sınırı. Müşteri sipariş özetleri gibi sınırlı sıcak pencerelerde kullanılır. |
+| `cachedb.config.readShapeGuardrail.maxProjectionQueryLimit` | `1000` | Projection/okuma modeli sorgu penceresi üst sınırı. Müşteri sipariş özetleri gibi sınırlı Redis pencerelerinde kullanılır. |
 
 ### Query Index
 

@@ -49,7 +49,7 @@ Kurallar:
 - worker Redis'te daha yeni version varsa stale event'i skip eder
 - SQL provider upsert sadece daha yeni version geldiğinde satırı günceller
 
-### Sıcak veri bütçesi
+### Redis veri bütçesi
 
 Her entity türü için:
 

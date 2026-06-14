@@ -4,7 +4,7 @@ Geçiş Planlayıcı, desteklenen JDBC kaynak veritabanında mevcut tabloları v
 çalışan bir ORM yapısı olan ekiplerin CacheDB'ye geçişi kanıta dayalı biçimde
 değerlendirmesi için yönetim arayüzünde sunulan akıştır.
 
-Bu ekran tek tıkla canlıya geçiş düğmesi değildir. Amacı, tek bir sıcak akışı
+Bu ekran tek tıkla canlıya geçiş düğmesi değildir. Amacı, tek bir kritik akışı
 keşfetmek, planlamak, Redis tarafını staging ortamında önceden doldurmak,
 kaynak veritabanı ve CacheDB sonuçlarını karşılaştırmak ve geçiş kararını
 görünür hale getirmektir.
@@ -82,11 +82,11 @@ Keşif şema bilgisini okuyabilir; ancak ürün davranışını tamamen bilemez.
 alanları elle kontrol et:
 
 - ilk sayfa boyutu
-- kök kayıt başına sıcak pencere
+- kök kayıt başına Redis penceresi
 - kök kayıt başına tipik çocuk satır sayısı
 - kök kayıt başına maksimum çocuk satır sayısı
 - archive history gerekli mi
-- detay lookup sıcak mı
+- detay lookup Redis'ten mi servis edilecek?
 - akış liste ağırlıklı mı
 - mevcut ORM eager loading kullanıyor mu
 - yan yana karşılaştırma gerekli mi
@@ -96,7 +96,7 @@ Pratik kural:
 - Liste ekranında summary projection tercih et.
 - Detay ekranında full entity gerektiğinde yüklenebilir.
 - Genel sıralı ekranda ranked projection tercih et.
-- Yüksek fan-out değerine sahip çocuk tabloda Redis'te yalnızca sınırlı sıcak pencere tut.
+- Yüksek fan-out değerine sahip çocuk tabloda Redis'te yalnızca sınırlı pencere tut.
 
 ### 4. Planı Oluştur
 
@@ -107,10 +107,10 @@ Beklenen sonuç:
 - önerilen CacheDB kullanım yüzeyi
 - Redis yerleşim kararı
 - kaynak veritabanı yerleşim kararı
-- seçilen sıcak pencere ayarlarına göre Redis bellek tahmini
+- seçilen Redis penceresi ayarlarına göre bellek tahmini
 - projection gerekli mi bilgisi
 - ranked projection gerekli mi bilgisi
-- sıcak pencere boyutu
+- Redis penceresi boyutu
 - ön ısıtma adımları
 - staging karşılaştırma checklist'i
 - örnek çocuk tablo SQL'i
@@ -120,7 +120,7 @@ Plan görünmüyorsa ekranın sessiz kalması doğru değildir; hata varsa açı
 gösterilmelidir.
 
 Redis bellek tahmini yaklaşık bir kapasite hesabıdır. Ekran, kaynak
-veritabanından sınırlı sayıda satır örneği alır, planner'daki satır sayısı ve sıcak pencere
+veritabanından sınırlı sayıda satır örneği alır, planner'daki satır sayısı ve Redis penceresi
 değerlerini kullanır; ardından payload, projection, hot-set/index, page-cache,
 stream ve güvenlik payını ayrı ayrı gösterir. Bu değeri staging öncesi kapasite
 fikri olarak kullan. Staging ön ısıtma bittikten sonra tahmini Redis
@@ -134,7 +134,7 @@ Beklenen sonuç:
 
 - kök `@CacheEntity` iskeleti
 - çocuk `@CacheEntity` iskeleti
-- sıcak liste named query'si
+- kritik liste named query'si
 - opsiyonel relation loader iskeleti
 - opsiyonel projection support iskeleti
 - generated binding kullanım örneği
@@ -162,7 +162,7 @@ Gerçek ön ısıtmayı yalnızca staging veya güvenli test ortamında çalış
 
 Beklenen sonuç:
 
-- seçilen çocuk sıcak penceresi kaynak veritabanından okunur
+- seçilen çocuk Redis penceresi kaynak veritabanından okunur
 - Redis entity yüzeyleri doğrudan doldurulur
 - kayıtlı projection'lar aynı akış içinde yenilenir
 - seçildiyse ilişkili kök satırlar da doldurulur
@@ -214,7 +214,7 @@ Beklenen sonuç:
 - planner projection isterken CacheDB entity yoluna geri düşüyorsa
 - sıralama farklıysa
 - p95 gecikmesi kaynak veritabanı referansından belirgin biçimde kötüyse
-- warm set production sıcak pencereyi temsil etmiyorsa
+- warm set production Redis penceresini temsil etmiyorsa
 
 ### 9. Geçiş Raporunu İndir
 
@@ -246,7 +246,7 @@ açık manuel kabul notu olmadan `%100 migration coverage` iddiası doğru deği
 
 ## Tam Sistem Migration Coverage
 
-Planner tek seferde bir sıcak akış modeller. Bu bilinçli bir tasarımdır.
+Planner tek seferde bir kritik akışı modeller. Bu bilinçli bir tasarımdır.
 Güvenli tam sistem dönüşümü tek büyük otomatik dönüşümden değil, akış
 envanterinden gelir.
 
@@ -255,7 +255,7 @@ envanterinden gelir.
 1. tüm production ekran, API, batch, worker ve rapor akışlarını listele
 2. her akışı kök tablo, çocuk tablo, sort, filter ve page size ile eşleştir
 3. her akışı generated CRUD, projection, ranked projection, direct repository veya kaynak veritabanı soğuk veri yolu olarak sınıflandır
-4. Redis öncelikli sıcak yol olacak her akış için planner sürecini çalıştır
+4. Redis öncelikli düşük gecikmeli yol olacak her akış için planner sürecini çalıştır
 5. sahip, hazırlık durumu, blokaj ve geri dönüş planı içeren kapsam tablosu tut
 6. her akış için açık karar verilmeden migration tamamlandı deme
 
