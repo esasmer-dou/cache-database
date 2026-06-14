@@ -85,21 +85,21 @@ jobs:
           STAGING_MSSQL_USER: ${{ secrets.STAGING_MSSQL_USER }}
           STAGING_MSSQL_PASSWORD: ${{ secrets.STAGING_MSSQL_PASSWORD }}
         run: |
-          $arguments = @(
-            "-Repository", "${{ github.repository }}",
-            "-TargetRef", "${{ steps.inputs.outputs.targetRef }}",
-            "-ReleaseTag", "${{ steps.inputs.outputs.releaseTag }}",
-            "-CoverageCsvPath", "${{ steps.inputs.outputs.coverageCsv }}",
-            "-SummaryPath", "./target/ga-release-readiness-summary.md"
-          )
+          $arguments = @{
+            Repository = "${{ github.repository }}"
+            TargetRef = "${{ steps.inputs.outputs.targetRef }}"
+            ReleaseTag = "${{ steps.inputs.outputs.releaseTag }}"
+            CoverageCsvPath = "${{ steps.inputs.outputs.coverageCsv }}"
+            SummaryPath = "./target/ga-release-readiness-summary.md"
+          }
           if ("${{ steps.inputs.outputs.requireManagedStagingHa }}" -eq "true") {
-            $arguments += "-RequireManagedStagingHa"
+            $arguments.RequireManagedStagingHa = $true
           }
           if ("${{ steps.inputs.outputs.requireApplicationMigrationCoverage }}" -eq "true") {
-            $arguments += "-RequireApplicationMigrationCoverage"
+            $arguments.RequireApplicationMigrationCoverage = $true
           }
           if ("${{ steps.inputs.outputs.requireMavenCentralPublish }}" -eq "true") {
-            $arguments += "-RequireMavenCentralPublish"
+            $arguments.RequireMavenCentralPublish = $true
           }
           ./tools/ci/check-ga-release-readiness.ps1 @arguments
 
