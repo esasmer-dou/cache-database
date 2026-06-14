@@ -11,7 +11,8 @@ relation/projection differences, and route contracts, read
 decision logic before choosing properties, start with the
 [Production Tuning Guide](./production-tuning-guide.md). If you are preparing
 the repository itself for outside users, also read
-[Public Beta Readiness](./public-beta-readiness.md) and the
+[Production GA Criteria](../PRODUCTION_GA_CRITERIA.md), the
+[Stable Release Launch Kit](./stable-release-launch-kit.md), and the
 [Release Checklist](./release-checklist.md).
 
 The answer is intentionally tied to the project's first priority:

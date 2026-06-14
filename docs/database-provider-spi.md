@@ -2,9 +2,9 @@
 
 Turkish version: [../tr/docs/veritabani-provider-spi.md](../tr/docs/veritabani-provider-spi.md)
 
-CacheDB uses PostgreSQL as the default durable SQL provider in the public beta,
-and now has an explicit storage-provider SPI. MSSQL is available as an explicit
-beta provider, so this is no longer a fake "change the JDBC URL" story.
+CacheDB uses PostgreSQL as the default durable SQL provider and has an explicit
+storage-provider SPI. MSSQL is available as an explicitly selected beta
+provider, so this is no longer a fake "change the JDBC URL" story.
 
 ## Decision
 
@@ -69,7 +69,7 @@ not force a driver version transitively; the application owns the `DataSource`.
 <dependency>
   <groupId>com.reactor.cachedb</groupId>
   <artifactId>cachedb-storage-mssql</artifactId>
-  <version>0.1.0-beta.4</version>
+  <version>0.1.0</version>
 </dependency>
 
 <dependency>
@@ -140,7 +140,7 @@ the version guard keeps retry behavior idempotent.
 | Parameter limit | 65,535 parameters | 2,100 parameters |
 | Temporary table | PostgreSQL temp table semantics | SQL Server `#temp` semantics, not wired yet |
 | Failure classification | SQLSTATE-oriented | SQL Server vendor-code-oriented |
-| Production status | default public beta provider | explicit beta provider, not GA |
+| Production status | default stable provider path | explicit beta provider, not GA |
 
 ## Current MSSQL Gate
 

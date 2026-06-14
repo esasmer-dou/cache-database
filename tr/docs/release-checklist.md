@@ -1,6 +1,6 @@
 # Release Checklist
 
-Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanılmalıdır.
+Bu kontrol listesi her public release öncesinde kullanılmalıdır.
 
 ## Repo Hijyeni
 
@@ -23,7 +23,8 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 
 - `-SNAPSHOT` sürümünü hedef release sürümüne çek
 - [../../CHANGELOG.md](../../CHANGELOG.md) dosyasını güncelle
-- dokümanlardaki public beta vs GA metinlerini kontrol et
+- dokümanlardaki release durumunu kontrol et: stable core, provider bazlı
+  sınırlar ve beta/experimental provider ayrımları net olmalı
 - release sonrasında [release-flow.md](release-flow.md) üzerinden `main` branch'ini bir sonraki `-SNAPSHOT` sürüme aç
 
 ## Kanıt
@@ -60,4 +61,5 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 - README ve Türkçe README güncel
 - production recipe rehberi güncel
 - yeni tuning parametreleri dokümante edildi
-- public beta sınırları açıkça yazılı
+- release sınırları açıkça yazılı; provider veya topoloji sertifikası
+  olduğundan fazla anlatılmıyor

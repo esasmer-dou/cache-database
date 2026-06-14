@@ -17,7 +17,7 @@ Planlayıcı, seçilen akış için Redis çalışma setini dry-run modunda
 hesaplayabilir veya staging ortamında gerçekten önceden ısıtabilir. Ayrıca
 bağlı kaynak veritabanı şemasını inceleyip kök/çocuk tablo adaylarını çıkarabilir,
 binding'e hazır kod iskeleti üretebilir ve canlıya geçmeden önce kaynak veritabanı sonucuyla CacheDB sonucunu yan yana karşılaştırabilir.
-Açık beta repo hijyeni ve release hazırlığı için ayrıca [Açık Beta Hazırlık Durumu](./public-beta-readiness.md) ve [Release Checklist](./release-checklist.md) dokümanlarına bak.
+Release hazırlığı ve production sınırları için ayrıca [Production GA Criteria](../../PRODUCTION_GA_CRITERIA.md) ve [Release Checklist](./release-checklist.md) dokümanlarına bak.
 
 ## Önerilen Production Başlangıcı
 

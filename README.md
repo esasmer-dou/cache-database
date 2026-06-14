@@ -17,9 +17,11 @@ The core design rule is simple:
 - generate metadata at compile time instead of discovering it with runtime
   reflection
 
-Short status: CacheDB is a strong public beta. It is suitable for controlled
-pilots, staging comparisons, and route-by-route cutover work. It should not be
-announced as unconditional GA yet.
+Short status: CacheDB core and the default PostgreSQL provider are ready for a
+stable framework release with explicit production boundaries. Teams should
+still prove every hot route with staging warm-up, side-by-side comparison,
+route contracts, Redis memory limits, and rollback planning before cutover.
+MSSQL remains an explicitly selected beta provider.
 
 ## What It Solves
 
@@ -74,7 +76,7 @@ Keep `cachedb.version` aligned with the release you use.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.4</cachedb.version>
+    <cachedb.version>0.1.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -385,7 +387,7 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
 - [Production Tests](cachedb-production-tests/README.md)
 - [Examples](cachedb-examples/README.md)
 - [Architecture](docs/architecture.md)
-- [Public Beta Readiness](docs/public-beta-readiness.md)
+- [Production GA Criteria](PRODUCTION_GA_CRITERIA.md)
 - [Release Checklist](docs/release-checklist.md)
 
 ## Community

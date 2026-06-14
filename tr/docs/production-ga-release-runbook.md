@@ -52,8 +52,8 @@ anlat.
 
 ## Adım Adım GA Akışı
 
-1. `1.0.0` gibi stabil bir sürüm hazırla. GA sürümünde `beta`, `alpha`, `rc`,
-   `preview` veya `SNAPSHOT` kullanma.
+1. `0.1.0` veya `1.0.0` gibi stabil bir sürüm hazırla. GA sürümünde `beta`,
+   `alpha`, `rc`, `preview` veya `SNAPSHOT` kullanma.
 2. Lokal Docker HA preflight'i çalıştır:
 
    ```powershell
@@ -68,15 +68,14 @@ anlat.
 4. Resmi GitHub Release artifact'ini hedef commit'ten üret:
 
    ```powershell
-   pwsh ./tools/release/build-public-beta-package.ps1 `
-     -Version 1.0.0 `
+   pwsh ./tools/release/build-release-package.ps1 `
+     -Version 0.1.0 `
      -PackageLabel github-release
    ```
 
-   Generic GA package script'i eklenene kadar bu script resmi GitHub Release
-   bundle builder olarak kullanılır. Stabil release için `github-release` gibi
-   beta içermeyen bir package label kullan.
-5. Stabil tag'i oluştur ve gönder; örnek: `v1.0.0`.
+   Stabil release için `github-release` gibi beta içermeyen bir package label
+   kullan.
+5. Stabil tag'i oluştur ve gönder; örnek: `v0.1.0`.
 6. Maven Central resmi dağıtım kanalı olarak seçildiyse, stabil tag üzerinde
    `Maven Central Publish` workflow'unu manuel olarak
    `gaRelease=true` ile çalıştır. Workflow, imzalı artifact publish etmeden
@@ -96,7 +95,7 @@ Tag oluştuktan sonra operatör şu komutu çalıştırabilir:
 pwsh ./tools/ci/check-ga-release-readiness.ps1 `
   -Repository esasmer-dou/cache-database `
   -TargetRef main `
-  -ReleaseTag v1.0.0
+  -ReleaseTag v0.1.0
 ```
 
 Bu komut framework-level GA hazırlığını kontrol eder. Release iddiası
@@ -114,9 +113,9 @@ kapıları yeşilse şu komutu çalıştır:
 ```powershell
 gh workflow run maven-central-publish.yml `
   --repo esasmer-dou/cache-database `
-  --ref v1.0.0 `
+  --ref v0.1.0 `
   -f gaRelease=true `
-  -f releaseTag=v1.0.0 `
+  -f releaseTag=v0.1.0 `
   -f targetRef=main `
   -f migrationCoverageCsvPath=docs/ga-migration-coverage.csv
 ```

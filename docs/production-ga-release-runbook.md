@@ -53,7 +53,7 @@ restart/reconnect and provider evidence, not as topology certification.
 
 ## Step-by-Step GA Flow
 
-1. Prepare a stable version such as `1.0.0`. Do not use `beta`, `alpha`,
+1. Prepare a stable version such as `0.1.0` or `1.0.0`. Do not use `beta`, `alpha`,
    `rc`, `preview`, or `SNAPSHOT` in a GA version.
 2. Run the local Docker HA preflight:
 
@@ -68,15 +68,13 @@ restart/reconnect and provider evidence, not as topology certification.
 4. Build the official GitHub Release artifact from the intended commit:
 
    ```powershell
-   pwsh ./tools/release/build-public-beta-package.ps1 `
-     -Version 1.0.0 `
+   pwsh ./tools/release/build-release-package.ps1 `
+     -Version 0.1.0 `
      -PackageLabel github-release
    ```
 
-   Until a generic GA package script replaces it, this script is the official
-   GitHub Release bundle builder. For stable releases, use a non-beta package
-   label such as `github-release`.
-5. Create and push the stable tag, for example `v1.0.0`.
+   For stable releases, use a non-beta package label such as `github-release`.
+5. Create and push the stable tag, for example `v0.1.0`.
 6. If Maven Central is the selected distribution channel, run `Maven Central
    Publish` manually on the stable tag with
    `gaRelease=true`. The workflow runs the GA preflight before deploying signed
@@ -96,7 +94,7 @@ After the tag exists, an operator can run:
 pwsh ./tools/ci/check-ga-release-readiness.ps1 `
   -Repository esasmer-dou/cache-database `
   -TargetRef main `
-  -ReleaseTag v1.0.0
+  -ReleaseTag v0.1.0
 ```
 
 This command checks framework-level GA readiness. Add the optional flags below
@@ -114,9 +112,9 @@ Central is the selected distribution channel:
 ```powershell
 gh workflow run maven-central-publish.yml `
   --repo esasmer-dou/cache-database `
-  --ref v1.0.0 `
+  --ref v0.1.0 `
   -f gaRelease=true `
-  -f releaseTag=v1.0.0 `
+  -f releaseTag=v0.1.0 `
   -f targetRef=main `
   -f migrationCoverageCsvPath=docs/ga-migration-coverage.csv
 ```

@@ -1,0 +1,93 @@
+# Stable Release Launch Kit
+
+English version: [../../docs/stable-release-launch-kit.md](../../docs/stable-release-launch-kit.md)
+
+Bu sayfa, beta olmayan bir CacheDB release'ini GitHub Releases veya seçilen
+başka bir resmi paket kanalı üzerinden yayınlarken kullanılmalıdır.
+
+## GitHub About Alanı
+
+```text
+Redis-first Java data layer with bounded hot sets, projections, compile-time generated APIs, and durable SQL write-behind.
+```
+
+## Önerilen Topic'ler
+
+```text
+java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, spring-boot
+```
+
+## Resmi Dağıtım Kanalı
+
+`v0.1.0` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
+
+```text
+cache-database-0.1.0-github-release.zip
+```
+
+Paket; Maven modül jar'larını, source jar'larını, javadoc dosyalarını, README'yi,
+güvenlik/topluluk dosyalarını, İngilizce dokümanları ve Türkçe dokümanları
+içerir. Bu release için Maven Central zorunlu değildir; çünkü seçilen resmi
+paket dağıtım kanalı GitHub Release'tir.
+
+## Release Konumlandırması
+
+`cache-database v0.1.0`
+
+CacheDB `v0.1.0`, ilk beta olmayan framework release'idir. Core Redis-first
+data-layer modeli, compile-time generated API'ler, sınırlı hot-set policy'leri,
+projection/read-model rehberliği, varsayılan PostgreSQL provider yolu ve
+production evidence kapıları bu release ile stable hatta taşınır.
+
+Bu release, her uygulamanın kendi production trafiğini ek doğrulama olmadan
+CacheDB'ye kesebileceği anlamına gelmez. Cutover öncesinde her uygulama için
+route envanteri, warm-up, side-by-side comparison, Redis bellek bütçesi,
+rollback planı ve ortama özel HA kanıtı gerekir.
+
+MSSQL hâlâ açıkça seçilen beta provider'dır. Canlı SQL Server evidence,
+restart/reconnect kontrolü, outbox/checkpoint desteği ve migration planner
+coverage vardır; ancak SQL Server HA veya Always On topolojileri için henüz GA
+provider iddiası yoktur.
+
+## Release Note Şablonu
+
+```markdown
+## cache-database v0.1.0
+
+Bu release, CacheDB'nin ilk beta olmayan framework release'idir.
+
+### Stable olan alanlar
+
+- Sınırlı hot-set policy'leriyle Redis-first entity repository'leri.
+- Compile-time generated metadata ve ORM benzeri API'ler.
+- Varsayılan kalıcı SQL provider olarak PostgreSQL.
+- İlişki yoğun ve global sıralı route'lar için projection/read-model reçeteleri.
+- Şema keşfi, warm-up, comparison ve rapor üretimi için Migration Planner akışı.
+- Çok pod coordination, leader lease ve lokal Docker HA preflight evidence.
+- Resmi paket dağıtım kanalı olarak GitHub Release asset'i.
+
+### Provider sınırları
+
+- PostgreSQL varsayılan stable provider yoludur.
+- MSSQL açıkça seçilen beta provider olarak kullanılabilir.
+- Maven Central bu release için opsiyoneldir; seçilen resmi dağıtım kanalı GitHub Release'tir.
+
+### Production kullanımı
+
+Bu release'i production odaklı pilotlar ve kontrollü cutover'lar için kullan.
+Ancak her sıcak route için route contract, warm-up evidence, side-by-side
+comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
+```
+
+## Yayın Kontrol Listesi
+
+- `pom.xml` ve tüm modül parent versiyonları stable sürümü kullanıyor.
+- Release note `docs/releases/v0.1.0.md` altında var.
+- `mvn -DskipTests package` geçiyor.
+- Public API compatibility kontrolü geçiyor.
+- Türkçe dokümantasyon kalite kontrolü geçiyor.
+- Lokal Docker HA preflight geçiyor veya son CI evidence yeşil.
+- `Public Beta Readiness` ve `Production Evidence` release commit'i için yeşil.
+- `Production GA Release Readiness`, `v0.1.0` için yeşil.
+- GitHub Release prerelease olarak işaretli değil.
+- GitHub Release asset'i `cache-database-0.1.0-github-release.zip` olarak eklendi.

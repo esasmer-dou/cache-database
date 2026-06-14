@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist before the first public beta and for later releases.
+Use this checklist before every public release.
 
 ## Repository Hygiene
 
@@ -23,7 +23,8 @@ Use this checklist before the first public beta and for later releases.
 
 - move from `-SNAPSHOT` to the intended release version
 - update [../CHANGELOG.md](../CHANGELOG.md)
-- confirm public beta vs GA wording in docs
+- confirm release status wording in docs: stable core, provider-specific limits,
+  and any beta/experimental provider boundaries
 - after the release, reopen `main` to the next `-SNAPSHOT` version with [release-flow.md](release-flow.md)
 
 ## Evidence
@@ -60,4 +61,5 @@ Use this checklist before the first public beta and for later releases.
 - README and Turkish README are current
 - production recipe guidance is current
 - any new tuning knobs are documented
-- public beta limitations are explicit
+- release limitations are explicit and do not overstate provider or topology
+  certification

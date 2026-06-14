@@ -9,8 +9,9 @@ dokümanını oku. Kavramlar, relation/projection farkı ve route contract tanı
 için [Kavramlar ve Kabuller](./kavramlar-ve-kabuller.md) sayfasına bak.
 Property seçmeden önce production ayar mantığını görmek istiyorsan
 [Production Tuning Rehberi](./production-tuning-rehberi.md) ile başla.
-Repo'yu dış kullanıcıya açma hazırlığı için [Açık Beta Hazırlık Durumu](./public-beta-readiness.md)
-ve [Release Checklist](./release-checklist.md) dokümanlarına bak.
+Repo'yu dış kullanıcıya açma hazırlığı için [Production GA Criteria](../../PRODUCTION_GA_CRITERIA.md),
+[Stable Release Launch Kit](./stable-release-launch-kit.md) ve [Release Checklist](./release-checklist.md)
+dokümanlarına bak.
 
 CacheDB'nin temel önceliği değişmez:
 

@@ -2,9 +2,9 @@
 
 English version: [../../docs/database-provider-spi.md](../../docs/database-provider-spi.md)
 
-CacheDB public beta aşamasında PostgreSQL'i varsayılan kalıcı SQL provider
-olarak kullanır. Bunun yanında storage provider tarafında açık bir SPI katmanı
-vardır ve MSSQL açıkça seçilen beta provider olarak desteklenir. Bu yüzden
+CacheDB, PostgreSQL'i varsayılan kalıcı SQL provider olarak kullanır. Bunun
+yanında storage provider tarafında açık bir SPI katmanı vardır ve MSSQL açıkça
+seçilen beta provider olarak desteklenir. Bu yüzden
 MSSQL desteği artık "JDBC URL'yi değiştir, aynı kod çalışır" gibi riskli ve
 yanıltıcı bir yaklaşım üzerinden ilerlemiyor.
 
@@ -73,7 +73,7 @@ uygulamanın sorumluluğundadır.
 <dependency>
   <groupId>com.reactor.cachedb</groupId>
   <artifactId>cachedb-storage-mssql</artifactId>
-  <version>0.1.0-beta.4</version>
+  <version>0.1.0</version>
 </dependency>
 
 <dependency>
@@ -147,7 +147,7 @@ idempotent tutar.
 | Parametre limiti | 65.535 parametre | 2.100 parametre |
 | Geçici tablo | PostgreSQL temp table semantiği | SQL Server `#temp` semantiği, henüz bağlanmadı |
 | Hata sınıflandırma | SQLSTATE odaklı | SQL Server vendor code odaklı |
-| Production durumu | varsayılan public beta provider | açıkça seçilen beta provider, GA değil |
+| Production durumu | varsayılan stable provider yolu | açıkça seçilen beta provider, GA değil |
 
 ## Mevcut MSSQL Kapısı
 

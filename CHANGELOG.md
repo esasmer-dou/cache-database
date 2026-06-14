@@ -2,7 +2,7 @@
 
 All notable changes to `cache-database` will be tracked here.
 
-The format is intentionally simple during public beta.
+The format is intentionally simple and release-focused.
 
 ## Unreleased
 
@@ -17,6 +17,34 @@ The format is intentionally simple during public beta.
 ### Fixed
 
 - _TBD_
+
+## 0.1.0 - 2026-06-14
+
+### Release Status
+
+- first non-beta CacheDB framework release
+- core Redis-first data-layer model and default PostgreSQL provider path are
+  positioned as stable with explicit production boundaries
+- MSSQL remains an explicitly selected beta provider, not a GA provider claim
+
+### Added
+
+- stable release notes at `docs/releases/v0.1.0.md`
+- stable release launch kit in English and Turkish
+- GitHub Release artifact packaging with non-beta `github-release` label
+
+### Changed
+
+- root and module Maven versions moved from `0.1.0-beta.4` to `0.1.0`
+- main onboarding docs now use stable version examples
+- release guidance now treats GitHub Release artifact as the selected official
+  distribution channel for `v0.1.0`
+
+### Notes
+
+- consuming applications still need route inventory, warm-up, side-by-side
+  comparison, Redis memory budget, rollback planning, and environment-specific
+  HA evidence before production cutover
 
 ## 0.1.0-beta.4 - 2026-06-14
 

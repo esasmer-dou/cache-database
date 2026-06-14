@@ -14,7 +14,7 @@ The planner can now run a dry-run or real staging warm execution for the Redis
 working set after it computes the recommended shape. It can also inspect the
 connected source-database schema, generate binding-ready scaffolds, and run a
 side-by-side source database vs CacheDB comparison before cutover.
-For public-beta repo hygiene and release prep, also see [Public Beta Readiness](./public-beta-readiness.md) and [Release Checklist](./release-checklist.md).
+For release prep and production boundaries, also see [Production GA Criteria](../PRODUCTION_GA_CRITERIA.md) and [Release Checklist](./release-checklist.md).
 
 ## Recommended Production Start
 

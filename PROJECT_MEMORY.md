@@ -11,9 +11,10 @@ remaining production gates. It is not release marketing copy.
 - Repository path: `E:\ReactorRepository\cache-database`
 - Remote: `ssh://git@ssh.github.com:443/esasmer-dou/cache-database.git`
 - Main branch status at the time of this note: clean and aligned with `origin/main`
-- Latest release prepared and published: `v0.1.0-beta.4`
-- Latest release asset: `cache-database-0.1.0-beta.4-public-beta.zip`
-- Public positioning: strong public beta, not GA yet
+- Latest release prepared: `v0.1.0`
+- Latest release asset target: `cache-database-0.1.0-github-release.zip`
+- Public positioning: non-beta framework release for CacheDB core and the
+  default PostgreSQL provider path; MSSQL remains an explicit beta provider
 
 ## Product Direction
 
@@ -29,7 +30,7 @@ The design direction is:
 - projection/read-model first for relation-heavy and global sorted screens
 - explicit route contracts for expensive read shapes
 - bounded hot-set memory, not "put the whole database in Redis"
-- production evidence before GA claims
+- production evidence before topology or provider GA claims
 
 The product should not be described as a drop-in ORM that makes every query fast
 automatically. The honest message is: CacheDB works best when hot entities,
@@ -58,15 +59,16 @@ explicitly.
 
 ## Major Work Completed
 
-### Public Beta Hygiene and Release
+### Public Release Hygiene and Release
 
 - Added public repo hygiene files: license, contributing, security, code of
   conduct, support, issue templates, PR templates, and release checklist.
-- Added release packaging scripts and public beta package generation.
+- Added release packaging scripts for public beta and stable GitHub Release
+  package generation.
 - Published `v0.1.0-beta.1`, `v0.1.0-beta.2`, `v0.1.0-beta.3`, and
   `v0.1.0-beta.4` release
   notes over the project lifecycle.
-- Current release is `0.1.0-beta.4`.
+- Prepared `v0.1.0` as the first non-beta framework release.
 
 ### Documentation
 
@@ -197,7 +199,8 @@ explicitly.
   - stale external event guard based on Redis version/tombstone version
 - Public API compatibility decision:
   - the new `ExternalChangeApply*` and `ExternalChangeHydrationRepository`
-    types are an intentional public beta API expansion
+    types were introduced during the prerelease line and are now part of the
+    `0.1.0` public API baseline
   - the baseline in `tools/ci/public-api-baseline.txt` must include these
     signatures
   - this is not a breaking change for existing users
@@ -216,10 +219,16 @@ explicitly.
 - Hardened benchmark gates so structural materialization checks are authoritative
   and flaky "fastest microbenchmark" noise does not block incorrectly.
 
-## Latest Release: 0.1.0-beta.4
+## Latest Release Target: 0.1.0
 
 Key additions:
 
+- first non-beta framework release for CacheDB core and the default PostgreSQL
+  provider path
+- stable release notes at `docs/releases/v0.1.0.md`
+- stable release launch kit in English and Turkish
+- official GitHub Release artifact target:
+  `cache-database-0.1.0-github-release.zip`
 - explicit storage-provider SPI with shared JDBC support
 - `cachedb-storage-mssql` beta provider with write-behind, outbox, dialect, and
   failure-classifier support
@@ -228,8 +237,8 @@ Key additions:
   restart/reconnect behavior
 - provider-aware English and Turkish documentation across README, onboarding,
   recipes, use cases, tuning, and provider SPI docs
-- release package now includes `cachedb-storage-jdbc` and
-  `cachedb-storage-mssql` artifacts
+- release package now includes exact-version `0.1.0` artifacts for
+  `cachedb-storage-jdbc` and `cachedb-storage-mssql`
 - GitHub Actions now use Node 24-compatible action versions:
   `actions/checkout@v6.0.3`, `actions/setup-java@v5.2.0`, and
   `actions/upload-artifact@v7.0.1`
@@ -237,6 +246,8 @@ Key additions:
 Key fixes:
 
 - root Maven metadata no longer describes the project as PostgreSQL-backed only
+- stable package no longer includes stale beta jars when the release version is
+  a prefix of an older prerelease version
 - public beta package no longer omits JDBC/MSSQL storage modules
 - Javadoc generation now uses source-file includes so jars contain real API
   documentation even though source folders do not mirror package names
@@ -245,7 +256,7 @@ Key fixes:
 Upgrade note:
 
 - Maven coordinates remain under `com.reactor.cachedb`
-- Use version `0.1.0-beta.4`
+- Use version `0.1.0`
 - If the source database can be changed outside CacheDB, configure outbox/CDC
   before relying on Redis hot-set freshness
 - Use `ExternalChangeApplyRunner` in `CACHE_ONLY` mode for database-originated
@@ -257,25 +268,25 @@ Upgrade note:
 
 ## Current Release Confidence State
 
-- GitHub `Production Evidence` and `Public Beta Readiness` workflows were green
-  on `main` before the MSSQL HA-evidence hardening work.
+- Local validation for `0.1.0` passed: Maven package, release package,
+  Turkish docs quality, public beta readiness validation, public API
+  compatibility, `git diff --check`, and local Docker HA preflight.
 - MSSQL provider evidence now includes live SQL Server load/replay,
   checkpoint-locking, multi-pod apply-runner, and container restart/reconnect
   checks. Remote CI must be rechecked after every related commit.
-- GitHub release `v0.1.0-beta.4` exists with the public beta package asset.
-- Maven Central publishing is not complete. `gh secret list` returned no
-  repository secrets in this environment, so Central credentials and GPG signing
-  must still be configured before a signed Central publish can succeed.
-- Staging Redis HA evidence is not complete until staging Redis/source-database
-  secrets are configured and an operator-triggered failover window is executed.
-- Staging MSSQL HA evidence is not complete until staging SQL Server secrets are
-  configured and an operator-triggered managed SQL Server or Always On failover
-  window is executed.
+- GitHub Release is the selected official distribution channel for `v0.1.0`.
+- Maven Central publishing is optional for this release. It remains the BEST
+  future Java ecosystem distribution channel, but it is not a GA blocker while
+  GitHub Release is the selected official package distribution.
+- Managed staging Redis HA evidence is a consuming-application cutover or
+  topology-certification gate, not a generic framework release gate.
+- Managed staging MSSQL HA or Always On evidence is still required before
+  promoting MSSQL beyond explicit beta provider status.
 
 ## Provider SPI / MSSQL State
 
-- Current public beta remains PostgreSQL-default, with MSSQL as an explicit
-  beta provider.
+- Current non-beta framework release keeps PostgreSQL as the default stable
+  provider path, with MSSQL as an explicit beta provider.
 - MSSQL must not be added by changing only the JDBC URL.
 - The first provider SPI layer now exists:
   - `cachedb-storage-jdbc` contains shared JDBC dialect and write-behind helpers.
@@ -350,7 +361,7 @@ pwsh tools\ci\check-public-api-compatibility.ps1
 pwsh tools\ci\check-tr-docs.ps1
 git diff --check
 mvn.cmd -q -DskipTests package
-pwsh tools\release\build-public-beta-package.ps1 -Version 0.1.0-beta.4
+pwsh tools\release\build-release-package.ps1 -Version 0.1.0 -PackageLabel github-release
 ```
 
 Known caveat:
@@ -380,9 +391,11 @@ production secrets.
 
 BEST:
 
-- Public beta for controlled pilots.
-- Production pilot only when route coverage, Redis HA, admin exposure, rollback,
-  and side-by-side comparison are validated for that application.
+- Stable framework release for CacheDB core and the default PostgreSQL provider
+  path.
+- Production cutover only when route coverage, Redis HA/topology evidence,
+  admin exposure, rollback, and side-by-side comparison are validated for that
+  application.
 
 ACCEPTABLE:
 
@@ -392,8 +405,10 @@ ACCEPTABLE:
 
 ANTI-PATTERN:
 
-- Announce GA without signed Maven Central release, staging Redis HA evidence,
-  route coverage, and benchmark regression gates.
+- Claim MSSQL GA or managed topology certification without real staging
+  failover evidence.
+- Treat Maven Central as mandatory when GitHub Release is the selected official
+  package distribution channel.
 - Treat CacheDB as a magical ORM replacement that automatically optimizes every
   existing dynamic query.
 - Let projection-required routes fall back to full entity scans in production.
@@ -401,15 +416,20 @@ ANTI-PATTERN:
 - Depend on Redis freshness while the source database is mutated by external
   systems without outbox/CDC.
 
-## GA Gates Still Open
+## Gates Still Open After v0.1.0
 
-The main remaining blockers for production GA are:
+The main remaining gates are:
 
-- verify remote GitHub Actions for `v0.1.0-beta.4`
-- signed Maven Central publish pipeline
-- real staging Redis HA/failover validation
+- verify remote GitHub Actions for the `v0.1.0` release commit and tag
+- publish the non-prerelease GitHub Release with
+  `cache-database-0.1.0-github-release.zip`
+- signed Maven Central publish pipeline if Maven Central is later selected as
+  an official distribution channel
+- real staging Redis HA/failover validation for applications that claim managed
+  Redis topology readiness
 - real staging SQL Server HA or Always On failover validation before MSSQL GA
-- full migration route coverage report for every screen/API/batch/report
+- full migration route coverage report for every screen/API/batch/report in a
+  consuming application cutover
 - outbox apply runner retry and dead-letter visibility hardening
 - stricter production fail-fast behavior for projection-required routes
 - broader side-by-side comparison evidence across real schemas
@@ -427,15 +447,18 @@ Do not start another feature before closing the release confidence loop.
 
 Recommended order:
 
-1. Check remote GitHub Actions for `main` and `v0.1.0-beta.4`.
+1. Check remote GitHub Actions for `main` and `v0.1.0`.
 2. Fix any CI failures until production evidence is green remotely.
-3. Complete signed Maven Central publishing.
-4. Run staging Redis HA/failover evidence against real infrastructure.
-5. Run staging SQL Server HA or Always On evidence before promoting MSSQL beyond
+3. Publish the non-prerelease GitHub Release and attach the official artifact.
+4. Complete signed Maven Central publishing only if Central becomes the selected
+   official distribution channel.
+5. Run staging Redis HA/failover evidence against real infrastructure for
+   consuming-application cutover claims.
+6. Run staging SQL Server HA or Always On evidence before promoting MSSQL beyond
    explicit beta.
-6. Add Migration Planner full coverage report enforcement for a real migration
+7. Add Migration Planner full coverage report enforcement for a real migration
    inventory.
-7. Harden outbox apply runner retry and dead-letter visibility.
+8. Harden outbox apply runner retry and dead-letter visibility.
 
 ## Files Future Sessions Should Inspect First
 
@@ -443,7 +466,8 @@ Recommended order:
 - `tr/README.md`
 - `CHANGELOG.md`
 - `PRODUCTION_GA_CRITERIA.md`
-- `docs/releases/v0.1.0-beta.4.md`
+- `docs/releases/v0.1.0.md`
+- `docs/stable-release-launch-kit.md`
 - `docs/production-recipes.md`
 - `docs/use-case-examples.md`
 - `docs/production-test-report.md`

@@ -19,9 +19,11 @@ CacheDB şu iddiayla konumlanır:
 - çalışma zamanı reflection'ı yerine derleme zamanında üretilen metadata
   kullanılmalıdır
 
-Kısa karar: CacheDB bugün güçlü bir açık beta seviyesindedir. Kontrollü pilot,
-staging karşılaştırması ve route bazlı cutover için uygundur; hâlâ koşulsuz GA
-olarak duyurulmamalıdır.
+Kısa karar: CacheDB core ve varsayılan PostgreSQL provider yolu, açık production
+sınırlarıyla stable framework release seviyesine taşınmıştır. Buna rağmen her
+sıcak route için staging warm-up, side-by-side comparison, route contract, Redis
+bellek limiti ve rollback planı kanıtlanmadan production cutover yapılmamalıdır.
+MSSQL hâlâ açıkça seçilen beta provider olarak ele alınmalıdır.
 
 ## İlk Bakışta Ne İşe Yarar?
 
@@ -77,7 +79,7 @@ otomatik hızlandırmasını beklemek.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.4</cachedb.version>
+    <cachedb.version>0.1.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -385,7 +387,7 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
 - [Production Testleri](cachedb-production-tests/README.md)
 - [Örnekler](cachedb-examples/README.md)
 - [Mimari](docs/architecture.md)
-- [Açık Beta Hazırlık Durumu](docs/public-beta-readiness.md)
+- [Production GA Criteria](../PRODUCTION_GA_CRITERIA.md)
 - [Release Checklist](docs/release-checklist.md)
 
 ## Topluluk ve Proje Dosyaları

@@ -36,7 +36,7 @@ production tuning should be approached.
 | How do I keep Redis fresh when the source database changes outside CacheDB? | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
 | Can CacheDB support MSSQL or another SQL database? | [Database Provider SPI Direction](docs/database-provider-spi.md) |
 | What must be proven before production? | [Production Test Report](docs/production-test-report.md) |
-| Public beta or GA? | [Public Beta Readiness](docs/public-beta-readiness.md) and [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) |
+| Stable release or provider-specific beta? | [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) and [Stable Release Launch Kit](docs/stable-release-launch-kit.md) |
 | How do I decide whether a GA release can ship? | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 | How do I cut a release? | [Release Flow](docs/release-flow.md) |
 | What is missing for Maven Central? | [Maven Central Publish Checklist](docs/maven-central-publish-checklist.md) |
@@ -109,7 +109,8 @@ with evidence.
 | [Production Test Report](docs/production-test-report.md) | Test evidence, smoke results, benchmark, certification lane |
 | [Production Readiness Report](docs/production-readiness-report.md) | Current production maturity assessment |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
-| [Public Beta Launch Kit](docs/public-beta-launch-kit.md) | GitHub description, release message, public beta positioning |
+| [Stable Release Launch Kit](docs/stable-release-launch-kit.md) | GitHub description, release message, stable release positioning |
+| [Public Beta Launch Kit](docs/public-beta-launch-kit.md) | Historical public beta release positioning |
 | [Release Checklist](docs/release-checklist.md) | Release readiness checklist |
 
 ## Documentation Quality Rule

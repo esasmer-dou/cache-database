@@ -10,6 +10,7 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $releaseRoot = Join-Path $repoRoot "target\releases"
 $stagingRoot = Join-Path $releaseRoot "cache-database-$Version"
+$isBetaPackage = $PackageLabel -match '(?i)beta'
 
 if ($PackageLabel -notmatch '^[A-Za-z0-9_.-]+$') {
     throw "PackageLabel may only contain letters, numbers, dot, underscore, and dash."
@@ -59,12 +60,11 @@ $docFiles = @(
     "docs\migration-planner.md",
     "docs\production-recipes.md",
     "docs\orm-alternative.md",
-    "docs\public-beta-readiness.md",
     "docs\production-ga-release-runbook.md",
     "docs\release-checklist.md",
-    "docs\public-beta-launch-kit.md",
     "docs\maven-central-publish-checklist.md",
     "docs\releases\v$Version.md",
+    "PRODUCTION_GA_CRITERIA.md",
     "tr\README.md",
     "tr\DOKUMAN_HARITASI.md",
     "tr\docs\getting-started.md",
@@ -73,9 +73,22 @@ $docFiles = @(
     "tr\docs\migration-planner.md",
     "tr\docs\production-recipes.md",
     "tr\docs\production-ga-release-runbook.md",
-    "tr\docs\release-checklist.md",
-    "tr\docs\public-beta-launch-kit.md"
+    "tr\docs\release-checklist.md"
 )
+
+if ($isBetaPackage) {
+    $docFiles += @(
+        "docs\public-beta-readiness.md",
+        "tr\docs\public-beta-readiness.md",
+        "docs\public-beta-launch-kit.md",
+        "tr\docs\public-beta-launch-kit.md"
+    )
+} else {
+    $docFiles += @(
+        "docs\stable-release-launch-kit.md",
+        "tr\docs\stable-release-launch-kit.md"
+    )
+}
 
 foreach ($file in $docFiles) {
     $source = Join-Path $repoRoot $file
@@ -106,8 +119,9 @@ foreach ($module in $artifactModules) {
     $moduleTarget = Join-Path $repoRoot "$module\target"
     $moduleDest = Join-Path $artifactsDest $module
     New-Item -ItemType Directory -Path $moduleDest -Force | Out-Null
+    $versionPattern = "^$([regex]::Escape($module))-$([regex]::Escape($Version))(-sources|-javadoc)?\.jar$"
     Get-ChildItem -Path $moduleTarget -File -Filter "*.jar" |
-        Where-Object { $_.Name -like "*$Version*" } |
+        Where-Object { $_.Name -match $versionPattern } |
         Copy-Item -Destination $moduleDest
 }
 
