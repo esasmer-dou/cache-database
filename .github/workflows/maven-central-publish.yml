@@ -76,6 +76,7 @@ jobs:
             -ReleaseTag $releaseTag `
             -CoverageCsvPath "${{ inputs.migrationCoverageCsvPath }}" `
             -SummaryPath ./target/ga-release-readiness-summary.md `
+            -RequireMavenCentralPublish `
             -SkipMavenCentralPublishCheck
 
       - name: Publish GA preflight summary

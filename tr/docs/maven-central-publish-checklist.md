@@ -1,6 +1,8 @@
 # Maven Central Publish Checklist
 
-İlk Maven Central publication öncesinde bu kontrol listesi kullanılmalıdır.
+Maven Central resmi dağıtım kanalı olarak seçildiyse bu kontrol listesi
+kullanılmalıdır. Maven Central tek seçenek değildir; ancak public Java tüketimi
+için BEST varsayılan kanaldır.
 
 ## Coordinates ve Metadata
 
@@ -31,15 +33,21 @@
 - release commit'te `-SNAPSHOT` kaldırıldı
 - [../../CHANGELOG.md](../../CHANGELOG.md) güncellendi
 - docs ve release note içindeki beta/GA metinleri gözden geçirildi
+- Maven Central resmi dağıtım kanalı olarak açıkça seçildi
 
 ## Kanıt
 
 - production evidence workflow yeşil
 - coordination evidence workflow yeşil
-- GA hedefleniyorsa staging Redis HA workflow yeşil
-- GA iddiasına MSSQL dahilse staging MSSQL HA workflow yeşil
-- GA hedefleniyorsa tam migration akış kapsamı doğrulaması yeşil
-- GitHub release yayınlanmadan önce `Production GA Release Readiness` yeşil
+- framework GA hedefleniyorsa lokal Docker veya CI outage/restart evidence yeşil
+- release iddiası managed Redis topology evidence içeriyorsa staging Redis HA
+  workflow yeşil
+- release iddiası managed SQL Server HA veya Always On evidence içeriyorsa
+  staging MSSQL HA workflow yeşil
+- production cutover yapacak uygulama için tam migration route coverage
+  doğrulaması yeşil
+- GitHub release yayınlanmadan önce seçilen opsiyonel kapılarla
+  `Production GA Release Readiness` yeşil
 - public-beta readiness workflow yeşil
 - performans hassas değişiklikler için güncel benchmark kanıtı mevcut
 

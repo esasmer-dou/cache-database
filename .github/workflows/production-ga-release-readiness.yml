@@ -15,6 +15,18 @@ on:
         description: Committed CSV path for full production route coverage
         required: true
         default: docs/ga-migration-coverage.csv
+      requireManagedStagingHa:
+        description: Require managed Redis and MSSQL staging HA workflow evidence
+        required: true
+        default: "false"
+      requireApplicationMigrationCoverage:
+        description: Require a full consuming-application migration coverage CSV
+        required: true
+        default: "false"
+      requireMavenCentralPublish:
+        description: Require a successful Maven Central Publish workflow for the tag
+        required: true
+        default: "false"
   release:
     types:
       - published
@@ -46,6 +58,9 @@ jobs:
             "releaseTag=${{ inputs.releaseTag }}" >> $env:GITHUB_OUTPUT
             "targetRef=${{ inputs.targetRef }}" >> $env:GITHUB_OUTPUT
             "coverageCsv=${{ inputs.migrationCoverageCsvPath }}" >> $env:GITHUB_OUTPUT
+            "requireManagedStagingHa=${{ inputs.requireManagedStagingHa }}" >> $env:GITHUB_OUTPUT
+            "requireApplicationMigrationCoverage=${{ inputs.requireApplicationMigrationCoverage }}" >> $env:GITHUB_OUTPUT
+            "requireMavenCentralPublish=${{ inputs.requireMavenCentralPublish }}" >> $env:GITHUB_OUTPUT
           }
 
       - name: Checkout
@@ -69,13 +84,24 @@ jobs:
           STAGING_MSSQL_URL: ${{ secrets.STAGING_MSSQL_URL }}
           STAGING_MSSQL_USER: ${{ secrets.STAGING_MSSQL_USER }}
           STAGING_MSSQL_PASSWORD: ${{ secrets.STAGING_MSSQL_PASSWORD }}
-        run: >
-          ./tools/ci/check-ga-release-readiness.ps1
-          -Repository "${{ github.repository }}"
-          -TargetRef "${{ steps.inputs.outputs.targetRef }}"
-          -ReleaseTag "${{ steps.inputs.outputs.releaseTag }}"
-          -CoverageCsvPath "${{ steps.inputs.outputs.coverageCsv }}"
-          -SummaryPath ./target/ga-release-readiness-summary.md
+        run: |
+          $arguments = @(
+            "-Repository", "${{ github.repository }}",
+            "-TargetRef", "${{ steps.inputs.outputs.targetRef }}",
+            "-ReleaseTag", "${{ steps.inputs.outputs.releaseTag }}",
+            "-CoverageCsvPath", "${{ steps.inputs.outputs.coverageCsv }}",
+            "-SummaryPath", "./target/ga-release-readiness-summary.md"
+          )
+          if ("${{ steps.inputs.outputs.requireManagedStagingHa }}" -eq "true") {
+            $arguments += "-RequireManagedStagingHa"
+          }
+          if ("${{ steps.inputs.outputs.requireApplicationMigrationCoverage }}" -eq "true") {
+            $arguments += "-RequireApplicationMigrationCoverage"
+          }
+          if ("${{ steps.inputs.outputs.requireMavenCentralPublish }}" -eq "true") {
+            $arguments += "-RequireMavenCentralPublish"
+          }
+          ./tools/ci/check-ga-release-readiness.ps1 @arguments
 
       - name: Publish readiness summary
         if: always()

@@ -1,6 +1,8 @@
 # Maven Central Publish Checklist
 
-Use this checklist before the first Maven Central publication.
+Use this checklist when Maven Central is the selected distribution channel.
+Maven Central is not the only possible channel, but it is the BEST default for
+public Java consumption.
 
 ## Coordinates and Metadata
 
@@ -31,15 +33,21 @@ Use this checklist before the first Maven Central publication.
 - `-SNAPSHOT` removed for the release commit
 - [../CHANGELOG.md](../CHANGELOG.md) updated
 - beta vs GA wording verified in docs and release notes
+- Maven Central is explicitly selected as the official distribution channel
 
 ## Evidence
 
 - production evidence workflow green
 - coordination evidence workflow green
-- staging Redis HA workflow green when targeting GA
-- staging MSSQL HA workflow green when MSSQL is included in the GA claim
-- full migration route coverage validation green when targeting GA
-- `Production GA Release Readiness` green before publishing the GitHub release
+- local Docker or CI outage/restart evidence green when targeting framework GA
+- staging Redis HA workflow green only when the release claim includes managed
+  Redis topology evidence
+- staging MSSQL HA workflow green only when the release claim includes managed
+  SQL Server HA or Always On evidence
+- full migration route coverage validation green only for a consuming
+  application's production cutover
+- `Production GA Release Readiness` green with the selected optional gates
+  before publishing the GitHub release
 - public-beta readiness workflow green
 - any recent performance-sensitive change has fresh benchmark evidence
 

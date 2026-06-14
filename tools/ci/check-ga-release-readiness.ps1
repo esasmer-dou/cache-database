@@ -6,6 +6,9 @@ param(
     [string]$CoverageCsvPath = "docs/ga-migration-coverage.csv",
     [string]$SummaryPath = "target/ga-release-readiness-summary.md",
     [switch]$CheckGitHubSecrets,
+    [switch]$RequireManagedStagingHa,
+    [switch]$RequireApplicationMigrationCoverage,
+    [switch]$RequireMavenCentralPublish,
     [switch]$SkipRemoteWorkflowChecks,
     [switch]$SkipSecretChecks,
     [switch]$SkipMavenCentralPublishCheck
@@ -188,22 +191,28 @@ Invoke-ReadinessCheck -Name "No public codex branches" -Check {
 }
 
 if ($SkipSecretChecks) {
-    Add-Check -Name "Required GA secrets" -Status "SKIP" -Details "Skipped by caller."
+    Add-Check -Name "External GA secrets" -Status "SKIP" -Details "Skipped by caller."
 } else {
-    Invoke-ReadinessCheck -Name "Required GA secrets" -Check {
-        $requiredSecrets = @(
-            "CENTRAL_USERNAME",
-            "CENTRAL_PASSWORD",
-            "GPG_PRIVATE_KEY",
-            "GPG_PASSPHRASE",
-            "STAGING_REDIS_URI",
-            "STAGING_POSTGRES_URL",
-            "STAGING_POSTGRES_USER",
-            "STAGING_POSTGRES_PASSWORD",
-            "STAGING_MSSQL_URL",
-            "STAGING_MSSQL_USER",
-            "STAGING_MSSQL_PASSWORD"
-        )
+    Invoke-ReadinessCheck -Name "External GA secrets" -Check {
+        $requiredSecrets = New-Object System.Collections.Generic.List[string]
+        if ($RequireMavenCentralPublish) {
+            $requiredSecrets.Add("CENTRAL_USERNAME")
+            $requiredSecrets.Add("CENTRAL_PASSWORD")
+            $requiredSecrets.Add("GPG_PRIVATE_KEY")
+            $requiredSecrets.Add("GPG_PASSPHRASE")
+        }
+        if ($RequireManagedStagingHa) {
+            $requiredSecrets.Add("STAGING_REDIS_URI")
+            $requiredSecrets.Add("STAGING_POSTGRES_URL")
+            $requiredSecrets.Add("STAGING_POSTGRES_USER")
+            $requiredSecrets.Add("STAGING_POSTGRES_PASSWORD")
+            $requiredSecrets.Add("STAGING_MSSQL_URL")
+            $requiredSecrets.Add("STAGING_MSSQL_USER")
+            $requiredSecrets.Add("STAGING_MSSQL_PASSWORD")
+        }
+        if ($requiredSecrets.Count -eq 0) {
+            return "No external secret gate requested. Maven Central and managed staging HA are optional library-release gates unless explicitly required."
+        }
 
         if ($CheckGitHubSecrets) {
             $json = (Invoke-Native -Command "gh" -Arguments @("secret", "list", "--repo", $Repository, "--json", "name")) -join [Environment]::NewLine
@@ -226,22 +235,44 @@ if ($SkipSecretChecks) {
     }
 }
 
-Invoke-ReadinessCheck -Name "Full migration coverage CSV" -Check {
-    $coverageFullPath = if ([System.IO.Path]::IsPathRooted($CoverageCsvPath)) {
-        $CoverageCsvPath
-    } else {
-        Join-Path $repoRoot $CoverageCsvPath
+if ($RequireApplicationMigrationCoverage) {
+    Invoke-ReadinessCheck -Name "Application migration coverage CSV" -Check {
+        $coverageFullPath = if ([System.IO.Path]::IsPathRooted($CoverageCsvPath)) {
+            $CoverageCsvPath
+        } else {
+            Join-Path $repoRoot $CoverageCsvPath
+        }
+        if (-not (Test-Path $coverageFullPath)) {
+            throw "Migration coverage CSV not found: $coverageFullPath"
+        }
+        $validatorPath = Join-Path $repoRoot "tools/ci/validate-migration-coverage-report.ps1"
+        Invoke-Native -Command "pwsh" -Arguments @(
+            $validatorPath,
+            "-CoverageCsvPath", $CoverageCsvPath,
+            "-SummaryPath", "target/migration-coverage-summary.md"
+        ) | Out-Null
+        "Coverage file '$CoverageCsvPath' passed schema and cutover checks."
     }
-    if (-not (Test-Path $coverageFullPath)) {
-        throw "Migration coverage CSV not found: $coverageFullPath"
+} else {
+    Invoke-ReadinessCheck -Name "Migration coverage tooling" -Check {
+        $templatePath = Join-Path $repoRoot "docs/ga-migration-coverage-template.csv"
+        $validatorPath = Join-Path $repoRoot "tools/ci/validate-migration-coverage-report.ps1"
+        if (-not (Test-Path $templatePath)) {
+            throw "Migration coverage template is missing: $templatePath"
+        }
+        if (-not (Test-Path $validatorPath)) {
+            throw "Migration coverage validator is missing: $validatorPath"
+        }
+        "Template and validator are present. Full route coverage is a consuming-application cutover gate, not a generic library GA gate."
     }
-    $validatorPath = Join-Path $repoRoot "tools/ci/validate-migration-coverage-report.ps1"
-    Invoke-Native -Command "pwsh" -Arguments @(
-        $validatorPath,
-        "-CoverageCsvPath", $CoverageCsvPath,
-        "-SummaryPath", "target/migration-coverage-summary.md"
-    ) | Out-Null
-    "Coverage file '$CoverageCsvPath' passed schema and cutover checks."
+}
+
+Invoke-ReadinessCheck -Name "Local Docker HA preflight tooling" -Check {
+    $preflightPath = Join-Path $repoRoot "tools/ci/run-local-docker-ha-preflight.ps1"
+    if (-not (Test-Path $preflightPath)) {
+        throw "Local Docker HA preflight script is missing: $preflightPath"
+    }
+    "Docker Desktop preflight tooling is present for Redis outage/recovery and MSSQL restart/reconnect evidence."
 }
 
 if ($SkipRemoteWorkflowChecks) {
@@ -259,12 +290,18 @@ if ($SkipRemoteWorkflowChecks) {
         "Run $($run.databaseId): $($run.url)"
     }
 
-    Invoke-ReadinessCheck -Name "Production GA Staging Evidence workflow" -Check {
-        $run = Get-LatestSuccessfulRun -WorkflowName "Production GA Staging Evidence" -HeadBranch $targetRefValue -HeadSha $targetSha
-        "Run $($run.databaseId): $($run.url)"
+    if ($RequireManagedStagingHa) {
+        Invoke-ReadinessCheck -Name "Production GA Staging Evidence workflow" -Check {
+            $run = Get-LatestSuccessfulRun -WorkflowName "Production GA Staging Evidence" -HeadBranch $targetRefValue -HeadSha $targetSha
+            "Run $($run.databaseId): $($run.url)"
+        }
+    } else {
+        Add-Check -Name "Production GA Staging Evidence workflow" -Status "SKIP" -Details "Managed Redis/SQL HA evidence was not requested. It remains required for a consuming application's own production cutover or managed HA support claim."
     }
 
-    if ($SkipMavenCentralPublishCheck) {
+    if (-not $RequireMavenCentralPublish) {
+        Add-Check -Name "Maven Central Publish workflow" -Status "SKIP" -Details "Maven Central publish was not requested. Use this when the official distribution channel is GitHub Release or GitHub Packages."
+    } elseif ($SkipMavenCentralPublishCheck) {
         Add-Check -Name "Maven Central Publish workflow" -Status "SKIP" -Details "Skipped by caller before the publish job."
     } else {
         Invoke-ReadinessCheck -Name "Maven Central Publish workflow" -Check {

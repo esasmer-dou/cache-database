@@ -30,8 +30,11 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 
 - production evidence workflow yeşil
 - coordination evidence workflow yeşil
-- hedef Redis/kaynak veritabanı topolojisi için staging Redis HA workflow yeşil
-- tam migration akış kapsamı CSV olarak commit edildi ve doğrulama geçti
+- framework GA için lokal Docker veya CI outage/restart evidence yeşil
+- release iddiası managed Redis topolojisini kapsıyorsa staging Redis HA
+  workflow yeşil
+- tam migration route coverage, generic framework release için değil,
+  production cutover yapacak uygulama için zorunlu
 - runtime hotspot değişiklikleri için güncel benchmark veya smoke kanıtı var
 
 ## Publishing
@@ -40,7 +43,8 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 - Linux release package yolunun geçtiğini doğrula; yalnızca geliştirici makinesindeki build yeterli değildir
 - seçilen release kanalı için signing config ve secret'ları doğrula
 - hedef release workflow ve credential'ları doğrula
-- GA duyurusu öncesinde signed publish sonucunun başarılı olduğunu doğrula
+- Maven Central resmi dağıtım kanalı olarak seçildiyse GA duyurusu öncesinde
+  signed publish sonucunun başarılı olduğunu doğrula
 
 ## GitHub / Repo Ayarları
 

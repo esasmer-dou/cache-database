@@ -30,8 +30,11 @@ Use this checklist before the first public beta and for later releases.
 
 - production evidence workflow is green
 - coordination evidence workflow is green
-- staging Redis HA workflow is green for the target Redis/source-database topology
-- full migration route coverage CSV is committed and passes validation
+- local Docker or CI outage/restart evidence is green for framework GA
+- staging Redis HA workflow is green only when the release claim includes a
+  managed Redis topology
+- full migration route coverage CSV is required for consuming-application
+  cutover, not for the generic framework release
 - any new runtime hotspot changes have fresh benchmark or smoke evidence
 
 ## Publishing
@@ -40,7 +43,8 @@ Use this checklist before the first public beta and for later releases.
 - verify the Linux release package path passes, not only the local developer machine
 - confirm signing configuration and secrets for the chosen release channel
 - confirm the target release workflow and credentials
-- confirm signed publish succeeds before any GA announcement
+- confirm signed publish succeeds before a GA announcement only when Maven
+  Central is the selected distribution channel
 
 ## GitHub / Repo Settings
 
