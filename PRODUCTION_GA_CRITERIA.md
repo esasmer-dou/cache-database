@@ -16,6 +16,7 @@ durable SQL volume.
 | Migration coverage | Every production screen, API, batch, worker, and report route must have an explicit CacheDB shape, warm decision, comparison result, owner, cutover state, and rollback plan. | `Production GA Staging Evidence / migration-coverage` validates `docs/ga-migration-coverage.csv` or the supplied CSV path. |
 | Public API compatibility | Public API signatures must be compared against the committed baseline. | `tools/ci/check-public-api-compatibility.ps1` passes. |
 | Maven Central release | Release artifacts must be source/javadoc attached and signed before publication. | `Maven Central Publish` workflow succeeds with Central and GPG secrets. |
+| GA release readiness | Stable release tag, full coverage, required secrets, staging evidence, production evidence, and signed publish must be checked together. | `Production GA Release Readiness` workflow succeeds for the release tag. |
 | Benchmark regressions | Benchmark JSON reports must be checked by a CI threshold gate, not only uploaded as artifacts. | `tools/ci/check-benchmark-thresholds.ps1` passes in `Production Evidence`. |
 | Relation-heavy reads | Summary-first, preview/detail, and projection-first recipes must remain faster and lower-materialization than full aggregate first-paint. | Relation read-shape benchmark and migration side-by-side reports pass. |
 | Global sorted/range reads | Ranked projection top-window path must remain cheaper than wide candidate scan. | Ranked projection benchmark passes. |
@@ -56,3 +57,7 @@ signed and reproducible.
 - Before GA, commit a full route coverage CSV using
   [docs/ga-migration-coverage-template.csv](docs/ga-migration-coverage-template.csv)
   as the schema and make the coverage workflow pass.
+- Before GA, run
+  [docs/production-ga-release-runbook.md](docs/production-ga-release-runbook.md)
+  and do not publish or announce the release unless `Production GA Release
+  Readiness` is green for the stable tag.

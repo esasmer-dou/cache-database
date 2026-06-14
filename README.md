@@ -48,6 +48,7 @@ announced as unconditional GA yet.
 | "How do I migrate an existing SQL database system?" | [Migration Planner](docs/migration-planner.md) |
 | "What must be proven before production?" | [Production Recipes](docs/production-recipes.md) |
 | "What is still missing for GA?" | [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) |
+| "How do I decide whether a GA release can ship?" | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 
 ## Choose Your Starting Path
 

@@ -52,6 +52,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "Mevcut SQL veritabanı sistemimi nasıl taşırım?" | [Geçiş Planlayıcı](docs/migration-planner.md) |
 | "Production'a çıkmadan önce ne kanıtlamalıyım?" | [Production Reçeteleri](docs/production-recipes.md) |
 | "GA için hâlâ eksik olan kapılar neler?" | [Production GA Criteria](../PRODUCTION_GA_CRITERIA.md) |
+| "GA release çıkabilir mi, nasıl karar verilir?" | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 
 ## Doğru Başlangıç Yolunu Seç
 

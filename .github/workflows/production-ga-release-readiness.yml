@@ -1,0 +1,95 @@
+name: Production GA Release Readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      releaseTag:
+        description: Stable GA tag to verify, for example v1.0.0
+        required: true
+        default: v1.0.0
+      targetRef:
+        description: Branch or ref that must have green production evidence
+        required: true
+        default: main
+      migrationCoverageCsvPath:
+        description: Committed CSV path for full production route coverage
+        required: true
+        default: docs/ga-migration-coverage.csv
+  release:
+    types:
+      - published
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  ga-release-readiness:
+    if: ${{ github.event_name != 'release' || github.event.release.prerelease == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Resolve readiness inputs
+        id: inputs
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "release") {
+            "releaseTag=${{ github.event.release.tag_name }}" >> $env:GITHUB_OUTPUT
+            if ([string]::IsNullOrWhiteSpace("${{ github.event.release.target_commitish }}")) {
+              "targetRef=main" >> $env:GITHUB_OUTPUT
+            } else {
+              "targetRef=${{ github.event.release.target_commitish }}" >> $env:GITHUB_OUTPUT
+            }
+            "coverageCsv=docs/ga-migration-coverage.csv" >> $env:GITHUB_OUTPUT
+          } else {
+            "releaseTag=${{ inputs.releaseTag }}" >> $env:GITHUB_OUTPUT
+            "targetRef=${{ inputs.targetRef }}" >> $env:GITHUB_OUTPUT
+            "coverageCsv=${{ inputs.migrationCoverageCsvPath }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+        with:
+          ref: ${{ steps.inputs.outputs.releaseTag }}
+          fetch-depth: 0
+
+      - name: Run production GA release readiness gate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          STAGING_REDIS_URI: ${{ secrets.STAGING_REDIS_URI }}
+          STAGING_POSTGRES_URL: ${{ secrets.STAGING_POSTGRES_URL }}
+          STAGING_POSTGRES_USER: ${{ secrets.STAGING_POSTGRES_USER }}
+          STAGING_POSTGRES_PASSWORD: ${{ secrets.STAGING_POSTGRES_PASSWORD }}
+          STAGING_MSSQL_URL: ${{ secrets.STAGING_MSSQL_URL }}
+          STAGING_MSSQL_USER: ${{ secrets.STAGING_MSSQL_USER }}
+          STAGING_MSSQL_PASSWORD: ${{ secrets.STAGING_MSSQL_PASSWORD }}
+        run: >
+          ./tools/ci/check-ga-release-readiness.ps1
+          -Repository "${{ github.repository }}"
+          -TargetRef "${{ steps.inputs.outputs.targetRef }}"
+          -ReleaseTag "${{ steps.inputs.outputs.releaseTag }}"
+          -CoverageCsvPath "${{ steps.inputs.outputs.coverageCsv }}"
+          -SummaryPath ./target/ga-release-readiness-summary.md
+
+      - name: Publish readiness summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path ./target/ga-release-readiness-summary.md) {
+            Get-Content ./target/ga-release-readiness-summary.md >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload readiness summary
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: production-ga-release-readiness
+          path: target/ga-release-readiness-summary.md
+          if-no-files-found: warn
+          retention-days: 30

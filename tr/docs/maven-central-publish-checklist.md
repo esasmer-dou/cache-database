@@ -21,7 +21,9 @@
 - Sonatype Central veya hedef registry hesabı hazır
 - namespace ownership doğrulandı
 - GitHub Actions veya release ortamında gerekli secret'lar tanımlı
-- release workflow signed artifact publish edebiliyor
+- `Maven Central Publish` hedef tag üzerinde manuel çalıştırılıyor
+- GA için `gaRelease=true` kullanılıyor; böylece workflow imzalı artifact
+  göndermeden önce GA preflight kontrolünü çalıştırıyor
 
 ## Versioning
 
@@ -35,7 +37,9 @@
 - production evidence workflow yeşil
 - coordination evidence workflow yeşil
 - GA hedefleniyorsa staging Redis HA workflow yeşil
+- GA iddiasına MSSQL dahilse staging MSSQL HA workflow yeşil
 - GA hedefleniyorsa tam migration akış kapsamı doğrulaması yeşil
+- GitHub release yayınlanmadan önce `Production GA Release Readiness` yeşil
 - public-beta readiness workflow yeşil
 - performans hassas değişiklikler için güncel benchmark kanıtı mevcut
 
@@ -43,6 +47,7 @@
 
 - release note hazır
 - tag seçildi
+- tag için imzalı Maven Central publish tamamlandı
 - release başlığı seçildi
 - gerekiyorsa release artifact'ları yüklendi
 

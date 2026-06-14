@@ -21,7 +21,9 @@ Use this checklist before the first Maven Central publication.
 - Sonatype Central account or target registry is ready
 - namespace ownership is verified
 - secrets are configured in GitHub Actions or release environment
-- release workflow knows how to publish signed artifacts
+- `Maven Central Publish` is run manually on the intended tag
+- for GA, `gaRelease=true` is used so the workflow runs the GA preflight before
+  deploying signed artifacts
 
 ## Versioning
 
@@ -35,7 +37,9 @@ Use this checklist before the first Maven Central publication.
 - production evidence workflow green
 - coordination evidence workflow green
 - staging Redis HA workflow green when targeting GA
+- staging MSSQL HA workflow green when MSSQL is included in the GA claim
 - full migration route coverage validation green when targeting GA
+- `Production GA Release Readiness` green before publishing the GitHub release
 - public-beta readiness workflow green
 - any recent performance-sensitive change has fresh benchmark evidence
 
@@ -43,6 +47,7 @@ Use this checklist before the first Maven Central publication.
 
 - release notes prepared
 - tag chosen
+- signed Maven Central publish completed for the tag
 - release title chosen
 - release artifacts uploaded if needed
 
