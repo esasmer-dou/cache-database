@@ -3,8 +3,9 @@
 Turkish version: [../tr/docs/veritabani-provider-spi.md](../tr/docs/veritabani-provider-spi.md)
 
 CacheDB uses PostgreSQL as the default durable SQL provider and has an explicit
-storage-provider SPI. MSSQL is available as an explicitly selected beta
-provider, so this is no longer a fake "change the JDBC URL" story.
+storage-provider SPI. MSSQL is available as an explicitly selected provider
+with its own SQL Server evidence lane, so this is no longer a fake "change the
+JDBC URL" story.
 
 ## Decision
 
@@ -114,7 +115,7 @@ adapter.start(externalChangeApplyRunner);
 
 ## MSSQL Write Semantics
 
-The MSSQL flusher does not use `MERGE` by default. The safer beta path is:
+The MSSQL flusher does not use `MERGE` by default. The safer provider path is:
 
 1. Open one transaction.
 2. Set isolation to `SERIALIZABLE`.
@@ -136,40 +137,48 @@ the version guard keeps retry behavior idempotent.
 | Area | PostgreSQL | MSSQL |
 | --- | --- | --- |
 | Upsert | `INSERT ... ON CONFLICT` | version-guarded update/existence/insert transaction |
-| Bulk load | optional `COPY` path | not enabled in this beta SPI |
+| Bulk load | optional `COPY` path | intentionally not enabled by default; use route-specific batches first |
 | Parameter limit | 65,535 parameters | 2,100 parameters |
 | Temporary table | PostgreSQL temp table semantics | SQL Server `#temp` semantics, not wired yet |
 | Failure classification | SQLSTATE-oriented | SQL Server vendor-code-oriented |
-| Production status | default stable provider path | explicit beta provider, not GA |
+| Production status | default provider path | explicit provider with SQL Server CI evidence; HA topology still environment-specific |
 
 ## Current MSSQL Gate
 
-MSSQL is usable for explicit beta testing of write-behind, outbox, migration
-planner, and multi-pod apply-runner behavior. It is still not
-production-certified.
+MSSQL is usable as an explicit provider for write-behind, outbox, migration
+planner, and multi-pod apply-runner behavior. The provider-level claim is now
+CI-backed for SQL Server correctness and regression coverage. The remaining
+boundary is not "does the provider work"; it is whether the consuming
+application has certified its own SQL Server topology, data volume, route
+inventory, and rollback plan.
 
 Now covered by the provider evidence lane:
 
 - real SQL Server integration lane, not only unit-level SQL recorder tests
 - parameter-limit and batch-size regression tests against a live SQL Server
 - high-volume write-behind load with stale version and delete checks
+- concurrent same-id write races with duplicate-id and stale-version pressure
+- retryable timeout, deadlock, and lock-conflict failure classification
+- live SQL Server lock-timeout classification under a blocked row
 - MSSQL outbox/checkpoint adapter
 - migration discovery, warm, and side-by-side comparison on SQL Server metadata
+  with representative windowed table volume
 - multi-pod apply runner smoke test with MSSQL as durable storage
 - lock-guarded checkpoint table bootstrap during concurrent pod startup
 - duplicate-key safe checkpoint row bootstrap during concurrent polling
 - concurrent same-`adapterName` polling protected by checkpoint row locks
+- provider-tagged durable SQL write performance breakdowns (`mssql:*`)
 - single-node SQL Server container restart/reconnect regression
 
-Still required before MSSQL GA:
+Still required before claiming a specific MSSQL production topology is ready:
 
-- stale version, duplicate id, deadlock, timeout, and lock-conflict tests at
-  larger concurrency, not only smoke scale
-- longer SQL Server soak/retry evidence under production-sized data
-- real SQL Server HA or Always On failover evidence from staging
-- partitioned outbox ownership if a route needs active-active polling
+- run the provider evidence lane against the application's approved SQL Server
+  version, JDBC driver, connection pool, schema size, and indexes
+- run a longer SQL Server soak/retry test under production-sized data and real
+  traffic mix
+- prove SQL Server HA or Always On failover in staging if that topology is part
+  of the application's availability claim
+- design partitioned outbox ownership if a route needs active-active polling
   throughput; same `adapterName` is intentionally serialized for safety
-- MSSQL migration warm and comparison against realistic table volumes
-- dashboard/reporting labels that separate PostgreSQL and MSSQL storage metrics
-
-Until those gates are complete, MSSQL remains an explicit beta provider.
+- run Migration Planner warm and comparison for every production route in the
+  application's migration inventory

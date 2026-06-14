@@ -76,7 +76,7 @@ This is the first public beta release of `cache-database`.
 
 CacheDB is a Redis-first Java data-layer library that keeps a durable SQL
 database as the source of truth through async write-behind. PostgreSQL is the
-default provider; MSSQL is available as an explicit beta provider. CacheDB is
+default provider; MSSQL is available as an explicit provider path. CacheDB is
 designed for teams that care about low runtime overhead but still want a serious
 ORM-like developer experience.
 

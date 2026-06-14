@@ -11,8 +11,11 @@ import org.junit.jupiter.api.Test;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,6 +33,9 @@ class MssqlMigrationPlannerSqlServerTest {
     );
     private static final String JDBC_USER = System.getProperty("cachedb.it.mssql.user", "sa");
     private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.mssql.password", "YourStrong!Passw0rd");
+    private static final int VOLUME_CUSTOMER_COUNT = Integer.getInteger("cachedb.it.mssql.migrationCustomers", 200);
+    private static final int VOLUME_ORDERS_PER_CUSTOMER = Integer.getInteger("cachedb.it.mssql.migrationOrdersPerCustomer", 50);
+    private static final int VOLUME_HOT_WINDOW_PER_ROOT = Integer.getInteger("cachedb.it.mssql.migrationHotWindowPerRoot", 25);
 
     @BeforeEach
     void setUp() throws Exception {
@@ -182,6 +188,169 @@ class MssqlMigrationPlannerSqlServerTest {
         assertTrue(comparison.baselineSqlTemplate().contains("OFFSET 0 ROWS FETCH NEXT :page_size ROWS ONLY"));
         assertEquals(1, comparison.sampleComparisons().size());
         assertTrue(comparison.sampleComparisons().get(0).exactMatch());
+    }
+
+    @Test
+    void mssqlMigrationWarmAndComparisonShouldHandleRepresentativeWindowedVolume() throws Exception {
+        replaceWithVolumeFixture(VOLUME_CUSTOMER_COUNT, VOLUME_ORDERS_PER_CUSTOMER);
+        DataSource dataSource = dataSource();
+        MigrationSchemaDiscovery discovery = new MigrationSchemaDiscovery(
+                dataSource,
+                new DefaultEntityRegistry(ResourceLimits.defaults())
+        );
+        MigrationSchemaDiscovery.Result discovered = discovery.discover();
+
+        assertTrue(discovered.tables().stream().anyMatch(table -> table.tableName().equalsIgnoreCase("cachedb_mssql_orders")));
+
+        MigrationPlanner.Request plannerRequest = new MigrationPlanner.Request(
+                "mssql-customer-orders-volume",
+                "cachedb_mssql_customers",
+                "customer_id",
+                "cachedb_mssql_orders",
+                "order_id",
+                "customer_id",
+                "order_date",
+                "DESC",
+                VOLUME_CUSTOMER_COUNT,
+                (long) VOLUME_CUSTOMER_COUNT * VOLUME_ORDERS_PER_CUSTOMER,
+                VOLUME_ORDERS_PER_CUSTOMER,
+                VOLUME_ORDERS_PER_CUSTOMER,
+                20,
+                VOLUME_HOT_WINDOW_PER_ROOT,
+                true,
+                false,
+                false,
+                false,
+                true,
+                false,
+                true,
+                true,
+                true
+        );
+        MigrationWarmRunner warmRunner = new MigrationWarmRunner(dataSource, fakeHydrators());
+        MigrationWarmRunner.Result warmResult = warmRunner.execute(new MigrationWarmRunner.Request(
+                plannerRequest,
+                true,
+                true,
+                256,
+                128,
+                128
+        ));
+
+        long expectedWindowedRows = (long) VOLUME_CUSTOMER_COUNT
+                * Math.min(VOLUME_ORDERS_PER_CUSTOMER, warmResult.plan().recommendedHotWindowPerRoot());
+        assertEquals(expectedWindowedRows, warmResult.childRowsRead());
+        assertEquals(VOLUME_CUSTOMER_COUNT, warmResult.rootRowsRead());
+        assertTrue(warmResult.childWarmSql().contains("ROW_NUMBER() OVER"));
+        assertFalse(warmResult.childWarmSql().contains("LIMIT"));
+
+        int sampleCustomerId = Math.min(15, VOLUME_CUSTOMER_COUNT);
+        int samplePageSize = Math.min(20, VOLUME_ORDERS_PER_CUSTOMER);
+        List<String> expectedTopIds = expectedTopOrderIds(sampleCustomerId, samplePageSize, VOLUME_ORDERS_PER_CUSTOMER);
+        MigrationComparisonRunner comparisonRunner = new MigrationComparisonRunner(
+                dataSource,
+                discovery,
+                warmRunner,
+                (plan, request) -> Optional.of(new MigrationComparisonRunner.CacheRouteExecutor() {
+                    @Override
+                    public String routeLabel() {
+                        return "projection:mssql-volume-window";
+                    }
+
+                    @Override
+                    public String idColumn() {
+                        return "order_id";
+                    }
+
+                    @Override
+                    public boolean usesProjection() {
+                        return true;
+                    }
+
+                    @Override
+                    public MigrationComparisonRunner.RoutePage execute(Object sampleRootId, int pageSize) {
+                        return new MigrationComparisonRunner.RoutePage(
+                                Math.min(pageSize, expectedTopIds.size()),
+                                expectedTopIds.subList(0, Math.min(pageSize, expectedTopIds.size()))
+                        );
+                    }
+                })
+        );
+        MigrationComparisonRunner.Result comparison = comparisonRunner.execute(new MigrationComparisonRunner.Request(
+                plannerRequest,
+                false,
+                false,
+                256,
+                128,
+                128,
+                String.valueOf(sampleCustomerId),
+                1,
+                0,
+                1,
+                samplePageSize,
+                "",
+                ""
+        ));
+
+        assertTrue(comparison.baselineSqlTemplate().contains("OFFSET 0 ROWS FETCH NEXT :page_size ROWS ONLY"));
+        assertEquals(1, comparison.sampleComparisons().size());
+        assertTrue(comparison.sampleComparisons().get(0).exactMatch());
+    }
+
+    private void replaceWithVolumeFixture(int customerCount, int ordersPerCustomer) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DELETE FROM cachedb_mssql_orders");
+            statement.executeUpdate("DELETE FROM cachedb_mssql_customers");
+        }
+        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+             PreparedStatement customerInsert = connection.prepareStatement("""
+                     INSERT INTO cachedb_mssql_customers (customer_id, tax_number, customer_type)
+                     VALUES (?, ?, ?)
+                     """);
+             PreparedStatement orderInsert = connection.prepareStatement("""
+                     INSERT INTO cachedb_mssql_orders
+                     (order_id, customer_id, order_date, order_amount, currency_code, order_type, entity_version)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)
+                     """)) {
+            connection.setAutoCommit(false);
+            for (int customerId = 1; customerId <= customerCount; customerId++) {
+                customerInsert.setLong(1, customerId);
+                customerInsert.setString(2, "TAX-" + customerId);
+                customerInsert.setString(3, customerId % 5 == 0 ? "VIP" : "STANDARD");
+                customerInsert.addBatch();
+                for (int sequence = 1; sequence <= ordersPerCustomer; sequence++) {
+                    long orderId = orderId(customerId, sequence);
+                    orderInsert.setLong(1, orderId);
+                    orderInsert.setLong(2, customerId);
+                    orderInsert.setObject(3, LocalDate.of(2026, 1, 1).plusDays(sequence));
+                    orderInsert.setBigDecimal(4, java.math.BigDecimal.valueOf(1000L + orderId, 2));
+                    orderInsert.setString(5, sequence % 3 == 0 ? "EUR" : "USD");
+                    orderInsert.setString(6, sequence % 2 == 0 ? "ONLINE" : "STORE");
+                    orderInsert.setLong(7, orderId);
+                    orderInsert.addBatch();
+                }
+                if (customerId % 50 == 0) {
+                    customerInsert.executeBatch();
+                    orderInsert.executeBatch();
+                }
+            }
+            customerInsert.executeBatch();
+            orderInsert.executeBatch();
+            connection.commit();
+        }
+    }
+
+    private static List<String> expectedTopOrderIds(int customerId, int pageSize, int ordersPerCustomer) {
+        ArrayList<String> ids = new ArrayList<>();
+        for (int sequence = ordersPerCustomer; sequence >= 1 && ids.size() < pageSize; sequence--) {
+            ids.add(String.valueOf(orderId(customerId, sequence)));
+        }
+        return List.copyOf(ids);
+    }
+
+    private static long orderId(int customerId, int sequence) {
+        return customerId * 100_000L + sequence;
     }
 
     private MigrationWarmRunner.WarmEntityHydratorFactory fakeHydrators() {

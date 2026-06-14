@@ -5,10 +5,10 @@ English version: [../README.md](../README.md)
 CacheDB, Redis'i düşük gecikmeli okuma/yazma katmanı olarak kullanan ve kalıcı
 doğruluk kaynağını seçilen SQL veritabanında tutan bir Java data-layer
 kütüphanesidir.
-Bugün PostgreSQL varsayılan provider'dır; MSSQL ise açıkça seçilen beta provider
-olarak desteklenir. Amaç, ORM'e benzeyen geliştirme ergonomisini korurken sık
-erişilen veri yolunu açık, sınırlı, ölçülebilir ve production ortamında
-yönetilebilir hale getirmektir.
+Bugün PostgreSQL varsayılan provider'dır; MSSQL ise kendi SQL Server evidence
+hattı olan açık bir provider olarak desteklenir. Amaç, ORM'e benzeyen
+geliştirme ergonomisini korurken sık erişilen veri yolunu açık, sınırlı,
+ölçülebilir ve production ortamında yönetilebilir hale getirmektir.
 
 CacheDB şu iddiayla konumlanır:
 
@@ -24,7 +24,10 @@ Kısa karar: CacheDB core ve varsayılan PostgreSQL provider yolu, açık produc
 sınırlarıyla stable framework release seviyesine taşınmıştır. Buna rağmen her
 kritik route için staging warm-up, side-by-side comparison, route contract, Redis
 bellek limiti ve rollback planı kanıtlanmadan production cutover yapılmamalıdır.
-MSSQL hâlâ açıkça seçilen beta provider olarak ele alınmalıdır.
+MSSQL tarafında write-behind, outbox, migration planner, concurrency, lock
+davranışı ve restart/reconnect akışları için provider'a özel CI kanıtı vardır;
+SQL Server HA veya Always On ise uygulamanın kendi ortamında ayrıca
+sertifikalanması gereken bir topoloji konusudur.
 
 ## İlk Bakışta Ne İşe Yarar?
 

@@ -243,8 +243,9 @@ ANTI-PATTERN:
 
 The selected SQL provider remains the durable source of truth. Even with
 Redis-first reads, connection-pool, transaction, and index quality still matter.
-PostgreSQL is the default provider path; MSSQL is an explicit beta provider and
-must be tuned with its own dialect limits, lock behavior, and driver settings.
+PostgreSQL is the default provider path; MSSQL is an explicit provider and must
+be tuned with its own dialect limits, lock behavior, driver settings, and
+topology evidence.
 
 Watch:
 

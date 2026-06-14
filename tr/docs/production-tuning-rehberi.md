@@ -245,9 +245,9 @@ ANTI-PATTERN:
 
 Seçilen SQL provider hâlâ kalıcı doğruluk kaynağıdır. CacheDB Redis-first olsa
 bile connection pool, transaction ve index kalitesi production davranışını
-belirler. PostgreSQL varsayılan provider yoludur; MSSQL açık beta provider
-olarak ayrı dialect limitleri, lock davranışı ve driver ayarlarıyla ele
-alınmalıdır.
+belirler. PostgreSQL varsayılan provider yoludur; MSSQL açık provider olarak
+ayrı dialect limitleri, lock davranışı, driver ayarları ve topoloji kanıtıyla
+ele alınmalıdır.
 
 Dikkat edilecekler:
 

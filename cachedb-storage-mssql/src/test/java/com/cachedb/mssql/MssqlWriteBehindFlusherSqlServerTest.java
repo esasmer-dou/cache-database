@@ -3,6 +3,8 @@ package com.reactor.cachedb.mssql;
 import com.microsoft.sqlserver.jdbc.SQLServerDataSource;
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
+import com.reactor.cachedb.core.queue.WriteFailureCategory;
+import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -10,16 +12,27 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.sql.DataSource;
+import java.io.PrintWriter;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.SQLFeatureNotSupportedException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class MssqlWriteBehindFlusherSqlServerTest {
@@ -75,6 +88,67 @@ class MssqlWriteBehindFlusherSqlServerTest {
         assertEquals(0L, scalarLong("SELECT COUNT(*) FROM cachedb_it_entity WHERE id = 1"));
     }
 
+    @Test
+    void concurrentSameIdUpsertsShouldSerializeDuplicateInsertRacesAndIgnoreStaleVersions() throws Exception {
+        int workerCount = Integer.getInteger("cachedb.it.mssql.duplicateRaceWorkers", 8);
+        int iterationsPerWorker = Integer.getInteger("cachedb.it.mssql.duplicateRaceIterations", 40);
+        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(dataSource(), emptyRegistry());
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(workerCount);
+        List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
+
+        for (int worker = 0; worker < workerCount; worker++) {
+            final int workerIndex = worker;
+            executor.submit(() -> {
+                try {
+                    start.await();
+                    for (int iteration = 1; iteration <= iterationsPerWorker; iteration++) {
+                        long version = workerIndex * 1_000L + iteration;
+                        flusher.flush(upsert("42", "worker-" + workerIndex + "-" + iteration, version));
+                        flusher.flush(upsert("42", "stale-" + workerIndex + "-" + iteration, version - 1));
+                    }
+                } catch (Throwable failure) {
+                    failures.add(failure);
+                }
+            });
+        }
+
+        start.countDown();
+        executor.shutdown();
+        assertTrue(executor.awaitTermination(60, TimeUnit.SECONDS), "MSSQL duplicate insert race test timed out");
+        if (!failures.isEmpty()) {
+            AssertionError assertionError = new AssertionError("MSSQL duplicate insert race produced write failures");
+            failures.forEach(assertionError::addSuppressed);
+            throw assertionError;
+        }
+
+        assertEquals(1L, scalarLong("SELECT COUNT(*) FROM cachedb_it_entity WHERE id = 42"));
+        long expectedVersion = (long) (workerCount - 1) * 1_000L + iterationsPerWorker;
+        assertEquals(expectedVersion, scalarLong("SELECT entity_version FROM cachedb_it_entity WHERE id = 42"));
+    }
+
+    @Test
+    void mssqlFlusherShouldClassifyLiveLockTimeoutAsRetryableLockConflict() throws Exception {
+        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(
+                new SessionSettingDataSource(dataSource(), "SET LOCK_TIMEOUT 200"),
+                emptyRegistry()
+        );
+        flusher.flush(upsert("77", "initial", 1));
+
+        try (Connection blocker = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+             Statement statement = blocker.createStatement()) {
+            blocker.setAutoCommit(false);
+            statement.executeUpdate("UPDATE cachedb_it_entity WITH (UPDLOCK, HOLDLOCK) SET name = 'blocked' WHERE id = 77");
+
+            SQLException exception = assertThrows(SQLException.class, () -> flusher.flush(upsert("77", "contended", 2)));
+            WriteFailureDetails details = flusher.classify(exception);
+
+            assertEquals(WriteFailureCategory.LOCK_CONFLICT, details.category());
+            assertTrue(details.retryable());
+            blocker.rollback();
+        }
+    }
+
     private static QueuedWriteOperation upsert(String id, String name, long version) {
         LinkedHashMap<String, String> columns = new LinkedHashMap<>();
         columns.put("id", id);
@@ -119,6 +193,71 @@ class MssqlWriteBehindFlusherSqlServerTest {
         dataSource.setUser(JDBC_USER);
         dataSource.setPassword(JDBC_PASSWORD);
         return dataSource;
+    }
+
+    private static final class SessionSettingDataSource implements DataSource {
+        private final DataSource delegate;
+        private final String settingSql;
+
+        private SessionSettingDataSource(DataSource delegate, String settingSql) {
+            this.delegate = delegate;
+            this.settingSql = settingSql;
+        }
+
+        @Override
+        public Connection getConnection() throws SQLException {
+            Connection connection = delegate.getConnection();
+            applySetting(connection);
+            return connection;
+        }
+
+        @Override
+        public Connection getConnection(String username, String password) throws SQLException {
+            Connection connection = delegate.getConnection(username, password);
+            applySetting(connection);
+            return connection;
+        }
+
+        private void applySetting(Connection connection) throws SQLException {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(settingSql);
+            }
+        }
+
+        @Override
+        public PrintWriter getLogWriter() throws SQLException {
+            return delegate.getLogWriter();
+        }
+
+        @Override
+        public void setLogWriter(PrintWriter out) throws SQLException {
+            delegate.setLogWriter(out);
+        }
+
+        @Override
+        public void setLoginTimeout(int seconds) throws SQLException {
+            delegate.setLoginTimeout(seconds);
+        }
+
+        @Override
+        public int getLoginTimeout() throws SQLException {
+            return delegate.getLoginTimeout();
+        }
+
+        @Override
+        public Logger getParentLogger() throws SQLFeatureNotSupportedException {
+            return delegate.getParentLogger();
+        }
+
+        @Override
+        public <T> T unwrap(Class<T> iface) throws SQLException {
+            return delegate.unwrap(iface);
+        }
+
+        @Override
+        public boolean isWrapperFor(Class<?> iface) throws SQLException {
+            return delegate.isWrapperFor(iface);
+        }
     }
 
     private static EntityRegistry emptyRegistry() {

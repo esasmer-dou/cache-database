@@ -146,10 +146,17 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         long elapsedMicros = (System.nanoTime() - startedAtNanos) / 1_000L;
         String normalizedTag = observationTag == null ? "" : observationTag.trim();
         if (normalizedTag.isBlank()) {
-            performanceCollector.recordPostgresWrite(elapsedMicros);
+            performanceCollector.recordPostgresWrite("postgres:write-behind", elapsedMicros);
             return;
         }
-        performanceCollector.recordPostgresWrite(normalizedTag, elapsedMicros);
+        performanceCollector.recordPostgresWrite(providerTag(normalizedTag), elapsedMicros);
+    }
+
+    private String providerTag(String normalizedTag) {
+        if (normalizedTag.regionMatches(true, 0, "postgres:", 0, "postgres:".length())) {
+            return normalizedTag;
+        }
+        return "postgres:" + normalizedTag;
     }
 
     private void delete(Connection connection, QueuedWriteOperation operation) throws SQLException {

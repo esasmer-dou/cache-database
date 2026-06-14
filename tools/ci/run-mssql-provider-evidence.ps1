@@ -110,7 +110,7 @@ function Invoke-MssqlEvidenceTests {
         "-pl", "cachedb-storage-mssql,cachedb-starter,cachedb-integration-tests",
         "-am",
         "test",
-        "-Dtest=MssqlWriteBehindFlusherSqlServerTest,MssqlWriteBehindFlusherLoadSqlServerTest,MssqlOutboxExternalChangeFeedAdapterSqlServerTest,MssqlMigrationPlannerSqlServerTest,MssqlOutboxMultiPodApplyRunnerTest",
+        "-Dtest=MssqlFailureClassifierTest,MssqlWriteBehindFlusherTest,MssqlWriteBehindFlusherSqlServerTest,MssqlWriteBehindFlusherLoadSqlServerTest,MssqlOutboxExternalChangeFeedAdapterSqlServerTest,MssqlMigrationPlannerSqlServerTest,MssqlOutboxMultiPodApplyRunnerTest",
         "-Dsurefire.failIfNoSpecifiedTests=false",
         "-Dcachedb.it.mssql.required=true",
         "-Dcachedb.it.mssql.url=$MssqlUrl",
@@ -147,14 +147,18 @@ $summary = @(
     "# MSSQL Provider Evidence",
     "",
     "- SQL Server write-behind idempotency smoke: passed",
+    "- SQL Server concurrent duplicate-id/stale-version write race: passed",
+    "- SQL Server live lock-timeout classification: passed",
+    "- SQL Server retryable timeout/deadlock/lock-conflict classifier coverage: passed",
+    "- SQL Server provider-tagged write performance breakdown: passed",
     "- SQL Server write-behind high-volume load: passed",
     "- SQL Server outbox checkpoint smoke: passed",
     "- SQL Server high-volume multi-pod outbox replay: passed",
-    "- SQL Server migration discovery/warm/compare SQL smoke: passed",
+    "- SQL Server representative-volume migration discovery/warm/compare: passed",
     "- SQL Server multi-pod outbox apply checkpoint smoke: passed",
     "- SQL Server container restart/reconnect check: $(if ($RestartSqlServerContainer) { 'passed' } else { 'not requested' })",
     "",
-    "This lane is a CI regression gate for single-node SQL Server restart/reconnect, load, replay, checkpoint, and planner SQL behavior. It is not a replacement for a real SQL Server HA or Always On staging topology test."
+    "This lane is a CI regression gate for single-node SQL Server restart/reconnect, concurrency, lock classification, load, replay, checkpoint, provider-tagged metrics, and planner SQL behavior. It is not a replacement for a real SQL Server HA or Always On staging topology test."
 )
 $summary | Set-Content -Path $summaryPath -Encoding UTF8
 
@@ -162,6 +166,8 @@ $json = [ordered]@{
     provider = "mssql"
     status = "passed"
     tests = @(
+        "MssqlFailureClassifierTest",
+        "MssqlWriteBehindFlusherTest",
         "MssqlWriteBehindFlusherSqlServerTest",
         "MssqlWriteBehindFlusherLoadSqlServerTest",
         "MssqlOutboxExternalChangeFeedAdapterSqlServerTest",

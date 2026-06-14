@@ -5,7 +5,7 @@ English version: [../../docs/getting-started.md](../../docs/getting-started.md)
 Bu rehber, CacheDB'yi sıfırdan bir projeye eklemek veya mevcut SQL veritabanı
 üzerinde çalışan bir uygulamada kontrollü biçimde denemek için izlenecek yolu
 anlatır. Starter tarafında varsayılan provider PostgreSQL'dir; MSSQL açıkça
-seçilen beta provider olarak kullanılır.
+seçilen ve kendi SQL Server evidence hattı olan provider olarak kullanılır.
 
 Hedef, ilk gün şunları başarmaktır:
 

@@ -184,10 +184,17 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
         long elapsedMicros = (System.nanoTime() - startedAtNanos) / 1_000L;
         String normalizedTag = observationTag == null ? "" : observationTag.trim();
         if (normalizedTag.isBlank()) {
-            performanceCollector.recordPostgresWrite(elapsedMicros);
+            performanceCollector.recordPostgresWrite("mssql:write-behind", elapsedMicros);
             return;
         }
-        performanceCollector.recordPostgresWrite(normalizedTag, elapsedMicros);
+        performanceCollector.recordPostgresWrite(providerTag(normalizedTag), elapsedMicros);
+    }
+
+    private String providerTag(String normalizedTag) {
+        if (normalizedTag.regionMatches(true, 0, "mssql:", 0, "mssql:".length())) {
+            return normalizedTag;
+        }
+        return "mssql:" + normalizedTag;
     }
 
     private String dominantObservationTag(List<QueuedWriteOperation> operations) {

@@ -44,10 +44,12 @@ CacheDB'ye kesebileceği anlamına gelmez. Cutover öncesinde her uygulama için
 route envanteri, warm-up, side-by-side comparison, Redis bellek bütçesi,
 rollback planı ve ortama özel HA kanıtı gerekir.
 
-MSSQL hâlâ açıkça seçilen beta provider'dır. Canlı SQL Server evidence,
-restart/reconnect kontrolü, outbox/checkpoint desteği ve migration planner
-coverage vardır; ancak SQL Server HA veya Always On topolojileri için henüz GA
-provider iddiası yoktur.
+MSSQL, canlı SQL Server evidence hattı olan açıkça seçilen bir provider'dır.
+Restart/reconnect kontrolü, concurrency ve lock-classification kapsamı,
+outbox/checkpoint desteği ve migration planner coverage vardır. Bu yine de her
+SQL Server HA veya Always On topolojisinin otomatik sertifikalı olduğu anlamına
+gelmez; bu topolojiler tüketen uygulamanın staging ortamında ayrıca
+kanıtlanmalıdır.
 
 ## Release Note Şablonu
 
@@ -69,7 +71,8 @@ Bu release, CacheDB'nin ilk beta olmayan framework release'idir.
 ### Provider sınırları
 
 - PostgreSQL varsayılan stable provider yoludur.
-- MSSQL açıkça seçilen beta provider olarak kullanılabilir.
+- MSSQL, SQL Server CI kanıtı olan açıkça seçilen provider olarak kullanılabilir.
+- SQL Server HA veya Always On hazırlığı, production iddiasının parçasıysa tüketen uygulamanın staging topolojisinde ayrıca kanıtlanmalıdır.
 - Maven Central bu release için opsiyoneldir; seçilen resmi dağıtım kanalı GitHub Release'tir.
 
 ### Production kullanımı

@@ -3,8 +3,8 @@
 English version: [../../docs/database-provider-spi.md](../../docs/database-provider-spi.md)
 
 CacheDB, PostgreSQL'i varsayılan kalıcı SQL provider olarak kullanır. Bunun
-yanında storage provider tarafında açık bir SPI katmanı vardır ve MSSQL açıkça
-seçilen beta provider olarak desteklenir. Bu yüzden
+yanında storage provider tarafında açık bir SPI katmanı vardır ve MSSQL kendi
+SQL Server evidence hattı olan açık bir provider olarak desteklenir. Bu yüzden
 MSSQL desteği artık "JDBC URL'yi değiştir, aynı kod çalışır" gibi riskli ve
 yanıltıcı bir yaklaşım üzerinden ilerlemiyor.
 
@@ -118,8 +118,8 @@ adapter.start(externalChangeApplyRunner);
 
 ## MSSQL Yazma Semantiği
 
-MSSQL flusher varsayılan olarak `MERGE` kullanmaz. Public beta için daha güvenli
-yol şudur:
+MSSQL flusher varsayılan olarak `MERGE` kullanmaz. Daha güvenli provider yolu
+şudur:
 
 1. Tek transaction açılır.
 2. Isolation seviyesi `SERIALIZABLE` yapılır.
@@ -143,25 +143,33 @@ idempotent tutar.
 | Alan | PostgreSQL | MSSQL |
 | --- | --- | --- |
 | Upsert | `INSERT ... ON CONFLICT` | version guard'lı update/existence/insert transaction |
-| Bulk load | opsiyonel `COPY` yolu | bu beta SPI'da açık değil |
+| Bulk load | opsiyonel `COPY` yolu | varsayılan olarak bilinçli şekilde kapalı; önce route bazlı batch kullanılmalı |
 | Parametre limiti | 65.535 parametre | 2.100 parametre |
 | Geçici tablo | PostgreSQL temp table semantiği | SQL Server `#temp` semantiği, henüz bağlanmadı |
 | Hata sınıflandırma | SQLSTATE odaklı | SQL Server vendor code odaklı |
-| Production durumu | varsayılan stable provider yolu | açıkça seçilen beta provider, GA değil |
+| Production durumu | varsayılan provider yolu | SQL Server CI kanıtı olan açık provider; HA topolojisi uygulama ortamında kanıtlanmalı |
 
 ## Mevcut MSSQL Kapısı
 
-MSSQL şu anda write-behind, outbox, migration planner ve çok pod'lu apply-runner
-davranışını bilinçli beta testlerine açar. Yine de henüz production sertifikalı
-değildir.
+MSSQL, write-behind, outbox, migration planner ve çok pod'lu apply-runner
+davranışı için açık provider olarak kullanılabilir. Provider seviyesindeki claim
+artık SQL Server doğruluk ve regresyon kanıtlarıyla CI hattına bağlıdır. Kalan
+sınır "provider çalışıyor mu?" sorusu değildir; tüketen uygulamanın kendi SQL
+Server topolojisini, veri hacmini, route envanterini ve rollback planını
+kanıtlamasıdır.
 
 Provider evidence lane ile artık doğrulananlar:
 
 - yalnızca unit-level SQL recorder değil, gerçek SQL Server integration lane
 - canlı SQL Server üzerinde parameter-limit ve batch-size regresyon testleri
 - yüksek hacimli write-behind yükü, eski sürüm ve silme kontrolleri
+- aynı primary key üzerinde eşzamanlı yazma yarışı, duplicate-id ve stale-version
+  baskısı
+- retryable timeout, deadlock ve lock-conflict hata sınıflandırması
+- bloklanan satır üzerinde canlı SQL Server lock-timeout sınıflandırması
 - MSSQL outbox/checkpoint adapter
-- SQL Server metadata üstünde migration discovery, warm ve side-by-side comparison
+- gerçekçi windowed tablo hacmiyle SQL Server metadata üstünde migration
+  discovery, warm ve side-by-side comparison
 - MSSQL kalıcı storage iken çok pod'lu apply runner smoke testi
 - pod'lar eşzamanlı başlarken checkpoint tablosu bootstrap adımının kilit ile
   korunması
@@ -169,17 +177,19 @@ Provider evidence lane ile artık doğrulananlar:
   sonucunu güvenli kabul etmesi
 - aynı `adapterName` ile çalışan eşzamanlı poller'ların checkpoint satırı
   kilidiyle korunması
+- provider adıyla etiketlenen kalıcı SQL yazma performans kırılımları
+  (`mssql:*`)
 - tek node SQL Server container restart/reconnect regresyonu
 
-MSSQL için GA demeden önce hâlâ kapanması gerekenler:
+Belirli bir MSSQL production topolojisi için hâlâ kanıtlanması gerekenler:
 
-- stale version, duplicate id, deadlock, timeout ve lock-conflict testlerinin
-  smoke ölçeği dışında, daha yüksek concurrency ile doğrulanması
-- production boyutuna yakın veriyle daha uzun SQL Server soak/retry kanıtı
-- staging ortamında gerçek SQL Server HA veya Always On failover kanıtı
-- route aktif-aktif polling kapasitesi istiyorsa partitioned outbox ownership;
-  aynı `adapterName` güvenlik için bilinçli olarak sıraya alınır
-- gerçekçi tablo hacimleriyle MSSQL migration warm ve comparison kanıtı
-- dashboard ve raporlarda PostgreSQL ile MSSQL storage metriklerini ayıran etiketler
-
-Bu kapılar tamamlanana kadar MSSQL açıkça seçilen bir beta provider olarak kalır.
+- provider evidence hattını uygulamanın onayladığı SQL Server sürümü, JDBC
+  driver'ı, connection pool ayarı, şema hacmi ve indeksleriyle çalıştırmak
+- production boyutuna yakın veri ve gerçek trafik karışımıyla daha uzun SQL
+  Server soak/retry testi yapmak
+- uygulamanın availability iddiası SQL Server HA veya Always On içeriyorsa bunu
+  staging ortamında ayrıca kanıtlamak
+- route aktif-aktif polling kapasitesi istiyorsa partitioned outbox ownership
+  tasarlamak; aynı `adapterName` güvenlik için bilinçli olarak sıraya alınır
+- uygulamanın migration envanterindeki her production route için Migration
+  Planner warm ve comparison çalıştırmak

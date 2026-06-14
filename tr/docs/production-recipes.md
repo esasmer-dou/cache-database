@@ -419,8 +419,8 @@ Repo içi ölçüm yüzeyleri:
 Kaynak veritabanı CacheDB dışında da değişebiliyorsa Redis'in kendiliğinden
 güncel kalacağını varsayma. Gerçek bir feed kur: outbox, Debezium, Kafka veya
 başka bir CDC kaynağı. Starter, varsayılan provider yolu için somut PostgreSQL
-outbox adapter'ı sunar; MSSQL beta provider tarafında da açıkça seçilen adapter
-yolu vardır.
+outbox adapter'ı sunar; MSSQL provider tarafında da SQL Server checkpoint
+semantiğine uygun açıkça seçilen adapter yolu vardır.
 
 Beklenen outbox şekli:
 

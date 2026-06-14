@@ -36,4 +36,20 @@ class MssqlFailureClassifierTest {
         assertEquals(WriteFailureCategory.AVAILABILITY, details.category());
         assertTrue(details.retryable());
     }
+
+    @Test
+    void shouldClassifySqlServerQueryTimeoutAsRetryableTimeout() {
+        var details = classifier.classify(new SQLException("query timeout", "HYT00", -2));
+
+        assertEquals(WriteFailureCategory.TIMEOUT, details.category());
+        assertTrue(details.retryable());
+    }
+
+    @Test
+    void shouldClassifyLockConflictAsRetryable() {
+        var details = classifier.classify(new SQLException("lock request timeout", "S0001", 1222));
+
+        assertEquals(WriteFailureCategory.LOCK_CONFLICT, details.category());
+        assertTrue(details.retryable());
+    }
 }

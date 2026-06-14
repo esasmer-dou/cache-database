@@ -44,10 +44,11 @@ traffic over without its own validation. Before cutover, each application still
 needs route inventory, warm-up, side-by-side comparison, Redis memory budgets,
 rollback planning, and environment-specific HA evidence.
 
-MSSQL remains an explicitly selected beta provider. It has live SQL Server
-evidence, restart/reconnect checks, outbox/checkpoint support, and migration
-planner coverage, but it is not yet a GA provider claim for SQL Server HA or
-Always On topologies.
+MSSQL is an explicitly selected provider with live SQL Server evidence,
+restart/reconnect checks, concurrency and lock-classification coverage,
+outbox/checkpoint support, and migration planner coverage. This is still not a
+blanket claim that every SQL Server HA or Always On topology is certified; those
+topologies must be proven in the consuming application's staging environment.
 
 ## Release Notes Template
 
@@ -69,7 +70,8 @@ This is the first non-beta CacheDB framework release.
 ### Provider boundaries
 
 - PostgreSQL is the default stable provider path.
-- MSSQL is available as an explicitly selected beta provider.
+- MSSQL is available as an explicitly selected provider with SQL Server CI evidence.
+- SQL Server HA or Always On readiness must be proven in the consuming application's staging topology when that topology is part of the production claim.
 - Maven Central is optional for this release because GitHub Release is the selected official distribution channel.
 
 ### Production use

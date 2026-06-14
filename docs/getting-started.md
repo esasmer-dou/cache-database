@@ -4,7 +4,7 @@ Turkish version: [../tr/docs/getting-started.md](../tr/docs/getting-started.md)
 
 This guide takes a new project, or an existing SQL-database application, to a
 working CacheDB integration. PostgreSQL is the default provider in the starter;
-MSSQL is an explicit beta provider.
+MSSQL is an explicit provider with its own SQL Server evidence lane.
 
 The day-one goal is to:
 

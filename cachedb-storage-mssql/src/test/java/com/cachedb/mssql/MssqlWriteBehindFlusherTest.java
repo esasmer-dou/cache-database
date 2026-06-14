@@ -3,6 +3,7 @@ package com.reactor.cachedb.mssql;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
+import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -84,6 +85,23 @@ class MssqlWriteBehindFlusherTest {
 
         assertEquals(5, dataSource.statementKinds().size());
         assertEquals(3, dataSource.commitCount);
+    }
+
+    @Test
+    void shouldTagStoragePerformanceBreakdownWithMssqlProvider() throws Exception {
+        RecordingDataSource dataSource = new RecordingDataSource(1, false);
+        StoragePerformanceCollector collector = new StoragePerformanceCollector();
+        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(
+                dataSource,
+                emptyRegistry(),
+                WriteBehindConfig.defaults(),
+                collector
+        );
+
+        flusher.flush(operation(OperationType.UPSERT, "5", 11));
+
+        assertEquals(1L, collector.snapshot().postgresWrite().operationCount());
+        assertTrue(collector.snapshot().postgresWriteBreakdown().containsKey("mssql:write"));
     }
 
     private static EntityRegistry emptyRegistry() {

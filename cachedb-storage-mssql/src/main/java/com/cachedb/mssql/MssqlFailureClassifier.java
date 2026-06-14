@@ -32,6 +32,7 @@ public final class MssqlFailureClassifier {
 
     private WriteFailureCategory categoryFor(String sqlState, int vendorCode) {
         WriteFailureCategory byVendorCode = switch (vendorCode) {
+            case -2 -> WriteFailureCategory.TIMEOUT;
             case 1205 -> WriteFailureCategory.DEADLOCK;
             case 1222 -> WriteFailureCategory.LOCK_CONFLICT;
             case 40197, 40501, 40613, 10928, 10929 -> WriteFailureCategory.AVAILABILITY;
@@ -46,6 +47,9 @@ public final class MssqlFailureClassifier {
         }
         if (sqlState.startsWith("08")) {
             return WriteFailureCategory.CONNECTION;
+        }
+        if ("HYT00".equals(sqlState) || "HYT01".equals(sqlState)) {
+            return WriteFailureCategory.TIMEOUT;
         }
         if ("40001".equals(sqlState)) {
             return WriteFailureCategory.SERIALIZATION;

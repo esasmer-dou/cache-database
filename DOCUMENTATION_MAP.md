@@ -36,7 +36,7 @@ production tuning should be approached.
 | How do I keep Redis fresh when the source database changes outside CacheDB? | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
 | Can CacheDB support MSSQL or another SQL database? | [Database Provider SPI Direction](docs/database-provider-spi.md) |
 | What must be proven before production? | [Production Test Report](docs/production-test-report.md) |
-| Stable release or provider-specific beta? | [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) and [Stable Release Launch Kit](docs/stable-release-launch-kit.md) |
+| Stable release or provider-specific production boundary? | [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) and [Stable Release Launch Kit](docs/stable-release-launch-kit.md) |
 | How do I decide whether a GA release can ship? | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 | How do I cut a release? | [Release Flow](docs/release-flow.md) |
 | What is missing for Maven Central? | [Maven Central Publish Checklist](docs/maven-central-publish-checklist.md) |

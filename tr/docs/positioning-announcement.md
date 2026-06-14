@@ -39,8 +39,8 @@ koduna zorlamadan, düşük gecikmeli veri akışlarını açık ve ölçülebil
 
 CacheDB, düşük gecikmeli okuma/yazma katmanını Redis üzerinden kurar; kalıcı doğruluk
 kaynağını ise seçilen SQL provider üzerinde tutar. PostgreSQL varsayılan
-provider yoludur, MSSQL desteği açık beta provider olarak bilinçli şekilde
-seçilmelidir. Derleme zamanında üretilen metadata sayesinde runtime reflection'a
+provider yoludur; MSSQL ise kendi SQL Server evidence hattı olan açık provider
+olarak bilinçli şekilde seçilir. Derleme zamanında üretilen metadata sayesinde runtime reflection'a
 ihtiyaç duymaz. Normal servis kodu generated API'lerle ergonomik kalır; çok
 ilişkili veya global sıralı ekranlarda ise projection ve okuma modeli disiplini
 kullanılır.

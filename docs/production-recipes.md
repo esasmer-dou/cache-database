@@ -414,8 +414,8 @@ Measured support:
 If the source database can be changed outside CacheDB, do not rely on Redis
 staying fresh by luck. Use a real feed: outbox, Debezium, Kafka, or another CDC
 source. The starter includes a concrete PostgreSQL outbox adapter for the
-default provider path, and the MSSQL beta provider exposes a matching explicit
-adapter path.
+default provider path, and the MSSQL provider exposes a matching explicit
+adapter path with SQL Server checkpoint semantics.
 
 Expected outbox shape:
 

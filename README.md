@@ -4,9 +4,9 @@ Turkish version: [tr/README.md](tr/README.md)
 
 CacheDB is a Redis-first Java data-layer library that keeps a durable SQL
 database as the source of truth. PostgreSQL is the default provider today;
-MSSQL is available as an explicit beta provider. CacheDB is built for teams
-that want ORM-like developer ergonomics without hiding the hot read/write path
-behind runtime magic.
+MSSQL is available as an explicit provider with its own SQL Server evidence
+lane. CacheDB is built for teams that want ORM-like developer ergonomics
+without hiding the hot read/write path behind runtime magic.
 
 The core design rule is simple:
 
@@ -21,7 +21,9 @@ Short status: CacheDB core and the default PostgreSQL provider are ready for a
 stable framework release with explicit production boundaries. Teams should
 still prove every hot route with staging warm-up, side-by-side comparison,
 route contracts, Redis memory limits, and rollback planning before cutover.
-MSSQL remains an explicitly selected beta provider.
+MSSQL has provider-specific CI coverage for write-behind, outbox, migration
+planner, concurrency, lock handling, and restart/reconnect behavior; SQL Server
+HA or Always On remains an application-environment certification item.
 
 ## What It Solves
 
