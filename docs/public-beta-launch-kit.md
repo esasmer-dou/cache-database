@@ -53,6 +53,18 @@ Current tag:
 
 `v0.1.0-beta.4`
 
+## Official Distribution Channel
+
+For the current public beta, the official distribution channel is the GitHub
+Release asset:
+
+`cache-database-0.1.0-beta.4-public-beta.zip`
+
+The bundle contains the Maven jars, sources jars, javadocs jars, README,
+security/community files, English docs, and Turkish docs. Maven Central is not
+required for this beta line; it remains a later lower-friction distribution
+option.
+
 ## First Public Release Notes
 
 ```md
@@ -110,3 +122,5 @@ is not optional in CacheDB. It is part of the intended production model.
 - security reporting enabled on GitHub
 - branch protection enabled
 - release artifacts built with `oss-release`
+- GitHub Release asset uploaded and documented as the official distribution
+  package

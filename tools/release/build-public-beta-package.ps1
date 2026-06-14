@@ -1,5 +1,6 @@
 param(
     [string]$Version = "0.1.0-beta.4",
+    [string]$PackageLabel = "public-beta",
     [switch]$SkipBuild
 )
 
@@ -9,7 +10,12 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $releaseRoot = Join-Path $repoRoot "target\releases"
 $stagingRoot = Join-Path $releaseRoot "cache-database-$Version"
-$zipPath = Join-Path $releaseRoot "cache-database-$Version-public-beta.zip"
+
+if ($PackageLabel -notmatch '^[A-Za-z0-9_.-]+$') {
+    throw "PackageLabel may only contain letters, numbers, dot, underscore, and dash."
+}
+
+$zipPath = Join-Path $releaseRoot "cache-database-$Version-$PackageLabel.zip"
 
 if (-not $SkipBuild) {
     & (Join-Path $repoRoot "tools\build\invoke-maven-semeru.ps1") `
@@ -54,6 +60,7 @@ $docFiles = @(
     "docs\production-recipes.md",
     "docs\orm-alternative.md",
     "docs\public-beta-readiness.md",
+    "docs\production-ga-release-runbook.md",
     "docs\release-checklist.md",
     "docs\public-beta-launch-kit.md",
     "docs\maven-central-publish-checklist.md",
@@ -65,6 +72,7 @@ $docFiles = @(
     "tr\docs\use-case-examples.md",
     "tr\docs\migration-planner.md",
     "tr\docs\production-recipes.md",
+    "tr\docs\production-ga-release-runbook.md",
     "tr\docs\release-checklist.md",
     "tr\docs\public-beta-launch-kit.md"
 )

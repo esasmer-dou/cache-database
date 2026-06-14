@@ -18,7 +18,7 @@ cutover evidence before using CacheDB on production traffic.
 | Migration coverage tooling | The repo must ship a route coverage schema and validator. Full route coverage is required for each consuming application's cutover, not for the generic library release. | `tools/ci/validate-migration-coverage-report.ps1` and `docs/ga-migration-coverage-template.csv`. |
 | Application migration coverage | Required when an application wants to cut production routes over to CacheDB. Every screen, API, batch, worker, and report route must have a shape, owner, warm status, compare result, rollback plan, and cutover state. | `Production GA Staging Evidence / migration-coverage` validates the supplied application CSV path. |
 | Public API compatibility | Public API signatures must be compared against the committed baseline. | `tools/ci/check-public-api-compatibility.ps1` passes. |
-| Official distribution | The release must have a documented official consumption path. Maven Central is BEST for public Java libraries, but GitHub Release or GitHub Packages can be used intentionally. | Release notes and distribution docs identify the supported channel. |
+| Official distribution | The release must have a documented official consumption path. Current selected channel: GitHub Release artifact. Maven Central remains optional and can be added later. | Release notes and distribution docs identify the supported channel. |
 | Maven Central release | Required only when Maven Central is the selected official distribution channel. Artifacts must be source/javadoc attached and signed before publication. | `Maven Central Publish` workflow succeeds with Central and GPG secrets. |
 | GA release readiness | Stable release tag, public evidence, production evidence, local HA tooling, and selected optional gates must be checked together. | `Production GA Release Readiness` workflow succeeds for the release tag. |
 | Benchmark regressions | Benchmark JSON reports must be checked by a CI threshold gate, not only uploaded as artifacts. | `tools/ci/check-benchmark-thresholds.ps1` passes in `Production Evidence`. |
@@ -30,8 +30,9 @@ cutover evidence before using CacheDB on production traffic.
 ## Classification
 
 BEST: Keep CacheDB as `public beta` until framework-level gates are green on
-the release candidate and the official distribution channel is documented. Use
-Maven Central when the goal is the lowest-friction public Java dependency.
+the release candidate and the official GitHub Release artifact is documented,
+built from the intended commit, and attached to the release. Add Maven Central
+later when the goal is the lowest-friction public Java dependency.
 
 ACCEPTABLE: Use CacheDB in controlled pilots when Redis HA, migration parity,
 admin exposure, and rollback are verified for that application's routes.

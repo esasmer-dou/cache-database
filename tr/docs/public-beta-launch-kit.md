@@ -51,6 +51,17 @@ Güncel etiket:
 
 `v0.1.0-beta.4`
 
+## Resmi Dağıtım Kanalı
+
+Mevcut açık beta için resmi dağıtım kanalı GitHub Release asset'idir:
+
+`cache-database-0.1.0-beta.4-public-beta.zip`
+
+Bu paket Maven jar'larını, sources jar'larını, javadocs jar'larını, README,
+güvenlik/topluluk dosyalarını, İngilizce dokümanları ve Türkçe dokümanları
+içerir. Bu beta hattı için Maven Central zorunlu değildir; ileride daha düşük
+sürtünmeli dağıtım kanalı olarak eklenebilir.
+
 ## İlk Açık Beta Sürüm Notu Taslağı
 
 ```md
@@ -110,3 +121,5 @@ CacheDB için opsiyonel değildir; tasarımın parçasıdır.
 - GitHub security reporting açıldı
 - branch protection açıldı
 - `oss-release` ile artifact build alındı
+- GitHub Release asset'i yüklendi ve resmi dağıtım paketi olarak dokümante
+  edildi

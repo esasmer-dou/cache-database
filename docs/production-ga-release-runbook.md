@@ -13,8 +13,8 @@ missing:
 
 - local Docker or CI outage/restart evidence for Redis coordination and SQL
   provider reconnect behavior
-- a documented official distribution path: Maven Central, GitHub Release, or
-  GitHub Packages
+- a documented official distribution path. Current selected path: GitHub
+  Release artifact
 - signed Maven Central publish with source and javadoc artifacts when Maven
   Central is the selected distribution channel
 - green public API compatibility and benchmark regression gates
@@ -65,16 +65,28 @@ restart/reconnect and provider evidence, not as topology certification.
    outage/recovery evidence, and runs SQL Server restart/reconnect evidence.
 3. Push the release commit to `main` and wait for `Public Beta Readiness` and
    `Production Evidence` to pass on that exact commit.
-4. Create and push the stable tag, for example `v1.0.0`.
-5. If Maven Central is the selected distribution channel, run `Maven Central
+4. Build the official GitHub Release artifact from the intended commit:
+
+   ```powershell
+   pwsh ./tools/release/build-public-beta-package.ps1 `
+     -Version 1.0.0 `
+     -PackageLabel github-release
+   ```
+
+   Until a generic GA package script replaces it, this script is the official
+   GitHub Release bundle builder. For stable releases, use a non-beta package
+   label such as `github-release`.
+5. Create and push the stable tag, for example `v1.0.0`.
+6. If Maven Central is the selected distribution channel, run `Maven Central
    Publish` manually on the stable tag with
    `gaRelease=true`. The workflow runs the GA preflight before deploying signed
    artifacts.
-6. Run `Production GA Release Readiness` for the same tag. Enable
+7. Run `Production GA Release Readiness` for the same tag. Enable
    `requireManagedStagingHa`, `requireApplicationMigrationCoverage`, or
    `requireMavenCentralPublish` only when that release claim includes those
    optional gates.
-7. Publish the GitHub release only after the readiness summary is `PASS`.
+8. Publish the GitHub release only after the readiness summary is `PASS` and
+   attach the official release artifact.
 
 ## Local Preflight
 
@@ -111,7 +123,8 @@ gh workflow run maven-central-publish.yml `
 
 ## Production Decision
 
-BEST: release GA only after `Production GA Release Readiness` is green.
+BEST: release GA only after `Production GA Release Readiness` is green and the
+GitHub Release artifact is attached as the official distribution package.
 
 ACCEPTABLE: release framework GA with Docker/CI outage evidence and clear
 boundaries, while individual applications still run route-level coverage,

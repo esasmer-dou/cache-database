@@ -41,6 +41,8 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 
 - `oss-release` Maven profilinin sources ve javadocs üretebildiğini doğrula
 - Linux release package yolunun geçtiğini doğrula; yalnızca geliştirici makinesindeki build yeterli değildir
+- GitHub Release artifact'inin hedef commit'ten üretildiğini ve bu release için
+  resmi dağıtım paketi olduğunu doğrula
 - seçilen release kanalı için signing config ve secret'ları doğrula
 - hedef release workflow ve credential'ları doğrula
 - Maven Central resmi dağıtım kanalı olarak seçildiyse GA duyurusu öncesinde

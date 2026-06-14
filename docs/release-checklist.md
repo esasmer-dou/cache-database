@@ -41,6 +41,8 @@ Use this checklist before the first public beta and for later releases.
 
 - verify the `oss-release` Maven profile builds sources and javadocs
 - verify the Linux release package path passes, not only the local developer machine
+- confirm the GitHub Release artifact is built from the intended commit and is
+  the official distribution package for this release
 - confirm signing configuration and secrets for the chosen release channel
 - confirm the target release workflow and credentials
 - confirm signed publish succeeds before a GA announcement only when Maven

@@ -12,8 +12,7 @@ Aşağıdakilerden biri eksikse framework GA release yayınlama veya duyurma:
 
 - Redis coordination ve SQL provider reconnect davranışı için lokal Docker veya
   CI outage/restart kanıtı
-- belgelenmiş resmi dağıtım yolu: Maven Central, GitHub Release veya GitHub
-  Packages
+- belgelenmiş resmi dağıtım yolu. Şu an seçilen yol: GitHub Release artifact
 - Maven Central seçildiyse source ve javadoc artifact'leriyle imzalı Maven
   Central publish
 - yeşil public API compatibility ve benchmark regression kapıları
@@ -66,16 +65,28 @@ anlat.
 3. Release commit'ini `main` branch'ine gönder ve aynı commit üzerinde
    `Public Beta Readiness` ile `Production Evidence` workflow'larının
    geçtiğini doğrula.
-4. Stabil tag'i oluştur ve gönder; örnek: `v1.0.0`.
-5. Maven Central resmi dağıtım kanalı olarak seçildiyse, stabil tag üzerinde
+4. Resmi GitHub Release artifact'ini hedef commit'ten üret:
+
+   ```powershell
+   pwsh ./tools/release/build-public-beta-package.ps1 `
+     -Version 1.0.0 `
+     -PackageLabel github-release
+   ```
+
+   Generic GA package script'i eklenene kadar bu script resmi GitHub Release
+   bundle builder olarak kullanılır. Stabil release için `github-release` gibi
+   beta içermeyen bir package label kullan.
+5. Stabil tag'i oluştur ve gönder; örnek: `v1.0.0`.
+6. Maven Central resmi dağıtım kanalı olarak seçildiyse, stabil tag üzerinde
    `Maven Central Publish` workflow'unu manuel olarak
    `gaRelease=true` ile çalıştır. Workflow, imzalı artifact publish etmeden
    önce GA preflight kontrolünü çalıştırır.
-6. Aynı tag için `Production GA Release Readiness` workflow'unu çalıştır.
+7. Aynı tag için `Production GA Release Readiness` workflow'unu çalıştır.
    `requireManagedStagingHa`, `requireApplicationMigrationCoverage` veya
    `requireMavenCentralPublish` seçeneklerini yalnızca release iddiası bu
    opsiyonel kapıları kapsıyorsa aç.
-7. GitHub release'i yalnızca readiness özeti `PASS` ise yayınla.
+8. GitHub release'i yalnızca readiness özeti `PASS` ise yayınla ve resmi
+   release artifact'ini ekle.
 
 ## Lokal Ön Kontrol
 
@@ -112,7 +123,8 @@ gh workflow run maven-central-publish.yml `
 
 ## Production Kararı
 
-BEST: GA release'i yalnızca `Production GA Release Readiness` yeşilken çıkar.
+BEST: GA release'i yalnızca `Production GA Release Readiness` yeşilken ve
+GitHub Release artifact'i resmi dağıtım paketi olarak eklenmişken çıkar.
 
 ACCEPTABLE: framework GA'yı Docker/CI outage evidence ve açık sınırlarla çıkar;
 uygulamalar ise production cutover öncesinde route bazlı coverage, rollback ve
