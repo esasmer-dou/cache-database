@@ -30,7 +30,7 @@ Use this checklist before the first public beta and for later releases.
 
 - production evidence workflow is green
 - coordination evidence workflow is green
-- staging Redis HA workflow is green for the target Redis/PostgreSQL topology
+- staging Redis HA workflow is green for the target Redis/source-database topology
 - full migration route coverage CSV is committed and passes validation
 - any new runtime hotspot changes have fresh benchmark or smoke evidence
 

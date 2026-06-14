@@ -2,18 +2,19 @@
 
 English version: [../../docs/database-provider-spi.md](../../docs/database-provider-spi.md)
 
-CacheDB public beta aşamasında hâlâ PostgreSQL odaklıdır. Bu çalışmayla storage
-provider tarafına ilk açık SPI katmanı eklendi. Bu yüzden MSSQL desteği artık
-"JDBC URL'yi değiştir, aynı kod çalışır" gibi riskli ve yanıltıcı bir yaklaşım
-üzerinden ilerlemiyor.
+CacheDB public beta aşamasında PostgreSQL'i varsayılan kalıcı SQL provider
+olarak kullanır. Bunun yanında storage provider tarafında açık bir SPI katmanı
+vardır ve MSSQL açıkça seçilen beta provider olarak desteklenir. Bu yüzden
+MSSQL desteği artık "JDBC URL'yi değiştir, aynı kod çalışır" gibi riskli ve
+yanıltıcı bir yaklaşım üzerinden ilerlemiyor.
 
 ## Karar
 
 BEST: Kalıcı SQL sağlayıcısını bilinçli olarak seçmek ve ona uygun
 write-behind flusher'ını açıkça bağlamak.
 
-ACCEPTABLE: Uygulama yalnızca PostgreSQL kullanıyorsa starter'ın varsayılan
-PostgreSQL yolunu kullanmak.
+ACCEPTABLE: Uygulama bilinçli olarak varsayılan PostgreSQL provider yolunu
+kullanıyorsa starter'ın varsayılan wiring'ini kullanmak.
 
 ANTI-PATTERN: PostgreSQL flusher'ını MSSQL JDBC URL'sine bağlayıp aynı SQL'in,
 aynı retry davranışının ve aynı parametre limitlerinin güvenli olduğunu

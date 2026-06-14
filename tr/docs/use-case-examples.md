@@ -4,8 +4,8 @@ English version: [../../docs/use-case-examples.md](../../docs/use-case-examples.
 
 Bu sayfa CacheDB davranışını gerçek kullanım senaryoları üzerinden anlatır.
 Amaç, uygulama geliştiricisinin hangi durumda entity repository, projection
-repository, command route veya PostgreSQL soğuk veri yolu kullanacağını net
-seçebilmesidir.
+repository, command route veya kaynak veritabanı soğuk veri yolu kullanacağını
+net seçebilmesidir.
 
 Örneklerde ortak müşteri/sipariş modeli kullanılır:
 
@@ -29,7 +29,8 @@ orders
 Production kuralı basittir:
 
 - Redis sıcak okuma/yazma hızlandırma katmanıdır.
-- PostgreSQL kalıcı doğruluk kaynağıdır ve tam geçmiş için doğru yerdir.
+- Seçilen SQL provider kalıcı doğruluk kaynağıdır ve tam geçmiş için doğru
+  yerdir.
 - Full entity okumaları küçük ve sınırlı kalmalıdır.
 - Büyük liste ekranları projection/okuma modeli penceresi kullanmalıdır.
 - Kısmi değişiklikler full entity update veya açık command route ile yapılmalıdır.
@@ -68,7 +69,7 @@ BEST tasarım:
 - Son siparişler `CustomerOrderSummaryProjection` ile okunur.
 - Destek talepleri `CustomerTicketSummaryProjection` veya küçük relation preview
   ile gösterilir.
-- Açık bakiye ayrı bir finans projection'ı veya PostgreSQL reporting yolundan
+- Açık bakiye ayrı bir finans projection'ı veya kaynak veritabanı reporting yolundan
   gelir.
 
 ANTI-PATTERN:
@@ -88,7 +89,7 @@ BEST tasarım:
 
 - Ticket listesi ranked projection olmalıdır.
 - Stok kartları `ProductStockSummary` projection'ından gelmelidir.
-- Ödeme denemeleri time-window projection veya PostgreSQL event query ile
+- Ödeme denemeleri time-window projection veya kaynak veritabanı event query ile
   okunmalıdır.
 - Dashboard ilk açılışında full entity hydration yapılmamalıdır.
 
@@ -110,7 +111,7 @@ BEST tasarım:
 - Fatura detayında `InvoiceEntity` kullanılır.
 - Son ödeme denemeleri `withRelationLimit("payments", 5)` veya payment preview
   projection ile gösterilir.
-- Aylık mutabakat PostgreSQL/reporting yolunda kalır.
+- Aylık mutabakat kaynak veritabanı/reporting yolunda kalır.
 
 ANTI-PATTERN:
 
@@ -141,14 +142,14 @@ ANTI-PATTERN:
 
 | İhtiyaç | BEST route | Neden |
 | --- | --- | --- |
-| Tek full entity oluşturmak veya değiştirmek | `EntityRepository.save(fullEntity)` | Redis öncelikli yazım, PostgreSQL'e write-behind kalıcılık |
+| Tek full entity oluşturmak veya değiştirmek | `EntityRepository.save(fullEntity)` | Redis öncelikli yazım, kalıcı SQL write-behind |
 | Sıcak tek entity'yi id ile okumak | `EntityRepository.findById(id)` | Hızlı Redis lookup |
 | Küçük full-entity page okumak | `EntityRepository.findPage(PageWindow)` | Sınırlı full payload okuması |
 | Büyük müşteri sipariş listesi okumak | `ProjectionRepository<OrderSummary>` | Özet payload, sınırlı sıcak pencere |
 | Global top-N dashboard satırı okumak | Ranked projection | Tek ranked index yolu |
-| Eski geçmiş veya arşiv verisi okumak | PostgreSQL soğuk veri yolu | Soğuk geçmiş Redis'i kirletmez |
+| Eski geçmiş veya arşiv verisi okumak | Kaynak veritabanı soğuk veri yolu | Soğuk geçmiş Redis'i kirletmez |
 | Redis'te olmayabilecek entity üzerinde tek alan değiştirmek | Açık command route | Eksik/bozuk Redis entity'si üretilmez |
-| Tek entity silmek | `deleteById(id)` | Idempotent delete, tombstone, write-behind ile PostgreSQL delete |
+| Tek entity silmek | `deleteById(id)` | Idempotent delete, tombstone, write-behind ile SQL provider delete |
 
 ## Minimal Entity Şekli
 
@@ -263,7 +264,7 @@ BEST:
 
 - `ProductEntity` Redis'te sıcak kalabilir.
 - Güncel stok özeti projection olmalıdır.
-- Tam inventory movement geçmişi PostgreSQL'de kalmalıdır.
+- Tam inventory movement geçmişi kaynak veritabanında kalmalıdır.
 - Dashboard widget'ları kompakt `ProductStockSummary` projection'ını okur.
 
 ```java
@@ -304,7 +305,7 @@ BEST:
 - `InvoiceEntity` detay entity'sidir.
 - `PaymentEntity` child entity'dir.
 - Invoice ekranı son birkaç ödeme denemesini preview olarak gösterebilir.
-- Muhasebe raporları PostgreSQL veya özel reporting projection kullanmalıdır.
+- Muhasebe raporları kaynak veritabanı veya özel reporting projection kullanmalıdır.
 
 ```java
 EntityRepository<InvoiceEntity, Long> invoices =
@@ -339,7 +340,7 @@ BEST:
 
 - Güncel shipment status Redis'te sıcak olabilir.
 - Son event preview sınırlı relation veya projection olabilir.
-- Tracking ekranı aşırı sıcak değilse tam tracking geçmişi PostgreSQL'de kalır.
+- Tracking ekranı aşırı sıcak değilse tam tracking geçmişi kaynak veritabanında kalır.
 
 ```java
 ProjectionRepository<ShipmentTimelinePreview, Long> timeline =
@@ -376,7 +377,7 @@ BEST:
 
 - Ticket inbox ekranları `TicketSummaryProjection` kullanmalıdır.
 - Ticket detail root ticket ve son mesaj preview ile açılmalıdır.
-- Eski veya nadir okunan tam mesaj geçmişi PostgreSQL'den sayfalanabilir.
+- Eski veya nadir okunan tam mesaj geçmişi kaynak veritabanından sayfalanabilir.
 
 ```java
 ProjectionRepository<TicketSummary, Long> ticketSummaries =
@@ -441,7 +442,7 @@ BEST route:
 
 - Sabit product alanları için `ProductEntity.findById(productId)`.
 - Güncel stok için `ProductStockSummary` projection.
-- Eski inventory movement geçmişi için PostgreSQL soğuk veri yolu.
+- Eski inventory movement geçmişi için kaynak veritabanı soğuk veri yolu.
 
 Neden: product detail küçük entity ve kompakt summary ister; tam inventory
 defteri istemez.
@@ -454,7 +455,7 @@ BEST route:
 
 - Invoice header için `InvoiceEntity.findById(invoiceId)`.
 - Son ödeme denemeleri için `withRelationLimit("payments", 5)`.
-- Kullanıcı audit sekmesini açarsa tam payment audit için PostgreSQL.
+- Kullanıcı audit sekmesini açarsa tam payment audit için kaynak veritabanı.
 
 Neden: son denemeler ilk ekran için değerlidir; tam payment geçmişi ilk ekran
 için gerekli değildir.
@@ -467,7 +468,7 @@ BEST route:
 
 - Güncel shipment status Redis'ten gelir.
 - Son 10 timeline event projection'dan gelir.
-- Tam carrier geçmişi yalnızca istenirse PostgreSQL'den okunur.
+- Tam carrier geçmişi yalnızca istenirse kaynak veritabanından okunur.
 
 Neden: tracking ilk ekranı sınırlı timeline'dır; tam arşiv export değildir.
 
@@ -519,7 +520,7 @@ CustomerEntityCacheBinding.using(session).repository().save(customer);
 - Müşteri payload'ı önce Redis'e yazılır.
 - Query index'leri ve hot-set takibi güncellenir.
 - Redis Stream'e write-behind event'i yazılır.
-- Write-behind worker satırı PostgreSQL'e flush eder.
+- Write-behind worker satırı seçilen SQL provider'a flush eder.
 
 BEST: geçerli full entity oluşturabiliyorsan `save(fullEntity)` kullan.
 
@@ -543,7 +544,7 @@ OrderEntityCacheBinding.using(session).repository().save(order);
 Çalışma zamanı davranışı:
 
 - Sipariş Redis'te hemen sıcak hale gelir.
-- PostgreSQL kalıcılığı write-behind ile tamamlanır.
+- Kalıcı SQL yazımı write-behind ile tamamlanır.
 - Kayıtlı projection'lar yenilenerek liste ekranlarına yeni sipariş yansıtılır.
 
 BEST: siparişleri full entity olarak oluştur.
@@ -582,7 +583,7 @@ for (OrderEntity order : ordersToWarm) {
 Çalışma zamanı davranışı:
 
 - Redis seçilen sıcak veri setiyle doldurulur.
-- PostgreSQL yazımları yine normal write-behind yolundan geçer.
+- SQL provider yazımları yine normal write-behind yolundan geçer.
 - Bu bir migration warm-up ise sıcak setin planlı route'a göre oluşması için
   Migration Planner warm runner tercih edilmelidir.
 
@@ -631,11 +632,11 @@ Optional<CustomerEntity> customer =
 
 - CacheDB Redis'te `customer_id=42` payload'ını arar.
 - Payload varsa ve tombstone yoksa entity döner.
-- Payload yoksa bu repository çağrısı otomatik PostgreSQL scan yapmaz.
+- Payload yoksa bu repository çağrısı otomatik kaynak veritabanı scan yapmaz.
 
 BEST: hot detail kayıtları için `findById` kullan.
 
-ACCEPTABLE: kayıt eskiyse ve Redis'te yoksa açık PostgreSQL soğuk veri yolu
+ACCEPTABLE: kayıt eskiyse ve Redis'te yoksa açık kaynak veritabanı soğuk veri yolu
 repository'si çağır.
 
 ### Query 2: 1.000 Satırlık Sıcak Projection Penceresinden Son 10 Siparişi Okuma
@@ -659,7 +660,7 @@ List<OrderSummaryReadModel> latest10 = summaries.query(
 - CacheDB full `OrderEntity` repository değil, projection repository kullanır.
 - Redis 1.000 satırlık sıcak summary penceresi tutabilir.
 - Sorgu yalnızca istenen 10 summary kaydını döndürür.
-- Bu sıcak liste route'u için PostgreSQL gerekmez.
+- Bu sıcak liste route'u için kaynak veritabanı gerekmez.
 
 BEST: Redis'te büyük projection penceresi, kullanıcıya küçük cevap.
 
@@ -687,7 +688,7 @@ BEST: page size değerini entity hot window altında tut.
 
 ANTI-PATTERN: 1.000+ satırlık iş ekranları için full entity page kullanmak.
 
-### Query 4: Eski Geçmişi PostgreSQL Soğuk Veri Yolundan Okuma
+### Query 4: Eski Geçmişi Kaynak Veritabanı Soğuk Veri Yolundan Okuma
 
 Kullanıcı sıcak projection penceresi dışındaki eski veriyi istiyorsa bu yolu kullan.
 
@@ -714,9 +715,9 @@ List<OrderEntity> februaryOrders = jdbcTemplate.query(
 
 - Bu route bilinçli olarak Redis'i pas geçer.
 - Redis sıcak pencereleri soğuk arşiv okumalarıyla kirlenmez.
-- PostgreSQL tam geçmiş için kalıcı kaynak olarak kalır.
+- Kaynak veritabanı tam geçmiş için kalıcı kaynak olarak kalır.
 
-BEST: eski geçmiş ve audit ekranları PostgreSQL veya özel archive read-model kullanır.
+BEST: eski geçmiş ve audit ekranları kaynak veritabanı veya özel archive read-model kullanır.
 
 ANTI-PATTERN: bir kez okunduğu için her eski arşiv verisini Redis'e yüklemek.
 
@@ -781,7 +782,7 @@ OrderEntityCacheBinding.using(session).repository().save(order);
 
 - Redis geçerli full replacement payload'ı alır.
 - Index'ler ve projection'lar full state üzerinden yenilenir.
-- PostgreSQL write-behind ile güncellenir.
+- Seçilen SQL provider write-behind ile güncellenir.
 
 BEST: full entity oluşturabiliyorsan full entity update kullan.
 
@@ -806,7 +807,7 @@ OrderEntityCacheBinding.using(session).repository().save(order);
 
 - Redis'te eski payload'ın bulunması gerekmez.
 - CacheDB yeni geçerli full state'i yazar.
-- PostgreSQL güncellemesi write-behind ile yapılır.
+- SQL provider güncellemesi write-behind ile yapılır.
 
 BEST: eski kayıt güncellemesi, yeni full state verildiğinde güvenlidir.
 
@@ -855,7 +856,7 @@ CustomerEntityCacheBinding.using(session).repository().save(customer);
 
 - Mevcut customer sıcak olduğu için Redis'ten okunur.
 - Güncellenmiş full entity geri yazılır.
-- PostgreSQL write-behind ile takip eder.
+- Seçilen SQL provider write-behind ile takip eder.
 
 ACCEPTABLE: hot entity'yi oku, değiştir, full entity olarak kaydet.
 
@@ -864,7 +865,7 @@ döngü içinde yapmak.
 
 ### Update 5: Toplu Fiyat veya Status Değişikliği
 
-PostgreSQL batch SQL kullan, ardından etkilenen sıcak route'ları açıkça yenile
+Kaynak veritabanında batch SQL kullan, ardından etkilenen sıcak route'ları açıkça yenile
 veya invalidate et.
 
 ```sql
@@ -876,7 +877,7 @@ WHERE status = 'CREATED'
 
 Çalışma zamanı davranışı:
 
-- Toplu mutation PostgreSQL'de yapılır.
+- Toplu mutation kaynak veritabanında yapılır.
 - CacheDB etkilenen projection'ları invalidate etmeli veya rebuild etmelidir.
 - Her etkilenen order'ı full entity olarak yükleyip `save(...)` çağırma.
 
@@ -899,7 +900,7 @@ OrderEntityCacheBinding.using(session).repository().deleteById(9001L);
 - Redis entity key'i silinir.
 - Hot-set ve query index kayıtları temizlenir.
 - Eski verinin geri dirilmesini engellemek için tombstone yazılır.
-- PostgreSQL delete write-behind ile yazılır.
+- SQL provider delete write-behind ile yazılır.
 
 BEST: primary key ile idempotent delete.
 
@@ -915,8 +916,8 @@ OrderEntityCacheBinding.using(session).repository().deleteById(500L);
 
 - Redis entity yoksa hata değildir.
 - CacheDB yine tombstone yazar.
-- PostgreSQL delete yine kuyruğa alınır.
-- PostgreSQL'de satır zaten yoksa işlem güvenli no-op olarak kalmalıdır.
+- SQL provider delete yine kuyruğa alınır.
+- Kaynak veritabanında satır zaten yoksa işlem güvenli no-op olarak kalmalıdır.
 
 BEST: delete işlemi entity'nin Redis'te hot olmasına bağlı değildir.
 
@@ -935,7 +936,7 @@ Güvenli servis orkestrasyonu:
 2. Siparişleri kontrollü command/batch route ile sil veya soft-delete et.
 3. Customer entity'yi id ile sil.
 4. Customer order projection'larını invalidate et.
-5. PostgreSQL durumunu doğrula.
+5. Kaynak veritabanı durumunu doğrula.
 ```
 
 BEST: aggregate seviyesindeki delete işlemleri açık domain orkestrasyonu ister.
@@ -945,7 +946,7 @@ dashboard read-model kayıtlarının kendiliğinden doğru kalacağını varsaym
 
 ### Delete 4: Soft Delete
 
-Satır PostgreSQL'de kalacaksa full entity update veya command route kullan.
+Satır kaynak veritabanında kalacaksa full entity update veya command route kullan.
 
 ```java
 OrderEntity order = loadFullOrderForSoftDelete(9001L);
@@ -958,7 +959,7 @@ OrderEntityCacheBinding.using(session).repository().save(order);
 
 - Route hâlâ hot olmalıysa Redis yeni full state'i tutar.
 - Projection'lar ekran ihtiyacına göre satırı kaldırabilir veya işaretleyebilir.
-- PostgreSQL satırı korur.
+- Kaynak veritabanı satırı korur.
 
 BEST: soft delete fiziksel delete değil, update işlemidir.
 
@@ -1079,7 +1080,7 @@ BEST:
 
 - Sık kullanılan operasyonel raporlarda projection/read-model kullan.
 - Yalnızca aktif raporlama penceresini sıcak tut.
-- Ham tarihsel gerçekler PostgreSQL'de kalsın.
+- Ham tarihsel gerçekler kaynak veritabanında kalsın.
 
 ### Projection 5: Mevcut ORM Route Geçişi
 
@@ -1134,7 +1135,7 @@ BEST: önceden hesaplanmış skor, sınırlı top-N okuma.
 
 ### Dashboard 3: Aylık Finans Raporu
 
-Rapor geniş tarih aralığı tarıyorsa PostgreSQL veya ayrı raporlama tablosu kullan.
+Rapor geniş tarih aralığı tarıyorsa kaynak veritabanı veya ayrı raporlama tablosu kullan.
 
 ```sql
 SELECT currency_code, sum(order_amount)
@@ -1144,13 +1145,13 @@ WHERE order_date >= :month_start
 GROUP BY currency_code;
 ```
 
-BEST: geniş tarihsel aggregation için set-based PostgreSQL raporlama.
+BEST: geniş tarihsel aggregation için set-based kaynak veritabanı raporlaması.
 
 ANTI-PATTERN: aylık tüm order kayıtlarını Redis'e çekip Java içinde toplamak.
 
 ### Dashboard 4: Audit Trail
 
-Nadir audit okumaları için PostgreSQL soğuk veri yolunu kullan.
+Nadir audit okumaları için kaynak veritabanı soğuk veri yolunu kullan.
 
 ```sql
 SELECT *
@@ -1159,7 +1160,7 @@ WHERE order_id = :order_id
 ORDER BY recorded_at DESC;
 ```
 
-BEST: audit trail PostgreSQL'de kalıcı ve sorgulanabilir kalsın.
+BEST: audit trail kaynak veritabanında kalıcı ve sorgulanabilir kalsın.
 
 ACCEPTABLE: audit ekranı gerçekten hot ve penceresi sabitse dar bir audit
 projection oluştur.
@@ -1182,7 +1183,7 @@ BEST: operasyonel telemetriyi iş raporlamasından ayrı tut.
 
 Partial update, magic davranıştan kaçınmanın en önemli yeridir.
 
-Şu satır PostgreSQL'de var ama Redis'te yok kabul edelim:
+Şu satır kaynak veritabanında var ama Redis'te yok kabul edelim:
 
 ```text
 order_id = 500
@@ -1220,7 +1221,7 @@ BEST seçenekler:
 - `save(...)` içine geçerli full `OrderEntity` gönder.
 - `CancelOrderCommand` gibi açık command route kullan.
 - Entity Redis'te varsa güncelle veya invalidate et.
-- Entity Redis'te yoksa PostgreSQL'i güncelle, kısmi Redis entity'si üretme.
+- Entity Redis'te yoksa kaynak veritabanını güncelle, kısmi Redis entity'si üretme.
 
 ANTI-PATTERN:
 
@@ -1240,7 +1241,7 @@ BEST:
 
 - Sık okunan root entity'ler sıcak kalır.
 - Büyük listeler sınırlı projection kullanır.
-- Eski geçmiş PostgreSQL'de kalır.
+- Eski geçmiş kaynak veritabanında kalır.
 - Redis `maxmemory` ile sınırlandırılır.
 - CacheDB guardrail'ları güvensiz full-entity okumalarını durdurur.
 
@@ -1332,7 +1333,7 @@ BEST:
 - Page size sıcak pencerenin altında kalır.
 - Büyük liste route'larında projection zorunlu olur.
 - Tenant quota tek tenant'ın Redis bütçesini tüketmesini engeller.
-- Cold read üst sınırı bellidir ve eski veri PostgreSQL/archive yolundan okunur.
+- Cold read üst sınırı bellidir ve eski veri kaynak veritabanı/archive yolundan okunur.
 - Staging warm sonrasında Redis bellek tahmini gerçek `MEMORY USAGE`
   örnekleriyle kalibre edilir.
 - Route seviyesindeki tenant memory budget gerçek entity payload byte ölçümünü
@@ -1347,7 +1348,7 @@ ANTI-PATTERN:
 - `entityTtlSeconds` değerini "son 90 iş günü" gibi yorumlamak.
 - Production route'un projection yerine sessizce entity scan'e düşmesine izin vermek.
 - Büyük backfill/warm işini checkpoint, resume ve rate limit olmadan çalıştırmak.
-- PostgreSQL CacheDB dışında güncellenirken CDC, outbox veya projection refresh feed'i kurmamak.
+- Kaynak veritabanı CacheDB dışında güncellenirken CDC, outbox veya projection refresh feed'i kurmamak.
 
 ## Son Kontrol Listesi
 
@@ -1357,7 +1358,7 @@ Yeni bir CacheDB route eklemeden önce şu soruları cevapla:
 - Veri sıcak mı, eski geçmiş mi?
 - Ekran full entity payload mı istiyor, yoksa summary alanları yeterli mi?
 - Maksimum result size nedir?
-- Bu route entity, projection, ranked projection, command veya PostgreSQL soğuk veri yolu mu olmalı?
+- Bu route entity, projection, ranked projection, command veya kaynak veritabanı soğuk veri yolu mu olmalı?
 - Redis kaydı içermiyorsa ne olacak?
 - İşlem tekrar denenirse ne olacak?
 - Cutover öncesinde projection parity nasıl doğrulanacak?

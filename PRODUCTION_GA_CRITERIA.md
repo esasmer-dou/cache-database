@@ -10,7 +10,7 @@ durable SQL volume.
 | Gate | GA requirement | Evidence |
 | --- | --- | --- |
 | Redis HA and failover | Multi-pod coordination, consumer identity, leader lease, pending claim, and post-outage recovery must pass. | `Production Evidence / redis-failover-evidence` workflow artifact. |
-| Staging Redis HA | The same coordination path must pass against the real staging Redis/PostgreSQL topology while a managed Redis failover is triggered externally. | `Production GA Staging Evidence / staging-redis-ha` workflow artifact. |
+| Staging Redis HA | The same coordination path must pass against the real staging Redis/source-database topology while a managed Redis failover is triggered externally. | `Production GA Staging Evidence / staging-redis-ha` workflow artifact. |
 | Admin HTTP exposure | Admin HTTP must be explicitly enabled and must be protected by gateway auth or CacheDB token auth. It must not be exposed directly to the public internet. | `cachedb.admin.http-enabled=true` is explicit; gateway route or `cachedb.admin.auth-enabled=true` is documented in deployment config. |
 | TLS boundary | Application-level TLS is not required when the service is behind a managed gateway or reverse proxy. | Gateway/proxy owns TLS termination, request authentication, and network exposure policy. |
 | Migration coverage | Every production screen, API, batch, worker, and report route must have an explicit CacheDB shape, warm decision, comparison result, owner, cutover state, and rollback plan. | `Production GA Staging Evidence / migration-coverage` validates `docs/ga-migration-coverage.csv` or the supplied CSV path. |
@@ -19,7 +19,7 @@ durable SQL volume.
 | Benchmark regressions | Benchmark JSON reports must be checked by a CI threshold gate, not only uploaded as artifacts. | `tools/ci/check-benchmark-thresholds.ps1` passes in `Production Evidence`. |
 | Relation-heavy reads | Summary-first, preview/detail, and projection-first recipes must remain faster and lower-materialization than full aggregate first-paint. | Relation read-shape benchmark and migration side-by-side reports pass. |
 | Global sorted/range reads | Ranked projection top-window path must remain cheaper than wide candidate scan. | Ranked projection benchmark passes. |
-| Write durability | Write-behind retry, claim, DLQ, poison visibility, and PostgreSQL durability must be verified. | Integration tests and multi-instance coordination evidence pass. |
+| Write durability | Write-behind retry, claim, DLQ, poison visibility, and selected SQL provider durability must be verified. | Integration tests and multi-instance coordination evidence pass. |
 | MSSQL provider readiness | MSSQL must remain explicit beta until live provider evidence, checkpoint locking, high-volume replay/load, migration SQL, multi-pod apply smoke, and longer SQL Server soak/failover tests are green. | `Production Evidence / mssql-provider-evidence` workflow artifact plus `Production GA Staging Evidence / staging-mssql-ha` artifact. |
 
 ## Classification

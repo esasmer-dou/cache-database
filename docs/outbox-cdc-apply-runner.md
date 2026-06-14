@@ -2,21 +2,22 @@
 
 Turkish version: [../tr/docs/outbox-cdc-apply-runner.md](../tr/docs/outbox-cdc-apply-runner.md)
 
-Use this page when PostgreSQL can be changed outside CacheDB and Redis must stay
-fresh.
+Use this page when the durable source database can be changed outside CacheDB
+and Redis must stay fresh.
 
 Examples:
 
-- an existing ORM still writes to PostgreSQL during migration
+- an existing ORM still writes to the source database during migration
 - a back-office batch job updates rows directly
 - Debezium or an outbox table publishes changes from another service
 - a repair job replays rows after an incident
 
 ## The Problem
 
-CacheDB can keep Redis and PostgreSQL aligned when writes go through CacheDB.
-If another system writes directly to PostgreSQL, Redis will not automatically
-know about that change unless you feed the change back into CacheDB.
+CacheDB can keep Redis and the selected SQL provider aligned when writes go
+through CacheDB. If another system writes directly to the source database, Redis
+will not automatically know about that change unless you feed the change back
+into CacheDB.
 
 The safe production pattern is:
 
@@ -24,7 +25,7 @@ The safe production pattern is:
 2. Convert it into an `ExternalChangeEvent`.
 3. Apply it with `ExternalChangeApplyRunner`.
 4. Let the runner update Redis hot entities, indexes, tombstones, and
-   projections without writing the same event back to PostgreSQL.
+   projections without writing the same event back to the source database.
 
 ## Default Mode: Cache Only
 
@@ -70,10 +71,10 @@ adapter.start(runner);
 - UPSERT hydrates Redis from the external event payload.
 - DELETE writes a Redis tombstone and removes hot/index/projection state.
 - The write-behind queue is not used.
-- PostgreSQL is not written again.
+- The source database is not written again.
 
-This prevents a feedback loop where a PostgreSQL event is written back to
-PostgreSQL as if it were a new CacheDB command.
+This prevents a feedback loop where a source-database event is written back to
+the same database as if it were a new CacheDB command.
 
 ## Event Shape
 

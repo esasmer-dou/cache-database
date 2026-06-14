@@ -1,6 +1,6 @@
 # CacheDB Project Memory
 
-Last updated: 2026-06-13
+Last updated: 2026-06-14
 
 Purpose: this file is an internal handoff note for future Codex/chat sessions.
 It summarizes the product direction, completed work, validation evidence, and
@@ -17,13 +17,15 @@ remaining production gates. It is not release marketing copy.
 
 ## Product Direction
 
-CacheDB is a Java/Spring Boot data-layer framework that uses PostgreSQL as the
-durable source of truth and Redis as a hot read/write coordination layer.
+CacheDB is a Java/Spring Boot data-layer framework that uses Redis as the hot
+read/write coordination layer and a selected SQL provider as the durable source
+of truth. PostgreSQL is the default provider path; MSSQL is an explicit beta
+provider and must be wired deliberately.
 
 The design direction is:
 
 - compile-time generated mapping, not reflection-heavy runtime magic
-- Redis-first hot reads and writes, PostgreSQL durability behind it
+- Redis-first hot reads and writes, durable SQL write-behind behind it
 - projection/read-model first for relation-heavy and global sorted screens
 - explicit route contracts for expensive read shapes
 - bounded hot-set memory, not "put the whole database in Redis"
@@ -36,7 +38,7 @@ explicitly.
 
 ## Architecture Rules Already Established
 
-- PostgreSQL remains the durable source of truth.
+- The selected SQL provider remains the durable source of truth.
 - Redis holds bounded hot entities, projection windows, route indexes, stream
   state, leader leases, and operational telemetry.
 - Relation-heavy first-paint screens must use summary/projection models.
@@ -46,11 +48,11 @@ explicitly.
 - Multi-pod Kubernetes deployments rely on Redis for coordination.
 - Consumer names must be pod/instance unique.
 - Singleton operational loops should use Redis leader lease behavior.
-- External PostgreSQL writes require outbox/CDC input, otherwise Redis can go
-  stale.
+- External source-database writes require outbox/CDC input, otherwise Redis can
+  go stale.
 - Database-originated outbox/CDC events must apply in cache-only mode by
-  default; they must not be sent back into PostgreSQL write-behind as if they
-  were new CacheDB commands.
+  default; they must not be sent back into write-behind as if they were new
+  CacheDB commands.
 - Production strict mode should fail fast if a projection-required route falls
   back to broad entity scanning.
 
@@ -84,7 +86,7 @@ explicitly.
 - Split Migration Planner resource structure into more maintainable assets and
   partial-like helpers.
 - Made Migration Planner more user friendly:
-  - PostgreSQL schema discovery
+  - source-database schema discovery
   - table/view selection
   - route candidate suggestions
   - form auto-fill from discovered candidates
@@ -103,13 +105,15 @@ explicitly.
 
 ### Migration Planner Capabilities
 
-- Discovery can inspect PostgreSQL schema and present route candidates.
+- Discovery can inspect a supported source-database schema and present route
+  candidates.
 - Planner can generate route decisions for relation-heavy shapes.
 - Planner can generate CacheDB entity skeletons, relation loader skeletons, and
   projection support skeletons from discovered schema.
 - Planner can run dry-run warm analysis without mutating Redis.
 - Planner can warm Redis for selected hot windows.
-- Planner can compare PostgreSQL baseline SQL against CacheDB route output.
+- Planner can compare source-database baseline SQL against CacheDB route
+  output.
 - Planner can generate downloadable migration reports with readiness state,
   blockers, next steps, rollback notes, and cutover action plan.
 - Latest product requirement: full conversion needs route coverage, not only one
@@ -216,7 +220,7 @@ explicitly.
 Key additions:
 
 - production scenario certification lane
-- concrete PostgreSQL outbox adapter
+- concrete PostgreSQL outbox adapter and explicit provider SPI direction
 - route-level cache contracts
 - tenant quota and payload-level memory budget accounting
 - composite hot policy support
@@ -229,15 +233,15 @@ Key fixes:
 - repeated writes of the same entity no longer double-count tenant payload bytes
 - warm batch hydration now carries tenant columns and payload estimates
 - release bundle copies the release note for the selected version
-- PostgreSQL outbox/CDC events can now be applied to Redis hot state through
-  `ExternalChangeApplyRunner` without re-enqueuing write-behind
+- source-database outbox/CDC events can now be applied to Redis hot state
+  through `ExternalChangeApplyRunner` without re-enqueuing write-behind
 
 Upgrade note:
 
 - Maven coordinates remain under `com.reactor.cachedb`
 - Use version `0.1.0-beta.3`
-- If PostgreSQL can be changed outside CacheDB, configure outbox/CDC before
-  relying on Redis hot-set freshness
+- If the source database can be changed outside CacheDB, configure outbox/CDC
+  before relying on Redis hot-set freshness
 - Use `ExternalChangeApplyRunner` in `CACHE_ONLY` mode for database-originated
   outbox/CDC events
 - For relation-heavy/global sorted screens, use route contracts and
@@ -253,7 +257,7 @@ Upgrade note:
 - GitHub release `v0.1.0-beta.3` exists with the public beta package asset.
 - Maven Central publishing is not complete until repository secrets for Central
   credentials and GPG signing are configured.
-- Staging Redis HA evidence is not complete until staging Redis/PostgreSQL
+- Staging Redis HA evidence is not complete until staging Redis/source-database
   secrets are configured and an operator-triggered failover window is executed.
 - Staging MSSQL HA evidence is not complete until staging SQL Server secrets are
   configured and an operator-triggered managed SQL Server or Always On failover
@@ -261,7 +265,8 @@ Upgrade note:
 
 ## Provider SPI / MSSQL State
 
-- Current public beta remains PostgreSQL-first.
+- Current public beta remains PostgreSQL-default, with MSSQL as an explicit
+  beta provider.
 - MSSQL must not be added by changing only the JDBC URL.
 - The first provider SPI layer now exists:
   - `cachedb-storage-jdbc` contains shared JDBC dialect and write-behind helpers.
@@ -372,8 +377,8 @@ BEST:
 
 ACCEPTABLE:
 
-- Use CacheDB for selected hot routes where PostgreSQL remains durable and Redis
-  hot windows are bounded.
+- Use CacheDB for selected hot routes where the selected SQL provider remains
+  durable and Redis hot windows are bounded.
 - Use migration planner to evaluate a subset of routes before a wider rollout.
 
 ANTI-PATTERN:
@@ -384,8 +389,8 @@ ANTI-PATTERN:
   existing dynamic query.
 - Let projection-required routes fall back to full entity scans in production.
 - Expose admin HTTP directly to the public internet.
-- Depend on Redis freshness while PostgreSQL is mutated by external systems
-  without outbox/CDC.
+- Depend on Redis freshness while the source database is mutated by external
+  systems without outbox/CDC.
 
 ## GA Gates Still Open
 

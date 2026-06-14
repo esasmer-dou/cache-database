@@ -88,7 +88,7 @@ Repository operations include:
 
 Behavior:
 
-- Writes enter Redis first and then PostgreSQL write-behind.
+- Writes enter Redis first and then SQL-provider write-behind.
 - Reads use the Redis hot path first.
 - Read-through or hydrated rows are admitted to Redis according to hot policy.
 - Large pages and queries should be protected by guardrails.
@@ -295,8 +295,8 @@ BEST: write source-database changes to an outbox table or CDC stream, read them
 with a CacheDB adapter, and apply them with an idempotent runner that refreshes
 entities and projections.
 
-ANTI-PATTERN: expecting Redis to stay fresh while other systems mutate
-PostgreSQL silently.
+ANTI-PATTERN: expecting Redis to stay fresh while other systems mutate the
+source database silently.
 
 ## Production Assumptions
 
@@ -330,5 +330,5 @@ ANTI-PATTERN:
 - load the whole table into Redis
 - open relation-heavy screens with full entity graphs
 - run large pages without route contracts
-- ignore external PostgreSQL writes without outbox/CDC
+- ignore external source-database writes without outbox/CDC
 - cut over without benchmark and parity evidence

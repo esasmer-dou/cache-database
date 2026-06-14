@@ -28,7 +28,8 @@ orders
 The production rule is simple:
 
 - Redis is the hot read/write acceleration layer.
-- PostgreSQL is the durable source of truth and the right place for full history.
+- The selected SQL provider is the durable source of truth and the right place
+  for full history.
 - Full entity reads must stay small and bounded.
 - Large list screens must use projection/read-model windows.
 - Partial changes must use explicit command routes or full entity updates.
@@ -68,7 +69,7 @@ BEST design:
 - Latest orders come from `CustomerOrderSummaryProjection`.
 - Support tickets come from `CustomerTicketSummaryProjection` or a small
   relation preview.
-- Open balance comes from a finance projection or PostgreSQL reporting path.
+- Open balance comes from a finance projection or source-database reporting path.
 
 ANTI-PATTERN:
 
@@ -87,7 +88,7 @@ BEST design:
 
 - Ticket list is a ranked projection.
 - Stock cards come from `ProductStockSummary`.
-- Payment attempts come from a time-window projection or PostgreSQL event query.
+- Payment attempts come from a time-window projection or source-database event query.
 - Dashboard first paint should not hydrate full entities.
 
 ANTI-PATTERN:
@@ -108,7 +109,7 @@ BEST design:
 - Invoice detail uses `InvoiceEntity`.
 - Latest payment attempts use `withRelationLimit("payments", 5)` or a payment
   preview projection.
-- Monthly reconciliation stays on PostgreSQL/reporting path.
+- Monthly reconciliation stays on the source-database/reporting path.
 
 ANTI-PATTERN:
 
@@ -138,14 +139,14 @@ ANTI-PATTERN:
 
 | Need | BEST route | Why |
 | --- | --- | --- |
-| Create or replace one full entity | `EntityRepository.save(fullEntity)` | Redis-first write, PostgreSQL write-behind durability |
+| Create or replace one full entity | `EntityRepository.save(fullEntity)` | Redis-first write, durable SQL write-behind |
 | Read one hot entity by id | `EntityRepository.findById(id)` | Fast Redis lookup |
 | Read a small full-entity page | `EntityRepository.findPage(PageWindow)` | Bounded full payload read |
 | Read a large customer order list | `ProjectionRepository<OrderSummary>` | Summary payload, bounded hot window |
 | Read global top-N dashboard rows | Ranked projection | Single ranked index path |
 | Read old history or archive data | Source-database cold path | Do not pollute Redis with cold history |
 | Change one field on an entity that may not be in Redis | Explicit command route | Avoid writing partial/invalid Redis entities |
-| Delete one entity | `deleteById(id)` | Idempotent delete, tombstone, PostgreSQL delete through write-behind |
+| Delete one entity | `deleteById(id)` | Idempotent delete, tombstone, SQL provider delete through write-behind |
 
 ## Minimal Entity Shape
 
@@ -259,7 +260,7 @@ BEST:
 
 - `ProductEntity` can stay hot in Redis.
 - Latest stock summary should be a projection.
-- Full inventory movement history should stay in PostgreSQL.
+- Full inventory movement history should stay in the source database.
 - Dashboard widgets read a compact `ProductStockSummary` projection.
 
 ```java
@@ -300,7 +301,7 @@ BEST:
 - `InvoiceEntity` is a detail entity.
 - `PaymentEntity` is a child entity.
 - The invoice screen can show the last few payment attempts as preview.
-- Accounting reports should use PostgreSQL or a dedicated reporting projection.
+- Accounting reports should use the source database or a dedicated reporting projection.
 
 ```java
 EntityRepository<InvoiceEntity, Long> invoices =
@@ -335,7 +336,7 @@ BEST:
 
 - Current shipment status can be hot in Redis.
 - Latest event preview can be a bounded relation or projection.
-- Full tracking history can remain in PostgreSQL unless the tracking screen is
+- Full tracking history can remain in the source database unless the tracking screen is
   extremely hot.
 
 ```java
@@ -449,7 +450,7 @@ BEST route:
 
 - `InvoiceEntity.findById(invoiceId)` for invoice header.
 - `withRelationLimit("payments", 5)` for recent payment attempts.
-- PostgreSQL for full payment audit if the user opens the audit tab.
+- Source database for full payment audit if the user opens the audit tab.
 
 Why: recent attempts are useful on first paint; full payment history is not.
 
@@ -513,7 +514,7 @@ Runtime behavior:
 - Redis receives the customer payload first.
 - Query indexes and hot-set tracking are updated.
 - A write-behind event is written to Redis Stream.
-- The write-behind worker flushes the row to PostgreSQL.
+- The write-behind worker flushes the row to the selected SQL provider.
 
 BEST: use `save(fullEntity)` when you can construct the full valid entity.
 
@@ -537,7 +538,7 @@ OrderEntityCacheBinding.using(session).repository().save(order);
 Runtime behavior:
 
 - The order becomes hot in Redis immediately.
-- PostgreSQL durability follows through write-behind.
+- Durable SQL persistence follows through write-behind.
 - Registered projections can be refreshed so list screens see the new order.
 
 BEST: create orders as full entities, not as partial payloads.
@@ -576,7 +577,7 @@ for (OrderEntity order : ordersToWarm) {
 Runtime behavior:
 
 - Redis is filled with the selected hot set.
-- PostgreSQL writes still go through the normal write-behind path.
+- SQL provider writes still go through the normal write-behind path.
 - If this is a migration warm-up, prefer the Migration Planner warm runner so
   the hot set is based on a planned route.
 
@@ -625,7 +626,7 @@ Runtime behavior:
 
 - CacheDB checks Redis for `customer_id=42`.
 - If the payload is present and not tombstoned, it returns the entity.
-- If it is absent, this repository call does not magically scan PostgreSQL.
+- If it is absent, this repository call does not magically scan the source database.
 
 BEST: use `findById` for hot detail records.
 
@@ -653,7 +654,7 @@ Runtime behavior:
 - CacheDB uses the projection repository, not the full `OrderEntity` repository.
 - Redis may keep a 1,000-row hot summary window.
 - The query returns only the requested 10 summaries.
-- PostgreSQL is not needed for this hot list route.
+- The source database is not needed for this hot list route.
 
 BEST: large list window in Redis, small response to the user.
 
@@ -682,7 +683,7 @@ BEST: keep page size below the entity hot window.
 
 ANTI-PATTERN: use full entity pages for 1,000+ row business screens.
 
-### Query 4: Read Old History From PostgreSQL Cold Path
+### Query 4: Read Old History From The Source-Database Cold Path
 
 Use this when the user asks for old data outside the hot projection window.
 
@@ -709,9 +710,9 @@ Runtime behavior:
 
 - This route intentionally bypasses Redis.
 - Redis hot windows are not polluted by cold archive reads.
-- PostgreSQL remains the durable full-history store.
+- The source database remains the durable full-history store.
 
-BEST: old history and audit screens use PostgreSQL or a purpose-built archive
+BEST: old history and audit screens use the source database or a purpose-built archive
 read model.
 
 ANTI-PATTERN: load every old archive read into Redis just because it was read
@@ -778,7 +779,7 @@ Runtime behavior:
 
 - Redis receives the full replacement payload.
 - Indexes and projections are refreshed from the valid full state.
-- PostgreSQL is updated through write-behind.
+- The selected SQL provider is updated through write-behind.
 
 BEST: full entity update when you can build a complete valid entity.
 
@@ -803,7 +804,7 @@ Runtime behavior:
 
 - Redis does not need the old payload to exist.
 - CacheDB writes the new complete state.
-- PostgreSQL receives the update through write-behind.
+- The selected SQL provider receives the update through write-behind.
 
 BEST: old record update is safe when the new full state is supplied.
 
@@ -853,7 +854,7 @@ Runtime behavior:
 
 - The current customer was hot and read from Redis.
 - The updated full entity is written back.
-- PostgreSQL follows through write-behind.
+- The selected SQL provider follows through write-behind.
 
 ACCEPTABLE: read hot entity, mutate, save full entity.
 
@@ -862,7 +863,7 @@ or a dedicated SQL command route.
 
 ### Update 5: Bulk Price Or Status Change
 
-Use PostgreSQL batch SQL and then explicitly refresh or invalidate affected hot
+Use source-database batch SQL and then explicitly refresh or invalidate affected hot
 routes.
 
 ```sql
@@ -874,7 +875,7 @@ WHERE status = 'CREATED'
 
 Runtime behavior:
 
-- PostgreSQL handles the bulk mutation.
+- The source database handles the bulk mutation.
 - CacheDB should invalidate or rebuild affected projections.
 - Do not load every affected order as a full entity just to call `save(...)`.
 
@@ -897,7 +898,7 @@ Runtime behavior:
 - Redis entity key is deleted.
 - Hot-set and query index entries are removed.
 - A tombstone is written to prevent stale resurrection.
-- PostgreSQL delete is written through write-behind.
+- SQL provider delete is written through write-behind.
 
 BEST: idempotent delete by primary key.
 
@@ -913,8 +914,8 @@ Runtime behavior:
 
 - Missing Redis entity is not an error.
 - CacheDB still writes the tombstone.
-- PostgreSQL delete is still queued.
-- If PostgreSQL already has no row, the operation should remain a safe no-op.
+- SQL provider delete is still queued.
+- If the source database already has no row, the operation should remain a safe no-op.
 
 BEST: delete does not depend on the entity being hot.
 
@@ -933,7 +934,7 @@ A safe service orchestration:
 2. Delete or soft-delete orders through a controlled command/batch route.
 3. Delete the customer entity by id.
 4. Invalidate customer order projections.
-5. Verify PostgreSQL state.
+5. Verify source-database state.
 ```
 
 BEST: explicit domain orchestration for aggregate-level deletes.
@@ -943,8 +944,8 @@ history row, and dashboard read-model is automatically correct.
 
 ### Delete 4: Soft Delete
 
-Use a full entity update or command route when the row must remain in
-PostgreSQL.
+Use a full entity update or command route when the row must remain in the
+source database.
 
 ```java
 OrderEntity order = loadFullOrderForSoftDelete(9001L);
@@ -957,7 +958,7 @@ Runtime behavior:
 
 - Redis stores the new full state if the route should remain hot.
 - Projections can remove or mark the row depending on screen requirements.
-- PostgreSQL keeps the row.
+- The source database keeps the row.
 
 BEST: soft delete is an update, not a physical delete.
 
@@ -1078,14 +1079,14 @@ BEST:
 
 - Use projection/read-model for operational reports that open frequently.
 - Keep only the active reporting window hot.
-- Keep raw historical facts in PostgreSQL.
+- Keep raw historical facts in the source database.
 
 ### Projection 5: Existing ORM Route Migration
 
 Use the Migration Planner before converting a production route.
 
 ```text
-1. Discover PostgreSQL schema.
+1. Discover the source-database schema.
 2. Pick root table and child table.
 3. Generate entity and projection scaffold.
 4. Run dry-run warm.
@@ -1133,7 +1134,7 @@ BEST: precomputed score, bounded top-N read.
 
 ### Dashboard 3: Monthly Finance Report
 
-Use PostgreSQL or a dedicated reporting table when the report scans a large
+Use the source database or a dedicated reporting table when the report scans a large
 date range.
 
 ```sql
@@ -1144,7 +1145,7 @@ WHERE order_date >= :month_start
 GROUP BY currency_code;
 ```
 
-BEST: set-based PostgreSQL reporting for broad historical aggregation.
+BEST: set-based source-database reporting for broad historical aggregation.
 
 ANTI-PATTERN: pull all monthly orders into Redis and aggregate in Java.
 
@@ -1159,7 +1160,7 @@ WHERE order_id = :order_id
 ORDER BY recorded_at DESC;
 ```
 
-BEST: keep audit trail durable and queryable in PostgreSQL.
+BEST: keep audit trail durable and queryable in the source database.
 
 ACCEPTABLE: create a narrow audit projection only if the audit screen is hot
 and has a stable bounded window.
@@ -1182,7 +1183,7 @@ BEST: separate operational telemetry from business reporting.
 
 Partial update is the most important place to avoid magic.
 
-Assume this row exists in PostgreSQL but not in Redis:
+Assume this row exists in the source database but not in Redis:
 
 ```text
 order_id = 500
@@ -1220,7 +1221,7 @@ BEST options:
 - Send the full valid `OrderEntity` to `save(...)`.
 - Use an explicit command route such as `CancelOrderCommand`.
 - If Redis has the entity, update/invalidate it.
-- If Redis does not have the entity, update PostgreSQL and do not create a
+- If Redis does not have the entity, update the source database and do not create a
   partial Redis entity.
 
 ANTI-PATTERN:
@@ -1241,7 +1242,7 @@ BEST:
 
 - Root entities that are frequently read stay hot.
 - Large lists use bounded projections.
-- Old history stays in PostgreSQL.
+- Old history stays in the source database.
 - Redis has `maxmemory` configured.
 - CacheDB guardrails stop unsafe full-entity reads.
 
@@ -1330,7 +1331,7 @@ BEST:
 - Page size stays below the hot window.
 - Projection is required for large list routes.
 - Tenant quota prevents one tenant from consuming the whole Redis budget.
-- Cold reads are capped and intentionally routed to PostgreSQL/archive paths.
+- Cold reads are capped and intentionally routed to source-database/archive paths.
 - Redis memory estimate is calibrated after staging warm with actual
   `MEMORY USAGE` samples.
 - Route tenant memory budget counts measured entity payload bytes, so repeated
@@ -1345,7 +1346,7 @@ ANTI-PATTERN:
 - Treat `entityTtlSeconds` as "last 90 business days".
 - Let a production route silently fall back from projection to entity scan.
 - Run a large backfill/warm job without checkpoint, resume, and rate limit.
-- Update PostgreSQL outside CacheDB without CDC, outbox, or a projection refresh feed.
+- Update the source database outside CacheDB without CDC, outbox, or a projection refresh feed.
 
 ## Final Checklist
 

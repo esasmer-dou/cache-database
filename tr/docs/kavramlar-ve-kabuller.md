@@ -88,7 +88,7 @@ Repository, entity üzerinde temel veri işlemlerini yapar:
 
 Davranış:
 
-- Yazma Redis'e girer ve PostgreSQL write-behind hattına alınır.
+- Yazma Redis'e girer ve SQL provider write-behind hattına alınır.
 - Okuma önce Redis sıcak yolundan yapılır.
 - Read-through veya hydrate ile gelen veri hot policy'ye göre Redis'e kabul
   edilir ya da reddedilir.
@@ -332,5 +332,5 @@ ANTI-PATTERN:
 - bütün tabloyu Redis'e doldurmak
 - relation-heavy ekranları full entity graph ile açmak
 - route contract olmadan büyük page okumak
-- PostgreSQL dış yazımlarını outbox/CDC olmadan yok saymak
+- kaynak veritabanı dış yazımlarını outbox/CDC olmadan yok saymak
 - benchmark ve parity kanıtı olmadan canlıya geçmek

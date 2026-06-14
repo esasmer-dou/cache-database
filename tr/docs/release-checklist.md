@@ -30,7 +30,7 @@ Bu kontrol listesi ilk public beta öncesinde ve sonraki release'lerde kullanıl
 
 - production evidence workflow yeşil
 - coordination evidence workflow yeşil
-- hedef Redis/PostgreSQL topolojisi için staging Redis HA workflow yeşil
+- hedef Redis/kaynak veritabanı topolojisi için staging Redis HA workflow yeşil
 - tam migration akış kapsamı CSV olarak commit edildi ve doğrulama geçti
 - runtime hotspot değişiklikleri için güncel benchmark veya smoke kanıtı var
 

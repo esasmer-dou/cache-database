@@ -2,15 +2,17 @@
 
 Turkish version: [tr/README.md](tr/README.md)
 
-CacheDB is a Redis-first Java persistence library that keeps PostgreSQL as the
-durable source of truth. It is built for teams that want ORM-like developer
-ergonomics without hiding the hot read/write path behind runtime magic.
+CacheDB is a Redis-first Java data-layer library that keeps a durable SQL
+database as the source of truth. PostgreSQL is the default provider today;
+MSSQL is available as an explicit beta provider. CacheDB is built for teams
+that want ORM-like developer ergonomics without hiding the hot read/write path
+behind runtime magic.
 
 The core design rule is simple:
 
 - do not move the whole database into Redis
 - explicitly define what is hot
-- keep PostgreSQL responsible for durable history
+- keep the selected SQL provider responsible for durable history
 - use projections/read models for relation-heavy and globally sorted screens
 - generate metadata at compile time instead of discovering it with runtime
   reflection
@@ -24,10 +26,10 @@ announced as unconditional GA yet.
 | Problem | CacheDB approach |
 | --- | --- |
 | Low-latency reads for hot entities | Redis-first entity repositories |
-| Durable writes | PostgreSQL write-behind flush |
+| Durable writes | SQL write-behind flush |
 | Growing relation fan-out | Relation limits, projections, and summary-first reads |
 | Global top-N dashboards | Ranked projections and route contracts |
-| Migration from existing PostgreSQL/ORM systems | Migration Planner, warm-up, dry-run, side-by-side comparison |
+| Migration from existing SQL database/ORM systems | Migration Planner, warm-up, dry-run, side-by-side comparison |
 | Redis memory growth | Hot policies, tenant quotas, payload budgets, admission telemetry |
 | Multi-pod Kubernetes operation | Pod-unique consumers, Redis leader leases, coordination evidence |
 
@@ -43,7 +45,7 @@ announced as unconditional GA yet.
 | "How do I model real production cases?" | [Use Case Examples](docs/use-case-examples.md) |
 | "How should I tune Redis memory and performance?" | [Production Tuning Guide](docs/production-tuning-guide.md) |
 | "Where are all properties and defaults?" | [Tuning Parameters](docs/tuning-parameters.md) |
-| "How do I migrate an existing PostgreSQL system?" | [Migration Planner](docs/migration-planner.md) |
+| "How do I migrate an existing SQL database system?" | [Migration Planner](docs/migration-planner.md) |
 | "What must be proven before production?" | [Production Recipes](docs/production-recipes.md) |
 | "What is still missing for GA?" | [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) |
 
@@ -54,13 +56,13 @@ announced as unconditional GA yet.
 | New Spring Boot service | `cachedb-spring-boot-starter` | Minimal setup, same-port admin UI, Spring `DataSource` integration |
 | Existing Spring Boot app with JPA | Starter plus existing `DataSource` | JPA usually already creates the `DataSource`; do not duplicate JDBC setup |
 | Plain Java service | `cachedb-starter` | You own bootstrap, shutdown, and connection lifecycle |
-| Existing PostgreSQL + ORM system | Migration Planner | Discover schema, warm Redis, compare PostgreSQL vs CacheDB, generate a cutover report |
+| Existing SQL database + ORM system | Migration Planner | Discover schema, warm Redis, compare the source database vs CacheDB, generate a cutover report |
 | Relation-heavy list screen | Projection/read model | Avoid loading the full object graph on first paint |
 | Internal worker, replay, repair, or batch job | Direct repository | Lower abstraction and more predictable operational behavior |
 
 BEST: choose one hot route, define the Redis hot-set decision, warm it in
-staging, compare it against PostgreSQL, and cut over only when parity and
-latency are proven.
+staging, compare it against the source database, and cut over only when parity
+and latency are proven.
 
 ANTI-PATTERN: mark every table as an entity and expect Redis to automatically
 make every dynamic query fast.
@@ -123,6 +125,10 @@ JDBC rule:
 - CacheDB needs a working Spring `DataSource` bean.
 - `cachedb-annotations` and the `cachedb-processor` annotation processor are
   still required.
+- The example below uses PostgreSQL because it is the default provider. For
+  MSSQL, add `cachedb-storage-mssql`, the Microsoft JDBC driver, and wire the
+  MSSQL flusher explicitly as described in
+  [Database Provider SPI](docs/database-provider-spi.md).
 
 Minimal `application.yml`:
 
@@ -203,7 +209,7 @@ CustomerEntity loaded = domain.customers()
 Behavior:
 
 - `save` writes the hot entity to Redis.
-- Durable persistence is sent to the PostgreSQL write-behind path.
+- Durable persistence is sent to the selected SQL write-behind path.
 - `findById` reads the hot entity from Redis.
 - If the entity does not satisfy the hot policy, it may be rejected or evicted
   from Redis.
@@ -292,23 +298,23 @@ Hot policy examples:
 Read [Production Tuning Guide](docs/production-tuning-guide.md) together with
 [Tuning Parameters](docs/tuning-parameters.md) for configuration details.
 
-## Existing PostgreSQL + ORM Migration
+## Existing SQL Database + ORM Migration
 
 The Migration Planner is not a one-click production cutover tool. Its job is to
 prove the route shape before cutover:
 
 - Should this route use entity, projection, or ranked projection?
 - Which Redis hot window should be warmed?
-- Which data stays in PostgreSQL full history?
+- Which data stays in the durable SQL database as full history?
 - How many rows does warm-up read?
-- Does CacheDB return the same IDs and ordering as PostgreSQL?
+- Does CacheDB return the same IDs and ordering as the source database?
 - Is p95 latency acceptable?
 - What is the rollback plan?
 
 Recommended flow:
 
 1. Open `/cachedb-admin/migration-planner`.
-2. Discover the PostgreSQL schema.
+2. Discover the source database schema.
 3. Select a route candidate and apply it to the form.
 4. Generate the plan.
 5. Generate scaffold.
@@ -324,8 +330,8 @@ table.
 ## Production Checklist
 
 - Is Redis HA/failover planned and tested?
-- Does PostgreSQL remain the durable source of truth?
-- If external systems mutate PostgreSQL, is outbox/CDC configured?
+- Does the selected SQL provider remain the durable source of truth?
+- If external systems mutate the source database, is outbox/CDC configured?
 - Does every hot route have a route contract?
 - Can projection-required routes fail fast instead of falling back to entity
   scans?
@@ -340,7 +346,7 @@ table.
 | Topic | CacheDB | Traditional ORM |
 | --- | --- | --- |
 | Primary hot read path | Redis | Database |
-| Durable source | PostgreSQL | Database |
+| Durable source | SQL database | Database |
 | Metadata | Compile-time generated | Usually runtime metadata/reflection |
 | Relation behavior | Explicit `FetchPlan`, loaders, projections | Often lazy/eager object graph behavior |
 | Large list screens | Projection/read-model | Often entity graph or SQL join first |

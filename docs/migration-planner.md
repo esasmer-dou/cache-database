@@ -11,7 +11,9 @@ warm, compare, and report one route at a time.
 
 Use the planner when:
 
-- you already have PostgreSQL tables, or MSSQL tables on the explicit beta provider
+- you already have supported JDBC source-database tables
+- PostgreSQL is the default discovery target; MSSQL is supported through the
+  explicit beta provider path
 - the current route is served by JPA, Hibernate, MyBatis, JDBC, or another ORM/data layer
 - a list/detail route is getting expensive as child rows grow
 - you need to know whether a route should use entity reads, projection reads, or ranked projection reads

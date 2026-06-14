@@ -13,7 +13,8 @@ görünür hale getirmektir.
 
 Şu durumlarda planlayıcıyı kullan:
 
-- mevcut PostgreSQL tabloların varsa veya açık beta MSSQL provider ile MSSQL tablolarını deneyeceksen
+- desteklenen JDBC kaynak veritabanı tabloların varsa
+- PostgreSQL varsayılan keşif hedefidir; MSSQL açık beta provider yolu ile desteklenir
 - akış bugün JPA, Hibernate, MyBatis, JDBC veya başka bir veri erişim katmanı ile çalışıyorsa
 - çocuk satır sayısı arttıkça liste veya detay ekranı pahalılaşıyorsa
 - akışın entity read, projection read veya ranked projection read olarak mı tasarlanacağını netleştirmek istiyorsan

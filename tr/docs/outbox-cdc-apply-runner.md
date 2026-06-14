@@ -2,21 +2,22 @@
 
 English version: [../../docs/outbox-cdc-apply-runner.md](../../docs/outbox-cdc-apply-runner.md)
 
-Bu sayfayı, PostgreSQL CacheDB dışında da değişebiliyorsa ve Redis'in güncel
-kalması gerekiyorsa kullan.
+Bu sayfayı, kalıcı kaynak veritabanı CacheDB dışında da değişebiliyorsa ve
+Redis'in güncel kalması gerekiyorsa kullan.
 
 Örnek durumlar:
 
-- geçiş sürecinde eski ORM hâlâ PostgreSQL'e yazıyor
+- geçiş sürecinde eski ORM hâlâ kaynak veritabanına yazıyor
 - bir back-office batch işi satırları doğrudan güncelliyor
 - Debezium veya outbox tablosu başka bir servisten değişiklik yayıyor
 - incident sonrası repair/replay işi eski değişiklikleri yeniden işliyor
 
 ## Problem
 
-Yazma işlemi CacheDB üzerinden geçerse Redis ve PostgreSQL aynı akış içinde
-senkron kalır. Fakat başka bir sistem doğrudan PostgreSQL'e yazarsa Redis bunu
-kendiliğinden bilemez. Bu değişikliğin CacheDB'ye ayrıca beslenmesi gerekir.
+Yazma işlemi CacheDB üzerinden geçerse Redis ve seçilen SQL provider aynı akış
+içinde senkron kalır. Fakat başka bir sistem doğrudan kaynak veritabanına
+yazarsa Redis bunu kendiliğinden bilemez. Bu değişikliğin CacheDB'ye ayrıca
+beslenmesi gerekir.
 
 Güvenli production deseni:
 
@@ -24,7 +25,7 @@ Güvenli production deseni:
 2. Değişikliği `ExternalChangeEvent` haline getir.
 3. `ExternalChangeApplyRunner` ile uygula.
 4. Runner Redis hot entity, index, tombstone ve projection state'ini günceller;
-   aynı değişikliği tekrar PostgreSQL'e yazmaz.
+   aynı değişikliği tekrar kaynak veritabanına yazmaz.
 
 ## Varsayılan Mod: Sadece Cache
 
@@ -70,10 +71,10 @@ adapter.start(runner);
 - UPSERT, external event payload'ından Redis'i hydrate eder.
 - DELETE, Redis tombstone yazar ve hot/index/projection state'ini temizler.
 - Write-behind kuyruğu kullanılmaz.
-- PostgreSQL'e tekrar yazılmaz.
+- Kaynak veritabanına tekrar yazılmaz.
 
-Bu davranış, PostgreSQL'den gelen bir event'in yeniden PostgreSQL'e CacheDB
-komutu gibi yazılmasını ve döngü üretmesini engeller.
+Bu davranış, kaynak veritabanından gelen bir event'in yeniden aynı veritabanına
+CacheDB komutu gibi yazılmasını ve döngü üretmesini engeller.
 
 ## Event Şekli
 

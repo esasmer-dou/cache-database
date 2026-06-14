@@ -13,7 +13,7 @@ Amaç:
 - relation-heavy ekranlarda ilk sayfa maliyetini sınırlamak
 - write-behind backlog oluştuğunda sistemi kontrollü tutmak
 - çok pod'lu Kubernetes ortamında consumer ve singleton işlerini güvenli yapmak
-- mevcut PostgreSQL sisteminden geçişte warm ve compare maliyetini öngörmek
+- mevcut SQL veritabanı sisteminden geçişte warm ve compare maliyetini öngörmek
 
 ## 30 Saniyelik Özet
 
@@ -22,11 +22,11 @@ Amaç:
 | Redis memory büyüyor | Hot policy, tenant quota, Redis `maxmemory`, projection window |
 | Büyük liste yavaş | Projection, ranked projection, route contract |
 | Relation yükleme pahalı | `withRelationLimit(...)`, batch loader, summary-first model |
-| Yazma kuyruğu birikiyor | Write-behind worker, batch size, flush policy, PostgreSQL pool |
+| Yazma kuyruğu birikiyor | Write-behind worker, batch size, flush policy, SQL provider pool |
 | Çok pod'da aynı iş iki kez çalışıyor | Runtime coordination ve leader lease |
 | Eski veri Redis'i kirletiyor | `admitOnRead=false`, `TIME_WINDOW`, cold path |
 | Migration warm uzun sürüyor | Batch size, checkpoint/resume, rate limit, route scope |
-| Dış sistem PostgreSQL'i değiştiriyor | Outbox/CDC adapter ve apply runner |
+| Dış sistem kaynak veritabanını değiştiriyor | Outbox/CDC adapter ve apply runner |
 
 ## 1. Önce Route'u Sınıflandır
 
@@ -212,39 +212,42 @@ ANTI-PATTERN:
 
 ## 6. Write-Behind Tuning
 
-Write-behind hattı Redis'ten PostgreSQL'e kalıcı yazım yapar. Bu hattı
-ayarlarken yalnızca worker sayısını artırmak yeterli değildir.
+Write-behind hattı Redis'ten seçilen SQL provider'a kalıcı yazım yapar. Bu
+hattı ayarlarken yalnızca worker sayısını artırmak yeterli değildir.
 
 İzlenecek sinyaller:
 
 - stream backlog
 - pending entry sayısı
 - DLQ sayısı
-- PostgreSQL flush latency
+- SQL provider flush latency
 - retry sayısı
 - worker CPU kullanımı
-- PostgreSQL connection pool bekleme süresi
+- SQL provider connection pool bekleme süresi
 
 İlk ayarlar:
 
 | Alan | Ne zaman artırılır? |
 | --- | --- |
-| worker threads | CPU ve PostgreSQL pool uygunsa backlog büyüyorsa |
+| worker threads | CPU ve SQL provider pool uygunsa backlog büyüyorsa |
 | batch size | Küçük flush'lar çok fazlaysa |
 | flush group parallelism | Farklı tablo grupları paralel yazılabiliyorsa |
-| retry backoff | Geçici PostgreSQL hatalarında retry fırtınası oluşuyorsa |
+| retry backoff | Geçici SQL provider hatalarında retry fırtınası oluşuyorsa |
 | DLQ trim | Uzun süreli hata analizleri için daha fazla kayıt gerekiyorsa |
 
 ANTI-PATTERN:
 
-- PostgreSQL yavaşken worker sayısını sınırsız artırmak.
+- Kaynak veritabanı yavaşken worker sayısını sınırsız artırmak.
 - DLQ'yu izlememek.
 - Retry ve timeout olmadan write-behind çalıştırmak.
 
-## 7. PostgreSQL Tuning
+## 7. SQL Provider Tuning
 
-PostgreSQL hâlâ kalıcı doğruluk kaynağıdır. CacheDB Redis-first olsa bile
-PostgreSQL bağlantı kalitesi production davranışını belirler.
+Seçilen SQL provider hâlâ kalıcı doğruluk kaynağıdır. CacheDB Redis-first olsa
+bile connection pool, transaction ve index kalitesi production davranışını
+belirler. PostgreSQL varsayılan provider yoludur; MSSQL açık beta provider
+olarak ayrı dialect limitleri, lock davranışı ve driver ayarlarıyla ele
+alınmalıdır.
 
 Dikkat edilecekler:
 
@@ -295,16 +298,17 @@ ANTI-PATTERN:
 
 ## 9. Kubernetes ve Çok Pod
 
-Çok pod'lu ortamda her pod aynı Redis ve PostgreSQL'e bağlanır. Bu normaldir.
-Önemli olan consumer kimliği ve singleton işlerin kontrolüdür.
+Çok pod'lu ortamda her pod aynı Redis'e ve aynı kaynak veritabanı topolojisine
+bağlanır. Bu normaldir. Önemli olan consumer kimliği ve singleton işlerin
+kontrolüdür.
 
 BEST:
 
 - consumer name pod-unique olmalı
 - consumer group ortak kalmalı
 - cleanup/report/history gibi loop'lar leader lease ile singleton çalışmalı
-- pod sayısı artınca toplam worker kapasitesi ve PostgreSQL pool birlikte
-  düşünülmeli
+- pod sayısı artınca toplam worker kapasitesi ve kaynak veritabanı pool'u
+  birlikte düşünülmeli
 - Redis HA zorunlu production bağımlılığı olarak ele alınmalı
 
 Örnek:
@@ -323,8 +327,8 @@ ANTI-PATTERN:
 
 ## 10. Migration Warm Tuning
 
-Warm işlemi migration'ın en riskli adımlarından biridir; çünkü hem PostgreSQL'i
-okur hem Redis'i doldurur.
+Warm işlemi migration'ın en riskli adımlarından biridir; çünkü hem kaynak
+veritabanını okur hem Redis'i doldurur.
 
 BEST:
 
@@ -332,7 +336,7 @@ BEST:
 - Warm scope'u tek route ile sınırla.
 - Batch size kontrollü başlasın.
 - Checkpoint/resume açık olsun.
-- Rate limit ile PostgreSQL ve Redis korunmalı.
+- Rate limit ile kaynak veritabanı ve Redis korunmalı.
 - Warm sonrası Redis memory calibration raporu okunmalı.
 
 Warm raporunda bakılacaklar:
@@ -348,7 +352,7 @@ Warm raporunda bakılacaklar:
 
 ## 11. Outbox ve CDC Tuning
 
-PostgreSQL CacheDB dışından değişiyorsa outbox/CDC gerekir.
+Kaynak veritabanı CacheDB dışından değişiyorsa outbox/CDC gerekir.
 
 BEST:
 
@@ -385,7 +389,7 @@ Alarm örnekleri:
 
 | Sinyal | Aksiyon |
 | --- | --- |
-| DLQ artıyor | PostgreSQL hata tipini ve retry politikasını incele |
+| DLQ artıyor | SQL provider hata tipini ve retry politikasını incele |
 | Projection lag artıyor | Refresh worker ve source write hızını kontrol et |
 | Tenant rejected artıyor | Hot policy, tenant quota ve route window uyumunu kontrol et |
 | Redis memory hızla artıyor | New key prefix, projection window ve entity TTL/hot policy kontrolü |
@@ -429,7 +433,7 @@ Production'a yaklaşmadan önce:
 - Page size hot window'dan küçük.
 - Tenant quota tek tenant taşmasını engelliyor.
 - Redis `maxmemory` ve eviction policy altyapıda tanımlı.
-- PostgreSQL indeksleri warm ve query şekline uygun.
+- Kaynak veritabanı indeksleri warm ve query şekline uygun.
 - Write-behind backlog ve DLQ izleniyor.
 - Outbox/CDC gereksinimi değerlendirildi.
 - Migration warm checkpoint/resume destekli.

@@ -12,7 +12,7 @@ yayınlamaktır.
 Production'da hangi kullanım yüzeyinin seçileceği için ayrıca
 [Production Reçeteleri](./production-recipes.md) dokümanına bak.
 Geleneksel ORM kullanımına karşı daha üst seviyede konumlandırma için ayrıca [CacheDB Bir ORM Alternatifi Olarak](./orm-alternative.md) dokümanına bak.
-Mevcut PostgreSQL + ORM geçişleri için ayrıca [Geçiş Planlayıcı](./migration-planner.md) dokümanına bak.
+Mevcut SQL veritabanı + ORM geçişleri için ayrıca [Geçiş Planlayıcı](./migration-planner.md) dokümanına bak.
 Planlayıcı, seçilen akış için Redis çalışma setini dry-run modunda
 hesaplayabilir veya staging ortamında gerçekten önceden ısıtabilir. Ayrıca
 bağlı kaynak veritabanı şemasını inceleyip kök/çocuk tablo adaylarını çıkarabilir,
@@ -307,6 +307,9 @@ Notlar:
 
 - `cachedb-spring-boot-starter`, JDBC starter yerine geçmez.
 - Spring tarafında yine bir `DataSource` gerekir.
+- Dependency örnekleri PostgreSQL'i gösterir; çünkü varsayılan provider
+  PostgreSQL'dir. MSSQL seçersen `cachedb-storage-mssql`, Microsoft SQL Server
+  JDBC driver'ı ve açık `MssqlWriteBehindFlusher` wiring'i gerekir.
 - `JedisPooled` bean'i yoksa starter bunu `cachedb.redis.uri` değerinden oluşturur.
 - Eski `cachedb.redis-uri` alias'i geriye uyumluluk için çalışmaya devam eder.
 - `cachedb.profile` şu değerleri kabul eder: `default`, `development`, `production`, `benchmark`, `memory-constrained`, `minimal-overhead`.

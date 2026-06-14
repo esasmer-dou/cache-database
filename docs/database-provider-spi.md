@@ -2,17 +2,17 @@
 
 Turkish version: [../tr/docs/veritabani-provider-spi.md](../tr/docs/veritabani-provider-spi.md)
 
-CacheDB is still PostgreSQL-first in the public beta. The storage provider work
-now has a first explicit SPI layer, so adding MSSQL is no longer a fake
-"change the JDBC URL" story.
+CacheDB uses PostgreSQL as the default durable SQL provider in the public beta,
+and now has an explicit storage-provider SPI. MSSQL is available as an explicit
+beta provider, so this is no longer a fake "change the JDBC URL" story.
 
 ## Decision
 
 BEST: choose the durable SQL provider explicitly and wire the matching
 write-behind flusher.
 
-ACCEPTABLE: use the default starter path for PostgreSQL while the application is
-PostgreSQL-only.
+ACCEPTABLE: use the default starter path when the application intentionally
+uses the default PostgreSQL provider.
 
 ANTI-PATTERN: point a PostgreSQL flusher at an MSSQL JDBC URL and assume the
 same SQL, retry rules, and parameter limits are safe.

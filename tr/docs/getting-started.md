@@ -2,13 +2,15 @@
 
 English version: [../../docs/getting-started.md](../../docs/getting-started.md)
 
-Bu rehber, CacheDB'yi sıfırdan bir projeye eklemek veya mevcut PostgreSQL
-tabanlı bir uygulamada kontrollü biçimde denemek için izlenecek yolu anlatır.
+Bu rehber, CacheDB'yi sıfırdan bir projeye eklemek veya mevcut SQL veritabanı
+üzerinde çalışan bir uygulamada kontrollü biçimde denemek için izlenecek yolu
+anlatır. Starter tarafında varsayılan provider PostgreSQL'dir; MSSQL açıkça
+seçilen beta provider olarak kullanılır.
 
 Hedef, ilk gün şunları başarmaktır:
 
 - dependency'leri doğru eklemek
-- Redis ve PostgreSQL bağlantısını tanımlamak
+- Redis ve SQL `DataSource` bağlantısını tanımlamak
 - ilk entity'yi compile-time binding ile üretmek
 - ilk save/read/delete akışını çalıştırmak
 - relation ve projection kararını yanlış başlatmamak
@@ -21,7 +23,7 @@ Hedef, ilk gün şunları başarmaktır:
 | Yeni Spring Boot servisi | `cachedb-spring-boot-starter` |
 | JPA kullanan mevcut Spring Boot servisi | Starter + mevcut `DataSource` |
 | Spring kullanmayan Java servisi | `cachedb-starter` |
-| Mevcut PostgreSQL + ORM sistemi | Önce Migration Planner |
+| Mevcut SQL veritabanı + ORM sistemi | Önce Migration Planner |
 | Sadece birkaç hot endpoint var | Önce tek route pilotu |
 | Çok ilişkili dashboard veya liste var | Önce projection/read-model tasarımı |
 
@@ -83,8 +85,12 @@ JDBC kuralı:
 - Projede `DataSource` yoksa `spring-boot-starter-jdbc` eklenmelidir.
 - Projede `spring-boot-starter-data-jpa` varsa çoğu durumda `DataSource` zaten
   vardır; sadece CacheDB için JDBC starter'ı tekrar ekleme.
-- PostgreSQL driver runtime dependency olarak kalmalıdır.
+- Seçtiğin SQL provider'a ait JDBC driver runtime dependency olarak kalmalıdır.
 - `cachedb-processor` annotation processor olarak tanımlanmalıdır.
+- Örneklerde PostgreSQL driver'ı gösterilir; çünkü varsayılan provider
+  PostgreSQL'dir. MSSQL için `cachedb-storage-mssql`, Microsoft SQL Server JDBC
+  driver'ı ve açık `MssqlWriteBehindFlusher` wiring'i gerekir. Detaylar için
+  [Veritabanı Sağlayıcı SPI](veritabani-provider-spi.md) sayfasına bak.
 
 ## 3. Plain Java Dependency'leri
 
@@ -221,7 +227,7 @@ CustomerEntity loaded = customers.findById(1001L).orElseThrow();
 Beklenen davranış:
 
 - `save` Redis hot entity yoluna yazar.
-- PostgreSQL yazımı write-behind hattına alınır.
+- Kalıcı yazım seçilen SQL write-behind hattına alınır.
 - `findById` Redis'teki sıcak entity'yi okur.
 - Entity hot policy'ye uymuyorsa Redis'e kabul edilmeyebilir.
 
@@ -235,7 +241,7 @@ Davranış:
 
 - Redis tarafında entity ve index kayıtları temizlenir.
 - Tombstone davranışı eski cached değerlerin yanlış servis edilmesini engeller.
-- PostgreSQL delete write-behind hattına alınır.
+- Delete işlemi seçilen SQL write-behind hattına alınır.
 - Tekrar çağrıldığında idempotent davranmalıdır.
 
 ## 8. İlk Query
@@ -329,7 +335,7 @@ BEST: Liste projection, detay entity.
 ANTI-PATTERN: Liste ekranında her siparişin tüm satırlarını ve tüm ilişkilerini
 yüklemek.
 
-## 11. Mevcut PostgreSQL + ORM Uygulamasında İlk Deneme
+## 11. Mevcut SQL Veritabanı + ORM Uygulamasında İlk Deneme
 
 Mevcut sistemde doğrudan kod yazmaya başlamadan önce Migration Planner kullan:
 
@@ -379,7 +385,7 @@ En az şunları tamamlamış olmalısın:
 
 - bir entity compile ediliyor
 - generated binding oluşuyor
-- Redis ve PostgreSQL bağlantısı çalışıyor
+- Redis ve SQL `DataSource` bağlantısı çalışıyor
 - save/read/delete akışı denenmiş
 - ilk sıcak route seçilmiş
 - büyük liste varsa projection ihtiyacı belirlenmiş

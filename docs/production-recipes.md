@@ -41,7 +41,7 @@ If you want the shortest possible recommendation:
 
 The most common mistake is treating Redis as a magic full-aggregate cache.
 CacheDB is faster when the read model is intentionally smaller than the durable
-history stored in PostgreSQL.
+history stored in the selected SQL provider.
 
 ## When Projections Are Required
 
@@ -101,7 +101,9 @@ That keeps most application code ergonomic while preserving a clear escape hatch
 
 ## Multi-Pod Coordination Smoke
 
-Before you trust a new Kubernetes recipe, run the local multi-instance coordination smoke once against the same Redis/PostgreSQL pair:
+Before you trust a new Kubernetes recipe, run the local multi-instance
+coordination smoke once against the same Redis/source-database pair. The command
+below uses the default PostgreSQL demo provider:
 
 ```powershell
 .\tools\ops\cluster\run-multi-instance-coordination-smoke.ps1 `
@@ -151,7 +153,7 @@ Important:
 
 - this benchmark measures CacheDB API-surface overhead
 - it does not measure external Hibernate/JPA runtime
-- it does not replace the end-to-end Redis/PostgreSQL production scenario runs
+- it does not replace the end-to-end Redis/source-database production scenario runs
 
 Latest local benchmark snapshot after generated-surface caching:
 
@@ -293,7 +295,7 @@ For customer timelines, a production-safe shape is:
 
 - Redis keeps the customer root entity hot
 - Redis keeps a bounded per-customer order-summary projection window, for example the latest 1,000 summaries
-- PostgreSQL remains the durable home for full order history and archive reads
+- the selected SQL provider remains the durable home for full order history and archive reads
 - detail screens fetch one explicit order or a small preview relation, not the whole customer aggregate
 
 For entity hot sets, choose the admission rule explicitly:
@@ -404,14 +406,15 @@ Measured support:
 
 - use `ReadShapeBenchmarkMain` in `cachedb-production-tests` when you want a repo-local comparison of summary list, preview list, and full aggregate list materialization cost
 - use `RankedProjectionBenchmarkMain` when you want a repo-local comparison of a ranked projection top-window path versus a wide candidate scan
-- this benchmark is intentionally application-side, so it complements rather than replaces end-to-end Redis/PostgreSQL scenario runs
+- this benchmark is intentionally application-side, so it complements rather than replaces end-to-end Redis/source-database scenario runs
 
-### PostgreSQL Outbox / CDC Adapter Example
+### Source Database Outbox / CDC Adapter Examples
 
-If PostgreSQL can be changed outside CacheDB, do not rely on Redis staying fresh
-by luck. Use a real feed: outbox, Debezium, Kafka, or another CDC source. The
-starter now includes a concrete PostgreSQL outbox adapter for the simplest
-production migration path.
+If the source database can be changed outside CacheDB, do not rely on Redis
+staying fresh by luck. Use a real feed: outbox, Debezium, Kafka, or another CDC
+source. The starter includes a concrete PostgreSQL outbox adapter for the
+default provider path, and the MSSQL beta provider exposes a matching explicit
+adapter path.
 
 Expected outbox shape:
 
@@ -498,7 +501,7 @@ No matter which recipe you choose, these remain the production defaults we recom
 - define route-level cache contracts for critical screens: page size, hot window, projection requirement, cold-read cap, memory budget, and tenant quota
 - run warm/backfill jobs with checkpoint, resume, batch-size, fetch-size, and row-rate limits when the hot set is large
 - calibrate planner estimates after staging warm with Redis `MEMORY USAGE` and key-prefix breakdown
-- use a CDC, Debezium, Kafka, or outbox adapter when PostgreSQL can be mutated outside CacheDB
+- use a CDC, Debezium, Kafka, or outbox adapter when the source database can be mutated outside CacheDB
 - use `readShapeGuardrail.maxProjectionQueryLimit` for bounded projection windows such as "latest 1,000 orders per customer"
 - set Redis `maxmemory` and keep `maxmemory-policy=noeviction` for a CacheDB-owned Redis; let CacheDB guardrails shed page-cache, read-through, hot-set, and query-index writes intentionally
 - keep generated ergonomics for normal code, and reserve minimal repository style for measured hotspots
@@ -535,7 +538,8 @@ Then let generated registrars auto-register entities, and use generated module o
 
 ## Multi-Pod Kubernetes Recipe
 
-When multiple application pods share one Redis and one PostgreSQL instance, keep these rules explicit:
+When multiple application pods share one Redis and one source-database topology,
+keep these rules explicit:
 
 - keep consumer groups shared across pods
 - let CacheDB auto-append the resolved instance id to consumer names
@@ -569,7 +573,7 @@ What does not change:
 
 - Redis is still the main coordination dependency
 - async projection refresh is still eventually consistent
-- `at-least-once` delivery still means PostgreSQL version guards remain part of correctness
+- `at-least-once` delivery still means source-database version guards remain part of correctness
 
 ## Recommended Defaults
 

@@ -12,7 +12,7 @@ problem için tasarlandığını net anlatmaktır.
 
 ### Kısa açıklama
 
-`Redis merkezli Java persistence kütüphanesi: PostgreSQL kalıcı kaynak olarak kalır, ORM benzeri API'ler derleme zamanında üretilir.`
+`Redis merkezli Java data-layer kütüphanesi: sıcak veri Redis'te, kalıcı doğruluk seçilen SQL veritabanında, ORM benzeri API'ler derleme zamanında üretilir.`
 
 ### Website
 
@@ -37,7 +37,7 @@ Ayrı bir site yoksa repo URL'si veya ana doküman giriş sayfası kullanılabil
 
 Önerilen ana mesaj:
 
-`cache-database, düşük gecikme ve ölçülebilir çalışma zamanı maliyeti isteyen Java ekipleri için Redis merkezli bir persistence katmanıdır. PostgreSQL kalıcı veri kaynağı olarak kalır; sıcak okuma ve yazma yolu Redis üzerinden tasarlanır.`
+`cache-database, düşük gecikme ve ölçülebilir çalışma zamanı maliyeti isteyen Java ekipleri için Redis merkezli bir data-layer katmanıdır. PostgreSQL varsayılan kalıcı provider'dır; MSSQL açıkça seçilen beta provider olarak desteklenir. Sıcak okuma ve yazma yolu Redis üzerinden bilinçli şekilde tasarlanır.`
 
 Mutlaka korunması gereken sınır:
 
@@ -60,14 +60,16 @@ Bu sürüm, `cache-database` için ilk açık beta yayınıdır.
 
 ### CacheDB nedir
 
-CacheDB, PostgreSQL'i kalıcı veri kaynağı olarak korurken uygulamanın sıcak
-okuma ve yazma yolunu Redis üzerinden kuran bir Java persistence
-kütüphanesidir. Hedefi, çalışma zamanı ek yükünü düşük tutmak ve buna rağmen
-ORM benzeri, üretilebilir bir geliştirici deneyimi sunmaktır.
+CacheDB, kalıcı doğruluk kaynağını seçilen SQL veritabanında tutarken
+uygulamanın sıcak okuma ve yazma yolunu Redis üzerinden kuran bir Java
+data-layer kütüphanesidir. PostgreSQL varsayılan provider'dır; MSSQL açıkça
+seçilen beta provider olarak desteklenir. Hedefi, çalışma zamanı ek yükünü
+düşük tutmak ve buna rağmen ORM benzeri, üretilebilir bir geliştirici deneyimi
+sunmaktır.
 
 ### Şimdiden güçlü olan taraflar
 
-- Redis merkezli okuma/yazma yolu ve PostgreSQL kalıcılığı
+- Redis merkezli okuma/yazma yolu ve SQL write-behind kalıcılığı
 - derleme zamanında üretilen entity metadata'sı ve ergonomik API'ler
 - Spring Boot starter ve plain Java bootstrap yolu
 - çok ilişkili ekranlar için projection/okuma modeli rehberi
@@ -91,7 +93,7 @@ Temel tasarım ilkesi açıktır:
 - production reçeteleri rehberini oku
 - tuning parameters dokümanını oku
 - production kanıt iş akışını çalıştır
-- ortak Redis/PostgreSQL kullanımında çok instance'lı koordinasyon smoke'unu çalıştır
+- ortak Redis/kaynak veritabanı kullanımında çok instance'lı koordinasyon smoke'unu çalıştır
 
 ### Önemli not
 

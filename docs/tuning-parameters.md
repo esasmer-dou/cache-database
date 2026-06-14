@@ -7,7 +7,8 @@ property reference.
 
 There are two layers:
 
-- connection/bootstrap tuning for Redis and PostgreSQL clients
+- connection/bootstrap tuning for Redis, the default PostgreSQL client, and
+  provider-specific SQL clients
 - core `CacheDatabaseConfig` overrides for write-behind, guardrails, admin, indexing, schema bootstrap, and cache behavior
 
 If a property is not set, the system falls back to the default shown below.
@@ -492,7 +493,7 @@ Operational notes:
 | `cachedb.config.schemaBootstrap.autoApplyOnStart` | `false` | Applies schema bootstrap on startup. |
 | `cachedb.config.schemaBootstrap.includeVersionColumn` | `true` | Includes version column in generated DDL. |
 | `cachedb.config.schemaBootstrap.includeDeletedColumn` | `true` | Includes deleted column in generated DDL. |
-| `cachedb.config.schemaBootstrap.schemaName` | empty | Target PostgreSQL schema name. |
+| `cachedb.config.schemaBootstrap.schemaName` | empty | Target SQL schema name for providers that support schemas; PostgreSQL is the default starter path. |
 
 ## Structured Override Formats
 

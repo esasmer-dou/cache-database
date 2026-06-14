@@ -32,7 +32,7 @@ CacheDB is not trying to be a drop-in clone of Hibernate.
 It is a Redis-first persistence library where:
 
 - application reads and writes go to Redis first
-- PostgreSQL remains the durable persistence layer
+- the selected SQL provider remains the durable persistence layer
 - metadata is compile-time generated
 - relation loading is explicit
 - write-behind moves database durability off the foreground path

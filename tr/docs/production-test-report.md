@@ -11,6 +11,10 @@ Doğrulama ortamı:
 - PostgreSQL kullanıcı bilgisi: `postgres / postgresql`
 - Test sınıfı: `EcommerceProductionScenarioSmokeTest`
 
+Provider kapsamı: bu rapor varsayılan PostgreSQL provider lane'i için kanıttır.
+MSSQL veya başka bir SQL provider için aynı production iddiası, kendi
+provider'ına özel evidence lane ile doğrulanmalıdır.
+
 Koşulan senaryolar:
 
 | Senaryo | Tip | İşlem | Okuma | Yazma | Hata | Ort. Gecikme | Maks Gecikme | Write-Behind Backlog | DLQ | Health |
@@ -30,7 +34,7 @@ Olumlu sinyaller:
 Görülen darboğaz:
 
 - Her iki koşu sonunda da anlamlı write-behind backlog oluştu.
-- Bu, kısa vadede asıl limitin Redis mutation hızı değil, PostgreSQL flush kapasitesi ve drain hızı olduğunu gösteriyor.
+- Bu, kısa vadede asıl limitin Redis mutation hızı değil, kaynak veritabanı flush kapasitesi ve drain hızı olduğunu gösteriyor.
 - `BREAK` senaryosunda gecikme, karışık yük senaryosuna göre belirgin şekilde daha kötü; bu da inventory/order yazma baskısıyla uyumlu.
 
 Bugünkü yorum:
@@ -42,7 +46,7 @@ Bugünkü yorum:
 ## Production Öncesi Ana Riskler
 
 1. Write-behind saturation.
-   PostgreSQL flush worker'ları kampanya piklerinde geride kalabilir ve kalıcı backlog üretebilir.
+   SQL provider flush worker'ları kampanya piklerinde geride kalabilir ve kalıcı backlog üretebilir.
 
 2. Sustained burst altında health degradation.
    DLQ oluşmasa bile backlog çok uzun süre taşınırsa sistem uzun süre `DEGRADED` kalabilir.
@@ -62,7 +66,7 @@ Bugünkü yorum:
 
 | Alert | Warning Tetik | Critical Tetik | Ana Risk | İlk Operator Aksiyonu |
 | --- | --- | --- | --- | --- |
-| `WRITE_BEHIND_BACKLOG` | backlog warning eşiğini geçer | backlog critical eşiğini geçer | PostgreSQL drain saturation | producer'ları yavaşlat, flush throughput ve drain durumunu kontrol et |
+| `WRITE_BEHIND_BACKLOG` | backlog warning eşiğini geçer | backlog critical eşiğini geçer | kaynak veritabanı drain saturation | producer'ları yavaşlat, flush throughput ve drain durumunu kontrol et |
 | `COMPACTION_PENDING_BACKLOG` | pending compaction warning eşiğini geçer | pending compaction critical eşiğini geçer | Redis memory büyümesi ve stale flush gecikmesi | compaction worker sağlığını ve runtime profile switching'i kontrol et |
 | `REDIS_MEMORY_PRESSURE` | used memory warning bütçesini geçer | used memory critical bütçesini geçer | Redis eviction baskısı ve degraded serving | daha sert guardrail profile'a geç, hot-set/page-cache bütçelerini daralt |
 | `REDIS_HARD_REJECTIONS` | yok | herhangi bir rejected write | bounded-memory koruması yazıları düşürüyor | kampanya trafiğini azalt ve drain kapasitesini geri kazan |
@@ -71,7 +75,7 @@ Bugünkü yorum:
 
 Önerilen operator runbook:
 
-1. Backlog ve memory birlikte yükseliyorsa önce Redis sizing değil PostgreSQL drain kapasitesini şüpheli kabul et.
+1. Backlog ve memory birlikte yükseliyorsa önce Redis sizing değil kaynak veritabanı drain kapasitesini şüpheli kabul et.
 2. Hard rejection görülürse önce kritik olmayan kampanya trafiğini kıs; sistem bounded memory koruması için availability'den feragat ediyor olabilir.
 3. Bir namespace degraded query-index modundaysa hard-limit baskısının düştüğünü doğrula ve `/api/query-index/rebuild` tetikle.
 4. Pressure düştükten sonra tombstone yüksek kalmaya devam ediyorsa delete ağırlıklı iş yüklerini, write-behind drain'i ve tombstone TTL ayarlarını incele.
@@ -108,7 +112,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 Certification raporu şunları birleştirir:
 
 - representative benchmark koşusu
-- gerçek Redis/PostgreSQL yığınında restart/recover doğrulaması
+- gerçek Redis/kaynak veritabanı yığınında restart/recover doğrulaması
 - throughput, backlog, hata, hard rejection, rebuild başarısı ve restart recovery için açık gate'ler
 
 Üretilen dosyalar:
@@ -190,7 +194,7 @@ Amaç:
    - ortalama ve p95 gecikme
    - write-behind backlog artış hızı
    - yük bittikten sonraki drain süresi
-   - PostgreSQL CPU ve IO
+   - kaynak veritabanı CPU ve IO
 3. Backlog hedef iyileşme penceresinde boşalamıyorsa artık yükü artırma.
 
 Başarı kriterleri:

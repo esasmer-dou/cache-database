@@ -8,7 +8,7 @@ Bu proje klasik `DB-first ORM` yaklasimini tersine cevirir:
 
 - uygulama katmani Redis ile konusur
 - entity yasam dongusu Redis'te baslar
-- PostgreSQL arka planda kalici depo olarak kullanilir
+- secilen SQL provider arka planda kalici depo olarak kullanilir
 - flush islemi kullanici isteginden ayrilir
 
 Bu nedenle sistem teknik olarak bir `cache-first persistence engine`dir.
@@ -36,7 +36,7 @@ Kurallar:
 
 - `save`, `find`, `delete`, `query result materialization` once Redis'e gider
 - kullaniciya verilen basari sinyali Redis seviyesinde olusur
-- PostgreSQL sync islemi daha sonra write-behind iscisi ile yapilir
+- SQL provider sync islemi daha sonra write-behind iscisi ile yapilir
 - Redis 8 uzerinde mutation akisina Redis Functions eklenebilir
 
 ### Version ordering
@@ -45,7 +45,7 @@ Kurallar:
 - mutation sirasinda version atomik artirilir
 - stream event'i bu version ile yazilir
 - worker Redis'te daha yeni version varsa stale event'i skip eder
-- PostgreSQL upsert sadece daha yeni version geldiginde satiri gunceller
+- SQL provider upsert sadece daha yeni version geldiginde satiri gunceller
 
 ### Sicak veri butcesi
 
@@ -54,7 +54,7 @@ Her entity turu icin:
 - bir `hot set` limiti olur
 - overflow kayitlar page mantigiyla gecici yuklenir
 - kullanim bittiginde LRU benzeri politika ile Redis'ten dusurulur
-- kalici veri PostgreSQL'de kalmaya devam eder
+- kalici veri secilen SQL provider'da kalmaya devam eder
 
 ## 3. Veri Akisi
 
@@ -64,12 +64,12 @@ Her entity turu icin:
 2. Entity codec ile Redis payload ve kolon haritasi uretilir.
 3. Redis Functions aciksa entity key ve stream append atomik bicimde calisir.
 4. Fonksiyon kapaliysa entity Redis'e yazilir ve write-behind kuyruguna event eklenir.
-5. Worker stream'i okuyup PostgreSQL'e `upsert/delete` uygular.
+5. Worker stream'i okuyup secilen SQL provider'a `upsert/delete` uygular.
 
 ### Okuma akisi
 
 1. Istek once Redis hot set icinde aranir.
-2. Bulunmazsa ileride page loader PostgreSQL'den ilgili pencereyi getirecektir.
+2. Bulunmazsa ileride page loader kaynak veritabanindan ilgili pencereyi getirecektir.
 3. `FetchPlan` bos degilse kayitli `RelationBatchLoader` preload yapar.
 
 ## 4. Tutarlilik Modeli
@@ -79,14 +79,14 @@ Sistem `eventual consistency` modelindedir.
 Bu su anlama gelir:
 
 - kullanici Redis yazisini gorur
-- PostgreSQL commit'i daha sonra gerceklesir
-- Redis ve PostgreSQL kisa sureli farkli olabilir
+- SQL provider commit'i daha sonra gerceklesir
+- Redis ve kaynak veritabani kisa sureli farkli olabilir
 
 Bu nedenle uretimde kritik konular:
 
 - Redis AOF acilmasi
 - durable stream/list kullanimi
-- idempotent PostgreSQL yazimi
+- idempotent SQL provider yazimi
 - retry ve dead-letter stratejisi
 - version ordering
 
@@ -105,7 +105,7 @@ Ornek cikti:
 Entity codec iki farkli amac tasir:
 
 - Redis payload encode/decode
-- PostgreSQL kolon degerleri uretimi
+- SQL provider kolon degerleri uretimi
 
 ## 6. Moduller
 
@@ -211,7 +211,7 @@ Onerilen akis:
 
 1. Java tarafi entity write operation uretir.
 2. `FCALL entity_upsert` ile entity key, version increment ve stream append tek atomik islemde yapilir.
-3. Worker ayni stream'i okuyup PostgreSQL'e flush eder.
+3. Worker ayni stream'i okuyup secilen SQL provider'a flush eder.
 
 Silme akisi:
 
@@ -246,7 +246,7 @@ Henuz netlesmesi gereken basliklar:
 - query DSL ne kadar genis olacak
 - page cache boyutu global mi, entity tipi bazli mi yonetilecek
 - write-behind ordering key bazli mi, entity tipi bazli mi olacak
-- PostgreSQL tarafinda tombstone / soft-delete standardi gerekli mi
+- SQL provider tarafinda tombstone / soft-delete standardi gerekli mi
 - version alani son kullanici entity modeline yansitilacak mi
 - page cache materialization sadece id listesi mi, yoksa tam payload mu tutmali
 
@@ -309,5 +309,5 @@ Bu sayede restart sonrasi explain plani tamamen sifirdan baslamak zorunda kalmaz
 
 1. Admin HTTP role modelini genişletmek; token/gateway auth sınırı artık üretim varsayımıdır
 2. Explain ve diagnostics icin daha zengin dashboard/REST filtreleri eklemek
-3. Failure injection ve load testlerle Redis/PostgreSQL hattini zorlamak
+3. Failure injection ve load testlerle Redis/kaynak veritabani hattini zorlamak
 4. Planner istatistiklerini daha gelismis cardinality modeli ve domain heuristics ile zenginlestirmek

@@ -5,7 +5,7 @@ Bu modül, `cache-database` için çalıştırılabilir örnekler içerir.
 İki amaç için kullanılır:
 
 - Demo yük altında Redis öncelikli çalışma davranışını gözlemlemek.
-- Gerçek bir PostgreSQL demo şeması üzerinde geçiş planlayıcı akışını prova etmek.
+- Gerçek bir PostgreSQL demo şeması üzerinde SQL geçiş planlayıcı akışını prova etmek.
 
 ## Spring Boot Demo
 
@@ -73,11 +73,12 @@ Yük profilleri:
 
 ## Geçiş Planlayıcı Demo Akışı
 
-Mevcut PostgreSQL geçiş davranışını denemek için:
+Mevcut SQL veritabanı geçiş davranışını varsayılan PostgreSQL demo veri setiyle
+denemek için:
 
 1. `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr` adresini aç.
 2. `Demo şemayı kur ve seed et` düğmesine bas.
-3. PostgreSQL şema keşfini çalıştır.
+3. PostgreSQL demo veri seti üzerinde şema keşfini çalıştır.
 4. Müşteri-sipariş gibi önerilen bir akış seç.
 5. `Forma uygula` düğmesine bas.
 6. `Planı oluştur` düğmesine bas.
@@ -96,7 +97,7 @@ Hazırlanan demo nesneleri:
 - `cachedb_migration_demo_ranked_orders_v`
 
 Karşılaştırma sonuç akış hazır değil diyorsa önce raporu incele. CacheDB tarafı
-hızlı görünse bile PostgreSQL ile ilk sayfa üyeliği ve sıralaması eşleşmeden
+hızlı görünse bile kaynak veritabanı baseline sonucu ile ilk sayfa üyeliği ve sıralaması eşleşmeden
 canlıya geçilmemelidir.
 
 ## Standalone Demo

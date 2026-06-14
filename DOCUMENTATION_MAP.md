@@ -32,8 +32,8 @@ production tuning should be approached.
 | How do I speed up relation-heavy screens? | [Production Recipes](docs/production-recipes.md) |
 | How do I control Redis memory? | [Production Tuning Guide](docs/production-tuning-guide.md) |
 | Where are all config properties? | [Tuning Parameters](docs/tuning-parameters.md) |
-| How do I migrate an existing PostgreSQL + ORM app? | [Migration Planner](docs/migration-planner.md) |
-| How do I keep Redis fresh when PostgreSQL changes outside CacheDB? | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
+| How do I migrate an existing SQL database + ORM app? | [Migration Planner](docs/migration-planner.md) |
+| How do I keep Redis fresh when the source database changes outside CacheDB? | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
 | Can CacheDB support MSSQL or another SQL database? | [Database Provider SPI Direction](docs/database-provider-spi.md) |
 | What must be proven before production? | [Production Test Report](docs/production-test-report.md) |
 | Public beta or GA? | [Public Beta Readiness](docs/public-beta-readiness.md) and [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) |
@@ -73,8 +73,8 @@ Start with:
 - [Production Readiness Report](docs/production-readiness-report.md)
 - [Final Production Go/No-Go Report](docs/final-production-go-no-go-report.md)
 
-Goal: understand Redis, PostgreSQL, workers, leader lease, failover, CI evidence,
-and observability boundaries.
+Goal: understand Redis, durable SQL providers, workers, leader lease, failover,
+CI evidence, and observability boundaries.
 
 ### Team Migrating From An Existing ORM
 
@@ -86,8 +86,9 @@ Start with:
 - [Production Recipes](docs/production-recipes.md)
 - [Production Tuning Guide](docs/production-tuning-guide.md)
 
-Goal: discover PostgreSQL schema, choose hot routes, produce Redis warm plans,
-compare against PostgreSQL baseline, and make cutover decisions with evidence.
+Goal: discover source-database schema, choose hot routes, produce Redis warm
+plans, compare against the source-database baseline, and make cutover decisions
+with evidence.
 
 ## Document Roles
 
@@ -99,7 +100,7 @@ compare against PostgreSQL baseline, and make cutover decisions with evidence.
 | [Use Case Examples](docs/use-case-examples.md) | Real entity, query, update, delete, projection, and dashboard examples |
 | [Production Tuning Guide](docs/production-tuning-guide.md) | Redis memory, hot policy, route contract, write-behind, Kubernetes tuning |
 | [Tuning Parameters](docs/tuning-parameters.md) | Property reference and defaults |
-| [Migration Planner](docs/migration-planner.md) | Migration flow from existing PostgreSQL systems |
+| [Migration Planner](docs/migration-planner.md) | Migration flow from existing SQL database systems |
 | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) | External database changes, outbox/CDC events, cache-only apply behavior |
 | [Database Provider SPI Direction](docs/database-provider-spi.md) | Storage provider boundary for PostgreSQL, MSSQL, and future SQL dialects |
 | [Production Recipes](docs/production-recipes.md) | BEST/ACCEPTABLE/ANTI-PATTERN production usage patterns |

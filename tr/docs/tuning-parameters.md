@@ -6,7 +6,8 @@ sayfasını oku; bu sayfa daha çok property referansı olarak kullanılmalıdı
 
 İki katman vardır:
 
-- Redis ve PostgreSQL istemci/bootstrap tuning ayarları
+- Redis, varsayılan PostgreSQL istemcisi ve provider'a özel SQL istemcileri için
+  connection/bootstrap tuning ayarları
 - write-behind, guardrail, admin, index, schema bootstrap ve cache davranışı için `CacheDatabaseConfig` override'ları
 
 Bir property set edilmezse, aşağıdaki tabloda yazan varsayılan değer kullanılır.
@@ -491,7 +492,7 @@ Operasyonel notlar:
 | `cachedb.config.schemaBootstrap.autoApplyOnStart` | `false` | Startup'ta schema bootstrap uygular. |
 | `cachedb.config.schemaBootstrap.includeVersionColumn` | `true` | Üretilen DDL'e version kolonu ekler. |
 | `cachedb.config.schemaBootstrap.includeDeletedColumn` | `true` | Üretilen DDL'e deleted kolonu ekler. |
-| `cachedb.config.schemaBootstrap.schemaName` | boş | Hedef PostgreSQL schema adı. |
+| `cachedb.config.schemaBootstrap.schemaName` | boş | Schema destekleyen provider'lar için hedef SQL schema adı; starter'da varsayılan yol PostgreSQL'dir. |
 
 ## Yapısal Override Formatları
 

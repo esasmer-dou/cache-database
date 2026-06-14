@@ -5,7 +5,7 @@ This module contains runnable examples for `cache-database`.
 Use it for two purposes:
 
 - observe Redis-first runtime behavior under demo load
-- rehearse the migration planner flow against a real PostgreSQL demo schema
+- rehearse the SQL migration planner flow against a real PostgreSQL demo schema
 
 ## Spring Boot Demo
 
@@ -73,11 +73,12 @@ Load profiles:
 
 ## Migration Planner Demo Flow
 
-Use this flow when you want to test existing-PostgreSQL migration behavior:
+Use this flow when you want to test the existing SQL-database migration behavior
+with the default PostgreSQL demo dataset:
 
 1. Open `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`.
 2. Click `Create and seed the demo schema`.
-3. Run PostgreSQL schema discovery.
+3. Run schema discovery against the PostgreSQL demo dataset.
 4. Pick a suggested route such as customer to orders.
 5. Click `Apply to form`.
 6. Click `Generate plan`.
@@ -97,7 +98,7 @@ Prepared demo objects:
 
 If comparison says the route is not ready, inspect the report before changing
 the route. A fast CacheDB number is not enough; first-page membership and order
-must also match PostgreSQL for the selected route.
+must also match the source-database baseline for the selected route.
 
 ## Standalone Demo
 

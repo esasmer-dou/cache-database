@@ -35,7 +35,7 @@ Sistem, test ettiğimiz yüksek baskılı e-ticaret rollout profili için artık
 Bu `GO` kararı doğru yorumlanmalı:
 
 1. Mevcut certification ve soak senaryolarının temsil ettiği kampanya tipi workload ailesi için geçerlidir.
-2. Validation sırasındaki operasyonel duruşu varsayar: Redis/PostgreSQL monitoring, aktif alerting ve rollback hazırlığı.
+2. Validation sırasındaki operasyonel duruşu varsayar: Redis/kaynak veritabanı monitoring, aktif alerting ve rollback hazırlığı.
 3. Test edilmeyen ve bu envelope'i aşan tüm olası workload karışımlarını otomatik olarak sertifikalamaz.
 
 ## Önerilen Rollout Yaklaşımı

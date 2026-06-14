@@ -37,11 +37,13 @@ koduna zorlamadan, sıcak veri yollarını açık ve ölçülebilir tutmaktır.
 
 ## Dışa Dönük Açıklama
 
-CacheDB, PostgreSQL'i kalıcı kaynak olarak korurken sıcak okuma ve yazma yolunu
-Redis üzerinden kurar. Derleme zamanında üretilen metadata sayesinde runtime
-reflection'a ihtiyaç duymaz. Normal servis kodu generated API'lerle ergonomik
-kalır; çok ilişkili veya global sıralı ekranlarda ise projection ve okuma modeli
-disiplini kullanılır.
+CacheDB, sıcak okuma ve yazma yolunu Redis üzerinden kurar; kalıcı doğruluk
+kaynağını ise seçilen SQL provider üzerinde tutar. PostgreSQL varsayılan
+provider yoludur, MSSQL desteği açık beta provider olarak bilinçli şekilde
+seçilmelidir. Derleme zamanında üretilen metadata sayesinde runtime reflection'a
+ihtiyaç duymaz. Normal servis kodu generated API'lerle ergonomik kalır; çok
+ilişkili veya global sıralı ekranlarda ise projection ve okuma modeli disiplini
+kullanılır.
 
 Bu nedenle CacheDB, "her şeyi otomatik gizleyen ORM" değil; sıcak veri yolunu
 bilinçli biçimde tasarlamak isteyen ekipler için düşük ek yüklü bir persistence

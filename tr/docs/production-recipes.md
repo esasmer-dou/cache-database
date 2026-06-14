@@ -40,8 +40,8 @@ Kısa kural:
 | Mevcut ORM akışının geçişi | Geçiş Planlayıcı, dry-run ön ısıtma, staging ön ısıtma, yan yana karşılaştırma | Sadece Redis hızlı diye kör canlı geçiş yapmak |
 
 En yaygın hata Redis'i sihirli bir tam veri grafiği cache'i gibi kullanmaktır.
-CacheDB, okuma modelini PostgreSQL'deki kalıcı geçmişten bilinçli olarak daha
-küçük tasarlandığında daha iyi sonuç verir.
+CacheDB, okuma modelini seçilen SQL provider'daki kalıcı geçmişten bilinçli
+olarak daha küçük tasarlandığında daha iyi sonuç verir.
 
 ## Projection Ne Zaman Şarttır?
 
@@ -104,8 +104,9 @@ az sayıdaki yol için de net bir kaçış hattı bırakır.
 
 ## Çok Pod Koordinasyon Smoke'u
 
-Yeni bir Kubernetes reçetesine güvenmeden önce aynı Redis/PostgreSQL çifti
-üzerinde local multi-instance coordination smoke'u bir kez çalıştır:
+Yeni bir Kubernetes reçetesine güvenmeden önce aynı Redis/kaynak veritabanı
+çifti üzerinde local multi-instance coordination smoke'u bir kez çalıştır.
+Aşağıdaki komut varsayılan PostgreSQL demo provider'ını kullanır:
 
 ```powershell
 .\tools\ops\cluster\run-multi-instance-coordination-smoke.ps1 `
@@ -156,7 +157,7 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
 
 - bu benchmark CacheDB API yüzeyi ek yükünü ölçer
 - dış Hibernate/JPA runtime maliyetini ölçmez
-- Redis/PostgreSQL üzerindeki end-to-end production senaryolarının yerine geçmez
+- Redis/kaynak veritabanı üzerindeki end-to-end production senaryolarının yerine geçmez
 
 Son yerel ölçümün özeti:
 
@@ -298,7 +299,7 @@ Müşteri timeline ekranı için production'a uygun şekil şudur:
 
 - Redis müşteri root entity'sini sıcak tutar
 - Redis müşteri başına sınırlı order summary projection penceresini sıcak tutar; örneğin son 1.000 özet
-- PostgreSQL bütün order geçmişi ve arşiv okumaları için kalıcı kaynak olarak kalır
+- Seçilen SQL provider bütün order geçmişi ve arşiv okumaları için kalıcı kaynak olarak kalır
 - detay ekranı bütün müşteri veri grafiğini değil, tek order'ı veya küçük bir relation önizlemesini açıkça okur
 
 Entity hot set için kabul kuralını açık seç:
@@ -412,12 +413,13 @@ Repo içi ölçüm yüzeyleri:
 - özet liste, önizleme listesi ve tam veri grafiği maliyeti için `ReadShapeBenchmarkMain`
 - ranked projection top-window ile geniş candidate scan farkı için `RankedProjectionBenchmarkMain`
 
-### PostgreSQL Outbox / CDC Adapter Örneği
+### Kaynak Veritabanı Outbox / CDC Adapter Örnekleri
 
-PostgreSQL CacheDB dışında da değişebiliyorsa Redis'in kendiliğinden güncel
-kalacağını varsayma. Gerçek bir feed kur: outbox, Debezium, Kafka veya başka bir
-CDC kaynağı. En sade geçiş yolu için starter içinde somut PostgreSQL outbox
-adapter'ı vardır.
+Kaynak veritabanı CacheDB dışında da değişebiliyorsa Redis'in kendiliğinden
+güncel kalacağını varsayma. Gerçek bir feed kur: outbox, Debezium, Kafka veya
+başka bir CDC kaynağı. Starter, varsayılan provider yolu için somut PostgreSQL
+outbox adapter'ı sunar; MSSQL beta provider tarafında da açıkça seçilen adapter
+yolu vardır.
 
 Beklenen outbox şekli:
 
@@ -505,7 +507,7 @@ Hangi reçeteyi seçersen seç, production için şu kurallar geçerlidir:
 - kritik ekranlar için route-level cache contract tanımla: page size, sıcak pencere, projection zorunluluğu, cold-read üst sınırı, memory budget ve tenant quota
 - büyük hot set'lerde warm/backfill işlerini checkpoint, resume, batch size, fetch size ve row-rate limit ile çalıştır
 - staging warm bittikten sonra planner tahminini Redis `MEMORY USAGE` ve key-prefix breakdown ile kalibre et
-- PostgreSQL CacheDB dışında da güncelleniyorsa CDC, Debezium, Kafka veya outbox adaptörü kullan
+- kaynak veritabanı CacheDB dışında da güncelleniyorsa CDC, Debezium, Kafka veya outbox adaptörü kullan
 - "müşteri başına son 1.000 order" gibi sınırlı projection pencereleri için `readShapeGuardrail.maxProjectionQueryLimit` kullan
 - CacheDB'ye ayrılmış Redis'te `maxmemory` ayarla ve `maxmemory-policy=noeviction` kullan; page-cache, read-through, hot-set ve query-index yazımlarını Redis'in rastgele eviction davranışına değil CacheDB guardrail'larına bırak
 - üretilmiş API ergonomisini normal kod için koru
@@ -547,8 +549,8 @@ kodunda generated module veya binding yüzeyini kullan.
 
 ## Çok Pod'lu Kubernetes Reçetesi
 
-Birden fazla application pod aynı Redis ve aynı PostgreSQL'e bağlandığında şu
-kuralları açık tut:
+Birden fazla application pod aynı Redis'e ve aynı kaynak veritabanı topolojisine
+bağlandığında şu kuralları açık tut:
 
 - consumer group'ları pod'lar arasında ortak bırak
 - CacheDB'nin consumer adlarına otomatik instance id eklemesine izin ver
@@ -582,7 +584,7 @@ Değişmeyen gerçekler:
 
 - Redis hâlâ ana koordinasyon bağımlılığıdır
 - async projection refresh eventual consistency taşır
-- `at-least-once` delivery modelinde PostgreSQL version guard correctness'in parçası olmaya devam eder
+- `at-least-once` delivery modelinde kaynak veritabanı version guard correctness'in parçası olmaya devam eder
 
 ## Kısa Playbook
 

@@ -35,7 +35,7 @@ The system is now acceptable for the validated high-pressure e-commerce rollout 
 This `GO` should still be interpreted correctly:
 
 1. It applies to the validated campaign-style workload family represented by the current certification and soak scenarios.
-2. It assumes the same operational posture used during validation: Redis/PostgreSQL monitoring, active alerting, and rollback readiness.
+2. It assumes the same operational posture used during validation: Redis/source-database monitoring, active alerting, and rollback readiness.
 3. It does not automatically certify arbitrary future workload mixes that exceed the tested envelope.
 
 ## Recommended Rollout Posture

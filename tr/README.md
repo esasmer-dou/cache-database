@@ -2,16 +2,18 @@
 
 English version: [../README.md](../README.md)
 
-CacheDB, Redis'i sıcak okuma/yazma yolu olarak kullanan, PostgreSQL'i ise
-kalıcı doğruluk kaynağı olarak koruyan bir Java persistence kütüphanesidir.
-Amaç, ORM'e benzeyen geliştirme ergonomisini korurken sıcak veri yolunu açık,
-sınırlı, ölçülebilir ve production ortamında yönetilebilir hale getirmektir.
+CacheDB, Redis'i sıcak okuma/yazma yolu olarak kullanan ve kalıcı doğruluk
+kaynağını seçilen SQL veritabanında tutan bir Java data-layer kütüphanesidir.
+Bugün PostgreSQL varsayılan provider'dır; MSSQL ise açıkça seçilen beta provider
+olarak desteklenir. Amaç, ORM'e benzeyen geliştirme ergonomisini korurken sıcak
+veri yolunu açık, sınırlı, ölçülebilir ve production ortamında yönetilebilir
+hale getirmektir.
 
 CacheDB şu iddiayla konumlanır:
 
 - verinin tamamını Redis'e taşımak gerekmez
 - sıcak olan veri ve route açıkça tanımlanmalıdır
-- PostgreSQL kalıcı geçmişin sahibi olmaya devam etmelidir
+- seçilen SQL provider kalıcı geçmişin sahibi olmaya devam etmelidir
 - ilişki yoğun ve global sıralı ekranlarda projection/read-model tasarımın
   parçasıdır
 - çalışma zamanı reflection'ı yerine derleme zamanında üretilen metadata
@@ -28,10 +30,10 @@ CacheDB özellikle şu problemlere odaklanır:
 | Problem | CacheDB yaklaşımı |
 | --- | --- |
 | Çok okunan tek entity'lerde düşük gecikme | Redis öncelikli entity repository |
-| Yazmanın kalıcı olması | PostgreSQL'e write-behind flush |
+| Yazmanın kalıcı olması | SQL write-behind flush |
 | İlişki sayısı zamanla büyüyen ekranlar | Relation limit, projection ve summary-first okuma |
 | Global top-N, dashboard ve sıralı iş ekranları | Ranked projection ve route contract |
-| Mevcut PostgreSQL + ORM sisteminden geçiş | Migration Planner, warm, dry-run ve side-by-side comparison |
+| Mevcut SQL veritabanı + ORM sisteminden geçiş | Migration Planner, warm, dry-run ve side-by-side comparison |
 | Redis'in sınırsız büyümesi | Hot policy, tenant quota, payload budget ve admission telemetry |
 | Çok pod'lu Kubernetes çalışma modeli | Pod-unique consumer adı, Redis leader lease ve coordination evidence |
 
@@ -47,7 +49,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "Gerçek hayatta nasıl modellemeliyim?" | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
 | "Redis memory ve performansı nasıl ayarlamalıyım?" | [Production Tuning Rehberi](docs/production-tuning-rehberi.md) |
 | "Tüm property'ler ve varsayılanlar nerede?" | [Tuning Parametreleri](docs/tuning-parameters.md) |
-| "Mevcut PostgreSQL sistemimi nasıl taşırım?" | [Geçiş Planlayıcı](docs/migration-planner.md) |
+| "Mevcut SQL veritabanı sistemimi nasıl taşırım?" | [Geçiş Planlayıcı](docs/migration-planner.md) |
 | "Production'a çıkmadan önce ne kanıtlamalıyım?" | [Production Reçeteleri](docs/production-recipes.md) |
 | "GA için hâlâ eksik olan kapılar neler?" | [Production GA Criteria](../PRODUCTION_GA_CRITERIA.md) |
 
@@ -58,7 +60,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | Yeni Spring Boot servisi | `cachedb-spring-boot-starter` | En az kurulum, aynı porttan admin UI, Spring `DataSource` entegrasyonu |
 | Zaten JPA kullanan Spring Boot uygulaması | Starter + mevcut `DataSource` | JPA zaten `DataSource` oluşturuyorsa JDBC starter tekrar eklenmez |
 | Plain Java servisi | `cachedb-starter` | Başlatma, kapatma ve bağlantı yaşam döngüsü sende kalır |
-| Mevcut PostgreSQL + ORM sistemi | Migration Planner | Şema keşfi, warm planı, compare ve cutover raporu üretir |
+| Mevcut SQL veritabanı + ORM sistemi | Migration Planner | Şema keşfi, warm planı, compare ve cutover raporu üretir |
 | Çok ilişkili liste ekranı | Projection/read-model | İlk ekranda bütün object graph yüklenmez |
 | Worker, replay, repair veya batch job | Doğrudan repository | Daha az soyutlama, daha açık performans davranışı |
 
@@ -125,6 +127,10 @@ JDBC kuralı:
 - CacheDB için gereken şey çalışan bir Spring `DataSource` bean'idir.
 - `cachedb-annotations` ve annotation processor olarak `cachedb-processor`
   her durumda gereklidir.
+- Aşağıdaki örnek PostgreSQL'i gösterir; çünkü varsayılan provider PostgreSQL'dir.
+  MSSQL için `cachedb-storage-mssql`, Microsoft JDBC driver'ı ve açık
+  `MssqlWriteBehindFlusher` wiring'i gerekir. Detaylar için
+  [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md) sayfasına bak.
 
 Minimal `application.yml`:
 
@@ -205,7 +211,7 @@ CustomerEntity loaded = domain.customers()
 Davranış:
 
 - `save` sıcak entity'yi Redis'e yazar.
-- Kalıcı yazım PostgreSQL write-behind hattına girer.
+- Kalıcı yazım seçilen SQL write-behind hattına girer.
 - `findById` önce Redis'teki hot entity'yi okur.
 - Entity hot policy'ye uymuyorsa Redis'e kabul edilmeyebilir veya Redis'ten
   düşürülebilir.
@@ -294,14 +300,14 @@ production modelinde dört katman birlikte kullanılır:
 Detaylı ayar için [Production Tuning Rehberi](docs/production-tuning-rehberi.md)
 ve [Tuning Parametreleri](docs/tuning-parameters.md) sayfalarını birlikte oku.
 
-## Mevcut PostgreSQL + ORM Sisteminden Geçiş
+## Mevcut SQL Veritabanı + ORM Sisteminden Geçiş
 
 Migration Planner'ın amacı tek düğmeyle production cutover yapmak değildir.
 Amaç, her production route için şu soruları kanıtlamaktır:
 
 - Bu route entity mi, projection mı, ranked projection mı olmalı?
 - Redis'e hangi hot window alınacak?
-- PostgreSQL tam geçmişte hangi rolü koruyacak?
+- Kalıcı SQL veritabanı tam geçmişte hangi rolü koruyacak?
 - Warm işlemi ne kadar veri okuyacak?
 - CacheDB sonucu kaynak veritabanı baseline'ı ile aynı mı?
 - Gecikme ve p95 değeri cutover için yeterli mi?
@@ -325,8 +331,8 @@ Amaç, her production route için şu soruları kanıtlamaktır:
 ## Production'a Yakın Kullanım İçin Kısa Kontrol Listesi
 
 - Redis HA/failover planı var mı?
-- PostgreSQL kalıcı doğruluk kaynağı olarak korunuyor mu?
-- Dış sistemler PostgreSQL'i değiştiriyorsa outbox/CDC var mı?
+- Seçilen SQL provider kalıcı doğruluk kaynağı olarak korunuyor mu?
+- Dış sistemler kaynak veritabanını değiştiriyorsa outbox/CDC var mı?
 - Her sıcak route için route contract yazıldı mı?
 - Projection gereken route production strict mode'da entity scan'e düşüyor mu?
 - Hot policy ve tenant quota bellek bütçesini koruyor mu?
@@ -340,7 +346,7 @@ Amaç, her production route için şu soruları kanıtlamaktır:
 | Konu | CacheDB | Geleneksel ORM |
 | --- | --- | --- |
 | Birincil sıcak okuma yolu | Redis | Veritabanı |
-| Kalıcı veri kaynağı | PostgreSQL | Veritabanı |
+| Kalıcı veri kaynağı | SQL veritabanı | Veritabanı |
 | Metadata | Derleme zamanında üretilir | Genelde runtime metadata/reflection |
 | Relation davranışı | Açık `FetchPlan`, loader ve projection | Çoğu zaman lazy/eager graph |
 | Büyük liste ekranı | Projection/read-model | Sıklıkla entity graph veya join |

@@ -11,6 +11,10 @@ Environment used for validation:
 - PostgreSQL credentials: `postgres / postgresql`
 - Test class: `EcommerceProductionScenarioSmokeTest`
 
+Provider scope: this report is evidence for the default PostgreSQL provider
+lane. Equivalent production claims for MSSQL or another SQL provider require
+their own provider-specific evidence lane.
+
 Executed scenarios:
 
 | Scenario | Kind | Ops | Reads | Writes | Failures | Avg Latency | Max Latency | Write-Behind Backlog | DLQ | Health |
@@ -30,7 +34,7 @@ Positive signals:
 Observed bottleneck:
 
 - Both runs ended with a non-trivial write-behind backlog.
-- This indicates the primary near-term throughput limit is not Redis mutation speed but PostgreSQL flush capacity and drain rate.
+- This indicates the primary near-term throughput limit is not Redis mutation speed but source-database flush capacity and drain rate.
 - The `BREAK` scenario showed materially worse latency than the mixed-load scenario, which is consistent with inventory/order write pressure.
 
 Current interpretation:
@@ -42,7 +46,7 @@ Current interpretation:
 ## Main Risks Before Production
 
 1. Write-behind saturation.
-   PostgreSQL flush workers may fall behind during campaign spikes, creating sustained backlog and delayed persistence.
+   SQL provider flush workers may fall behind during campaign spikes, creating sustained backlog and delayed persistence.
 
 2. Health degradation under sustained bursts.
    Even without DLQ growth, the system can remain alive but degraded for too long if backlog drain time is unacceptable.
@@ -62,7 +66,7 @@ Recommended production alert set:
 
 | Alert | Warning Trigger | Critical Trigger | Primary Risk | First Operator Action |
 | --- | --- | --- | --- | --- |
-| `WRITE_BEHIND_BACKLOG` | backlog above warning threshold | backlog above critical threshold | PostgreSQL drain saturation | slow producers, inspect flush throughput, check drain completion |
+| `WRITE_BEHIND_BACKLOG` | backlog above warning threshold | backlog above critical threshold | source-database drain saturation | slow producers, inspect flush throughput, check drain completion |
 | `COMPACTION_PENDING_BACKLOG` | pending compaction above warning threshold | pending compaction above critical threshold | Redis memory growth and stale flush lag | confirm compaction worker health and watch runtime profile switching |
 | `REDIS_MEMORY_PRESSURE` | used memory above warning budget | used memory above critical budget | Redis eviction pressure and degraded serving | move to stricter guardrail profile, reduce hot-set/page-cache budgets |
 | `REDIS_HARD_REJECTIONS` | n/a | any rejected write | bounded-memory protection is dropping writes | pause campaign traffic and restore drain capacity immediately |
@@ -71,7 +75,7 @@ Recommended production alert set:
 
 Suggested operator runbook:
 
-1. If backlog and memory are both rising, treat PostgreSQL drain capacity as the primary suspect before touching Redis sizing.
+1. If backlog and memory are both rising, treat source-database drain capacity as the primary suspect before touching Redis sizing.
 2. If hard rejections appear, stop non-critical campaign traffic first; the system is protecting bounded memory at the cost of availability.
 3. If a namespace is in degraded query-index mode, confirm hard-limit pressure is gone and trigger `/api/query-index/rebuild`.
 4. If tombstones remain high after pressure falls, inspect delete-heavy workloads and verify write-behind drain plus tombstone TTL settings.
@@ -108,7 +112,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 The certification report combines:
 
 - one representative benchmark run
-- restart/recover verification using the real Redis/PostgreSQL stack
+- restart/recover verification using the real Redis/source-database stack
 - explicit gates for throughput, backlog, failures, hard rejections, rebuild success, and restart recovery
 
 Generated files:
@@ -190,7 +194,7 @@ Recommended steps:
    - average and p95 latency
    - write-behind backlog growth
    - drain time after load stops
-   - PostgreSQL CPU and IO
+   - source-database CPU and IO
 3. Stop increasing when backlog no longer drains within the defined recovery window.
 
 Success criteria:

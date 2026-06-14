@@ -2,13 +2,14 @@
 
 Turkish version: [../tr/docs/getting-started.md](../tr/docs/getting-started.md)
 
-This guide takes a new project, or an existing PostgreSQL application, to a
-working CacheDB integration.
+This guide takes a new project, or an existing SQL-database application, to a
+working CacheDB integration. PostgreSQL is the default provider in the starter;
+MSSQL is an explicit beta provider.
 
 The day-one goal is to:
 
 - add dependencies correctly
-- configure Redis and PostgreSQL
+- configure Redis and the SQL `DataSource`
 - model the first entity with compile-time generated bindings
 - run the first save/read/delete flow
 - avoid starting relation-heavy screens with the wrong shape
@@ -21,7 +22,7 @@ The day-one goal is to:
 | New Spring Boot service | `cachedb-spring-boot-starter` |
 | Existing Spring Boot service with JPA | Starter plus the existing `DataSource` |
 | Non-Spring Java service | `cachedb-starter` |
-| Existing PostgreSQL + ORM system | Migration Planner first |
+| Existing SQL database + ORM system | Migration Planner first |
 | A few known hot endpoints | One-route pilot first |
 | Relation-heavy dashboard or list | Projection/read-model design first |
 
@@ -84,8 +85,11 @@ JDBC rule:
   Spring `DataSource`.
 - If `spring-boot-starter-data-jpa` or another starter already creates a
   `DataSource`, do not add the JDBC starter again.
-- Keep the PostgreSQL driver as a runtime dependency.
+- Keep the JDBC driver for your selected SQL provider as a runtime dependency.
 - Configure `cachedb-processor` as an annotation processor.
+- The dependency examples use PostgreSQL. For MSSQL, add
+  `cachedb-storage-mssql`, the Microsoft SQL Server JDBC driver, and explicitly
+  wire `MssqlWriteBehindFlusher`; see [Database Provider SPI](database-provider-spi.md).
 
 ## 3. Plain Java Dependencies
 
@@ -222,7 +226,7 @@ CustomerEntity loaded = customers.findById(1001L).orElseThrow();
 Expected behavior:
 
 - `save` writes to the Redis hot entity path.
-- PostgreSQL persistence enters the write-behind path.
+- Durable persistence enters the selected SQL write-behind path.
 - `findById` reads the hot entity from Redis.
 - The entity may be rejected from Redis if it does not satisfy the hot policy.
 
@@ -236,7 +240,7 @@ Behavior:
 
 - Redis entity and index entries are removed.
 - Tombstone behavior prevents stale cached values from being served.
-- PostgreSQL delete is sent to the write-behind path.
+- The delete is sent to the selected SQL write-behind path.
 - Repeating the delete should be idempotent.
 
 ## 8. First Query
@@ -326,13 +330,13 @@ BEST: list reads from projection, detail reads from entity.
 
 ANTI-PATTERN: load every order and every order line for the first screen.
 
-## 11. First Trial In An Existing PostgreSQL + ORM App
+## 11. First Trial In An Existing SQL Database + ORM App
 
 Use the Migration Planner before writing integration code:
 
 1. Start the application with admin UI enabled.
 2. Open `/cachedb-admin/migration-planner`.
-3. Run PostgreSQL schema discovery.
+3. Run source-database schema discovery.
 4. Pick one route candidate.
 5. Apply it to the form.
 6. Generate the plan.
@@ -375,7 +379,7 @@ At the end of the first day you should have:
 
 - one entity compiling
 - generated bindings produced
-- Redis and PostgreSQL connections working
+- Redis and SQL `DataSource` connections working
 - save/read/delete tested
 - first hot route selected
 - projection need identified for any large list screen

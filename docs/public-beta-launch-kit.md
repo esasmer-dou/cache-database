@@ -11,7 +11,7 @@ outside users.
 
 ### Short description
 
-`Redis-first Java persistence with async PostgreSQL write-behind and compile-time generated ORM-like APIs.`
+`Redis-first Java data layer with compile-time generated ORM-like APIs, bounded hot sets, projections, and async SQL write-behind.`
 
 ### Website
 
@@ -62,14 +62,15 @@ This is the first public beta release of `cache-database`.
 
 ### What CacheDB is
 
-CacheDB is a Redis-first Java persistence library that keeps PostgreSQL as the
-durable store through async write-behind. It is designed for teams that care
-about low runtime overhead but still want a serious ORM-like developer
-experience.
+CacheDB is a Redis-first Java data-layer library that keeps a durable SQL
+database as the source of truth through async write-behind. PostgreSQL is the
+default provider; MSSQL is available as an explicit beta provider. CacheDB is
+designed for teams that care about low runtime overhead but still want a serious
+ORM-like developer experience.
 
 ### What is already strong
 
-- Redis-first read/write path with PostgreSQL durability
+- Redis-first read/write path with durable SQL write-behind
 - compile-time generated entity metadata and generated ergonomic APIs
 - Spring Boot starter plus plain Java bootstrap path
 - projection/read-model guidance for relation-heavy screens
@@ -92,7 +93,7 @@ The key design rule is explicit read-model shape:
 - read the production recipes
 - read the tuning parameters
 - run the production evidence workflow
-- run the multi-instance coordination smoke for shared Redis/PostgreSQL setups
+- run the multi-instance coordination smoke for shared Redis/source-database setups
 
 ### Important note
 

@@ -6,9 +6,9 @@ This report summarizes the current strengths, weaknesses, risks, and remaining w
 
 | Area | Strengths | Weaknesses | Risk |
 | --- | --- | --- | --- |
-| Architecture | Clear Redis-first, PostgreSQL-backed model with explicit async semantics | Operational model is more complex than a classic ORM | Teams may assume stronger consistency than the system actually provides |
+| Architecture | Clear Redis-first, SQL-provider-backed model with explicit async semantics | Operational model is more complex than a classic ORM | Teams may assume stronger consistency than the system actually provides |
 | Correctness | Tombstones, stale-skip, latest-state vs exact-sequence semantics, DLQ/replay/rebuild flows, crash/replay chaos coverage, and bounded fault-injection scenarios are implemented | Exhaustive crash and cross-node race testing is still limited | Rare edge cases may still appear under long-running contention |
-| Redis boundedness | Guardrails, hard limits, shedding, runtime profile switching, and degraded fallbacks exist | Bounded behavior is not yet proven under long soak runs | Extended overload can still pressure Redis if PostgreSQL drain remains behind |
+| Redis boundedness | Guardrails, hard limits, shedding, runtime profile switching, and degraded fallbacks exist | Bounded behavior is not yet proven under long soak runs | Extended overload can still pressure Redis if source-database drain remains behind |
 | Query layer | Redis indexes, explain plans, learned stats, degraded full-scan fallback, rebuild/recover path | Not a full SQL planner or relational optimizer | In degraded mode latency can rise sharply for text/relation-heavy queries |
 | Operability | Admin HTTP, dashboard, incidents, diagnostics, Prometheus export, rebuild endpoints, certification reports | External monitoring and on-call workflows are still lightweight | Operators can mis-handle replay/rebuild without strict SOPs |
 | Performance | Significant write-behind throughput work completed: batching, coalescing, sharding, compaction | Drain completion is still the main bottleneck | Campaign bursts can still accumulate backlog and high tail latency |
@@ -51,7 +51,7 @@ Additional validated evidence:
 
 | Priority | Work Item | Why It Matters |
 | --- | --- | --- |
-| 1 | Sustained drain benchmark on target hardware | Current bottleneck is still PostgreSQL drain capacity |
+| 1 | Sustained drain benchmark on target hardware | Current bottleneck is still source-database drain capacity |
 | 2 | Soak testing for memory boundedness | Guardrails exist, but long-run proof is still missing |
 | 3 | Restart/crash/replay race suite | Production trust depends on correctness under recovery |
 | 4 | External monitoring integration | Prometheus scrape exists, but end-to-end alert routing is not complete |
@@ -63,14 +63,14 @@ Additional validated evidence:
 | --- | --- | --- |
 | Stage A | Prove bounded behavior | 1h and 4h soak runs, memory envelope report, guardrail trend charts |
 | Stage B | Prove recovery correctness | restart/rejoin crash suite, replay ordering suite, production recovery runbook drill |
-| Stage C | Prove sustained throughput | drain-focused benchmarks on target hardware, PG tuning report, backlog slope analysis |
+| Stage C | Prove sustained throughput | drain-focused benchmarks on target hardware, source-database tuning report, backlog slope analysis |
 | Stage D | Harden product surface | migration bootstrap tool, profile docs, stable API notes, onboarding guide |
 
 ## High-Signal Core Test Matrix
 
 - Campaign-triggered browse surges and checkout bursts
 - Write-behind backlog growth and producer backpressure
-- PostgreSQL slowdown or temporary outage with replay recovery
+- source-database slowdown or temporary outage with replay recovery
 - Restart, crash, and replay correctness
 - 1h and 4h soak boundedness for memory and drain behavior
 

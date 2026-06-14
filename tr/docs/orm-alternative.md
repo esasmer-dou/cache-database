@@ -39,7 +39,7 @@ CacheDB, Hibernate'in birebir kopyası olmaya çalışmaz.
 CacheDB şu modeli kullanır:
 
 - Uygulamanın sıcak okuma/yazma yolu Redis üzerinden ilerler.
-- PostgreSQL kalıcı veri deposu olarak kalır.
+- Seçilen SQL provider kalıcı veri deposu olarak kalır.
 - Entity metadata'sı derleme zamanında üretilir.
 - İlişki yükleme açık fetch plan ve loader'larla yapılır.
 - Write-behind, kalıcı yazımı foreground uygulama yolunun dışına taşır.

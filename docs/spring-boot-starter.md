@@ -9,11 +9,11 @@ This document covers the second path, with emphasis on Spring Boot and same-port
 
 For production surface selection and decision guidance, also see [Production Recipes](./production-recipes.md).
 For higher-level positioning against traditional ORM usage, also see [CacheDB As An ORM Alternative](./orm-alternative.md).
-For existing PostgreSQL + ORM migrations, also see [Migration Planner](./migration-planner.md).
+For existing SQL database + ORM migrations, also see [Migration Planner](./migration-planner.md).
 The planner can now run a dry-run or real staging warm execution for the Redis
 working set after it computes the recommended shape. It can also inspect the
-connected PostgreSQL schema, generate binding-ready scaffolds, and run a
-side-by-side PostgreSQL vs CacheDB comparison before cutover.
+connected source-database schema, generate binding-ready scaffolds, and run a
+side-by-side source database vs CacheDB comparison before cutover.
 For public-beta repo hygiene and release prep, also see [Public Beta Readiness](./public-beta-readiness.md) and [Release Checklist](./release-checklist.md).
 
 ## Recommended Production Start
@@ -298,6 +298,9 @@ Notes:
 
 - `cachedb-spring-boot-starter` does not replace your JDBC starter.
 - A Spring `DataSource` is still required.
+- The dependency snippets use PostgreSQL because it is the default provider. If
+  you choose MSSQL, add `cachedb-storage-mssql`, use the Microsoft SQL Server
+  JDBC driver, and wire `MssqlWriteBehindFlusher` explicitly.
 - If you do not provide a `JedisPooled` bean, the starter creates one from `cachedb.redis.uri`.
 - The legacy alias `cachedb.redis-uri` still works.
 - `cachedb.profile` accepts `default`, `development`, `production`, `benchmark`, `memory-constrained`, or `minimal-overhead`.

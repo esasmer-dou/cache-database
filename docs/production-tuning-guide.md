@@ -12,7 +12,7 @@ The goals are to:
 - keep first-paint cost bounded on relation-heavy screens
 - handle write-behind backlog predictably
 - run safely in multi-pod Kubernetes environments
-- estimate warm-up and comparison cost during PostgreSQL migrations
+- estimate warm-up and comparison cost during existing SQL database migrations
 
 ## 30-Second Map
 
@@ -21,11 +21,11 @@ The goals are to:
 | Redis memory is growing | Hot policy, tenant quota, Redis `maxmemory`, projection window |
 | Large list is slow | Projection, ranked projection, route contract |
 | Relation loading is expensive | `withRelationLimit(...)`, batch loader, summary-first model |
-| Write queue is building up | Write-behind workers, batch size, flush policy, PostgreSQL pool |
+| Write queue is building up | Write-behind workers, batch size, flush policy, SQL provider pool |
 | Multi-pod loops run twice | Runtime coordination and leader lease |
 | Old reads pollute Redis | `admitOnRead=false`, `TIME_WINDOW`, cold path |
 | Migration warm-up takes too long | Batch size, checkpoint/resume, rate limit, route scope |
-| External systems update PostgreSQL | Outbox/CDC adapter and apply runner |
+| External systems update the source database | Outbox/CDC adapter and apply runner |
 
 ## 1. Classify The Route First
 
@@ -210,39 +210,41 @@ ANTI-PATTERN:
 
 ## 6. Write-Behind Tuning
 
-Write-behind persists Redis writes into PostgreSQL. Increasing worker count is
-not the only tuning lever.
+Write-behind persists Redis writes into the selected SQL provider. Increasing
+worker count is not the only tuning lever.
 
 Watch:
 
 - stream backlog
 - pending entry count
 - DLQ count
-- PostgreSQL flush latency
+- SQL provider flush latency
 - retry count
 - worker CPU
-- PostgreSQL connection pool wait
+- SQL provider connection pool wait
 
 First levers:
 
 | Area | Increase or tune when |
 | --- | --- |
-| Worker threads | Backlog grows and CPU/PostgreSQL pool can handle more |
+| Worker threads | Backlog grows and CPU/SQL provider pool can handle more |
 | Batch size | Too many tiny flushes are happening |
 | Flush group parallelism | Different table groups can be written in parallel |
-| Retry backoff | Transient PostgreSQL errors create retry storms |
+| Retry backoff | Transient SQL provider errors create retry storms |
 | DLQ trim | More failed records are needed for incident analysis |
 
 ANTI-PATTERN:
 
-- increase worker count without checking PostgreSQL capacity
+- increase worker count without checking source-database capacity
 - ignore DLQ
 - run write-behind without retry and timeout discipline
 
-## 7. PostgreSQL Tuning
+## 7. SQL Provider Tuning
 
-PostgreSQL remains the durable source of truth. Even with Redis-first reads,
-PostgreSQL connection and index quality matter.
+The selected SQL provider remains the durable source of truth. Even with
+Redis-first reads, connection-pool, transaction, and index quality still matter.
+PostgreSQL is the default provider path; MSSQL is an explicit beta provider and
+must be tuned with its own dialect limits, lock behavior, and driver settings.
 
 Watch:
 
@@ -291,16 +293,17 @@ ANTI-PATTERN:
 
 ## 9. Kubernetes And Multi-Pod
 
-In Kubernetes, multiple app pods connect to the same Redis and PostgreSQL. That
-is expected. Consumer identity and singleton loops are the important parts.
+In Kubernetes, multiple app pods connect to the same Redis and the same
+source-database topology. That is expected. Consumer identity and singleton
+loops are the important parts.
 
 BEST:
 
 - consumer name must be pod-unique
 - consumer group should stay shared
 - cleanup/report/history loops should use leader lease
-- pod count, total worker capacity, and PostgreSQL pool size must be planned
-  together
+- pod count, total worker capacity, and source-database pool size must be
+  planned together
 - Redis HA is a production dependency
 
 Example:
@@ -319,8 +322,8 @@ ANTI-PATTERN:
 
 ## 10. Migration Warm Tuning
 
-Warm-up is one of the riskiest migration steps because it reads PostgreSQL and
-fills Redis.
+Warm-up is one of the riskiest migration steps because it reads the source
+database and fills Redis.
 
 BEST:
 
@@ -328,7 +331,7 @@ BEST:
 - scope warm-up to one route
 - start with controlled batch size
 - enable checkpoint/resume
-- protect PostgreSQL and Redis with rate limits
+- protect the source database and Redis with rate limits
 - inspect Redis memory calibration after warm-up
 
 Warm report fields:
@@ -344,7 +347,7 @@ Warm report fields:
 
 ## 11. Outbox And CDC Tuning
 
-If PostgreSQL changes outside CacheDB, outbox/CDC is required.
+If the source database changes outside CacheDB, outbox/CDC is required.
 
 BEST:
 
@@ -382,7 +385,7 @@ Alarm examples:
 
 | Signal | Action |
 | --- | --- |
-| DLQ growing | Inspect PostgreSQL error type and retry policy |
+| DLQ growing | Inspect SQL provider error type and retry policy |
 | Projection lag growing | Check refresh workers and source write rate |
 | Tenant rejected growing | Check hot policy, tenant quota, and route window |
 | Redis memory growing quickly | Inspect key prefixes, projection windows, entity TTL/hot policy |
@@ -426,7 +429,7 @@ Before production:
 - page size is smaller than hot window
 - tenant quota protects against single-tenant overflow
 - Redis `maxmemory` and eviction policy are configured
-- PostgreSQL indexes match warm/query shape
+- source-database indexes match warm/query shape
 - write-behind backlog and DLQ are monitored
 - outbox/CDC requirement is evaluated
 - migration warm supports checkpoint/resume
