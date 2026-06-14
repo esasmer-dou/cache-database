@@ -18,6 +18,27 @@ The format is intentionally simple during public beta.
 
 - _TBD_
 
+## 0.1.0-beta.4 - 2026-06-14
+
+### Added
+
+- explicit storage-provider SPI with shared JDBC support plus PostgreSQL and MSSQL provider modules
+- `cachedb-storage-mssql` beta provider with `MssqlWriteBehindFlusher`, `MssqlDatabaseDialect`, `MssqlFailureClassifier`, and `MssqlOutboxExternalChangeFeedAdapter`
+- live MSSQL provider evidence lane covering write-behind, outbox checkpointing, migration SQL smoke, multi-pod apply-runner locking, and SQL Server restart/reconnect behavior
+- release bundle support for `cachedb-storage-jdbc` and `cachedb-storage-mssql` artifacts
+
+### Changed
+
+- documentation now describes CacheDB as Redis-first with a selected durable SQL provider instead of PostgreSQL-only
+- public beta release guidance now positions PostgreSQL as the default provider and MSSQL as an explicit beta provider
+- publish tooling defaults to `main` instead of creating a `codex/*` release branch
+- root Maven description now uses provider-neutral durable SQL wording
+
+### Fixed
+
+- package generation no longer omits the JDBC/MSSQL storage artifacts needed by MSSQL beta users
+- remaining PostgreSQL-only wording in English and Turkish user documentation was replaced with provider-aware language
+
 ## 0.1.0-beta.3 - 2026-06-04
 
 ### Added

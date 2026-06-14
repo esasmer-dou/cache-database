@@ -1,6 +1,6 @@
 param(
-    [string]$CurrentVersion = "0.1.0-beta.3",
-    [string]$NextVersion = "0.1.0-beta.4-SNAPSHOT",
+    [string]$CurrentVersion = "0.1.0-beta.4",
+    [string]$NextVersion = "0.1.0-beta.5-SNAPSHOT",
     [switch]$CreateReleaseNotesTemplate
 )
 

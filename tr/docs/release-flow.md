@@ -15,8 +15,8 @@ Her public beta release sonrasında bu akış kullanılmalıdır.
 
 ```powershell
 ./tools/release/start-next-beta-cycle.ps1 `
-  -CurrentVersion 0.1.0-beta.3 `
-  -NextVersion 0.1.0-beta.4-SNAPSHOT `
+  -CurrentVersion 0.1.0-beta.4 `
+  -NextVersion 0.1.0-beta.5-SNAPSHOT `
   -CreateReleaseNotesTemplate
 ```
 
@@ -29,7 +29,8 @@ Bu komut şunları yapar:
 ## Önerilen branch akışı
 
 - `main` branch'i bir sonraki `-SNAPSHOT` sürümünde kalır
-- kısa ömürlü işler `codex/*` branch'lerinde yapılır
+- kısa ömürlü işler feature branch'lerinde yapılabilir; açıkça istenmedikçe
+  public remote üzerinde `codex/*` branch bırakma
 - beta release tag'i gerçekten yayınlamak istediğin commit'ten kesilir
 
 ## Sonraki beta kesilmeden önce

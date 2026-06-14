@@ -3,11 +3,11 @@ param(
     [string]$GitHubToken,
     [string]$Owner = "esasmer-dou",
     [string]$Repository = "cache-database",
-    [string]$Branch = "codex/public-beta-launch",
-    [string]$Version = "0.1.0-beta.3",
+    [string]$Branch = "main",
+    [string]$Version = "0.1.0-beta.4",
     [string]$GitUserName = "esasmer-dou",
     [string]$GitUserEmail = "esasmer-dou@users.noreply.github.com",
-    [string]$ReleaseTitle = "cache-database public beta"
+    [string]$ReleaseTitle = "cache-database v0.1.0-beta.4"
 )
 
 $ErrorActionPreference = "Stop"

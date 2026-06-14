@@ -76,7 +76,7 @@ otomatik hızlandırmasını beklemek.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.3</cachedb.version>
+    <cachedb.version>0.1.0-beta.4</cachedb.version>
 </properties>
 
 <dependencies>

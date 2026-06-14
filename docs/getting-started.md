@@ -36,7 +36,7 @@ Use this path for most Spring Boot applications.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.3</cachedb.version>
+    <cachedb.version>0.1.0-beta.4</cachedb.version>
 </properties>
 
 <dependencies>
@@ -97,7 +97,7 @@ Use this path when you do not use Spring Boot.
 
 ```xml
 <properties>
-    <cachedb.version>0.1.0-beta.3</cachedb.version>
+    <cachedb.version>0.1.0-beta.4</cachedb.version>
 </properties>
 
 <dependencies>

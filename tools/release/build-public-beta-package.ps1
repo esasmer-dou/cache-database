@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.0-beta.3",
+    [string]$Version = "0.1.0-beta.4",
     [switch]$SkipBuild
 )
 
@@ -48,13 +48,25 @@ New-Item -ItemType Directory -Path $docsDest -Force | Out-Null
 
 $docFiles = @(
     "docs\getting-started.md",
+    "docs\database-provider-spi.md",
+    "docs\use-case-examples.md",
+    "docs\migration-planner.md",
     "docs\production-recipes.md",
     "docs\orm-alternative.md",
     "docs\public-beta-readiness.md",
     "docs\release-checklist.md",
     "docs\public-beta-launch-kit.md",
     "docs\maven-central-publish-checklist.md",
-    "docs\releases\v$Version.md"
+    "docs\releases\v$Version.md",
+    "tr\README.md",
+    "tr\DOKUMAN_HARITASI.md",
+    "tr\docs\getting-started.md",
+    "tr\docs\veritabani-provider-spi.md",
+    "tr\docs\use-case-examples.md",
+    "tr\docs\migration-planner.md",
+    "tr\docs\production-recipes.md",
+    "tr\docs\release-checklist.md",
+    "tr\docs\public-beta-launch-kit.md"
 )
 
 foreach ($file in $docFiles) {
@@ -72,7 +84,9 @@ $artifactModules = @(
     "cachedb-processor",
     "cachedb-core",
     "cachedb-storage-redis",
+    "cachedb-storage-jdbc",
     "cachedb-storage-postgres",
+    "cachedb-storage-mssql",
     "cachedb-starter",
     "cachedb-spring-boot-starter"
 )

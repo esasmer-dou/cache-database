@@ -75,10 +75,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.3
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5.2.0
         with:
           distribution: temurin
           java-version: "21"
@@ -97,7 +97,7 @@ jobs:
         run: Get-Content ./target/cachedb-prodtest-reports/production-evidence-summary.md >> $env:GITHUB_STEP_SUMMARY
 
       - name: Upload production evidence artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: production-evidence
           path: |
@@ -137,10 +137,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.3
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5.2.0
         with:
           distribution: temurin
           java-version: "21"
@@ -155,7 +155,7 @@ jobs:
         run: Get-Content ./target/cachedb-prodtest-reports/multi-instance-coordination-smoke.md >> $env:GITHUB_STEP_SUMMARY
 
       - name: Upload coordination evidence artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: coordination-evidence
           path: |
@@ -194,10 +194,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.3
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5.2.0
         with:
           distribution: temurin
           java-version: "21"
@@ -212,7 +212,7 @@ jobs:
         run: Get-Content ./target/cachedb-redis-failover-reports/redis-failover-evidence.md >> $env:GITHUB_STEP_SUMMARY
 
       - name: Upload Redis failover evidence artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: redis-failover-evidence
           path: |
@@ -251,10 +251,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.3
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5.2.0
         with:
           distribution: temurin
           java-version: "21"
@@ -269,7 +269,7 @@ jobs:
         run: Get-Content ./target/cachedb-prodtest-reports/production-scenario-certification.md >> $env:GITHUB_STEP_SUMMARY
 
       - name: Upload scenario certification evidence artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: production-scenario-certification
           path: |
@@ -294,10 +294,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.3
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5.2.0
         with:
           distribution: temurin
           java-version: "21"
@@ -312,7 +312,7 @@ jobs:
         run: Get-Content ./target/cachedb-mssql-provider-reports/mssql-provider-evidence.md >> $env:GITHUB_STEP_SUMMARY
 
       - name: Upload MSSQL provider evidence artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: mssql-provider-evidence
           path: |

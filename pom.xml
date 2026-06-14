@@ -6,11 +6,11 @@
 
     <groupId>com.reactor.cachedb</groupId>
     <artifactId>cache-database</artifactId>
-    <version>0.1.0-beta.3</version>
+    <version>0.1.0-beta.4</version>
     <packaging>pom</packaging>
 
     <name>cache-database</name>
-    <description>Redis-first, write-behind, PostgreSQL-backed persistence library focused on low runtime overhead</description>
+    <description>Redis-first Java data layer with bounded hot sets, projections, compile-time generated APIs, and durable SQL write-behind</description>
     <url>${cachedb.release.projectUrl}</url>
     <inceptionYear>2026</inceptionYear>
 
@@ -153,6 +153,9 @@
                                     <show>package</show>
                                     <failOnError>false</failOnError>
                                     <doclint>none</doclint>
+                                    <sourceFileIncludes>
+                                        <sourceFileInclude>**/*.java</sourceFileInclude>
+                                    </sourceFileIncludes>
                                 </configuration>
                             </execution>
                         </executions>

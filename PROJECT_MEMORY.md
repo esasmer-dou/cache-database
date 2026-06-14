@@ -11,8 +11,8 @@ remaining production gates. It is not release marketing copy.
 - Repository path: `E:\ReactorRepository\cache-database`
 - Remote: `ssh://git@ssh.github.com:443/esasmer-dou/cache-database.git`
 - Main branch status at the time of this note: clean and aligned with `origin/main`
-- Latest release prepared and published: `v0.1.0-beta.3`
-- Latest release asset: `cache-database-0.1.0-beta.3-public-beta.zip`
+- Latest release prepared and published: `v0.1.0-beta.4`
+- Latest release asset: `cache-database-0.1.0-beta.4-public-beta.zip`
 - Public positioning: strong public beta, not GA yet
 
 ## Product Direction
@@ -63,9 +63,10 @@ explicitly.
 - Added public repo hygiene files: license, contributing, security, code of
   conduct, support, issue templates, PR templates, and release checklist.
 - Added release packaging scripts and public beta package generation.
-- Published `v0.1.0-beta.1`, `v0.1.0-beta.2`, and `v0.1.0-beta.3` release
+- Published `v0.1.0-beta.1`, `v0.1.0-beta.2`, `v0.1.0-beta.3`, and
+  `v0.1.0-beta.4` release
   notes over the project lifecycle.
-- Current release is `0.1.0-beta.3`.
+- Current release is `0.1.0-beta.4`.
 
 ### Documentation
 
@@ -215,37 +216,44 @@ explicitly.
 - Hardened benchmark gates so structural materialization checks are authoritative
   and flaky "fastest microbenchmark" noise does not block incorrectly.
 
-## Latest Release: 0.1.0-beta.3
+## Latest Release: 0.1.0-beta.4
 
 Key additions:
 
-- production scenario certification lane
-- concrete PostgreSQL outbox adapter and explicit provider SPI direction
-- route-level cache contracts
-- tenant quota and payload-level memory budget accounting
-- composite hot policy support
-- migration warm checkpoint/resume
-- Redis memory calibration output
-- cache admission telemetry
+- explicit storage-provider SPI with shared JDBC support
+- `cachedb-storage-mssql` beta provider with write-behind, outbox, dialect, and
+  failure-classifier support
+- live MSSQL provider evidence lane for write-behind, outbox checkpointing,
+  migration SQL smoke, multi-pod apply-runner locking, and SQL Server
+  restart/reconnect behavior
+- provider-aware English and Turkish documentation across README, onboarding,
+  recipes, use cases, tuning, and provider SPI docs
+- release package now includes `cachedb-storage-jdbc` and
+  `cachedb-storage-mssql` artifacts
+- GitHub Actions now use Node 24-compatible action versions:
+  `actions/checkout@v6.0.3`, `actions/setup-java@v5.2.0`, and
+  `actions/upload-artifact@v7.0.1`
 
 Key fixes:
 
-- repeated writes of the same entity no longer double-count tenant payload bytes
-- warm batch hydration now carries tenant columns and payload estimates
-- release bundle copies the release note for the selected version
-- source-database outbox/CDC events can now be applied to Redis hot state
-  through `ExternalChangeApplyRunner` without re-enqueuing write-behind
+- root Maven metadata no longer describes the project as PostgreSQL-backed only
+- public beta package no longer omits JDBC/MSSQL storage modules
+- Javadoc generation now uses source-file includes so jars contain real API
+  documentation even though source folders do not mirror package names
+- release publishing defaults to `main` instead of a `codex/*` branch
 
 Upgrade note:
 
 - Maven coordinates remain under `com.reactor.cachedb`
-- Use version `0.1.0-beta.3`
+- Use version `0.1.0-beta.4`
 - If the source database can be changed outside CacheDB, configure outbox/CDC
   before relying on Redis hot-set freshness
 - Use `ExternalChangeApplyRunner` in `CACHE_ONLY` mode for database-originated
   outbox/CDC events
 - For relation-heavy/global sorted screens, use route contracts and
   projection-required strict mode
+- MSSQL users must add `cachedb-storage-mssql`, own the Microsoft SQL Server
+  JDBC driver, and wire `MssqlWriteBehindFlusher` explicitly.
 
 ## Current Release Confidence State
 
@@ -254,9 +262,10 @@ Upgrade note:
 - MSSQL provider evidence now includes live SQL Server load/replay,
   checkpoint-locking, multi-pod apply-runner, and container restart/reconnect
   checks. Remote CI must be rechecked after every related commit.
-- GitHub release `v0.1.0-beta.3` exists with the public beta package asset.
-- Maven Central publishing is not complete until repository secrets for Central
-  credentials and GPG signing are configured.
+- GitHub release `v0.1.0-beta.4` exists with the public beta package asset.
+- Maven Central publishing is not complete. `gh secret list` returned no
+  repository secrets in this environment, so Central credentials and GPG signing
+  must still be configured before a signed Central publish can succeed.
 - Staging Redis HA evidence is not complete until staging Redis/source-database
   secrets are configured and an operator-triggered failover window is executed.
 - Staging MSSQL HA evidence is not complete until staging SQL Server secrets are
@@ -341,7 +350,7 @@ pwsh tools\ci\check-public-api-compatibility.ps1
 pwsh tools\ci\check-tr-docs.ps1
 git diff --check
 mvn.cmd -q -DskipTests package
-pwsh tools\release\build-public-beta-package.ps1 -Version 0.1.0-beta.3 -SkipBuild
+pwsh tools\release\build-public-beta-package.ps1 -Version 0.1.0-beta.4
 ```
 
 Known caveat:
@@ -396,7 +405,7 @@ ANTI-PATTERN:
 
 The main remaining blockers for production GA are:
 
-- verify remote GitHub Actions for `v0.1.0-beta.3`
+- verify remote GitHub Actions for `v0.1.0-beta.4`
 - signed Maven Central publish pipeline
 - real staging Redis HA/failover validation
 - real staging SQL Server HA or Always On failover validation before MSSQL GA
@@ -418,7 +427,7 @@ Do not start another feature before closing the release confidence loop.
 
 Recommended order:
 
-1. Check remote GitHub Actions for `main` and `v0.1.0-beta.3`.
+1. Check remote GitHub Actions for `main` and `v0.1.0-beta.4`.
 2. Fix any CI failures until production evidence is green remotely.
 3. Complete signed Maven Central publishing.
 4. Run staging Redis HA/failover evidence against real infrastructure.
@@ -434,7 +443,7 @@ Recommended order:
 - `tr/README.md`
 - `CHANGELOG.md`
 - `PRODUCTION_GA_CRITERIA.md`
-- `docs/releases/v0.1.0-beta.3.md`
+- `docs/releases/v0.1.0-beta.4.md`
 - `docs/production-recipes.md`
 - `docs/use-case-examples.md`
 - `docs/production-test-report.md`

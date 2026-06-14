@@ -15,8 +15,8 @@ Run:
 
 ```powershell
 ./tools/release/start-next-beta-cycle.ps1 `
-  -CurrentVersion 0.1.0-beta.3 `
-  -NextVersion 0.1.0-beta.4-SNAPSHOT `
+  -CurrentVersion 0.1.0-beta.4 `
+  -NextVersion 0.1.0-beta.5-SNAPSHOT `
   -CreateReleaseNotesTemplate
 ```
 
@@ -29,7 +29,8 @@ This does three things:
 ## Recommended branch flow
 
 - `main` stays on the next `-SNAPSHOT` version
-- short-lived work happens on `codex/*` branches
+- short-lived work can happen on feature branches, but do not leave `codex/*`
+  branches on the public remote unless explicitly intended
 - beta release tags are created from the commit you actually want to ship
 
 ## Before cutting the next beta
