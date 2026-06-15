@@ -106,6 +106,27 @@ http://127.0.0.1:8092/cachedb-admin
 | Dashboard | `GET /api/dashboard/commerce?limit=25` | Small dashboard from projections and ticket entity query |
 | Tuning | `GET /api/tuning` | Active CacheDB policy and guardrail summary |
 
+## Core Terms Used in This README
+
+Read this section first if you are new to CacheDB. The sample uses a few CacheDB-specific terms that are easier to understand before walking through the code.
+
+| Term | What it means in this sample | Where to look |
+|---|---|---|
+| CacheDB entity | A Java class annotated with `@CacheEntity`. It maps one SQL Server table to one Redis namespace and one generated repository surface. | `domain/CustomerEntity.java`, `domain/OrderEntity.java` |
+| Generated binding | A build-time generated class such as `OrderEntityCacheBinding`. It exposes type-safe repository creation, named queries, fetch presets, and projection repositories. This is the practical ORM API used by the app. | `SampleRepositories.java`, controller calls like `OrderEntityCacheBinding.customerTimeline(...)` |
+| Entity repository | The CRUD and bounded-query API for full entity objects. Use it for create, update, delete, and detail reads. | `EntityRepository<OrderEntity, Long>` |
+| Projection | A compact read model derived from an entity. It is designed for list, dashboard, and sorted screens where loading full entities would be too expensive. | `OrderReadModels.OrderSummary` |
+| Read model | The user-facing shape of a read screen. In this sample, `OrderSummary` is the read model for timelines and high-value order lists. | `readmodel/OrderReadModels.java` |
+| Projection repository | The repository used to query projection rows instead of full entity rows. | `ProjectionRepository<OrderSummary, Long>` |
+| Named query | A predefined `QuerySpec` declared on the entity and exposed through the generated binding. It avoids ad-hoc, unbounded query shapes in controllers. | `customerTimelineQuery`, `recentHighValueOrdersQuery` |
+| Fetch preset | A named fetch plan for a detail route. It decides which relation may be loaded and how many child rows are allowed. | `ordersPreviewFetchPlan`, `linePreviewFetchPlan` |
+| Relation loader | Explicit code that fills child collections only when a fetch preset requests them. It prevents accidental `N+1` style loading. | `CustomerOrdersRelationBatchLoader`, `OrderLinesRelationBatchLoader` |
+| Active data set | The subset of records allowed to stay in Redis according to policy, such as recent orders or operationally active rows. | `SampleCacheDbTuningConfig` |
+| Write-behind | The write model where CacheDB accepts the write through Redis first and flushes the durable row to SQL Server asynchronously. | Seed flow, create endpoints, admin UI write-behind panel |
+| Guardrail | A safety limit that prevents expensive production mistakes, such as unbounded entity scans or Redis memory pressure. | `ReadShapeGuardrailConfig`, `RedisGuardrailConfig` |
+
+When the README says "learn the generated binding model", it means: inspect how `@CacheEntity`, named queries, fetch presets, and projections become generated methods such as `repository(...)`, `customerTimeline(...)`, `ordersPreviewRepository(...)`, and `orderSummary(...)`. Those generated methods are the application-facing ORM surface.
+
 ## Layer-by-Layer Walkthrough
 
 This sample is intentionally small, but it follows the same shape a production service should use.

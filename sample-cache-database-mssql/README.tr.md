@@ -106,6 +106,27 @@ http://127.0.0.1:8092/cachedb-admin
 | Panel | `GET /api/dashboard/commerce?limit=25` | Projection ve ticket sorgularıyla küçük dashboard |
 | Ayarlar | `GET /api/tuning` | Aktif CacheDB politikaları ve koruma eşikleri |
 
+## Bu README’de Geçen Temel Terimler
+
+CacheDB’ye yeni başlıyorsan önce bu bölümü oku. Örnek projede bazı CacheDB terimleri sık geçer; kodu incelemeden önce bu kavramların ne anlama geldiğini bilmek işleri netleştirir.
+
+| Terim | Bu örnekte ne anlama gelir? | Nerede görülür? |
+|---|---|---|
+| CacheDB entity | `@CacheEntity` ile işaretlenmiş Java sınıfıdır. Bir SQL Server tablosunu, bir Redis namespace’ini ve generated repository yüzeyini temsil eder. | `domain/CustomerEntity.java`, `domain/OrderEntity.java` |
+| Generated binding | Build sırasında üretilen bağlayıcı sınıftır. Örneğin `OrderEntityCacheBinding`; repository oluşturma, named query, fetch preset ve projection repository metotlarını type-safe şekilde sunar. Uygulamanın kullandığı pratik ORM yüzeyi budur. | `SampleRepositories.java`, `OrderEntityCacheBinding.customerTimeline(...)` gibi controller çağrıları |
+| Entity repository | Full entity nesneleri için CRUD ve sınırlı sorgu API’sidir. Create, update, delete ve detay okumalarında kullanılır. | `EntityRepository<OrderEntity, Long>` |
+| Projection | Entity’den türetilmiş küçük okuma modelidir. Liste, dashboard ve global sıralı ekranlarda full entity yükleme maliyetini önlemek için kullanılır. | `OrderReadModels.OrderSummary` |
+| Okuma modeli | Kullanıcı ekranının ihtiyaç duyduğu sade veri şeklidir. Bu örnekte `OrderSummary`, sipariş listesi ve yüksek değerli sipariş ekranının okuma modelidir. | `readmodel/OrderReadModels.java` |
+| Projection repository | Full entity yerine projection satırlarını sorgulayan repository’dir. | `ProjectionRepository<OrderSummary, Long>` |
+| Named query | Entity üzerinde tanımlanan ve generated binding üzerinden kullanılan hazır `QuerySpec` metodudur. Controller içinde kontrolsüz ve sınırsız sorgu yazılmasını engeller. | `customerTimelineQuery`, `recentHighValueOrdersQuery` |
+| Fetch preset | Detay route’u için adlandırılmış fetch planıdır. Hangi relation’ın yükleneceğini ve kaç child satıra izin verileceğini belirler. | `ordersPreviewFetchPlan`, `linePreviewFetchPlan` |
+| Relation loader | Child koleksiyonları sadece fetch preset istediğinde dolduran açık koddur. Yanlışlıkla `N+1` benzeri yükleme yapılmasını engeller. | `CustomerOrdersRelationBatchLoader`, `OrderLinesRelationBatchLoader` |
+| Aktif veri seti | Policy’ye göre Redis’te kalmasına izin verilen veri alt kümesidir. Örneğin son siparişler veya operasyonel olarak aktif kayıtlar. | `SampleCacheDbTuningConfig` |
+| Write-behind | Yazının önce Redis üzerinden kabul edilip kalıcı SQL Server satırına arka planda taşındığı yazma modelidir. | Seed akışı, create endpoint’leri, yönetim ekranındaki write-behind paneli |
+| Guardrail | Production’da pahalı hataları engelleyen güvenlik sınırıdır. Örneğin sınırsız entity taraması veya Redis bellek baskısı. | `ReadShapeGuardrailConfig`, `RedisGuardrailConfig` |
+
+README’de “generated binding mantığını öğren” denildiğinde kastedilen şudur: `@CacheEntity`, named query, fetch preset ve projection tanımlarının build sırasında `repository(...)`, `customerTimeline(...)`, `ordersPreviewRepository(...)` ve `orderSummary(...)` gibi generated metotlara nasıl dönüştüğünü incelemek. Uygulamanın ORM gibi kullandığı yüzey bu generated metotlardır.
+
 ## Katman Katman Mimari
 
 Bu örnek küçük tutuldu, fakat production servislerde kullanılması gereken yapıyı izler.
