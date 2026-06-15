@@ -69,28 +69,35 @@
       }
     },
     {
-      "name": "08 Commerce Dashboard",
+      "name": "08 Archive Orders From SQL",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/orders/archive?customerId={{customerId}}&limit=20"
+      }
+    },
+    {
+      "name": "09 Commerce Dashboard",
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/api/dashboard/commerce?limit=25"
       }
     },
     {
-      "name": "09 Active Products",
+      "name": "10 Active Products",
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/api/products/active?category=electronics&limit=20"
       }
     },
     {
-      "name": "10 Open Tickets",
+      "name": "11 Open Tickets",
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/api/tickets/open?limit=25"
       }
     },
     {
-      "name": "11 Create Customer",
+      "name": "12 Create Customer",
       "request": {
         "method": "POST",
         "header": [
@@ -107,7 +114,7 @@
       }
     },
     {
-      "name": "12 Create Order",
+      "name": "13 Create Order",
       "request": {
         "method": "POST",
         "header": [
@@ -124,7 +131,7 @@
       }
     },
     {
-      "name": "13 Update Order Status",
+      "name": "14 Update Order Status",
       "request": {
         "method": "PATCH",
         "header": [
@@ -141,14 +148,14 @@
       }
     },
     {
-      "name": "14 Delete Order",
+      "name": "15 Delete Order",
       "request": {
         "method": "DELETE",
         "url": "{{baseUrl}}/api/orders/999001"
       }
     },
     {
-      "name": "15 Tuning Summary",
+      "name": "16 Tuning Summary",
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/api/tuning"

@@ -89,16 +89,26 @@ http://127.0.0.1:8091/cachedb-admin
 
 ## Main API Flow
 
-| Step | Endpoint | What it demonstrates |
+| Step | Endpoint | Main data path | What it demonstrates |
+|---|---|---|---|
+| Health | `GET /api/health/ready` | Runtime checks | Redis connectivity and write-behind health summary |
+| Seed | `POST /api/demo/seed` | Redis write, PostgreSQL write-behind | CacheDB write path, SQL persistence, projection refresh |
+| Customer detail | `GET /api/customers/1?orderPreview=5` | Redis entity + bounded relation preview | Entity detail with bounded relation preview |
+| Timeline | `GET /api/customers/1/orders?limit=20` | Redis projection: `OrderSummary` | Customer order list without full aggregate hydration |
+| Order detail | `GET /api/orders/10001?linePreview=5` | Redis entity + bounded order lines | Explicit detail load with bounded child relation |
+| High value list | `GET /api/orders/high-value?minimumAmount=500&limit=25` | Redis ranked projection: `OrderSummary` | Global sorted projection query |
+| Archive orders | `GET /api/orders/archive?customerId=1&limit=20` | Direct PostgreSQL query | Archive read using the same `OrderSummary` response shape |
+| Dashboard | `GET /api/dashboard/commerce?limit=25` | Redis projection + Redis entity query | Small dashboard from projections and ticket entity query |
+| Tuning | `GET /api/tuning` | Runtime config | Active CacheDB policy and guardrail summary |
+
+The sample is intentionally not "Redis for everything". The production rule is:
+
+| Need | BEST path | Why |
 |---|---|---|
-| Health | `GET /api/health/ready` | Redis connectivity and write-behind health summary |
-| Seed | `POST /api/demo/seed` | CacheDB write path, SQL persistence, projection refresh |
-| Customer detail | `GET /api/customers/1?orderPreview=5` | Entity detail with bounded relation preview |
-| Timeline | `GET /api/customers/1/orders?limit=20` | Projection/read-model list route |
-| Order detail | `GET /api/orders/10001?linePreview=5` | Explicit detail load with bounded child relation |
-| High value list | `GET /api/orders/high-value?minimumAmount=500&limit=25` | Global sorted projection query |
-| Dashboard | `GET /api/dashboard/commerce?limit=25` | Small dashboard from projections and ticket entity query |
-| Tuning | `GET /api/tuning` | Active CacheDB policy and guardrail summary |
+| Create or update an operational entity | CacheDB entity repository | The write is accepted through Redis and flushed to PostgreSQL by write-behind |
+| Render the first page of a growing list | Projection repository with `OrderSummary` | The UI reads a compact, ranked row instead of loading full order entities |
+| Render a selected detail screen | Entity repository with a bounded fetch preset | Only the selected aggregate and limited child preview are loaded |
+| Read old history or export data | Explicit SQL route | Archive and reporting reads should not pollute Redis or bypass SQL query planning |
 
 ## Core Terms Used in This README
 
@@ -285,6 +295,147 @@ The projection is ranked by fields used by real screens:
 
 This keeps list rows compact in Redis. The full entity is still available for detail screens, but list screens do not pay the cost of full aggregate hydration.
 
+## OrderSummary End-to-End Example
+
+`OrderSummary` is the concrete example behind the recommendation "use `OrderSummary` for customer order lists and high-value order lists." It is not a placeholder.
+
+### 1. The read model shape
+
+`OrderSummary` contains only the columns a list screen needs:
+
+```java
+public record OrderSummary(
+        Long orderId,
+        Long customerId,
+        Long orderDate,
+        Double orderAmount,
+        String currencyCode,
+        String orderType,
+        String status,
+        Integer lineCount,
+        Double priorityScore
+) {
+}
+```
+
+It intentionally does not contain order lines, product details, customer details, or audit history. Those belong to detail screens or cold archive flows.
+
+### 2. The projection maps full entity to summary
+
+`OrderReadModels.ORDER_SUMMARY_PROJECTION` tells CacheDB how to build and store the compact row:
+
+```java
+(OrderEntity order) -> new OrderSummary(
+        order.orderId,
+        order.customerId,
+        order.orderDate,
+        order.orderAmount,
+        order.currencyCode,
+        order.orderType,
+        order.status,
+        order.lineCount,
+        order.priorityScore
+)
+```
+
+The projection is ranked by the columns used by the hot screens:
+
+```java
+).rankedBy("order_date", "priority_score").asyncRefresh();
+```
+
+That is why customer timelines can sort by `order_date`, and high-value lists can sort by `priority_score`, without loading full `OrderEntity` payloads.
+
+### 3. The entity exposes the projection
+
+`OrderEntity` registers the projection with CacheDB:
+
+```java
+@CacheProjectionDefinition("orderSummary")
+public static EntityProjection<OrderEntity, OrderReadModels.OrderSummary, Long> orderSummaryProjection() {
+    return OrderReadModels.ORDER_SUMMARY_PROJECTION;
+}
+```
+
+The generated binding then exposes:
+
+```java
+OrderEntityCacheBinding.orderSummary(orderRepository)
+OrderEntityCacheBinding.customerTimeline(orderSummaryRepository, customerId, limit)
+OrderEntityCacheBinding.recentHighValueOrders(orderSummaryRepository, minimumAmount, limit)
+```
+
+### 4. The API route uses the projection repository
+
+The hot customer timeline endpoint is intentionally a projection route:
+
+```java
+@GetMapping("/{customerId}/orders")
+public List<OrderReadModels.OrderSummary> orderTimeline(
+        @PathVariable long customerId,
+        @RequestParam(defaultValue = "20") int limit
+) {
+    return OrderEntityCacheBinding.customerTimeline(
+            orderSummaryRepository,
+            customerId,
+            clamp(limit, 1, 1_000)
+    );
+}
+```
+
+The response shape is already the screen shape. The UI does not receive hidden full order entities.
+
+## Query Flow: Redis vs PostgreSQL
+
+This sample now shows both paths explicitly. Hot operational reads go through CacheDB/Redis. Archive reads go directly to PostgreSQL.
+
+| Route | First runtime path | When PostgreSQL is used | Redis behavior | Why |
+|---|---|---|---|---|
+| `POST /api/customers` | `EntityRepository.save` | Write-behind persists the row asynchronously | Entity enters Redis if the hot policy admits it | Normal command path |
+| `POST /api/orders` | `JdbcTemplate` FK readiness check, then `EntityRepository.save` | PostgreSQL is checked only to make sure the parent customer is durable before inserting a child row | Order is saved through Redis and queued for write-behind | Avoids FK violation while keeping Redis-first write path |
+| `GET /api/customers/{id}/orders` | `ProjectionRepository<OrderSummary>` | Not used for the hot list route | Reads Redis projection payload/index; may warm missing projection rows from Redis base entity payloads | Fast customer timeline |
+| `GET /api/orders/high-value` | `ProjectionRepository<OrderSummary>` | Not used for the hot list route | Reads ranked Redis projection data | Fast global sorted business list |
+| `GET /api/orders/{id}` | `EntityRepository.findById` with `linePreview` fetch preset | Not used by this sample endpoint on a cache miss | Reads Redis entity payload, then relation loader queries Redis for bounded lines | Detail screen for hot orders |
+| `GET /api/orders/archive` | `JdbcTemplate.query` | Direct PostgreSQL read | Does not mutate Redis | Cold/archive history path |
+| `GET /api/products/active` | `EntityRepository.query` | Not used by this sample endpoint | Bounded Redis entity query | Small catalog list |
+| `GET /api/tickets/open` | `EntityRepository.query` | Not used by this sample endpoint | Bounded Redis entity query | Operational queue |
+| `GET /api/dashboard/commerce` | Projection query plus ticket entity query | Not used by this sample endpoint | Combines Redis projection and Redis entity query | Dashboard first paint |
+
+The important rule: CacheDB repository reads are not a license to scan the database on every miss. In this sample, `EntityRepository.findById` and normal `query(...)` routes are Redis/hot-set routes. If you need archive or full-history reads, expose that as an explicit SQL route, as this sample does with:
+
+```java
+@GetMapping("/archive")
+public List<OrderReadModels.OrderSummary> archiveFromSql(
+        @RequestParam long customerId,
+        @RequestParam(required = false) Long beforeOrderDate,
+        @RequestParam(defaultValue = "100") int limit
+) {
+    return jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, safeLimit);
+}
+```
+
+The SQL route uses the same response model, but a different source:
+
+```sql
+SELECT order_id, customer_id, order_date, order_amount, currency_code,
+       order_type, status, line_count, priority_score
+FROM sample_orders
+WHERE customer_id = ? AND order_date < ?
+ORDER BY order_date DESC, order_id DESC
+OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
+```
+
+This is the production pattern:
+
+| Screen type | Use Redis/CacheDB | Use PostgreSQL |
+|---|---|---|
+| First page timeline | Yes, projection | No |
+| High-value sorted list | Yes, ranked projection | No |
+| Detail for selected hot order | Yes, entity detail with preview relation | Only if you build an explicit cold detail route |
+| Old archive/history page | No, unless intentionally warmed | Yes, bounded SQL query |
+| Export/reporting job | Usually no | Yes, batch/reporting path |
+| Migration warm/backfill | Writes selected hot set to Redis | Reads source rows from PostgreSQL |
+
 ## Real-World Use Cases in This Sample
 
 | Use case | Endpoint | CacheDB shape | Why this shape |
@@ -292,6 +443,7 @@ This keeps list rows compact in Redis. The full entity is still available for de
 | Customer opens order history | `GET /api/customers/{id}/orders?limit=20` | Projection query on `OrderSummary` | Growing timeline, compact payload, stable sort |
 | User opens one order | `GET /api/orders/{id}?linePreview=5` | Entity detail plus bounded relation preview | Detail needs more data, but still not all lines unless requested |
 | Operations checks high-value orders | `GET /api/orders/high-value?minimumAmount=500&limit=25` | Ranked projection query | Global sorted screen should not scan full entities |
+| User opens older history | `GET /api/orders/archive?customerId=1&limit=20` | Direct PostgreSQL query returning `OrderSummary` | Archive reads should not pollute Redis unless intentionally warmed |
 | Product category list | `GET /api/products/active?category=electronics&limit=20` | Named entity query | Small bounded catalog route is acceptable as entity query |
 | Support queue | `GET /api/tickets/open?limit=25` | Named entity query with status index | Operational queue is bounded and status-filtered |
 | Commerce dashboard | `GET /api/dashboard/commerce?limit=25` | Projection plus ticket entity query | Dashboard combines small pre-shaped read models |
@@ -474,7 +626,7 @@ Import:
 postman/cache-database-postgresql-sample.postman_collection.json
 ```
 
-The collection contains the normal flow: readiness, seed, customer timeline, detail, dashboard, update, delete, and tuning.
+The collection contains the normal flow: readiness, seed, customer timeline, detail, high-value projection, archive SQL read, dashboard, update, delete, and tuning.
 
 ## PostgreSQL Notes
 

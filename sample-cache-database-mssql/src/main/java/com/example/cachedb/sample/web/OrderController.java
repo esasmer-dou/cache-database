@@ -26,6 +26,14 @@ import java.util.concurrent.TimeUnit;
 @RequestMapping("/api/orders")
 public class OrderController {
 
+    private static final String ARCHIVE_SQL = """
+            SELECT order_id, customer_id, order_date, order_amount, currency_code, order_type, status, line_count, priority_score
+            FROM sample_orders
+            WHERE customer_id = ? AND order_date < ?
+            ORDER BY order_date DESC, order_id DESC
+            OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
+            """;
+
     private final EntityRepository<OrderEntity, Long> orderRepository;
     private final ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository;
     private final JdbcTemplate jdbcTemplate;
@@ -79,6 +87,33 @@ public class OrderController {
                 orderSummaryRepository,
                 minimumAmount,
                 clamp(limit, 1, 1_000)
+        );
+    }
+
+    @GetMapping("/archive")
+    public List<OrderReadModels.OrderSummary> archiveFromSql(
+            @RequestParam long customerId,
+            @RequestParam(required = false) Long beforeOrderDate,
+            @RequestParam(defaultValue = "100") int limit
+    ) {
+        long upperBound = beforeOrderDate == null ? Long.MAX_VALUE : beforeOrderDate;
+        int safeLimit = clamp(limit, 1, 500);
+        return jdbcTemplate.query(
+                ARCHIVE_SQL,
+                (resultSet, rowNumber) -> new OrderReadModels.OrderSummary(
+                        resultSet.getLong("order_id"),
+                        resultSet.getLong("customer_id"),
+                        resultSet.getLong("order_date"),
+                        resultSet.getDouble("order_amount"),
+                        resultSet.getString("currency_code"),
+                        resultSet.getString("order_type"),
+                        resultSet.getString("status"),
+                        resultSet.getInt("line_count"),
+                        resultSet.getDouble("priority_score")
+                ),
+                customerId,
+                upperBound,
+                safeLimit
         );
     }
 
