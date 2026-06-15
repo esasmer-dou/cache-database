@@ -351,6 +351,109 @@ CachePolicy.builder()
 
 Bu politika şunu söyler: kayıt son 90 günlük iş penceresindeyse veya operasyonel olarak aktifse aktif veri setinde kalabilir. Bu yaklaşım “en son okunan neyse onu cache’le” davranışından daha gerçekçidir.
 
+## CachePolicy Parametreleri Nasıl Ayarlanır?
+
+Cache ayarını şu sırayla yap. İlk refleks Redis belleğini büyütmek olmamalıdır.
+
+1. Route sözleşmesini belirle: endpoint limiti, sıralama, detay/önizleme ayrımı ve projection gerekip gerekmediği.
+2. Redis bütçesini belirle: `maxmemory`, `maxmemory-policy=noeviction`, uyarı eşiği ve kritik eşik.
+3. Redis’e kabul kuralını belirle: hangi kayıtlar aktif veri setine girebilir?
+4. Redis’te kalma kuralını belirle: kayıt sayısı, zaman penceresi, durum penceresi ve TTL davranışı.
+5. Yazma baskısını belirle: write-behind worker sayısı, batch boyutu, retry ve backlog eşikleri.
+
+### CachePolicy Parametreleri
+
+| Parametre | Neyi kontrol eder? | Ne zaman artırılır? | Ne zaman azaltılır? | Production önerisi |
+|---|---|---|---|---|
+| `hotEntityLimit` | Varsayılan `CachePolicy` için aktif entity penceresini sınırlar. Redis büyümesine karşı ilk kaba sınırdır. | Redis’te boşluk varsa ve sınırlı aktif okuma route’larında miss yüksekse. | Redis belleği hızlı büyüyorsa veya tek route belleği domine ediyorsa. | Bellek bütçesinden hesapla: ortalama entity payload + indeks maliyeti x beklenen hot satır. Projection window yerine kullanılmamalıdır. |
+| `pageSize` | Çağıran taraf daha sıkı limit vermediğinde kullanılan varsayılan sayfa boyutudur. | Normal ekranlar daha büyük ilk sayfa istiyorsa ve payload küçükse. | API response büyüyorsa veya UI küçük bir ilk sayfa gösteriyorsa. | Gerçek UI sayfa boyutuna yakın tut; çoğu ekranda `50-100` yeterlidir. Büyük export işleri entity page cache kullanmamalıdır. |
+| `lruEvictionEnabled` | Count window aşıldığında eski aktif kayıtların dışarı itilmesine izin verir. | Geniş bir çalışma seti varsa ve normal cache churn kabul edilebiliyorsa. | Katı hot policy davranışı istiyorsan ve sessiz churn istemiyorsan. | Çoğu online iş yükünde açık kalabilir; yine de Redis `maxmemory` ve route limitleri zorunludur. |
+| `entityTtlSeconds` | Full entity kayıtları için opsiyonel TTL’dir. `0`, entity’nin TTL ile düşmeyeceği anlamına gelir. | Veri geçiciyse, yeniden üretilebiliyorsa veya cold-load güvenliyse. | İş detayı stabil kalmalıysa ve hot-set davranışı policy ile yönetilecekse. | Kalıcı iş entity’lerinde genelde `0` kullan; TTL’i ephemeral view, session veya kısa ömürlü operasyon kayıtlarında kullan. |
+| `pageTtlSeconds` | Cache’lenen sayfa/sorgu sonuçlarının TTL değeridir. | Liste sonuçları tekrar kullanılıyorsa ve kısa süreli bayatlık kabul edilebiliyorsa. | Liste çok sık değişiyorsa veya eski sıralama kullanıcıya görünüyorsa. | Kısa tut; genelde `30-120s`. Projection satırları sayfa cache’inden daha uzun yaşayabilir. |
+| `hotPolicy` | Bir satırın Redis’e girip giremeyeceğini belirleyen kabul kuralıdır. | Basit LRU yerine iş kuralına göre cache istiyorsan. | Kural çok fazla kayıt kabul ediyorsa veya önemli okumaları kaçırıyorsa. | Composite policy tercih et: yakın zaman OR aktif durum OR özel iş kuralı. |
+
+### Hot Policy Modları
+
+| Mod | Ne zaman kullanılır? | Örnek | Risk |
+|---|---|---|---|
+| `COUNT_WINDOW` | Basit ve sayıyla sınırlı hot set yeterliyse. | Son `N` ürün veya kategori kaydını tutmak. | İş önemini bilmez; gürültülü route’lar faydalı kayıtları dışarı itebilir. |
+| `TIME_WINDOW` | Gerçek iş kuralı yakın zamansa. | `order_date` ile son 90 gün siparişlerini tutmak. | Eski ama operasyonel olarak aktif kayıtlar state policy ile birleşmezse dışarıda kalabilir. |
+| `STATE_WINDOW` | Kaydın durumu hot olmasını belirliyorsa. | `OPEN`, `PENDING`, `PAID`, `ACTIVE` kayıtlarını tutmak. | Büyük status kümeleri çok fazla veri kabul edebilir. Count veya time sınırıyla birlikte düşünülmelidir. |
+| `CUSTOM_PREDICATE` | Hot olma kararı domain mantığına bağlıysa. | VIP müşteri siparişlerini veya tenant’a özel premium route’ları kabul etmek. | Okuması ve işletmesi daha zordur; gerçek veri dağılımıyla test edilmelidir. |
+| `COMPOSITE` | Gerçek sistemde birden fazla kural gerekiyorsa. | Son 90 gün OR aktif durum OR aktif ürün. | `ANY` fazla veri kabul edebilir; `ALL` fazla veri reddedebilir. Staging bellek ölçümüyle doğrulanmalıdır. |
+
+Örnek projede `ANY` kullanılır; çünkü bir sipariş ya yakın tarihli olduğu için ya da operasyonel olarak aktif olduğu için önemli olabilir. Daha sıkı bellek profilinde `ALL` ancak kayıt tüm child kuralları sağlamalıysa seçilmelidir.
+
+### Admission Source Bayrakları
+
+`EntityHotPolicy` kaydın hangi kaynaktan Redis’e kabul edilebileceğini de yönetir:
+
+| Bayrak | Anlamı | Ne zaman değiştirilir? |
+|---|---|---|
+| `admitOnWrite` | Yeni yazılan kayıt Redis’e alınabilir. | Sadece write-heavy ama cold olan verinin Redis’i kirletmesini istemiyorsan kapat. |
+| `admitOnRead` | Cold read sonucu Redis’e promote edilebilir. | Arşiv route’larında tek seferlik okumaların hot olmasını istemiyorsan kapat. |
+| `admitOnWarm` | Warm/backfill işleri Redis’i doldurabilir. | Warm job sadece SQL doğrulaması yapacaksa ve Redis’i değiştirmemeliyse kapat. |
+| `evictWhenRejected` | Kayıt artık policy’ye uymuyorsa aktif setten düşürülebilir. | Policy geçişinde daha yumuşak davranış istiyorsan geçici olarak kapat. |
+
+### Read Guardrail Parametreleri
+
+Cache policy Redis’te neyin kalabileceğini belirler. Read guardrail ise çağıranın ne isteyebileceğini sınırlar.
+
+| Parametre | Production kullanımı |
+|---|---|
+| `maxEntityQueryLimit` | Düşük tutulmalıdır. Entity query full object hydrate eder ve relation işini tetikleyebilir. Normal ekranlarda `100-250` bandı uygundur. |
+| `maxProjectionQueryLimit` | Projection payload küçük olduğu için daha yüksek olabilir. Timeline ve dashboard pencerelerinde kullanılır. |
+| `hotSetHeadroom` | İstenen pencereyle hot-set sınırı arasında boşluk bırakır. Sorgular sık sık hot window kenarına geliyorsa artırılır. |
+| `rejectEntityQueryOverLimit` | Açık kalmalıdır. Route daha çok satır istiyorsa global limiti artırmak yerine projection route tasarlanmalıdır. |
+| `rejectProjectionQueryOverLimit` | Açık kalmalıdır. Sadece payload boyutu ölçülmüş belirli projection route’larında artırılmalıdır. |
+
+### Redis Guardrail Parametreleri
+
+Redis sınırsız heap değildir; sınırlandırılmış runtime bağımlılığıdır.
+
+| Parametre | Production kullanımı |
+|---|---|
+| `usedMemoryWarnMaxmemoryPercent` | Cache büyümesini yavaşlatmak için ilk sinyaldir. Başlangıç için `%70-80` uygundur. |
+| `usedMemoryCriticalMaxmemoryPercent` | Kritik baskı seviyesidir. Başlangıç için `%85-90` uygundur; üstünde read/write shedding alanına yaklaşılır. |
+| `expectedMaxmemoryPolicy` | Bu modelde `noeviction` kullanılmalıdır. Neyin tutulacağına CacheDB karar vermeli; Redis rastgele gerekli key düşürmemelidir. |
+| `producerBackpressureEnabled` | Açık kalmalıdır; Redis baskı altındayken producer tarafı yavaşlar. |
+| `writeBehindBacklogWarnThreshold` | SQL Server flush gecikmesi kullanıcıya görünmeden önce alarm üretir. Daha sıkı consistency beklentisinde düşürülür. |
+| `writeBehindBacklogCriticalThreshold` | Kritik backlog seviyesidir. Bu noktada SQL Server lock, pool saturation ve batch size incelenmelidir. |
+
+### Write-Behind Parametreleri
+
+Write-behind tuning, cache admission’dan ayrı düşünülmelidir. SQL Server yavaşlığını Redis’e daha az veri alarak çözmeye çalışma; Redis belleği de problemse ayrıca ele al.
+
+| Parametre | Ne zaman artırılır? | Ne zaman azaltılır? |
+|---|---|---|
+| `workerThreads` | Backlog büyüyor ve SQL Server tarafında boş connection/CPU varsa. | SQL Server pool doluyorsa veya lock beklemeleri artıyorsa. |
+| `batchSize` / `maxFlushBatchSize` | Backlog büyüyor ve SQL Server batch yazmayı iyi kaldırıyorsa. | Latency zıplıyorsa, lock artıyorsa veya transaction çok büyüyorsa. |
+| `tableAwareBatchingEnabled` | Genelde açık kalır; yazıları tabloya göre gruplayarak flush davranışını iyileştirir. | Nadiren, sadece debugging veya provider’a özel problem varsa kapatılır. |
+| `coalescingEnabled` | Genelde açık kalır; aynı entity üzerindeki tekrar eden update’leri birleştirebilir. | Her ara durumun kalıcı olarak görünmesi gerekiyorsa kapatılır. |
+| `maxFlushRetries` / `retryBackoffMillis` | Deploy veya failover sırasında transient SQL Server hataları varsa. | Retry kalıcı hataları saklıyorsa ve DLQ büyüyorsa. |
+
+### MSSQL’e Özel Notlar
+
+SQL Server için cache policy ve write-behind tuning, lock davranışıyla birlikte doğrulanmalıdır:
+
+| Ayar | Öneri |
+|---|---|
+| Hikari `maximum-pool-size` | Sadece artırma. SQL Server CPU, worker thread ve lock beklemeleriyle birlikte ayarla. |
+| `lock-timeout-millis` | Sonlu kalmalıdır; bloklanan flush işlemleri worker thread’i sonsuza kadar tutmak yerine hata alıp retry edebilmelidir. |
+| `query-timeout-seconds` | Liste ve warm route’ları için sonlu kalmalıdır. Uzun süren sorgu ya indekslenmeli ya projection’a taşınmalıdır. |
+| `transaction-isolation` | Muhafazakâr başla, sonra kendi contention profilinle doğrula. Daha yüksek isolation daha fazla blocking yaratabilir. |
+| Batch size | SQL Server, PostgreSQL’den farklı tepki verebilir. Sadece wait stat ve flush latency kontrolünden sonra artırılmalıdır. |
+
+### Pratik Profiller
+
+| Profil | Ne zaman kullanılır? | Ayar yönü |
+|---|---|---|
+| Küçük admin uygulaması | Trafik düşük, listeler sınırlı | `hotEntityLimit=1_000`, `pageSize=50`, kısa page TTL, düşük query limit |
+| Ticaret timeline ekranı | Müşteri sipariş geçmişi sürekli büyür | Projection zorunlu, `maxProjectionQueryLimit=1_000`, entity detay limiti `100-250`, 90 gün veya aktif durum hot policy |
+| Dashboard/KPI | Tekrarlanan global sıralı okumalar vardır | Dedicated projection, kısa page TTL, sıkı entity query limiti, ranked projection alanları |
+| Arşiv okuma | Eski kayıtlar nadiren okunur | `admitOnRead` kapatılabilir, entity TTL kısa veya `0`, okuma SQL Server cold path’ten yapılır |
+| Yüksek yazma trafiği | Yazılar burst şeklinde gelir | Write-behind worker ve batch ayarlanır, Redis guardrail sıkı tutulur, backlog izlenir |
+
 ## MSSQL Provider Ayarları
 
 Temel provider seçimi `application.yml` içindedir:

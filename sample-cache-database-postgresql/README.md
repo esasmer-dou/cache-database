@@ -342,6 +342,97 @@ CachePolicy.builder()
 
 This policy means: keep records in the active data set when they are recent enough or operationally active. It is closer to real systems than "cache whatever was read last".
 
+## Cache Policy Parameter Tuning
+
+Tune cache policy in this order. Do not start by increasing memory.
+
+1. Define the route contract: endpoint limit, sort order, detail/preview split, and whether projection is required.
+2. Define the Redis budget: `maxmemory`, `maxmemory-policy=noeviction`, warning threshold, critical threshold.
+3. Define admission: which records are allowed into the active data set.
+4. Define retention: count window, time window, state window, and TTL behavior.
+5. Define write pressure: write-behind worker count, batch size, retry, and backlog thresholds.
+
+### CachePolicy Parameters
+
+| Parameter | What it controls | Increase when | Decrease when | Production guidance |
+|---|---|---|---|---|
+| `hotEntityLimit` | Maximum active entity window for the default cache policy. It is the first coarse bound against Redis growth. | Redis has headroom and hot-read misses are high for bounded routes. | Redis memory grows too fast or one route dominates memory. | Size it from memory budget: average entity payload plus index overhead times expected hot rows. Do not use it as a substitute for projection windows. |
+| `pageSize` | Default page size used by cache/query surfaces when the caller does not provide a tighter route limit. | Normal screens need slightly larger first pages and payload size is small. | API responses are large or UI only renders a small first page. | Keep it close to real UI page size, usually `50-100`. Large exports should not use entity page cache. |
+| `lruEvictionEnabled` | Allows older active records to be pushed out when the count window is exceeded. | You run a broad working set and can tolerate normal cache churn. | You need strict hot policy behavior and want rejection instead of silent churn. | Keep enabled for most online workloads, but still enforce Redis `maxmemory` and route limits. |
+| `entityTtlSeconds` | Optional TTL for full entity records. `0` means no TTL-based entity expiration. | Data is temporary, naturally refreshable, or safe to cold-load again. | Business detail reads must stay stable and hot-set eviction should be policy-driven. | For durable business entities, prefer `0` plus explicit hot policy. Use TTL for ephemeral views, sessions, or short-lived operational records. |
+| `pageTtlSeconds` | TTL for cached page/query results. | List results are reused and can tolerate short staleness. | Lists change frequently or stale ordering is visible to users. | Keep short, usually `30-120s`. Projection rows can live longer than cached page results. |
+| `hotPolicy` | Admission rule deciding whether a row can enter or stay in Redis. | You need business-aware caching instead of plain LRU. | The rule admits too many records or misses important reads. | Prefer composite policy: recent time window OR active state OR custom business predicate. |
+
+### Hot Policy Modes
+
+| Mode | Use when | Example | Risk |
+|---|---|---|---|
+| `COUNT_WINDOW` | You only need a simple bounded hot set. | Keep latest `N` product/category records. | It does not know business importance; noisy routes can crowd out useful rows. |
+| `TIME_WINDOW` | Recency is the real business rule. | Keep orders from the last 90 days using `order_date`. | Old but operationally active rows may be rejected unless combined with state policy. |
+| `STATE_WINDOW` | A status makes a record hot. | Keep `OPEN`, `PENDING`, `PAID`, `ACTIVE` records. | A large status bucket can over-admit data if not combined with count or time bounds. |
+| `CUSTOM_PREDICATE` | Hotness depends on domain logic. | Admit VIP customer orders or tenant-specific premium routes. | Harder to reason about; document and test it with real distributions. |
+| `COMPOSITE` | Real systems need more than one rule. | Last 90 days OR active status OR active product. | `ANY` can admit too much; `ALL` can admit too little. Validate with staging memory numbers. |
+
+The sample uses `ANY` because an order can be important either because it is recent or because it is operationally active. For a strict memory profile, switch to `ALL` only if a record must satisfy every child rule.
+
+### Admission Source Flags
+
+`EntityHotPolicy` also supports source-level admission:
+
+| Flag | Meaning | When to change |
+|---|---|---|
+| `admitOnWrite` | Newly written records may enter Redis. | Turn off only for write-heavy cold data that should not pollute Redis. |
+| `admitOnRead` | Cold reads may promote records into Redis. | Turn off for archive routes where one-off reads should not become hot. |
+| `admitOnWarm` | Warm/backfill jobs may populate Redis. | Turn off when warm jobs are only validating SQL and should not mutate Redis. |
+| `evictWhenRejected` | If a record no longer satisfies policy, CacheDB may evict it from the active set. | Turn off only when you need a softer transition during policy rollout. |
+
+### Read Guardrail Parameters
+
+Cache policy controls what may live in Redis. Read guardrails control what callers are allowed to ask for.
+
+| Parameter | Production use |
+|---|---|
+| `maxEntityQueryLimit` | Keep low. Entity queries hydrate full objects and can trigger relation work. Use `100-250` for normal screens. |
+| `maxProjectionQueryLimit` | Can be higher because projection payloads are compact. Use it for timeline windows and dashboards. |
+| `hotSetHeadroom` | Leaves room between requested window and hot-set boundary. Increase when queries often sit near the edge of the hot window. |
+| `rejectEntityQueryOverLimit` | Keep enabled. If a route needs more rows, create a projection route instead of raising this globally. |
+| `rejectProjectionQueryOverLimit` | Keep enabled. Raise only for a known projection route with measured payload size. |
+
+### Redis Guardrail Parameters
+
+Redis must be treated as a bounded runtime dependency, not as an unlimited heap.
+
+| Parameter | Production use |
+|---|---|
+| `usedMemoryWarnMaxmemoryPercent` | First signal to slow down cache growth. `70-80` is a reasonable start. |
+| `usedMemoryCriticalMaxmemoryPercent` | Critical pressure. `85-90` is a reasonable start; above that you are close to write/read shedding. |
+| `expectedMaxmemoryPolicy` | Use `noeviction` for this model. CacheDB should decide what to keep; Redis should not randomly evict required keys. |
+| `producerBackpressureEnabled` | Keep enabled so write producers slow down when Redis is under pressure. |
+| `writeBehindBacklogWarnThreshold` | Alert before SQL flush lag becomes user-visible. Lower it for strict consistency windows. |
+| `writeBehindBacklogCriticalThreshold` | Critical backlog level. At this point inspect SQL locks, pool saturation, and batch size. |
+
+### Write-Behind Parameters
+
+Write-behind tuning is separate from cache admission. Do not fix slow SQL by admitting less data unless Redis memory is also the problem.
+
+| Parameter | Increase when | Decrease when |
+|---|---|---|
+| `workerThreads` | Backlog grows and SQL has spare connections/CPU. | SQL pool is saturated or lock waits increase. |
+| `batchSize` / `maxFlushBatchSize` | Backlog grows and SQL handles batch writes well. | Latency spikes, locks grow, or transactions become too large. |
+| `tableAwareBatchingEnabled` | Usually keep enabled; groups writes by table for better flush behavior. | Rarely disabled; only for debugging or provider-specific issues. |
+| `coalescingEnabled` | Usually keep enabled; repeated updates to the same entity can collapse. | Disable only when every intermediate state must be durably visible. |
+| `maxFlushRetries` / `retryBackoffMillis` | Transient SQL failures occur during deploy/failover. | Retries hide permanent failures and DLQ grows. |
+
+### Practical Profiles
+
+| Profile | When to use | Example direction |
+|---|---|---|
+| Small admin app | Low traffic, bounded lists | `hotEntityLimit=1_000`, `pageSize=50`, short page TTL, low query limits |
+| Commerce timeline | Customer has growing order history | Projection required, `maxProjectionQueryLimit=1_000`, entity detail limit `100-250`, 90-day or active-state hot policy |
+| Dashboard/KPI | Repeated global sorted reads | Dedicated projection, short page TTL, strict entity query limit, ranked projection fields |
+| Archive lookup | Old records are rarely read | Do not admit on read, keep entity TTL `0` or very short, serve from SQL cold path |
+| High write traffic | Writes are bursty | Tune write-behind workers and batch size, keep Redis memory guardrails strict, watch backlog |
+
 ## Why Projection Is Used
 
 The customer order timeline can grow without bound. Loading `Customer -> all Orders -> all Lines` on every list screen is not production-safe. This sample keeps the list screen on `OrderSummary`, then loads full order details only after the user selects one order.
