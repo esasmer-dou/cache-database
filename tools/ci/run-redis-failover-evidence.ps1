@@ -50,7 +50,7 @@ function Resolve-RedisContainer {
     if (-not [string]::IsNullOrWhiteSpace($byPort)) {
         return $byPort
     }
-    $byImage = docker ps --filter "ancestor=redis:7.2" --format "{{.ID}}" | Select-Object -First 1
+    $byImage = docker ps --filter "ancestor=redis:8-alpine" --format "{{.ID}}" | Select-Object -First 1
     if (-not [string]::IsNullOrWhiteSpace($byImage)) {
         return $byImage
     }

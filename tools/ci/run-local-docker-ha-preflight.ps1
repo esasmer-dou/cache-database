@@ -76,7 +76,7 @@ function Remove-ContainerIfOwned {
 
 function Start-Redis {
     Remove-ContainerIfOwned -Name $redisName
-    Invoke-Docker @("run", "-d", "--name", $redisName, "-p", "${RedisPort}:6379", "redis:7.2") | Out-Null
+    Invoke-Docker @("run", "-d", "--name", $redisName, "-p", "${RedisPort}:6379", "redis:8-alpine") | Out-Null
     $startedContainers.Add($redisName)
 }
 

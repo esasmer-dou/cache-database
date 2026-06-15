@@ -53,7 +53,7 @@ export GITHUB_TOKEN=read-packages-token
 mvn clean package
 ```
 
-Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir. Tam örnek `settings-github-packages.example.xml` dosyasında durur.
+Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir.
 
 ## Yerelde Çalıştırma
 

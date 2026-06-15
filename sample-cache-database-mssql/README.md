@@ -59,7 +59,7 @@ export GITHUB_TOKEN=your-read-packages-token
 mvn clean package
 ```
 
-If you do not configure credentials, Maven will usually fail with `401 Unauthorized` even though the repository URL is correct. A complete example is included in `settings-github-packages.example.xml`.
+If you do not configure credentials, Maven will usually fail with `401 Unauthorized` even though the repository URL is correct.
 
 ## Run Locally
 
