@@ -29,7 +29,31 @@ This project intentionally consumes CacheDB as an external Maven package:
 </dependency>
 ```
 
-Users should not build the parent repository first. If your Maven client asks for GitHub Packages credentials, configure a read token in `~/.m2/settings.xml`. The application code stays the same when the package is later mirrored to Maven Central.
+Users should not build the parent repository first. CacheDB `0.1.0` is published from the main repository to GitHub Packages.
+
+GitHub Packages Maven access requires credentials. The `<id>` in `pom.xml` must match the `<server><id>` in Maven `settings.xml`:
+
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>cache-database-github-packages</id>
+      <username>${env.GITHUB_ACTOR}</username>
+      <password>${env.GITHUB_TOKEN}</password>
+    </server>
+  </servers>
+</settings>
+```
+
+Use a token with `read:packages` access, then run:
+
+```bash
+export GITHUB_ACTOR=your-github-user
+export GITHUB_TOKEN=your-read-packages-token
+mvn clean package
+```
+
+If you do not configure credentials, Maven will usually fail with `401 Unauthorized` even though the repository URL is correct. A complete example is included in `settings-github-packages.example.xml`.
 
 ## Run Locally
 

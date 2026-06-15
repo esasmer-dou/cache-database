@@ -35,7 +35,31 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 </dependency>
 ```
 
-Yani kullanıcı ana projeyi önce build etmek zorunda değildir. Maven, GitHub Packages için erişim isterse `~/.m2/settings.xml` içine okuma yetkili token eklenmelidir.
+Yani kullanıcı ana projeyi önce build etmek zorunda değildir. CacheDB `0.1.0`, ana repodan GitHub Packages’a yayınlanır ve bu örnek proje paketi oradan çeker.
+
+GitHub Packages Maven erişimi için kimlik bilgisi gerekir. `pom.xml` içindeki `<repository><id>` değeri ile Maven `settings.xml` içindeki `<server><id>` değeri aynı olmalıdır:
+
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>cache-database-github-packages</id>
+      <username>${env.GITHUB_ACTOR}</username>
+      <password>${env.GITHUB_TOKEN}</password>
+    </server>
+  </servers>
+</settings>
+```
+
+`read:packages` yetkisi olan bir token tanımladıktan sonra proje doğrudan build edilir:
+
+```bash
+export GITHUB_ACTOR=github-kullanici-adin
+export GITHUB_TOKEN=read-packages-token
+mvn clean package
+```
+
+Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir. Tam örnek `settings-github-packages.example.xml` dosyasında durur.
 
 ## Yerelde Çalıştırma
 
