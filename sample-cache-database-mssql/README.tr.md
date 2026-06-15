@@ -106,6 +106,230 @@ http://127.0.0.1:8092/cachedb-admin
 | Panel | `GET /api/dashboard/commerce?limit=25` | Projection ve ticket sorgularıyla küçük dashboard |
 | Ayarlar | `GET /api/tuning` | Aktif CacheDB politikaları ve koruma eşikleri |
 
+## Katman Katman Mimari
+
+Bu örnek küçük tutuldu, fakat production servislerde kullanılması gereken yapıyı izler.
+
+| Katman | Ana dosyalar | Sorumluluk | Production kuralı |
+|---|---|---|---|
+| API | `web/*Controller.java` | İsteği doğrular, limitleri sınırlar, güvenli endpoint sunar | Sınırsız liste endpoint’i açma |
+| Service | `SampleSeedService.java`, controller metotları | İş akışını, kayıt sırasını ve retry davranışını yönetir | Yazma ve ilişki sırasını açık tut |
+| CacheDB repository | `SampleRepositories.java` | Generated `EntityRepository` ve `ProjectionRepository` bean’lerini üretir | Generated binding’leri ORM yüzeyi olarak kullan |
+| Entity mapping | `domain/*Entity.java` | Java alanlarını SQL Server kolonlarına ve Redis namespace’lerine bağlar | Tablo, id, kolon ve relation tanımı açık olmalı |
+| Relation yükleme | `relation/*BatchLoader.java` | Child koleksiyonları sadece fetch preset istediğinde yükler | Tam aggregate yerine sınırlı önizleme kullan |
+| Okuma modeli | `readmodel/OrderReadModels.java` | Liste ve dashboard satırlarını küçük projection payload olarak tutar | Büyüyen listelerde projection kullan |
+| Kalıcı veri | `schema.sql` | Primary key, foreign key ve route indekslerini sahiplenir | Tam geçmişin doğruluk kaynağı SQL Server’dır |
+| Runtime ayarları | `SampleCacheDbTuningConfig.java`, `application.yml` | Aktif veri politikası, limitler, guardrail, MSSQL lock timeout ve write-behind ayarlarını verir | Ayarı route, SQL Server davranışı ve bellek bütçesiyle yap |
+
+### API Katmanı: ORM’e Gitmeden Önce İsteği Sınırla
+
+`CustomerController`, kullanıcının verdiği limiti olduğu gibi CacheDB’ye taşımaz. Önce güvenli aralığa çeker:
+
+```java
+@GetMapping("/{customerId}/orders")
+public List<OrderReadModels.OrderSummary> orderTimeline(
+        @PathVariable long customerId,
+        @RequestParam(defaultValue = "20") int limit
+) {
+    return OrderEntityCacheBinding.customerTimeline(
+            orderSummaryRepository,
+            customerId,
+            clamp(limit, 1, 1_000)
+    );
+}
+```
+
+Buradaki asıl mesele `1_000` sayısı değildir. Asıl mesele route sözleşmesidir. Bir liste endpoint’i Redis’e veya SQL Server’a gitmeden önce maksimum sonuç sınırını bilmelidir.
+
+### Repository Katmanı: Generated Binding ORM Yüzeyidir
+
+`SampleRepositories`, CacheDB’nin generated binding sınıflarını Spring bean haline getirir:
+
+```java
+@Bean
+EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
+    return OrderEntityCacheBinding.repository(cacheDatabase);
+}
+
+@Bean
+ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository(
+        EntityRepository<OrderEntity, Long> orderRepository
+) {
+    return OrderEntityCacheBinding.orderSummary(orderRepository);
+}
+```
+
+Controller’lar bu repository’leri ORM gibi kullanır. Fakat bu yüzey klasik dinamik ORM query katmanı gibi sınırsız değildir. Named query, fetch preset, projection ve relation loader tanımları kodda açıktır ve build sırasında generated binding’e dönüşür.
+
+### Entity Katmanı: SQL Mapping ve Cache Mapping Açık Tanımlıdır
+
+`OrderEntity`; tabloyu, Redis namespace’i, primary key’i, kolonları, relation’ı, named query’leri ve projection’ı tanımlar:
+
+```java
+@CacheEntity(
+        table = "sample_orders",
+        redisNamespace = "sample-orders",
+        relationLoader = OrderLinesRelationBatchLoader.class
+)
+public class OrderEntity {
+    @CacheId(column = "order_id")
+    public Long orderId;
+
+    @CacheColumn("customer_id")
+    public Long customerId;
+
+    @CacheRelation(
+            targetEntity = "OrderLineEntity",
+            mappedBy = "orderId",
+            kind = CacheRelation.RelationKind.ONE_TO_MANY,
+            batchLoadOnly = true
+    )
+    public List<OrderLineEntity> lines;
+}
+```
+
+Bu gizli bir mekanizma değildir. Tablo ve kolon tanımı CacheDB’ye entity’nin nasıl yazılıp okunacağını söyler. Relation metadata’sı ise fetch plan istendiğinde Java object graph’ının nasıl bağlanacağını söyler.
+
+### Relation Modeli: Foreign Key ve `@CacheRelation` Farklı İşleri Çözer
+
+Database foreign key veri bütünlüğünü korur:
+
+```sql
+CONSTRAINT fk_sample_orders_customer
+FOREIGN KEY (customer_id) REFERENCES sample_customers(customer_id)
+```
+
+`@CacheRelation` uygulamanın okuma şeklini tanımlar:
+
+```java
+@CacheRelation(
+        targetEntity = "OrderEntity",
+        mappedBy = "customerId",
+        kind = CacheRelation.RelationKind.ONE_TO_MANY,
+        batchLoadOnly = true
+)
+public List<OrderEntity> orders;
+```
+
+Doğru yorum şu şekildedir:
+
+| Durum | Davranış |
+|---|---|
+| Foreign key var ve `@CacheRelation` var | SQL Server bütünlüğü korur, CacheDB istenirse object graph yükler |
+| Foreign key var ama `@CacheRelation` yok | SQL Server doğru kalır, fakat CacheDB Java child koleksiyonunu otomatik doldurmaz |
+| `@CacheRelation` var ama foreign key yok | CacheDB eşleşen kolonla sorgu yapabilir, fakat SQL Server orphan kayıtları engellemez |
+| İkisi de yok | Sadece açık child sorguları kullanılmalı; ORM tarzı relation beklenmemeli |
+
+Production önerisi: ikisini birlikte kullan. Foreign key doğruluk içindir; `@CacheRelation` ve fetch preset kontrollü object graph yüklemek içindir.
+
+### Fetch Preset: Detay Ekranı Tam Aggregate Değil, Önizleme Alır
+
+`CustomerEntity` küçük bir sipariş önizlemesi sunar:
+
+```java
+@CacheFetchPreset("ordersPreview")
+public static FetchPlan ordersPreviewFetchPlan(int orderLimit) {
+    return FetchPlan.of("orders").withRelationLimit("orders", Math.max(1, orderLimit));
+}
+```
+
+`CustomerController.detail` bu preset’i kullanır:
+
+```java
+return CustomerEntityCacheBinding
+        .ordersPreviewRepository(customerRepository, clamp(orderPreview, 1, 25))
+        .findById(customerId)
+        .orElseThrow(...);
+```
+
+Yani detay ekranı “son 5 siparişi” gösterebilir; ama müşterinin tüm tarihsel siparişlerini ve tüm satırlarını tek response içinde yüklemez.
+
+### Projection Katmanı: Büyüyen Listeler `OrderSummary` Kullanır
+
+Sipariş listesi ve yüksek değerli sipariş ekranı full `OrderEntity` yerine `OrderSummary` kullanır:
+
+```java
+public record OrderSummary(
+        Long orderId,
+        Long customerId,
+        Long orderDate,
+        Double orderAmount,
+        String currencyCode,
+        String orderType,
+        String status,
+        Integer lineCount,
+        Double priorityScore
+) {
+}
+```
+
+Projection gerçek ekranların sıralama alanlarına göre ranked tutulur:
+
+```java
+).rankedBy("order_date", "priority_score").asyncRefresh();
+```
+
+Böylece Redis içinde liste satırları küçük kalır. Full entity hâlâ detay ekranı için vardır; fakat liste ekranı tam aggregate yükleme maliyetini ödemez.
+
+## Bu Örnekteki Gerçek Hayat Senaryoları
+
+| Senaryo | Endpoint | CacheDB şekli | Neden bu şekil? |
+|---|---|---|---|
+| Müşteri sipariş geçmişini açar | `GET /api/customers/{id}/orders?limit=20` | `OrderSummary` projection sorgusu | Büyüyen liste, küçük payload, sabit sıralama |
+| Kullanıcı tek sipariş açar | `GET /api/orders/{id}?linePreview=5` | Entity detay ve sınırlı relation önizlemesi | Detay daha fazla veri ister, fakat yine de tüm satırları zorla yüklemez |
+| Operasyon yüksek değerli siparişlere bakar | `GET /api/orders/high-value?minimumAmount=500&limit=25` | Ranked projection sorgusu | Global sıralı ekran full entity taramamalı |
+| Kategoriye göre ürün listesi | `GET /api/products/active?category=electronics&limit=20` | Named entity query | Küçük ve sınırlı katalog rotası entity query için uygundur |
+| Destek kuyruğu | `GET /api/tickets/open?limit=25` | Status indeksli named entity query | Operasyon kuyruğu sınırlı ve filtrelidir |
+| Ticaret paneli | `GET /api/dashboard/commerce?limit=25` | Projection ve ticket entity sorgusu | Dashboard küçük, önceden şekillenmiş okuma modellerini birleştirir |
+| Müşteri oluşturma | `POST /api/customers` | Entity save | Redis-first yazma, SQL Server’a arka plan yazma |
+| Sipariş oluşturma | `POST /api/orders` | FK hazırlık kontrolüyle entity save | Child kayıt, parent SQL Server’da kalıcı olana kadar bekler |
+| Sipariş durum güncelleme | `PATCH /api/orders/{id}/status` | Entity oku, nesneyi değiştir, kaydet | Partial update açık full-entity save olarak uygulanır |
+| Sipariş silme | `DELETE /api/orders/{id}` | Repository delete | Aktif cache kaydını kaldırır ve kalıcı delete işini sıraya alır |
+
+## İlk Gün Kullanımı ve Yük Büyüdükçe Yapılacaklar
+
+| Aşama | Veri şekli | Yapılacak iş |
+|---|---|---|
+| İlk gün lokal demo | 20 müşteri, müşteri başına 40 sipariş, sipariş başına 4 satır | Seed çalıştır, API cevaplarını incele, yönetim ekranını aç, generated binding mantığını öğren |
+| İlk staging denemesi | Binlerce müşteri, gerçeğe yakın sipariş dağılımı | API limitlerini projection penceresinin altında tut, SQL Server indekslerini doğrula, projection gecikmesini izle |
+| Trafik artışı | Çok sayıda müşteri sürekli sipariş listesi açar | Redis `maxmemory` değerini artır, `hotEntityLimit` değerini bellek bütçesine göre ayarla, listeyi projection’da tut |
+| Büyük müşteri fan-out | Bazı müşterilerde binlerce sipariş oluşur | `Customer -> tüm Orders` yükleme; `OrderSummary` timeline ve açık sipariş detayı kullan |
+| Dashboard büyümesi | Global sıralı ve KPI ekranları artar | Full entity tekrar kullanmak yerine route’a özel projection ekle |
+| SQL Server yoğunluğu | Lock beklemeleri veya pool baskısı görünür | Hikari pool, lock timeout, query timeout ve batch size birlikte ayarlanmalı |
+| Çok podlu runtime | Birden fazla application container çalışır | Unique consumer name ve leader lease ayarlarını açık tut |
+
+## Tuning Rehberi
+
+Önce örnekteki ayarlarla başla, sonra ölçüme göre değiştir:
+
+| Sinyal | Nereden bakılır? | Aksiyon |
+|---|---|---|
+| Redis belleği hızlı büyüyor | Yönetim ekranı, Redis `INFO memory`, `/api/tuning` | Aktif pencereyi daralt, hot policy’yi sıkılaştır, projection payload’ını küçült |
+| Sipariş listesi yavaş | API latency ve route etiketi | Route’un entity fallback değil `projection:order-summary` kullandığını doğrula |
+| SQL Server okuma yükü artıyor | SQL Server metrikleri, slow query kanıtı | Tekrarlanan liste ekranlarını projection’a taşı, route indekslerini ekle |
+| Write-behind backlog büyüyor | Yönetim ekranındaki write-behind bölümü | Worker/batch ayarını dikkatli artır, SQL Server lock durumunu incele, backpressure uygula |
+| Projection gecikmesi büyüyor | Yönetim ekranındaki projection telemetry | Refresh baskısını azalt veya projection’ları route bazında ayır |
+| Response payload büyüyor | API payload boyutu | Controller limitini düşür, detay için ayrı follow-up endpoint kullan |
+| Lock beklemeleri artıyor | SQL Server wait stat ve uygulama timeout kayıtları | Batch size düşür, isolation ayarını gözden geçir, transaction süresini kısa tut |
+
+Örneğin temel tuning kodu:
+
+```java
+CachePolicy.builder()
+        .hotEntityLimit(5_000)
+        .pageSize(100)
+        .entityTtlSeconds(0)
+        .pageTtlSeconds(120)
+        .compositeHotPolicy(EntityHotPolicyCompositeOperator.ANY, List.of(
+                EntityHotPolicy.timeWindow("order_date", 90L * 24L * 60L * 60L),
+                EntityHotPolicy.stateWindow("status", List.of("ACTIVE", "NEW", "PAID", "PICKING", "OPEN", "PENDING")),
+                EntityHotPolicy.stateWindow("active_status", List.of("ACTIVE"))
+        ))
+        .build()
+```
+
+Bu politika şunu söyler: kayıt son 90 günlük iş penceresindeyse veya operasyonel olarak aktifse aktif veri setinde kalabilir. Bu yaklaşım “en son okunan neyse onu cache’le” davranışından daha gerçekçidir.
+
 ## MSSQL Provider Ayarları
 
 Temel provider seçimi `application.yml` içindedir:
