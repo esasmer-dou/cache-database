@@ -88,8 +88,9 @@ JDBC rule:
 - Keep the JDBC driver for your selected SQL provider as a runtime dependency.
 - Configure `cachedb-processor` as an annotation processor.
 - The dependency examples use PostgreSQL. For MSSQL, add
-  `cachedb-storage-mssql`, the Microsoft SQL Server JDBC driver, and explicitly
-  wire `MssqlWriteBehindFlusher`; see [Database Provider SPI](database-provider-spi.md).
+  `cachedb-storage-mssql`, the Microsoft SQL Server JDBC driver, and select the
+  provider with `cachedb.sql.provider=mssql` or
+  `MssqlWriteBehindFlusher.factory(...)`; see [Database Provider SPI](database-provider-spi.md).
 
 ## 3. Plain Java Dependencies
 

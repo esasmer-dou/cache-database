@@ -235,7 +235,7 @@ yüklü sorgu şekillerine yönlendirir.
 
 ```java
 var domain = com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session);
-List<UserEntity> açtiveUsers = domain.users().queries().activeUsers(25);
+List<UserEntity> activeUsers = domain.users().queries().activeUsers(25);
 ```
 
 Neden varsayılan:
@@ -257,7 +257,7 @@ Neden varsayılan:
 
 ```java
 var users = UserEntityCacheBinding.using(session);
-List<UserEntity> açtiveUsers = users.queries().activeUsers(25);
+List<UserEntity> activeUsers = users.queries().activeUsers(25);
 ```
 
 Neden:

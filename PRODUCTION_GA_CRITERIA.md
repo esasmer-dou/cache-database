@@ -11,7 +11,7 @@ cutover evidence before using CacheDB on production traffic.
 | Gate | GA requirement | Evidence |
 | --- | --- | --- |
 | Redis HA and failover | Multi-pod coordination, consumer identity, leader lease, pending claim, and post-outage recovery must pass. | `Production Evidence / redis-failover-evidence` workflow artifact. |
-| Local Docker HA preflight | Docker Desktop or CI must prove Redis outage/recovery, multi-instance coordination, and SQL Server restart/reconnect behavior from clean containers. | `tools/ci/run-local-docker-ha-preflight.ps1` summary or equivalent `Production Evidence` artifacts. |
+| Local Docker HA preflight | Docker Desktop or CI must prove Redis outage/recovery, multi-instance coordination, SQL Server restart/reconnect, and MSSQL listener backend-switch behavior from clean containers. | `tools/ci/run-local-docker-ha-preflight.ps1` and `tools/ci/run-local-mssql-listener-failover-evidence.ps1` summaries or equivalent `Production Evidence` artifacts. |
 | Managed staging Redis HA | Required only for a consuming application's production cutover or when the release claim explicitly certifies a managed Redis topology. | `Production GA Staging Evidence / staging-redis-ha` workflow artifact. |
 | Admin HTTP exposure | Admin HTTP must be explicitly enabled and must be protected by gateway auth or CacheDB token auth. It must not be exposed directly to the public internet. | `cachedb.admin.http-enabled=true` is explicit; gateway route or `cachedb.admin.auth-enabled=true` is documented in deployment config. |
 | TLS boundary | Application-level TLS is not required when the service is behind a managed gateway or reverse proxy. | Gateway/proxy owns TLS termination, request authentication, and network exposure policy. |
@@ -25,7 +25,7 @@ cutover evidence before using CacheDB on production traffic.
 | Relation-heavy reads | Summary-first, preview/detail, and projection-first recipes must remain faster and lower-materialization than full aggregate first-paint. | Relation read-shape benchmark and migration side-by-side reports pass. |
 | Global sorted/range reads | Ranked projection top-window path must remain cheaper than wide candidate scan. | Ranked projection benchmark passes. |
 | Write durability | Write-behind retry, claim, DLQ, poison visibility, and selected SQL provider durability must be verified. | Integration tests and multi-instance coordination evidence pass. |
-| MSSQL provider readiness | MSSQL can be documented as a supported provider only for the evidence level that has passed. Docker restart/reconnect and high-volume replay are library evidence; SQL Server HA or Always On remains an application/topology cutover gate. | `Production Evidence / mssql-provider-evidence` workflow artifact; add `Production GA Staging Evidence / staging-mssql-ha` for managed HA claims. |
+| MSSQL provider readiness | MSSQL can be documented as a supported provider only for the evidence level that has passed. Docker restart/reconnect, listener backend-switch, and high-volume replay are library evidence; SQL Server HA or Always On remains an application/topology cutover gate. | `Production Evidence / mssql-provider-evidence` workflow artifact; local listener-failover summary; add `Production GA Staging Evidence / staging-mssql-ha` for managed HA claims. |
 
 ## Classification
 

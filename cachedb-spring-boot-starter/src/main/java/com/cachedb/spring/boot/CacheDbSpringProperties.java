@@ -8,6 +8,7 @@ public class CacheDbSpringProperties {
     private boolean enabled = true;
     private Profile profile = Profile.DEFAULT;
     private final RedisProperties redis = new RedisProperties();
+    private final SqlProperties sql = new SqlProperties();
     private final AdminUiProperties admin = new AdminUiProperties();
     private final RegistrationProperties registration = new RegistrationProperties();
     private final RuntimeProperties runtime = new RuntimeProperties();
@@ -30,6 +31,10 @@ public class CacheDbSpringProperties {
 
     public RedisProperties getRedis() {
         return redis;
+    }
+
+    public SqlProperties getSql() {
+        return sql;
     }
 
     /**
@@ -65,6 +70,18 @@ public class CacheDbSpringProperties {
         BENCHMARK,
         MEMORY_CONSTRAINED,
         MINIMAL_OVERHEAD
+    }
+
+    public enum SqlProvider {
+        POSTGRES,
+        MSSQL,
+        CUSTOM
+    }
+
+    public enum TransactionIsolation {
+        READ_COMMITTED,
+        REPEATABLE_READ,
+        SERIALIZABLE
     }
 
     public static final class RedisProperties {
@@ -250,6 +267,64 @@ public class CacheDbSpringProperties {
 
         public PoolProperties getPool() {
             return pool;
+        }
+    }
+
+    public static final class SqlProperties {
+        private SqlProvider provider = SqlProvider.POSTGRES;
+        private final MssqlProperties mssql = new MssqlProperties();
+
+        public SqlProvider getProvider() {
+            return provider;
+        }
+
+        public void setProvider(SqlProvider provider) {
+            this.provider = provider == null ? SqlProvider.POSTGRES : provider;
+        }
+
+        public MssqlProperties getMssql() {
+            return mssql;
+        }
+    }
+
+    public static final class MssqlProperties {
+        private int lockTimeoutMillis = 5_000;
+        private int queryTimeoutSeconds = 10;
+        private TransactionIsolation transactionIsolation = TransactionIsolation.SERIALIZABLE;
+        private boolean restoreLockTimeoutAfterTransaction = true;
+
+        public int getLockTimeoutMillis() {
+            return lockTimeoutMillis;
+        }
+
+        public void setLockTimeoutMillis(int lockTimeoutMillis) {
+            this.lockTimeoutMillis = lockTimeoutMillis;
+        }
+
+        public int getQueryTimeoutSeconds() {
+            return queryTimeoutSeconds;
+        }
+
+        public void setQueryTimeoutSeconds(int queryTimeoutSeconds) {
+            this.queryTimeoutSeconds = queryTimeoutSeconds;
+        }
+
+        public TransactionIsolation getTransactionIsolation() {
+            return transactionIsolation;
+        }
+
+        public void setTransactionIsolation(TransactionIsolation transactionIsolation) {
+            this.transactionIsolation = transactionIsolation == null
+                    ? TransactionIsolation.SERIALIZABLE
+                    : transactionIsolation;
+        }
+
+        public boolean isRestoreLockTimeoutAfterTransaction() {
+            return restoreLockTimeoutAfterTransaction;
+        }
+
+        public void setRestoreLockTimeoutAfterTransaction(boolean restoreLockTimeoutAfterTransaction) {
+            this.restoreLockTimeoutAfterTransaction = restoreLockTimeoutAfterTransaction;
         }
     }
 

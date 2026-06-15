@@ -300,7 +300,7 @@ Notes:
 - A Spring `DataSource` is still required.
 - The dependency snippets use PostgreSQL because it is the default provider. If
   you choose MSSQL, add `cachedb-storage-mssql`, use the Microsoft SQL Server
-  JDBC driver, and wire `MssqlWriteBehindFlusher` explicitly.
+  JDBC driver, and set `cachedb.sql.provider=mssql`.
 - If you do not provide a `JedisPooled` bean, the starter creates one from `cachedb.redis.uri`.
 - The legacy alias `cachedb.redis-uri` still works.
 - `cachedb.profile` accepts `default`, `development`, `production`, `benchmark`, `memory-constrained`, or `minimal-overhead`.
@@ -308,6 +308,52 @@ Notes:
 - set `cachedb.registration.enabled=false` only if you want to opt back into fully manual binding registration
 - `cachedb.runtime.append-instance-id-to-consumer-names=true` is the safe multi-pod default; it keeps consumer groups shared but makes consumer names pod-unique
 - `cachedb.runtime.leader-lease-enabled=true` turns on Redis leader leasing for cleanup/report/history loops so those singleton tasks do not fan out across every pod
+
+### MSSQL With Spring Boot
+
+For SQL Server, keep your normal Spring `DataSource` setup and add the provider
+module plus Microsoft JDBC driver:
+
+```xml
+<dependency>
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cachedb-storage-mssql</artifactId>
+    <version>${cachedb.version}</version>
+</dependency>
+<dependency>
+    <groupId>com.microsoft.sqlserver</groupId>
+    <artifactId>mssql-jdbc</artifactId>
+    <scope>runtime</scope>
+</dependency>
+```
+
+Then select the provider explicitly:
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:sqlserver://sqlserver:1433;databaseName=app;encrypt=true;trustServerCertificate=false
+    username: app
+    password: app
+
+cachedb:
+  enabled: true
+  profile: production
+  sql:
+    provider: mssql
+    mssql:
+      lock-timeout-millis: 5000
+      query-timeout-seconds: 10
+      transaction-isolation: serializable
+      restore-lock-timeout-after-transaction: true
+  redis:
+    uri: redis://redis:6379
+```
+
+BEST: give CacheDB write-behind a dedicated SQL Server pool in high-write
+services and size that pool from total cluster worker concurrency. If you use a
+shared application pool, keep `restore-lock-timeout-after-transaction=true` so
+CacheDB does not leak a changed `LOCK_TIMEOUT` into unrelated SQL code.
 
 ## First Working Plain Java Example
 

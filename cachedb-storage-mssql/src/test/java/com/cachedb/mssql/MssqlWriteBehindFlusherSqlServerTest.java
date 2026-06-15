@@ -130,8 +130,13 @@ class MssqlWriteBehindFlusherSqlServerTest {
     @Test
     void mssqlFlusherShouldClassifyLiveLockTimeoutAsRetryableLockConflict() throws Exception {
         MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(
-                new SessionSettingDataSource(dataSource(), "SET LOCK_TIMEOUT 200"),
-                emptyRegistry()
+                dataSource(),
+                emptyRegistry(),
+                com.reactor.cachedb.core.config.WriteBehindConfig.defaults(),
+                MssqlWriteBehindOptions.builder()
+                        .lockTimeoutMillis(200)
+                        .queryTimeoutSeconds(5)
+                        .build()
         );
         flusher.flush(upsert("77", "initial", 1));
 

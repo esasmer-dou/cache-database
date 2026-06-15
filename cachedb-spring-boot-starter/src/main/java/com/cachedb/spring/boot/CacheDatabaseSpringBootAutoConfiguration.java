@@ -4,6 +4,7 @@ import com.reactor.cachedb.core.config.AdminHttpConfig;
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.RuntimeCoordinationConfig;
+import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer;
 import com.reactor.cachedb.starter.CacheDatabaseProfiles;
@@ -26,6 +27,9 @@ import org.springframework.beans.factory.SmartInitializingSingleton;
 import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
+import java.lang.reflect.InvocationTargetException;
+import java.sql.Connection;
+
 @AutoConfiguration
 @ConditionalOnClass({CacheDatabase.class, DataSource.class, JedisPooled.class, Servlet.class})
 @EnableConfigurationProperties(CacheDbSpringProperties.class)
@@ -74,6 +78,7 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                         .authToken(properties.getAdmin().getAuthToken())
                         .authHeaderName(properties.getAdmin().getAuthHeaderName())
                         .build());
+        applySqlProvider(builder, properties.getSql());
         for (CacheDatabaseConfigCustomizer customizer : customizers.orderedStream().toList()) {
             customizer.customize(builder, properties);
         }
@@ -214,6 +219,74 @@ public class CacheDatabaseSpringBootAutoConfiguration {
             case MEMORY_CONSTRAINED -> CacheDatabaseProfiles.memoryConstrained();
             case MINIMAL_OVERHEAD -> CacheDatabaseProfiles.minimalOverhead();
             case DEFAULT -> CacheDatabaseConfig.defaults();
+        };
+    }
+
+    private void applySqlProvider(CacheDatabaseConfig.Builder builder, CacheDbSpringProperties.SqlProperties sqlProperties) {
+        if (sqlProperties == null || sqlProperties.getProvider() == null) {
+            return;
+        }
+        switch (sqlProperties.getProvider()) {
+            case POSTGRES -> {
+                // PostgreSQL remains the starter default through CacheDatabase.
+            }
+            case MSSQL -> builder.writeBehindFlusherFactory(mssqlWriteBehindFlusherFactory(sqlProperties.getMssql()));
+            case CUSTOM -> builder.writeBehindFlusherFactory((dataSource, entityRegistry, writeBehindConfig, collector) -> {
+                throw new IllegalStateException(
+                        "cachedb.sql.provider=custom requires a CacheDatabaseConfigCustomizer "
+                                + "or CacheDatabaseConfig bean that supplies writeBehindFlusherFactory"
+                );
+            });
+        }
+    }
+
+    private WriteBehindFlusherFactory mssqlWriteBehindFlusherFactory(CacheDbSpringProperties.MssqlProperties properties) {
+        try {
+            Class<?> optionsClass = Class.forName("com.reactor.cachedb.mssql.MssqlWriteBehindOptions");
+            Object optionsBuilder = optionsClass.getMethod("builder").invoke(null);
+            invokeBuilder(optionsBuilder, "lockTimeoutMillis", int.class, properties.getLockTimeoutMillis());
+            invokeBuilder(optionsBuilder, "queryTimeoutSeconds", int.class, properties.getQueryTimeoutSeconds());
+            invokeBuilder(optionsBuilder, "transactionIsolation", int.class, jdbcIsolation(properties.getTransactionIsolation()));
+            invokeBuilder(
+                    optionsBuilder,
+                    "restoreLockTimeoutAfterTransaction",
+                    boolean.class,
+                    properties.isRestoreLockTimeoutAfterTransaction()
+            );
+            Object options = optionsBuilder.getClass().getMethod("build").invoke(optionsBuilder);
+
+            Class<?> flusherClass = Class.forName("com.reactor.cachedb.mssql.MssqlWriteBehindFlusher");
+            Object factory = flusherClass.getMethod("factory", optionsClass).invoke(null, options);
+            return (WriteBehindFlusherFactory) factory;
+        } catch (ClassNotFoundException exception) {
+            throw new IllegalStateException(
+                    "cachedb.sql.provider=mssql requires com.reactor.cachedb:cachedb-storage-mssql on the application classpath",
+                    exception
+            );
+        } catch (InvocationTargetException exception) {
+            Throwable target = exception.getTargetException();
+            if (target instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IllegalStateException("Could not create MSSQL write-behind flusher factory", target);
+        } catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException("Could not create MSSQL write-behind flusher factory", exception);
+        }
+    }
+
+    private void invokeBuilder(Object builder, String methodName, Class<?> valueType, Object value)
+            throws ReflectiveOperationException {
+        builder.getClass().getMethod(methodName, valueType).invoke(builder, value);
+    }
+
+    private int jdbcIsolation(CacheDbSpringProperties.TransactionIsolation isolation) {
+        CacheDbSpringProperties.TransactionIsolation resolved = isolation == null
+                ? CacheDbSpringProperties.TransactionIsolation.SERIALIZABLE
+                : isolation;
+        return switch (resolved) {
+            case READ_COMMITTED -> Connection.TRANSACTION_READ_COMMITTED;
+            case REPEATABLE_READ -> Connection.TRANSACTION_REPEATABLE_READ;
+            case SERIALIZABLE -> Connection.TRANSACTION_SERIALIZABLE;
         };
     }
 

@@ -107,10 +107,10 @@ function Invoke-MssqlEvidenceTests {
     Write-Host ""
     Write-Host "Running MSSQL provider evidence phase: $Phase"
     Invoke-Maven @(
-        "-pl", "cachedb-storage-mssql,cachedb-starter,cachedb-integration-tests",
+        "-pl", "cachedb-storage-mssql,cachedb-starter,cachedb-spring-boot-starter,cachedb-integration-tests",
         "-am",
         "test",
-        "-Dtest=MssqlFailureClassifierTest,MssqlWriteBehindFlusherTest,MssqlWriteBehindFlusherSqlServerTest,MssqlWriteBehindFlusherLoadSqlServerTest,MssqlOutboxExternalChangeFeedAdapterSqlServerTest,MssqlMigrationPlannerSqlServerTest,MssqlOutboxMultiPodApplyRunnerTest",
+        "-Dtest=MssqlFailureClassifierTest,MssqlWriteBehindFlusherTest,MssqlWriteBehindFlusherSqlServerTest,MssqlWriteBehindFlusherLoadSqlServerTest,MssqlOutboxExternalChangeFeedAdapterSqlServerTest,MssqlMigrationPlannerSqlServerTest,MssqlOutboxMultiPodApplyRunnerTest,CacheDbSpringPropertiesTest",
         "-Dsurefire.failIfNoSpecifiedTests=false",
         "-Dcachedb.it.mssql.required=true",
         "-Dcachedb.it.mssql.url=$MssqlUrl",
@@ -149,7 +149,9 @@ $summary = @(
     "- SQL Server write-behind idempotency smoke: passed",
     "- SQL Server concurrent duplicate-id/stale-version write race: passed",
     "- SQL Server live lock-timeout classification: passed",
+    "- SQL Server provider-level lock/query timeout options: passed",
     "- SQL Server retryable timeout/deadlock/lock-conflict classifier coverage: passed",
+    "- Spring Boot explicit MSSQL provider wiring: passed",
     "- SQL Server provider-tagged write performance breakdown: passed",
     "- SQL Server write-behind high-volume load: passed",
     "- SQL Server outbox checkpoint smoke: passed",
@@ -172,7 +174,8 @@ $json = [ordered]@{
         "MssqlWriteBehindFlusherLoadSqlServerTest",
         "MssqlOutboxExternalChangeFeedAdapterSqlServerTest",
         "MssqlMigrationPlannerSqlServerTest",
-        "MssqlOutboxMultiPodApplyRunnerTest"
+        "MssqlOutboxMultiPodApplyRunnerTest",
+        "CacheDbSpringPropertiesTest"
     )
     restartSqlServerContainer = [bool]$RestartSqlServerContainer
     restartedContainer = $restartContainer

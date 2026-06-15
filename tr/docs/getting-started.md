@@ -89,8 +89,10 @@ JDBC kuralı:
 - `cachedb-processor` annotation processor olarak tanımlanmalıdır.
 - Örneklerde PostgreSQL driver'ı gösterilir; çünkü varsayılan provider
   PostgreSQL'dir. MSSQL için `cachedb-storage-mssql`, Microsoft SQL Server JDBC
-  driver'ı ve açık `MssqlWriteBehindFlusher` wiring'i gerekir. Detaylar için
-  [Veritabanı Sağlayıcı SPI](veritabani-provider-spi.md) sayfasına bak.
+  driver'ı gerekir. Provider seçimini Spring Boot'ta `cachedb.sql.provider=mssql`
+  ile, plain Java'da ise `MssqlWriteBehindFlusher.factory(...)` ile açıkça
+  yaparsın. Detaylar için [Veritabanı Sağlayıcı SPI](veritabani-provider-spi.md)
+  sayfasına bak.
 
 ## 3. Plain Java Dependency'leri
 

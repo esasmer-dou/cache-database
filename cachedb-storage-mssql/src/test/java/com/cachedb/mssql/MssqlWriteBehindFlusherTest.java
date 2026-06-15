@@ -17,6 +17,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -27,6 +28,7 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MssqlWriteBehindFlusherTest {
@@ -85,6 +87,63 @@ class MssqlWriteBehindFlusherTest {
 
         assertEquals(5, dataSource.statementKinds().size());
         assertEquals(3, dataSource.commitCount);
+    }
+
+    @Test
+    void shouldApplySharedPoolMssqlTimeoutOptionsAndRestoreLockTimeout() throws Exception {
+        RecordingDataSource dataSource = new RecordingDataSource(1, false);
+        MssqlWriteBehindOptions options = MssqlWriteBehindOptions.builder()
+                .lockTimeoutMillis(250)
+                .queryTimeoutSeconds(3)
+                .restoreLockTimeoutAfterTransaction(true)
+                .build();
+        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(
+                dataSource,
+                emptyRegistry(),
+                WriteBehindConfig.defaults(),
+                options
+        );
+
+        flusher.flush(operation(OperationType.UPSERT, "6", 12));
+
+        assertEquals(List.of("SELECT @@LOCK_TIMEOUT", "SET LOCK_TIMEOUT 250", "SET LOCK_TIMEOUT -1"), dataSource.sessionSqlCalls);
+        assertFalse(dataSource.queryTimeouts.isEmpty());
+        assertTrue(dataSource.queryTimeouts.stream().allMatch(timeout -> timeout == 3));
+    }
+
+    @Test
+    void shouldUseDedicatedWorkerPoolPresetWithoutLockTimeoutRestoreRead() throws Exception {
+        RecordingDataSource dataSource = new RecordingDataSource(1, false);
+        MssqlWriteBehindOptions options = MssqlWriteBehindOptions.dedicatedWorkerPoolDefaults()
+                .toBuilder()
+                .lockTimeoutMillis(300)
+                .queryTimeoutSeconds(4)
+                .build();
+        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(
+                dataSource,
+                emptyRegistry(),
+                WriteBehindConfig.defaults(),
+                options
+        );
+
+        flusher.flush(operation(OperationType.UPSERT, "7", 13));
+
+        assertEquals(List.of("SET LOCK_TIMEOUT 300"), dataSource.sessionSqlCalls);
+        assertFalse(dataSource.queryTimeouts.isEmpty());
+        assertTrue(dataSource.queryTimeouts.stream().allMatch(timeout -> timeout == 4));
+    }
+
+    @Test
+    void shouldRejectUnsupportedMssqlOptions() {
+        assertThrows(IllegalArgumentException.class, () -> MssqlWriteBehindOptions.builder()
+                .lockTimeoutMillis(-2)
+                .build());
+        assertThrows(IllegalArgumentException.class, () -> MssqlWriteBehindOptions.builder()
+                .queryTimeoutSeconds(-1)
+                .build());
+        assertThrows(IllegalArgumentException.class, () -> MssqlWriteBehindOptions.builder()
+                .transactionIsolation(Connection.TRANSACTION_NONE)
+                .build());
     }
 
     @Test
@@ -175,11 +234,14 @@ class MssqlWriteBehindFlusherTest {
         private final int updateCount;
         private final boolean exists;
         private final List<String> sqlCalls = new ArrayList<>();
+        private final List<String> sessionSqlCalls = new ArrayList<>();
+        private final List<Integer> queryTimeouts = new ArrayList<>();
         private boolean committed;
         private boolean rolledBack;
         private int commitCount;
         private int requestedIsolation;
         private boolean serializableIsolationRequested;
+        private int currentLockTimeout = MssqlWriteBehindOptions.LOCK_TIMEOUT_WAIT_FOREVER;
 
         private RecordingDataSource(int updateCount, boolean exists) {
             this.updateCount = updateCount;
@@ -285,6 +347,7 @@ class MssqlWriteBehindFlusherTest {
                     yield null;
                 }
                 case "prepareStatement" -> preparedStatement(dataSource, (String) args[0]);
+                case "createStatement" -> statement(dataSource);
                 default -> defaultValue(method.getReturnType());
             };
         }
@@ -295,12 +358,45 @@ class MssqlWriteBehindFlusherTest {
         InvocationHandler handler = (proxy, method, args) -> switch (method.getName()) {
             case "executeUpdate" -> sql.startsWith("UPDATE") ? dataSource.updateCount : 1;
             case "executeQuery" -> resultSet(dataSource.exists);
+            case "setQueryTimeout" -> {
+                dataSource.queryTimeouts.add((Integer) args[0]);
+                yield null;
+            }
             case "setObject", "setLong", "close" -> null;
             default -> defaultValue(method.getReturnType());
         };
         return (PreparedStatement) Proxy.newProxyInstance(
                 PreparedStatement.class.getClassLoader(),
                 new Class<?>[]{PreparedStatement.class},
+                handler
+        );
+    }
+
+    private static Statement statement(RecordingDataSource dataSource) {
+        InvocationHandler handler = (proxy, method, args) -> switch (method.getName()) {
+            case "executeQuery" -> {
+                String sql = (String) args[0];
+                dataSource.sessionSqlCalls.add(sql);
+                yield intResultSet(dataSource.currentLockTimeout);
+            }
+            case "execute" -> {
+                String sql = (String) args[0];
+                dataSource.sessionSqlCalls.add(sql);
+                if (sql.startsWith("SET LOCK_TIMEOUT ")) {
+                    dataSource.currentLockTimeout = Integer.parseInt(sql.substring("SET LOCK_TIMEOUT ".length()));
+                }
+                yield false;
+            }
+            case "setQueryTimeout" -> {
+                dataSource.queryTimeouts.add((Integer) args[0]);
+                yield null;
+            }
+            case "close" -> null;
+            default -> defaultValue(method.getReturnType());
+        };
+        return (Statement) Proxy.newProxyInstance(
+                Statement.class.getClassLoader(),
+                new Class<?>[]{Statement.class},
                 handler
         );
     }
@@ -320,6 +416,31 @@ class MssqlWriteBehindFlusherTest {
                     return null;
                 }
                 return defaultValue(method.getReturnType());
+            }
+        };
+        return (ResultSet) Proxy.newProxyInstance(
+                ResultSet.class.getClassLoader(),
+                new Class<?>[]{ResultSet.class},
+                handler
+        );
+    }
+
+    private static ResultSet intResultSet(int value) {
+        InvocationHandler handler = new InvocationHandler() {
+            private boolean first = true;
+
+            @Override
+            public Object invoke(Object proxy, Method method, Object[] args) {
+                return switch (method.getName()) {
+                    case "next" -> {
+                        boolean result = first;
+                        first = false;
+                        yield result;
+                    }
+                    case "getInt" -> value;
+                    case "close" -> null;
+                    default -> defaultValue(method.getReturnType());
+                };
             }
         };
         return (ResultSet) Proxy.newProxyInstance(

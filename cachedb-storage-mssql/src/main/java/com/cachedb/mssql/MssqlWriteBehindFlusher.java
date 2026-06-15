@@ -6,6 +6,7 @@ import com.reactor.cachedb.core.queue.FailureClassifyingFlusher;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
+import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
 
@@ -14,6 +15,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -25,14 +27,15 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
     private final MssqlDatabaseDialect dialect;
     private final MssqlFailureClassifier failureClassifier;
     private final StoragePerformanceCollector performanceCollector;
+    private final MssqlWriteBehindOptions options;
     private final int transactionBatchSize;
 
     public MssqlWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry) {
-        this(dataSource, entityRegistry, WriteBehindConfig.defaults(), null);
+        this(dataSource, entityRegistry, WriteBehindConfig.defaults(), (StoragePerformanceCollector) null);
     }
 
     public MssqlWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry, WriteBehindConfig config) {
-        this(dataSource, entityRegistry, config, null);
+        this(dataSource, entityRegistry, config, (StoragePerformanceCollector) null);
     }
 
     public MssqlWriteBehindFlusher(
@@ -41,14 +44,46 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
             WriteBehindConfig config,
             StoragePerformanceCollector performanceCollector
     ) {
+        this(dataSource, entityRegistry, config, performanceCollector, MssqlWriteBehindOptions.defaults());
+    }
+
+    public MssqlWriteBehindFlusher(
+            DataSource dataSource,
+            EntityRegistry entityRegistry,
+            WriteBehindConfig config,
+            MssqlWriteBehindOptions options
+    ) {
+        this(dataSource, entityRegistry, config, null, options);
+    }
+
+    public MssqlWriteBehindFlusher(
+            DataSource dataSource,
+            EntityRegistry entityRegistry,
+            WriteBehindConfig config,
+            StoragePerformanceCollector performanceCollector,
+            MssqlWriteBehindOptions options
+    ) {
         this.dataSource = dataSource;
         this.entityRegistry = entityRegistry;
         this.dialect = new MssqlDatabaseDialect();
         this.failureClassifier = new MssqlFailureClassifier();
         this.performanceCollector = performanceCollector;
+        this.options = options == null ? MssqlWriteBehindOptions.defaults() : options;
         this.transactionBatchSize = Math.max(1, config == null
                 ? WriteBehindConfig.defaults().maxFlushBatchSize()
                 : config.maxFlushBatchSize());
+    }
+
+    public static WriteBehindFlusherFactory factory(MssqlWriteBehindOptions options) {
+        MssqlWriteBehindOptions resolvedOptions = options == null ? MssqlWriteBehindOptions.defaults() : options;
+        return (dataSource, entityRegistry, writeBehindConfig, performanceCollector) ->
+                new MssqlWriteBehindFlusher(
+                        dataSource,
+                        entityRegistry,
+                        writeBehindConfig,
+                        performanceCollector,
+                        resolvedOptions
+                );
     }
 
     @Override
@@ -86,9 +121,18 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
     private void executeInTransaction(Connection connection, List<QueuedWriteOperation> operations) throws SQLException {
         boolean previousAutoCommit = connection.getAutoCommit();
         int previousIsolation = connection.getTransactionIsolation();
+        int previousLockTimeout = MssqlWriteBehindOptions.LOCK_TIMEOUT_WAIT_FOREVER;
+        boolean restoreLockTimeout = false;
         connection.setAutoCommit(false);
-        connection.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
         try {
+            if (options.lockTimeoutEnabled()) {
+                if (options.restoreLockTimeoutAfterTransaction()) {
+                    previousLockTimeout = currentLockTimeout(connection);
+                    restoreLockTimeout = true;
+                }
+                setLockTimeout(connection, options.lockTimeoutMillis());
+            }
+            connection.setTransactionIsolation(options.transactionIsolation());
             for (QueuedWriteOperation operation : operations) {
                 if (operation.type() == OperationType.DELETE) {
                     delete(connection, operation);
@@ -101,13 +145,40 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
             connection.rollback();
             throw exception;
         } finally {
-            connection.setTransactionIsolation(previousIsolation);
-            connection.setAutoCommit(previousAutoCommit);
+            SQLException restoreFailure = null;
+            try {
+                connection.setTransactionIsolation(previousIsolation);
+            } catch (SQLException exception) {
+                restoreFailure = exception;
+            }
+            if (restoreLockTimeout) {
+                try {
+                    setLockTimeout(connection, previousLockTimeout);
+                } catch (SQLException exception) {
+                    if (restoreFailure == null) {
+                        restoreFailure = exception;
+                    } else {
+                        restoreFailure.addSuppressed(exception);
+                    }
+                }
+            }
+            try {
+                connection.setAutoCommit(previousAutoCommit);
+            } catch (SQLException exception) {
+                if (restoreFailure == null) {
+                    restoreFailure = exception;
+                } else {
+                    restoreFailure.addSuppressed(exception);
+                }
+            }
+            if (restoreFailure != null) {
+                throw restoreFailure;
+            }
         }
     }
 
     private void delete(Connection connection, QueuedWriteOperation operation) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(dialect.deleteSql(operation))) {
+        try (PreparedStatement statement = prepareStatement(connection, dialect.deleteSql(operation))) {
             statement.setObject(1, JdbcWriteBehindSupport.convertValue(
                     operation.id(),
                     JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
@@ -134,7 +205,7 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
             QueuedWriteOperation operation,
             List<Map.Entry<String, String>> entries
     ) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(dialect.updateSql(operation, entries))) {
+        try (PreparedStatement statement = prepareStatement(connection, dialect.updateSql(operation, entries))) {
             int parameterIndex = 1;
             for (Map.Entry<String, String> entry : entries) {
                 if (entry.getKey().equals(operation.idColumn())) {
@@ -155,7 +226,7 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
     }
 
     private boolean exists(Connection connection, QueuedWriteOperation operation) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(dialect.existsSql(operation))) {
+        try (PreparedStatement statement = prepareStatement(connection, dialect.existsSql(operation))) {
             statement.setObject(1, JdbcWriteBehindSupport.convertValue(
                     operation.id(),
                     JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
@@ -171,9 +242,40 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
             QueuedWriteOperation operation,
             List<Map.Entry<String, String>> entries
     ) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(dialect.insertSql(operation, entries))) {
+        try (PreparedStatement statement = prepareStatement(connection, dialect.insertSql(operation, entries))) {
             JdbcWriteBehindSupport.bindUpsert(statement, operation, entityRegistry, entries);
             statement.executeUpdate();
+        }
+    }
+
+    private PreparedStatement prepareStatement(Connection connection, String sql) throws SQLException {
+        PreparedStatement statement = connection.prepareStatement(sql);
+        applyQueryTimeout(statement);
+        return statement;
+    }
+
+    private int currentLockTimeout(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            applyQueryTimeout(statement);
+            try (ResultSet resultSet = statement.executeQuery("SELECT @@LOCK_TIMEOUT")) {
+                if (resultSet.next()) {
+                    return resultSet.getInt(1);
+                }
+            }
+        }
+        return MssqlWriteBehindOptions.LOCK_TIMEOUT_WAIT_FOREVER;
+    }
+
+    private void setLockTimeout(Connection connection, int lockTimeoutMillis) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            applyQueryTimeout(statement);
+            statement.execute("SET LOCK_TIMEOUT " + lockTimeoutMillis);
+        }
+    }
+
+    private void applyQueryTimeout(Statement statement) throws SQLException {
+        if (options.queryTimeoutSeconds() > 0) {
+            statement.setQueryTimeout(options.queryTimeoutSeconds());
         }
     }
 

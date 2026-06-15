@@ -147,6 +147,47 @@ Operasyonel notlar:
 | `<scope>.postgres.applicationName` | `cache-database` | PostgreSQL oturumundaki application name. |
 | `<scope>.postgres.additionalParameters` | boş | `key=value;key=value` formatında ek JDBC query parametreleri. |
 
+## MSSQL Provider Tuning
+
+Spring Boot starter'da varsayılan provider PostgreSQL'dir. Uygulama
+`cachedb-storage-mssql` modülünü ve Microsoft JDBC driver'ını ekliyorsa MSSQL
+seçimi açık yapılmalıdır: `cachedb.sql.provider=mssql`.
+
+| Property | Varsayılan | Ne işe yarar |
+| --- | --- | --- |
+| `cachedb.sql.provider` | `postgres` | Starter'ın hangi kalıcı SQL provider'ını bağlayacağını belirler. Desteklenen değerler: `postgres`, `mssql`, `custom`. |
+| `cachedb.sql.mssql.lock-timeout-millis` | `5000` | MSSQL write-behind flusher'ın uyguladığı SQL Server `LOCK_TIMEOUT` değeri. `-1` sonsuza kadar bekler; düşük gecikme hedefleyen production route'larında kullanılmamalıdır. |
+| `cachedb.sql.mssql.query-timeout-seconds` | `10` | MSSQL session, update, existence, insert ve delete statement'larına uygulanan JDBC query timeout süresi. |
+| `cachedb.sql.mssql.transaction-isolation` | `serializable` | MSSQL write transaction isolation seviyesi. Desteklenen değerler: `read_committed`, `repeatable_read`, `serializable`. Route bazlı ölçüm kanıtın yoksa `serializable` bırak. |
+| `cachedb.sql.mssql.restore-lock-timeout-after-transaction` | `true` | Her transaction sonunda connection'ın önceki `LOCK_TIMEOUT` değerini geri yükler. Uygulamayla paylaşılan havuzlarda açık kalmalı; yalnızca CacheDB write-behind için ayrılmış `DataSource` kullanıyorsan kapatılmalıdır. |
+
+Düz Java kullananlar aynı davranışı `MssqlWriteBehindOptions` ile kurar:
+
+```java
+MssqlWriteBehindOptions options = MssqlWriteBehindOptions.dedicatedWorkerPoolDefaults()
+        .toBuilder()
+        .lockTimeoutMillis(5_000)
+        .queryTimeoutSeconds(10)
+        .build();
+
+CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
+        .writeBehindFlusherFactory(MssqlWriteBehindFlusher.factory(options))
+        .start();
+```
+
+BEST: Yazma trafiği yüksek servislerde CacheDB write-behind için ayrı SQL Server
+connection pool kullan, pool boyutunu cluster toplam worker concurrency'sine göre
+ayarla ve lock-timeout restore davranışını yalnızca bu ayrılmış havuzda kapat.
+
+ANTI-PATTERN: Aynı SQL Server pool'unu iş sorgularıyla paylaşmak, restore
+davranışını kapatmak ve CacheDB'nin değiştirdiği `LOCK_TIMEOUT` değerinin başka
+uygulama koduna sızmasına izin vermek.
+
+`cachedb.sql.provider=custom` fail-fast modudur. Bunu ancak
+`CacheDatabaseConfigCustomizer` veya açık `CacheDatabaseConfig` üzerinden
+`writeBehindFlusherFactory` veriyorsan kullan. Aksi halde sistem sessizce
+PostgreSQL'e dönmez; startup sırasında açık hata verir.
+
 ## Core Runtime Tuning
 
 ### Write-Behind
@@ -630,15 +671,15 @@ Bu görünüm iki kaynağı birleştirir:
 | `cachedb.admin.ui.howToRead.step2Body` | yerleşik yardım metni | İkinci operator yönlendirme adımı açıklaması. |
 | `cachedb.admin.ui.howToRead.step3Title` | `3. What should I do next?` | Üçüncü operator yönlendirme adımı başlığı. |
 | `cachedb.admin.ui.howToRead.step3Body` | yerleşik yardım metni | Üçüncü operator yönlendirme adımı açıklaması. |
-| `cachedb.admin.ui.sectionGuideTitle` | `Section Guide` | Seçtion guide bölümü başlığı. |
-| `cachedb.admin.ui.sectionGuide.liveTrendsTitle` | `Live Trends` | Seçtion guide içindeki live-trends başlığı. |
-| `cachedb.admin.ui.sectionGuide.liveTrendsBody` | yerleşik guide metni | Seçtion guide içindeki live-trends açıklaması. |
-| `cachedb.admin.ui.sectionGuide.triageTitle` | `Triage` | Seçtion guide içindeki triage başlığı. |
-| `cachedb.admin.ui.sectionGuide.triageBody` | yerleşik guide metni | Seçtion guide içindeki triage açıklaması. |
-| `cachedb.admin.ui.sectionGuide.topSignalsTitle` | `Top Failing Signals` | Seçtion guide içindeki top-signals başlığı. |
-| `cachedb.admin.ui.sectionGuide.topSignalsBody` | yerleşik guide metni | Seçtion guide içindeki top-signals açıklaması. |
-| `cachedb.admin.ui.sectionGuide.routingTitle` | `Alert Routing / Runbooks` | Seçtion guide içindeki routing/runbooks başlığı. |
-| `cachedb.admin.ui.sectionGuide.routingBody` | yerleşik guide metni | Seçtion guide içindeki routing/runbooks açıklaması. |
+| `cachedb.admin.ui.sectionGuideTitle` | `Section Guide` | Bölüm rehberi başlığı. |
+| `cachedb.admin.ui.sectionGuide.liveTrendsTitle` | `Live Trends` | Bölüm rehberindeki live-trends başlığı. |
+| `cachedb.admin.ui.sectionGuide.liveTrendsBody` | yerleşik guide metni | Bölüm rehberindeki live-trends açıklaması. |
+| `cachedb.admin.ui.sectionGuide.triageTitle` | `Triage` | Bölüm rehberindeki triage başlığı. |
+| `cachedb.admin.ui.sectionGuide.triageBody` | yerleşik guide metni | Bölüm rehberindeki triage açıklaması. |
+| `cachedb.admin.ui.sectionGuide.topSignalsTitle` | `Top Failing Signals` | Bölüm rehberindeki top-signals başlığı. |
+| `cachedb.admin.ui.sectionGuide.topSignalsBody` | yerleşik guide metni | Bölüm rehberindeki top-signals açıklaması. |
+| `cachedb.admin.ui.sectionGuide.routingTitle` | `Alert Routing / Runbooks` | Bölüm rehberindeki routing/runbooks başlığı. |
+| `cachedb.admin.ui.sectionGuide.routingBody` | yerleşik guide metni | Bölüm rehberindeki routing/runbooks açıklaması. |
 | `cachedb.admin.ui.liveTrendsTitle` | `Live Trends` | Live trend bölümü başlığı. |
 | `cachedb.admin.ui.liveTrends.backlogLabel` | `Write-behind backlog` | Backlog sparkline üstündeki etiket. |
 | `cachedb.admin.ui.liveTrends.redisMemoryLabel` | `Redis memory` | Memory sparkline üstündeki etiket. |
@@ -668,7 +709,7 @@ Bu görünüm iki kaynağı birleştirir:
 | `cachedb.admin.ui.tuning.exportJsonLabel` | `Export JSON` | JSON tuning export buton etiketi. |
 | `cachedb.admin.ui.tuning.exportMarkdownLabel` | `Export Markdown` | Markdown tuning export buton etiketi. |
 | `cachedb.admin.ui.tuning.copyFlagsLabel` | `Copy Startup Flags` | Effective tuning'i `-D...` flag olarak kopyalama buton etiketi. |
-| `cachedb.admin.ui.tuning.exportStatusIdle` | `Choose an export açtion.` | Tuning export alanı için ilk yardım metni. |
+| `cachedb.admin.ui.tuning.exportStatusIdle` | `Choose an export action.` | Tuning export alanı için ilk yardım metni. |
 | `cachedb.admin.ui.tuning.exportLoading` | `Loading export...` | Export yüklenirken gösterilen durum metni. |
 | `cachedb.admin.ui.tuning.exportJsonSuccess` | `JSON export loaded below.` | JSON export yüklendikten sonra gösterilen durum metni. |
 | `cachedb.admin.ui.tuning.exportMarkdownSuccess` | `Markdown export loaded below.` | Markdown export yüklendikten sonra gösterilen durum metni. |
@@ -703,8 +744,8 @@ Bu görünüm iki kaynağı birleştirir:
 | `cachedb.admin.ui.empty.highSignalFailures` | `No high-signal failures detected.` | Top-failing-signals bölümü boşken gösterilen metin. |
 | `cachedb.admin.ui.empty.triageEvidence` | `No triage evidence` | Triage evidence tablosu boşken gösterilen metin. |
 | `cachedb.admin.ui.empty.services` | `No services` | Service status boşken gösterilen metin. |
-| `cachedb.admin.ui.empty.activeIssues` | `No açtive issues` | Health issue listesi boşken gösterilen metin. |
-| `cachedb.admin.ui.empty.activeIncidents` | `No açtive incidents` | Incident listesi boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.activeIssues` | `No active issues` | Health issue listesi boşken gösterilen metin. |
+| `cachedb.admin.ui.empty.activeIncidents` | `No active incidents` | Incident listesi boşken gösterilen metin. |
 | `cachedb.admin.ui.empty.profileSwitches` | `No profile switches` | Runtime-profile churn boşken gösterilen metin. |
 | `cachedb.admin.ui.empty.deploymentData` | `No deployment data` | Deployment satırları boşken gösterilen metin. |
 | `cachedb.admin.ui.empty.schemaData` | `No schema data` | Schema status boşken gösterilen metin. |
@@ -723,7 +764,7 @@ Bu görünüm iki kaynağı birleştirir:
 | `cachedb.admin.ui.deployment.workersSuffix` | ` workers` | Write-behind worker sayısına eklenen sonek. |
 | `cachedb.admin.ui.deployment.durableCompactionLabel` | `durable compaction` | Durable compaction açıkken deployment satır etiketi. |
 | `cachedb.admin.ui.deployment.noCompactionLabel` | `no compaction` | Durable compaction kapalıyken deployment satır etiketi. |
-| `cachedb.admin.ui.deployment.activeStreamsSuffix` | ` açtive streams` | Active stream sayısına eklenen sonek. |
+| `cachedb.admin.ui.deployment.activeStreamsSuffix` | ` active streams` | Active stream sayısına eklenen sonek. |
 | `cachedb.admin.ui.deployment.guardrailsOnLabel` | `guardrails on` | Guardrails açıkken deployment satır etiketi. |
 | `cachedb.admin.ui.deployment.guardrailsOffLabel` | `guardrails off` | Guardrails kapalıyken deployment satır etiketi. |
 | `cachedb.admin.ui.deployment.autoProfileSwitchLabel` | `auto profile switch` | Otomatik profile switching açıkken deployment satır etiketi. |

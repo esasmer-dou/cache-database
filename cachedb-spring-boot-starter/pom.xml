@@ -60,5 +60,11 @@
             <version>2.2.224</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-storage-mssql</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>

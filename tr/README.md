@@ -135,8 +135,9 @@ JDBC kuralı:
 - `cachedb-annotations` ve annotation processor olarak `cachedb-processor`
   her durumda gereklidir.
 - Aşağıdaki örnek PostgreSQL'i gösterir; çünkü varsayılan provider PostgreSQL'dir.
-  MSSQL için `cachedb-storage-mssql`, Microsoft JDBC driver'ı ve açık
-  `MssqlWriteBehindFlusher` wiring'i gerekir. Detaylar için
+  MSSQL için `cachedb-storage-mssql`, Microsoft JDBC driver'ı ve provider
+  seçimini `cachedb.sql.provider=mssql` veya `MssqlWriteBehindFlusher.factory(...)`
+  ile açık yapman gerekir. Detaylar için
   [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md) sayfasına bak.
 
 Minimal `application.yml`:

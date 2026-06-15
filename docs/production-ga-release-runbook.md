@@ -63,9 +63,20 @@ restart/reconnect and provider evidence, not as topology certification.
 
    This starts Redis, PostgreSQL, and SQL Server containers, runs Redis
    outage/recovery evidence, and runs SQL Server restart/reconnect evidence.
-3. Push the release commit to `main` and wait for `Public Beta Readiness` and
+3. If the release includes MSSQL listener/failover claims but the shared staging
+   Always On environment cannot be failed over on demand, run the local listener
+   preflight:
+
+   ```powershell
+   pwsh ./tools/ci/run-local-mssql-listener-failover-evidence.ps1
+   ```
+
+   This proves stale JDBC connection invalidation and new-connection recovery
+   through a stable listener endpoint. It does not replace a real Always On
+   topology test for replication, quorum, or managed failover policy.
+4. Push the release commit to `main` and wait for `Public Beta Readiness` and
    `Production Evidence` to pass on that exact commit.
-4. Build the official GitHub Release artifact from the intended commit:
+5. Build the official GitHub Release artifact from the intended commit:
 
    ```powershell
    pwsh ./tools/release/build-release-package.ps1 `
@@ -74,16 +85,16 @@ restart/reconnect and provider evidence, not as topology certification.
    ```
 
    For stable releases, use a non-beta package label such as `github-release`.
-5. Create and push the stable tag, for example `v0.1.0`.
-6. If Maven Central is the selected distribution channel, run `Maven Central
+6. Create and push the stable tag, for example `v0.1.0`.
+7. If Maven Central is the selected distribution channel, run `Maven Central
    Publish` manually on the stable tag with
    `gaRelease=true`. The workflow runs the GA preflight before deploying signed
    artifacts.
-7. Run `Production GA Release Readiness` for the same tag. Enable
+8. Run `Production GA Release Readiness` for the same tag. Enable
    `requireManagedStagingHa`, `requireApplicationMigrationCoverage`, or
    `requireMavenCentralPublish` only when that release claim includes those
    optional gates.
-8. Publish the GitHub release only after the readiness summary is `PASS` and
+9. Publish the GitHub release only after the readiness summary is `PASS` and
    attach the official release artifact.
 
 ## Local Preflight

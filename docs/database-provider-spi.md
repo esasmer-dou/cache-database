@@ -38,6 +38,7 @@ cachedb-storage-postgres
 cachedb-storage-mssql
 - MssqlDatabaseDialect
 - MssqlWriteBehindFlusher
+- MssqlWriteBehindOptions
 - MssqlFailureClassifier
 - MssqlOutboxExternalChangeFeedAdapter
 - SQL Server update/existence/insert write path
@@ -84,9 +85,16 @@ Wire the flusher explicitly:
 
 ```java
 import com.reactor.cachedb.mssql.MssqlWriteBehindFlusher;
+import com.reactor.cachedb.mssql.MssqlWriteBehindOptions;
+
+MssqlWriteBehindOptions mssqlOptions = MssqlWriteBehindOptions.dedicatedWorkerPoolDefaults()
+        .toBuilder()
+        .lockTimeoutMillis(5_000)
+        .queryTimeoutSeconds(10)
+        .build();
 
 CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
-        .writeBehindFlusherFactory(MssqlWriteBehindFlusher::new)
+        .writeBehindFlusherFactory(MssqlWriteBehindFlusher.factory(mssqlOptions))
         .register(db -> {
             // register generated entities and projections
         })
@@ -95,6 +103,25 @@ CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
 
 This is intentionally explicit. It prevents an application from silently running
 PostgreSQL SQL against SQL Server.
+
+With Spring Boot, keep the MSSQL module and Microsoft driver on the application
+classpath and select the provider explicitly:
+
+```yaml
+cachedb:
+  sql:
+    provider: mssql
+    mssql:
+      lock-timeout-millis: 5000
+      query-timeout-seconds: 10
+      transaction-isolation: serializable
+      restore-lock-timeout-after-transaction: true
+```
+
+Use `restore-lock-timeout-after-transaction=true` when CacheDB shares a SQL
+Server connection pool with other application code. If CacheDB has a dedicated
+worker `DataSource`, `MssqlWriteBehindOptions.dedicatedWorkerPoolDefaults()`
+avoids the extra `SELECT @@LOCK_TIMEOUT` restore read per transaction.
 
 For database-originated events, use the MSSQL outbox adapter explicitly:
 
@@ -118,11 +145,14 @@ adapter.start(externalChangeApplyRunner);
 The MSSQL flusher does not use `MERGE` by default. The safer provider path is:
 
 1. Open one transaction.
-2. Set isolation to `SERIALIZABLE`.
-3. Try `UPDATE ... WITH (UPDLOCK, HOLDLOCK)` with a version guard.
-4. If no row was updated, check row existence with the same lock hints.
-5. If the row does not exist, insert it.
-6. Commit or roll back the whole batch.
+2. Apply finite SQL Server `LOCK_TIMEOUT` when enabled.
+3. Apply JDBC query timeout to session, update, existence, insert, and delete statements.
+4. Set isolation to `SERIALIZABLE` by default.
+5. Try `UPDATE ... WITH (UPDLOCK, HOLDLOCK)` with a version guard.
+6. If no row was updated, check row existence with the same lock hints.
+7. If the row does not exist, insert it.
+8. Commit or roll back the whole batch.
+9. Restore the previous `LOCK_TIMEOUT` when shared-pool mode is enabled.
 
 This favors correctness and idempotency over maximum bulk throughput. Bulk copy
 and table-valued parameters are separate GA hardening items.
@@ -141,6 +171,8 @@ the version guard keeps retry behavior idempotent.
 | Parameter limit | 65,535 parameters | 2,100 parameters |
 | Temporary table | PostgreSQL temp table semantics | SQL Server `#temp` semantics, not wired yet |
 | Failure classification | SQLSTATE-oriented | SQL Server vendor-code-oriented |
+| Timeout contract | PostgreSQL driver/socket properties | `MssqlWriteBehindOptions` plus JDBC driver/pool settings |
+| Spring Boot provider choice | default | `cachedb.sql.provider=mssql` when module is on the classpath |
 | Production status | default provider path | explicit provider with SQL Server CI evidence; HA topology still environment-specific |
 
 ## Current MSSQL Gate
@@ -158,9 +190,11 @@ Now covered by the provider evidence lane:
 - parameter-limit and batch-size regression tests against a live SQL Server
 - high-volume write-behind load with stale version and delete checks
 - concurrent same-id write races with duplicate-id and stale-version pressure
+- provider-level finite lock/query timeout options
 - retryable timeout, deadlock, and lock-conflict failure classification
 - live SQL Server lock-timeout classification under a blocked row
 - MSSQL outbox/checkpoint adapter
+- Spring Boot explicit MSSQL provider wiring through `cachedb.sql.provider=mssql`
 - migration discovery, warm, and side-by-side comparison on SQL Server metadata
   with representative windowed table volume
 - multi-pod apply runner smoke test with MSSQL as durable storage
@@ -169,11 +203,24 @@ Now covered by the provider evidence lane:
 - concurrent same-`adapterName` polling protected by checkpoint row locks
 - provider-tagged durable SQL write performance breakdowns (`mssql:*`)
 - single-node SQL Server container restart/reconnect regression
+- local Docker listener-failover preflight: two SQL Server containers behind a
+  stable TCP listener, stale JDBC connection invalidation after backend switch,
+  and new JDBC connection landing on the second backend
 
 Still required before claiming a specific MSSQL production topology is ready:
 
 - run the provider evidence lane against the application's approved SQL Server
   version, JDBC driver, connection pool, schema size, and indexes
+- run the local listener-failover preflight before staging if the team cannot
+  freely trigger failover on the shared Always On environment:
+
+  ```powershell
+  pwsh ./tools/ci/run-local-mssql-listener-failover-evidence.ps1
+  ```
+
+  This validates reconnect behavior through a listener-like endpoint. It does
+  not certify Always On replication, quorum, read-only routing, or the managed
+  failover policy.
 - run a longer SQL Server soak/retry test under production-sized data and real
   traffic mix
 - prove SQL Server HA or Always On failover in staging if that topology is part

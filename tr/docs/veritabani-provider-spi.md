@@ -40,6 +40,7 @@ cachedb-storage-postgres
 cachedb-storage-mssql
 - MssqlDatabaseDialect
 - MssqlWriteBehindFlusher
+- MssqlWriteBehindOptions
 - MssqlFailureClassifier
 - MssqlOutboxExternalChangeFeedAdapter
 - SQL Server update/existence/insert yazma yolu
@@ -87,9 +88,16 @@ Flusher'ı açıkça bağlayın:
 
 ```java
 import com.reactor.cachedb.mssql.MssqlWriteBehindFlusher;
+import com.reactor.cachedb.mssql.MssqlWriteBehindOptions;
+
+MssqlWriteBehindOptions mssqlOptions = MssqlWriteBehindOptions.dedicatedWorkerPoolDefaults()
+        .toBuilder()
+        .lockTimeoutMillis(5_000)
+        .queryTimeoutSeconds(10)
+        .build();
 
 CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
-        .writeBehindFlusherFactory(MssqlWriteBehindFlusher::new)
+        .writeBehindFlusherFactory(MssqlWriteBehindFlusher.factory(mssqlOptions))
         .register(db -> {
             // generated entity ve projection kayıtları
         })
@@ -98,6 +106,26 @@ CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
 
 Bu açıklık bilinçli bir tasarım kararıdır. Amaç, bir uygulamanın farkında
 olmadan PostgreSQL SQL'ini SQL Server üzerinde çalıştırmasını engellemektir.
+
+Spring Boot kullanıyorsan MSSQL modülü ve Microsoft JDBC driver uygulama
+classpath'inde olmalı; provider seçimini de açıkça yapmalısın:
+
+```yaml
+cachedb:
+  sql:
+    provider: mssql
+    mssql:
+      lock-timeout-millis: 5000
+      query-timeout-seconds: 10
+      transaction-isolation: serializable
+      restore-lock-timeout-after-transaction: true
+```
+
+CacheDB, SQL Server connection pool'unu uygulamanın başka parçalarıyla
+paylaşıyorsa `restore-lock-timeout-after-transaction=true` güvenli seçimdir.
+CacheDB write-behind için ayrı bir `DataSource` kullanıyorsan
+`MssqlWriteBehindOptions.dedicatedWorkerPoolDefaults()` daha az ek SQL çağrısı
+yapar; her transaction sonunda `SELECT @@LOCK_TIMEOUT` ile eski ayarı okumaz.
 
 Veritabanı kaynaklı event'ler için MSSQL outbox adapter'ını da açıkça kullan:
 
@@ -122,11 +150,14 @@ MSSQL flusher varsayılan olarak `MERGE` kullanmaz. Daha güvenli provider yolu
 şudur:
 
 1. Tek transaction açılır.
-2. Isolation seviyesi `SERIALIZABLE` yapılır.
-3. Version guard ile `UPDATE ... WITH (UPDLOCK, HOLDLOCK)` denenir.
-4. Satır güncellenmediyse aynı lock hint'leriyle satır var mı diye bakılır.
-5. Satır yoksa insert yapılır.
-6. Bütün batch commit edilir veya tek parça roll back edilir.
+2. Açıksa SQL Server için sonlu `LOCK_TIMEOUT` uygulanır.
+3. Session, update, existence, insert ve delete statement'larına JDBC query timeout uygulanır.
+4. Varsayılan isolation seviyesi `SERIALIZABLE` yapılır.
+5. Version guard ile `UPDATE ... WITH (UPDLOCK, HOLDLOCK)` denenir.
+6. Satır güncellenmediyse aynı lock hint'leriyle satır var mı diye bakılır.
+7. Satır yoksa insert yapılır.
+8. Bütün batch commit edilir veya tek parça roll back edilir.
+9. Shared-pool modu açıksa önceki `LOCK_TIMEOUT` değeri geri yüklenir.
 
 Bu tasarım, maksimum toplu yazma kapasitesi yerine doğruluk ve idempotency
 tarafını önceliklendirir. Bulk copy ve table-valued parameter kullanımı ayrı GA
@@ -147,6 +178,8 @@ idempotent tutar.
 | Parametre limiti | 65.535 parametre | 2.100 parametre |
 | Geçici tablo | PostgreSQL temp table semantiği | SQL Server `#temp` semantiği, henüz bağlanmadı |
 | Hata sınıflandırma | SQLSTATE odaklı | SQL Server vendor code odaklı |
+| Timeout sözleşmesi | PostgreSQL driver/socket ayarları | `MssqlWriteBehindOptions` ile JDBC driver/pool ayarları birlikte |
+| Spring Boot provider seçimi | varsayılan | modül classpath'teyse `cachedb.sql.provider=mssql` |
 | Production durumu | varsayılan provider yolu | SQL Server CI kanıtı olan açık provider; HA topolojisi uygulama ortamında kanıtlanmalı |
 
 ## Mevcut MSSQL Kapısı
@@ -165,9 +198,11 @@ Provider evidence lane ile artık doğrulananlar:
 - yüksek hacimli write-behind yükü, eski sürüm ve silme kontrolleri
 - aynı primary key üzerinde eşzamanlı yazma yarışı, duplicate-id ve stale-version
   baskısı
+- provider seviyesinde sonlu lock/query timeout seçenekleri
 - retryable timeout, deadlock ve lock-conflict hata sınıflandırması
 - bloklanan satır üzerinde canlı SQL Server lock-timeout sınıflandırması
 - MSSQL outbox/checkpoint adapter
+- Spring Boot için `cachedb.sql.provider=mssql` ile açık provider wiring'i
 - gerçekçi windowed tablo hacmiyle SQL Server metadata üstünde migration
   discovery, warm ve side-by-side comparison
 - MSSQL kalıcı storage iken çok pod'lu apply runner smoke testi
@@ -180,11 +215,24 @@ Provider evidence lane ile artık doğrulananlar:
 - provider adıyla etiketlenen kalıcı SQL yazma performans kırılımları
   (`mssql:*`)
 - tek node SQL Server container restart/reconnect regresyonu
+- lokal Docker listener-failover preflight: sabit bir TCP listener arkasında iki
+  SQL Server container, backend değişince eski JDBC connection'ın geçersiz
+  kalması ve yeni JDBC connection'ın ikinci backend'e gitmesi
 
 Belirli bir MSSQL production topolojisi için hâlâ kanıtlanması gerekenler:
 
 - provider evidence hattını uygulamanın onayladığı SQL Server sürümü, JDBC
   driver'ı, connection pool ayarı, şema hacmi ve indeksleriyle çalıştırmak
+- ortak Always On ortamında failover tetikleyemiyorsan staging öncesinde lokal
+  listener-failover preflight'i çalıştırmak:
+
+  ```powershell
+  pwsh ./tools/ci/run-local-mssql-listener-failover-evidence.ps1
+  ```
+
+  Bu komut, listener benzeri sabit bir endpoint üzerinden yeniden bağlanma
+  davranışını kanıtlar. Always On replikasyonunu, quorum davranışını, read-only
+  routing'i veya yönetilen failover politikasını sertifikalandırmaz.
 - production boyutuna yakın veri ve gerçek trafik karışımıyla daha uzun SQL
   Server soak/retry testi yapmak
 - uygulamanın availability iddiası SQL Server HA veya Always On içeriyorsa bunu

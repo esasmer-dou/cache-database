@@ -55,7 +55,7 @@ UserEntityCacheBinding.register(cacheDatabase);
 OrderEntityCacheBinding.register(cacheDatabase);
 
 EntityRepository<UserEntity, Long> users = UserEntityCacheBinding.repository(cacheDatabase);
-List<UserEntity> açtiveUsers = users.query(
+List<UserEntity> activeUsers = users.query(
         QueryFilter.eq("status", "ACTIVE"),
         50,
         QuerySort.asc("username")
@@ -309,7 +309,7 @@ Notlar:
 - Spring tarafında yine bir `DataSource` gerekir.
 - Dependency örnekleri PostgreSQL'i gösterir; çünkü varsayılan provider
   PostgreSQL'dir. MSSQL seçersen `cachedb-storage-mssql`, Microsoft SQL Server
-  JDBC driver'ı ve açık `MssqlWriteBehindFlusher` wiring'i gerekir.
+  JDBC driver'ı ve `cachedb.sql.provider=mssql` ayarı gerekir.
 - `JedisPooled` bean'i yoksa starter bunu `cachedb.redis.uri` değerinden oluşturur.
 - Eski `cachedb.redis-uri` alias'i geriye uyumluluk için çalışmaya devam eder.
 - `cachedb.profile` şu değerleri kabul eder: `default`, `development`, `production`, `benchmark`, `memory-constrained`, `minimal-overhead`.
@@ -317,6 +317,53 @@ Notlar:
 - tamamen manuel binding registration istiyorsan `cachedb.registration.enabled=false` kullanabilirsin
 - `cachedb.runtime.append-instance-id-to-consumer-names=true` çok pod'lu güvenli varsayılandır; consumer group'ları ortak bırakır ama consumer adlarını pod-unique yapar
 - `cachedb.runtime.leader-lease-enabled=true` cleanup/report/history döngülerini Redis leader lease altına alır; böylece her pod aynı singleton işi koşmaz
+
+### Spring Boot ile MSSQL
+
+SQL Server kullanıyorsan normal Spring `DataSource` kurulumun kalır. Buna ek
+olarak MSSQL provider modülünü ve Microsoft JDBC driver'ını eklersin:
+
+```xml
+<dependency>
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cachedb-storage-mssql</artifactId>
+    <version>${cachedb.version}</version>
+</dependency>
+<dependency>
+    <groupId>com.microsoft.sqlserver</groupId>
+    <artifactId>mssql-jdbc</artifactId>
+    <scope>runtime</scope>
+</dependency>
+```
+
+Sonra provider seçimini açıkça yaparsın:
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:sqlserver://sqlserver:1433;databaseName=app;encrypt=true;trustServerCertificate=false
+    username: app
+    password: app
+
+cachedb:
+  enabled: true
+  profile: production
+  sql:
+    provider: mssql
+    mssql:
+      lock-timeout-millis: 5000
+      query-timeout-seconds: 10
+      transaction-isolation: serializable
+      restore-lock-timeout-after-transaction: true
+  redis:
+    uri: redis://redis:6379
+```
+
+BEST: Yazma trafiği yüksek servislerde CacheDB write-behind için ayrı SQL Server
+pool kullan ve bu pool'u cluster toplam worker concurrency'sine göre boyutlandır.
+Uygulamanın ana SQL pool'unu paylaşıyorsan
+`restore-lock-timeout-after-transaction=true` açık kalmalı; böylece CacheDB'nin
+ayarladığı `LOCK_TIMEOUT` başka SQL koduna sızmaz.
 
 ## İlk Çalışan Düz Java Örneği
 
@@ -376,7 +423,7 @@ Bu türdeki temel kolaylıklar:
 public class UserEntity {
 
     @CacheNamedQuery("activeUsers")
-    public static QuerySpec açtiveUsersQuery(int limit) {
+    public static QuerySpec activeUsersQuery(int limit) {
         return QuerySpec.where(QueryFilter.eq("status", "ACTIVE"))
                 .orderBy(QuerySort.asc("username"))
                 .limitTo(limit);
@@ -388,11 +435,11 @@ public class UserEntity {
     }
 }
 
-List<UserEntity> açtiveUsers = UserEntityCacheBinding.activeUsers(session, 25);
+List<UserEntity> activeUsers = UserEntityCacheBinding.activeUsers(session, 25);
 EntityRepository<UserEntity, Long> previewRepository =
         UserEntityCacheBinding.ordersPreviewRepository(session, 8);
 List<UserEntity> users = UserEntityCacheBinding.usersPage(session, 0, 25);
-UserEntity açtivated = UserEntityCacheBinding.activateUser(session, 41L, "alice");
+UserEntity activated = UserEntityCacheBinding.activateUser(session, 41L, "alice");
 UserEntityCacheBinding.deleteUser(session, 41L);
 
 var userOps = UserEntityCacheBinding.using(session);

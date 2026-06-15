@@ -148,6 +148,47 @@ Operational notes:
 | `<scope>.postgres.applicationName` | `cache-database` | Application name attached to PostgreSQL sessions. |
 | `<scope>.postgres.additionalParameters` | empty | Extra JDBC query parameters as `key=value;key=value`. |
 
+## MSSQL Provider Tuning
+
+The Spring Boot starter keeps PostgreSQL as the default provider. When the
+application adds `cachedb-storage-mssql` and the Microsoft JDBC driver, select
+MSSQL explicitly with `cachedb.sql.provider=mssql`.
+
+| Property | Default | What it does |
+| --- | --- | --- |
+| `cachedb.sql.provider` | `postgres` | Durable SQL provider choice for starter wiring. Supported values: `postgres`, `mssql`, `custom`. |
+| `cachedb.sql.mssql.lock-timeout-millis` | `5000` | SQL Server `LOCK_TIMEOUT` applied by the MSSQL write-behind flusher. `-1` waits forever and should not be used for latency-sensitive production routes. |
+| `cachedb.sql.mssql.query-timeout-seconds` | `10` | JDBC query timeout applied to MSSQL session, update, existence, insert, and delete statements. |
+| `cachedb.sql.mssql.transaction-isolation` | `serializable` | MSSQL write transaction isolation. Supported values: `read_committed`, `repeatable_read`, `serializable`. Keep `serializable` unless you have route-specific evidence. |
+| `cachedb.sql.mssql.restore-lock-timeout-after-transaction` | `true` | Restores the previous connection `LOCK_TIMEOUT` after each transaction. Keep this on for shared application pools; turn it off only for a dedicated CacheDB worker `DataSource`. |
+
+Plain Java users configure the same behavior through `MssqlWriteBehindOptions`:
+
+```java
+MssqlWriteBehindOptions options = MssqlWriteBehindOptions.dedicatedWorkerPoolDefaults()
+        .toBuilder()
+        .lockTimeoutMillis(5_000)
+        .queryTimeoutSeconds(10)
+        .build();
+
+CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, mssqlDataSource)
+        .writeBehindFlusherFactory(MssqlWriteBehindFlusher.factory(options))
+        .start();
+```
+
+BEST: use a dedicated SQL Server connection pool for CacheDB write-behind in
+high-write services, size the pool from total cluster worker concurrency, and
+disable lock-timeout restore only on that dedicated pool.
+
+ANTI-PATTERN: share the same SQL Server pool with business queries, disable
+restore, and let CacheDB leave a changed `LOCK_TIMEOUT` behind for unrelated
+application code.
+
+`cachedb.sql.provider=custom` is a fail-fast mode. Use it only when a
+`CacheDatabaseConfigCustomizer` or explicit `CacheDatabaseConfig` supplies the
+`writeBehindFlusherFactory`; otherwise startup fails instead of silently falling
+back to PostgreSQL.
+
 ## Core Runtime Tuning
 
 ### Write-Behind

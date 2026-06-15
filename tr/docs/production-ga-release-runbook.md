@@ -62,10 +62,22 @@ anlat.
 
    Bu komut Redis, PostgreSQL ve SQL Server container'larını başlatır; Redis
    outage/recovery evidence ve SQL Server restart/reconnect evidence çalıştırır.
-3. Release commit'ini `main` branch'ine gönder ve aynı commit üzerinde
+3. Release iddiası MSSQL listener/failover davranışını içeriyorsa ama ortak
+   staging Always On ortamında isteğe bağlı failover tetikleyemiyorsan lokal
+   listener preflight'i çalıştır:
+
+   ```powershell
+   pwsh ./tools/ci/run-local-mssql-listener-failover-evidence.ps1
+   ```
+
+   Bu test, sabit listener endpoint'i üzerinden eski JDBC connection'ın
+   geçersiz kaldığını ve yeni connection'ın yeni backend'e gittiğini kanıtlar.
+   Always On replikasyonunun, quorum davranışının veya yönetilen failover
+   politikasının yerine geçmez.
+4. Release commit'ini `main` branch'ine gönder ve aynı commit üzerinde
    `Public Beta Readiness` ile `Production Evidence` workflow'larının
    geçtiğini doğrula.
-4. Resmi GitHub Release artifact'ini hedef commit'ten üret:
+5. Resmi GitHub Release artifact'ini hedef commit'ten üret:
 
    ```powershell
    pwsh ./tools/release/build-release-package.ps1 `
@@ -75,16 +87,16 @@ anlat.
 
    Stabil release için `github-release` gibi beta içermeyen bir package label
    kullan.
-5. Stabil tag'i oluştur ve gönder; örnek: `v0.1.0`.
-6. Maven Central resmi dağıtım kanalı olarak seçildiyse, stabil tag üzerinde
+6. Stabil tag'i oluştur ve gönder; örnek: `v0.1.0`.
+7. Maven Central resmi dağıtım kanalı olarak seçildiyse, stabil tag üzerinde
    `Maven Central Publish` workflow'unu manuel olarak
    `gaRelease=true` ile çalıştır. Workflow, imzalı artifact publish etmeden
    önce GA preflight kontrolünü çalıştırır.
-7. Aynı tag için `Production GA Release Readiness` workflow'unu çalıştır.
+8. Aynı tag için `Production GA Release Readiness` workflow'unu çalıştır.
    `requireManagedStagingHa`, `requireApplicationMigrationCoverage` veya
    `requireMavenCentralPublish` seçeneklerini yalnızca release iddiası bu
    opsiyonel kapıları kapsıyorsa aç.
-8. GitHub release'i yalnızca readiness özeti `PASS` ise yayınla ve resmi
+9. GitHub release'i yalnızca readiness özeti `PASS` ise yayınla ve resmi
    release artifact'ini ekle.
 
 ## Lokal Ön Kontrol

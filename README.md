@@ -132,7 +132,8 @@ JDBC rule:
   still required.
 - The example below uses PostgreSQL because it is the default provider. For
   MSSQL, add `cachedb-storage-mssql`, the Microsoft JDBC driver, and wire the
-  MSSQL flusher explicitly as described in
+  provider explicitly with `cachedb.sql.provider=mssql` or
+  `MssqlWriteBehindFlusher.factory(...)` as described in
   [Database Provider SPI](docs/database-provider-spi.md).
 
 Minimal `application.yml`:

@@ -322,3 +322,38 @@ jobs:
             cachedb-integration-tests/target/surefire-reports/**
           if-no-files-found: error
           retention-days: 14
+
+  mssql-listener-failover-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Setup Java
+        uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run local MSSQL listener failover evidence
+        shell: pwsh
+        run: ./tools/ci/run-local-mssql-listener-failover-evidence.ps1 -MavenExecutable mvn -SkipProviderEvidence
+
+      - name: Publish MSSQL listener failover summary
+        shell: pwsh
+        run: Get-Content ./target/cachedb-local-mssql-listener-failover-reports/local-mssql-listener-failover-evidence.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload MSSQL listener failover evidence artifacts
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: mssql-listener-failover-evidence
+          path: |
+            target/cachedb-local-mssql-listener-failover-reports/**
+            cachedb-storage-mssql/target/surefire-reports/**
+            cachedb-starter/target/surefire-reports/**
+            cachedb-integration-tests/target/surefire-reports/**
+          if-no-files-found: error
+          retention-days: 14

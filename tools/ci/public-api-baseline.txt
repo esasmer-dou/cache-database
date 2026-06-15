@@ -2672,9 +2672,30 @@ public final class com.reactor.cachedb.mssql.MssqlWriteBehindFlusher implements 
   public com.reactor.cachedb.mssql.MssqlWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry);
   public com.reactor.cachedb.mssql.MssqlWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig);
   public com.reactor.cachedb.mssql.MssqlWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.queue.StoragePerformanceCollector);
+  public com.reactor.cachedb.mssql.MssqlWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.mssql.MssqlWriteBehindOptions);
+  public com.reactor.cachedb.mssql.MssqlWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.queue.StoragePerformanceCollector, com.reactor.cachedb.mssql.MssqlWriteBehindOptions);
+  public static com.reactor.cachedb.core.queue.WriteBehindFlusherFactory factory(com.reactor.cachedb.mssql.MssqlWriteBehindOptions);
   public void flush(com.reactor.cachedb.core.queue.QueuedWriteOperation) throws java.sql.SQLException;
   public void flushBatch(java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>) throws java.sql.SQLException;
   public com.reactor.cachedb.core.queue.WriteFailureDetails classify(java.lang.Exception);
+}
+
+## cachedb-storage-mssql :: com.reactor.cachedb.mssql.MssqlWriteBehindOptions
+public final class com.reactor.cachedb.mssql.MssqlWriteBehindOptions extends java.lang.Record {
+  public static final int LOCK_TIMEOUT_WAIT_FOREVER;
+  public com.reactor.cachedb.mssql.MssqlWriteBehindOptions(int, int, int, boolean);
+  public static com.reactor.cachedb.mssql.MssqlWriteBehindOptions defaults();
+  public static com.reactor.cachedb.mssql.MssqlWriteBehindOptions sharedPoolDefaults();
+  public static com.reactor.cachedb.mssql.MssqlWriteBehindOptions dedicatedWorkerPoolDefaults();
+  public static com.reactor.cachedb.mssql.MssqlWriteBehindOptions$Builder builder();
+  public com.reactor.cachedb.mssql.MssqlWriteBehindOptions$Builder toBuilder();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public int lockTimeoutMillis();
+  public int queryTimeoutSeconds();
+  public int transactionIsolation();
+  public boolean restoreLockTimeoutAfterTransaction();
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.AdminIncidentDeliveryManager
@@ -3435,6 +3456,7 @@ public class com.reactor.cachedb.spring.boot.CacheDbSpringProperties {
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$Profile getProfile();
   public void setProfile(com.reactor.cachedb.spring.boot.CacheDbSpringProperties$Profile);
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$RedisProperties getRedis();
+  public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$SqlProperties getSql();
   public java.lang.String getRedisUri();
   public void setRedisUri(java.lang.String);
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$AdminUiProperties getAdmin();
