@@ -44,6 +44,7 @@ HA or Always On remains an application-environment certification item.
 | "Where is the full documentation map?" | [Documentation Map](DOCUMENTATION_MAP.md) |
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
+| "Where is a runnable REST API sample?" | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "What are entity, relation, projection, and route contract?" | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | "How do I model real production cases?" | [Use Case Examples](docs/use-case-examples.md) |
@@ -58,6 +59,7 @@ HA or Always On remains an application-environment certification item.
 
 | Situation | Recommended path | Why |
 | --- | --- | --- |
+| I want to run a complete sample first | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) | REST API, Docker Compose, schema, seed data, Postman collection |
 | New Spring Boot service | `cachedb-spring-boot-starter` | Minimal setup, same-port admin UI, Spring `DataSource` integration |
 | Existing Spring Boot app with JPA | Starter plus existing `DataSource` | JPA usually already creates the `DataSource`; do not duplicate JDBC setup |
 | Plain Java service | `cachedb-starter` | You own bootstrap, shutdown, and connection lifecycle |

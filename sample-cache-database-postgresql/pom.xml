@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.5</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.example.cachedb</groupId>
+    <artifactId>sample-cache-database-postgresql</artifactId>
+    <version>0.1.0</version>
+    <name>sample-cache-database-postgresql</name>
+    <description>CacheDB REST API sample using Redis and PostgreSQL</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <cachedb.groupId>com.reactor.cachedb</cachedb.groupId>
+        <cachedb.version>0.1.0</cachedb.version>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>cache-database-github-packages</id>
+            <name>CacheDB GitHub Packages</name>
+            <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <dependency>
+            <groupId>${cachedb.groupId}</groupId>
+            <artifactId>cachedb-spring-boot-starter</artifactId>
+            <version>${cachedb.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>${cachedb.groupId}</groupId>
+            <artifactId>cachedb-annotations</artifactId>
+            <version>${cachedb.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>${cachedb.groupId}</groupId>
+                            <artifactId>cachedb-processor</artifactId>
+                            <version>${cachedb.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

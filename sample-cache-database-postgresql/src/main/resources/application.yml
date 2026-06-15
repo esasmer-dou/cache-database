@@ -1,0 +1,37 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: sample-cache-database-postgresql
+  datasource:
+    url: jdbc:postgresql://127.0.0.1:55432/cachedb_sample
+    username: cachedb
+    password: cachedb
+    hikari:
+      maximum-pool-size: 12
+      minimum-idle: 2
+      connection-timeout: 2000
+      validation-timeout: 1000
+  sql:
+    init:
+      mode: always
+
+cachedb:
+  enabled: true
+  profile: development
+  redis:
+    uri: redis://127.0.0.1:56379
+    background:
+      enabled: true
+  sql:
+    provider: postgres
+  admin:
+    enabled: true
+    http-enabled: true
+    base-path: /cachedb-admin
+    dashboard-enabled: true
+    title: CacheDB PostgreSQL Sample
+  runtime:
+    append-instance-id-to-consumer-names: true
+    leader-lease-enabled: true

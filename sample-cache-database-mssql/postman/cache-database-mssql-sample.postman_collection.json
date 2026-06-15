@@ -1,0 +1,158 @@
+{
+  "info": {
+    "name": "CacheDB MSSQL Sample",
+    "description": "End-to-end REST API flow for the CacheDB MSSQL sample.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8092"
+    },
+    {
+      "key": "customerId",
+      "value": "1"
+    },
+    {
+      "key": "orderId",
+      "value": "10001"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Ready",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/health/ready"
+      }
+    },
+    {
+      "name": "02 Seed Demo Data",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
+      }
+    },
+    {
+      "name": "03 Active Customers",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/customers/active?limit=25"
+      }
+    },
+    {
+      "name": "04 Customer Detail With Order Preview",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/customers/{{customerId}}?orderPreview=5"
+      }
+    },
+    {
+      "name": "05 Customer Order Timeline Projection",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/customers/{{customerId}}/orders?limit=20"
+      }
+    },
+    {
+      "name": "06 Order Detail With Line Preview",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/orders/{{orderId}}?linePreview=5"
+      }
+    },
+    {
+      "name": "07 High Value Orders Projection",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/orders/high-value?minimumAmount=500&limit=25"
+      }
+    },
+    {
+      "name": "08 Commerce Dashboard",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/dashboard/commerce?limit=25"
+      }
+    },
+    {
+      "name": "09 Active Products",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/products/active?category=electronics&limit=20"
+      }
+    },
+    {
+      "name": "10 Open Tickets",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/tickets/open?limit=25"
+      }
+    },
+    {
+      "name": "11 Create Customer",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerId\": 999,\n  \"taxNumber\": \"TAX-999999\",\n  \"customerType\": \"CORPORATE\",\n  \"segment\": \"VIP\",\n  \"status\": \"ACTIVE\"\n}"
+        },
+        "url": "{{baseUrl}}/api/customers"
+      }
+    },
+    {
+      "name": "12 Create Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": 999001,\n  \"customerId\": 999,\n  \"orderAmount\": 850.50,\n  \"currencyCode\": \"USD\",\n  \"orderType\": \"EXPRESS\",\n  \"status\": \"NEW\",\n  \"lineCount\": 0\n}"
+        },
+        "url": "{{baseUrl}}/api/orders"
+      }
+    },
+    {
+      "name": "13 Update Order Status",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"PAID\"\n}"
+        },
+        "url": "{{baseUrl}}/api/orders/999001/status"
+      }
+    },
+    {
+      "name": "14 Delete Order",
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/api/orders/999001"
+      }
+    },
+    {
+      "name": "15 Tuning Summary",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/tuning"
+      }
+    }
+  ]
+}

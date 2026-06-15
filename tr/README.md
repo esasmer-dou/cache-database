@@ -50,6 +50,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "Tüm doküman haritası nerede?" | [Doküman Haritası](DOKUMAN_HARITASI.md) |
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
+| "Çalışan REST API örneği nerede?" | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md) |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Entity, relation, projection ve route contract ne demek?" | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | "Gerçek hayatta nasıl modellemeliyim?" | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
@@ -64,6 +65,7 @@ CacheDB özellikle şu problemlere odaklanır:
 
 | Durum | Önerilen yol | Neden |
 | --- | --- | --- |
+| Önce çalışan bir örnek görmek istiyorsun | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md) | REST API, Docker Compose, şema, seed verisi ve Postman koleksiyonu hazırdır |
 | Yeni Spring Boot servisi | `cachedb-spring-boot-starter` | En az kurulum, aynı porttan admin UI, Spring `DataSource` entegrasyonu |
 | Zaten JPA kullanan Spring Boot uygulaması | Starter + mevcut `DataSource` | JPA zaten `DataSource` oluşturuyorsa JDBC starter tekrar eklenmez |
 | Plain Java servisi | `cachedb-starter` | Başlatma, kapatma ve bağlantı yaşam döngüsü sende kalır |

@@ -1,0 +1,43 @@
+server:
+  port: 8092
+
+spring:
+  application:
+    name: sample-cache-database-mssql
+  datasource:
+    url: jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true;loginTimeout=5
+    username: sa
+    password: YourStrong!Passw0rd
+    hikari:
+      maximum-pool-size: 12
+      minimum-idle: 2
+      connection-timeout: 3000
+      validation-timeout: 1500
+  sql:
+    init:
+      mode: always
+      separator: "@@"
+
+cachedb:
+  enabled: true
+  profile: development
+  redis:
+    uri: redis://127.0.0.1:56380
+    background:
+      enabled: true
+  sql:
+    provider: mssql
+    mssql:
+      lock-timeout-millis: 5000
+      query-timeout-seconds: 10
+      transaction-isolation: serializable
+      restore-lock-timeout-after-transaction: true
+  admin:
+    enabled: true
+    http-enabled: true
+    base-path: /cachedb-admin
+    dashboard-enabled: true
+    title: CacheDB MSSQL Sample
+  runtime:
+    append-instance-id-to-consumer-names: true
+    leader-lease-enabled: true

@@ -1,0 +1,25 @@
+services:
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cachedb_sample
+      POSTGRES_USER: cachedb
+      POSTGRES_PASSWORD: cachedb
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cachedb -d cachedb_sample"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

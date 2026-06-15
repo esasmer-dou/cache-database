@@ -10,10 +10,11 @@ questions a new user or technical lead is likely to ask.
 Read in this order:
 
 1. [README](README.md)
-2. [Getting Started](docs/getting-started.md)
-3. [Concepts and Assumptions](docs/concepts-and-assumptions.md)
-4. [Use Case Examples](docs/use-case-examples.md)
-5. [Production Tuning Guide](docs/production-tuning-guide.md)
+2. [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md)
+3. [Getting Started](docs/getting-started.md)
+4. [Concepts and Assumptions](docs/concepts-and-assumptions.md)
+5. [Use Case Examples](docs/use-case-examples.md)
+6. [Production Tuning Guide](docs/production-tuning-guide.md)
 
 These five documents should be enough for a new team to understand what CacheDB
 is, how it is installed, how relation/projection decisions are made, and how
@@ -24,6 +25,7 @@ production tuning should be approached.
 | Question | Document |
 | --- | --- |
 | What is CacheDB, and what is it not? | [README](README.md) |
+| How do I run a complete REST API sample? | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
 | Do I need the Spring Boot JDBC starter? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | What are entity, relation, projection, and route contract? | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
@@ -48,6 +50,7 @@ production tuning should be approached.
 Start with:
 
 - [Getting Started](docs/getting-started.md)
+- [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md)
 - [Use Case Examples](docs/use-case-examples.md)
 - [Spring Boot Starter](docs/spring-boot-starter.md)
 

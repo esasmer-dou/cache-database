@@ -1,0 +1,12 @@
+target/
+*.log
+*.pid
+.idea/
+.vscode/
+.project
+.classpath
+.settings/
+.env
+.env.*
+!.env.example
+docker-compose.override.yml
