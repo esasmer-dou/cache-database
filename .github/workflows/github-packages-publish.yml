@@ -1,0 +1,49 @@
+name: GitHub Packages Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      targetRef:
+        description: Branch, tag, or SHA to publish
+        required: false
+        default: main
+      skipTests:
+        description: Skip tests during package publish
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+        with:
+          ref: ${{ inputs.targetRef }}
+          fetch-depth: 0
+
+      - name: Setup Java and GitHub Packages credentials
+        uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Publish Maven artifacts to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          mvn -B
+          -DskipTests=${{ inputs.skipTests }}
+          -Dgpg.skip=true
+          deploy
+          -DaltDeploymentRepository=github::default::https://maven.pkg.github.com/${{ github.repository }}
