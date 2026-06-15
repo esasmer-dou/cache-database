@@ -225,6 +225,24 @@ Behavior:
 CacheDB relations are not Hibernate-style transparent lazy loading. Relations
 are loaded only when requested explicitly.
 
+Think about relation in three separate layers:
+
+| Layer | What it does | Required for CacheDB preload? |
+| --- | --- | --- |
+| Source database primary/foreign key | Protects durable data integrity and prevents orphan rows | Recommended, but not enough by itself |
+| `@CacheRelation` metadata | Tells CacheDB that a parent field represents a relation and which target field joins it | Yes |
+| `RelationBatchLoader` + `FetchPlan` | Executes the bounded batch load when the caller asks for the relation | Yes |
+
+So the rule is precise:
+
+- A database foreign key does not automatically create a CacheDB relation.
+- `@CacheRelation` does not create a database constraint.
+- `kind = ONE_TO_MANY` is relation-shape metadata, not a DDL declaration.
+- `mappedBy` points to the target entity field that carries the parent id.
+- Relation preload works only when the source entity is registered with a
+  concrete `RelationBatchLoader` and the caller requests the relation through
+  `FetchPlan` or `withRelationLimit(...)`.
+
 ```java
 @CacheEntity(
         table = "customers",
@@ -237,6 +255,7 @@ public class CustomerEntity {
 
     @CacheRelation(
             targetEntity = "OrderEntity",
+            // OrderEntity.customerId, mapped to the order table's customer_id column.
             mappedBy = "customerId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
             batchLoadOnly = true
@@ -253,6 +272,15 @@ CustomerEntity customer = customerRepository
         .findById(customerId)
         .orElseThrow();
 ```
+
+What happens in common cases:
+
+| Database FK | `@CacheRelation` | Loader | Result |
+| --- | --- | --- | --- |
+| Yes | No | No | The database is consistent, but CacheDB has no relation path to preload. |
+| No | Yes | Yes | CacheDB can preload if `mappedBy` is queryable, but orphan or inconsistent rows are your risk. Use only for legacy or soft relations. |
+| Yes | Yes | No | Metadata exists, but fetch preload cannot run; strict relation config can fail fast. |
+| Yes | Yes | Yes | BEST: durable integrity, explicit metadata, and bounded batch preload. |
 
 BEST: use `withRelationLimit(...)` for a small detail-page preview.
 

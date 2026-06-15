@@ -288,12 +288,20 @@ Parent relation:
 ```java
 @CacheRelation(
         targetEntity = "OrderEntity",
+        // OrderEntity.customerId maps to orders.customer_id.
         mappedBy = "customerId",
         kind = CacheRelation.RelationKind.ONE_TO_MANY,
         batchLoadOnly = true
 )
 public List<OrderEntity> orders;
 ```
+
+This annotation is CacheDB metadata. It is not a database foreign key. If the
+database has `orders.customer_id -> customers.customer_id` but this annotation
+and a registered `RelationBatchLoader` are missing, CacheDB will not preload the
+relation. If the annotation and loader exist but the database has no foreign
+key, CacheDB can still load the relation through `mappedBy`, but durable
+integrity is now your responsibility.
 
 Read:
 

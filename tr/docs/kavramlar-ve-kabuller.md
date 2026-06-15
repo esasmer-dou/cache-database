@@ -144,6 +144,19 @@ Son 90 günlük iş verisi istiyorsan TTL değil, `TIME_WINDOW` kullan.
 Relation, entity'ler arası ilişki bilgisidir. CacheDB bunu görünmez lazy loading
 olarak çalıştırmaz.
 
+En önemli ayrım şudur:
+
+| Konu | Sorumlu katman | Anlamı |
+| --- | --- | --- |
+| Kalıcı veri bütünlüğü | Kaynak veritabanı | Primary key, foreign key, unique constraint ve index'ler veriyi doğru tutar. |
+| CacheDB relation metadata'sı | Entity annotation'ları | `@CacheRelation`, kaynak entity üzerinde adlandırılmış bir relation yolu olduğunu söyler. |
+| Çalışma anında relation yükleme | Loader ve fetch plan | `RelationBatchLoader`, sadece `FetchPlan` isterse veriyi yükler. |
+
+CacheDB, veritabanındaki foreign key'i okuyup kendiliğinden runtime relation
+oluşturmaz. Annotation da DDL değildir; veritabanında foreign key oluşturmaz.
+Bu yüzden DB constraint'i ve CacheDB relation metadata'sı iki ayrı sözleşmedir.
+Production'da genellikle aynı iş ilişkisini göstermeleri gerekir.
+
 ```java
 @CacheRelation(
         targetEntity = "OrderEntity",
@@ -157,12 +170,77 @@ public List<OrderEntity> orders;
 Kural:
 
 - Relation metadata'da tanımlanır.
+- `kind`, `ONE_TO_MANY` gibi relation şeklini anlatır; veritabanı constraint'i
+  tanımı değildir.
+- `mappedBy`, hedef entity üzerinde join kolonunu açığa çıkaran alanla aynı
+  olmalıdır. Örnek: `OrderEntity.customerId`, `orders.customer_id` kolonuna map
+  edilir.
 - Relation yükleme açıkça `FetchPlan` ile istenir.
 - Loader yoksa relation otomatik ve güvenli biçimde yüklenemez.
+- Kaynak veritabanında foreign key olması production için güçlü şekilde
+  önerilen bir veri bütünlüğü kuralıdır; fakat `@CacheRelation` veya
+  `RelationBatchLoader` yerine geçmez.
 - Preview gerekiyorsa `withRelationLimit(...)` kullanılır.
 - Büyük listelerde relation yerine projection tercih edilir.
 
-BEST:
+### Constraint ve Metadata Matrisi
+
+| DB constraint | CacheDB metadata | Loader | Davranış |
+| --- | --- | --- | --- |
+| Var | Yok | Yok | Kaynak veritabanı bütünlüğü korur, ama CacheDB relation yolunu bilmez. `orders` fetch isteği CacheDB için tanımsızdır. |
+| Yok | Var | Var | Loader `mappedBy` üzerinden sorgu yapabiliyorsa CacheDB relation'ı yükleyebilir; fakat kaynak veritabanı orphan child satırlarına izin verebilir. Sadece legacy veya soft relation için kabul edilebilir. |
+| Var | Var | Yok | Query explain relation metadata'sını görebilir, ama preload çalışamaz. Strict relation ayarında istenen fetch path fail-fast olur. |
+| Var | Var | Var | BEST: veritabanı bütünlüğü korur, CacheDB ise açık ve limitli preload yoluna sahiptir. |
+
+### Basit Örnek: Müşteri Detayında Sipariş Önizleme
+
+Bu model, detay ekranında az sayıda alt kayıt önizlemesi göstermek içindir:
+
+```java
+@CacheEntity(
+        table = "customers",
+        redisNamespace = "customers",
+        relationLoader = CustomerOrdersRelationBatchLoader.class
+)
+public class CustomerEntity {
+    @CacheId(column = "customer_id")
+    public Long customerId;
+
+    @CacheRelation(
+            targetEntity = "OrderEntity",
+            mappedBy = "customerId",
+            kind = CacheRelation.RelationKind.ONE_TO_MANY,
+            batchLoadOnly = true
+    )
+    public List<OrderEntity> orders;
+}
+```
+
+Karşı taraftaki eşleşen alan hedef entity'dedir:
+
+```java
+@CacheEntity(table = "orders", redisNamespace = "orders")
+public class OrderEntity {
+    @CacheId(column = "order_id")
+    public Long orderId;
+
+    @CacheColumn("customer_id")
+    public Long customerId;
+}
+```
+
+Veritabanı tarafı yine senin sorumluluğundadır:
+
+```sql
+ALTER TABLE orders
+ADD CONSTRAINT fk_orders_customer
+FOREIGN KEY (customer_id) REFERENCES customers(customer_id);
+
+CREATE INDEX idx_orders_customer_date
+ON orders(customer_id, order_date DESC);
+```
+
+Çalışma anında relation açıkça istenir:
 
 ```java
 customerRepository
@@ -170,11 +248,49 @@ customerRepository
         .findById(customerId);
 ```
 
+### Loader Örneği
+
+Gerçek okuma stratejisinin sahibi loader'dır. Loader batch ve limitli
+tasarlanmalıdır:
+
+```java
+public final class CustomerOrdersRelationBatchLoader
+        implements RelationBatchLoader<CustomerEntity> {
+
+    private final EntityRepository<OrderEntity, Long> orderRepository;
+
+    public CustomerOrdersRelationBatchLoader(EntityRepository<OrderEntity, Long> orderRepository) {
+        this.orderRepository = orderRepository;
+    }
+
+    @Override
+    public void preload(List<CustomerEntity> customers, RelationBatchContext context) {
+        if (customers.isEmpty() || !context.fetchPlan().includes("orders")) {
+            return;
+        }
+        int limit = context.relationLimit("orders");
+        for (CustomerEntity customer : customers) {
+            customer.orders = orderRepository.query(
+                    QueryFilter.eq("customer_id", customer.customerId),
+                    limit,
+                    QuerySort.desc("order_date")
+            );
+        }
+    }
+}
+```
+
+Bu model küçük önizleme için kabul edilebilir. Müşteri başına son 1.000 sipariş
+gösteren bir ekran için `OrderEntity` nesnelerini relation olarak yüklemek
+yerine projection window kullanılmalıdır.
+
 ANTI-PATTERN:
 
 - müşteri listesindeki her satır için bütün sipariş geçmişini yüklemek
 - relation alanına erişince otomatik DB/Redis çağrısı beklemek
 - relation limit olmadan geniş object graph üretmek
+- sadece veritabanı foreign key'ine güvenip CacheDB'nin relation fetch yolunu
+  otomatik keşfetmesini beklemek
 
 ## Projection
 

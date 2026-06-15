@@ -285,17 +285,25 @@ public class OrderEntity {
 }
 ```
 
-Parent relation:
+Parent tarafındaki relation tanımı:
 
 ```java
 @CacheRelation(
         targetEntity = "OrderEntity",
+        // OrderEntity.customerId alanı orders.customer_id kolonuna map edilir.
         mappedBy = "customerId",
         kind = CacheRelation.RelationKind.ONE_TO_MANY,
         batchLoadOnly = true
 )
 public List<OrderEntity> orders;
 ```
+
+Bu annotation CacheDB metadata'sıdır; veritabanı foreign key'i değildir. DB'de
+`orders.customer_id -> customers.customer_id` constraint'i olsa bile bu
+annotation ve kayıtlı `RelationBatchLoader` yoksa CacheDB relation preload
+yapmaz. Annotation ve loader var ama DB foreign key yoksa CacheDB `mappedBy`
+üzerinden relation'ı yükleyebilir; fakat kalıcı veri bütünlüğü artık senin
+sorumluluğundadır.
 
 Okuma:
 

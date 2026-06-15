@@ -141,6 +141,19 @@ Use `TIME_WINDOW` for "last 90 days of business data", not TTL.
 Relations describe entity relationships, but CacheDB does not run transparent
 lazy loading.
 
+This is the most important distinction:
+
+| Concern | Owned by | Meaning |
+| --- | --- | --- |
+| Durable integrity | Source database | Primary key, foreign key, unique constraints, and indexes keep stored data correct. |
+| CacheDB relation metadata | Entity annotations | `@CacheRelation` declares that a source entity has a named relation path. |
+| Runtime relation loading | Loader and fetch plan | `RelationBatchLoader` loads the data only when `FetchPlan` requests it. |
+
+CacheDB does not inspect a database foreign key and automatically create a
+runtime relation. The annotation is also not DDL; it does not create a foreign
+key. Treat database constraints and CacheDB relation metadata as two separate
+contracts that should usually point to the same business relationship.
+
 ```java
 @CacheRelation(
         targetEntity = "OrderEntity",
@@ -154,12 +167,75 @@ public List<OrderEntity> orders;
 Rules:
 
 - Relation metadata is declared on the entity.
+- `kind` documents the relationship shape, such as `ONE_TO_MANY`; it is not a
+  database constraint declaration.
+- `mappedBy` must match the target entity field that exposes the joining column,
+  for example `OrderEntity.customerId` mapped to `orders.customer_id`.
 - Relation loading is requested explicitly with `FetchPlan`.
 - A relation cannot be safely preloaded without a registered loader.
+- A source-database foreign key is strongly recommended for durable integrity,
+  but it does not replace `@CacheRelation` or `RelationBatchLoader`.
 - Use `withRelationLimit(...)` for previews.
 - Use projections for large lists.
 
-BEST:
+### Constraint And Metadata Matrix
+
+| Database constraint | CacheDB metadata | Loader | Behavior |
+| --- | --- | --- | --- |
+| Present | Missing | Missing | The source database protects integrity, but CacheDB has no relation path. Fetching `orders` is unknown to CacheDB. |
+| Missing | Present | Present | CacheDB can execute the relation if the loader can query `mappedBy`, but the source database may allow orphan children. Use only when the relation is intentionally soft or legacy. |
+| Present | Present | Missing | Query explain can see the relation metadata, but preload cannot run. With strict relation config, a requested fetch path fails fast. |
+| Present | Present | Present | BEST: the database protects integrity and CacheDB has an explicit bounded preload path. |
+
+### Simple Example: Customer Detail Preview
+
+Use this for a detail page that needs a small child preview:
+
+```java
+@CacheEntity(
+        table = "customers",
+        redisNamespace = "customers",
+        relationLoader = CustomerOrdersRelationBatchLoader.class
+)
+public class CustomerEntity {
+    @CacheId(column = "customer_id")
+    public Long customerId;
+
+    @CacheRelation(
+            targetEntity = "OrderEntity",
+            mappedBy = "customerId",
+            kind = CacheRelation.RelationKind.ONE_TO_MANY,
+            batchLoadOnly = true
+    )
+    public List<OrderEntity> orders;
+}
+```
+
+The matching child field is on the target entity:
+
+```java
+@CacheEntity(table = "orders", redisNamespace = "orders")
+public class OrderEntity {
+    @CacheId(column = "order_id")
+    public Long orderId;
+
+    @CacheColumn("customer_id")
+    public Long customerId;
+}
+```
+
+At the database level, this is still your responsibility:
+
+```sql
+ALTER TABLE orders
+ADD CONSTRAINT fk_orders_customer
+FOREIGN KEY (customer_id) REFERENCES customers(customer_id);
+
+CREATE INDEX idx_orders_customer_date
+ON orders(customer_id, order_date DESC);
+```
+
+At runtime, the caller must request the relation:
 
 ```java
 customerRepository
@@ -167,11 +243,48 @@ customerRepository
         .findById(customerId);
 ```
 
+### Loader Example
+
+The loader owns the actual read strategy. Keep it batched and bounded:
+
+```java
+public final class CustomerOrdersRelationBatchLoader
+        implements RelationBatchLoader<CustomerEntity> {
+
+    private final EntityRepository<OrderEntity, Long> orderRepository;
+
+    public CustomerOrdersRelationBatchLoader(EntityRepository<OrderEntity, Long> orderRepository) {
+        this.orderRepository = orderRepository;
+    }
+
+    @Override
+    public void preload(List<CustomerEntity> customers, RelationBatchContext context) {
+        if (customers.isEmpty() || !context.fetchPlan().includes("orders")) {
+            return;
+        }
+        int limit = context.relationLimit("orders");
+        for (CustomerEntity customer : customers) {
+            customer.orders = orderRepository.query(
+                    QueryFilter.eq("customer_id", customer.customerId),
+                    limit,
+                    QuerySort.desc("order_date")
+            );
+        }
+    }
+}
+```
+
+This is acceptable for a small preview. For a screen that shows the latest 1,000
+orders per customer, use a projection window instead of hydrating `OrderEntity`
+objects as a relation.
+
 ANTI-PATTERN:
 
 - loading a full order history for every row in a customer list
 - expecting relation field access to trigger automatic Redis/DB calls
 - creating wide object graphs without relation limits
+- relying only on database foreign keys and expecting CacheDB to discover
+  relation fetch paths automatically
 
 ## Projection
 

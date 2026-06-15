@@ -229,6 +229,24 @@ Davranış:
 CacheDB relation'ı Hibernate lazy loading gibi görünmez çalışan bir mekanizma
 değildir. Relation yükleme açıkça istenir.
 
+Relation'ı üç ayrı katman olarak düşün:
+
+| Katman | Ne işe yarar? | CacheDB preload için şart mı? |
+| --- | --- | --- |
+| Kaynak veritabanındaki primary/foreign key | Kalıcı veri bütünlüğünü korur, orphan satır oluşmasını engeller | Önerilir, ama tek başına yeterli değildir |
+| `@CacheRelation` metadata'sı | Parent entity alanının hangi hedef entity ile ilişkili olduğunu CacheDB'ye anlatır | Evet |
+| `RelationBatchLoader` + `FetchPlan` | İstenen relation'ı limitli ve batch halinde gerçekten yükler | Evet |
+
+Kural net:
+
+- Veritabanındaki foreign key, CacheDB relation'ını otomatik oluşturmaz.
+- `@CacheRelation`, veritabanında constraint oluşturmaz.
+- `kind = ONE_TO_MANY` bir DDL tanımı değil, relation şekli bilgisidir.
+- `mappedBy`, hedef entity üzerinde parent id taşıyan alanı göstermelidir.
+- Relation preload ancak kaynak entity somut bir `RelationBatchLoader` ile
+  kayıtlıysa ve okuma tarafı relation'ı `FetchPlan` veya `withRelationLimit(...)`
+  ile açıkça isterse çalışır.
+
 ```java
 @CacheEntity(
         table = "customers",
@@ -241,6 +259,7 @@ public class CustomerEntity {
 
     @CacheRelation(
             targetEntity = "OrderEntity",
+            // OrderEntity.customerId alanı; order tablosundaki customer_id kolonuna map edilir.
             mappedBy = "customerId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
             batchLoadOnly = true
@@ -257,6 +276,15 @@ CustomerEntity customer = customerRepository
         .findById(customerId)
         .orElseThrow();
 ```
+
+Sık görülen durumlar:
+
+| DB foreign key | `@CacheRelation` | Loader | Sonuç |
+| --- | --- | --- | --- |
+| Var | Yok | Yok | Veritabanı tutarlıdır, ama CacheDB'nin preload edebileceği bir relation yolu yoktur. |
+| Yok | Var | Var | `mappedBy` sorgulanabiliyorsa CacheDB preload yapabilir; fakat orphan veya tutarsız satır riski sana aittir. Bu yol sadece legacy veya soft relation için kabul edilebilir. |
+| Var | Var | Yok | Metadata vardır, ama preload çalışamaz; strict relation ayarında fail-fast olabilir. |
+| Var | Var | Var | BEST: kalıcı veri bütünlüğü, açık metadata ve limitli batch preload birlikte vardır. |
 
 BEST: Detay ekranında küçük önizleme gerekiyorsa `withRelationLimit(...)` kullan.
 
