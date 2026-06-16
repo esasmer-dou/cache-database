@@ -59,6 +59,9 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 
 Yani kullanıcı ana projeyi önce build etmek zorunda değildir. CacheDB `0.1.0`, ana repodan GitHub Packages’a yayınlanır ve bu örnek proje paketi oradan çeker.
 
+Çalıştırma ve build gereksinimi: JDK 21 kullan. Örnek `pom.xml` içinde
+`<java.version>21</java.version>` tanımlıdır ve proje Java release 21 ile derlenir.
+
 GitHub Packages Maven erişimi için kimlik bilgisi gerekir. `pom.xml` içindeki `<repository><id>` değeri ile Maven `settings.xml` içindeki `<server><id>` değeri aynı olmalıdır:
 
 ```xml

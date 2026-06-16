@@ -53,6 +53,9 @@ This project intentionally consumes CacheDB as an external Maven package:
 
 Users should not build the parent repository first. CacheDB `0.1.0` is published from the main repository to GitHub Packages.
 
+Runtime and build requirement: use JDK 21. The sample `pom.xml` sets
+`<java.version>21</java.version>` and compiles with Java release 21.
+
 GitHub Packages Maven access requires credentials. The `<id>` in `pom.xml` must match the `<server><id>` in Maven `settings.xml`:
 
 ```xml
