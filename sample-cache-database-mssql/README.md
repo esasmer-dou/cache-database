@@ -126,6 +126,7 @@ http://127.0.0.1:8092/cachedb-admin
 | Seed | `POST /api/demo/seed` | Redis write, SQL Server write-behind | CacheDB write path, SQL Server persistence, projection refresh |
 | Customer detail | `GET /api/customers/1?orderPreview=5` | Redis entity + bounded relation preview | Entity detail with bounded relation preview |
 | Timeline | `GET /api/customers/1/orders?limit=20` | Redis projection: `OrderSummary` | Customer order list without full aggregate hydration |
+| Warm customer orders | `POST /api/warm/orders/customer/1?limit=100` | SQL Server read -> Redis hydrate | Explicit warm/backfill for active-set and projection routes |
 | Order detail | `GET /api/orders/10001?linePreview=5` | Redis entity + bounded order lines | Explicit detail load with bounded child relation |
 | High value list | `GET /api/orders/high-value?minimumAmount=500&limit=25` | Redis ranked projection: `OrderSummary` | Global sorted projection query |
 | Archive orders | `GET /api/orders/archive?customerId=1&limit=20` | Direct SQL Server query | Archive read using the same `OrderSummary` response shape |
@@ -140,6 +141,185 @@ The sample is intentionally not "Redis for everything". The production rule is:
 | Render the first page of a growing list | Projection repository with `OrderSummary` | The UI reads a compact, ranked row instead of loading full order entities |
 | Render a selected detail screen | Entity repository with a bounded fetch preset | Only the selected aggregate and limited child preview are loaded |
 | Read old history or export data | Explicit SQL route | Archive and reporting reads should not pollute Redis or bypass SQL Server query planning |
+
+## Copy-Paste Active-Set Route Playbook
+
+Use this section to see the intended model end to end. The commands assume the
+sample is running on `8092` and you are in the `sample-cache-database-mssql`
+directory.
+
+### Scenario 1: Existing SQL Server Rows Do Not Automatically Appear In Redis
+
+Seed data through CacheDB first so SQL Server has durable rows:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8092/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
+```
+
+Now clear Redis to simulate an existing SQL Server database with an empty active
+set:
+
+```bash
+docker compose exec redis redis-cli FLUSHDB
+```
+
+This Redis projection route may now return an empty list because the projection
+active set is empty:
+
+```bash
+curl.exe "http://127.0.0.1:8092/api/customers/1/orders?limit=5"
+```
+
+The explicit SQL Server archive route still sees the durable rows:
+
+```bash
+curl.exe "http://127.0.0.1:8092/api/orders/archive?customerId=1&limit=5"
+```
+
+Production meaning: entity/projection reads are active-set reads. Existing SQL
+Server rows need an explicit warm/backfill path before Redis routes can serve
+them.
+
+### Scenario 2: Warm The Redis Projection For A Route
+
+Run a dry-run first. It reads SQL Server and reports how many rows would be
+warmed, but it does not mutate Redis:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8092/api/warm/orders/customer/1?limit=100&dryRun=true"
+```
+
+Warm only the `OrderSummary` projection for the customer timeline route:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8092/api/warm/orders/customer/1?limit=100&projectionOnly=true"
+```
+
+Now the timeline route reads Redis projection rows:
+
+```bash
+curl.exe "http://127.0.0.1:8092/api/customers/1/orders?limit=5"
+```
+
+Projection-only warm is the right shape when the screen is a list or dashboard
+and does not need full `OrderEntity` payloads.
+
+### Scenario 3: Warm Full Entity Payloads For A Detail Route
+
+If the next screen needs selected order details, warm the full active entity
+window as well:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8092/api/warm/orders/customer/1?limit=100&projectionOnly=false"
+```
+
+Then a selected detail route can read Redis entity data:
+
+```bash
+curl.exe "http://127.0.0.1:8092/api/orders/10001?linePreview=5"
+```
+
+Production rule: do not warm full entities just because a list exists. Warm full
+entities only for selected detail or command routes that actually need them.
+
+### Scenario 4: New Writes Enter Redis Immediately
+
+Create a customer through CacheDB:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8092/api/customers" -H "Content-Type: application/json" -d '{"customerId":9001,"taxNumber":"TAX-9001","customerType":"RETAIL","segment":"VIP","status":"ACTIVE"}'
+```
+
+Create an order through CacheDB:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8092/api/orders" -H "Content-Type: application/json" -d '{"orderId":90010001,"customerId":9001,"orderAmount":725.50,"currencyCode":"USD","orderType":"EXPRESS","status":"PAID","lineCount":0}'
+```
+
+Read the Redis projection route:
+
+```bash
+curl.exe "http://127.0.0.1:8092/api/customers/9001/orders?limit=5"
+```
+
+Read the selected Redis entity detail:
+
+```bash
+curl.exe "http://127.0.0.1:8092/api/orders/90010001?linePreview=5"
+```
+
+Production meaning: CacheDB write paths populate Redis first and flush the
+durable row to SQL Server through write-behind. Existing SQL Server rows use
+warm; new CacheDB writes do not need a separate warm step.
+
+### Scenario 5: Archive And Export Stay On SQL Server
+
+Use the explicit SQL Server route for old history, export, audit, and one-off
+lookups:
+
+```bash
+curl.exe "http://127.0.0.1:8092/api/orders/archive?customerId=1&beforeOrderDate=9999999999999&limit=20"
+```
+
+Do not implement archive by widening the Redis hot set until it contains the
+whole table. That turns Redis into a second archive database.
+
+### Java Pattern Behind The Commands
+
+The repository registration is explicit:
+
+```java
+@Bean
+EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
+    CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
+    OrderEntityCacheBinding.register(cacheDatabase, policy);
+    return OrderEntityCacheBinding.repository(cacheDatabase, policy);
+}
+```
+
+The list route uses a projection repository:
+
+```java
+@GetMapping("/{customerId}/orders")
+public List<OrderReadModels.OrderSummary> orderTimeline(
+        @PathVariable long customerId,
+        @RequestParam(defaultValue = "20") int limit
+) {
+    return OrderEntityCacheBinding.customerTimeline(
+            orderSummaryRepository,
+            customerId,
+            clamp(limit, 1, 1_000)
+    );
+}
+```
+
+The warm route reads SQL Server and hydrates Redis without enqueueing another
+SQL write-behind operation:
+
+```java
+redisRepository.hydrateWarmBatch(orders, Collections.nCopies(orders.size(), 1L), true, false);
+```
+
+For list-only screens, it can hydrate just the projection:
+
+```java
+redisRepository.hydrateProjectionWarmBatch(orders);
+```
+
+The archive route stays explicit SQL Server:
+
+```java
+jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, safeLimit);
+```
+
+Route decision summary:
+
+| Route | Redis entity | Redis projection | SQL Server |
+|---|---:|---:|---:|
+| Customer order timeline | No | Yes | Only during warm/backfill |
+| Selected order detail | Yes | Optional | Only explicit cold-detail route |
+| Create/update order | Yes, if policy admits | Yes, if projection exists | Write-behind flush |
+| Archive/export | No | No | Yes |
 
 ## Core Terms Used in This README
 

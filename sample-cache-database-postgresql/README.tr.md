@@ -120,6 +120,7 @@ http://127.0.0.1:8091/cachedb-admin
 | Veri üretme | `POST /api/demo/seed` | Redis yazma, PostgreSQL’e arka plan kalıcılık | CacheDB yazma yolu, SQL kalıcılığı, projection yenileme |
 | Müşteri detay | `GET /api/customers/1?orderPreview=5` | Redis entity + sınırlı ilişki önizlemesi | Sınırlı sipariş önizlemesiyle entity detayı |
 | Sipariş listesi | `GET /api/customers/1/orders?limit=20` | Redis projection: `OrderSummary` | Tüm aggregate yüklenmeden müşteri sipariş listesi |
+| Sipariş warm/backfill | `POST /api/warm/orders/customer/1?limit=100` | PostgreSQL okuma -> Redis’e yerleştirme | Aktif veri seti ve projection yolu için açık warm/backfill |
 | Sipariş detay | `GET /api/orders/10001?linePreview=5` | Redis entity + sınırlı sipariş satırı | Sınırlı satır önizlemesiyle detay okuma |
 | Yüksek değerli sipariş | `GET /api/orders/high-value?minimumAmount=500&limit=25` | Redis ranked projection: `OrderSummary` | Global sıralı projection sorgusu |
 | Arşiv siparişleri | `GET /api/orders/archive?customerId=1&limit=20` | Doğrudan PostgreSQL sorgusu | Aynı `OrderSummary` yanıt şekliyle arşiv okuması |
@@ -134,6 +135,184 @@ Bu örnek “her şeyi Redis’ten oku” demek değildir. Production’da kural
 | Büyüyen listenin ilk sayfasını gösterme | `OrderSummary` kullanan projection repository | Ekran tam `OrderEntity` yerine küçük, sıralanmış özet satır okur |
 | Seçilmiş detay ekranını gösterme | Sınırlı fetch preset kullanan entity repository | Sadece seçilen aggregate ve sınırlı alt kayıt önizlemesi yüklenir |
 | Eski geçmişi veya export verisini okuma | Açık SQL yolu | Arşiv ve raporlama okumaları Redis’i şişirmemeli, SQL sorgu planı üzerinden çalışmalıdır |
+
+## Kopyala-Çalıştır Aktif Veri Seti Akışı
+
+Bu bölüm, doğru modeli baştan sona denemen için hazırlandı. Komutlar,
+uygulamanın `8091` portunda çalıştığını ve terminalde
+`sample-cache-database-postgresql` dizininde olduğunu varsayar.
+
+### Senaryo 1: SQL’deki Mevcut Kayıt Redis’e Kendiliğinden Gelmez
+
+Önce CacheDB üzerinden veri üret; böylece PostgreSQL’de kalıcı satırlar oluşsun:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8091/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
+```
+
+Şimdi Redis’i temizle. Bu adım, PostgreSQL’de veri olan ama Redis aktif veri
+seti boş olan mevcut sistem durumunu simüle eder:
+
+```bash
+docker compose exec redis redis-cli FLUSHDB
+```
+
+Bu Redis projection yolu artık boş liste dönebilir; çünkü aktif projection seti
+boştur:
+
+```bash
+curl.exe "http://127.0.0.1:8091/api/customers/1/orders?limit=5"
+```
+
+Açık SQL arşiv yolu ise kalıcı satırları görmeye devam eder:
+
+```bash
+curl.exe "http://127.0.0.1:8091/api/orders/archive?customerId=1&limit=5"
+```
+
+Production anlamı: entity/projection okumaları aktif veri seti okumasıdır.
+Mevcut SQL kayıtları, Redis okuma yolları çalışmadan önce açık warm/backfill
+yoluyla Redis’e alınmalıdır.
+
+### Senaryo 2: Bir Route İçin Redis Projection Warm Et
+
+Önce dry-run çalıştır. Bu çağrı PostgreSQL’den kaç satır okunacağını gösterir,
+ama Redis’i değiştirmez:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&dryRun=true"
+```
+
+Müşteri sipariş listesi için yalnızca `OrderSummary` projection’ını warm et:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&projectionOnly=true"
+```
+
+Artık sipariş listesi Redis projection satırlarını okur:
+
+```bash
+curl.exe "http://127.0.0.1:8091/api/customers/1/orders?limit=5"
+```
+
+Projection-only warm, liste ve panel ekranları için doğru modeldir. Bu ekranda
+tam `OrderEntity` veri gövdesine ihtiyaç yoktur.
+
+### Senaryo 3: Detay Ekranı İçin Full Entity Warm Et
+
+Seçilmiş sipariş detayı da Redis’ten okunacaksa full entity penceresini ayrıca
+warm et:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&projectionOnly=false"
+```
+
+Sonra seçilmiş detay yolu Redis entity verisini okuyabilir:
+
+```bash
+curl.exe "http://127.0.0.1:8091/api/orders/10001?linePreview=5"
+```
+
+Production kuralı: sadece liste var diye full entity warm etme. Full entity,
+seçilmiş detay veya command route gerçekten ihtiyaç duyuyorsa Redis’te tutulmalıdır.
+
+### Senaryo 4: Yeni Yazılar Redis’e Hemen Girer
+
+CacheDB üzerinden müşteri oluştur:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8091/api/customers" -H "Content-Type: application/json" -d '{"customerId":9001,"taxNumber":"TAX-9001","customerType":"RETAIL","segment":"VIP","status":"ACTIVE"}'
+```
+
+CacheDB üzerinden sipariş oluştur:
+
+```bash
+curl.exe -X POST "http://127.0.0.1:8091/api/orders" -H "Content-Type: application/json" -d '{"orderId":90010001,"customerId":9001,"orderAmount":725.50,"currencyCode":"USD","orderType":"EXPRESS","status":"PAID","lineCount":0}'
+```
+
+Redis projection yolunu oku:
+
+```bash
+curl.exe "http://127.0.0.1:8091/api/customers/9001/orders?limit=5"
+```
+
+Seçilmiş Redis entity detayını oku:
+
+```bash
+curl.exe "http://127.0.0.1:8091/api/orders/90010001?linePreview=5"
+```
+
+Production anlamı: CacheDB yazma yolları Redis’i önce doldurur, kalıcı satırı
+PostgreSQL’e write-behind ile taşır. Mevcut SQL kayıtları warm ister; yeni
+CacheDB yazıları ayrıca warm gerektirmez.
+
+### Senaryo 5: Arşiv ve Export SQL’de Kalır
+
+Eski geçmiş, export, audit ve tek seferlik arama için açık SQL yolunu kullan:
+
+```bash
+curl.exe "http://127.0.0.1:8091/api/orders/archive?customerId=1&beforeOrderDate=9999999999999&limit=20"
+```
+
+Arşiv ihtiyacını Redis aktif veri setini tüm tabloyu kapsayacak kadar büyüterek
+çözmeye çalışma. Bu yaklaşım Redis’i ikinci bir arşiv veritabanına çevirir.
+
+### Bu Komutların Arkasındaki Java Kalıbı
+
+Repository kaydı açıktır:
+
+```java
+@Bean
+EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
+    CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
+    OrderEntityCacheBinding.register(cacheDatabase, policy);
+    return OrderEntityCacheBinding.repository(cacheDatabase, policy);
+}
+```
+
+Liste yolu projection repository kullanır:
+
+```java
+@GetMapping("/{customerId}/orders")
+public List<OrderReadModels.OrderSummary> orderTimeline(
+        @PathVariable long customerId,
+        @RequestParam(defaultValue = "20") int limit
+) {
+    return OrderEntityCacheBinding.customerTimeline(
+            orderSummaryRepository,
+            customerId,
+            clamp(limit, 1, 1_000)
+    );
+}
+```
+
+Warm yolu PostgreSQL’den okur ve SQL’e yeniden write-behind üretmeden kayıtları
+Redis’e yerleştirir:
+
+```java
+redisRepository.hydrateWarmBatch(orders, Collections.nCopies(orders.size(), 1L), true, false);
+```
+
+Sadece liste ekranı için projection Redis’e yerleştirilebilir:
+
+```java
+redisRepository.hydrateProjectionWarmBatch(orders);
+```
+
+Arşiv yolu açık SQL olarak kalır:
+
+```java
+jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, safeLimit);
+```
+
+Yol karar özeti:
+
+| Route | Redis entity | Redis projection | PostgreSQL |
+|---|---:|---:|---:|
+| Müşteri sipariş listesi | Hayır | Evet | Sadece warm/backfill sırasında |
+| Seçilmiş sipariş detayı | Evet | Opsiyonel | Sadece açık cold-detail yolu varsa |
+| Sipariş oluşturma/güncelleme | Policy kabul ederse evet | Projection varsa evet | Write-behind flush |
+| Arşiv/export | Hayır | Hayır | Evet |
 
 ## Bu README’de Geçen Temel Terimler
 
@@ -746,7 +925,7 @@ ANTI-PATTERN:
 | Aktif veri penceresi | Varsayılan `hotEntityLimit=25_000`, route profillerinde `150_000` seviyesine kadar | Redis büyümesini sınırlarken farklı gerçek hayat okuma sözleşmelerini gösterir |
 | Entity TTL | `0` | Bu örnekte entity kayıtları TTL ile silinmez |
 | Sayfa TTL | Varsayılan `90s`; katalog ve destek profillerinde daha kısa | Sayfa cache’i kısa süreli tutulur |
-| Aktif veri politikası | route’a göre değişen zaman/durum politikaları | Ticaret, katalog, destek, lojistik, raporlama ve audit için farklı kabul profilleri gösterir |
+| Aktif veri politikası | yola göre değişen zaman/durum politikaları | Ticaret, katalog, destek, lojistik, raporlama ve audit için farklı kabul profilleri gösterir |
 | Entity sorgu limiti | `250` | Büyük entity taramalarını engeller |
 | Projection sorgu limiti | `1000` | Zaman çizelgesi penceresine izin verir, sınırsız okumayı engeller |
 | Redis koruma eşikleri | uyarı %75, kritik %88 | Bellek baskısını erken görünür yapar |

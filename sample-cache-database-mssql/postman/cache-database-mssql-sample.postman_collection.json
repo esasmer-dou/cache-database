@@ -93,6 +93,27 @@
           }
         },
         {
+          "name": "Warm Customer Orders Dry Run",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/warm/orders/customer/{{customerId}}?limit=100&dryRun=true"
+          }
+        },
+        {
+          "name": "Warm Customer Orders Projection",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/warm/orders/customer/{{customerId}}?limit=100&projectionOnly=true"
+          }
+        },
+        {
+          "name": "Warm Customer Orders Entity",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/warm/orders/customer/{{customerId}}?limit=100&projectionOnly=false"
+          }
+        },
+        {
           "name": "Order Detail With Line Preview",
           "request": {
             "method": "GET",
