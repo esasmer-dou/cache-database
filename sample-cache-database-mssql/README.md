@@ -586,6 +586,33 @@ These recipes are starting profiles, not universal defaults. Use them to decide 
 
 BEST: start from the closest recipe, then run a staging warm-up and compare estimated Redis memory with actual `MEMORY USAGE` by key prefix. For SQL Server, also check lock waits before increasing `workerThreads` or `batchSize`. ANTI-PATTERN: copy the largest `hotEntityLimit` into every service and hope Redis absorbs the model.
 
+## Outside The Active Data Set: Read And Write Behavior
+
+CacheDB does not behave like a dynamic ORM that scans SQL Server whenever an entity is missing from Redis. Entity repository reads are bounded active-set reads. SQL Server remains the durable source of truth, but archive, export, old-history, and cold-detail screens must use explicit SQL routes or a controlled warm/backfill flow.
+
+One important exception is `findPage(PageWindow)`: it can call an `EntityPageLoader` only if read-through is enabled and a page loader is registered. Do not treat that as a generic fallback for every entity query.
+
+| Operation | If the row is inside the active data set | If the row is outside the active data set | SQL Server behavior | Redis/cache behavior |
+|---|---|---|---|---|
+| `findById(id)` | Returns the Redis entity and applies the requested fetch preset. | Returns empty; sample controllers usually map this to `404`. | The repository read does not call SQL Server. | Missing, tombstoned, or policy-rejected entities are not served. If `evictWhenRejected=true`, stale active-set entries can be removed. |
+| `query(QuerySpec)` | Uses Redis indexes and Redis payloads, then returns only matching admitted rows. | Returns fewer rows or an empty list. | SQL Server is not scanned to fill the gap. | Only Redis-indexed and policy-admitted rows can appear. |
+| `findPage(PageWindow)` | Returns the cached page if present. | If read-through and `EntityPageLoader` are configured, the loader may read SQL Server; otherwise it returns empty or fails depending on page-cache config. | Only the explicitly registered page loader may call SQL Server. | Loaded pages are cached only when guardrails allow the loaded size. |
+| Projection query | Returns compact projection rows from Redis projection indexes. | Returns only projection rows that exist inside the projection window. | The projection query does not scan SQL Server. | Projection is the correct shape for timelines, dashboards, and top-N screens. |
+| Explicit archive/reporting route | Usually not needed for normal first-paint screens. | Use this for old history, export, audit, and cold detail screens. | Reads SQL Server with bounded, indexed SQL. | Should not mutate Redis unless the route intentionally warms a hot set. |
+| `save(entity)` | Queues the durable write and keeps/reindexes Redis state. | Queues the durable write, but the full entity can be rejected or evicted from Redis. | Write-behind persists the change. | Hot policy decides whether the entity remains cache-resident. A just-written cold row may not be visible through Redis entity reads. |
+| `deleteById(id)` | Removes/tombstones Redis state and queues the durable delete. | The durable delete still belongs to the write-behind flow if the application issues it. | SQL Server delete is flushed by write-behind. | Future Redis reads return empty and projection payloads are removed. |
+| Warm/backfill | Policy-admitted rows are hydrated into Redis. | Rejected rows stay SQL Server-only. | Source rows are read from SQL Server. | `admitOnWarm` and `hotPolicy` decide Redis admission. |
+
+| Scenario | Configuration shape | Read outside the active data set | Write outside the active data set | Correct route design |
+|---|---|---|---|---|
+| E-commerce customer order timeline | Last 90 days OR `NEW/PAID/PICKING/OPEN/PENDING`, `OrderSummary` projection, `maxProjectionQueryLimit=1_000`. | A 2-year-old completed order is not returned by the Redis timeline query. `findById` can return empty if the order is not admitted. | A corrected old completed order is still written to SQL Server, but Redis may reject or evict the full entity. | Timeline uses `OrderSummary` projection; order archive/detail history uses an indexed SQL Server route such as `WHERE customer_id=? ORDER BY order_date DESC OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY`. |
+| Logistics shipment tracking | Last 14 days OR `IN_TRANSIT/OUT_FOR_DELIVERY/DELAYED/EXCEPTION`, shipment timeline projection. | A delivered shipment from last month is not expected in Redis tracking lists. | A late status correction is durable in SQL Server; Redis admits it only if the new status/time matches policy. | Active tracking screen uses projection; delivered shipment history uses SQL Server archive route. |
+| Reporting and audit archive | Live report jobs only, small `ReportRunSummary`, often `admitOnRead=false` for archives. | Old audit and ledger rows are intentionally not promoted by one-off reads. | New audit rows are durable; old archive rows should not pollute Redis. | Dashboard reads live summaries from Redis; audit/export reads SQL Server directly with report-specific indexes. |
+| Support operations queue | Last 30 days OR `OPEN/PENDING/ESCALATED/SLA_BREACH`, `OpenTicketSummary` projection. | A closed ticket older than 30 days may not be returned by entity repository reads. | Reopening the ticket changes state; after write, policy can admit it back into Redis. | Queue screen reads projection; closed ticket search reads SQL Server history; active detail reads Redis when admitted. |
+| Product catalog and inventory | `ACTIVE` products OR `IN_STOCK/LOW_STOCK` OR updated in last 7 days, availability projection. | A discontinued SKU is omitted from public catalog projection. | Admin changes to discontinued products persist, but Redis keeps them only if policy admits them. | Public category pages use projection; admin cold detail and bulk catalog export use SQL Server. |
+
+BEST: design one route for the active user experience and a separate explicit route for cold history. ANTI-PATTERN: expecting a broad entity query to miss Redis, scan SQL Server, fill Redis, and still stay within a bounded memory budget.
+
 ## Cache Policy Parameter Tuning
 
 Tune cache policy in this order. Do not start by increasing memory.
