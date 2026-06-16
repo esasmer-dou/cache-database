@@ -207,7 +207,7 @@ public class SampleSeedService {
         shipment.customerId = customerId;
         shipment.trackingNumber = "TRK-" + shipmentId;
         shipment.carrierCode = shipmentIndex % 2 == 0 ? "UPS" : "DHL";
-        shipment.shipmentStatus = switch ((int) (shipmentId % 5)) {
+        shipment.shipmentStatus = switch ((int) ((customerId + shipmentIndex) % 5)) {
             case 0 -> "DELAYED";
             case 1 -> "IN_TRANSIT";
             case 2 -> "OUT_FOR_DELIVERY";
