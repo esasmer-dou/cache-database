@@ -257,52 +257,468 @@ curl.exe "http://127.0.0.1:8091/api/orders/archive?customerId=1&beforeOrderDate=
 Arşiv ihtiyacını Redis aktif veri setini tüm tabloyu kapsayacak kadar büyüterek
 çözmeye çalışma. Bu yaklaşım Redis’i ikinci bir arşiv veritabanına çevirir.
 
-### Bu Komutların Arkasındaki Java Kalıbı
+### Kopyala-Çalıştır Java Uygulama Paketi
 
-Repository kaydı açıktır:
+Yukarıdaki komutlar davranışı test eder. Aşağıdaki kod ise gerçek projeye
+taşınacak parçayı gösterir. Kendi sisteminde tablo ve kolon adlarını değiştirmen
+yeterlidir.
 
-```java
-@Bean
-EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
-    CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
-    OrderEntityCacheBinding.register(cacheDatabase, policy);
-    return OrderEntityCacheBinding.repository(cacheDatabase, policy);
-}
-```
+#### 1. Okuma yolunun sözleşmesini açık yaz
 
-Liste yolu projection repository kullanır:
+Her controller kendi sayfa boyutunu veya Redis penceresini belirlememeli. Bu
+kararı tek bir sınıfa koy:
 
 ```java
-@GetMapping("/{customerId}/orders")
-public List<OrderReadModels.OrderSummary> orderTimeline(
-        @PathVariable long customerId,
-        @RequestParam(defaultValue = "20") int limit
+// src/main/java/com/example/orders/CustomerOrdersRouteContract.java
+package com.example.orders;
+
+public record CustomerOrdersRouteContract(
+        int firstPageSize,
+        int hotWindowPerCustomer,
+        int maxSqlArchivePageSize,
+        boolean projectionRequired
 ) {
-    return OrderEntityCacheBinding.customerTimeline(
-            orderSummaryRepository,
-            customerId,
-            clamp(limit, 1, 1_000)
-    );
+    public static CustomerOrdersRouteContract timeline() {
+        return new CustomerOrdersRouteContract(20, 1_000, 500, true);
+    }
+
+    public int clampTimelineLimit(int requested) {
+        return Math.max(1, Math.min(requested, hotWindowPerCustomer));
+    }
+
+    public int clampArchiveLimit(int requested) {
+        return Math.max(1, Math.min(requested, maxSqlArchivePageSize));
+    }
 }
 ```
 
-Warm yolu PostgreSQL’den okur ve SQL’e yeniden write-behind üretmeden kayıtları
-Redis’e yerleştirir:
+#### 2. Entity, projection ve named query tanımını yap
+
+Named query, Redis’ten çalışacak okuma yolunun sözleşmesidir. Projection, ekranın
+okuyacağı küçük satırdır. Full entity ise seçilmiş detay ekranları için ayrılır.
 
 ```java
-redisRepository.hydrateWarmBatch(orders, Collections.nCopies(orders.size(), 1L), true, false);
+// src/main/java/com/example/orders/domain/OrderEntity.java
+package com.example.orders.domain;
+
+import com.example.orders.readmodel.OrderReadModels;
+import com.reactor.cachedb.annotations.CacheColumn;
+import com.reactor.cachedb.annotations.CacheEntity;
+import com.reactor.cachedb.annotations.CacheId;
+import com.reactor.cachedb.annotations.CacheNamedQuery;
+import com.reactor.cachedb.annotations.CacheProjectionDefinition;
+import com.reactor.cachedb.core.projection.EntityProjection;
+import com.reactor.cachedb.core.query.QueryFilter;
+import com.reactor.cachedb.core.query.QuerySort;
+import com.reactor.cachedb.core.query.QuerySpec;
+
+@CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
+public class OrderEntity {
+    @CacheId(column = "order_id")
+    public Long orderId;
+
+    @CacheColumn("customer_id")
+    public Long customerId;
+
+    @CacheColumn("order_date")
+    public Long orderDate;
+
+    @CacheColumn("order_amount")
+    public Double orderAmount;
+
+    @CacheColumn("currency_code")
+    public String currencyCode;
+
+    @CacheColumn("order_type")
+    public String orderType;
+
+    @CacheColumn("status")
+    public String status;
+
+    @CacheColumn("line_count")
+    public Integer lineCount;
+
+    @CacheColumn("priority_score")
+    public Double priorityScore;
+
+    @CacheProjectionDefinition("orderSummary")
+    public static EntityProjection<OrderEntity, OrderReadModels.OrderSummary, Long> orderSummaryProjection() {
+        return OrderReadModels.ORDER_SUMMARY_PROJECTION;
+    }
+
+    @CacheNamedQuery("customerTimeline")
+    public static QuerySpec customerTimelineQuery(long customerId, int limit) {
+        return QuerySpec.where(QueryFilter.eq("customer_id", customerId))
+                .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
+                .limitTo(limit);
+    }
+}
 ```
 
-Sadece liste ekranı için projection Redis’e yerleştirilebilir:
-
 ```java
-redisRepository.hydrateProjectionWarmBatch(orders);
+// src/main/java/com/example/orders/readmodel/OrderReadModels.java
+package com.example.orders.readmodel;
+
+import com.example.orders.domain.OrderEntity;
+import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
+import com.reactor.cachedb.core.projection.EntityProjection;
+import com.reactor.cachedb.core.projection.ProjectionCodec;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+public final class OrderReadModels {
+    public static final EntityProjection<OrderEntity, OrderSummary, Long> ORDER_SUMMARY_PROJECTION =
+            EntityProjection.of(
+                    "order-summary",
+                    new ProjectionCodec<>() {
+                        @Override
+                        public String toRedisValue(OrderSummary projection) {
+                            LinkedHashMap<String, String> values = new LinkedHashMap<>();
+                            values.put("order_id", String.valueOf(projection.orderId()));
+                            values.put("customer_id", String.valueOf(projection.customerId()));
+                            values.put("order_date", String.valueOf(projection.orderDate()));
+                            values.put("order_amount", String.valueOf(projection.orderAmount()));
+                            values.put("currency_code", projection.currencyCode());
+                            values.put("status", projection.status());
+                            values.put("priority_score", String.valueOf(projection.priorityScore()));
+                            return LengthPrefixedPayloadCodec.encode(values);
+                        }
+
+                        @Override
+                        public OrderSummary fromRedisValue(String encoded) {
+                            Map<String, String> values = LengthPrefixedPayloadCodec.decode(encoded);
+                            return new OrderSummary(
+                                    Long.valueOf(values.get("order_id")),
+                                    Long.valueOf(values.get("customer_id")),
+                                    Long.valueOf(values.get("order_date")),
+                                    Double.valueOf(values.get("order_amount")),
+                                    values.get("currency_code"),
+                                    values.get("status"),
+                                    Double.valueOf(values.get("priority_score"))
+                            );
+                        }
+                    },
+                    OrderSummary::orderId,
+                    List.of("order_id", "customer_id", "order_date", "order_amount", "currency_code", "status", "priority_score"),
+                    projection -> {
+                        LinkedHashMap<String, Object> columns = new LinkedHashMap<>();
+                        columns.put("order_id", projection.orderId());
+                        columns.put("customer_id", projection.customerId());
+                        columns.put("order_date", projection.orderDate());
+                        columns.put("order_amount", projection.orderAmount());
+                        columns.put("currency_code", projection.currencyCode());
+                        columns.put("status", projection.status());
+                        columns.put("priority_score", projection.priorityScore());
+                        return columns;
+                    },
+                    order -> new OrderSummary(
+                            order.orderId,
+                            order.customerId,
+                            order.orderDate,
+                            order.orderAmount,
+                            order.currencyCode,
+                            order.status,
+                            order.priorityScore
+                    )
+            ).rankedBy("order_date", "priority_score").asyncRefresh();
+
+    private OrderReadModels() {
+    }
+
+    public record OrderSummary(
+            Long orderId,
+            Long customerId,
+            Long orderDate,
+            Double orderAmount,
+            String currencyCode,
+            String status,
+            Double priorityScore
+    ) {
+    }
+}
 ```
 
-Arşiv yolu açık SQL olarak kalır:
+#### 3. Entity ve projection repository kayıtlarını yap
+
+Annotation processing sonrasında `OrderEntityCacheBinding`, CacheDB tarafından
+üretilir. Uygulama kodu reflection veya string tabanlı lookup yerine bu generated
+binding sınıfını kullanmalıdır.
 
 ```java
-jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, safeLimit);
+// src/main/java/com/example/orders/OrderCacheDbConfig.java
+package com.example.orders;
+
+import com.example.orders.domain.OrderEntity;
+import com.example.orders.domain.OrderEntityCacheBinding;
+import com.example.orders.readmodel.OrderReadModels;
+import com.reactor.cachedb.core.api.EntityRepository;
+import com.reactor.cachedb.core.api.ProjectionRepository;
+import com.reactor.cachedb.core.cache.CachePolicy;
+import com.reactor.cachedb.starter.CacheDatabase;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class OrderCacheDbConfig {
+    @Bean
+    EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
+        CachePolicy policy = CachePolicy.builder()
+                .hotEntityLimit(100_000)
+                .pageSize(100)
+                .entityTtlSeconds(0)
+                .pageTtlSeconds(60)
+                .build();
+        OrderEntityCacheBinding.register(cacheDatabase, policy);
+        return OrderEntityCacheBinding.repository(cacheDatabase, policy);
+    }
+
+    @Bean
+    ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository(
+            EntityRepository<OrderEntity, Long> orderRepository
+    ) {
+        return OrderEntityCacheBinding.orderSummary(orderRepository);
+    }
+
+    @Bean
+    CustomerOrdersRouteContract customerOrdersRouteContract() {
+        return CustomerOrdersRouteContract.timeline();
+    }
+}
+```
+
+#### 4. Redis projection okuma yolunu yaz
+
+Bu yol, Redis boşsa PostgreSQL’i otomatik taramaz. Bu bir aktif veri seti
+yoludur. Veri eksikse warm/backfill çalıştırılmalı veya açık SQL yolu
+kullanılmalıdır.
+
+```java
+// src/main/java/com/example/orders/CustomerOrdersController.java
+package com.example.orders;
+
+import com.example.orders.domain.OrderEntityCacheBinding;
+import com.example.orders.readmodel.OrderReadModels;
+import com.reactor.cachedb.core.api.ProjectionRepository;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/customers")
+public class CustomerOrdersController {
+    private final ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository;
+    private final CustomerOrdersRouteContract routeContract;
+
+    public CustomerOrdersController(
+            ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository,
+            CustomerOrdersRouteContract routeContract
+    ) {
+        this.orderSummaryRepository = orderSummaryRepository;
+        this.routeContract = routeContract;
+    }
+
+    @GetMapping("/{customerId}/orders")
+    public List<OrderReadModels.OrderSummary> timeline(
+            @PathVariable long customerId,
+            @RequestParam(defaultValue = "20") int limit
+    ) {
+        return OrderEntityCacheBinding.customerTimeline(
+                orderSummaryRepository,
+                customerId,
+                routeContract.clampTimelineLimit(limit)
+        );
+    }
+}
+```
+
+#### 5. Warm/backfill servis kodunu ekle
+
+Geçiş sürecindeki kritik parça burasıdır. Servis PostgreSQL’den okur, sonra
+`save(...)` çağırmadan Redis’i doldurur. Böylece aynı kayıtlar için tekrar
+write-behind işi üretmez.
+
+```java
+// src/main/java/com/example/orders/CustomerOrdersWarmBackfillService.java
+package com.example.orders;
+
+import com.example.orders.domain.OrderEntity;
+import com.reactor.cachedb.core.api.EntityRepository;
+import com.reactor.cachedb.redis.RedisEntityRepository;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
+import java.util.Collections;
+import java.util.List;
+
+@Service
+public class CustomerOrdersWarmBackfillService {
+    private static final String CUSTOMER_ORDER_WINDOW_SQL = """
+            SELECT order_id, customer_id, order_date, order_amount, currency_code, order_type, status, line_count, priority_score
+            FROM sample_orders
+            WHERE customer_id = ?
+            ORDER BY order_date DESC, order_id DESC
+            OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
+            """;
+
+    private final JdbcTemplate jdbcTemplate;
+    private final EntityRepository<OrderEntity, Long> orderRepository;
+    private final CustomerOrdersRouteContract routeContract;
+
+    public CustomerOrdersWarmBackfillService(
+            JdbcTemplate jdbcTemplate,
+            EntityRepository<OrderEntity, Long> orderRepository,
+            CustomerOrdersRouteContract routeContract
+    ) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.orderRepository = orderRepository;
+        this.routeContract = routeContract;
+    }
+
+    public WarmResult warm(long customerId, int requestedLimit, boolean projectionOnly, boolean dryRun) {
+        int limit = routeContract.clampTimelineLimit(requestedLimit);
+        List<OrderEntity> orders = jdbcTemplate.query(
+                CUSTOMER_ORDER_WINDOW_SQL,
+                (rs, rowNumber) -> {
+                    OrderEntity order = new OrderEntity();
+                    order.orderId = rs.getLong("order_id");
+                    order.customerId = rs.getLong("customer_id");
+                    order.orderDate = rs.getLong("order_date");
+                    order.orderAmount = rs.getDouble("order_amount");
+                    order.currencyCode = rs.getString("currency_code");
+                    order.orderType = rs.getString("order_type");
+                    order.status = rs.getString("status");
+                    order.lineCount = rs.getInt("line_count");
+                    order.priorityScore = rs.getDouble("priority_score");
+                    return order;
+                },
+                customerId,
+                limit
+        );
+
+        if (!dryRun && !orders.isEmpty()) {
+            RedisEntityRepository<OrderEntity, Long> redisRepository = redisOrderRepository();
+            if (projectionOnly) {
+                redisRepository.hydrateProjectionWarmBatch(orders);
+            } else {
+                redisRepository.hydrateWarmBatch(orders, Collections.nCopies(orders.size(), 1L), true, false);
+            }
+        }
+
+        return new WarmResult(customerId, limit, orders.size(), projectionOnly, dryRun);
+    }
+
+    @SuppressWarnings("unchecked")
+    private RedisEntityRepository<OrderEntity, Long> redisOrderRepository() {
+        if (orderRepository instanceof RedisEntityRepository<?, ?> redisRepository) {
+            return (RedisEntityRepository<OrderEntity, Long>) redisRepository;
+        }
+        throw new IllegalStateException("Warm/backfill requires RedisEntityRepository");
+    }
+
+    public record WarmResult(long customerId, int requestedWindow, int rowsReadFromSql, boolean projectionOnly, boolean dryRun) {
+    }
+}
+```
+
+```java
+// src/main/java/com/example/orders/WarmBackfillController.java
+package com.example.orders;
+
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/warm")
+public class WarmBackfillController {
+    private final CustomerOrdersWarmBackfillService warmBackfillService;
+
+    public WarmBackfillController(CustomerOrdersWarmBackfillService warmBackfillService) {
+        this.warmBackfillService = warmBackfillService;
+    }
+
+    @PostMapping("/orders/customer/{customerId}")
+    public CustomerOrdersWarmBackfillService.WarmResult warmCustomerOrders(
+            @PathVariable long customerId,
+            @RequestParam(defaultValue = "100") int limit,
+            @RequestParam(defaultValue = "false") boolean projectionOnly,
+            @RequestParam(defaultValue = "false") boolean dryRun
+    ) {
+        return warmBackfillService.warm(customerId, limit, projectionOnly, dryRun);
+    }
+}
+```
+
+#### 6. Arşiv ve geçmiş için açık SQL yolu bırak
+
+Bu endpoint bilinçli olarak CacheDB entity sorgusu değildir. Aktif veri setinin
+dışındaki okumalar, eski geçmiş, export ve audit ekranları için güvenli yoldur.
+
+```java
+// src/main/java/com/example/orders/OrderArchiveController.java
+package com.example.orders;
+
+import com.example.orders.readmodel.OrderReadModels;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/orders")
+public class OrderArchiveController {
+    private static final String ARCHIVE_SQL = """
+            SELECT order_id, customer_id, order_date, order_amount, currency_code, status, priority_score
+            FROM sample_orders
+            WHERE customer_id = ? AND order_date < ?
+            ORDER BY order_date DESC, order_id DESC
+            OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
+            """;
+
+    private final JdbcTemplate jdbcTemplate;
+    private final CustomerOrdersRouteContract routeContract;
+
+    public OrderArchiveController(JdbcTemplate jdbcTemplate, CustomerOrdersRouteContract routeContract) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.routeContract = routeContract;
+    }
+
+    @GetMapping("/archive")
+    public List<OrderReadModels.OrderSummary> archive(
+            @RequestParam long customerId,
+            @RequestParam(required = false) Long beforeOrderDate,
+            @RequestParam(defaultValue = "100") int limit
+    ) {
+        long upperBound = beforeOrderDate == null ? Long.MAX_VALUE : beforeOrderDate;
+        int safeLimit = routeContract.clampArchiveLimit(limit);
+        return jdbcTemplate.query(
+                ARCHIVE_SQL,
+                (rs, rowNumber) -> new OrderReadModels.OrderSummary(
+                        rs.getLong("order_id"),
+                        rs.getLong("customer_id"),
+                        rs.getLong("order_date"),
+                        rs.getDouble("order_amount"),
+                        rs.getString("currency_code"),
+                        rs.getString("status"),
+                        rs.getDouble("priority_score")
+                ),
+                customerId,
+                upperBound,
+                safeLimit
+        );
+    }
+}
 ```
 
 Yol karar özeti:
