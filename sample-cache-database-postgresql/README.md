@@ -494,6 +494,75 @@ CachePolicy.builder()
 
 This policy means: keep records in the active data set when they are recent enough or operationally active. It is closer to real systems than "cache whatever was read last".
 
+## SampleCacheDbTuningConfig Reference
+
+`SampleCacheDbTuningConfig` is the complete tuning entry point used by this sample. It is intentionally small enough to read in one pass, but every value has production impact.
+
+### Resource Limits
+
+| Parameter | Sample value | What it means | When to change |
+|---|---:|---|---|
+| `defaultCachePolicy` | custom `CachePolicy` | The default Redis admission, retention, TTL, and page behavior for entities that do not override policy. | Change only after defining route contracts and Redis memory budget. |
+| `maxRegisteredEntities` | `64` | Maximum entity metadata registrations allowed in this CacheDB runtime. It protects startup/runtime from accidentally loading an unexpectedly large model surface. | Increase when the application legitimately has more CacheDB entities. Do not raise it to hide uncontrolled package scanning. |
+| `maxColumnsPerOperation` | `64` | Upper bound for columns handled by one generated operation. It protects write/read paths from very wide entities and accidental payload explosion. | Increase only for a measured wide entity. Prefer splitting bloated tables into explicit read models or projections. |
+
+### Default Cache Policy
+
+| Parameter | Sample value | What it means | Production guidance |
+|---|---:|---|---|
+| `hotEntityLimit` | `5_000` | Coarse maximum active entity count for the default policy. It bounds how many full entity rows can stay in Redis before policy pressure starts. | Estimate from Redis memory: average entity size plus indexes times active row count. Do not use this as the limit for large list screens; use projections. |
+| `pageSize` | `100` | Default page/query size when the caller does not provide a tighter limit. | Keep close to UI page size. If a screen needs more than this repeatedly, design a projection route. |
+| `entityTtlSeconds` | `0` | Full entity keys do not expire by TTL. Retention is policy-driven instead of time-expiry-driven. | Good for durable business entities. Use a positive TTL only for ephemeral data that is safe to rebuild. |
+| `pageTtlSeconds` | `120` | Cached page/query result TTL is two minutes. | Keep short because page ordering can become stale. Projection rows can live longer than page caches. |
+| `compositeHotPolicy(ANY, ...)` | `ANY` | A record is admitted if any child policy matches. In this sample: recent order OR operational status OR active product/status field. | `ANY` is useful for operational systems but can admit more data. Use staging memory reports before tightening to `ALL`. |
+| `timeWindow("order_date", 90 days)` | `90 days` | Orders with `order_date` inside the last 90 days may stay in Redis. | Tune to the business working set, not arbitrary time. For example, billing may need 13 months; support queues may need days. |
+| `stateWindow("status", ACTIVE/NEW/PAID/PICKING/OPEN/PENDING)` | active operational states | Records in active workflow states may stay in Redis even if they are older than the time window. | Keep the state list small. Large status buckets can over-admit old data. |
+| `stateWindow("active_status", ACTIVE)` | `ACTIVE` | Product/catalog-style records with active status may stay in Redis. | Use for small active catalogs. Do not put archive states here. |
+
+### Read Shape Guardrail
+
+| Parameter | Sample value | What it means | Production guidance |
+|---|---:|---|---|
+| `enabled` | `true` | Enables read-shape protection. Oversized query shapes are rejected instead of silently becoming expensive. | Keep enabled in production. Disabling it turns accidental large reads into runtime risk. |
+| `maxEntityQueryLimit` | `250` | Maximum rows allowed for full entity query surfaces. | Keep low. Entity rows are larger and can trigger relation work. |
+| `maxProjectionQueryLimit` | `1_000` | Maximum rows allowed for projection query surfaces. | Can be higher than entity limit because projection rows are compact. Still keep bounded. |
+| `hotSetHeadroom` | `10` | Safety margin between requested windows and active-set boundaries. | Increase when routes frequently hit the edge of the active data set. |
+
+### Redis Guardrail
+
+| Parameter | Sample value | What it means | Production guidance |
+|---|---:|---|---|
+| `enabled` | `true` | Enables Redis pressure checks and runtime safety behavior. | Keep enabled. Redis is a bounded runtime dependency, not unlimited heap. |
+| `producerBackpressureEnabled` | `true` | Slows producers when Redis/write-behind pressure is high. | Keep enabled to avoid amplifying outages under burst writes. |
+| `usedMemoryWarnMaxmemoryPercent` | `75` | Warning threshold based on Redis `used_memory / maxmemory`. | Alert and reduce admission before memory becomes critical. |
+| `usedMemoryCriticalMaxmemoryPercent` | `88` | Critical memory pressure threshold. | At this level, reduce admission, inspect large prefixes, and avoid expanding hot windows. |
+| `expectedMaxmemoryPolicy` | `noeviction` | Expected Redis eviction policy. CacheDB wants deterministic admission/eviction decisions, not Redis evicting arbitrary keys. | Use `noeviction`. If Redis evicts keys behind CacheDB, projections and indexes can become inconsistent. |
+| `warnOnMissingMaxmemory` | `true` | Emits a warning when Redis has no `maxmemory` configured. | Keep enabled. A Redis without memory limit makes local demos easy but production behavior unsafe. |
+| `writeBehindBacklogWarnThreshold` | `500` | Warning threshold for pending durable writes. | Lower for strict durability windows; raise only after measuring SQL throughput. |
+| `writeBehindBacklogCriticalThreshold` | `2_000` | Critical backlog threshold for durable writes. | Treat as incident-level pressure: check SQL locks, pool saturation, batch size, and Redis memory. |
+| `automaticRuntimeProfileSwitchingEnabled` | `true` | Allows CacheDB to switch runtime behavior when guardrails detect pressure. | Keep enabled for samples and production unless you have a separate operational controller. |
+
+### Write-Behind
+
+| Parameter | Sample value | What it means | Production guidance |
+|---|---:|---|---|
+| `workerThreads` | `2` | Number of background workers flushing Redis-accepted writes to SQL. | Increase only when SQL has spare connections/CPU and backlog is growing. |
+| `batchSize` | `128` | Target number of queued writes grouped for a flush cycle. | Increase for throughput after measuring lock duration and flush latency. |
+| `maxFlushBatchSize` | `128` | Hard cap for one flush batch. | Keep aligned with `batchSize` until load tests show SQL benefits from larger batches. |
+| `tableAwareBatchingEnabled` | `true` | Groups writes by table to improve SQL batch behavior and reduce mixed-shape flushes. | Keep enabled for most production workloads. |
+| `batchFlushEnabled` | `true` | Enables batch flushing instead of one-row-at-a-time durable writes. | Keep enabled unless diagnosing provider-specific behavior. |
+| `coalescingEnabled` | `true` | Combines repeated writes for the same entity before flushing where safe. | Keep enabled for update-heavy workloads. Disable only if every intermediate state must be durable. |
+| `maxFlushRetries` | `5` | Retry count for transient SQL flush failures. | Increase only with bounded backoff and visibility. Permanent failures should move to failure handling, not retry forever. |
+| `retryBackoffMillis` | `500` | Delay between flush retry attempts. | Tune with SQL failover behavior. Too low creates retry storms; too high increases durability lag. |
+
+### Values Mentioned In The README But Not Set In This Class
+
+| Parameter | Why it still appears |
+|---|---|
+| `lruEvictionEnabled` | Supported by `CachePolicy`; not explicitly set here, so the framework default applies. It is documented because production teams often tune count-window behavior. |
+| `admitOnWrite`, `admitOnRead`, `admitOnWarm`, `evictWhenRejected` | Supported by `EntityHotPolicy`; this sample uses helper constructors with default admission behavior. They are documented because migration, archive, and warm-up flows commonly need these switches. |
+| `rejectEntityQueryOverLimit`, `rejectProjectionQueryOverLimit` | Supported by read guardrails; this sample relies on default rejection behavior after setting query limits. |
+
 ## Cache Policy Parameter Tuning
 
 Tune cache policy in this order. Do not start by increasing memory.
