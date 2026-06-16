@@ -12,6 +12,28 @@ Bu proje, CacheDB’nin Redis ve PostgreSQL ile nasıl kullanılacağını göst
 - Destek talepleri operasyon paneline veri sağlar.
 - Müşteri sipariş zaman çizelgesi, tüm aggregate yüklenmeden özet okuma modeli üzerinden döner.
 
+## Bu Örnekte Ürün Konumlandırması
+
+Bu örnek, CacheDB'yi PostgreSQL'in önüne konan şeffaf bir cache gibi
+konumlandırmaz. API bilinçli olarak ikiye ayrılır: Redis'teki aktif veri setini
+okuyan operasyonel yollar ve PostgreSQL'i açıkça kullanan arşiv/geçmiş yolları.
+
+| Yol tipi | Örnek | Veri yolu | Sözleşme |
+|---|---|---|---|
+| Operasyonel entity yazma | `POST /api/orders` | Önce Redis, sonra PostgreSQL'e write-behind | Yazı CacheDB üzerinden kabul edilir ve arka planda kalıcılaştırılır. Kaydın Redis'te kalıp kalmayacağını hot policy belirler. |
+| Operasyonel liste | `GET /api/customers/{id}/orders` | Redis projection: `OrderSummary` | Liste tam sipariş aggregate verisi yerine sınırlı bir read-model okur. |
+| Seçilmiş detay | `GET /api/orders/{id}` | Redis entity + sınırlı ilişki önizlemesi | Aktif veri setindeki kayıtlar için çalışır. Sipariş aktif veri setinin dışındaysa açık bir detay SQL yolu tasarlanmalıdır. |
+| Arşiv/geçmiş | `GET /api/orders/archive` | Doğrudan PostgreSQL sorgusu | Eski geçmiş, export ve audit okumaları varsayılan olarak Redis'i büyütmemelidir. |
+| Panel | `GET /api/dashboard/commerce` | Redis projection ve sınırlı entity sorgusu | Panel satırları ekran ihtiyacına göre önceden şekillendirilmiş veriden okunur. |
+
+BEST: önce aktif okuma/yazma yolunu tasarla, hot policy kararını ver,
+listeleri projection repository üzerinden oku ve arşiv/geçmiş okumalarını açık
+PostgreSQL sorgusu olarak tut.
+
+ANTI-PATTERN: geniş ve dinamik bir entity sorgusunun veriyi Redis'te
+bulamamasını, PostgreSQL'i taramasını, Redis'i doldurmasını ve production bellek
+sınırları altında yine de öngörülebilir kalmasını beklemek.
+
 ## Bağımlılık Modeli
 
 Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
@@ -581,7 +603,7 @@ BEST: en yakın senaryodan başla, staging warm-up çalıştır, sonra tahmini R
 
 CacheDB, Redis’te bulunmayan her entity için otomatik PostgreSQL taraması yapan dinamik ORM gibi davranmaz. Entity repository okumaları, sınırlandırılmış aktif veri seti okumalarıdır. PostgreSQL kalıcı veri kaynağı olmaya devam eder; ancak arşiv, export, eski geçmiş ve özellikle soğuk detay ekranları açık SQL yolları veya kontrollü warm/backfill akışıyla tasarlanmalıdır.
 
-Önemli istisna `findPage(PageWindow)` davranışıdır: read-through açıksa ve `EntityPageLoader` kayıtlıysa sayfa cache miss durumunda loader PostgreSQL okuyabilir. Bu davranış, her entity query için genel fallback varmış gibi yorumlanmamalıdır.
+Önemli istisna `findPage(PageWindow)` davranışıdır: read-through açıksa ve `EntityPageLoader` kayıtlıysa sayfa cache'te yokken loader PostgreSQL okuyabilir. Bu davranış, her entity query için genel fallback varmış gibi yorumlanmamalıdır.
 
 | Operasyon | Kayıt aktif veri setindeyse | Kayıt aktif veri setinin dışındaysa | PostgreSQL davranışı | Redis/cache davranışı |
 |---|---|---|---|---|

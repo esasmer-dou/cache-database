@@ -2,6 +2,21 @@
 
 Bu modül, `cache-database` için production-benzeri e-ticaret DAO yük ve kırma testlerini içerir.
 
+## Bu Testler Neyi Kanıtlar?
+
+Bu testler, CacheDB'nin her rastgele ORM sorgusunu otomatik hızlandırdığını
+kanıtlamak için yazılmamıştır. Amaç, belirli aktif veri seti ve projection
+sözleşmelerini yük altında kanıtlamaktır:
+
+- online okumalar Redis entity veya projection yolunda kalır
+- ilişki yoğun ekranlarda tüm aggregate yüklenmez
+- write-behind baskı altında gözlemlenebilir kalır
+- Redis bellek davranışı policy ve guardrail ile sınırlandırılır
+- SQL kalıcı geçmiş ve repair kaynağı olarak kalır
+
+Bir senaryo arşiv, export, audit veya tam geçmiş verisi istiyorsa bunu normal
+Redis entity sorgusu gibi değil, açık SQL yolu olarak modelle.
+
 Kapsam:
 
 - kampanya, SMS veya push bildirimi sonrası ani trafik sıçramaları

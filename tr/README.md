@@ -29,6 +29,37 @@ davranışı ve restart/reconnect akışları için provider'a özel CI kanıtı
 SQL Server HA veya Always On ise uygulamanın kendi ortamında ayrıca
 sertifikalanması gereken bir topoloji konusudur.
 
+## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
+
+CacheDB, uygulama ile SQL veritabanı arasına konup Redis'te bulamadığı her
+kaydı otomatik olarak veritabanından çeken şeffaf bir cache katmanı değildir.
+Redis'te kayıt yoksa CacheDB'nin her sorgu şekli için SQL'i tarayıp sonucu
+Redis'e doldurması beklenmemelidir.
+
+CacheDB, her dinamik sorguyu karşılayan bire bir Hibernate/JPA alternatifi de
+değildir. CacheDB'nin doğru konumu; sınırları belirlenmiş operasyonel okuma ve
+yazma yolları için Redis-first çalışan aktif veri seti, projection ve
+read-model katmanıdır.
+
+| Net ifade | Çalışma zamanı anlamı |
+| --- | --- |
+| Redis anlık okuma yoludur | Entity ve projection repository'leri Redis'teki aktif veri setini okur. Kayıt Redis'te bulunmadığında otomatik SQL taraması yapılmaz. |
+| SQL kalıcı doğruluk kaynağıdır | PostgreSQL veya MSSQL, write-behind ile kalıcı geçmişi tutar. Arşiv, export, audit ve tam geçmiş okumaları açık SQL yollarıyla tasarlanmalıdır. |
+| Hot policy bir sözleşmedir | Kayıt aktif veri politikasının dışındaysa entity veya projection okuması boş dönebilir. Bu veri kaybı değil, beklenen davranıştır. |
+| Projection modelin parçasıdır | İlişki yoğun listeler, paneller, zaman çizelgeleri, top-N ve global sıralı ekranlar küçük read-model'ler üzerinden okunmalıdır. |
+| Aktif veri seti dışındaki yol açık olmalıdır | Aktif veri seti dışında kalan veri için sınırlı SQL endpoint'i, kayıtlı page loader, warm/backfill job'ı veya migration yolu tasarlanmalıdır. |
+
+| Sınıflandırma | CacheDB'yi bu şekilde konumlandır |
+| --- | --- |
+| BEST | Yüksek trafikli operasyonel okumalar ve kontrollü write-behind kalıcılık için aktif veri seti ORM/read-model katmanı. |
+| ACCEPTABLE | Açık SQL yolları ve route bazlı guardrail'lerle kullanılan Redis-first persistence katmanı. |
+| ANTI-PATTERN | Redis'i veritabanının önüne koyup her geniş ORM sorgusunun veriyi Redis'te bulamamasını, SQL'i taramasını, Redis'i doldurmasını ve yine de bellek açısından güvenli kalmasını beklemek. |
+
+Bu bilinçli bir tasarım tercihidir. Bir okuma/yazma yolu production'a çıkmadan
+önce şu kararlar verilmelidir: Redis'te hangi veri kalacak, hangi veri yalnızca
+SQL'de kalacak, ekranı hangi projection besleyecek ve istenen veri aktif veri
+setinin dışındaysa uygulama hangi açık yoldan cevap verecek?
+
 ## İlk Bakışta Ne İşe Yarar?
 
 CacheDB özellikle şu problemlere odaklanır:
@@ -362,7 +393,7 @@ Amaç, her production route için şu soruları kanıtlamaktır:
 7. Staging warm çalıştır; Redis hot set dolmalıdır.
 8. Side-by-side comparison çalıştır.
 9. Raporu indir.
-10. Aynı işlemi her production ekranı/API/batch/report route'u için tekrarla.
+10. Aynı işlemi her production ekranı, API, batch ve report yolu için tekrarla.
 
 %100 dönüşüm coverage, tek seçilen tabloyla değil route envanteriyle sağlanır.
 

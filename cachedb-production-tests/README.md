@@ -5,6 +5,20 @@ This module contains production-like ecommerce DAO load and breaker tests for `c
 If you are deciding which application surface to use before running these scenarios, start with the decision guide in [../docs/production-recipes.md](../docs/production-recipes.md).
 If you are preparing a public-beta release, also review [../docs/public-beta-readiness.md](../docs/public-beta-readiness.md) and [../docs/release-checklist.md](../docs/release-checklist.md).
 
+## What These Tests Prove
+
+These tests do not prove that CacheDB can make every arbitrary ORM query fast.
+They prove specific active-set and projection contracts under load:
+
+- online reads stay on Redis entity or projection paths
+- relation-heavy screens avoid full aggregate hydration
+- write-behind remains observable under pressure
+- Redis memory behavior is bounded by policy and guardrails
+- SQL remains the durable history and repair source
+
+If a scenario needs archive, export, audit, or full-history data, model it as an
+explicit SQL route instead of treating it as a normal Redis entity query.
+
 The repo also ships official CI evidence lanes:
 
 - workflow: [../.github/workflows/production-evidence.yml](../.github/workflows/production-evidence.yml)

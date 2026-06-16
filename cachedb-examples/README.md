@@ -7,6 +7,20 @@ Use it for two purposes:
 - observe Redis-first runtime behavior under demo load
 - rehearse the SQL migration planner flow against a real PostgreSQL demo schema
 
+## Product Positioning For The Demo
+
+The demo is not a transparent database-cache benchmark. It is a bounded
+active-set and projection demo:
+
+- Redis serves the online entity and projection paths.
+- PostgreSQL stays responsible for durable history and migration source data.
+- Relation-heavy screens should be read through projections or limited relation previews.
+- Archive, full-history, export, and repair flows should use explicit SQL routes.
+
+If a demo route returns no Redis data, that does not prove the durable row is
+lost. It usually means the route is outside the active data set, the projection
+was not warmed, or the screen needs an explicit SQL path.
+
 ## Spring Boot Demo
 
 Start the recommended demo with:

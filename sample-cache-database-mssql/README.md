@@ -12,6 +12,28 @@ The sample models a commerce support system:
 - Support tickets feed a small operational dashboard.
 - Customer order timelines are served from a projection/read-model instead of hydrating full aggregates.
 
+## Product Positioning In This Sample
+
+This sample does not present CacheDB as a transparent cache in front of SQL
+Server. The API is intentionally split into active Redis routes and explicit
+SQL Server routes.
+
+| Route type | Example | Data path | Contract |
+|---|---|---|---|
+| Operational entity write | `POST /api/orders` | Redis first, SQL Server write-behind | The write is accepted through CacheDB and later flushed durably. Redis residency still depends on hot policy. |
+| Operational list | `GET /api/customers/{id}/orders` | Redis projection: `OrderSummary` | The list reads a bounded read model, not the full order aggregate. |
+| Selected detail | `GET /api/orders/{id}` | Redis entity + bounded relation preview | Works for active-set data. If the order is outside the active set, use an explicit cold-detail route. |
+| Archive/history | `GET /api/orders/archive` | Direct SQL Server query | Old history, export, and audit reads must not pollute Redis by default. |
+| Dashboard | `GET /api/dashboard/commerce` | Redis projection and bounded entity query | Dashboard rows are pre-shaped for the screen. |
+
+BEST: design the active route first, define the hot policy, serve lists from
+projection repositories, and keep archive/history reads as explicit SQL Server
+queries.
+
+ANTI-PATTERN: expect a broad dynamic entity query to miss Redis, scan SQL
+Server, fill Redis, and still remain predictable under production memory
+limits.
+
 ## Dependency Model
 
 This project intentionally consumes CacheDB as an external Maven package:

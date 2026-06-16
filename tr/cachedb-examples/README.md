@@ -7,6 +7,20 @@ Bu modül, `cache-database` için çalıştırılabilir örnekler içerir.
 - Demo yük altında Redis öncelikli çalışma davranışını gözlemlemek.
 - Gerçek bir PostgreSQL demo şeması üzerinde SQL geçiş planlayıcı akışını prova etmek.
 
+## Demo İçin Ürün Konumlandırması
+
+Bu demo, şeffaf bir veritabanı cache kıyaslaması değildir. Demo şu davranışı
+gösterir: sınırları belirlenmiş aktif veri seti, projection ve açık SQL yolları.
+
+- Redis, online entity ve projection yollarını besler.
+- PostgreSQL, kalıcı geçmişten ve migration kaynak verisinden sorumludur.
+- İlişki yoğun ekranlar projection veya sınırlı ilişki önizlemesiyle okunmalıdır.
+- Arşiv, tam geçmiş, export ve repair akışları açık SQL yollarıyla tasarlanmalıdır.
+
+Bir demo yolu Redis'ten veri döndürmüyorsa bu, kalıcı satırın kaybolduğu
+anlamına gelmez. Genellikle bu yol aktif veri setinin dışındadır, projection
+warm edilmemiştir veya ekranın açık bir SQL yoluna ihtiyacı vardır.
+
 ## Spring Boot Demo
 
 Önerilen demoyu şu komutla başlat:

@@ -25,6 +25,34 @@ MSSQL has provider-specific CI coverage for write-behind, outbox, migration
 planner, concurrency, lock handling, and restart/reconnect behavior; SQL Server
 HA or Always On remains an application-environment certification item.
 
+## Product Positioning: What CacheDB Is And Is Not
+
+CacheDB is not a transparent read-through cache that sits between the
+application and SQL. A Redis miss does not mean CacheDB will automatically scan
+the database, fill Redis, and return the result for every query shape.
+
+CacheDB is also not a drop-in Hibernate/JPA replacement for arbitrary dynamic
+queries. It is a Redis-first active-data persistence and read-model layer for
+bounded operational routes.
+
+| Statement | Runtime meaning |
+| --- | --- |
+| Redis is the online read path | Entity and projection repositories read the active Redis data set. They do not automatically scan SQL on every miss. |
+| SQL is the durable source of truth | PostgreSQL or MSSQL keeps the durable history through write-behind. Archive, export, audit, and full-history reads should use explicit SQL routes. |
+| Hot policy is a contract | If a row is outside the active policy, an entity or projection read may return empty. That is expected behavior, not data loss. |
+| Projection is part of the model | Relation-heavy lists, dashboards, timelines, top-N, and globally sorted screens should use compact read models. |
+| Cold paths must be explicit | Use a bounded SQL endpoint, registered page loader, warm/backfill job, or migration route for data outside the active set. |
+
+| Classification | Use CacheDB this way |
+| --- | --- |
+| BEST | Active-set ORM/read-model layer for high-throughput operational reads and controlled write-behind durability. |
+| ACCEPTABLE | Redis-first persistence with explicit SQL cold paths and route-level guardrails. |
+| ANTI-PATTERN | Put Redis in front of the database and expect every broad ORM query to miss Redis, scan SQL, refill Redis, and stay memory-safe. |
+
+The design burden is intentional: before a route goes live, decide what belongs
+in Redis, what stays only in SQL, which projection serves the screen, and what
+happens when the requested data is outside the active set.
+
 ## What It Solves
 
 | Problem | CacheDB approach |
