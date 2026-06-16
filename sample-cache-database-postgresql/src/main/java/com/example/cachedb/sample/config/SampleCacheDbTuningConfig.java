@@ -1,8 +1,5 @@
 package com.example.cachedb.sample.config;
 
-import com.reactor.cachedb.core.cache.CachePolicy;
-import com.reactor.cachedb.core.cache.EntityHotPolicy;
-import com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.ResourceLimits;
@@ -11,8 +8,6 @@ import com.reactor.cachedb.spring.boot.CacheDatabaseConfigCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.List;
-
 @Configuration
 public class SampleCacheDbTuningConfig {
 
@@ -20,18 +15,8 @@ public class SampleCacheDbTuningConfig {
     CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
         return (builder, properties) -> builder
                 .resourceLimits(ResourceLimits.builder()
-                        .defaultCachePolicy(CachePolicy.builder()
-                                .hotEntityLimit(5_000)
-                                .pageSize(100)
-                                .entityTtlSeconds(0)
-                                .pageTtlSeconds(120)
-                                .compositeHotPolicy(EntityHotPolicyCompositeOperator.ANY, List.of(
-                                        EntityHotPolicy.timeWindow("order_date", 90L * 24L * 60L * 60L),
-                                        EntityHotPolicy.stateWindow("status", List.of("ACTIVE", "NEW", "PAID", "PICKING", "OPEN", "PENDING")),
-                                        EntityHotPolicy.stateWindow("active_status", List.of("ACTIVE"))
-                                ))
-                                .build())
-                        .maxRegisteredEntities(64)
+                        .defaultCachePolicy(SampleCachePolicies.platformDefaultPolicy())
+                        .maxRegisteredEntities(128)
                         .maxColumnsPerOperation(64)
                         .build())
                 .readShapeGuardrail(ReadShapeGuardrailConfig.builder()

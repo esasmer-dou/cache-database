@@ -2,7 +2,6 @@ package com.example.cachedb.sample.web;
 
 import com.example.cachedb.sample.domain.CustomerEntity;
 import com.example.cachedb.sample.domain.CustomerEntityCacheBinding;
-import com.example.cachedb.sample.domain.OrderEntity;
 import com.example.cachedb.sample.domain.OrderEntityCacheBinding;
 import com.example.cachedb.sample.readmodel.OrderReadModels;
 import com.reactor.cachedb.core.api.EntityRepository;

@@ -758,6 +758,19 @@ ANTI-PATTERN:
 - Exposing unbounded `findAll` list endpoints.
 - Assuming PostgreSQL and SQL Server have identical lock, isolation, and batch behavior.
 
+## Expanded API Scenarios
+
+The sample now covers several production-style route shapes. Use this table before opening Postman so each request has a clear purpose.
+
+| Scenario group | Main endpoints | What it demonstrates |
+|---|---|---|
+| Commerce timeline | `/api/customers/{id}/orders`, `/api/orders/high-value`, `/api/orders/archive` | Projection-first order timeline, explicit detail fetch, and SQL Server archive route for full history |
+| Catalog and inventory | `/api/products/active`, `/api/products/low-stock`, `/api/products/{id}/stock` | Product availability projection, state-based active set, and stock update admission |
+| Support operations | `/api/tickets/open`, `/api/tickets/{id}`, `/api/tickets/{id}/status` | Open queue reads from Redis; reopened/escalated tickets re-enter the active set |
+| Logistics tracking | `/api/shipments/active`, `/api/shipments/exceptions`, `/api/shipments/{id}` | Shipment summary projection plus bounded shipment-event preview |
+| Reporting and audit | `/api/reports/jobs/live`, `/api/reports/audit/security`, `/api/reports/audit/archive` | Live report jobs in Redis; audit/archive reads through explicit SQL Server |
+| Dashboards and tuning | `/api/dashboard/commerce`, `/api/dashboard/operations`, `/api/tuning/profiles` | Multi-projection dashboard reads and route-level tuning profiles |
+
 ## Postman
 
 Import:
@@ -766,7 +779,7 @@ Import:
 postman/cache-database-mssql-sample.postman_collection.json
 ```
 
-The collection contains the normal flow: readiness, seed, customer timeline, detail, high-value projection, archive SQL read, dashboard, update, delete, and tuning.
+The collection is grouped by scenario: platform readiness, commerce, catalog/inventory, support, logistics, reporting/audit, dashboards, and tuning profiles.
 
 ## SQL Server Notes
 
@@ -775,7 +788,13 @@ The schema is created by `src/main/resources/schema.sql`. It includes primary ke
 - `sample_orders(customer_id, order_date DESC, order_id DESC)`
 - `sample_orders(priority_score DESC, order_date DESC)`
 - `sample_order_lines(order_id, line_number)`
+- `sample_products(category, active_status, stock_status, updated_at DESC)`
 - `sample_support_tickets(status, priority, updated_at DESC)`
+- `sample_shipments(shipment_status, risk_score DESC, updated_at DESC)`
+- `sample_shipments(customer_id, updated_at DESC, shipment_id DESC)`
+- `sample_shipment_events(shipment_id, event_time DESC, event_id DESC)`
+- `sample_report_jobs(status, updated_at DESC, report_job_id DESC)`
+- `sample_audit_events(entity_name, entity_id, created_at DESC)`
 
 The seed endpoint writes through CacheDB and waits for parent rows before writing dependent child rows. That is intentional because the database has foreign keys.
 

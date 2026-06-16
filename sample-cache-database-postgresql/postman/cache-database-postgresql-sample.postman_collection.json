@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CacheDB PostgreSQL Sample",
-    "description": "End-to-end REST API flow for the CacheDB PostgreSQL sample.",
+    "description": "End-to-end REST API flow for commerce, catalog, support, logistics, reporting, and audit scenarios.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -16,150 +16,449 @@
     {
       "key": "orderId",
       "value": "10001"
+    },
+    {
+      "key": "productId",
+      "value": "10"
+    },
+    {
+      "key": "shipmentId",
+      "value": "20001"
+    },
+    {
+      "key": "ticketId",
+      "value": "1"
+    },
+    {
+      "key": "reportJobId",
+      "value": "1"
     }
   ],
   "item": [
     {
-      "name": "01 Ready",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/health/ready"
-      }
-    },
-    {
-      "name": "02 Seed Demo Data",
-      "request": {
-        "method": "POST",
-        "url": "{{baseUrl}}/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
-      }
-    },
-    {
-      "name": "03 Active Customers",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/customers/active?limit=25"
-      }
-    },
-    {
-      "name": "04 Customer Detail With Order Preview",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/customers/{{customerId}}?orderPreview=5"
-      }
-    },
-    {
-      "name": "05 Customer Order Timeline Projection",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/customers/{{customerId}}/orders?limit=20"
-      }
-    },
-    {
-      "name": "06 Order Detail With Line Preview",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/orders/{{orderId}}?linePreview=5"
-      }
-    },
-    {
-      "name": "07 High Value Orders Projection",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/orders/high-value?minimumAmount=500&limit=25"
-      }
-    },
-    {
-      "name": "08 Archive Orders From SQL",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/orders/archive?customerId={{customerId}}&limit=20"
-      }
-    },
-    {
-      "name": "09 Commerce Dashboard",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/dashboard/commerce?limit=25"
-      }
-    },
-    {
-      "name": "10 Active Products",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/products/active?category=electronics&limit=20"
-      }
-    },
-    {
-      "name": "11 Open Tickets",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/tickets/open?limit=25"
-      }
-    },
-    {
-      "name": "12 Create Customer",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
+      "name": "00 Platform",
+      "item": [
+        {
+          "name": "Ready",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/health/ready"
           }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"customerId\": 999,\n  \"taxNumber\": \"TAX-999999\",\n  \"customerType\": \"CORPORATE\",\n  \"segment\": \"VIP\",\n  \"status\": \"ACTIVE\"\n}"
         },
-        "url": "{{baseUrl}}/api/customers"
-      }
-    },
-    {
-      "name": "13 Create Order",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
+        {
+          "name": "Seed Demo Data",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
           }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"orderId\": 999001,\n  \"customerId\": 999,\n  \"orderAmount\": 850.50,\n  \"currencyCode\": \"USD\",\n  \"orderType\": \"EXPRESS\",\n  \"status\": \"NEW\",\n  \"lineCount\": 0\n}"
         },
-        "url": "{{baseUrl}}/api/orders"
-      }
-    },
-    {
-      "name": "14 Update Order Status",
-      "request": {
-        "method": "PATCH",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
+        {
+          "name": "Current Tuning Summary",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/tuning"
           }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"status\": \"PAID\"\n}"
         },
-        "url": "{{baseUrl}}/api/orders/999001/status"
-      }
+        {
+          "name": "Route Tuning Profiles",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/tuning/profiles"
+          }
+        }
+      ]
     },
     {
-      "name": "15 Delete Order",
-      "request": {
-        "method": "DELETE",
-        "url": "{{baseUrl}}/api/orders/999001"
-      }
+      "name": "01 Commerce: Customer Orders",
+      "item": [
+        {
+          "name": "Active Customers",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/customers/active?limit=25"
+          }
+        },
+        {
+          "name": "Customer Detail With Order Preview",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/customers/{{customerId}}?orderPreview=5"
+          }
+        },
+        {
+          "name": "Customer Order Timeline Projection",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/customers/{{customerId}}/orders?limit=20"
+          }
+        },
+        {
+          "name": "Order Detail With Line Preview",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/orders/{{orderId}}?linePreview=5"
+          }
+        },
+        {
+          "name": "High Value Orders Projection",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/orders/high-value?minimumAmount=500&limit=25"
+          }
+        },
+        {
+          "name": "Archive Orders From SQL",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/orders/archive?customerId={{customerId}}&limit=20"
+          }
+        },
+        {
+          "name": "Create Customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": 999,\n  \"taxNumber\": \"TAX-999999\",\n  \"customerType\": \"CORPORATE\",\n  \"segment\": \"VIP\",\n  \"status\": \"ACTIVE\"\n}"
+            },
+            "url": "{{baseUrl}}/api/customers"
+          }
+        },
+        {
+          "name": "Create Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 999001,\n  \"customerId\": 999,\n  \"orderAmount\": 850.50,\n  \"currencyCode\": \"USD\",\n  \"orderType\": \"EXPRESS\",\n  \"status\": \"NEW\",\n  \"lineCount\": 0\n}"
+            },
+            "url": "{{baseUrl}}/api/orders"
+          }
+        },
+        {
+          "name": "Update Order Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"PAID\"\n}"
+            },
+            "url": "{{baseUrl}}/api/orders/999001/status"
+          }
+        },
+        {
+          "name": "Delete Order",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/orders/999001"
+          }
+        }
+      ]
     },
     {
-      "name": "16 Tuning Summary",
-      "request": {
-        "method": "GET",
-        "url": "{{baseUrl}}/api/tuning"
-      }
+      "name": "02 Catalog And Inventory",
+      "item": [
+        {
+          "name": "Active Products Projection",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/products/active?category=electronics&limit=20"
+          }
+        },
+        {
+          "name": "Low Stock Products Projection",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/products/low-stock?limit=25"
+          }
+        },
+        {
+          "name": "Product Detail From Active Set",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/products/{{productId}}"
+          }
+        },
+        {
+          "name": "Inactive Product Archive From SQL",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/products/archive?limit=25"
+          }
+        },
+        {
+          "name": "Update Product Stock",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"stockQuantity\": 6,\n  \"reservedQuantity\": 1\n}"
+            },
+            "url": "{{baseUrl}}/api/products/{{productId}}/stock"
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Support Operations",
+      "item": [
+        {
+          "name": "Open Tickets",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/tickets/open?limit=25"
+          }
+        },
+        {
+          "name": "Ticket Detail From Active Set",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/tickets/{{ticketId}}"
+          }
+        },
+        {
+          "name": "Create Support Ticket",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": 9999,\n  \"customerId\": 1,\n  \"priority\": \"HIGH\",\n  \"status\": \"OPEN\",\n  \"subject\": \"Payment review needed\"\n}"
+            },
+            "url": "{{baseUrl}}/api/tickets"
+          }
+        },
+        {
+          "name": "Escalate Support Ticket",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ESCALATED\",\n  \"priority\": \"HIGH\"\n}"
+            },
+            "url": "{{baseUrl}}/api/tickets/9999/status"
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Logistics Tracking",
+      "item": [
+        {
+          "name": "Active Shipments Projection",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/shipments/active?limit=25"
+          }
+        },
+        {
+          "name": "Shipment Exceptions Projection",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/shipments/exceptions?limit=25"
+          }
+        },
+        {
+          "name": "Customer Shipments Projection",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/shipments/customer/{{customerId}}?limit=25"
+          }
+        },
+        {
+          "name": "Shipment Detail With Event Preview",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/shipments/{{shipmentId}}?eventPreview=5"
+          }
+        },
+        {
+          "name": "Shipment Events",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/shipments/{{shipmentId}}/events?limit=20"
+          }
+        },
+        {
+          "name": "Delivered Shipment Archive From SQL",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/shipments/archive?customerId={{customerId}}&limit=25"
+          }
+        },
+        {
+          "name": "Create Shipment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shipmentId\": 999901,\n  \"customerId\": 1,\n  \"trackingNumber\": \"TRK-999901\",\n  \"carrierCode\": \"DHL\",\n  \"shipmentStatus\": \"IN_TRANSIT\",\n  \"currentCity\": \"Istanbul\"\n}"
+            },
+            "url": "{{baseUrl}}/api/shipments"
+          }
+        },
+        {
+          "name": "Add Shipment Event",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": 99990101,\n  \"eventType\": \"DELAY\",\n  \"eventCity\": \"Ankara\",\n  \"severity\": \"WARN\",\n  \"description\": \"Delay reported by carrier\"\n}"
+            },
+            "url": "{{baseUrl}}/api/shipments/999901/events"
+          }
+        },
+        {
+          "name": "Update Shipment Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shipmentStatus\": \"DELAYED\",\n  \"currentCity\": \"Ankara\"\n}"
+            },
+            "url": "{{baseUrl}}/api/shipments/999901/status"
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Reporting And Audit",
+      "item": [
+        {
+          "name": "Live Report Jobs",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/reports/jobs/live?limit=25"
+          }
+        },
+        {
+          "name": "Report Jobs By Type",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/reports/jobs/type/ORDER_SUMMARY?limit=25"
+          }
+        },
+        {
+          "name": "Create Report Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportJobId\": 999,\n  \"reportType\": \"ORDER_SUMMARY\",\n  \"status\": \"QUEUED\",\n  \"requestedBy\": \"ops@example.com\"\n}"
+            },
+            "url": "{{baseUrl}}/api/reports/jobs"
+          }
+        },
+        {
+          "name": "Complete Report Job",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"COMPLETED\",\n  \"rowCount\": 12500\n}"
+            },
+            "url": "{{baseUrl}}/api/reports/jobs/999/status"
+          }
+        },
+        {
+          "name": "Security Audit Events From Active Set",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/reports/audit/security?limit=25"
+          }
+        },
+        {
+          "name": "Audit Archive From SQL",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/reports/audit/archive?entityName=CustomerEntity&entityId={{customerId}}&limit=25"
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Dashboards",
+      "item": [
+        {
+          "name": "Commerce Dashboard",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/dashboard/commerce?limit=25"
+          }
+        },
+        {
+          "name": "Operations Dashboard",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/dashboard/operations?limit=25"
+          }
+        }
+      ]
     }
   ]
 }

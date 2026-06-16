@@ -1,5 +1,6 @@
 package com.example.cachedb.sample.web;
 
+import com.example.cachedb.sample.config.SampleCachePolicies;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.starter.CacheDatabase;
@@ -42,6 +43,11 @@ public class TuningController {
                         "Set Redis maxmemory and keep maxmemory-policy=noeviction for this sample."
                 )
         );
+    }
+
+    @GetMapping("/profiles")
+    public List<SampleCachePolicies.PolicyProfile> profiles() {
+        return SampleCachePolicies.profiles();
     }
 
     public record TuningResponse(

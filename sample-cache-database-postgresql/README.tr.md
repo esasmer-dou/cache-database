@@ -718,15 +718,28 @@ ANTI-PATTERN:
 
 | Alan | Örnek ayar | Neden? |
 |---|---|---|
-| Aktif veri penceresi | `hotEntityLimit=5000` | Yerel testte Redis büyümesini sınırlar |
+| Aktif veri penceresi | Varsayılan `hotEntityLimit=25_000`, route profillerinde `150_000` seviyesine kadar | Redis büyümesini sınırlarken farklı gerçek hayat okuma sözleşmelerini gösterir |
 | Entity TTL | `0` | Bu örnekte entity kayıtları TTL ile silinmez |
-| Sayfa TTL | `120s` | Sayfa cache’i kısa süreli tutulur |
-| Aktif veri politikası | son 90 gün veya aktif operasyon durumları | Sadece LRU’dan daha gerçekçi bir iş kuralı sağlar |
+| Sayfa TTL | Varsayılan `90s`; katalog ve destek profillerinde daha kısa | Sayfa cache’i kısa süreli tutulur |
+| Aktif veri politikası | route’a göre değişen zaman/durum politikaları | Ticaret, katalog, destek, lojistik, raporlama ve audit için farklı kabul profilleri gösterir |
 | Entity sorgu limiti | `250` | Büyük entity taramalarını engeller |
 | Projection sorgu limiti | `1000` | Zaman çizelgesi penceresine izin verir, sınırsız okumayı engeller |
 | Redis koruma eşikleri | uyarı %75, kritik %88 | Bellek baskısını erken görünür yapar |
 
 Production’da Redis `maxmemory` mutlaka verilmelidir, `maxmemory-policy=noeviction` korunmalıdır, bağlantı havuzları hedef trafiğe göre ayarlanmalıdır ve yönetim ekranı gateway/auth arkasında tutulmalıdır.
+
+## Genişletilmiş API Senaryoları
+
+Örnek proje artık birden fazla production tarzı okuma/yazma şeklini gösterir. Postman’ı açmadan önce bu tabloya bakarsan hangi çağrının neyi kanıtladığı daha net olur.
+
+| Senaryo grubu | Ana endpoint’ler | Ne gösterir? |
+|---|---|---|
+| Ticaret zaman çizelgesi | `/api/customers/{id}/orders`, `/api/orders/high-value`, `/api/orders/archive` | Projection-first sipariş listesi, açık detay yükleme ve tam geçmiş için SQL arşiv yolu |
+| Katalog ve stok | `/api/products/active`, `/api/products/low-stock`, `/api/products/{id}/stock` | Ürün uygunluk projection’ı, durum bazlı aktif veri seti ve stok update kabul davranışı |
+| Destek operasyonu | `/api/tickets/open`, `/api/tickets/{id}`, `/api/tickets/{id}/status` | Açık kuyruk Redis’ten okunur; yeniden açılan veya eskale edilen kayıt aktif sete döner |
+| Lojistik takip | `/api/shipments/active`, `/api/shipments/exceptions`, `/api/shipments/{id}` | Gönderi özet projection’ı ve sınırlı olay önizlemesi |
+| Raporlama ve audit | `/api/reports/jobs/live`, `/api/reports/audit/security`, `/api/reports/audit/archive` | Canlı rapor işleri Redis’te, audit/arşiv okumaları açık SQL yolunda kalır |
+| Paneller ve tuning | `/api/dashboard/commerce`, `/api/dashboard/operations`, `/api/tuning/profiles` | Birden fazla projection’dan panel okuması ve route bazlı tuning profilleri |
 
 ## Postman
 
@@ -736,7 +749,7 @@ Production’da Redis `maxmemory` mutlaka verilmelidir, `maxmemory-policy=noevic
 postman/cache-database-postgresql-sample.postman_collection.json
 ```
 
-Koleksiyon; sağlık kontrolü, veri üretme, müşteri sipariş listesi, detay, yüksek değerli projection, arşiv SQL okuması, panel, update, delete ve tuning çağrılarını içerir.
+Koleksiyon senaryoya göre gruplanmıştır: platform hazırlığı, ticaret, katalog/stok, destek, lojistik, raporlama/audit, paneller ve tuning profilleri.
 
 ## PostgreSQL Notları
 
@@ -745,7 +758,13 @@ Koleksiyon; sağlık kontrolü, veri üretme, müşteri sipariş listesi, detay,
 - `sample_orders(customer_id, order_date DESC, order_id DESC)`
 - `sample_orders(priority_score DESC, order_date DESC)`
 - `sample_order_lines(order_id, line_number)`
+- `sample_products(category, active_status, stock_status, updated_at DESC)`
 - `sample_support_tickets(status, priority, updated_at DESC)`
+- `sample_shipments(shipment_status, risk_score DESC, updated_at DESC)`
+- `sample_shipments(customer_id, updated_at DESC, shipment_id DESC)`
+- `sample_shipment_events(shipment_id, event_time DESC, event_id DESC)`
+- `sample_report_jobs(status, updated_at DESC, report_job_id DESC)`
+- `sample_audit_events(entity_name, entity_id, created_at DESC)`
 
 Seed endpoint’i veriyi CacheDB üzerinden yazar ve alt kayıtları yazmadan önce üst kayıtların SQL tarafına düşmesini bekler. Bunun nedeni şemada foreign key bulunmasıdır.
 

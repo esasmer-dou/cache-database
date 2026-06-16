@@ -758,6 +758,19 @@ ANTI-PATTERN:
 - Sınırsız `findAll` benzeri çağrı açmak.
 - PostgreSQL ve SQL Server’ın kilit, isolation ve batch davranışının bire bir aynı olduğunu varsaymak.
 
+## Genişletilmiş API Senaryoları
+
+Örnek proje artık birden fazla production tarzı okuma/yazma şeklini gösterir. Postman’ı açmadan önce bu tabloya bakarsan hangi çağrının neyi kanıtladığı daha net olur.
+
+| Senaryo grubu | Ana endpoint’ler | Ne gösterir? |
+|---|---|---|
+| Ticaret zaman çizelgesi | `/api/customers/{id}/orders`, `/api/orders/high-value`, `/api/orders/archive` | Projection-first sipariş listesi, açık detay yükleme ve tam geçmiş için SQL Server arşiv yolu |
+| Katalog ve stok | `/api/products/active`, `/api/products/low-stock`, `/api/products/{id}/stock` | Ürün uygunluk projection’ı, durum bazlı aktif veri seti ve stok update kabul davranışı |
+| Destek operasyonu | `/api/tickets/open`, `/api/tickets/{id}`, `/api/tickets/{id}/status` | Açık kuyruk Redis’ten okunur; yeniden açılan veya eskale edilen kayıt aktif sete döner |
+| Lojistik takip | `/api/shipments/active`, `/api/shipments/exceptions`, `/api/shipments/{id}` | Gönderi özet projection’ı ve sınırlı olay önizlemesi |
+| Raporlama ve audit | `/api/reports/jobs/live`, `/api/reports/audit/security`, `/api/reports/audit/archive` | Canlı rapor işleri Redis’te, audit/arşiv okumaları açık SQL Server yolunda kalır |
+| Paneller ve tuning | `/api/dashboard/commerce`, `/api/dashboard/operations`, `/api/tuning/profiles` | Birden fazla projection’dan panel okuması ve route bazlı tuning profilleri |
+
 ## Postman
 
 İçe aktarılacak dosya:
@@ -766,7 +779,7 @@ ANTI-PATTERN:
 postman/cache-database-mssql-sample.postman_collection.json
 ```
 
-Koleksiyon; sağlık kontrolü, veri üretme, müşteri sipariş listesi, detay, yüksek değerli projection, arşiv SQL okuması, panel, update, delete ve tuning çağrılarını içerir.
+Koleksiyon senaryoya göre gruplanmıştır: platform hazırlığı, ticaret, katalog/stok, destek, lojistik, raporlama/audit, paneller ve tuning profilleri.
 
 ## SQL Server Notları
 
@@ -775,7 +788,13 @@ Koleksiyon; sağlık kontrolü, veri üretme, müşteri sipariş listesi, detay,
 - `sample_orders(customer_id, order_date DESC, order_id DESC)`
 - `sample_orders(priority_score DESC, order_date DESC)`
 - `sample_order_lines(order_id, line_number)`
+- `sample_products(category, active_status, stock_status, updated_at DESC)`
 - `sample_support_tickets(status, priority, updated_at DESC)`
+- `sample_shipments(shipment_status, risk_score DESC, updated_at DESC)`
+- `sample_shipments(customer_id, updated_at DESC, shipment_id DESC)`
+- `sample_shipment_events(shipment_id, event_time DESC, event_id DESC)`
+- `sample_report_jobs(status, updated_at DESC, report_job_id DESC)`
+- `sample_audit_events(entity_name, entity_id, created_at DESC)`
 
 Seed endpoint’i veriyi CacheDB üzerinden yazar ve alt kayıtları yazmadan önce üst kayıtların SQL tarafına düşmesini bekler. Bunun nedeni şemada foreign key bulunmasıdır.
 

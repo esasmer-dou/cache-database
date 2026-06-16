@@ -1,0 +1,129 @@
+package com.example.cachedb.sample.web;
+
+import com.example.cachedb.sample.domain.AuditEventEntity;
+import com.example.cachedb.sample.domain.AuditEventEntityCacheBinding;
+import com.example.cachedb.sample.domain.ReportJobEntity;
+import com.example.cachedb.sample.domain.ReportJobEntityCacheBinding;
+import com.reactor.cachedb.core.api.EntityRepository;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.time.Instant;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/reports")
+public class ReportingController {
+
+    private static final String AUDIT_ARCHIVE_SQL = """
+            SELECT audit_event_id, entity_name, entity_id, event_type, severity, actor, created_at, message
+            FROM sample_audit_events
+            WHERE entity_name = ? AND entity_id = ?
+            ORDER BY created_at DESC, audit_event_id DESC
+            OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
+            """;
+
+    private final EntityRepository<ReportJobEntity, Long> reportJobRepository;
+    private final EntityRepository<AuditEventEntity, Long> auditEventRepository;
+    private final JdbcTemplate jdbcTemplate;
+
+    public ReportingController(
+            EntityRepository<ReportJobEntity, Long> reportJobRepository,
+            EntityRepository<AuditEventEntity, Long> auditEventRepository,
+            JdbcTemplate jdbcTemplate
+    ) {
+        this.reportJobRepository = reportJobRepository;
+        this.auditEventRepository = auditEventRepository;
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    @GetMapping("/jobs/live")
+    public List<ReportJobEntity> liveJobs(@RequestParam(defaultValue = "25") int limit) {
+        return ReportJobEntityCacheBinding.liveReportJobs(reportJobRepository, clamp(limit, 1, 500));
+    }
+
+    @GetMapping("/jobs/type/{reportType}")
+    public List<ReportJobEntity> jobsByType(
+            @PathVariable String reportType,
+            @RequestParam(defaultValue = "25") int limit
+    ) {
+        return ReportJobEntityCacheBinding.reportJobsByType(reportJobRepository, reportType, clamp(limit, 1, 500));
+    }
+
+    @PostMapping("/jobs")
+    public ReportJobEntity createJob(@RequestBody CreateReportJobRequest request) {
+        long now = Instant.now().getEpochSecond();
+        ReportJobEntity job = new ReportJobEntity();
+        job.reportJobId = request.reportJobId();
+        job.reportType = request.reportType() == null ? "ORDER_SUMMARY" : request.reportType();
+        job.status = request.status() == null ? "QUEUED" : request.status();
+        job.requestedBy = request.requestedBy() == null ? "sample-user" : request.requestedBy();
+        job.createdAt = now;
+        job.updatedAt = now;
+        job.rowCount = 0;
+        job.failureReason = null;
+        return reportJobRepository.save(job);
+    }
+
+    @PatchMapping("/jobs/{reportJobId}/status")
+    public ReportJobEntity updateJobStatus(
+            @PathVariable long reportJobId,
+            @RequestBody UpdateReportJobStatusRequest request
+    ) {
+        ReportJobEntity job = reportJobRepository.findById(reportJobId)
+                .orElseThrow(() -> new ResourceNotFoundException("Report job not found in active set: " + reportJobId));
+        job.status = request.status();
+        job.rowCount = request.rowCount() == null ? job.rowCount : request.rowCount();
+        job.failureReason = request.failureReason();
+        job.updatedAt = Instant.now().getEpochSecond();
+        return reportJobRepository.save(job);
+    }
+
+    @GetMapping("/audit/security")
+    public List<AuditEventEntity> securityAuditEvents(@RequestParam(defaultValue = "25") int limit) {
+        return AuditEventEntityCacheBinding.securityAuditEvents(auditEventRepository, clamp(limit, 1, 100));
+    }
+
+    @GetMapping("/audit/archive")
+    public List<AuditEventEntity> auditArchive(
+            @RequestParam String entityName,
+            @RequestParam long entityId,
+            @RequestParam(defaultValue = "50") int limit
+    ) {
+        return jdbcTemplate.query(
+                AUDIT_ARCHIVE_SQL,
+                (resultSet, rowNumber) -> {
+                    AuditEventEntity event = new AuditEventEntity();
+                    event.auditEventId = resultSet.getLong("audit_event_id");
+                    event.entityName = resultSet.getString("entity_name");
+                    event.entityId = resultSet.getLong("entity_id");
+                    event.eventType = resultSet.getString("event_type");
+                    event.severity = resultSet.getString("severity");
+                    event.actor = resultSet.getString("actor");
+                    event.createdAt = resultSet.getLong("created_at");
+                    event.message = resultSet.getString("message");
+                    return event;
+                },
+                entityName,
+                entityId,
+                clamp(limit, 1, 500)
+        );
+    }
+
+    private int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(value, max));
+    }
+
+    public record CreateReportJobRequest(Long reportJobId, String reportType, String status, String requestedBy) {
+    }
+
+    public record UpdateReportJobStatusRequest(String status, Integer rowCount, String failureReason) {
+    }
+}
