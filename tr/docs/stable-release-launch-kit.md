@@ -19,10 +19,10 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Resmi Dağıtım Kanalı
 
-`v0.1.0` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
+`v0.2.0` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
 
 ```text
-cache-database-0.1.0-github-release.zip
+cache-database-0.2.0-github-release.zip
 ```
 
 Paket; Maven modül jar'larını, source jar'larını, javadoc dosyalarını, README'yi,
@@ -32,12 +32,14 @@ paket dağıtım kanalı GitHub Release'tir.
 
 ## Release Konumlandırması
 
-`cache-database v0.1.0`
+`cache-database v0.2.0`
 
-CacheDB `v0.1.0`, ilk beta olmayan framework release'idir. Core Redis-first
-data-layer modeli, compile-time generated API'ler, sınırlı hot-set policy'leri,
-projection/read-model rehberliği, varsayılan PostgreSQL provider yolu ve
-production evidence kapıları bu release ile stable hatta taşınır.
+CacheDB `v0.2.0`, mevcut SQL tabanlı uygulamaları kontrollü biçimde CacheDB'ye
+taşımaya odaklanan stable framework release'idir. `v0.1.0` ile gelen
+Redis-first data-layer modeli, compile-time generated API'ler, sınırlı hot-set
+policy'leri ve projection/read-model rehberliği korunur; üzerine
+JDBC-backed warm/read-through, PostgreSQL ve MSSQL örnek kapsamı ve çalıştırılabilir
+sample load gate'leri eklenir.
 
 Bu release, her uygulamanın kendi production trafiğini ek doğrulama olmadan
 CacheDB'ye kesebileceği anlamına gelmez. Cutover öncesinde her uygulama için
@@ -54,24 +56,27 @@ kanıtlanmalıdır.
 ## Release Note Şablonu
 
 ```markdown
-## cache-database v0.1.0
+## cache-database v0.2.0
 
-Bu release, CacheDB'nin ilk beta olmayan framework release'idir.
+Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uygulanabilir hale getirir.
 
 ### Stable olan alanlar
 
 - Sınırlı hot-set policy'leriyle Redis-first entity repository'leri.
 - Compile-time generated metadata ve ORM benzeri API'ler.
-- Varsayılan kalıcı SQL provider olarak PostgreSQL.
+- PostgreSQL ve açıkça seçilen MSSQL kalıcı SQL provider yolları.
+- `registerJdbcBacked(...)` ile generated JDBC-backed binding'ler.
+- Route'a göre şekillenen query loader'lar üzerinden kontrollü read-through ve warm/backfill.
 - İlişki yoğun ve global sıralı route'lar için projection/read-model reçeteleri.
 - Şema keşfi, warm-up, comparison ve rapor üretimi için Migration Planner akışı.
 - Çok pod coordination, leader lease ve lokal Docker HA preflight evidence.
+- Docker Compose, Postman koleksiyonu ve yerel hot-route load script'leri olan PostgreSQL ve MSSQL REST örnekleri.
 - Resmi paket dağıtım kanalı olarak GitHub Release asset'i.
 
 ### Provider sınırları
 
-- PostgreSQL varsayılan stable provider yoludur.
-- MSSQL, SQL Server CI kanıtı olan açıkça seçilen provider olarak kullanılabilir.
+- PostgreSQL varsayılan provider yoludur.
+- MSSQL, SQL Server sample ve integration kanıtı olan açıkça seçilen provider olarak kullanılabilir.
 - SQL Server HA veya Always On hazırlığı, production iddiasının parçasıysa tüketen uygulamanın staging topolojisinde ayrıca kanıtlanmalıdır.
 - Maven Central bu release için opsiyoneldir; seçilen resmi dağıtım kanalı GitHub Release'tir.
 
@@ -85,12 +90,12 @@ comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
 ## Yayın Kontrol Listesi
 
 - `pom.xml` ve tüm modül parent versiyonları stable sürümü kullanıyor.
-- Release note `docs/releases/v0.1.0.md` altında var.
+- Release note `docs/releases/v0.2.0.md` altında var.
 - `mvn -DskipTests package` geçiyor.
 - Public API compatibility kontrolü geçiyor.
 - Türkçe dokümantasyon kalite kontrolü geçiyor.
 - Lokal Docker HA preflight geçiyor veya son CI evidence yeşil.
 - `Public Beta Readiness` ve `Production Evidence` release commit'i için yeşil.
-- `Production GA Release Readiness`, `v0.1.0` için yeşil.
+- `Production GA Release Readiness`, `v0.2.0` için yeşil.
 - GitHub Release prerelease olarak işaretli değil.
-- GitHub Release asset'i `cache-database-0.1.0-github-release.zip` olarak eklendi.
+- GitHub Release asset'i `cache-database-0.2.0-github-release.zip` olarak eklendi.

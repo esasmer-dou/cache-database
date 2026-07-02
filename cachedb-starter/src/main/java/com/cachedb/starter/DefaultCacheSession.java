@@ -6,8 +6,12 @@ import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
+import com.reactor.cachedb.core.page.EntityByIdLoader;
 import com.reactor.cachedb.core.page.EntityPageLoader;
+import com.reactor.cachedb.core.page.EntityQueryLoader;
+import com.reactor.cachedb.core.page.NoOpEntityByIdLoader;
 import com.reactor.cachedb.core.page.NoOpEntityPageLoader;
+import com.reactor.cachedb.core.page.NoOpEntityQueryLoader;
 import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.registry.EntityBinding;
@@ -98,6 +102,12 @@ public final class DefaultCacheSession implements CacheSession {
         EntityPageLoader<T> pageLoader = binding.pageLoader() == null
                 ? new NoOpEntityPageLoader<>()
                 : binding.pageLoader();
+        EntityByIdLoader<T, ID> byIdLoader = binding.byIdLoader() == null
+                ? new NoOpEntityByIdLoader<>()
+                : binding.byIdLoader();
+        EntityQueryLoader<T> queryLoader = binding.queryLoader() == null
+                ? new NoOpEntityQueryLoader<>()
+                : binding.queryLoader();
         CachePolicy resolvedCachePolicy = cachePolicy != null
                 ? cachePolicy
                 : (binding.cachePolicy() == null ? defaultPolicy : binding.cachePolicy());
@@ -131,7 +141,10 @@ public final class DefaultCacheSession implements CacheSession {
                 config.relations(),
                 config.queryIndex(),
                 pageLoader,
+                byIdLoader,
+                queryLoader,
                 config.pageCache(),
+                config.readThrough(),
                 config.readShapeGuardrail(),
                 new RedisPageCacheManager<>(
                         foregroundJedis,

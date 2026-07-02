@@ -115,3 +115,22 @@ CREATE INDEX IF NOT EXISTS idx_sample_shipment_events_shipment_time ON sample_sh
 CREATE INDEX IF NOT EXISTS idx_sample_report_jobs_live ON sample_report_jobs(status, updated_at DESC, report_job_id DESC);
 CREATE INDEX IF NOT EXISTS idx_sample_audit_events_entity_time ON sample_audit_events(entity_name, entity_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sample_audit_events_security ON sample_audit_events(severity, created_at DESC);
+
+ALTER TABLE sample_customers ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 0;
+ALTER TABLE sample_customers ADD COLUMN IF NOT EXISTS deleted VARCHAR(16);
+ALTER TABLE sample_products ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 0;
+ALTER TABLE sample_products ADD COLUMN IF NOT EXISTS deleted VARCHAR(16);
+ALTER TABLE sample_orders ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 0;
+ALTER TABLE sample_orders ADD COLUMN IF NOT EXISTS deleted VARCHAR(16);
+ALTER TABLE sample_order_lines ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 0;
+ALTER TABLE sample_order_lines ADD COLUMN IF NOT EXISTS deleted VARCHAR(16);
+ALTER TABLE sample_support_tickets ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 0;
+ALTER TABLE sample_support_tickets ADD COLUMN IF NOT EXISTS deleted VARCHAR(16);
+ALTER TABLE sample_shipments ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 0;
+ALTER TABLE sample_shipments ADD COLUMN IF NOT EXISTS deleted VARCHAR(16);
+ALTER TABLE sample_shipment_events ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 0;
+ALTER TABLE sample_shipment_events ADD COLUMN IF NOT EXISTS deleted VARCHAR(16);
+ALTER TABLE sample_report_jobs ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 0;
+ALTER TABLE sample_report_jobs ADD COLUMN IF NOT EXISTS deleted VARCHAR(16);
+ALTER TABLE sample_audit_events ADD COLUMN IF NOT EXISTS entity_version BIGINT DEFAULT 0;
+ALTER TABLE sample_audit_events ADD COLUMN IF NOT EXISTS deleted VARCHAR(16);

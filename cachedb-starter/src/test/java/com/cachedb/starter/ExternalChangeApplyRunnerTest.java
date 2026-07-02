@@ -24,6 +24,8 @@ import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.core.relation.RelationBatchLoader;
 import com.reactor.cachedb.core.page.EntityPageLoader;
+import com.reactor.cachedb.core.page.NoOpEntityByIdLoader;
+import com.reactor.cachedb.core.page.NoOpEntityQueryLoader;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -190,7 +192,9 @@ class ExternalChangeApplyRunnerTest {
                 codec,
                 CachePolicy.defaults(),
                 null,
-                null
+                null,
+                new NoOpEntityByIdLoader<>(),
+                new NoOpEntityQueryLoader<>()
         );
         private final EntityRegistry registry = new SingleEntityRegistry(binding);
         private final CacheSession session = new RecordingCacheSession(repository);

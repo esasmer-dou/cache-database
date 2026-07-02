@@ -7,6 +7,7 @@ import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -21,6 +22,7 @@ public final class CacheDatabaseBootstrap {
     private CacheDatabaseConfig config = CacheDatabaseConfig.defaults();
     private final ArrayList<Consumer<CacheDatabase>> registrations = new ArrayList<>();
     private final ArrayList<Consumer<CacheDatabaseConfig.Builder>> configCustomizers = new ArrayList<>();
+    private final ArrayList<CacheWarmPlan> warmOnStartPlans = new ArrayList<>();
 
     private CacheDatabaseBootstrap(DataSource dataSource) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
@@ -133,6 +135,21 @@ public final class CacheDatabaseBootstrap {
         return this;
     }
 
+    public CacheDatabaseBootstrap warmOnStart(CacheWarmPlan plan) {
+        this.warmOnStartPlans.add(Objects.requireNonNull(plan, "plan"));
+        return this;
+    }
+
+    public CacheDatabaseBootstrap warmOnStart(Collection<CacheWarmPlan> plans) {
+        if (plans == null || plans.isEmpty()) {
+            return this;
+        }
+        for (CacheWarmPlan plan : plans) {
+            warmOnStart(plan);
+        }
+        return this;
+    }
+
     public CacheDatabase build() {
         CacheDatabaseConfig resolvedConfig = previewConfig();
         JedisPooled resolvedForeground = foregroundJedis;
@@ -175,6 +192,7 @@ public final class CacheDatabaseBootstrap {
         CacheDatabase cacheDatabase = build();
         try {
             cacheDatabase.start();
+            cacheDatabase.warmAll(warmOnStartPlans);
             return cacheDatabase;
         } catch (RuntimeException exception) {
             try {

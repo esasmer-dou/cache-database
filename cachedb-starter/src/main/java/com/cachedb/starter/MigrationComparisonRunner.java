@@ -199,32 +199,40 @@ final class MigrationComparisonRunner {
     ) {
         String sortDirection = "ASC".equalsIgnoreCase(plan.request().sortDirection()) ? "ASC" : "DESC";
         MigrationSqlDialect effectiveDialect = dialect == null ? MigrationSqlDialect.POSTGRES : dialect;
+        String safeChildTableName = MigrationPlanner.requireSqlIdentifier(childTableName, "child table", true);
+        String safeRelationColumn = MigrationPlanner.requireSqlIdentifier(plan.request().relationColumn(), "relation column", false);
+        String safeSortColumn = MigrationPlanner.requireSqlIdentifier(plan.request().sortColumn(), "sort column", false);
+        String safeChildPrimaryKeyColumn = MigrationPlanner.requireSqlIdentifier(plan.request().childPrimaryKeyColumn(), "child primary key column", false);
         if (plan.rankedProjectionRequired()) {
             return """
-                    SELECT *
+                    SELECT source.%s AS %s
                     FROM %s source
                     ORDER BY %s %s, %s DESC
                     %s
                     """.formatted(
-                    childTableName,
-                    plan.request().sortColumn(),
+                    safeChildPrimaryKeyColumn,
+                    safeChildPrimaryKeyColumn,
+                    safeChildTableName,
+                    safeSortColumn,
                     sortDirection,
-                    plan.request().childPrimaryKeyColumn(),
+                    safeChildPrimaryKeyColumn,
                     effectiveDialect.parameterizedLimitTail()
             ).trim();
         }
         return """
-                SELECT *
+                SELECT source.%s AS %s
                 FROM %s source
                 WHERE %s = :sample_root_id
                 ORDER BY %s %s, %s DESC
                 %s
                 """.formatted(
-                childTableName,
-                plan.request().relationColumn(),
-                plan.request().sortColumn(),
+                safeChildPrimaryKeyColumn,
+                safeChildPrimaryKeyColumn,
+                safeChildTableName,
+                safeRelationColumn,
+                safeSortColumn,
                 sortDirection,
-                plan.request().childPrimaryKeyColumn(),
+                safeChildPrimaryKeyColumn,
                 effectiveDialect.parameterizedLimitTail()
         ).trim();
     }
@@ -244,6 +252,8 @@ final class MigrationComparisonRunner {
             Object coerced = coerceLiteral(request.sampleRootId().trim(), relationColumn);
             return List.of(new SampleRoute(String.valueOf(coerced), coerced));
         }
+        String safeRelationColumn = MigrationPlanner.requireSqlIdentifier(plan.request().relationColumn(), "relation column", false);
+        String safeChildTableName = MigrationPlanner.requireSqlIdentifier(childTable.qualifiedTableName(), "child table", true);
         String sql = """
                 SELECT %s AS cachedb_sample_root_id, COUNT(*) AS cachedb_child_count
                 FROM %s
@@ -252,11 +262,11 @@ final class MigrationComparisonRunner {
                 ORDER BY COUNT(*) DESC, %s ASC
                 %s
                 """.formatted(
-                plan.request().relationColumn(),
-                childTable.qualifiedTableName(),
-                plan.request().relationColumn(),
-                plan.request().relationColumn(),
-                plan.request().relationColumn(),
+                safeRelationColumn,
+                safeChildTableName,
+                safeRelationColumn,
+                safeRelationColumn,
+                safeRelationColumn,
                 (dialect == null ? MigrationSqlDialect.POSTGRES : dialect).sampleRootLimitTail(request.sampleRootCount())
         );
         ArrayList<SampleRoute> samples = new ArrayList<>();

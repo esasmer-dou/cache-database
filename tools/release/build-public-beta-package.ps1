@@ -100,6 +100,46 @@ foreach ($file in $docFiles) {
     Copy-Item -Path $source -Destination $destination
 }
 
+$localizedReleaseNote = Join-Path $repoRoot "tr\docs\releases\v$Version.md"
+if (Test-Path $localizedReleaseNote) {
+    $destination = Join-Path $stagingRoot "tr\docs\releases\v$Version.md"
+    $parent = Split-Path -Parent $destination
+    if (-not (Test-Path $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Copy-Item -Path $localizedReleaseNote -Destination $destination
+}
+
+$sampleProjects = @(
+    "sample-cache-database-postgresql",
+    "sample-cache-database-mssql"
+)
+$samplesDest = Join-Path $stagingRoot "samples"
+New-Item -ItemType Directory -Path $samplesDest -Force | Out-Null
+
+foreach ($sampleProject in $sampleProjects) {
+    $sampleSource = Join-Path $repoRoot $sampleProject
+    $sampleDest = Join-Path $samplesDest $sampleProject
+    New-Item -ItemType Directory -Path $sampleDest -Force | Out-Null
+    Get-ChildItem -Path $sampleSource -Recurse -File |
+        Where-Object {
+            $_.FullName -notmatch '\\target\\' -and
+            $_.FullName -notmatch '\\\.git\\' -and
+            $_.FullName -notmatch '\\\.idea\\' -and
+            $_.FullName -notmatch '\\\.vscode\\' -and
+            $_.Name -notmatch '\.log$'
+        } |
+        ForEach-Object {
+            $relative = $_.FullName.Substring($sampleSource.Length).TrimStart([char[]]@('\', '/'))
+            $destination = Join-Path $sampleDest $relative
+            $parent = Split-Path -Parent $destination
+            if (-not (Test-Path $parent)) {
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            }
+            Copy-Item -Path $_.FullName -Destination $destination
+        }
+}
+
 $artifactModules = @(
     "cachedb-annotations",
     "cachedb-processor",

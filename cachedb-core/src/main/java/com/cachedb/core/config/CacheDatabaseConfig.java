@@ -11,6 +11,7 @@ public record CacheDatabaseConfig(
         RedisFunctionsConfig redisFunctions,
         RelationConfig relations,
         PageCacheConfig pageCache,
+        ReadThroughConfig readThrough,
         ReadShapeGuardrailConfig readShapeGuardrail,
         QueryIndexConfig queryIndex,
         ProjectionRefreshConfig projectionRefresh,
@@ -29,6 +30,7 @@ public record CacheDatabaseConfig(
             RedisFunctionsConfig redisFunctions,
             RelationConfig relations,
             PageCacheConfig pageCache,
+            ReadThroughConfig readThrough,
             ReadShapeGuardrailConfig readShapeGuardrail,
             QueryIndexConfig queryIndex,
             ProjectionRefreshConfig projectionRefresh,
@@ -48,6 +50,7 @@ public record CacheDatabaseConfig(
                 redisFunctions,
                 relations,
                 pageCache,
+                readThrough,
                 readShapeGuardrail,
                 queryIndex,
                 projectionRefresh,
@@ -78,6 +81,7 @@ public record CacheDatabaseConfig(
                 .redisFunctions(redisFunctions)
                 .relations(relations)
                 .pageCache(pageCache)
+                .readThrough(readThrough)
                 .readShapeGuardrail(readShapeGuardrail)
                 .queryIndex(queryIndex)
                 .projectionRefresh(projectionRefresh)
@@ -98,6 +102,7 @@ public record CacheDatabaseConfig(
         private RedisFunctionsConfig redisFunctions = RedisFunctionsConfig.defaults();
         private RelationConfig relations = RelationConfig.defaults();
         private PageCacheConfig pageCache = PageCacheConfig.defaults();
+        private ReadThroughConfig readThrough = ReadThroughConfig.defaults();
         private ReadShapeGuardrailConfig readShapeGuardrail = ReadShapeGuardrailConfig.defaults();
         private QueryIndexConfig queryIndex = QueryIndexConfig.defaults();
         private ProjectionRefreshConfig projectionRefresh = ProjectionRefreshConfig.defaults();
@@ -145,6 +150,11 @@ public record CacheDatabaseConfig(
 
         public Builder pageCache(PageCacheConfig pageCache) {
             this.pageCache = pageCache;
+            return this;
+        }
+
+        public Builder readThrough(ReadThroughConfig readThrough) {
+            this.readThrough = readThrough;
             return this;
         }
 
@@ -203,6 +213,7 @@ public record CacheDatabaseConfig(
                     redisFunctions,
                     relations,
                     pageCache,
+                    readThrough,
                     readShapeGuardrail,
                     queryIndex,
                     projectionRefresh,

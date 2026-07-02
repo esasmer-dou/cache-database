@@ -25,6 +25,9 @@ import com.reactor.cachedb.core.queue.QueryIndexRebuildResult;
 import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
+import com.reactor.cachedb.core.route.RouteCacheContext;
+import com.reactor.cachedb.core.route.RouteCacheContract;
+import com.reactor.cachedb.core.route.RouteCacheStrictMode;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.Response;
@@ -387,9 +390,22 @@ public final class RedisQueryIndexManager<T, ID> {
     public List<String> resolveCandidateIds(QuerySpec querySpec) {
         maybeRecoverDegradedIndexes(classifyQueryClasses(querySpec));
         if (shouldBypassIndexes(querySpec)) {
+            rejectStrictRouteFullScan("query indexes are degraded or reads are being shed");
             return scanAllEntityIds();
         }
         return resolveIndexedAndResidualCandidates(querySpec);
+    }
+
+    private void rejectStrictRouteFullScan(String reason) {
+        RouteCacheContract contract = RouteCacheContext.currentContract();
+        if (contract == null || contract.strictMode() != RouteCacheStrictMode.FAIL_FAST) {
+            return;
+        }
+        throw new IllegalStateException(
+                "Route " + contract.routeName()
+                        + " cannot fall back to a Redis full-scan because " + reason
+                        + ". Rebuild query indexes, use a registered projection route, or lower the route contract before serving production traffic."
+        );
     }
 
     public void warm(QuerySpec querySpec) {

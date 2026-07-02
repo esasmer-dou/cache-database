@@ -47,11 +47,11 @@ This project intentionally consumes CacheDB as an external Maven package:
 <dependency>
   <groupId>com.reactor.cachedb</groupId>
   <artifactId>cachedb-spring-boot-starter</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
-Users should not build the parent repository first. CacheDB `0.1.0` is published from the main repository to GitHub Packages.
+Users should not build the parent repository first. CacheDB `0.2.0` is published from the main repository to GitHub Packages.
 
 Runtime and build requirement: use JDK 21. The sample `pom.xml` sets
 `<java.version>21</java.version>` and compiles with Java release 21.
@@ -79,6 +79,83 @@ mvn clean package
 ```
 
 If you do not configure credentials, Maven will usually fail with `401 Unauthorized` even though the repository URL is correct.
+
+## 0.2.0 Verified Path
+
+This sample is wired for CacheDB `0.2.0`. The important runtime contract is:
+
+1. Writes go through CacheDB and are flushed to PostgreSQL by write-behind.
+2. Existing PostgreSQL rows are not magically loaded into Redis at startup.
+3. Routes that must be fast need either a bounded entity active set or a projection.
+4. Warm/backfill uses the registered JDBC loader and then hydrates Redis/projection rows.
+5. Load tests must run after seed data is durable in PostgreSQL and after the warm step finishes.
+
+The sample code makes that contract explicit.
+
+```java
+@Bean
+CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
+    return (builder, properties) -> builder
+            .readThrough(ReadThroughConfig.builder()
+                    .mode(ReadThroughMode.READ_THROUGH_QUERY)
+                    .failOnMissingLoader(true)
+                    .hydrateLoadedEntities(true)
+                    .maxQueryLoadRows(500)
+                    .build());
+}
+```
+
+`registerJdbcBacked(...)` is what lets CacheDB read a bounded query from PostgreSQL when you intentionally warm or read through:
+
+```java
+@Bean
+EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
+    CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
+    OrderEntityCacheBinding.registerJdbcBacked(cacheDatabase, policy);
+    return OrderEntityCacheBinding.repository(cacheDatabase, policy);
+}
+```
+
+The warm endpoint then uses a route-shaped query, not a full table scan:
+
+```java
+QuerySpec querySpec = QuerySpec.where(QueryFilter.eq("customer_id", customerId))
+        .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
+        .limitTo(limit);
+
+CacheWarmResult result = cacheDatabase.warm(CacheWarmPlan.builder(OrderEntityCacheBinding.METADATA.entityName())
+        .name("sample-customer-order-window-" + customerId)
+        .querySpec(querySpec)
+        .maxRows(limit)
+        .forceImmediateProjectionRefresh(true)
+        .reindexQueryIndexes(true)
+        .build());
+```
+
+Run the local load gate after the app is ready:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-load-test.ps1 `
+  -RouteProfile hot-timeline `
+  -Concurrency 4 `
+  -DurationSeconds 10 `
+  -SeedCustomers 10 `
+  -OrdersPerCustomer 20 `
+  -LinesPerOrder 4 `
+  -WarmCustomers 10 `
+  -WarmLimit 100 `
+  -MaxP95Millis 500
+```
+
+Latest local evidence for this sample on Docker Desktop:
+
+| Provider | Version | Route profile | Result |
+|---|---:|---|---|
+| PostgreSQL | `0.2.0` | `hot-timeline` | `ok=605`, `fail=0`, `p95=184 ms` |
+
+This is a sample-machine smoke gate, not a production benchmark. In staging,
+increase data volume, run longer duration tests, and watch Redis memory,
+projection lag, write-behind backlog, PostgreSQL latency, and JVM GC.
 
 ## Run Locally
 

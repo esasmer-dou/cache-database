@@ -13,8 +13,12 @@ import com.reactor.cachedb.core.config.SchemaBootstrapMode;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
+import com.reactor.cachedb.core.page.EntityByIdLoader;
 import com.reactor.cachedb.core.page.EntityPageLoader;
+import com.reactor.cachedb.core.page.EntityQueryLoader;
+import com.reactor.cachedb.core.page.NoOpEntityByIdLoader;
 import com.reactor.cachedb.core.page.NoOpEntityPageLoader;
+import com.reactor.cachedb.core.page.NoOpEntityQueryLoader;
 import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.projection.EntityProjectionBinding;
@@ -34,6 +38,7 @@ import com.reactor.cachedb.core.queue.WriteBehindFlusher;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import com.reactor.cachedb.core.relation.RelationBatchLoader;
+import com.reactor.cachedb.jdbc.JdbcEntitySourceLoader;
 import com.reactor.cachedb.postgres.PostgresWriteBehindFlusher;
 import com.reactor.cachedb.redis.RedisFunctionArgsMapper;
 import com.reactor.cachedb.redis.RedisFunctionExecutor;
@@ -57,6 +62,8 @@ import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -452,7 +459,9 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 codec,
                 cachePolicy,
                 new NoOpRelationBatchLoader<>(),
-                new NoOpEntityPageLoader<>()
+                new NoOpEntityPageLoader<>(),
+                new NoOpEntityByIdLoader<>(),
+                new NoOpEntityQueryLoader<>()
         );
     }
 
@@ -467,7 +476,9 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 codec,
                 cachePolicy,
                 relationBatchLoader,
-                new NoOpEntityPageLoader<>()
+                new NoOpEntityPageLoader<>(),
+                new NoOpEntityByIdLoader<>(),
+                new NoOpEntityQueryLoader<>()
         );
     }
 
@@ -478,7 +489,82 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             RelationBatchLoader<T> relationBatchLoader,
             EntityPageLoader<T> pageLoader
     ) {
-        return entityRegistry.register(metadata, codec, cachePolicy, relationBatchLoader, pageLoader);
+        return register(
+                metadata,
+                codec,
+                cachePolicy,
+                relationBatchLoader,
+                pageLoader,
+                new NoOpEntityByIdLoader<>(),
+                new NoOpEntityQueryLoader<>()
+        );
+    }
+
+    public <T, ID> EntityBinding<T, ID> register(
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            CachePolicy cachePolicy,
+            RelationBatchLoader<T> relationBatchLoader,
+            EntityPageLoader<T> pageLoader,
+            EntityByIdLoader<T, ID> byIdLoader,
+            EntityQueryLoader<T> queryLoader
+    ) {
+        return entityRegistry.register(metadata, codec, cachePolicy, relationBatchLoader, pageLoader, byIdLoader, queryLoader);
+    }
+
+    public <T, ID> EntityBinding<T, ID> registerJdbcBacked(
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec
+    ) {
+        return registerJdbcBacked(metadata, codec, config.resourceLimits().defaultCachePolicy());
+    }
+
+    public <T, ID> EntityBinding<T, ID> registerJdbcBacked(
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            CachePolicy cachePolicy
+    ) {
+        return registerJdbcBacked(
+                metadata,
+                codec,
+                cachePolicy,
+                new NoOpRelationBatchLoader<>(),
+                null
+        );
+    }
+
+    public <T, ID> EntityBinding<T, ID> registerJdbcBacked(
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            CachePolicy cachePolicy,
+            RelationBatchLoader<T> relationBatchLoader
+    ) {
+        return registerJdbcBacked(metadata, codec, cachePolicy, relationBatchLoader, null);
+    }
+
+    public <T, ID> EntityBinding<T, ID> registerJdbcBacked(
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            CachePolicy cachePolicy,
+            RelationBatchLoader<T> relationBatchLoader,
+            EntityPageLoader<T> pageLoader
+    ) {
+        JdbcEntitySourceLoader<T, ID> sourceLoader = new JdbcEntitySourceLoader<>(
+                dataSource,
+                metadata,
+                codec,
+                config.readThrough().maxQueryLoadRows()
+        );
+        EntityPageLoader<T> resolvedPageLoader = pageLoader == null ? sourceLoader : pageLoader;
+        return register(
+                metadata,
+                codec,
+                cachePolicy,
+                relationBatchLoader == null ? new NoOpRelationBatchLoader<>() : relationBatchLoader,
+                resolvedPageLoader,
+                sourceLoader,
+                sourceLoader
+        );
     }
 
     public <T, ID> EntityBinding<T, ID> register(
@@ -490,7 +576,9 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 codec,
                 config.resourceLimits().defaultCachePolicy(),
                 new NoOpRelationBatchLoader<>(),
-                new NoOpEntityPageLoader<>()
+                new NoOpEntityPageLoader<>(),
+                new NoOpEntityByIdLoader<>(),
+                new NoOpEntityQueryLoader<>()
         );
     }
 
@@ -500,8 +588,26 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 binding.codec(),
                 binding.cachePolicy(),
                 binding.relationBatchLoader(),
-                binding.pageLoader()
+                binding.pageLoader(),
+                binding.byIdLoader(),
+                binding.queryLoader()
         );
+    }
+
+    public CacheWarmResult warm(CacheWarmPlan plan) {
+        return new CacheWarmRunner(this).execute(plan);
+    }
+
+    public List<CacheWarmResult> warmAll(Collection<CacheWarmPlan> plans) {
+        if (plans == null || plans.isEmpty()) {
+            return List.of();
+        }
+        CacheWarmRunner runner = new CacheWarmRunner(this);
+        ArrayList<CacheWarmResult> results = new ArrayList<>(plans.size());
+        for (CacheWarmPlan plan : plans) {
+            results.add(runner.execute(plan));
+        }
+        return List.copyOf(results);
     }
 
     private WriteBehindFlusher createWriteBehindFlusher(

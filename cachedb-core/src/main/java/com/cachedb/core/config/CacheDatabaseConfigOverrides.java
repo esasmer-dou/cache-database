@@ -41,6 +41,7 @@ public final class CacheDatabaseConfigOverrides {
                 .redisFunctions(applyRedisFunctions(baseConfig.redisFunctions(), root.child("redisFunctions.")))
                 .relations(applyRelations(baseConfig.relations(), root.child("relations.")))
                 .pageCache(applyPageCache(baseConfig.pageCache(), root.child("pageCache.")))
+                .readThrough(applyReadThrough(baseConfig.readThrough(), root.child("readThrough.")))
                 .readShapeGuardrail(applyReadShapeGuardrail(baseConfig.readShapeGuardrail(), root.child("readShapeGuardrail.")))
                 .queryIndex(applyQueryIndex(baseConfig.queryIndex(), root.child("queryIndex.")))
                 .projectionRefresh(applyProjectionRefresh(baseConfig.projectionRefresh(), root.child("projectionRefresh.")))
@@ -201,6 +202,15 @@ public final class CacheDatabaseConfigOverrides {
                 .readThroughEnabled(lookup.bool("readThroughEnabled", base.readThroughEnabled()))
                 .failOnMissingPageLoader(lookup.bool("failOnMissingPageLoader", base.failOnMissingPageLoader()))
                 .evictionBatchSize(lookup.integer("evictionBatchSize", base.evictionBatchSize()))
+                .build();
+    }
+
+    private static ReadThroughConfig applyReadThrough(ReadThroughConfig base, Lookup lookup) {
+        return ReadThroughConfig.builder()
+                .mode(lookup.enumValue("mode", ReadThroughMode.class, base.mode()))
+                .failOnMissingLoader(lookup.bool("failOnMissingLoader", base.failOnMissingLoader()))
+                .hydrateLoadedEntities(lookup.bool("hydrateLoadedEntities", base.hydrateLoadedEntities()))
+                .maxQueryLoadRows(lookup.integer("maxQueryLoadRows", base.maxQueryLoadRows()))
                 .build();
     }
 

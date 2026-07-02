@@ -16,6 +16,10 @@ import java.util.Set;
 
 public final class MigrationPlanner {
 
+    private static final String SQL_IDENTIFIER_SEGMENT = "[A-Za-z_][A-Za-z0-9_]*";
+    private static final String SQL_IDENTIFIER_PATTERN = SQL_IDENTIFIER_SEGMENT;
+    private static final String QUALIFIED_SQL_IDENTIFIER_PATTERN = SQL_IDENTIFIER_SEGMENT + "(\\." + SQL_IDENTIFIER_SEGMENT + ")*";
+
     Template template(EntityRegistry entityRegistry) {
         ArrayList<EntityOption> entityOptions = new ArrayList<>();
         for (EntityBinding<?, ?> binding : entityRegistry.all()) {
@@ -328,17 +332,21 @@ public final class MigrationPlanner {
     ) {
         String sortDirection = "ASC".equalsIgnoreCase(request.sortDirection()) ? "ASC" : "DESC";
         MigrationSqlDialect effectiveDialect = dialect == null ? MigrationSqlDialect.POSTGRES : dialect;
+        String safeChildTableName = requireSqlIdentifier(childTableName, "child table", true);
+        String safeRelationColumn = requireSqlIdentifier(request.relationColumn(), "relation column", false);
+        String safeSortColumn = requireSqlIdentifier(request.sortColumn(), "sort column", false);
+        String safeChildPrimaryKeyColumn = requireSqlIdentifier(request.childPrimaryKeyColumn(), "child primary key column", false);
         if (rankedProjectionRequired) {
             return """
-                    SELECT *
+                    SELECT source.*
                     FROM %s source
                     ORDER BY %s %s, %s DESC
                     %s;
                     """.formatted(
-                    childTableName,
-                    request.sortColumn(),
+                    safeChildTableName,
+                    safeSortColumn,
                     sortDirection,
-                    request.childPrimaryKeyColumn(),
+                    safeChildPrimaryKeyColumn,
                     effectiveDialect.limitTail(hotWindowPerRoot)
             ).trim();
         }
@@ -351,30 +359,45 @@ public final class MigrationPlanner {
                        ) AS cachedb_hot_rank
                     FROM %s source
                 )
-                SELECT *
+                SELECT ranked_source.*
                 FROM ranked_source
                 WHERE cachedb_hot_rank <= %d;
                 """.formatted(
-                request.relationColumn(),
-                request.sortColumn(),
+                safeRelationColumn,
+                safeSortColumn,
                 sortDirection,
-                request.childPrimaryKeyColumn(),
-                childTableName,
+                safeChildPrimaryKeyColumn,
+                safeChildTableName,
                 hotWindowPerRoot
         ).trim();
     }
 
     static String buildRootWarmSqlTemplate(Request request, String rootTableName) {
+        String safeRootTableName = requireSqlIdentifier(rootTableName, "root table", true);
+        String safeRootPrimaryKeyColumn = requireSqlIdentifier(request.rootPrimaryKeyColumn(), "root primary key column", false);
         return """
                 SELECT *
                 FROM %s
                 WHERE %s IN (:referenced_root_ids)
                 ORDER BY %s ASC;
                 """.formatted(
-                rootTableName,
-                request.rootPrimaryKeyColumn(),
-                request.rootPrimaryKeyColumn()
+                safeRootTableName,
+                safeRootPrimaryKeyColumn,
+                safeRootPrimaryKeyColumn
         ).trim();
+    }
+
+    static String requireSqlIdentifier(String value, String label, boolean allowQualified) {
+        String normalized = value == null ? "" : value.trim();
+        String pattern = allowQualified ? QUALIFIED_SQL_IDENTIFIER_PATTERN : SQL_IDENTIFIER_PATTERN;
+        if (normalized.isBlank() || !normalized.matches(pattern)) {
+            throw new IllegalArgumentException(
+                    "Unsafe SQL identifier for " + label + ": " + String.valueOf(value)
+                            + ". Use unquoted letters, digits, and underscores"
+                            + (allowQualified ? " with optional schema qualification." : ".")
+            );
+        }
+        return normalized;
     }
 
     private String buildComparisonSummary(boolean projectionRequired, boolean rankedProjectionRequired, int hotWindowPerRoot) {

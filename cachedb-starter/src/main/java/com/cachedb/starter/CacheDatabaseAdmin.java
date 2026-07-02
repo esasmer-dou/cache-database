@@ -71,6 +71,9 @@ import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 
 public final class CacheDatabaseAdmin {
 
+    private static final int ADMIN_KEY_SCAN_COUNT = 500;
+    private static final int ADMIN_KEY_SCAN_CAP = 50_000;
+
     private final DeadLetterManagement deadLetterManagement;
     private final JedisPooled jedis;
     private final String keyPrefix;
@@ -781,10 +784,7 @@ public final class CacheDatabaseAdmin {
         RedisTelemetrySupport.deleteKeySafely(jedis, diagnosticsStreamKey);
         RedisTelemetrySupport.deleteKeySafely(jedis, monitoringConfig.incidentStreamKey());
         try {
-            java.util.Set<String> cooldownKeys = jedis.keys(monitoringConfig.incidentStreamKey() + ":cooldown:*");
-            if (!cooldownKeys.isEmpty()) {
-                RedisTelemetrySupport.deleteKeysSafely(jedis, cooldownKeys.toArray(String[]::new));
-            }
+            deleteKeysByScan(monitoringConfig.incidentStreamKey() + ":cooldown:*", ADMIN_KEY_SCAN_CAP);
         } catch (RuntimeException ignored) {
             // Best-effort cleanup; telemetry reset should not fail only because cooldown keys could not be scanned.
         }
@@ -2057,10 +2057,51 @@ public final class CacheDatabaseAdmin {
 
     private long keyCount(String pattern) {
         try {
-            return jedis.keys(pattern).size();
+            return scanKeyCount(pattern, ADMIN_KEY_SCAN_CAP);
         } catch (RuntimeException exception) {
             return 0L;
         }
+    }
+
+    private long scanKeyCount(String pattern, int maxKeys) {
+        long count = 0L;
+        String cursor = "0";
+        redis.clients.jedis.params.ScanParams params = new redis.clients.jedis.params.ScanParams()
+                .match(pattern)
+                .count(ADMIN_KEY_SCAN_COUNT);
+        do {
+            redis.clients.jedis.resps.ScanResult<String> scan = jedis.scan(cursor, params);
+            count += scan.getResult().size();
+            if (count >= maxKeys) {
+                return maxKeys;
+            }
+            cursor = scan.getCursor();
+        } while (!"0".equals(cursor));
+        return count;
+    }
+
+    private long deleteKeysByScan(String pattern, int maxKeys) {
+        long deleted = 0L;
+        String cursor = "0";
+        redis.clients.jedis.params.ScanParams params = new redis.clients.jedis.params.ScanParams()
+                .match(pattern)
+                .count(ADMIN_KEY_SCAN_COUNT);
+        do {
+            redis.clients.jedis.resps.ScanResult<String> scan = jedis.scan(cursor, params);
+            List<String> keys = scan.getResult();
+            int fromIndex = 0;
+            while (fromIndex < keys.size() && deleted < maxKeys) {
+                int toIndex = Math.min(fromIndex + ADMIN_KEY_SCAN_COUNT, keys.size());
+                RedisTelemetrySupport.deleteKeysSafely(jedis, keys.subList(fromIndex, toIndex).toArray(String[]::new));
+                deleted += toIndex - fromIndex;
+                fromIndex = toIndex;
+            }
+            if (deleted >= maxKeys) {
+                return deleted;
+            }
+            cursor = scan.getCursor();
+        } while (!"0".equals(cursor));
+        return deleted;
     }
 
     private boolean recentError(long lastErrorAtEpochMillis) {

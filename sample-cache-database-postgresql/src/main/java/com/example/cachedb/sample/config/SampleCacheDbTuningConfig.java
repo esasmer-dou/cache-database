@@ -1,6 +1,8 @@
 package com.example.cachedb.sample.config;
 
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
+import com.reactor.cachedb.core.config.ReadThroughConfig;
+import com.reactor.cachedb.core.config.ReadThroughMode;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.ResourceLimits;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
@@ -24,6 +26,12 @@ public class SampleCacheDbTuningConfig {
                         .maxEntityQueryLimit(250)
                         .maxProjectionQueryLimit(1_000)
                         .hotSetHeadroom(10)
+                        .build())
+                .readThrough(ReadThroughConfig.builder()
+                        .mode(ReadThroughMode.READ_THROUGH_QUERY)
+                        .failOnMissingLoader(true)
+                        .hydrateLoadedEntities(true)
+                        .maxQueryLoadRows(500)
                         .build())
                 .redisGuardrail(RedisGuardrailConfig.builder()
                         .enabled(true)

@@ -18,7 +18,6 @@ import javax.annotation.processing.Messager;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
@@ -44,7 +43,6 @@ import java.util.Objects;
 import java.util.Set;
 
 @SupportedAnnotationTypes("com.reactor.cachedb.annotations.CacheEntity")
-@SupportedSourceVersion(SourceVersion.RELEASE_17)
 public final class CacheEntityProcessor extends AbstractProcessor {
 
     private static final String CACHE_DATABASE_TYPE = "com.reactor.cachedb.starter.CacheDatabase";
@@ -58,6 +56,10 @@ public final class CacheEntityProcessor extends AbstractProcessor {
     private static final String RELATION_BATCH_LOADER_TYPE = "com.reactor.cachedb.core.relation.RelationBatchLoader";
     private static final String ENTITY_PAGE_LOADER_TYPE = "com.reactor.cachedb.core.page.EntityPageLoader";
     private static final String GENERATED_BINDINGS_REGISTRAR_TYPE = "com.reactor.cachedb.starter.GeneratedCacheBindingsRegistrar";
+    private static final String SQL_IDENTIFIER_SEGMENT = "[A-Za-z_][A-Za-z0-9_]*";
+    private static final String SQL_IDENTIFIER_PATTERN = SQL_IDENTIFIER_SEGMENT;
+    private static final String QUALIFIED_SQL_IDENTIFIER_PATTERN = SQL_IDENTIFIER_SEGMENT + "(\\." + SQL_IDENTIFIER_SEGMENT + ")*";
+    private static final String REDIS_NAMESPACE_PATTERN = "[A-Za-z0-9_.:-]+";
     private static final ProjectionModel INVALID_PROJECTION_MODEL =
             new ProjectionModel("__invalid__", "__invalid__", "__invalid__", "__invalid__");
     private static final NamedQueryModel INVALID_NAMED_QUERY_MODEL =
@@ -74,6 +76,11 @@ public final class CacheEntityProcessor extends AbstractProcessor {
     private Filer filer;
     private Messager messager;
     private final LinkedHashSet<String> generatedRegistrarClassNames = new LinkedHashSet<>();
+
+    @Override
+    public SourceVersion getSupportedSourceVersion() {
+        return SourceVersion.latestSupported();
+    }
 
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
@@ -120,7 +127,19 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         CacheEntity cacheEntity = typeElement.getAnnotation(CacheEntity.class);
         String packageName = processingEnv.getElementUtils().getPackageOf(typeElement).getQualifiedName().toString();
         String simpleName = typeElement.getSimpleName().toString();
+        String tableName = requireSqlIdentifier(typeElement, cacheEntity.table(), "@CacheEntity.table", true);
+        if (tableName == null) {
+            return null;
+        }
         String redisNamespace = cacheEntity.redisNamespace().isBlank() ? simpleName : cacheEntity.redisNamespace();
+        if (!isSafeRedisNamespace(redisNamespace)) {
+            messager.printMessage(
+                    Diagnostic.Kind.ERROR,
+                    "@CacheEntity.redisNamespace must contain only letters, digits, underscore, dot, colon, or dash",
+                    typeElement
+            );
+            return null;
+        }
         String relationLoaderTypeName = extractLoaderTypeName(cacheEntity, true);
         String pageLoaderTypeName = extractLoaderTypeName(cacheEntity, false);
 
@@ -246,10 +265,19 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 return null;
             }
 
+            String columnName = requireSqlIdentifier(
+                    field,
+                    cacheId != null ? cacheId.column() : cacheColumn.value(),
+                    cacheId != null ? "@CacheId.column" : "@CacheColumn.value",
+                    false
+            );
+            if (columnName == null) {
+                return null;
+            }
             FieldModel fieldModel = new FieldModel(
                     field.getSimpleName().toString(),
                     field.asType().toString(),
-                    cacheId != null ? cacheId.column() : cacheColumn.value(),
+                    columnName,
                     cacheId != null,
                     isEnumType(field),
                     extractCodecTypeName(cacheCodec)
@@ -305,7 +333,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 packageName,
                 simpleName,
                 simpleName + "CacheBinding",
-                cacheEntity.table(),
+                tableName,
                 redisNamespace,
                 idField,
                 persistedFields,
@@ -319,6 +347,25 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 relationLoader,
                 pageLoader
         );
+    }
+
+    private String requireSqlIdentifier(Element element, String value, String label, boolean allowQualified) {
+        String normalized = value == null ? "" : value.trim();
+        String pattern = allowQualified ? QUALIFIED_SQL_IDENTIFIER_PATTERN : SQL_IDENTIFIER_PATTERN;
+        if (!normalized.isBlank() && normalized.matches(pattern)) {
+            return normalized;
+        }
+        messager.printMessage(
+                Diagnostic.Kind.ERROR,
+                label + " must be a safe SQL identifier. Use letters, digits, and underscores"
+                        + (allowQualified ? " with optional schema qualification." : "."),
+                element
+        );
+        return null;
+    }
+
+    private boolean isSafeRedisNamespace(String value) {
+        return value != null && !value.isBlank() && value.matches(REDIS_NAMESPACE_PATTERN);
     }
 
     private boolean hasGeneratedAccessorConflicts(
@@ -376,6 +423,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         return Set.of(
                 "repository",
                 "register",
+                "registerJdbcBacked",
                 "using",
                 "queries",
                 "projections",
@@ -1242,19 +1290,19 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 .append(model.simpleName()).append(", ").append(model.idField().typeName()).append("> {\n");
         builder.append("        @Override\n");
         builder.append("        public String entityName() {\n");
-        builder.append("            return \"").append(model.simpleName()).append("\";\n");
+        builder.append("            return ").append(javaStringLiteral(model.simpleName())).append(";\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public String tableName() {\n");
-        builder.append("            return \"").append(model.tableName()).append("\";\n");
+        builder.append("            return ").append(javaStringLiteral(model.tableName())).append(";\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public String redisNamespace() {\n");
-        builder.append("            return \"").append(model.redisNamespace()).append("\";\n");
+        builder.append("            return ").append(javaStringLiteral(model.redisNamespace())).append(";\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public String idColumn() {\n");
-        builder.append("            return \"").append(model.idField().columnName()).append("\";\n");
+        builder.append("            return ").append(javaStringLiteral(model.idField().columnName())).append(";\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public Class<").append(model.simpleName()).append("> entityType() {\n");
@@ -1274,8 +1322,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("        public Map<String, String> columnTypes() {\n");
         builder.append("            LinkedHashMap<String, String> columnTypes = new LinkedHashMap<>();\n");
         for (FieldModel field : model.persistedFields()) {
-            builder.append("            columnTypes.put(\"").append(field.columnName()).append("\", \"")
-                    .append(columnTypeName(field)).append("\");\n");
+            builder.append("            columnTypes.put(").append(javaStringLiteral(field.columnName())).append(", ")
+                    .append(javaStringLiteral(columnTypeName(field))).append(");\n");
         }
         builder.append("            return columnTypes;\n");
         builder.append("        }\n\n");
@@ -1287,10 +1335,10 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             builder.append("            return List.of(\n");
             for (int index = 0; index < model.relations().size(); index++) {
                 RelationModel relation = model.relations().get(index);
-                builder.append("                    new RelationDefinition(\"")
-                        .append(relation.name()).append("\", \"")
-                        .append(relation.targetEntity()).append("\", \"")
-                        .append(relation.mappedBy()).append("\", RelationKind.")
+                builder.append("                    new RelationDefinition(")
+                        .append(javaStringLiteral(relation.name())).append(", ")
+                        .append(javaStringLiteral(relation.targetEntity())).append(", ")
+                        .append(javaStringLiteral(relation.mappedBy())).append(", RelationKind.")
                         .append(relation.kindName()).append(", ")
                         .append(relation.batchLoadOnly()).append(")");
                 builder.append(index == model.relations().size() - 1 ? "\n" : ",\n");
@@ -1307,7 +1355,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("        public String toRedisValue(").append(model.simpleName()).append(" entity) {\n");
         builder.append("            LinkedHashMap<String, String> values = new LinkedHashMap<>();\n");
         for (FieldModel field : model.persistedFields()) {
-            builder.append("            values.put(\"").append(field.columnName()).append("\", ")
+            builder.append("            values.put(").append(javaStringLiteral(field.columnName())).append(", ")
                     .append(toStringExpression("entity." + field.fieldName(), field)).append(");\n");
         }
         builder.append("            return LengthPrefixedPayloadCodec.encode(values);\n");
@@ -1335,7 +1383,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("        public Map<String, Object> toColumns(").append(model.simpleName()).append(" entity) {\n");
         builder.append("            LinkedHashMap<String, Object> columns = new LinkedHashMap<>();\n");
         for (FieldModel field : model.persistedFields()) {
-            builder.append("            columns.put(\"").append(field.columnName()).append("\", ")
+            builder.append("            columns.put(").append(javaStringLiteral(field.columnName())).append(", ")
                     .append(toColumnValueExpression(field)).append(");\n");
         }
         builder.append("            return columns;\n");
@@ -1736,6 +1784,39 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         } else {
             builder.append("        cacheDatabase.register(METADATA, CODEC, cachePolicy);\n");
         }
+        renderProjectionRegistrationStatements(builder, model);
+        builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase) {\n");
+        builder.append("        registerJdbcBacked(cacheDatabase, cacheDatabase.config().resourceLimits().defaultCachePolicy());\n");
+        builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
+        builder.append("        cacheDatabase.registerJdbcBacked(METADATA, CODEC, cachePolicy, ")
+                .append(model.relationLoader() == null ? "null" : "relationLoader(cacheDatabase, cachePolicy)")
+                .append(", ")
+                .append(model.pageLoader() == null ? "null" : "pageLoader(cacheDatabase, cachePolicy)")
+                .append(");\n");
+        renderProjectionRegistrationStatements(builder, model);
+        builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase, RelationBatchLoader<")
+                .append(model.simpleName()).append("> relationBatchLoader) {\n");
+        builder.append("        cacheDatabase.registerJdbcBacked(METADATA, CODEC, cacheDatabase.config().resourceLimits().defaultCachePolicy(), relationBatchLoader, null);\n");
+        renderProjectionRegistrationStatements(builder, model);
+        builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase, CachePolicy cachePolicy, RelationBatchLoader<")
+                .append(model.simpleName()).append("> relationBatchLoader) {\n");
+        builder.append("        cacheDatabase.registerJdbcBacked(METADATA, CODEC, cachePolicy, relationBatchLoader, null);\n");
+        renderProjectionRegistrationStatements(builder, model);
+        builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase, RelationBatchLoader<")
+                .append(model.simpleName()).append("> relationBatchLoader, EntityPageLoader<").append(model.simpleName())
+                .append("> pageLoader) {\n");
+        builder.append("        cacheDatabase.registerJdbcBacked(METADATA, CODEC, cacheDatabase.config().resourceLimits().defaultCachePolicy(), relationBatchLoader, pageLoader);\n");
+        renderProjectionRegistrationStatements(builder, model);
+        builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase, CachePolicy cachePolicy, RelationBatchLoader<")
+                .append(model.simpleName()).append("> relationBatchLoader, EntityPageLoader<").append(model.simpleName())
+                .append("> pageLoader) {\n");
+        builder.append("        cacheDatabase.registerJdbcBacked(METADATA, CODEC, cachePolicy, relationBatchLoader, pageLoader);\n");
         renderProjectionRegistrationStatements(builder, model);
         builder.append("    }\n\n");
         builder.append("    public static void register(CacheDatabase cacheDatabase, RelationBatchLoader<")
@@ -2163,11 +2244,30 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
     private void appendQuotedList(StringBuilder builder, List<String> values) {
         for (int index = 0; index < values.size(); index++) {
-            builder.append('"').append(values.get(index)).append('"');
+            builder.append(javaStringLiteral(values.get(index)));
             if (index < values.size() - 1) {
                 builder.append(", ");
             }
         }
+    }
+
+    private String javaStringLiteral(String value) {
+        String safe = value == null ? "" : value;
+        StringBuilder builder = new StringBuilder(safe.length() + 2);
+        builder.append('"');
+        for (int index = 0; index < safe.length(); index++) {
+            char character = safe.charAt(index);
+            switch (character) {
+                case '\\' -> builder.append("\\\\");
+                case '"' -> builder.append("\\\"");
+                case '\n' -> builder.append("\\n");
+                case '\r' -> builder.append("\\r");
+                case '\t' -> builder.append("\\t");
+                default -> builder.append(character);
+            }
+        }
+        builder.append('"');
+        return builder.toString();
     }
 
     private String toStringExpression(String accessor, FieldModel field) {

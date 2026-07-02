@@ -11,6 +11,8 @@ import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySortDirection;
 import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
+import com.reactor.cachedb.core.route.RouteCacheContext;
+import com.reactor.cachedb.core.route.RouteCacheContract;
 import redis.clients.jedis.resps.Tuple;
 
 import java.util.ArrayList;
@@ -90,6 +92,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             if (ids.isEmpty()) {
                 return List.of();
             }
+            validateProjectionRouteContract("Projection bulk read", ids.size());
             List<ID> idsList = new ArrayList<>(ids);
             List<String> rawIds = idsList.stream().map(String::valueOf).toList();
             LinkedHashMap<String, P> resolved = loadProjectionMap(rawIds);
@@ -110,6 +113,9 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     public List<P> query(QuerySpec querySpec) {
         long startedAt = System.nanoTime();
         try {
+            if (querySpec != null) {
+                validateProjectionRouteContract("Projection query", querySpec.limit());
+            }
             ReadShapeGuardrails.validateProjectionQuery(
                     readRuntime.binding().projection().name(),
                     querySpec,
@@ -179,6 +185,12 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             return;
         }
         queryCache.put(key, result);
+    }
+
+    private void validateProjectionRouteContract(String shape, int requestedRows) {
+        RouteCacheContract contract = RouteCacheContext.currentContract();
+        ReadShapeGuardrails.validateRouteContract(contract, "projection:" + readRuntime.binding().projection().name());
+        ReadShapeGuardrails.validateRouteReadSize(contract, shape, requestedRows);
     }
 
     private String hotQueryCacheKey(QuerySpec querySpec) {

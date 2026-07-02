@@ -1,6 +1,7 @@
 package com.reactor.cachedb.starter;
 
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
+import com.reactor.cachedb.core.config.ReadThroughMode;
 import com.reactor.cachedb.core.queue.WriteBehindFlusher;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,15 @@ class CacheDatabaseBootstrapTest {
 
         assertTrue(config.writeBehind().enabled());
         assertTrue(config.redisGuardrail().enabled());
+        assertTrue(config.redisGuardrail().rejectWritesOnHardLimit());
+        assertEquals(20_000L, config.redisGuardrail().writeBehindBacklogHardLimit());
+        assertEquals(50_000L, config.redisGuardrail().compactionPendingHardLimit());
+        assertEquals(500, config.readShapeGuardrail().maxEntityQueryLimit());
+        assertEquals(2_000, config.readShapeGuardrail().maxProjectionQueryLimit());
+        assertTrue(config.pageCache().failOnMissingPageLoader());
+        assertEquals(ReadThroughMode.REDIS_ONLY, config.readThrough().mode());
+        assertTrue(config.readThrough().failOnMissingLoader());
+        assertEquals(500, config.readThrough().maxQueryLoadRows());
         assertFalse(config.adminHttp().enabled());
         assertEquals("VALIDATE_ONLY", config.schemaBootstrap().mode().name());
     }

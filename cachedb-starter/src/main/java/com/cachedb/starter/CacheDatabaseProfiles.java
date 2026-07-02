@@ -4,6 +4,10 @@ import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.AdminHttpConfig;
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
+import com.reactor.cachedb.core.config.PageCacheConfig;
+import com.reactor.cachedb.core.config.ReadThroughConfig;
+import com.reactor.cachedb.core.config.ReadThroughMode;
+import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.SchemaBootstrapConfig;
 import com.reactor.cachedb.core.config.SchemaBootstrapMode;
@@ -44,6 +48,37 @@ public final class CacheDatabaseProfiles {
                         .enabled(true)
                         .producerBackpressureEnabled(true)
                         .warnOnMissingMaxmemory(true)
+                        .writeBehindBacklogWarnThreshold(1_000L)
+                        .writeBehindBacklogCriticalThreshold(5_000L)
+                        .writeBehindBacklogHardLimit(20_000L)
+                        .compactionPendingWarnThreshold(5_000L)
+                        .compactionPendingCriticalThreshold(20_000L)
+                        .compactionPendingHardLimit(50_000L)
+                        .compactionPayloadHardLimit(50_000L)
+                        .rejectWritesOnHardLimit(true)
+                        .shedPageCacheWritesOnHardLimit(true)
+                        .shedReadThroughCacheOnHardLimit(true)
+                        .shedHotSetTrackingOnHardLimit(true)
+                        .shedQueryIndexWritesOnHardLimit(true)
+                        .shedQueryIndexReadsOnHardLimit(true)
+                        .shedPlannerLearningOnHardLimit(true)
+                        .build())
+                .readShapeGuardrail(ReadShapeGuardrailConfig.builder()
+                        .enabled(true)
+                        .maxPageRequestSize(500)
+                        .maxLoadedPageSize(500)
+                        .maxEntityQueryLimit(500)
+                        .maxProjectionQueryLimit(2_000)
+                        .build())
+                .pageCache(PageCacheConfig.builder()
+                        .readThroughEnabled(true)
+                        .failOnMissingPageLoader(true)
+                        .build())
+                .readThrough(ReadThroughConfig.builder()
+                        .mode(ReadThroughMode.REDIS_ONLY)
+                        .failOnMissingLoader(true)
+                        .hydrateLoadedEntities(true)
+                        .maxQueryLoadRows(500)
                         .build())
                 .schemaBootstrap(SchemaBootstrapConfig.builder()
                         .mode(SchemaBootstrapMode.VALIDATE_ONLY)

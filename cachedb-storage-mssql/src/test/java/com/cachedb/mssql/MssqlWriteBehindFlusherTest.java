@@ -85,8 +85,23 @@ class MssqlWriteBehindFlusherTest {
                 operation(OperationType.UPSERT, "5", 5)
         ));
 
-        assertEquals(5, dataSource.statementKinds().size());
+        assertEquals(3, dataSource.statementKinds().size());
         assertEquals(3, dataSource.commitCount);
+    }
+
+    @Test
+    void shouldBatchConsecutiveDeletesWithoutReorderingOperations() throws Exception {
+        RecordingDataSource dataSource = new RecordingDataSource(1, false);
+        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(dataSource, emptyRegistry());
+
+        flusher.flushBatch(List.of(
+                operation(OperationType.DELETE, "1", 1),
+                operation(OperationType.DELETE, "2", 2),
+                operation(OperationType.DELETE, "3", 3)
+        ));
+
+        assertEquals(List.of("DELETE"), dataSource.statementKinds());
+        assertEquals(1, dataSource.commitCount);
     }
 
     @Test

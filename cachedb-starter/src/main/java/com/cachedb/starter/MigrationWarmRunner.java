@@ -405,10 +405,12 @@ final class MigrationWarmRunner {
     }
 
     private String buildRootChunkSql(String tableName, String rootPrimaryKeyColumn, int parameterCount) {
+        String safeTableName = MigrationPlanner.requireSqlIdentifier(tableName, "root table", true);
+        String safeRootPrimaryKeyColumn = MigrationPlanner.requireSqlIdentifier(rootPrimaryKeyColumn, "root primary key column", false);
         StringBuilder builder = new StringBuilder("SELECT * FROM ")
-                .append(tableName)
+                .append(safeTableName)
                 .append(" WHERE ")
-                .append(rootPrimaryKeyColumn)
+                .append(safeRootPrimaryKeyColumn)
                 .append(" IN (");
         for (int index = 0; index < parameterCount; index++) {
             if (index > 0) {
@@ -416,7 +418,7 @@ final class MigrationWarmRunner {
             }
             builder.append('?');
         }
-        builder.append(") ORDER BY ").append(rootPrimaryKeyColumn).append(" ASC");
+        builder.append(") ORDER BY ").append(safeRootPrimaryKeyColumn).append(" ASC");
         return builder.toString();
     }
 

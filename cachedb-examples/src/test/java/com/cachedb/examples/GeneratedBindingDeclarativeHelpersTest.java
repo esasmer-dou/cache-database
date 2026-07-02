@@ -11,6 +11,7 @@ import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.examples.entity.GeneratedCacheModule;
 import com.reactor.cachedb.examples.entity.UserEntity;
 import com.reactor.cachedb.examples.entity.UserEntityCacheBinding;
+import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsRegistrar;
 import org.junit.jupiter.api.Test;
@@ -84,6 +85,16 @@ class GeneratedBindingDeclarativeHelpersTest {
 
         assertTrue(registrars.stream().anyMatch(registrar -> registrar.packageName().equals("com.reactor.cachedb.examples.entity")));
         assertTrue(registrars.stream().anyMatch(registrar -> registrar.packageName().equals("com.reactor.cachedb.examples.demo.entity")));
+    }
+
+    @Test
+    void shouldExposeJdbcBackedRegistrationHelper() throws NoSuchMethodException {
+        assertEquals(
+                Void.TYPE,
+                UserEntityCacheBinding.class
+                        .getMethod("registerJdbcBacked", CacheDatabase.class, CachePolicy.class)
+                        .getReturnType()
+        );
     }
 
     @Test

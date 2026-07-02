@@ -6,6 +6,7 @@ import com.reactor.cachedb.core.cache.CacheAdmissionSource;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.change.ExternalChangeHydrationRepository;
 import com.reactor.cachedb.core.config.QueryIndexConfig;
+import com.reactor.cachedb.core.config.ReadThroughConfig;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.RelationConfig;
@@ -16,8 +17,12 @@ import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.model.WriteOperation;
+import com.reactor.cachedb.core.page.EntityByIdLoader;
 import com.reactor.cachedb.core.page.EntityPageLoader;
+import com.reactor.cachedb.core.page.EntityQueryLoader;
+import com.reactor.cachedb.core.page.NoOpEntityByIdLoader;
 import com.reactor.cachedb.core.page.NoOpEntityPageLoader;
+import com.reactor.cachedb.core.page.NoOpEntityQueryLoader;
 import com.reactor.cachedb.core.plan.FetchPlan;
 import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.projection.EntityProjectionBinding;
@@ -35,6 +40,8 @@ import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.core.relation.RelationBatchContext;
 import com.reactor.cachedb.core.relation.RelationBatchLoader;
 import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
+import com.reactor.cachedb.core.route.RouteCacheContext;
+import com.reactor.cachedb.core.route.RouteCacheContract;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.Pipeline;
 
@@ -42,6 +49,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -70,7 +78,10 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     private final RelationConfig relationConfig;
     private final QueryIndexConfig queryIndexConfig;
     private final EntityPageLoader<T> pageLoader;
+    private final EntityByIdLoader<T, ID> byIdLoader;
+    private final EntityQueryLoader<T> queryLoader;
     private final PageCacheConfig pageCacheConfig;
+    private final ReadThroughConfig readThroughConfig;
     private final ReadShapeGuardrailConfig readShapeGuardrailConfig;
     private final RedisPageCacheManager<T, ID> pageCacheManager;
     private final QueryEvaluator queryEvaluator;
@@ -99,7 +110,10 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             RelationConfig relationConfig,
             QueryIndexConfig queryIndexConfig,
             EntityPageLoader<T> pageLoader,
+            EntityByIdLoader<T, ID> byIdLoader,
+            EntityQueryLoader<T> queryLoader,
             PageCacheConfig pageCacheConfig,
+            ReadThroughConfig readThroughConfig,
             ReadShapeGuardrailConfig readShapeGuardrailConfig,
             RedisPageCacheManager<T, ID> pageCacheManager,
             QueryEvaluator queryEvaluator,
@@ -127,8 +141,11 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         this.relationBatchLoader = relationBatchLoader;
         this.relationConfig = relationConfig;
         this.queryIndexConfig = queryIndexConfig;
-        this.pageLoader = pageLoader;
-        this.pageCacheConfig = pageCacheConfig;
+        this.pageLoader = pageLoader == null ? new NoOpEntityPageLoader<>() : pageLoader;
+        this.byIdLoader = byIdLoader == null ? new NoOpEntityByIdLoader<>() : byIdLoader;
+        this.queryLoader = queryLoader == null ? new NoOpEntityQueryLoader<>() : queryLoader;
+        this.pageCacheConfig = pageCacheConfig == null ? PageCacheConfig.defaults() : pageCacheConfig;
+        this.readThroughConfig = readThroughConfig == null ? ReadThroughConfig.defaults() : readThroughConfig;
         this.readShapeGuardrailConfig = readShapeGuardrailConfig;
         this.pageCacheManager = pageCacheManager;
         this.queryEvaluator = queryEvaluator;
@@ -150,7 +167,9 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             }
             String encoded = values.get(0);
             if (encoded == null) {
-                return Optional.empty();
+                Optional<T> loaded = loadByIdFromSource(id);
+                loaded.ifPresent(entity -> applyFetchPlan(List.of(entity)));
+                return loaded;
             }
             T entity = codec.fromRedisValue(encoded);
             if (!pageCacheManager.shouldServeCachedEntity(entity)) {
@@ -174,6 +193,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             if (ids.isEmpty()) {
                 return List.of();
             }
+            validateEntityRouteContract("Entity bulk read", ids.size());
 
             List<ID> idsList = new ArrayList<>(ids);
             List<String> keys = new ArrayList<>(idsList.size());
@@ -210,6 +230,10 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     public List<T> findPage(PageWindow pageWindow) {
         long startedAt = System.nanoTime();
         try {
+            rejectProjectionOnlyEntityRoute("Entity page read");
+            if (pageWindow != null) {
+                validateEntityRouteContract("Entity page read", pageWindow.pageSize());
+            }
             ReadShapeGuardrails.validatePageRequest(metadata.entityName(), pageWindow, effectiveCachePolicy(), readShapeGuardrailConfig);
             Optional<List<T>> cachedPage = pageCacheManager.getCachedPage(pageWindow);
             if (cachedPage.isPresent()) {
@@ -219,7 +243,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             }
 
             EntityPageLoader<T> effectivePageLoader = currentPageLoader();
-            if (pageCacheConfig.failOnMissingPageLoader() && effectivePageLoader instanceof NoOpEntityPageLoader) {
+            if (shouldFailOnMissingPageLoader() && effectivePageLoader instanceof NoOpEntityPageLoader) {
                 throw new IllegalStateException("Page cache miss for " + metadata.entityName() + " but no EntityPageLoader is registered");
             }
             if (!pageCacheConfig.readThroughEnabled()) {
@@ -253,6 +277,10 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     public List<T> query(QuerySpec querySpec) {
         long startedAt = System.nanoTime();
         try {
+            rejectProjectionOnlyEntityRoute("Entity query");
+            if (querySpec != null) {
+                validateEntityRouteContract("Entity query", querySpec.limit());
+            }
             ReadShapeGuardrails.validateEntityQuery(metadata.entityName(), querySpec, effectiveCachePolicy(), readShapeGuardrailConfig);
             queryIndexManager.warm(querySpec);
             boolean sortedIndexScan = queryIndexManager.supportsSortedIndexScan(querySpec);
@@ -267,8 +295,12 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             boolean requiresResidualEvaluation = !queryIndexManager.fullyIndexed(querySpec.rootGroup());
             boolean requiresInMemorySort = !querySpec.sorts().isEmpty() && !sortedIndexScan && !completeSortOrderResolved;
             if (candidateIds.isEmpty()) {
-                queryIndexManager.observe(querySpec, 0L);
-                return List.of();
+                List<T> loaded = loadQueryFromSource(querySpec);
+                queryIndexManager.observe(querySpec, loaded.size());
+                if (!loaded.isEmpty()) {
+                    applyFetchPlan(loaded, querySpec.fetchPlan());
+                }
+                return loaded;
             }
 
             List<String> payloadIds = windowResolvedCandidateIds(
@@ -353,6 +385,12 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         int fromIndex = Math.min(querySpec.offset(), candidateIds.size());
         int toIndex = Math.min(fromIndex + querySpec.limit(), candidateIds.size());
         return candidateIds.subList(fromIndex, toIndex);
+    }
+
+    private void validateEntityRouteContract(String shape, int requestedRows) {
+        RouteCacheContract contract = RouteCacheContext.currentContract();
+        ReadShapeGuardrails.validateRouteContract(contract, "entity:" + metadata.entityName());
+        ReadShapeGuardrails.validateRouteReadSize(contract, shape, requestedRows);
     }
 
     @Override
@@ -728,7 +766,10 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 relationConfig,
                 queryIndexConfig,
                 pageLoader,
+                byIdLoader,
+                queryLoader,
                 pageCacheConfig,
+                readThroughConfig,
                 readShapeGuardrailConfig,
                 pageCacheManager,
                 queryEvaluator,
@@ -838,6 +879,17 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         performanceCollector.recordCacheAdmission(tag, admitted);
     }
 
+    private void recordReadThroughEvent(String event, boolean success) {
+        if (performanceCollector == null) {
+            return;
+        }
+        String routeTag = PerformanceObservationContext.currentTag();
+        String tag = routeTag.isBlank()
+                ? "read-through:entity:" + metadata.entityName() + ":" + event
+                : "read-through:route:" + routeTag + ":" + event;
+        performanceCollector.recordCacheAdmission(tag, success);
+    }
+
     private Map<String, Object> enrichColumnsForPersistence(Map<String, Object> source, long version, boolean deleting) {
         LinkedHashMap<String, Object> enriched = new LinkedHashMap<>(source);
         enriched.put(metadata.versionColumn(), version);
@@ -891,6 +943,115 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             return pageLoader;
         }
         return (EntityPageLoader<T>) binding.pageLoader();
+    }
+
+    @SuppressWarnings("unchecked")
+    private EntityByIdLoader<T, ID> currentByIdLoader() {
+        if (entityRegistry == null) {
+            return byIdLoader;
+        }
+        EntityBinding<?, ?> binding = entityRegistry.find(metadata.entityName()).orElse(null);
+        if (binding == null || binding.byIdLoader() == null) {
+            return byIdLoader;
+        }
+        return (EntityByIdLoader<T, ID>) binding.byIdLoader();
+    }
+
+    @SuppressWarnings("unchecked")
+    private EntityQueryLoader<T> currentQueryLoader() {
+        if (entityRegistry == null) {
+            return queryLoader;
+        }
+        EntityBinding<?, ?> binding = entityRegistry.find(metadata.entityName()).orElse(null);
+        if (binding == null || binding.queryLoader() == null) {
+            return queryLoader;
+        }
+        return (EntityQueryLoader<T>) binding.queryLoader();
+    }
+
+    private Optional<T> loadByIdFromSource(ID id) {
+        if (!readThroughConfig.mode().byIdEnabled()) {
+            recordReadThroughEvent("by-id-disabled", false);
+            return Optional.empty();
+        }
+        EntityByIdLoader<T, ID> effectiveByIdLoader = currentByIdLoader();
+        if (effectiveByIdLoader instanceof NoOpEntityByIdLoader) {
+            if (readThroughConfig.failOnMissingLoader()) {
+                throw new IllegalStateException("Redis miss for " + metadata.entityName() + " id=" + id
+                        + " but no EntityByIdLoader is registered");
+            }
+            recordReadThroughEvent("by-id-loader-missing", false);
+            return Optional.empty();
+        }
+        Optional<T> loaded = Optional.ofNullable(effectiveByIdLoader.load(id)).orElse(Optional.empty());
+        if (loaded.isEmpty()) {
+            recordReadThroughEvent("by-id-source-empty", false);
+            return Optional.empty();
+        }
+        if (shouldHydrateReadThrough()) {
+            hydrateInternal(loaded.get(), 0L, true, true, true, CacheAdmissionSource.READ);
+        }
+        recordReadThroughEvent("by-id-loaded", true);
+        return loaded;
+    }
+
+    private List<T> loadQueryFromSource(QuerySpec querySpec) {
+        if (!readThroughConfig.mode().queryEnabled()) {
+            recordReadThroughEvent("query-disabled", false);
+            return List.of();
+        }
+        if (querySpec.limit() > readThroughConfig.maxQueryLoadRows()) {
+            throw new IllegalArgumentException("Read-through query for " + metadata.entityName()
+                    + " requested " + querySpec.limit()
+                    + " rows but maxQueryLoadRows=" + readThroughConfig.maxQueryLoadRows());
+        }
+        EntityQueryLoader<T> effectiveQueryLoader = currentQueryLoader();
+        if (effectiveQueryLoader instanceof NoOpEntityQueryLoader) {
+            if (readThroughConfig.failOnMissingLoader()) {
+                throw new IllegalStateException("Redis query miss for " + metadata.entityName()
+                        + " but no EntityQueryLoader is registered");
+            }
+            recordReadThroughEvent("query-loader-missing", false);
+            return List.of();
+        }
+        List<T> loaded = effectiveQueryLoader.load(querySpec);
+        if (loaded == null || loaded.isEmpty()) {
+            recordReadThroughEvent("query-source-empty", false);
+            return List.of();
+        }
+        if (loaded.size() > readThroughConfig.maxQueryLoadRows()) {
+            throw new IllegalArgumentException("Read-through query loader for " + metadata.entityName()
+                    + " returned " + loaded.size()
+                    + " rows but maxQueryLoadRows=" + readThroughConfig.maxQueryLoadRows());
+        }
+        if (shouldHydrateReadThrough()) {
+            hydrateWarmBatch(
+                    loaded,
+                    Collections.nCopies(loaded.size(), 0L),
+                    true,
+                    true
+            );
+        }
+        recordReadThroughEvent("query-loaded", true);
+        return List.copyOf(loaded);
+    }
+
+    private boolean shouldFailOnMissingPageLoader() {
+        return pageCacheConfig.failOnMissingPageLoader()
+                || (readThroughConfig.mode().pageEnabled() && readThroughConfig.failOnMissingLoader());
+    }
+
+    private boolean shouldHydrateReadThrough() {
+        return readThroughConfig.hydrateLoadedEntities()
+                && (producerGuard == null || !producerGuard.shouldShedReadThroughCache(metadata.redisNamespace()));
+    }
+
+    private void rejectProjectionOnlyEntityRoute(String shape) {
+        if (!readThroughConfig.mode().projectionOnly()) {
+            return;
+        }
+        throw new IllegalStateException(shape + " for " + metadata.entityName()
+                + " is disabled because readThrough.mode=PROJECTION_ONLY; use ProjectionRepository or an explicit SQL route");
     }
 
     private List<String> mgetEntityAndTombstones(List<String> entityKeys, List<String> tombstoneKeys) {

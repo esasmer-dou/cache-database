@@ -17,6 +17,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -133,11 +134,16 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
                 setLockTimeout(connection, options.lockTimeoutMillis());
             }
             connection.setTransactionIsolation(options.transactionIsolation());
-            for (QueuedWriteOperation operation : operations) {
-                if (operation.type() == OperationType.DELETE) {
-                    delete(connection, operation);
-                } else {
-                    upsert(connection, operation);
+            try (StatementCache statements = new StatementCache(connection)) {
+                int index = 0;
+                while (index < operations.size()) {
+                    QueuedWriteOperation operation = operations.get(index);
+                    if (operation.type() == OperationType.DELETE) {
+                        index = deleteConsecutiveBatch(statements, operations, index);
+                    } else {
+                        upsert(statements, operation);
+                        index++;
+                    }
                 }
             }
             connection.commit();
@@ -177,81 +183,140 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
         }
     }
 
-    private void delete(Connection connection, QueuedWriteOperation operation) throws SQLException {
-        try (PreparedStatement statement = prepareStatement(connection, dialect.deleteSql(operation))) {
-            statement.setObject(1, JdbcWriteBehindSupport.convertValue(
-                    operation.id(),
-                    JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
-            ));
-            statement.setLong(2, operation.version());
-            statement.executeUpdate();
+    private int deleteConsecutiveBatch(
+            StatementCache statements,
+            List<QueuedWriteOperation> operations,
+            int startIndex
+    ) throws SQLException {
+        QueuedWriteOperation template = operations.get(startIndex);
+        String sql = dialect.deleteSql(template);
+        PreparedStatement statement = statements.get(sql);
+        int index = startIndex;
+        while (index < operations.size()) {
+            QueuedWriteOperation operation = operations.get(index);
+            if (operation.type() != OperationType.DELETE || !dialect.deleteSql(operation).equals(sql)) {
+                break;
+            }
+            statement.clearParameters();
+            bindDelete(statement, operation);
+            statement.addBatch();
+            index++;
         }
+        statement.executeBatch();
+        statement.clearBatch();
+        return index;
     }
 
-    private void upsert(Connection connection, QueuedWriteOperation operation) throws SQLException {
+    private void bindDelete(PreparedStatement statement, QueuedWriteOperation operation) throws SQLException {
+        statement.setObject(1, JdbcWriteBehindSupport.convertValue(
+                operation.id(),
+                JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
+        ));
+        statement.setLong(2, operation.version());
+    }
+
+    private void upsert(StatementCache statements, QueuedWriteOperation operation) throws SQLException {
         List<Map.Entry<String, String>> entries = new ArrayList<>(operation.columns().entrySet());
-        int updated = update(connection, operation, entries);
+        int updated = update(statements, operation, entries);
         if (updated > 0) {
             return;
         }
-        if (exists(connection, operation)) {
+        if (exists(statements, operation)) {
             return;
         }
-        insert(connection, operation, entries);
+        insert(statements, operation, entries);
     }
 
     private int update(
-            Connection connection,
+            StatementCache statements,
             QueuedWriteOperation operation,
             List<Map.Entry<String, String>> entries
     ) throws SQLException {
-        try (PreparedStatement statement = prepareStatement(connection, dialect.updateSql(operation, entries))) {
-            int parameterIndex = 1;
-            for (Map.Entry<String, String> entry : entries) {
-                if (entry.getKey().equals(operation.idColumn())) {
-                    continue;
-                }
-                statement.setObject(parameterIndex++, JdbcWriteBehindSupport.convertValue(
-                        entry.getValue(),
-                        JdbcWriteBehindSupport.columnType(entityRegistry, operation, entry.getKey())
-                ));
+        PreparedStatement statement = statements.get(dialect.updateSql(operation, entries));
+        statement.clearParameters();
+        int parameterIndex = 1;
+        for (Map.Entry<String, String> entry : entries) {
+            if (entry.getKey().equals(operation.idColumn())) {
+                continue;
             }
             statement.setObject(parameterIndex++, JdbcWriteBehindSupport.convertValue(
-                    operation.id(),
-                    JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
+                    entry.getValue(),
+                    JdbcWriteBehindSupport.columnType(entityRegistry, operation, entry.getKey())
             ));
-            statement.setLong(parameterIndex, operation.version());
-            return statement.executeUpdate();
         }
+        statement.setObject(parameterIndex++, JdbcWriteBehindSupport.convertValue(
+                operation.id(),
+                JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
+        ));
+        statement.setLong(parameterIndex, operation.version());
+        return statement.executeUpdate();
     }
 
-    private boolean exists(Connection connection, QueuedWriteOperation operation) throws SQLException {
-        try (PreparedStatement statement = prepareStatement(connection, dialect.existsSql(operation))) {
-            statement.setObject(1, JdbcWriteBehindSupport.convertValue(
-                    operation.id(),
-                    JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
-            ));
-            try (ResultSet resultSet = statement.executeQuery()) {
-                return resultSet.next();
-            }
+    private boolean exists(StatementCache statements, QueuedWriteOperation operation) throws SQLException {
+        PreparedStatement statement = statements.get(dialect.existsSql(operation));
+        statement.clearParameters();
+        statement.setObject(1, JdbcWriteBehindSupport.convertValue(
+                operation.id(),
+                JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
+        ));
+        try (ResultSet resultSet = statement.executeQuery()) {
+            return resultSet.next();
         }
     }
 
     private void insert(
-            Connection connection,
+            StatementCache statements,
             QueuedWriteOperation operation,
             List<Map.Entry<String, String>> entries
     ) throws SQLException {
-        try (PreparedStatement statement = prepareStatement(connection, dialect.insertSql(operation, entries))) {
-            JdbcWriteBehindSupport.bindUpsert(statement, operation, entityRegistry, entries);
-            statement.executeUpdate();
-        }
+        PreparedStatement statement = statements.get(dialect.insertSql(operation, entries));
+        statement.clearParameters();
+        JdbcWriteBehindSupport.bindUpsert(statement, operation, entityRegistry, entries);
+        statement.executeUpdate();
     }
 
     private PreparedStatement prepareStatement(Connection connection, String sql) throws SQLException {
         PreparedStatement statement = connection.prepareStatement(sql);
         applyQueryTimeout(statement);
         return statement;
+    }
+
+    private final class StatementCache implements AutoCloseable {
+        private final Connection connection;
+        private final LinkedHashMap<String, PreparedStatement> statements = new LinkedHashMap<>();
+
+        private StatementCache(Connection connection) {
+            this.connection = connection;
+        }
+
+        private PreparedStatement get(String sql) throws SQLException {
+            PreparedStatement cached = statements.get(sql);
+            if (cached != null) {
+                return cached;
+            }
+            PreparedStatement prepared = prepareStatement(connection, sql);
+            statements.put(sql, prepared);
+            return prepared;
+        }
+
+        @Override
+        public void close() throws SQLException {
+            SQLException closeFailure = null;
+            for (PreparedStatement statement : statements.values()) {
+                try {
+                    statement.close();
+                } catch (SQLException exception) {
+                    if (closeFailure == null) {
+                        closeFailure = exception;
+                    } else {
+                        closeFailure.addSuppressed(exception);
+                    }
+                }
+            }
+            if (closeFailure != null) {
+                throw closeFailure;
+            }
+        }
     }
 
     private int currentLockTimeout(Connection connection) throws SQLException {

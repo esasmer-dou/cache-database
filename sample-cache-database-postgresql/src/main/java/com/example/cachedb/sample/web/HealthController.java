@@ -21,9 +21,29 @@ public class HealthController {
     @GetMapping("/ready")
     public ReadyResponse ready() {
         var worker = cacheDatabase.workerSnapshot();
-        return new ReadyResponse("UP", jedis.ping(), worker.lastErrorType() == null, worker.flushedCount());
+        return new ReadyResponse(
+                "UP",
+                jedis.ping(),
+                worker.lastErrorType() == null,
+                worker.flushedCount(),
+                worker.lastObservedBacklog(),
+                worker.deadLetterCount(),
+                worker.pendingRecoveryCount(),
+                worker.lastErrorType(),
+                worker.lastErrorRootType()
+        );
     }
 
-    public record ReadyResponse(String status, String redis, boolean writeBehindHealthy, long flushedWrites) {
+    public record ReadyResponse(
+            String status,
+            String redis,
+            boolean writeBehindHealthy,
+            long flushedWrites,
+            long lastObservedBacklog,
+            long deadLetterCount,
+            long pendingRecoveryCount,
+            String lastErrorType,
+            String lastErrorRootType
+    ) {
     }
 }

@@ -119,6 +119,11 @@ public class SampleSeedService {
             auditEventCount++;
         }
 
+        waitForRows("sample_order_lines", lineCount);
+        waitForRows("sample_shipment_events", shipmentEventCount);
+        waitForRows("sample_support_tickets", customers);
+        waitForRows("sample_audit_events", auditEventCount);
+
         return new SeedResult(
                 customers,
                 50,

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MigrationPlannerTest {
@@ -127,5 +128,39 @@ class MigrationPlannerTest {
 
         assertEquals("MigrationDemoCustomerEntityMigrationDemoOrderEntitySummaryHot", result.summaryProjectionName());
         assertEquals("", result.rankedProjectionName());
+    }
+
+    @Test
+    void shouldRejectUnsafeSqlIdentifiersBeforeRenderingWarmSql() {
+        MigrationPlanner.Request request = new MigrationPlanner.Request(
+                "customer-orders",
+                "customer",
+                "customer_id",
+                "orders",
+                "order_id",
+                "customer_id",
+                "order_date; DROP TABLE orders",
+                "DESC",
+                100L,
+                1_000L,
+                10L,
+                20L,
+                50,
+                100,
+                true,
+                false,
+                false,
+                false,
+                true,
+                false,
+                true,
+                true,
+                true
+        );
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> planner.plan(request));
+
+        assertTrue(exception.getMessage().contains("Unsafe SQL identifier"));
+        assertTrue(exception.getMessage().contains("sort column"));
     }
 }

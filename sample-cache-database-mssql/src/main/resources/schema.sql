@@ -182,3 +182,58 @@ CREATE INDEX idx_sample_audit_events_entity_time ON sample_audit_events(entity_n
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_audit_events_security' AND object_id = OBJECT_ID(N'sample_audit_events'))
 CREATE INDEX idx_sample_audit_events_security ON sample_audit_events(severity, created_at DESC)
 @@
+
+IF COL_LENGTH(N'sample_customers', N'entity_version') IS NULL
+ALTER TABLE sample_customers ADD entity_version BIGINT NULL CONSTRAINT df_sample_customers_entity_version DEFAULT 0
+@@
+IF COL_LENGTH(N'sample_customers', N'deleted') IS NULL
+ALTER TABLE sample_customers ADD deleted NVARCHAR(16) NULL
+@@
+IF COL_LENGTH(N'sample_products', N'entity_version') IS NULL
+ALTER TABLE sample_products ADD entity_version BIGINT NULL CONSTRAINT df_sample_products_entity_version DEFAULT 0
+@@
+IF COL_LENGTH(N'sample_products', N'deleted') IS NULL
+ALTER TABLE sample_products ADD deleted NVARCHAR(16) NULL
+@@
+IF COL_LENGTH(N'sample_orders', N'entity_version') IS NULL
+ALTER TABLE sample_orders ADD entity_version BIGINT NULL CONSTRAINT df_sample_orders_entity_version DEFAULT 0
+@@
+IF COL_LENGTH(N'sample_orders', N'deleted') IS NULL
+ALTER TABLE sample_orders ADD deleted NVARCHAR(16) NULL
+@@
+IF COL_LENGTH(N'sample_order_lines', N'entity_version') IS NULL
+ALTER TABLE sample_order_lines ADD entity_version BIGINT NULL CONSTRAINT df_sample_order_lines_entity_version DEFAULT 0
+@@
+IF COL_LENGTH(N'sample_order_lines', N'deleted') IS NULL
+ALTER TABLE sample_order_lines ADD deleted NVARCHAR(16) NULL
+@@
+IF COL_LENGTH(N'sample_support_tickets', N'entity_version') IS NULL
+ALTER TABLE sample_support_tickets ADD entity_version BIGINT NULL CONSTRAINT df_sample_support_tickets_entity_version DEFAULT 0
+@@
+IF COL_LENGTH(N'sample_support_tickets', N'deleted') IS NULL
+ALTER TABLE sample_support_tickets ADD deleted NVARCHAR(16) NULL
+@@
+IF COL_LENGTH(N'sample_shipments', N'entity_version') IS NULL
+ALTER TABLE sample_shipments ADD entity_version BIGINT NULL CONSTRAINT df_sample_shipments_entity_version DEFAULT 0
+@@
+IF COL_LENGTH(N'sample_shipments', N'deleted') IS NULL
+ALTER TABLE sample_shipments ADD deleted NVARCHAR(16) NULL
+@@
+IF COL_LENGTH(N'sample_shipment_events', N'entity_version') IS NULL
+ALTER TABLE sample_shipment_events ADD entity_version BIGINT NULL CONSTRAINT df_sample_shipment_events_entity_version DEFAULT 0
+@@
+IF COL_LENGTH(N'sample_shipment_events', N'deleted') IS NULL
+ALTER TABLE sample_shipment_events ADD deleted NVARCHAR(16) NULL
+@@
+IF COL_LENGTH(N'sample_report_jobs', N'entity_version') IS NULL
+ALTER TABLE sample_report_jobs ADD entity_version BIGINT NULL CONSTRAINT df_sample_report_jobs_entity_version DEFAULT 0
+@@
+IF COL_LENGTH(N'sample_report_jobs', N'deleted') IS NULL
+ALTER TABLE sample_report_jobs ADD deleted NVARCHAR(16) NULL
+@@
+IF COL_LENGTH(N'sample_audit_events', N'entity_version') IS NULL
+ALTER TABLE sample_audit_events ADD entity_version BIGINT NULL CONSTRAINT df_sample_audit_events_entity_version DEFAULT 0
+@@
+IF COL_LENGTH(N'sample_audit_events', N'deleted') IS NULL
+ALTER TABLE sample_audit_events ADD deleted NVARCHAR(16) NULL
+@@

@@ -5,6 +5,7 @@ import com.reactor.cachedb.core.cache.PageWindow;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.core.route.RouteCacheContract;
+import com.reactor.cachedb.core.route.RouteCacheStrictMode;
 
 public final class ReadShapeGuardrails {
 
@@ -111,6 +112,21 @@ public final class ReadShapeGuardrails {
             return;
         }
         contract.validateResolvedRoute(resolvedRouteLabel);
+    }
+
+    public static void validateRouteReadSize(RouteCacheContract contract, String shape, int requestedRows) {
+        if (contract == null
+                || contract.strictMode() != RouteCacheStrictMode.FAIL_FAST
+                || requestedRows <= 0
+                || contract.allowsColdReadSize(requestedRows)) {
+            return;
+        }
+        throw new IllegalArgumentException(
+                safeSurface(shape) + " for route " + safeSurface(contract.routeName())
+                        + " requested " + requestedRows
+                        + " rows but maxColdReadSize is " + contract.maxColdReadSize()
+                        + ". Use a projection/read-model route, lower the page size, or widen the explicit route contract."
+        );
     }
 
     public static int effectivePageRequestLimit(CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {

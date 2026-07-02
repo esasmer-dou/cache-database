@@ -47,17 +47,17 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 <dependency>
   <groupId>com.reactor.cachedb</groupId>
   <artifactId>cachedb-spring-boot-starter</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 
 <dependency>
   <groupId>com.reactor.cachedb</groupId>
   <artifactId>cachedb-storage-mssql</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
-Yani kullanıcı ana projeyi önce build etmek zorunda değildir. CacheDB `0.1.0`, ana repodan GitHub Packages’a yayınlanır ve bu örnek proje paketi oradan çeker.
+Yani kullanıcı ana projeyi önce build etmek zorunda değildir. CacheDB `0.2.0`, ana repodan GitHub Packages’a yayınlanır ve bu örnek proje paketi oradan çeker.
 
 Çalıştırma ve build gereksinimi: JDK 21 kullan. Örnek `pom.xml` içinde
 `<java.version>21</java.version>` tanımlıdır ve proje Java release 21 ile derlenir.
@@ -85,6 +85,87 @@ mvn clean package
 ```
 
 Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir.
+
+## 0.2.0 İçin Doğrulanmış Akış
+
+Bu örnek CacheDB `0.2.0` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
+sözleşme şudur:
+
+1. Yazılar CacheDB üzerinden alınır ve SQL Server’a write-behind ile aktarılır.
+2. SQL Server’da önceden duran kayıtlar uygulama açılır açılmaz Redis’e kendiliğinden yüklenmez.
+3. Hızlı çalışması gereken yollar için sınırlı bir aktif entity seti veya projection gerekir.
+4. Warm/backfill akışı, kayıtlı JDBC loader üzerinden SQL Server’dan okur ve sonra Redis/projection satırlarını doldurur.
+5. Yük testi, seed verisi SQL Server’a kalıcı olarak indikten ve warm adımı bittikten sonra koşulmalıdır.
+
+Bu sözleşme örnek kodda açıkça görünür.
+
+```java
+@Bean
+CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
+    return (builder, properties) -> builder
+            .readThrough(ReadThroughConfig.builder()
+                    .mode(ReadThroughMode.READ_THROUGH_QUERY)
+                    .failOnMissingLoader(true)
+                    .hydrateLoadedEntities(true)
+                    .maxQueryLoadRows(500)
+                    .build());
+}
+```
+
+`registerJdbcBacked(...)`, kontrollü warm veya read-through gerektiğinde
+CacheDB’nin SQL Server’dan sınırlı sorgu okuyabilmesini sağlar:
+
+```java
+@Bean
+EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
+    CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
+    OrderEntityCacheBinding.registerJdbcBacked(cacheDatabase, policy);
+    return OrderEntityCacheBinding.repository(cacheDatabase, policy);
+}
+```
+
+Warm endpoint’i tam tablo taramaz; müşteri sipariş ekranının ihtiyacı olan
+pencereyi okur:
+
+```java
+QuerySpec querySpec = QuerySpec.where(QueryFilter.eq("customer_id", customerId))
+        .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
+        .limitTo(limit);
+
+CacheWarmResult result = cacheDatabase.warm(CacheWarmPlan.builder(OrderEntityCacheBinding.METADATA.entityName())
+        .name("sample-customer-order-window-" + customerId)
+        .querySpec(querySpec)
+        .maxRows(limit)
+        .forceImmediateProjectionRefresh(true)
+        .reindexQueryIndexes(true)
+        .build());
+```
+
+Uygulama hazır olduktan sonra yerel yük kapısını şu komutla çalıştır:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-load-test.ps1 `
+  -RouteProfile hot-timeline `
+  -Concurrency 4 `
+  -DurationSeconds 10 `
+  -SeedCustomers 5 `
+  -OrdersPerCustomer 10 `
+  -LinesPerOrder 3 `
+  -WarmCustomers 5 `
+  -WarmLimit 50 `
+  -MaxP95Millis 1000
+```
+
+Docker Desktop üzerinde son yerel doğrulama:
+
+| Provider | Versiyon | Yol profili | Sonuç |
+|---|---:|---|---|
+| SQL Server | `0.2.0` | `hot-timeline` | `ok=6606`, `fail=0`, `p95=11.4 ms` |
+
+Bu sonuç production benchmark değildir; örnek proje için smoke gate kanıtıdır.
+Staging ortamında veri hacmini büyüt, testi daha uzun çalıştır ve Redis bellek
+kullanımı, projection gecikmesi, write-behind backlog, SQL Server lock
+beklemeleri, SQL gecikmesi ve JVM GC metriklerini birlikte izle.
 
 ## Yerelde Çalıştırma
 

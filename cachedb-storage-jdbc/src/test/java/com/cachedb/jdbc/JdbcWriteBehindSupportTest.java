@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class JdbcWriteBehindSupportTest {
 
@@ -21,6 +22,20 @@ class JdbcWriteBehindSupportTest {
 
         assertEquals(List.of("1", "entity-1", "1"), JdbcWriteBehindSupport.orderedColumnValues(first, entries));
         assertEquals(List.of("2", "entity-2", "2"), JdbcWriteBehindSupport.orderedColumnValues(second, entries));
+    }
+
+    @Test
+    void shouldPreserveNullColumnValuesForNullableWriteColumns() {
+        QueuedWriteOperation operation = operationWithNullableDeletedColumn();
+        List<Map.Entry<String, String>> entries = List.copyOf(operation.columns().entrySet());
+
+        List<String> values = JdbcWriteBehindSupport.orderedColumnValues(operation, entries);
+
+        assertEquals(4, values.size());
+        assertEquals("1", values.get(0));
+        assertEquals("entity-1", values.get(1));
+        assertEquals("1", values.get(2));
+        assertNull(values.get(3));
     }
 
     @Test
@@ -58,6 +73,28 @@ class JdbcWriteBehindSupportTest {
                 id,
                 columns,
                 version,
+                Instant.parse("2026-04-05T13:00:00Z")
+        );
+    }
+
+    private static QueuedWriteOperation operationWithNullableDeletedColumn() {
+        LinkedHashMap<String, String> columns = new LinkedHashMap<>();
+        columns.put("id", "1");
+        columns.put("name", "entity-1");
+        columns.put("entity_version", "1");
+        columns.put("deleted", null);
+        return new QueuedWriteOperation(
+                OperationType.UPSERT,
+                "DemoEntity",
+                "demo_table",
+                "demo",
+                "write",
+                "id",
+                "entity_version",
+                "deleted",
+                "1",
+                columns,
+                1,
                 Instant.parse("2026-04-05T13:00:00Z")
         );
     }

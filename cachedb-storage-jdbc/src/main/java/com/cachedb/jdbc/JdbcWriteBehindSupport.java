@@ -30,7 +30,7 @@ public final class JdbcWriteBehindSupport {
         for (Map.Entry<String, String> entry : entries) {
             values.add(columnValue(operation, entry.getKey()));
         }
-        return List.copyOf(values);
+        return values;
     }
 
     public static void bindUpsert(

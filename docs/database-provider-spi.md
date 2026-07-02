@@ -71,7 +71,7 @@ not force a driver version transitively; the application owns the `DataSource`.
 <dependency>
   <groupId>com.reactor.cachedb</groupId>
   <artifactId>cachedb-storage-mssql</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 
 <dependency>
