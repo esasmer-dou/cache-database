@@ -39,19 +39,64 @@ sınırları altında yine de öngörülebilir kalmasını beklemek.
 Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 
 ```xml
-<repository>
-  <id>cache-database-github-packages</id>
-  <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
-</repository>
+<properties>
+  <java.version>21</java.version>
+  <cachedb.version>0.2.0</cachedb.version>
+</properties>
 
-<dependency>
-  <groupId>com.reactor.cachedb</groupId>
-  <artifactId>cachedb-spring-boot-starter</artifactId>
-  <version>0.2.0</version>
-</dependency>
+<repositories>
+  <repository>
+    <id>cache-database-github-packages</id>
+    <name>CacheDB GitHub Packages</name>
+    <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+  </repository>
+</repositories>
+
+<dependencies>
+  <dependency>
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cachedb-spring-boot-starter</artifactId>
+    <version>${cachedb.version}</version>
+  </dependency>
+  <dependency>
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cachedb-annotations</artifactId>
+    <version>${cachedb.version}</version>
+  </dependency>
+
+  <dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-jdbc</artifactId>
+  </dependency>
+  <dependency>
+    <groupId>org.postgresql</groupId>
+    <artifactId>postgresql</artifactId>
+    <scope>runtime</scope>
+  </dependency>
+</dependencies>
+
+<build>
+  <plugins>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-compiler-plugin</artifactId>
+      <configuration>
+        <release>${java.version}</release>
+        <annotationProcessorPaths>
+          <path>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-processor</artifactId>
+            <version>${cachedb.version}</version>
+          </path>
+        </annotationProcessorPaths>
+      </configuration>
+    </plugin>
+  </plugins>
+</build>
 ```
 
 Yani kullanıcı ana projeyi önce build etmek zorunda değildir. CacheDB `0.2.0`, ana repodan GitHub Packages’a yayınlanır ve bu örnek proje paketi oradan çeker.
+`cachedb-annotations` ve `cachedb-processor`, `OrderEntityCacheBinding` gibi generated binding sınıflarının üretilmesi için gereklidir.
 
 Çalıştırma ve build gereksinimi: JDK 21 kullan. Örnek `pom.xml` içinde
 `<java.version>21</java.version>` tanımlıdır ve proje Java release 21 ile derlenir.
@@ -70,7 +115,7 @@ GitHub Packages Maven erişimi için kimlik bilgisi gerekir. `pom.xml` içindeki
 </settings>
 ```
 
-`read:packages` yetkisi olan bir token tanımladıktan sonra proje doğrudan build edilir:
+`read:packages` yetkisi olan bir GitHub personal access token tanımladıktan sonra proje doğrudan build edilir:
 
 ```bash
 export GITHUB_ACTOR=github-kullanici-adin

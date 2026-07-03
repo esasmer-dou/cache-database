@@ -39,19 +39,64 @@ limits.
 This project intentionally consumes CacheDB as an external Maven package:
 
 ```xml
-<repository>
-  <id>cache-database-github-packages</id>
-  <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
-</repository>
+<properties>
+  <java.version>21</java.version>
+  <cachedb.version>0.2.0</cachedb.version>
+</properties>
 
-<dependency>
-  <groupId>com.reactor.cachedb</groupId>
-  <artifactId>cachedb-spring-boot-starter</artifactId>
-  <version>0.2.0</version>
-</dependency>
+<repositories>
+  <repository>
+    <id>cache-database-github-packages</id>
+    <name>CacheDB GitHub Packages</name>
+    <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+  </repository>
+</repositories>
+
+<dependencies>
+  <dependency>
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cachedb-spring-boot-starter</artifactId>
+    <version>${cachedb.version}</version>
+  </dependency>
+  <dependency>
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cachedb-annotations</artifactId>
+    <version>${cachedb.version}</version>
+  </dependency>
+
+  <dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-jdbc</artifactId>
+  </dependency>
+  <dependency>
+    <groupId>org.postgresql</groupId>
+    <artifactId>postgresql</artifactId>
+    <scope>runtime</scope>
+  </dependency>
+</dependencies>
+
+<build>
+  <plugins>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-compiler-plugin</artifactId>
+      <configuration>
+        <release>${java.version}</release>
+        <annotationProcessorPaths>
+          <path>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-processor</artifactId>
+            <version>${cachedb.version}</version>
+          </path>
+        </annotationProcessorPaths>
+      </configuration>
+    </plugin>
+  </plugins>
+</build>
 ```
 
 Users should not build the parent repository first. CacheDB `0.2.0` is published from the main repository to GitHub Packages.
+The annotation dependency and `cachedb-processor` are required for generated bindings such as `OrderEntityCacheBinding`.
 
 Runtime and build requirement: use JDK 21. The sample `pom.xml` sets
 `<java.version>21</java.version>` and compiles with Java release 21.
@@ -70,7 +115,7 @@ GitHub Packages Maven access requires credentials. The `<id>` in `pom.xml` must 
 </settings>
 ```
 
-Use a token with `read:packages` access, then run:
+Use a GitHub personal access token with `read:packages` access, then run:
 
 ```bash
 export GITHUB_ACTOR=your-github-user
