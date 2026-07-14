@@ -85,9 +85,9 @@ public record RedisGuardrailConfig(
         private int criticalSamplesToAggressive = 2;
         private int warnSamplesToDeescalateAggressive = 4;
         private int normalSamplesToStandard = 5;
-        private int compactionPayloadTtlSeconds = 3_600;
-        private int compactionPendingTtlSeconds = 3_600;
-        private int versionKeyTtlSeconds = 86_400;
+        private int compactionPayloadTtlSeconds;
+        private int compactionPendingTtlSeconds;
+        private int versionKeyTtlSeconds;
         private int tombstoneTtlSeconds = 86_400;
         private boolean autoRecoverDegradedIndexesEnabled = true;
         private long degradedIndexRebuildCooldownMillis = 30_000L;
@@ -288,6 +288,16 @@ public record RedisGuardrailConfig(
         }
 
         public RedisGuardrailConfig build() {
+            if (compactionPayloadTtlSeconds > 0 || compactionPendingTtlSeconds > 0) {
+                throw new IllegalArgumentException(
+                        "Durable compaction payload and pending keys cannot expire; configure both TTL values as 0"
+                );
+            }
+            if (versionKeyTtlSeconds > 0) {
+                throw new IllegalArgumentException(
+                        "Entity version fences cannot expire; configure versionKeyTtlSeconds as 0"
+                );
+            }
             return new RedisGuardrailConfig(
                     enabled,
                     producerBackpressureEnabled,

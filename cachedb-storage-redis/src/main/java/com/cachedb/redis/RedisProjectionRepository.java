@@ -181,10 +181,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     }
 
     private void cacheHotQuery(String key, List<P> result) {
-        if (key == null || result == null) {
-            return;
-        }
-        queryCache.put(key, result);
+        // Redis is the shared cache. Pod-local query results cannot be invalidated reliably across replicas.
     }
 
     private void validateProjectionRouteContract(String shape, int requestedRows) {
@@ -194,42 +191,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     }
 
     private String hotQueryCacheKey(QuerySpec querySpec) {
-        if (querySpec == null) {
-            return null;
-        }
-        if (querySpec.offset() != 0 || querySpec.limit() <= 0 || querySpec.limit() > 200) {
-            return null;
-        }
-        if (querySpec.rootGroup().operator() != com.reactor.cachedb.core.query.QueryGroupOperator.AND) {
-            return null;
-        }
-        if (querySpec.fetchPlan() != null
-                && (!querySpec.fetchPlan().includes().isEmpty()
-                || !querySpec.fetchPlan().relationLimits().isEmpty())) {
-            return null;
-        }
-        if (querySpec.filters().size() != 1 || querySpec.sorts().isEmpty()) {
-            return null;
-        }
-        QueryFilter filter = querySpec.filters().get(0);
-        if (filter.operator() != QueryOperator.EQ || filter.column().contains(".")) {
-            return null;
-        }
-        StringBuilder builder = new StringBuilder(readRuntime.metadata().entityName())
-                .append('|')
-                .append(filter.column())
-                .append('=')
-                .append(String.valueOf(filter.value()))
-                .append('|')
-                .append("limit=")
-                .append(querySpec.limit());
-        for (QuerySort sort : querySpec.sorts()) {
-            builder.append('|')
-                    .append(sort.column())
-                    .append(':')
-                    .append(sort.direction().name());
-        }
-        return builder.toString();
+        return null;
     }
 
     private Optional<List<P>> queryViaRankedProjectionWindow(QuerySpec querySpec) {

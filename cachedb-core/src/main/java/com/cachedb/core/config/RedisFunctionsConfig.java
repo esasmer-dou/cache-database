@@ -10,8 +10,28 @@ public record RedisFunctionsConfig(
         String deleteFunctionName,
         String compactionCompleteFunctionName,
         String templateResourcePath,
-        String sourceOverride
+        String sourceOverride,
+        String libraryVersion
 ) {
+    public RedisFunctionsConfig(
+            boolean enabled,
+            boolean autoLoadLibrary,
+            boolean replaceLibraryOnLoad,
+            boolean strictLoading,
+            String libraryName,
+            String upsertFunctionName,
+            String deleteFunctionName,
+            String compactionCompleteFunctionName,
+            String templateResourcePath,
+            String sourceOverride
+    ) {
+        this(
+                enabled, autoLoadLibrary, replaceLibraryOnLoad, strictLoading, libraryName,
+                upsertFunctionName, deleteFunctionName, compactionCompleteFunctionName,
+                templateResourcePath, sourceOverride, "0.3.0"
+        );
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -31,6 +51,7 @@ public record RedisFunctionsConfig(
         private String compactionCompleteFunctionName = "compaction_complete";
         private String templateResourcePath = "/functions/cachedb-functions.lua";
         private String sourceOverride;
+        private String libraryVersion = "0.3.0";
 
         public Builder enabled(boolean enabled) {
             this.enabled = enabled;
@@ -82,6 +103,11 @@ public record RedisFunctionsConfig(
             return this;
         }
 
+        public Builder libraryVersion(String libraryVersion) {
+            this.libraryVersion = libraryVersion;
+            return this;
+        }
+
         public RedisFunctionsConfig build() {
             return new RedisFunctionsConfig(
                     enabled,
@@ -93,7 +119,8 @@ public record RedisFunctionsConfig(
                     deleteFunctionName,
                     compactionCompleteFunctionName,
                     templateResourcePath,
-                    sourceOverride
+                    sourceOverride,
+                    libraryVersion
             );
         }
     }

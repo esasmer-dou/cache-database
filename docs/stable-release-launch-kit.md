@@ -19,10 +19,10 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Official Distribution Channel
 
-For `v0.2.0`, the official distribution channel is the GitHub Release asset:
+For `v0.3.0`, the official distribution channel is the GitHub Release asset:
 
 ```text
-cache-database-0.2.0-github-release.zip
+cache-database-0.3.0-github-release.zip
 ```
 
 The bundle contains the Maven module jars, source jars, javadocs, README,
@@ -32,9 +32,9 @@ package distribution channel.
 
 ## Release Positioning
 
-`cache-database v0.2.0`
+`cache-database v0.3.0`
 
-CacheDB `v0.2.0` is a stable framework release focused on explicit active-route
+CacheDB `v0.3.0` is a stable framework release focused on explicit active-route
 adoption, JDBC-backed warm/read-through, PostgreSQL and MSSQL sample coverage,
 and deterministic sample load gates. It keeps the Redis-first data-layer model,
 compile-time generated APIs, bounded hot-set policies, and projection/read-model
@@ -55,7 +55,7 @@ topologies must be proven in the consuming application's staging environment.
 ## Release Notes Template
 
 ```markdown
-## cache-database v0.2.0
+## cache-database v0.3.0
 
 This stable release improves the practical migration path for existing SQL-backed applications.
 
@@ -89,13 +89,13 @@ comparison, Redis memory budget, and rollback plan.
 ## Publication Checklist
 
 - `pom.xml` and all module parent versions use the stable version.
-- Release notes exist at `docs/releases/v0.2.0.md`.
+- Release notes exist at `docs/releases/v0.3.0.md`.
 - `mvn -DskipTests package` passes.
 - Public API compatibility check passes.
 - Turkish documentation quality check passes.
 - Local Docker HA preflight passes or the latest CI evidence is green.
 - `Public Beta Readiness` and `Production Evidence` are green for the release
   commit.
-- `Production GA Release Readiness` is green for `v0.2.0`.
+- `Production GA Release Readiness` is green for `v0.3.0`.
 - GitHub Release is not marked as prerelease.
-- GitHub Release asset `cache-database-0.2.0-github-release.zip` is attached.
+- GitHub Release asset `cache-database-0.3.0-github-release.zip` is attached.

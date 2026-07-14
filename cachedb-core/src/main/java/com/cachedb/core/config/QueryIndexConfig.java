@@ -16,8 +16,36 @@ public record QueryIndexConfig(
         int prefixMaxLength,
         int textTokenMinLength,
         int textTokenMaxLength,
-        int textMaxTokensPerValue
+        int textMaxTokensPerValue,
+        int maxMaterializedCandidateIds
 ) {
+    public QueryIndexConfig(
+            boolean exactIndexEnabled,
+            boolean rangeIndexEnabled,
+            boolean prefixIndexEnabled,
+            boolean textIndexEnabled,
+            boolean plannerStatisticsEnabled,
+            boolean plannerStatisticsPersisted,
+            long plannerStatisticsTtlMillis,
+            int plannerStatisticsSampleSize,
+            boolean learnedStatisticsEnabled,
+            double learnedStatisticsWeight,
+            boolean cacheWarmingEnabled,
+            int rangeHistogramBuckets,
+            int prefixMaxLength,
+            int textTokenMinLength,
+            int textTokenMaxLength,
+            int textMaxTokensPerValue
+    ) {
+        this(
+                exactIndexEnabled, rangeIndexEnabled, prefixIndexEnabled, textIndexEnabled,
+                plannerStatisticsEnabled, plannerStatisticsPersisted, plannerStatisticsTtlMillis,
+                plannerStatisticsSampleSize, learnedStatisticsEnabled, learnedStatisticsWeight,
+                cacheWarmingEnabled, rangeHistogramBuckets, prefixMaxLength, textTokenMinLength,
+                textTokenMaxLength, textMaxTokensPerValue, 10_000
+        );
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -29,8 +57,8 @@ public record QueryIndexConfig(
     public static final class Builder {
         private boolean exactIndexEnabled = true;
         private boolean rangeIndexEnabled = true;
-        private boolean prefixIndexEnabled = true;
-        private boolean textIndexEnabled = true;
+        private boolean prefixIndexEnabled;
+        private boolean textIndexEnabled;
         private boolean plannerStatisticsEnabled = true;
         private boolean plannerStatisticsPersisted = true;
         private long plannerStatisticsTtlMillis = 60_000;
@@ -43,6 +71,7 @@ public record QueryIndexConfig(
         private int textTokenMinLength = 2;
         private int textTokenMaxLength = 32;
         private int textMaxTokensPerValue = 16;
+        private int maxMaterializedCandidateIds = 10_000;
 
         public Builder exactIndexEnabled(boolean exactIndexEnabled) {
             this.exactIndexEnabled = exactIndexEnabled;
@@ -124,7 +153,15 @@ public record QueryIndexConfig(
             return this;
         }
 
+        public Builder maxMaterializedCandidateIds(int maxMaterializedCandidateIds) {
+            this.maxMaterializedCandidateIds = maxMaterializedCandidateIds;
+            return this;
+        }
+
         public QueryIndexConfig build() {
+            if (maxMaterializedCandidateIds <= 0) {
+                throw new IllegalArgumentException("maxMaterializedCandidateIds must be greater than zero");
+            }
             return new QueryIndexConfig(
                     exactIndexEnabled,
                     rangeIndexEnabled,
@@ -141,7 +178,8 @@ public record QueryIndexConfig(
                     prefixMaxLength,
                     textTokenMinLength,
                     textTokenMaxLength,
-                    textMaxTokensPerValue
+                    textMaxTokensPerValue,
+                    maxMaterializedCandidateIds
             );
         }
     }

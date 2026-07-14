@@ -3,10 +3,25 @@ package com.reactor.cachedb.redis;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import redis.clients.jedis.JedisPooled;
 
-import java.time.Instant;
 import java.util.List;
 
 public final class RedisHotSetManager {
+
+    private static final String RECORD_ACCESS_SCRIPT = """
+            redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
+            if ARGV[4] ~= '1' then
+                return {}
+            end
+            local overflow = redis.call('ZCARD', KEYS[1]) - tonumber(ARGV[3])
+            if overflow <= 0 then
+                return {}
+            end
+            local evicted = redis.call('ZRANGE', KEYS[1], 0, overflow - 1)
+            if #evicted > 0 then
+                redis.call('ZREM', KEYS[1], unpack(evicted))
+            end
+            return evicted
+            """;
 
     private final JedisPooled jedis;
     private final RedisKeyStrategy keyStrategy;
@@ -21,28 +36,20 @@ public final class RedisHotSetManager {
             return List.of();
         }
 
-        String hotSetKey = keyStrategy.hotSetKey(namespace);
-        jedis.zadd(hotSetKey, Instant.now().toEpochMilli(), String.valueOf(id));
-
-        if (!cachePolicy.lruEvictionEnabled()) {
+        Object result = jedis.eval(
+                RECORD_ACCESS_SCRIPT,
+                List.of(keyStrategy.hotSetKey(namespace)),
+                List.of(
+                        String.valueOf(System.currentTimeMillis()),
+                        String.valueOf(id),
+                        String.valueOf(cachePolicy.hotEntityLimit()),
+                        cachePolicy.lruEvictionEnabled() ? "1" : "0"
+                )
+        );
+        if (!(result instanceof List<?> values) || values.isEmpty()) {
             return List.of();
         }
-
-        long currentSize = jedis.zcard(hotSetKey);
-        long overflow = currentSize - cachePolicy.hotEntityLimit();
-        if (overflow <= 0) {
-            return List.of();
-        }
-
-        List<String> overflowMembers = jedis.zrange(hotSetKey, 0, overflow - 1);
-        if (overflowMembers == null || overflowMembers.isEmpty()) {
-            return List.of();
-        }
-
-        for (String overflowId : overflowMembers) {
-            jedis.zrem(hotSetKey, overflowId);
-        }
-        return List.copyOf(overflowMembers);
+        return values.stream().map(String::valueOf).toList();
     }
 
     public <ID> void remove(String namespace, ID id) {

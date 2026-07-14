@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -46,13 +47,33 @@ final class CacheDatabaseAdminServlet extends HttpServlet {
             return;
         }
         URI targetUri = resolveTargetUri(request);
-        byte[] requestBody = request.getInputStream().readAllBytes();
+        byte[] requestBody = readBoundedRequestBody(request, response);
+        if (requestBody == null) {
+            return;
+        }
         AdminHttpResponse adminResponse = adminHandler.dispatch(request.getMethod(), targetUri, requestBody, requestHeaders);
         response.setStatus(adminResponse.statusCode());
         copyResponseHeaders(request, response, adminResponse.headers());
         byte[] body = adminResponse.body();
         if (body.length > 0) {
             response.getOutputStream().write(body);
+        }
+    }
+
+    private byte[] readBoundedRequestBody(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        int maxBytes = adminHandler.maxRequestBodyBytes();
+        long declaredLength = request.getContentLengthLong();
+        if (declaredLength > maxBytes) {
+            response.sendError(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "Admin request body is too large");
+            return null;
+        }
+        try (InputStream input = request.getInputStream()) {
+            byte[] body = input.readNBytes(maxBytes + 1);
+            if (body.length > maxBytes) {
+                response.sendError(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "Admin request body is too large");
+                return null;
+            }
+            return body;
         }
     }
 

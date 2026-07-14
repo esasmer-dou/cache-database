@@ -71,8 +71,8 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
         }
         enforceHardLimits(operation);
         var body = mapper.toBody(operation);
-        jedis.xadd(streamKey, XAddParams.xAddParams(), body);
-        if (!config.durableCompactionEnabled()) {
+        if (!config.compactionActive()) {
+            jedis.xadd(streamKey, XAddParams.xAddParams(), body);
             return;
         }
         String targetCompactionStreamKey = keyStrategy.compactionStreamKey(
@@ -89,10 +89,9 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
         if (!payloadExists) {
             jedis.hincrBy(statsKey, "payloadCount", 1L);
         }
-        expireIfConfigured(payloadKey, guardrailConfig.compactionPayloadTtlSeconds());
         if (jedis.setnx(pendingKey, String.valueOf(operation.version())) == 1L) {
             jedis.hincrBy(statsKey, "pendingCount", 1L);
-            jedis.xadd(targetCompactionStreamKey, compactionAddParams(), Map.of(
+            jedis.xadd(targetCompactionStreamKey, XAddParams.xAddParams(), Map.of(
                     "namespace", operation.metadata().redisNamespace(),
                     "id", String.valueOf(operation.id()),
                     "version", String.valueOf(operation.version()),
@@ -100,21 +99,6 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
             ));
         } else {
             jedis.set(pendingKey, String.valueOf(operation.version()));
-        }
-        expireIfConfigured(pendingKey, guardrailConfig.compactionPendingTtlSeconds());
-    }
-
-    private XAddParams compactionAddParams() {
-        XAddParams params = XAddParams.xAddParams();
-        if (config.compactionMaxLength() > 0) {
-            params.maxLen(config.compactionMaxLength()).approximateTrimming();
-        }
-        return params;
-    }
-
-    private void expireIfConfigured(String key, int ttlSeconds) {
-        if (ttlSeconds > 0) {
-            jedis.expire(key, ttlSeconds);
         }
     }
 

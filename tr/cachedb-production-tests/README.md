@@ -295,9 +295,11 @@ Yararlı override'lar:
 - `cachedb.prod.redis.usedMemoryCriticalBytes=3221225472`
 - `cachedb.prod.redis.compactionPendingWarnThreshold=1000`
 - `cachedb.prod.redis.compactionPendingCriticalThreshold=5000`
-- `cachedb.prod.redis.compactionPayloadTtlSeconds=3600`
-- `cachedb.prod.redis.compactionPendingTtlSeconds=3600`
-- `cachedb.prod.redis.versionKeyTtlSeconds=86400`
+- `cachedb.prod.redis.compactionPayloadTtlSeconds=0`
+- `cachedb.prod.redis.compactionPendingTtlSeconds=0`
+- `cachedb.prod.redis.versionKeyTtlSeconds=0`
+
+Bu üç değer dayanıklılık çitidir ve `0` kalmalıdır. Payload veya pending kaydının SQL flush öncesinde, version fence'in ise eski bir olay geldikten önce süresinin dolması veri kaybına ya da eski verinin yeni veriyi ezmesine neden olabilir.
 - `cachedb.prod.redis.tombstoneTtlSeconds=86400`
 - `cachedb.prod.redis.shedQueryIndexWritesOnHardLimit=true`
 - `cachedb.prod.redis.shedQueryIndexReadsOnHardLimit=true`

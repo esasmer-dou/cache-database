@@ -4,11 +4,15 @@ public record ReadThroughConfig(
         ReadThroughMode mode,
         boolean failOnMissingLoader,
         boolean hydrateLoadedEntities,
-        int maxQueryLoadRows
+        int maxQueryLoadRows,
+        int queryTimeoutSeconds
 ) {
     public ReadThroughConfig {
         mode = mode == null ? ReadThroughMode.REDIS_ONLY : mode;
         maxQueryLoadRows = Math.max(1, maxQueryLoadRows);
+        if (queryTimeoutSeconds <= 0) {
+            throw new IllegalArgumentException("Read-through queryTimeoutSeconds must be greater than zero");
+        }
     }
 
     public static Builder builder() {
@@ -24,6 +28,7 @@ public record ReadThroughConfig(
         private boolean failOnMissingLoader;
         private boolean hydrateLoadedEntities = true;
         private int maxQueryLoadRows = 500;
+        private int queryTimeoutSeconds = 30;
 
         public Builder mode(ReadThroughMode mode) {
             this.mode = mode;
@@ -45,12 +50,18 @@ public record ReadThroughConfig(
             return this;
         }
 
+        public Builder queryTimeoutSeconds(int queryTimeoutSeconds) {
+            this.queryTimeoutSeconds = queryTimeoutSeconds;
+            return this;
+        }
+
         public ReadThroughConfig build() {
             return new ReadThroughConfig(
                     mode,
                     failOnMissingLoader,
                     hydrateLoadedEntities,
-                    maxQueryLoadRows
+                    maxQueryLoadRows,
+                    queryTimeoutSeconds
             );
         }
     }

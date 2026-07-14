@@ -17,4 +17,21 @@ public record EntityBinding<T, ID>(
         EntityByIdLoader<T, ID> byIdLoader,
         EntityQueryLoader<T> queryLoader
 ) {
+    public EntityBinding(
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            CachePolicy cachePolicy,
+            RelationBatchLoader<T> relationBatchLoader,
+            EntityPageLoader<T> pageLoader
+    ) {
+        this(
+                metadata,
+                codec,
+                cachePolicy,
+                relationBatchLoader,
+                pageLoader,
+                new com.reactor.cachedb.core.page.NoOpEntityByIdLoader<>(),
+                new com.reactor.cachedb.core.page.NoOpEntityQueryLoader<>()
+        );
+    }
 }

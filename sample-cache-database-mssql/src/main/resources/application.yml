@@ -38,6 +38,11 @@ cachedb:
     base-path: /cachedb-admin
     dashboard-enabled: true
     title: CacheDB MSSQL Sample
+    request-queue-capacity: 128
+    background-worker-threads: 2
+    background-queue-capacity: 32
+    max-request-body-bytes: 1048576
+    job-status-ttl-seconds: 86400
   runtime:
     append-instance-id-to-consumer-names: true
     leader-lease-enabled: true

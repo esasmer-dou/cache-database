@@ -3,11 +3,12 @@ package com.reactor.cachedb.starter;
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.page.EntityQueryLoader;
 import com.reactor.cachedb.core.page.NoOpEntityQueryLoader;
+import com.reactor.cachedb.core.page.VersionedEntity;
+import com.reactor.cachedb.core.page.VersionedEntitySourceLoader;
 import com.reactor.cachedb.core.queue.PerformanceObservationContext;
 import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.redis.RedisEntityRepository;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -36,6 +37,12 @@ public final class CacheWarmRunner {
             throw new IllegalStateException("Warm plan " + plan.name()
                     + " requires an EntityQueryLoader for " + plan.entityName());
         }
+        if (!(queryLoader instanceof VersionedEntitySourceLoader<?, ?> rawVersionedLoader)) {
+            throw new IllegalStateException("Warm plan " + plan.name()
+                    + " requires a VersionedEntitySourceLoader so Redis version fences remain correct");
+        }
+        VersionedEntitySourceLoader<T, ID> versionedLoader =
+                (VersionedEntitySourceLoader<T, ID>) rawVersionedLoader;
         if (plan.querySpec().limit() > plan.maxRows()) {
             throw new IllegalArgumentException("Warm plan " + plan.name()
                     + " query limit " + plan.querySpec().limit()
@@ -43,9 +50,9 @@ public final class CacheWarmRunner {
         }
 
         long startedAtNanos = System.nanoTime();
-        List<T> loaded = PerformanceObservationContext.supplyWithTag(
+        List<VersionedEntity<T>> loaded = PerformanceObservationContext.supplyWithTag(
                 "warm:" + plan.name(),
-                () -> queryLoader.load(plan.querySpec())
+                () -> versionedLoader.loadVersionedQuery(plan.querySpec())
         );
         if (loaded == null || loaded.isEmpty()) {
             return new CacheWarmResult(
@@ -76,8 +83,8 @@ public final class CacheWarmRunner {
         }
         RedisEntityRepository<T, ID> redisRepository = (RedisEntityRepository<T, ID>) rawRedisRepository;
         redisRepository.hydrateWarmBatch(
-                loaded,
-                Collections.nCopies(loaded.size(), 0L),
+                loaded.stream().map(VersionedEntity::entity).toList(),
+                loaded.stream().map(VersionedEntity::version).toList(),
                 plan.forceImmediateProjectionRefresh(),
                 plan.reindexQueryIndexes()
         );

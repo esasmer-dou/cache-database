@@ -300,6 +300,7 @@ public final class com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec {
 ## cachedb-core :: com.reactor.cachedb.core.config.AdminHttpConfig
 public final class com.reactor.cachedb.core.config.AdminHttpConfig extends java.lang.Record {
   public com.reactor.cachedb.core.config.AdminHttpConfig(boolean, java.lang.String, int, int, int, boolean, boolean, java.lang.String, boolean, java.lang.String, java.lang.String);
+  public com.reactor.cachedb.core.config.AdminHttpConfig(boolean, java.lang.String, int, int, int, boolean, boolean, java.lang.String, boolean, java.lang.String, java.lang.String, int, int, int, int, int);
   public static com.reactor.cachedb.core.config.AdminHttpConfig$Builder builder();
   public static com.reactor.cachedb.core.config.AdminHttpConfig defaults();
   public final java.lang.String toString();
@@ -316,6 +317,11 @@ public final class com.reactor.cachedb.core.config.AdminHttpConfig extends java.
   public boolean authEnabled();
   public java.lang.String authToken();
   public java.lang.String authHeaderName();
+  public int requestQueueCapacity();
+  public int backgroundWorkerThreads();
+  public int backgroundQueueCapacity();
+  public int maxRequestBodyBytes();
+  public int jobStatusTtlSeconds();
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.config.AdminMonitoringConfig
@@ -386,8 +392,10 @@ public final class com.reactor.cachedb.core.config.AdminReportJobConfig extends 
 
 ## cachedb-core :: com.reactor.cachedb.core.config.CacheDatabaseConfig
 public final class com.reactor.cachedb.core.config.CacheDatabaseConfig extends java.lang.Record {
-  public com.reactor.cachedb.core.config.CacheDatabaseConfig(com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.config.ResourceLimits, com.reactor.cachedb.core.config.KeyspaceConfig, com.reactor.cachedb.core.config.RuntimeCoordinationConfig, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.config.ProjectionRefreshConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.DeadLetterRecoveryConfig, com.reactor.cachedb.core.config.AdminMonitoringConfig, com.reactor.cachedb.core.config.AdminReportJobConfig, com.reactor.cachedb.core.config.AdminHttpConfig, com.reactor.cachedb.core.config.SchemaBootstrapConfig);
   public com.reactor.cachedb.core.config.CacheDatabaseConfig(com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.queue.WriteBehindFlusherFactory, com.reactor.cachedb.core.config.ResourceLimits, com.reactor.cachedb.core.config.KeyspaceConfig, com.reactor.cachedb.core.config.RuntimeCoordinationConfig, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.config.ProjectionRefreshConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.DeadLetterRecoveryConfig, com.reactor.cachedb.core.config.AdminMonitoringConfig, com.reactor.cachedb.core.config.AdminReportJobConfig, com.reactor.cachedb.core.config.AdminHttpConfig, com.reactor.cachedb.core.config.SchemaBootstrapConfig);
+  public com.reactor.cachedb.core.config.CacheDatabaseConfig(com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.config.ResourceLimits, com.reactor.cachedb.core.config.KeyspaceConfig, com.reactor.cachedb.core.config.RuntimeCoordinationConfig, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.config.ProjectionRefreshConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.DeadLetterRecoveryConfig, com.reactor.cachedb.core.config.AdminMonitoringConfig, com.reactor.cachedb.core.config.AdminReportJobConfig, com.reactor.cachedb.core.config.AdminHttpConfig, com.reactor.cachedb.core.config.SchemaBootstrapConfig);
+  public com.reactor.cachedb.core.config.CacheDatabaseConfig(com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.config.ResourceLimits, com.reactor.cachedb.core.config.KeyspaceConfig, com.reactor.cachedb.core.config.RuntimeCoordinationConfig, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadThroughConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.config.ProjectionRefreshConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.DeadLetterRecoveryConfig, com.reactor.cachedb.core.config.AdminMonitoringConfig, com.reactor.cachedb.core.config.AdminReportJobConfig, com.reactor.cachedb.core.config.AdminHttpConfig, com.reactor.cachedb.core.config.SchemaBootstrapConfig);
+  public com.reactor.cachedb.core.config.CacheDatabaseConfig(com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.queue.WriteBehindFlusherFactory, com.reactor.cachedb.core.config.ResourceLimits, com.reactor.cachedb.core.config.KeyspaceConfig, com.reactor.cachedb.core.config.RuntimeCoordinationConfig, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadThroughConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.config.ProjectionRefreshConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.DeadLetterRecoveryConfig, com.reactor.cachedb.core.config.AdminMonitoringConfig, com.reactor.cachedb.core.config.AdminReportJobConfig, com.reactor.cachedb.core.config.AdminHttpConfig, com.reactor.cachedb.core.config.SchemaBootstrapConfig);
   public static com.reactor.cachedb.core.config.CacheDatabaseConfig$Builder builder();
   public static com.reactor.cachedb.core.config.CacheDatabaseConfig defaults();
   public com.reactor.cachedb.core.config.CacheDatabaseConfig$Builder toBuilder();
@@ -402,6 +410,7 @@ public final class com.reactor.cachedb.core.config.CacheDatabaseConfig extends j
   public com.reactor.cachedb.core.config.RedisFunctionsConfig redisFunctions();
   public com.reactor.cachedb.core.config.RelationConfig relations();
   public com.reactor.cachedb.core.config.PageCacheConfig pageCache();
+  public com.reactor.cachedb.core.config.ReadThroughConfig readThrough();
   public com.reactor.cachedb.core.config.ReadShapeGuardrailConfig readShapeGuardrail();
   public com.reactor.cachedb.core.config.QueryIndexConfig queryIndex();
   public com.reactor.cachedb.core.config.ProjectionRefreshConfig projectionRefresh();
@@ -672,6 +681,7 @@ public final class com.reactor.cachedb.core.config.ProjectionRefreshConfig exten
 ## cachedb-core :: com.reactor.cachedb.core.config.QueryIndexConfig
 public final class com.reactor.cachedb.core.config.QueryIndexConfig extends java.lang.Record {
   public com.reactor.cachedb.core.config.QueryIndexConfig(boolean, boolean, boolean, boolean, boolean, boolean, long, int, boolean, double, boolean, int, int, int, int, int);
+  public com.reactor.cachedb.core.config.QueryIndexConfig(boolean, boolean, boolean, boolean, boolean, boolean, long, int, boolean, double, boolean, int, int, int, int, int, int);
   public static com.reactor.cachedb.core.config.QueryIndexConfig$Builder builder();
   public static com.reactor.cachedb.core.config.QueryIndexConfig defaults();
   public final java.lang.String toString();
@@ -693,6 +703,7 @@ public final class com.reactor.cachedb.core.config.QueryIndexConfig extends java
   public int textTokenMinLength();
   public int textTokenMaxLength();
   public int textMaxTokensPerValue();
+  public int maxMaterializedCandidateIds();
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.config.ReadShapeGuardrailConfig
@@ -716,9 +727,40 @@ public final class com.reactor.cachedb.core.config.ReadShapeGuardrailConfig exte
   public int maxProjectionQueryLimit();
 }
 
+## cachedb-core :: com.reactor.cachedb.core.config.ReadThroughConfig
+public final class com.reactor.cachedb.core.config.ReadThroughConfig extends java.lang.Record {
+  public com.reactor.cachedb.core.config.ReadThroughConfig(com.reactor.cachedb.core.config.ReadThroughMode, boolean, boolean, int, int);
+  public static com.reactor.cachedb.core.config.ReadThroughConfig$Builder builder();
+  public static com.reactor.cachedb.core.config.ReadThroughConfig defaults();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public com.reactor.cachedb.core.config.ReadThroughMode mode();
+  public boolean failOnMissingLoader();
+  public boolean hydrateLoadedEntities();
+  public int maxQueryLoadRows();
+  public int queryTimeoutSeconds();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.config.ReadThroughMode
+public final class com.reactor.cachedb.core.config.ReadThroughMode extends java.lang.Enum<com.reactor.cachedb.core.config.ReadThroughMode> {
+  public static final com.reactor.cachedb.core.config.ReadThroughMode REDIS_ONLY;
+  public static final com.reactor.cachedb.core.config.ReadThroughMode READ_THROUGH_BY_ID;
+  public static final com.reactor.cachedb.core.config.ReadThroughMode READ_THROUGH_PAGE;
+  public static final com.reactor.cachedb.core.config.ReadThroughMode READ_THROUGH_QUERY;
+  public static final com.reactor.cachedb.core.config.ReadThroughMode PROJECTION_ONLY;
+  public static com.reactor.cachedb.core.config.ReadThroughMode[] values();
+  public static com.reactor.cachedb.core.config.ReadThroughMode valueOf(java.lang.String);
+  public boolean byIdEnabled();
+  public boolean pageEnabled();
+  public boolean queryEnabled();
+  public boolean projectionOnly();
+}
+
 ## cachedb-core :: com.reactor.cachedb.core.config.RedisFunctionsConfig
 public final class com.reactor.cachedb.core.config.RedisFunctionsConfig extends java.lang.Record {
   public com.reactor.cachedb.core.config.RedisFunctionsConfig(boolean, boolean, boolean, boolean, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
+  public com.reactor.cachedb.core.config.RedisFunctionsConfig(boolean, boolean, boolean, boolean, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
   public static com.reactor.cachedb.core.config.RedisFunctionsConfig$Builder builder();
   public static com.reactor.cachedb.core.config.RedisFunctionsConfig defaults();
   public final java.lang.String toString();
@@ -734,6 +776,7 @@ public final class com.reactor.cachedb.core.config.RedisFunctionsConfig extends 
   public java.lang.String compactionCompleteFunctionName();
   public java.lang.String templateResourcePath();
   public java.lang.String sourceOverride();
+  public java.lang.String libraryVersion();
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.config.RedisGuardrailConfig
@@ -854,6 +897,8 @@ public final class com.reactor.cachedb.core.config.SchemaBootstrapMode extends j
 ## cachedb-core :: com.reactor.cachedb.core.config.WriteBehindConfig
 public final class com.reactor.cachedb.core.config.WriteBehindConfig extends java.lang.Record {
   public com.reactor.cachedb.core.config.WriteBehindConfig(boolean, int, int, boolean, boolean, boolean, boolean, int, int, boolean, int, boolean, long, long, int, int, boolean, int, boolean, int, long, long, int, long, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, int, boolean, long, boolean, boolean, long, int, java.util.List<com.reactor.cachedb.core.config.WriteRetryPolicyOverride>, java.util.List<com.reactor.cachedb.core.config.EntityFlushPolicy>, long, java.lang.String, long);
+  public com.reactor.cachedb.core.config.WriteBehindConfig(boolean, int, int, boolean, boolean, boolean, boolean, int, int, boolean, int, boolean, long, long, int, int, boolean, int, boolean, int, int, long, long, int, long, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, int, boolean, long, boolean, boolean, long, int, java.util.List<com.reactor.cachedb.core.config.WriteRetryPolicyOverride>, java.util.List<com.reactor.cachedb.core.config.EntityFlushPolicy>, long, java.lang.String, long);
+  public boolean compactionActive();
   public java.lang.String activeStreamKey();
   public java.util.List<java.lang.String> activeStreamKeys();
   public java.lang.String activeConsumerGroup();
@@ -883,6 +928,7 @@ public final class com.reactor.cachedb.core.config.WriteBehindConfig extends jav
   public int postgresMultiRowStatementRowLimit();
   public boolean postgresCopyBulkLoadEnabled();
   public int postgresCopyThreshold();
+  public int statementTimeoutSeconds();
   public long blockTimeoutMillis();
   public long idleSleepMillis();
   public int maxFlushRetries();
@@ -941,6 +987,7 @@ public final class com.reactor.cachedb.core.guardrail.ReadShapeGuardrails {
   public static void validateEntityQuery(java.lang.String, com.reactor.cachedb.core.query.QuerySpec, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
   public static void validateProjectionQuery(java.lang.String, com.reactor.cachedb.core.query.QuerySpec, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
   public static void validateRouteContract(com.reactor.cachedb.core.route.RouteCacheContract, java.lang.String);
+  public static void validateRouteReadSize(com.reactor.cachedb.core.route.RouteCacheContract, java.lang.String, int);
   public static int effectivePageRequestLimit(com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
   public static int effectiveLoadedPageLimit(com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
   public static int effectiveEntityQueryLimit(com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig);
@@ -1026,15 +1073,57 @@ public final class com.reactor.cachedb.core.model.WriteOperation<T, ID> extends 
   public java.time.Instant createdAt();
 }
 
+## cachedb-core :: com.reactor.cachedb.core.page.EntityByIdLoader
+public interface com.reactor.cachedb.core.page.EntityByIdLoader<T, ID> {
+  public abstract java.util.Optional<T> load(ID);
+}
+
 ## cachedb-core :: com.reactor.cachedb.core.page.EntityPageLoader
 public interface com.reactor.cachedb.core.page.EntityPageLoader<T> {
   public abstract java.util.List<T> load(com.reactor.cachedb.core.cache.PageWindow);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.page.EntityQueryLoader
+public interface com.reactor.cachedb.core.page.EntityQueryLoader<T> {
+  public abstract java.util.List<T> load(com.reactor.cachedb.core.query.QuerySpec);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.page.NoOpEntityByIdLoader
+public final class com.reactor.cachedb.core.page.NoOpEntityByIdLoader<T, ID> implements com.reactor.cachedb.core.page.EntityByIdLoader<T, ID> {
+  public com.reactor.cachedb.core.page.NoOpEntityByIdLoader();
+  public java.util.Optional<T> load(ID);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.page.NoOpEntityPageLoader
 public final class com.reactor.cachedb.core.page.NoOpEntityPageLoader<T> implements com.reactor.cachedb.core.page.EntityPageLoader<T> {
   public com.reactor.cachedb.core.page.NoOpEntityPageLoader();
   public java.util.List<T> load(com.reactor.cachedb.core.cache.PageWindow);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.page.NoOpEntityQueryLoader
+public final class com.reactor.cachedb.core.page.NoOpEntityQueryLoader<T> implements com.reactor.cachedb.core.page.EntityQueryLoader<T> {
+  public com.reactor.cachedb.core.page.NoOpEntityQueryLoader();
+  public java.util.List<T> load(com.reactor.cachedb.core.query.QuerySpec);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.page.VersionedEntity
+public final class com.reactor.cachedb.core.page.VersionedEntity<T> extends java.lang.Record {
+  public com.reactor.cachedb.core.page.VersionedEntity(T, long);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public T entity();
+  public long version();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.page.VersionedEntitySourceLoader
+public interface com.reactor.cachedb.core.page.VersionedEntitySourceLoader<T, ID> extends com.reactor.cachedb.core.page.EntityByIdLoader<T, ID>, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.page.EntityQueryLoader<T> {
+  public abstract java.util.Optional<com.reactor.cachedb.core.page.VersionedEntity<T>> loadVersionedById(ID);
+  public abstract java.util.List<com.reactor.cachedb.core.page.VersionedEntity<T>> loadVersionedPage(com.reactor.cachedb.core.cache.PageWindow);
+  public abstract java.util.List<com.reactor.cachedb.core.page.VersionedEntity<T>> loadVersionedQuery(com.reactor.cachedb.core.query.QuerySpec);
+  public default java.util.Optional<T> load(ID);
+  public default java.util.List<T> load(com.reactor.cachedb.core.cache.PageWindow);
+  public default java.util.List<T> load(com.reactor.cachedb.core.query.QuerySpec);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.plan.FetchPlan
@@ -1842,6 +1931,11 @@ public final class com.reactor.cachedb.core.queue.RecoveryCleanupSnapshot extend
   public java.lang.String lastErrorStackTrace();
 }
 
+## cachedb-core :: com.reactor.cachedb.core.queue.RedisBackpressureException
+public final class com.reactor.cachedb.core.queue.RedisBackpressureException extends java.lang.IllegalStateException {
+  public com.reactor.cachedb.core.queue.RedisBackpressureException(com.reactor.cachedb.core.queue.RedisGuardrailSnapshot);
+}
+
 ## cachedb-core :: com.reactor.cachedb.core.queue.RedisGuardrailSnapshot
 public final class com.reactor.cachedb.core.queue.RedisGuardrailSnapshot extends java.lang.Record {
   public com.reactor.cachedb.core.queue.RedisGuardrailSnapshot(long, long, long, java.lang.String, boolean, boolean, long, long, long, long, long, long, long, java.lang.String);
@@ -1934,6 +2028,11 @@ public final class com.reactor.cachedb.core.queue.SchemaMigrationStep extends ja
   public java.lang.String tableName();
   public java.lang.String sql();
   public java.lang.String reason();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.queue.StaleWriteRejectedException
+public final class com.reactor.cachedb.core.queue.StaleWriteRejectedException extends java.sql.SQLException {
+  public com.reactor.cachedb.core.queue.StaleWriteRejectedException(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.lang.Long);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.queue.StoragePerformanceCollector
@@ -2074,6 +2173,7 @@ public final class com.reactor.cachedb.core.queue.WriteFailureCategory extends j
   public static final com.reactor.cachedb.core.queue.WriteFailureCategory DATA;
   public static final com.reactor.cachedb.core.queue.WriteFailureCategory SCHEMA;
   public static final com.reactor.cachedb.core.queue.WriteFailureCategory PERMISSION;
+  public static final com.reactor.cachedb.core.queue.WriteFailureCategory STALE_WRITE;
   public static final com.reactor.cachedb.core.queue.WriteFailureCategory UNKNOWN;
   public static com.reactor.cachedb.core.queue.WriteFailureCategory[] values();
   public static com.reactor.cachedb.core.queue.WriteFailureCategory valueOf(java.lang.String);
@@ -2100,6 +2200,7 @@ public final class com.reactor.cachedb.core.queue.WriteFailureDetails extends ja
 public final class com.reactor.cachedb.core.registry.DefaultEntityRegistry implements com.reactor.cachedb.core.registry.EntityRegistry {
   public com.reactor.cachedb.core.registry.DefaultEntityRegistry(com.reactor.cachedb.core.config.ResourceLimits);
   public synchronized <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>);
+  public synchronized <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.page.EntityByIdLoader<T, ID>, com.reactor.cachedb.core.page.EntityQueryLoader<T>);
   public synchronized <T, ID, P> com.reactor.cachedb.core.projection.EntityProjectionBinding<T, P, ID> registerProjection(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.projection.EntityProjection<T, P, ID>);
   public synchronized java.util.Optional<com.reactor.cachedb.core.registry.EntityBinding<?, ?>> find(java.lang.String);
   public synchronized java.util.Optional<com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>> findProjection(java.lang.String, java.lang.String);
@@ -2110,6 +2211,7 @@ public final class com.reactor.cachedb.core.registry.DefaultEntityRegistry imple
 ## cachedb-core :: com.reactor.cachedb.core.registry.EntityBinding
 public final class com.reactor.cachedb.core.registry.EntityBinding<T, ID> extends java.lang.Record {
   public com.reactor.cachedb.core.registry.EntityBinding(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>);
+  public com.reactor.cachedb.core.registry.EntityBinding(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.page.EntityByIdLoader<T, ID>, com.reactor.cachedb.core.page.EntityQueryLoader<T>);
   public final java.lang.String toString();
   public final int hashCode();
   public final boolean equals(java.lang.Object);
@@ -2118,11 +2220,14 @@ public final class com.reactor.cachedb.core.registry.EntityBinding<T, ID> extend
   public com.reactor.cachedb.core.cache.CachePolicy cachePolicy();
   public com.reactor.cachedb.core.relation.RelationBatchLoader<T> relationBatchLoader();
   public com.reactor.cachedb.core.page.EntityPageLoader<T> pageLoader();
+  public com.reactor.cachedb.core.page.EntityByIdLoader<T, ID> byIdLoader();
+  public com.reactor.cachedb.core.page.EntityQueryLoader<T> queryLoader();
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.registry.EntityRegistry
 public interface com.reactor.cachedb.core.registry.EntityRegistry {
-  public abstract <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>);
+  public default <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>);
+  public default <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.page.EntityByIdLoader<T, ID>, com.reactor.cachedb.core.page.EntityQueryLoader<T>);
   public abstract <T, ID, P> com.reactor.cachedb.core.projection.EntityProjectionBinding<T, P, ID> registerProjection(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.projection.EntityProjection<T, P, ID>);
   public abstract java.util.Optional<com.reactor.cachedb.core.registry.EntityBinding<?, ?>> find(java.lang.String);
   public abstract java.util.Optional<com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>> findProjection(java.lang.String, java.lang.String);
@@ -2210,6 +2315,7 @@ public final class com.reactor.cachedb.core.route.TenantCacheQuota extends java.
 ## cachedb-processor :: com.reactor.cachedb.processor.CacheEntityProcessor
 public final class com.reactor.cachedb.processor.CacheEntityProcessor extends javax.annotation.processing.AbstractProcessor {
   public com.reactor.cachedb.processor.CacheEntityProcessor();
+  public javax.lang.model.SourceVersion getSupportedSourceVersion();
   public synchronized void init(javax.annotation.processing.ProcessingEnvironment);
   public boolean process(java.util.Set<? extends javax.lang.model.element.TypeElement>, javax.annotation.processing.RoundEnvironment);
 }
@@ -2252,6 +2358,7 @@ public final class com.reactor.cachedb.redis.RedisDeadLetterRecoveryWorker imple
 ## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisEntityRepository
 public final class com.reactor.cachedb.redis.RedisEntityRepository<T, ID> implements com.reactor.cachedb.core.api.EntityRepository<T, ID>, com.reactor.cachedb.core.change.ExternalChangeHydrationRepository<T, ID> {
   public com.reactor.cachedb.redis.RedisEntityRepository(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.queue.WriteBehindQueue, com.reactor.cachedb.redis.RedisKeyStrategy, com.reactor.cachedb.core.plan.FetchPlan, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.redis.RedisFunctionExecutor, com.reactor.cachedb.redis.RedisProducerGuard, com.reactor.cachedb.core.config.RedisGuardrailConfig, java.lang.String, java.lang.String, int, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.redis.RedisPageCacheManager<T, ID>, com.reactor.cachedb.core.query.QueryEvaluator, com.reactor.cachedb.redis.RedisQueryIndexManager<T, ID>, com.reactor.cachedb.core.queue.StoragePerformanceCollector, redis.clients.jedis.JedisPooled, com.reactor.cachedb.redis.ProjectionRefreshDispatcher, com.reactor.cachedb.redis.RedisProjectionRefreshQueue);
+  public com.reactor.cachedb.redis.RedisEntityRepository(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.queue.WriteBehindQueue, com.reactor.cachedb.redis.RedisKeyStrategy, com.reactor.cachedb.core.plan.FetchPlan, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.redis.RedisFunctionExecutor, com.reactor.cachedb.redis.RedisProducerGuard, com.reactor.cachedb.core.config.RedisGuardrailConfig, java.lang.String, java.lang.String, int, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.page.EntityByIdLoader<T, ID>, com.reactor.cachedb.core.page.EntityQueryLoader<T>, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadThroughConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.redis.RedisPageCacheManager<T, ID>, com.reactor.cachedb.core.query.QueryEvaluator, com.reactor.cachedb.redis.RedisQueryIndexManager<T, ID>, com.reactor.cachedb.core.queue.StoragePerformanceCollector, redis.clients.jedis.JedisPooled, com.reactor.cachedb.redis.ProjectionRefreshDispatcher, com.reactor.cachedb.redis.RedisProjectionRefreshQueue);
   public java.util.Optional<T> findById(ID);
   public java.util.List<T> findAll(java.util.Collection<ID>);
   public java.util.List<T> findPage(com.reactor.cachedb.core.cache.PageWindow);
@@ -2277,12 +2384,15 @@ public final class com.reactor.cachedb.redis.RedisEntityRepository<T, ID> implem
 public final class com.reactor.cachedb.redis.RedisFunctionArgsMapper {
   public com.reactor.cachedb.redis.RedisFunctionArgsMapper();
   public <T, ID> java.util.List<java.lang.String> upsertArgs(com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.RedisGuardrailConfig, boolean);
+  public <T, ID> java.util.List<java.lang.String> upsertArgs(com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.WriteBehindConfig, boolean);
+  public <T, ID> java.util.List<java.lang.String> deleteArgs(com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.WriteBehindConfig);
   public <T, ID> java.util.List<java.lang.String> deleteArgs(com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.config.RedisGuardrailConfig);
 }
 
 ## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisFunctionExecutor
 public final class com.reactor.cachedb.redis.RedisFunctionExecutor {
   public com.reactor.cachedb.redis.RedisFunctionExecutor(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.redis.RedisFunctionArgsMapper);
+  public com.reactor.cachedb.redis.RedisFunctionExecutor(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.config.RedisFunctionsConfig, com.reactor.cachedb.core.config.RedisGuardrailConfig, com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.redis.RedisFunctionArgsMapper);
   public boolean enabled();
   public <T, ID> long upsert(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, com.reactor.cachedb.core.model.WriteOperation<T, ID>, com.reactor.cachedb.core.cache.CachePolicy, boolean);
   public <T, ID> long delete(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, com.reactor.cachedb.core.model.WriteOperation<T, ID>);
@@ -2376,6 +2486,7 @@ public final class com.reactor.cachedb.redis.RedisPageCacheManager<T, ID> {
   public void removeEntity(ID);
   public java.util.Optional<java.util.List<T>> getCachedPage(com.reactor.cachedb.core.cache.PageWindow);
   public void cachePage(com.reactor.cachedb.core.cache.PageWindow, java.util.List<T>);
+  public void cachePageMembership(com.reactor.cachedb.core.cache.PageWindow, java.util.List<T>);
   public java.util.List<java.lang.String> hotEntityIds();
   public boolean shouldServeCachedEntity(T);
 }
@@ -2517,6 +2628,15 @@ public interface com.reactor.cachedb.jdbc.JdbcDatabaseDialect {
   public default int safeStatementRowLimit(int, int);
 }
 
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcEntitySourceLoader
+public final class com.reactor.cachedb.jdbc.JdbcEntitySourceLoader<T, ID> implements com.reactor.cachedb.core.page.VersionedEntitySourceLoader<T, ID> {
+  public com.reactor.cachedb.jdbc.JdbcEntitySourceLoader(javax.sql.DataSource, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, int);
+  public com.reactor.cachedb.jdbc.JdbcEntitySourceLoader(javax.sql.DataSource, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, int, int);
+  public java.util.Optional<com.reactor.cachedb.core.page.VersionedEntity<T>> loadVersionedById(ID);
+  public java.util.List<com.reactor.cachedb.core.page.VersionedEntity<T>> loadVersionedPage(com.reactor.cachedb.core.cache.PageWindow);
+  public java.util.List<com.reactor.cachedb.core.page.VersionedEntity<T>> loadVersionedQuery(com.reactor.cachedb.core.query.QuerySpec);
+}
+
 ## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcOutboxDialect
 public interface com.reactor.cachedb.jdbc.JdbcOutboxDialect {
   public abstract java.lang.String name();
@@ -2575,6 +2695,18 @@ public final class com.reactor.cachedb.jdbc.SqlFailureClassifierSupport {
   public static java.lang.Throwable rootCause(java.lang.Throwable);
   public static java.sql.SQLException rootSqlException(java.lang.Exception);
   public static java.lang.String blankToEmpty(java.lang.String);
+}
+
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.VersionGuardedWriteSupport
+public final class com.reactor.cachedb.jdbc.VersionGuardedWriteSupport {
+  public static void verifySingleOutcome(java.sql.Connection, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.queue.QueuedWriteOperation, int) throws java.sql.SQLException;
+  public static void verifySingleOutcome(java.sql.Connection, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.queue.QueuedWriteOperation, int, int) throws java.sql.SQLException;
+  public static void verifyBatchOutcome(java.sql.Connection, com.reactor.cachedb.core.registry.EntityRegistry, java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>, int[]) throws java.sql.SQLException;
+  public static void verifyBatchOutcome(java.sql.Connection, com.reactor.cachedb.core.registry.EntityRegistry, java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>, int[], int) throws java.sql.SQLException;
+  public static void verifyAggregateOutcome(java.sql.Connection, com.reactor.cachedb.core.registry.EntityRegistry, java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>, int) throws java.sql.SQLException;
+  public static void verifyAggregateOutcome(java.sql.Connection, com.reactor.cachedb.core.registry.EntityRegistry, java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>, int, int) throws java.sql.SQLException;
+  public static java.lang.Long currentVersion(java.sql.Connection, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.queue.QueuedWriteOperation) throws java.sql.SQLException;
+  public static java.lang.Long currentVersion(java.sql.Connection, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.queue.QueuedWriteOperation, int) throws java.sql.SQLException;
 }
 
 ## cachedb-storage-postgres :: com.reactor.cachedb.postgres.PostgresDatabaseDialect
@@ -2841,8 +2973,15 @@ public final class com.reactor.cachedb.starter.CacheDatabase implements com.reac
   public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy);
   public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>);
   public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>);
+  public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.page.EntityByIdLoader<T, ID>, com.reactor.cachedb.core.page.EntityQueryLoader<T>);
+  public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> registerJdbcBacked(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>);
+  public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> registerJdbcBacked(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy);
+  public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> registerJdbcBacked(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>);
+  public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> registerJdbcBacked(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.page.EntityPageLoader<T>);
   public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>);
   public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.registry.EntityBinding<T, ID>);
+  public com.reactor.cachedb.starter.CacheWarmResult warm(com.reactor.cachedb.starter.CacheWarmPlan);
+  public java.util.List<com.reactor.cachedb.starter.CacheWarmResult> warmAll(java.util.Collection<com.reactor.cachedb.starter.CacheWarmPlan>);
   public <T, ID, P> com.reactor.cachedb.core.projection.EntityProjectionBinding<T, P, ID> registerProjection(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.projection.EntityProjection<T, P, ID>);
   public <T, ID> com.reactor.cachedb.core.api.EntityRepository<T, ID> repository(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>);
   public <T, ID> com.reactor.cachedb.core.api.EntityRepository<T, ID> repository(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy);
@@ -2970,6 +3109,7 @@ public final class com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer impl
   public java.net.URI baseUri();
   public com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer$AdminHttpResponse dispatch(java.lang.String, java.net.URI, byte[]) throws java.io.IOException;
   public com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer$AdminHttpResponse dispatch(java.lang.String, java.net.URI, byte[], java.util.Map<java.lang.String, java.util.List<java.lang.String>>) throws java.io.IOException;
+  public int maxRequestBodyBytes();
   public boolean isRequestAuthorized(java.util.Map<java.lang.String, java.util.List<java.lang.String>>);
   public java.lang.String authenticationChallenge();
   public com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer$DashboardTemplateModel renderDashboardTemplateModel(java.lang.String, java.lang.String);
@@ -3002,6 +3142,8 @@ public final class com.reactor.cachedb.starter.CacheDatabaseBootstrap {
   public com.reactor.cachedb.starter.CacheDatabaseBootstrap minimalOverhead();
   public com.reactor.cachedb.starter.CacheDatabaseBootstrap keyPrefix(java.lang.String);
   public com.reactor.cachedb.starter.CacheDatabaseBootstrap register(java.util.function.Consumer<com.reactor.cachedb.starter.CacheDatabase>);
+  public com.reactor.cachedb.starter.CacheDatabaseBootstrap warmOnStart(com.reactor.cachedb.starter.CacheWarmPlan);
+  public com.reactor.cachedb.starter.CacheDatabaseBootstrap warmOnStart(java.util.Collection<com.reactor.cachedb.starter.CacheWarmPlan>);
   public com.reactor.cachedb.starter.CacheDatabase build();
   public com.reactor.cachedb.starter.CacheDatabase start();
   public com.reactor.cachedb.core.config.CacheDatabaseConfig previewConfig();
@@ -3043,6 +3185,43 @@ public final class com.reactor.cachedb.starter.CacheDatabaseSchemaAdmin {
   public com.reactor.cachedb.core.queue.SchemaMigrationPlan planMigration();
   public com.reactor.cachedb.core.queue.SchemaMigrationPlan applyMigrationPlan();
   public java.util.List<com.reactor.cachedb.starter.SchemaMigrationHistoryEntry> migrationHistory(int);
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.CacheWarmPlan
+public final class com.reactor.cachedb.starter.CacheWarmPlan extends java.lang.Record {
+  public com.reactor.cachedb.starter.CacheWarmPlan(java.lang.String, java.lang.String, com.reactor.cachedb.core.query.QuerySpec, int, boolean, boolean);
+  public static com.reactor.cachedb.starter.CacheWarmPlan$Builder builder(java.lang.String);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String name();
+  public java.lang.String entityName();
+  public com.reactor.cachedb.core.query.QuerySpec querySpec();
+  public int maxRows();
+  public boolean forceImmediateProjectionRefresh();
+  public boolean reindexQueryIndexes();
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.CacheWarmResult
+public final class com.reactor.cachedb.starter.CacheWarmResult extends java.lang.Record {
+  public com.reactor.cachedb.starter.CacheWarmResult(java.lang.String, java.lang.String, int, int, long, boolean, boolean, java.util.List<java.lang.String>);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String planName();
+  public java.lang.String entityName();
+  public int loadedRows();
+  public int submittedRows();
+  public long durationMillis();
+  public boolean forceImmediateProjectionRefresh();
+  public boolean reindexQueryIndexes();
+  public java.util.List<java.lang.String> notes();
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.CacheWarmRunner
+public final class com.reactor.cachedb.starter.CacheWarmRunner {
+  public com.reactor.cachedb.starter.CacheWarmRunner(com.reactor.cachedb.starter.CacheDatabase);
+  public com.reactor.cachedb.starter.CacheWarmResult execute(com.reactor.cachedb.starter.CacheWarmPlan);
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.DefaultCacheSession

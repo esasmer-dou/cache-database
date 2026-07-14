@@ -214,6 +214,7 @@ PostgreSQL'e dönmez; startup sırasında açık hata verir.
 | `cachedb.config.writeBehind.postgresMultiRowStatementRowLimit` | `64` | Üretilen multi-row statement başına satır limiti. |
 | `cachedb.config.writeBehind.postgresCopyBulkLoadEnabled` | `true` | PostgreSQL `COPY` yolunu açar. |
 | `cachedb.config.writeBehind.postgresCopyThreshold` | `128` | `COPY` yoluna geçiş minimum satır sayısı. |
+| `cachedb.config.writeBehind.statementTimeoutSeconds` | `30` | Write-behind statement'ları ve version fence yavaş yol kontrolleri için JDBC zaman aşımıdır. |
 | `cachedb.config.writeBehind.blockTimeoutMillis` | `2000` | Redis stream block timeout. |
 | `cachedb.config.writeBehind.idleSleepMillis` | `250` | Worker idle sleep süresi. |
 | `cachedb.config.writeBehind.maxFlushRetries` | `3` | Genel flush retry sayısı. |
@@ -233,7 +234,7 @@ PostgreSQL'e dönmez; startup sırasında açık hata verir.
 | `cachedb.config.writeBehind.claimBatchSize` | `100` | Her döngüde claim edilen entry sayısı. |
 | `cachedb.config.writeBehind.deadLetterMaxLength` | `10000` | Write-behind DLQ stream trim hedefi. |
 | `cachedb.config.writeBehind.deadLetterStreamKey` | `cachedb:stream:write-behind:dlq` | Write-behind DLQ stream key'i. |
-| `cachedb.config.writeBehind.compactionMaxLength` | `10000` | Compaction stream trim hedefi. |
+| `cachedb.config.writeBehind.compactionMaxLength` | `0` | `0` kalmalıdır. Onaylanmamış dayanıklı compaction kayıtları otomatik olarak silinemez. |
 | `cachedb.config.writeBehind.retryOverrides` | boş | Entity bazlı retry override. Format aşağıda. |
 | `cachedb.config.writeBehind.entityFlushPolicies` | boş | Entity bazlı PostgreSQL flush policy. Format aşağıda. |
 
@@ -310,12 +311,23 @@ edilemiyorsa kayıtlı Java predicate kullan.
 | `cachedb.config.redisFunctions.compactionCompleteFunctionName` | `compaction_complete` | Compaction-complete function giriş noktası. |
 | `cachedb.config.redisFunctions.templateResourcePath` | `/functions/cachedb-functions.lua` | Function kaynak template yolu. |
 | `cachedb.config.redisFunctions.sourceOverride` | boş | Library için tam kaynak override'i. |
+| `cachedb.config.redisFunctions.libraryVersion` | `0.3.0` | Semantik dağıtım sürümüdür. Function kaynağı değiştiğinde yeni sürüm yayımlanmalıdır. |
 | `cachedb.config.relations.batchSize` | `250` | Varsayılan relation batch boyu. |
 | `cachedb.config.relations.maxFetchDepth` | `3` | Maksimum relation fetch derinliği. |
 | `cachedb.config.relations.failOnMissingPreloader` | `false` | Eksik relation preloader durumunda fail davranışını belirler. |
 | `cachedb.config.pageCache.readThroughEnabled` | `true` | Page-cache read-through davranışını açar. |
 | `cachedb.config.pageCache.failOnMissingPageLoader` | `false` | Read-through için page loader yoksa fail olup olmayacağını belirler. |
 | `cachedb.config.pageCache.evictionBatchSize` | `100` | Page-cache eviction batch boyu. |
+
+### Veritabanından Okuyarak Tamamlama
+
+| Ayar | Varsayılan | Ne işe yarar |
+| --- | --- | --- |
+| `cachedb.config.readThrough.mode` | `REDIS_ONLY` | Yalnızca Redis, tekil kayıt, sorgu veya tam SQL fallback davranışını seçer. Fallback yalnızca sınırları belirlenmiş route'larda açılmalıdır. |
+| `cachedb.config.readThrough.failOnMissingLoader` | `false` | Fallback açık olduğu hâlde kaynak loader yoksa isteği açık hatayla durdurur. |
+| `cachedb.config.readThrough.hydrateLoadedEntities` | `true` | SQL'den gelen sürümlü kayıtları cache policy izin veriyorsa Redis'e alır. Sürüm taşımayan özel loader sonuçları döndürülür ancak Redis'e yazılmaz. |
+| `cachedb.config.readThrough.maxQueryLoadRows` | `500` | Tek SQL sorgu loader çağrısından kabul edilen en yüksek satır sayısıdır. |
+| `cachedb.config.readThrough.queryTimeoutSeconds` | `30` | SQL fallback statement'ları için JDBC zaman aşımıdır. |
 
 ### Okuma Şekli Guardrail'ları
 
@@ -341,8 +353,8 @@ Bu ayarlar Redis'i yanlışlıkla geniş okuma yüküyle doldurmayı engeller. V
 | --- | --- | --- |
 | `cachedb.config.queryIndex.exactIndexEnabled` | `true` | Exact-match index'lerini açar. |
 | `cachedb.config.queryIndex.rangeIndexEnabled` | `true` | Range index'lerini açar. |
-| `cachedb.config.queryIndex.prefixIndexEnabled` | `true` | Prefix index'lerini açar. |
-| `cachedb.config.queryIndex.textIndexEnabled` | `true` | Text index'lerini açar. |
+| `cachedb.config.queryIndex.prefixIndexEnabled` | `false` | Prefix indekslerini açar. Değer uzunluğu yazma maliyetini büyüttüğü için yalnızca ölçülmüş route'larda etkinleştirilmelidir. |
+| `cachedb.config.queryIndex.textIndexEnabled` | `false` | Token indekslerini açar. Genel tam metin araması için arama motoru kullanılmalıdır. |
 | `cachedb.config.queryIndex.plannerStatisticsEnabled` | `true` | Planner statistics toplamayı açar. |
 | `cachedb.config.queryIndex.plannerStatisticsPersisted` | `true` | Planner statistics'i Redis'te kalıcı tutar. |
 | `cachedb.config.queryIndex.plannerStatisticsTtlMillis` | `60000` | Planner statistics TTL süresi. |
@@ -351,10 +363,11 @@ Bu ayarlar Redis'i yanlışlıkla geniş okuma yüküyle doldurmayı engeller. V
 | `cachedb.config.queryIndex.learnedStatisticsWeight` | `0.35` | Learned statistics ağırlığı. |
 | `cachedb.config.queryIndex.cacheWarmingEnabled` | `true` | Index ve planner warming davranışını açar. |
 | `cachedb.config.queryIndex.rangeHistogramBuckets` | `8` | Range histogram bucket sayısı. |
-| `cachedb.config.queryIndex.prefixMaxLength` | `12` | Indexlenen maksimum prefix uzunlugu. |
-| `cachedb.config.queryIndex.textTokenMinLength` | `2` | Indexlenen minimum token uzunlugu. |
-| `cachedb.config.queryIndex.textTokenMaxLength` | `32` | Indexlenen maksimum token uzunlugu. |
+| `cachedb.config.queryIndex.prefixMaxLength` | `12` | İndekslenen en uzun prefix değeridir. |
+| `cachedb.config.queryIndex.textTokenMinLength` | `2` | İndekslenen en kısa token uzunluğudur. |
+| `cachedb.config.queryIndex.textTokenMaxLength` | `32` | İndekslenen en uzun token uzunluğudur. |
 | `cachedb.config.queryIndex.textMaxTokensPerValue` | `16` | Alan başı maksimum token sayısı. |
+| `cachedb.config.queryIndex.maxMaterializedCandidateIds` | `10000` | Geniş bir sorgunun daha büyük bir aday kümesini JVM belleğine almadan önce açık hatayla durmasını sağlar. Bu değeri ölçmeden büyütmek yerine projection veya daha seçici filtre kullan. |
 
 ### Projection Refresh
 
@@ -390,7 +403,7 @@ Operasyonel notlar:
 - model tasarım gereği hala eventual consistency tabanlıdır
 - poison projection refresh event'leri ayrık bir Redis Stream dead-letter queue'ya taşınır
 - replay işlemi admin API ve birlikte gelen ops script'leri üzerinden yapılabilir
-- ama henüz poison queue, replay tooling veya ayrık admin telemetry içeren tam bir projection platformu değildir
+- poison kayıt yönetimi, replay, gecikme ve hata telemetrisi bulunur; production route'ları kendi gecikme ve dead-letter eşiklerini ayrıca alarm üretir hâle getirmelidir
 - runtime coordination suffix açıkken projection refresh consumer adları varsayılan olarak pod-unique olur
 
 ### Redis Guardrails
@@ -428,9 +441,9 @@ Operasyonel notlar:
 | `cachedb.config.redisGuardrail.criticalSamplesToAggressive` | `2` | `AGGRESSIVE` profile geçiş sample sayısı. |
 | `cachedb.config.redisGuardrail.warnSamplesToDeescalateAggressive` | `4` | `AGGRESSIVE -> BALANCED` için gereken sample sayısı. |
 | `cachedb.config.redisGuardrail.normalSamplesToStandard` | `5` | `STANDARD` profile dönüş sample sayısı. |
-| `cachedb.config.redisGuardrail.compactionPayloadTtlSeconds` | `3600` | Compaction payload key TTL süresi. |
-| `cachedb.config.redisGuardrail.compactionPendingTtlSeconds` | `3600` | Compaction pending key TTL süresi. |
-| `cachedb.config.redisGuardrail.versionKeyTtlSeconds` | `86400` | Version key TTL süresi. |
+| `cachedb.config.redisGuardrail.compactionPayloadTtlSeconds` | `0` | `0` kalmalıdır; SQL'e yazılmamış bir payload'ın süresinin dolması veri kaybına yol açabilir. |
+| `cachedb.config.redisGuardrail.compactionPendingTtlSeconds` | `0` | `0` kalmalıdır; pending kayıt yalnızca başarılı flush sonrasında kaldırılır. |
+| `cachedb.config.redisGuardrail.versionKeyTtlSeconds` | `0` | `0` kalmalıdır; version fence süresinin dolması eski verinin yeni veriyi ezmesine izin verebilir. |
 | `cachedb.config.redisGuardrail.tombstoneTtlSeconds` | `86400` | Tombstone TTL süresi. |
 | `cachedb.config.redisGuardrail.autoRecoverDegradedIndexesEnabled` | `true` | Pressure düştugunde degraded index'leri otomatik rebuild eder. |
 | `cachedb.config.redisGuardrail.degradedIndexRebuildCooldownMillis` | `30000` | Yeni rebuild denemesi için cooldown. |
@@ -529,6 +542,11 @@ Operasyonel notlar:
 | `cachedb.config.adminHttp.authEnabled` | `false` | Native admin HTTP isteklerinde admin token zorunlu olur. |
 | `cachedb.config.adminHttp.authToken` | boş | Auth açıkken kullanılan admin token. |
 | `cachedb.config.adminHttp.authHeaderName` | `Authorization` | Admin token'ın okunacağı header. `Authorization: Bearer <token>` desteklenir. |
+| `cachedb.config.adminHttp.requestQueueCapacity` | `128` | Native yönetim HTTP istekleri için sınırlı kuyruktur. Aşırı yükte sınırsız bellek tüketmek yerine istek reddedilir. |
+| `cachedb.config.adminHttp.backgroundWorkerThreads` | `2` | Warm ve karşılaştırma işlerini çalıştıran worker sayısıdır. Ayrılmış SQL pool kapasitesinden küçük tutulmalıdır. |
+| `cachedb.config.adminHttp.backgroundQueueCapacity` | `32` | Warm ve karşılaştırma işleri için sınırlı kuyruktur. Kuyruk dolduğunda açık hata döner. |
+| `cachedb.config.adminHttp.maxRequestBodyBytes` | `1048576` | Yönetim API'sinin kabul ettiği en büyük istek gövdesidir. Native HTTP ve Spring servlet yollarında uygulanır. |
+| `cachedb.config.adminHttp.jobStatusTtlSeconds` | `86400` | Podlar arasında görülebilen warm ve karşılaştırma iş durumlarının Redis'te saklanma süresidir. |
 | `cachedb.config.schemaBootstrap.mode` | `DISABLED` | Schema bootstrap modu. |
 | `cachedb.config.schemaBootstrap.autoApplyOnStart` | `false` | Startup'ta schema bootstrap uygular. |
 | `cachedb.config.schemaBootstrap.includeVersionColumn` | `true` | Üretilen DDL'e version kolonu ekler. |

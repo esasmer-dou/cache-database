@@ -41,7 +41,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.2.0</cachedb.version>
+  <cachedb.version>0.3.0</cachedb.version>
 </properties>
 
 <repositories>
@@ -100,7 +100,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 </build>
 ```
 
-Yani kullanıcı ana projeyi önce build etmek zorunda değildir. CacheDB `0.2.0`, ana repodan GitHub Packages’a yayınlanır ve bu örnek proje paketi oradan çeker.
+Yani kullanıcı ana projeyi önce build etmek zorunda değildir. CacheDB `0.3.0`, ana repodan GitHub Packages'a yayınlanır ve bu örnek proje paketi oradan çeker.
 `cachedb-annotations` ve `cachedb-processor`, `OrderEntityCacheBinding` gibi generated binding sınıflarının üretilmesi için gereklidir.
 `cachedb-storage-mssql`, uygulama MSSQL provider'ını açıkça seçtiğinde gerekli olan CacheDB modülüdür.
 
@@ -131,9 +131,9 @@ mvn clean package
 
 Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir.
 
-## 0.2.0 İçin Doğrulanmış Akış
+## 0.3.0 İçin Doğrulanmış Akış
 
-Bu örnek CacheDB `0.2.0` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
+Bu örnek CacheDB `0.3.0` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
 sözleşme şudur:
 
 1. Yazılar CacheDB üzerinden alınır ve SQL Server’a write-behind ile aktarılır.
@@ -144,6 +144,12 @@ sözleşme şudur:
 
 Bu sözleşme örnek kodda açıkça görünür.
 
+`0.3.0` sürümünde JDBC işlemleri de sınırlıdır: read-through sorguları 15
+saniyede, write-behind SQL işlemleri 20 saniyede zaman aşımına uğrar. Admin
+istek ve arka plan kuyruklarının kapasitesi `application.yml` içinde açıkça
+tanımlanmıştır. Sürüm kontrollü hydration, eski bir warm/read-through sonucunun
+Redis'teki daha yeni kaydı ezmesini engeller.
+
 ```java
 @Bean
 CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
@@ -153,6 +159,12 @@ CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
                     .failOnMissingLoader(true)
                     .hydrateLoadedEntities(true)
                     .maxQueryLoadRows(500)
+                    .queryTimeoutSeconds(15)
+                    .build())
+            .writeBehind(WriteBehindConfig.builder()
+                    .workerThreads(2)
+                    .batchSize(128)
+                    .statementTimeoutSeconds(20)
                     .build());
 }
 ```
@@ -201,7 +213,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-load-test.ps1 `
   -MaxP95Millis 1000
 ```
 
-Docker Desktop üzerinde son yerel doğrulama:
+`0.2.0` sürümünden korunan tarihsel yerel yük testi başlangıç değeri:
 
 | Provider | Versiyon | Yol profili | Sonuç |
 |---|---:|---|---|

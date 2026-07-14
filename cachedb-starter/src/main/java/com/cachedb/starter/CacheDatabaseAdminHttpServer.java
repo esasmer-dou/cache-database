@@ -54,8 +54,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -81,6 +84,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private final CacheDatabaseAdmin admin;
     private final CacheDatabaseDebug debug;
     private final AdminHttpConfig config;
+    private final RedisAdminJobStatusStore jobStatusStore;
     private final ThreadLocal<String> dashboardLanguage = ThreadLocal.withInitial(() -> "tr");
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicReference<String> lastGoodHotSnapshotJson = new AtomicReference<>("");
@@ -101,6 +105,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         this.admin = cacheDatabase.admin();
         this.debug = cacheDatabase.debug();
         this.config = config;
+        this.jobStatusStore = new RedisAdminJobStatusStore(
+                cacheDatabase.backgroundRedisClient(),
+                cacheDatabase.redisKeyPrefix(),
+                config.jobStatusTtlSeconds()
+        );
     }
 
     private static String loadRequiredAdminTextResource(String resourcePath) {
@@ -130,7 +139,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             return;
         }
         server = HttpServer.create(new InetSocketAddress(config.host(), config.port()), config.backlog());
-        executor = Executors.newFixedThreadPool(Math.max(1, config.workerThreads()), new AdminHttpThreadFactory());
+        executor = boundedExecutor(
+                config.workerThreads(),
+                config.requestQueueCapacity(),
+                new AdminHttpThreadFactory()
+        );
         server.setExecutor(executor);
         createSecuredContext("/", this::handleRoot);
         createSecuredContext("/dashboard", this::handleDashboard);
@@ -193,11 +206,17 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
 
     private HttpContext createSecuredContext(String path, HttpHandler handler) {
         return server.createContext(path, exchange -> {
-            if (!isRequestAuthorized(exchange.getRequestHeaders())) {
-                sendUnauthorized(exchange);
-                return;
+            try {
+                if (!isRequestAuthorized(exchange.getRequestHeaders())) {
+                    sendUnauthorized(exchange);
+                    return;
+                }
+                handler.handle(exchange);
+            } catch (RequestBodyTooLargeException exception) {
+                sendJson(exchange, 413, "{\"error\":\"" + escapeJson(exception.getMessage()) + "\"}");
+            } catch (RejectedExecutionException exception) {
+                sendJson(exchange, 503, "{\"error\":\"Admin request queue is full; retry later\"}");
             }
-            handler.handle(exchange);
         });
     }
 
@@ -219,9 +238,24 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
             byte[] requestBody,
             Map<String, List<String>> requestHeaders
     ) throws IOException {
+        if (requestBody != null && requestBody.length > config.maxRequestBodyBytes()) {
+            return new AdminHttpResponse(
+                    413,
+                    Map.of(
+                            "Content-Type", List.of("application/json; charset=utf-8"),
+                            "Cache-Control", List.of("no-store")
+                    ),
+                    ("{\"error\":\"Admin request body exceeds maxRequestBodyBytes="
+                            + config.maxRequestBodyBytes() + "\"}").getBytes(StandardCharsets.UTF_8)
+            );
+        }
         InMemoryHttpExchange exchange = new InMemoryHttpExchange(method, requestUri, requestBody, requestHeaders);
         handleDispatched(exchange);
         return exchange.toResponse();
+    }
+
+    public int maxRequestBodyBytes() {
+        return config.maxRequestBodyBytes();
     }
 
     public boolean isRequestAuthorized(Map<String, List<String>> requestHeaders) {
@@ -981,10 +1015,17 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         pruneCompletedWarmJobs();
         MigrationPlannerWarmJob job = migrationPlannerWarmJobs.get(jobId);
         if (job == null) {
+            var persisted = jobStatusStore.get(jobId);
+            if (persisted.isPresent()) {
+                sendJson(exchange, 200, persisted.get());
+                return;
+            }
             sendJson(exchange, 404, "{\"error\":\"Warm job not found\"}");
             return;
         }
-        sendJson(exchange, 200, renderMigrationWarmJobStatus(job));
+        String status = renderMigrationWarmJobStatus(job);
+        jobStatusStore.put(jobId, status);
+        sendJson(exchange, 200, status);
     }
 
     private void handleMigrationPlannerScaffold(HttpExchange exchange) throws IOException {
@@ -1045,10 +1086,17 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         pruneCompletedCompareJobs();
         MigrationPlannerCompareJob job = migrationPlannerCompareJobs.get(jobId);
         if (job == null) {
+            var persisted = jobStatusStore.get(jobId);
+            if (persisted.isPresent()) {
+                sendJson(exchange, 200, persisted.get());
+                return;
+            }
             sendJson(exchange, 404, "{\"error\":\"Compare job not found\"}");
             return;
         }
-        sendJson(exchange, 200, renderMigrationCompareJobStatus(job));
+        String status = renderMigrationCompareJobStatus(job);
+        jobStatusStore.put(jobId, status);
+        sendJson(exchange, 200, status);
     }
 
     private QuerySpec parseQuerySpec(Map<String, List<String>> query) {
@@ -1079,23 +1127,37 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private MigrationPlannerWarmJob startMigrationPlannerWarmJob(MigrationWarmRunner.Request request) {
         pruneCompletedWarmJobs();
         long createdAt = System.currentTimeMillis();
-        String jobId = "warm-" + migrationPlannerWarmJobSequence.incrementAndGet();
+        String jobId = "warm-" + UUID.randomUUID();
         MigrationPlannerWarmJob job = new MigrationPlannerWarmJob(jobId, request.dryRun(), createdAt);
         migrationPlannerWarmJobs.put(jobId, job);
-        ensureBackgroundExecutor().submit(() -> {
-            job.markRunning(System.currentTimeMillis());
-            try {
-                job.markCompleted(admin.warmMigration(request), System.currentTimeMillis());
-            } catch (RuntimeException exception) {
-                job.markFailed(exception, System.currentTimeMillis());
-            }
-        });
+        jobStatusStore.put(jobId, renderMigrationWarmJobStatus(job));
+        try {
+            ensureBackgroundExecutor().submit(() -> {
+                job.markRunning(System.currentTimeMillis());
+                jobStatusStore.put(jobId, renderMigrationWarmJobStatus(job));
+                try {
+                    job.markCompleted(admin.warmMigration(request), System.currentTimeMillis());
+                } catch (RuntimeException exception) {
+                    job.markFailed(exception, System.currentTimeMillis());
+                } finally {
+                    jobStatusStore.put(jobId, renderMigrationWarmJobStatus(job));
+                }
+            });
+        } catch (RejectedExecutionException exception) {
+            job.markFailed(exception, System.currentTimeMillis());
+            jobStatusStore.put(jobId, renderMigrationWarmJobStatus(job));
+            throw new IllegalStateException("Admin background job queue is full; retry later", exception);
+        }
         return job;
     }
 
     private synchronized ExecutorService ensureBackgroundExecutor() {
         if (backgroundExecutor == null || backgroundExecutor.isShutdown()) {
-            backgroundExecutor = Executors.newFixedThreadPool(2, new AdminAsyncJobThreadFactory());
+            backgroundExecutor = boundedExecutor(
+                    config.backgroundWorkerThreads(),
+                    config.backgroundQueueCapacity(),
+                    new AdminAsyncJobThreadFactory()
+            );
         }
         return backgroundExecutor;
     }
@@ -1117,17 +1179,27 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private MigrationPlannerCompareJob startMigrationPlannerCompareJob(MigrationComparisonRunner.Request request) {
         pruneCompletedCompareJobs();
         long createdAt = System.currentTimeMillis();
-        String jobId = "compare-" + migrationPlannerCompareJobSequence.incrementAndGet();
+        String jobId = "compare-" + UUID.randomUUID();
         MigrationPlannerCompareJob job = new MigrationPlannerCompareJob(jobId, createdAt);
         migrationPlannerCompareJobs.put(jobId, job);
-        ensureBackgroundExecutor().submit(() -> {
-            job.markRunning(System.currentTimeMillis());
-            try {
-                job.markCompleted(admin.compareMigration(request), System.currentTimeMillis());
-            } catch (RuntimeException exception) {
-                job.markFailed(exception, System.currentTimeMillis());
-            }
-        });
+        jobStatusStore.put(jobId, renderMigrationCompareJobStatus(job));
+        try {
+            ensureBackgroundExecutor().submit(() -> {
+                job.markRunning(System.currentTimeMillis());
+                jobStatusStore.put(jobId, renderMigrationCompareJobStatus(job));
+                try {
+                    job.markCompleted(admin.compareMigration(request), System.currentTimeMillis());
+                } catch (RuntimeException exception) {
+                    job.markFailed(exception, System.currentTimeMillis());
+                } finally {
+                    jobStatusStore.put(jobId, renderMigrationCompareJobStatus(job));
+                }
+            });
+        } catch (RejectedExecutionException exception) {
+            job.markFailed(exception, System.currentTimeMillis());
+            jobStatusStore.put(jobId, renderMigrationCompareJobStatus(job));
+            throw new IllegalStateException("Admin background job queue is full; retry later", exception);
+        }
         return job;
     }
 
@@ -1282,11 +1354,42 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {
-        byte[] bytes = exchange.getRequestBody().readAllBytes();
-        if (bytes.length == 0) {
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(config.maxRequestBodyBytes(), 8_192));
+        byte[] buffer = new byte[8_192];
+        int total = 0;
+        int read;
+        while ((read = exchange.getRequestBody().read(buffer)) != -1) {
+            total += read;
+            if (total > config.maxRequestBodyBytes()) {
+                throw new RequestBodyTooLargeException(
+                        "Admin request body exceeds maxRequestBodyBytes=" + config.maxRequestBodyBytes()
+                );
+            }
+            output.write(buffer, 0, read);
+        }
+        if (total == 0) {
             return "";
         }
-        return new String(bytes, StandardCharsets.UTF_8);
+        return output.toString(StandardCharsets.UTF_8);
+    }
+
+    private static final class RequestBodyTooLargeException extends IllegalArgumentException {
+        private RequestBodyTooLargeException(String message) {
+            super(message);
+        }
+    }
+
+    private static ExecutorService boundedExecutor(int workerThreads, int queueCapacity, ThreadFactory threadFactory) {
+        int threads = Math.max(1, workerThreads);
+        return new ThreadPoolExecutor(
+                threads,
+                threads,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(Math.max(1, queueCapacity)),
+                threadFactory,
+                new ThreadPoolExecutor.AbortPolicy()
+        );
     }
 
     private String renderMetrics(ReconciliationMetrics metrics) {

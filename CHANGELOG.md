@@ -6,17 +6,31 @@ The format is intentionally simple and release-focused.
 
 ## Unreleased
 
+## 0.3.0 - 2026-07-14
+
 ### Added
 
-- _TBD_
+- version-aware JDBC source loaders and atomic Redis hydration for warm, read-through, and external-change paths
+- bounded query candidate materialization, JDBC read/write timeouts, bounded admin queues, and cross-pod Redis job status
+- explicit stale-write and Redis backpressure failure categories
+- focused Docker integration coverage for stale hydration, tenant admission races, function deployment, and admin body limits
 
 ### Changed
 
-- _TBD_
+- durable compaction state and entity version fences no longer expire; the durable compaction stream is not trimmed before acknowledgement
+- prefix and token indexes are opt-in; broad indexed and degraded-scan candidate sets fail before large JVM materialization
+- tenant row and payload admission is serialized per tenant across pods, while cache contention does not reject the durable business write
+- repository graphs and owned Redis clients are reused and closed deterministically
+- Redis Function deployment is lease-protected, versioned, and rejects same-version source drift or downgrade
+- public API additions are backward-compatible: previous config, registry, Redis function, and repository signatures remain as delegating overloads
 
 ### Fixed
 
-- _TBD_
+- stale warm or CDC events cannot overwrite newer Redis state or resurrect a newer tombstone
+- zero-row SQL outcomes are no longer acknowledged as successful without checking the persisted version
+- partial page/index payload loss no longer returns incomplete query results silently
+- rejected admin jobs no longer remain indefinitely visible as queued
+- concurrent tenant admission can no longer re-add an entity after its reservation was evicted
 
 ## 0.1.0 - 2026-06-14
 

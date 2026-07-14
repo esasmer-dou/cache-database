@@ -48,11 +48,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class MultiInstanceCoordinationSmokeRunner {
 
-    private static final String JDBC_USER = System.getProperty("cachedb.prod.postgres.user", "postgres");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.prod.postgres.password", "postgresql");
-    private static final String REDIS_PASSWORD = System.getProperty("cachedb.prod.redis.password", "welcome1");
-    private static final String REDIS_URI = System.getProperty("cachedb.prod.redis.uri", "redis://default:" + REDIS_PASSWORD + "@127.0.0.1:6379");
-    private static final String JDBC_URL = System.getProperty("cachedb.prod.postgres.url", "jdbc:postgresql://127.0.0.1:5432/postgres");
+    private static final String JDBC_USER = ProductionTestEnvironment.postgresUser();
+    private static final String JDBC_PASSWORD = ProductionTestEnvironment.postgresPassword();
+    private static final String REDIS_URI = ProductionTestEnvironment.redisUri();
+    private static final String JDBC_URL = ProductionTestEnvironment.postgresUrl();
 
     public MultiInstanceCoordinationSmokeReport run() throws Exception {
         ConsumerAndLeaderOutcome consumerAndLeader = verifyConsumerIdentityAndLeaderFailover();
@@ -251,7 +250,7 @@ public final class MultiInstanceCoordinationSmokeRunner {
                         .claimBatchSize(16)
                         .deadLetterStreamKey(keyPrefix + ":dlq")
                         .deadLetterMaxLength(256L)
-                        .compactionMaxLength(256L)
+                        .compactionMaxLength(0L)
                         .build())
                 .resourceLimits(base.resourceLimits())
                 .relations(base.relations())

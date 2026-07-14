@@ -12,6 +12,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public class StoragePerformanceCollector {
 
     private static final int SAMPLE_LIMIT = 256;
+    private static final int BREAKDOWN_TAG_LIMIT = 1_024;
+    private static final String OVERFLOW_TAG = "__overflow__";
     private static final StoragePerformanceCollector NO_OP = new NoOpStoragePerformanceCollector();
 
     private final LatencyAccumulator redisRead = new LatencyAccumulator();
@@ -65,7 +67,8 @@ public class StoragePerformanceCollector {
         if (normalized.isBlank()) {
             return;
         }
-        cacheAdmissionBreakdown.computeIfAbsent(normalized, ignored -> new CacheAdmissionAccumulator())
+        String boundedTag = boundedTag(cacheAdmissionBreakdown, normalized);
+        cacheAdmissionBreakdown.computeIfAbsent(boundedTag, ignored -> new CacheAdmissionAccumulator())
                 .recordAdmission(admitted);
     }
 
@@ -74,7 +77,8 @@ public class StoragePerformanceCollector {
         if (normalized.isBlank() || evictedCount <= 0L) {
             return;
         }
-        cacheAdmissionBreakdown.computeIfAbsent(normalized, ignored -> new CacheAdmissionAccumulator())
+        String boundedTag = boundedTag(cacheAdmissionBreakdown, normalized);
+        cacheAdmissionBreakdown.computeIfAbsent(boundedTag, ignored -> new CacheAdmissionAccumulator())
                 .recordEviction(evictedCount);
     }
 
@@ -119,8 +123,16 @@ public class StoragePerformanceCollector {
         aggregate.record(elapsedMicros);
         String normalized = normalizeTag(tag);
         if (!normalized.isBlank()) {
-            breakdown.computeIfAbsent(normalized, ignored -> new LatencyAccumulator()).record(elapsedMicros);
+            String boundedTag = boundedTag(breakdown, normalized);
+            breakdown.computeIfAbsent(boundedTag, ignored -> new LatencyAccumulator()).record(elapsedMicros);
         }
+    }
+
+    private String boundedTag(ConcurrentHashMap<String, ?> breakdown, String tag) {
+        if (breakdown.containsKey(tag) || breakdown.size() < BREAKDOWN_TAG_LIMIT) {
+            return tag;
+        }
+        return OVERFLOW_TAG;
     }
 
     private Map<String, LatencyMetricSnapshot> snapshot(ConcurrentHashMap<String, LatencyAccumulator> accumulators) {

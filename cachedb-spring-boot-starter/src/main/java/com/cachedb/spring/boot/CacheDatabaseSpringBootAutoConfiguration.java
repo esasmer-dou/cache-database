@@ -77,6 +77,11 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                         .authEnabled(properties.getAdmin().isAuthEnabled())
                         .authToken(properties.getAdmin().getAuthToken())
                         .authHeaderName(properties.getAdmin().getAuthHeaderName())
+                        .requestQueueCapacity(properties.getAdmin().getRequestQueueCapacity())
+                        .backgroundWorkerThreads(properties.getAdmin().getBackgroundWorkerThreads())
+                        .backgroundQueueCapacity(properties.getAdmin().getBackgroundQueueCapacity())
+                        .maxRequestBodyBytes(properties.getAdmin().getMaxRequestBodyBytes())
+                        .jobStatusTtlSeconds(properties.getAdmin().getJobStatusTtlSeconds())
                         .build());
         applySqlProvider(builder, properties.getSql());
         for (CacheDatabaseConfigCustomizer customizer : customizers.orderedStream().toList()) {
@@ -142,6 +147,11 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                 .authEnabled(adminProperties.isAuthEnabled())
                 .authToken(adminProperties.getAuthToken())
                 .authHeaderName(adminProperties.getAuthHeaderName())
+                .requestQueueCapacity(adminProperties.getRequestQueueCapacity())
+                .backgroundWorkerThreads(adminProperties.getBackgroundWorkerThreads())
+                .backgroundQueueCapacity(adminProperties.getBackgroundQueueCapacity())
+                .maxRequestBodyBytes(adminProperties.getMaxRequestBodyBytes())
+                .jobStatusTtlSeconds(adminProperties.getJobStatusTtlSeconds())
                 .build();
         return cacheDatabase.adminHttpServer(adminHttpConfig);
     }

@@ -320,14 +320,11 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
     private PendingEntry resolveCompactionEntry(String sourceStreamKey, CompactionTokenGroup tokenGroup, Map<String, String> body) {
         if (body == null || body.isEmpty()) {
-            for (StreamEntryID ackId : tokenGroup.ackIds()) {
-                ackToken(sourceStreamKey, ackId);
-            }
-            long pendingRemoved = jedis.del(keyStrategy.compactionPendingKey(tokenGroup.namespace(), tokenGroup.id()));
-            if (pendingRemoved > 0) {
-                jedis.hincrBy(keyStrategy.compactionStatsKey(), "pendingCount", -pendingRemoved);
-            }
-            return null;
+            throw new IllegalStateException(
+                    "Durable compaction payload is missing for namespace=" + tokenGroup.namespace()
+                            + ", id=" + tokenGroup.id()
+                            + ", stream=" + sourceStreamKey
+            );
         }
         return new PendingEntry(
                 tokenGroup.entry(),
@@ -555,7 +552,9 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         if (pendingEntry.compacted()) {
             completeCompaction(pendingEntry.operation());
         }
-        jedis.xack(pendingEntry.sourceStreamKey(), config.activeConsumerGroup(), pendingEntry.ackIds().toArray(StreamEntryID[]::new));
+        StreamEntryID[] ackIds = pendingEntry.ackIds().toArray(StreamEntryID[]::new);
+        jedis.xack(pendingEntry.sourceStreamKey(), config.activeConsumerGroup(), ackIds);
+        jedis.xdel(pendingEntry.sourceStreamKey(), ackIds);
     }
 
     private void ackPendingEntries(List<PendingEntry> pendingEntries) {
@@ -575,12 +574,15 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                     .addAll(pendingEntry.ackIds());
         }
         for (Entry<String, ArrayList<StreamEntryID>> entry : ackIdsByStream.entrySet()) {
-            jedis.xack(entry.getKey(), config.activeConsumerGroup(), entry.getValue().toArray(StreamEntryID[]::new));
+            StreamEntryID[] ackIds = entry.getValue().toArray(StreamEntryID[]::new);
+            jedis.xack(entry.getKey(), config.activeConsumerGroup(), ackIds);
+            jedis.xdel(entry.getKey(), ackIds);
         }
     }
 
     private void ackToken(String sourceStreamKey, StreamEntryID streamEntryID) {
         jedis.xack(sourceStreamKey, config.activeConsumerGroup(), streamEntryID);
+        jedis.xdel(sourceStreamKey, streamEntryID);
     }
 
     private void completeCompaction(QueuedWriteOperation operation) {
@@ -649,7 +651,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 operation.id(),
                 config.compactionShardCount()
         );
-        jedis.xadd(targetCompactionStreamKey, compactionAddParams(), Map.of(
+        jedis.xadd(targetCompactionStreamKey, redis.clients.jedis.params.XAddParams.xAddParams(), Map.of(
                 "namespace", operation.redisNamespace(),
                 "id", operation.id(),
                 "version", String.valueOf(currentVersion),
@@ -664,7 +666,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 operation.id(),
                 config.compactionShardCount()
         );
-        jedis.xadd(targetCompactionStreamKey, compactionAddParams(), Map.of(
+        jedis.xadd(targetCompactionStreamKey, redis.clients.jedis.params.XAddParams.xAddParams(), Map.of(
                 "namespace", operation.redisNamespace(),
                 "id", operation.id(),
                 "version", String.valueOf(operation.version()),
@@ -684,14 +686,6 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             captureError(requeueFailure);
             return false;
         }
-    }
-
-    private redis.clients.jedis.params.XAddParams compactionAddParams() {
-        redis.clients.jedis.params.XAddParams params = redis.clients.jedis.params.XAddParams.xAddParams();
-        if (config.compactionMaxLength() > 0) {
-            params.maxLen(config.compactionMaxLength()).approximateTrimming();
-        }
-        return params;
     }
 
     private void deferAcknowledgement(PendingEntry pendingEntry, RuntimeException exception) {

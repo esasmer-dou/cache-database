@@ -2,6 +2,7 @@ package com.reactor.cachedb.postgres;
 
 import com.reactor.cachedb.core.queue.WriteFailureCategory;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
+import com.reactor.cachedb.core.queue.StaleWriteRejectedException;
 
 import java.sql.SQLException;
 
@@ -9,6 +10,16 @@ public final class PostgresFailureClassifier {
 
     public WriteFailureDetails classify(Exception exception) {
         Throwable root = rootCause(exception);
+        if (root instanceof StaleWriteRejectedException staleWrite) {
+            return new WriteFailureDetails(
+                    WriteFailureCategory.STALE_WRITE,
+                    staleWrite.getSQLState(),
+                    staleWrite.getErrorCode(),
+                    false,
+                    staleWrite.getClass().getName(),
+                    blankToEmpty(staleWrite.getMessage())
+            );
+        }
         if (root instanceof SQLException sqlException) {
             return classifySqlException(sqlException);
         }
@@ -67,7 +78,7 @@ public final class PostgresFailureClassifier {
     private boolean isRetryable(WriteFailureCategory category, String sqlState) {
         return switch (category) {
             case CONNECTION, AVAILABILITY, TIMEOUT, SERIALIZATION, DEADLOCK, LOCK_CONFLICT -> true;
-            case CONSTRAINT, DATA, SCHEMA, PERMISSION, UNKNOWN -> false;
+            case CONSTRAINT, DATA, SCHEMA, PERMISSION, STALE_WRITE, UNKNOWN -> false;
         };
     }
 

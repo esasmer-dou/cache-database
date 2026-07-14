@@ -536,6 +536,11 @@ cachedb:
     base-path: /cachedb-admin
     dashboard-enabled: true
     title: Benim CacheDB Admin
+    request-queue-capacity: 128
+    background-worker-threads: 2
+    background-queue-capacity: 32
+    max-request-body-bytes: 1048576
+    job-status-ttl-seconds: 86400
 ```
 
 Bu kurulumla:
@@ -550,6 +555,9 @@ Bu kurulumla:
 - `/cachedb-admin/**` yollarını gateway veya operasyon ağı arkasında tut
 - platform standardın buysa TLS'i gateway veya reverse proxy üzerinde sonlandır
 - gateway authentication kullan veya CacheDB token auth için `cachedb.admin.auth-enabled=true` tanımla
+- warm ve karşılaştırma worker sayısını bu işler için ayrılan SQL connection pool kapasitesinin altında tut
+- istek ve arka plan kuyruklarını sınırlı tut; aşırı yük, JVM belleğini büyütmek yerine açık hata üretmelidir
+- iş durumu Redis'te saklanır; ayarlanan süre dolana kadar başka bir pod da sonucu okuyabilir
 
 ## Üretim İçin Varsayılan Redis Topolojisi
 
@@ -569,7 +577,7 @@ Varsayılan havuz boyutları:
 - foreground timeout'ları: `connection=2000ms`, `read=5000ms`, `blockingRead=15000ms`
 - background timeout'ları: `connection=2000ms`, `read=10000ms`, `blockingRead=30000ms`
 
-Varsayılan konfigurasyon:
+Varsayılan yapılandırma:
 
 ```yaml
 cachedb:

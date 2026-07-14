@@ -3,6 +3,7 @@ package com.reactor.cachedb.redis;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.RedisFunctionsConfig;
+import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.model.WriteOperation;
 import redis.clients.jedis.JedisPooled;
 
@@ -13,6 +14,7 @@ public final class RedisFunctionExecutor {
     private final JedisPooled jedis;
     private final RedisFunctionsConfig config;
     private final RedisGuardrailConfig guardrailConfig;
+    private final WriteBehindConfig writeBehindConfig;
     private final RedisFunctionArgsMapper argsMapper;
 
     public RedisFunctionExecutor(
@@ -21,9 +23,20 @@ public final class RedisFunctionExecutor {
             RedisGuardrailConfig guardrailConfig,
             RedisFunctionArgsMapper argsMapper
     ) {
+        this(jedis, config, guardrailConfig, WriteBehindConfig.defaults(), argsMapper);
+    }
+
+    public RedisFunctionExecutor(
+            JedisPooled jedis,
+            RedisFunctionsConfig config,
+            RedisGuardrailConfig guardrailConfig,
+            WriteBehindConfig writeBehindConfig,
+            RedisFunctionArgsMapper argsMapper
+    ) {
         this.jedis = jedis;
         this.config = config;
         this.guardrailConfig = guardrailConfig;
+        this.writeBehindConfig = writeBehindConfig;
         this.argsMapper = argsMapper;
     }
 
@@ -47,7 +60,7 @@ public final class RedisFunctionExecutor {
         Object result = jedis.fcall(
                 config.upsertFunctionName(),
                 List.of(entityKey, versionKey, tombstoneKey, streamKey, compactionPayloadKey, compactionPendingKey, compactionStreamKey, compactionStatsKey),
-                argsMapper.upsertArgs(operation, cachePolicy, guardrailConfig, cacheEntity)
+                argsMapper.upsertArgs(operation, cachePolicy, guardrailConfig, writeBehindConfig, cacheEntity)
         );
         return toLong(result);
     }
@@ -66,7 +79,7 @@ public final class RedisFunctionExecutor {
         Object result = jedis.fcall(
                 config.deleteFunctionName(),
                 List.of(entityKey, versionKey, tombstoneKey, streamKey, compactionPayloadKey, compactionPendingKey, compactionStreamKey, compactionStatsKey),
-                argsMapper.deleteArgs(operation, guardrailConfig)
+                argsMapper.deleteArgs(operation, guardrailConfig, writeBehindConfig)
         );
         return toLong(result);
     }

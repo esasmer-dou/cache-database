@@ -1249,7 +1249,7 @@ public final class RedisQueryIndexManager<T, ID> {
     private List<String> resolveIndexedAndResidualCandidates(QuerySpec querySpec) {
         Set<String> candidates = resolveIndexedCandidates(querySpec.rootGroup()).candidates();
         if (candidates == null) {
-            candidates = new LinkedHashSet<>(jedis.smembers(keyStrategy.indexAllKey(metadata.redisNamespace())));
+            candidates = boundedSetMembers(keyStrategy.indexAllKey(metadata.redisNamespace()), "full entity index");
         }
 
         if (!fullyIndexed(querySpec.rootGroup()) && !candidates.isEmpty()) {
@@ -1310,6 +1310,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 return new Resolution(null, false);
             }
             candidates.addAll(resolution.candidates());
+            enforceCandidateLimit(candidates, "OR query union");
         }
         return new Resolution(candidates, fullyIndexed);
     }
@@ -1372,12 +1373,9 @@ public final class RedisQueryIndexManager<T, ID> {
         if (!config.exactIndexEnabled()) {
             return null;
         }
-        return new LinkedHashSet<>(
-                jedis.smembers(keyStrategy.indexExactKey(
-                        metadata.redisNamespace(),
-                        column,
-                        encodeKeyPart(serializeValue(value))
-                ))
+        return boundedSetMembers(
+                keyStrategy.indexExactKey(metadata.redisNamespace(), column, encodeKeyPart(serializeValue(value))),
+                "exact index " + column
         );
     }
 
@@ -1385,6 +1383,7 @@ public final class RedisQueryIndexManager<T, ID> {
         LinkedHashSet<String> matches = new LinkedHashSet<>();
         for (Object value : values) {
             matches.addAll(membersForExact(column, value));
+            enforceCandidateLimit(matches, "IN query " + column);
         }
         return matches;
     }
@@ -1409,21 +1408,23 @@ public final class RedisQueryIndexManager<T, ID> {
                 return null;
             }
         }
-        return new LinkedHashSet<>(
-                jedis.zrangeByScore(keyStrategy.indexSortKey(metadata.redisNamespace(), filter.column()), min, max)
-        );
+        String indexKey = keyStrategy.indexSortKey(metadata.redisNamespace(), filter.column());
+        long cardinality = jedis.zcount(indexKey, min, max);
+        enforceCandidateLimit(cardinality, "range index " + filter.column());
+        return new LinkedHashSet<>(jedis.zrangeByScore(indexKey, min, max));
     }
 
     private Set<String> membersForPrefix(String column, Object value) {
         if (!config.prefixIndexEnabled() || value == null) {
             return null;
         }
-        return new LinkedHashSet<>(
-                jedis.smembers(keyStrategy.indexPrefixKey(
+        return boundedSetMembers(
+                keyStrategy.indexPrefixKey(
                         metadata.redisNamespace(),
                         column,
                         encodeKeyPart(normalizeText(String.valueOf(value)))
-                ))
+                ),
+                "prefix index " + column
         );
     }
 
@@ -1438,12 +1439,9 @@ public final class RedisQueryIndexManager<T, ID> {
 
         LinkedHashSet<String> candidates = null;
         for (String token : tokens) {
-            LinkedHashSet<String> tokenMatches = new LinkedHashSet<>(
-                    jedis.smembers(keyStrategy.indexTokenKey(
-                            metadata.redisNamespace(),
-                            column,
-                            encodeKeyPart(token)
-                    ))
+            LinkedHashSet<String> tokenMatches = boundedSetMembers(
+                    keyStrategy.indexTokenKey(metadata.redisNamespace(), column, encodeKeyPart(token)),
+                    "text token index " + column
             );
             candidates = candidates == null ? tokenMatches : new LinkedHashSet<>(intersect(candidates, tokenMatches));
             if (candidates.isEmpty()) {
@@ -1843,7 +1841,10 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private Set<String> subtractAll(Set<String> excluded) {
-        LinkedHashSet<String> allIds = new LinkedHashSet<>(jedis.smembers(keyStrategy.indexAllKey(metadata.redisNamespace())));
+        LinkedHashSet<String> allIds = boundedSetMembers(
+                keyStrategy.indexAllKey(metadata.redisNamespace()),
+                "not-equal full entity index"
+        );
         allIds.removeAll(excluded);
         return allIds;
     }
@@ -2434,11 +2435,33 @@ public final class RedisQueryIndexManager<T, ID> {
             for (String key : scan.getResult()) {
                 if (key.startsWith(prefix)) {
                     ids.add(key.substring(prefix.length()));
+                    enforceCandidateLimit(ids, "degraded entity key scan");
                 }
             }
             cursor = scan.getCursor();
         } while (!"0".equals(cursor));
         return List.copyOf(ids);
+    }
+
+    private LinkedHashSet<String> boundedSetMembers(String key, String shape) {
+        enforceCandidateLimit(jedis.scard(key), shape);
+        return new LinkedHashSet<>(jedis.smembers(key));
+    }
+
+    private void enforceCandidateLimit(Collection<String> candidates, String shape) {
+        enforceCandidateLimit(candidates == null ? 0L : candidates.size(), shape);
+    }
+
+    private void enforceCandidateLimit(long candidateCount, String shape) {
+        if (candidateCount > config.maxMaterializedCandidateIds()) {
+            throw new IllegalStateException(
+                    "Query candidate materialization rejected for " + metadata.entityName()
+                            + ": shape=" + shape
+                            + ", candidates=" + candidateCount
+                            + ", maxMaterializedCandidateIds=" + config.maxMaterializedCandidateIds()
+                            + ". Use a sorted-window route, a projection, or a narrower indexed predicate."
+            );
+        }
     }
 
     private boolean isRangeOperator(QueryOperator operator) {

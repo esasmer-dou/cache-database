@@ -73,6 +73,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     private final DataSource dataSource;
     private final JedisPooled foregroundJedis;
     private final JedisPooled backgroundJedis;
+    private final java.util.concurrent.CopyOnWriteArrayList<AutoCloseable> ownedResources =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
     private final String instanceId;
     private final DefaultCacheSession session;
     private final EntityRegistry entityRegistry;
@@ -151,7 +153,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 .build();
         this.entityRegistry = new DefaultEntityRegistry(config.resourceLimits());
         this.queryEvaluator = new QueryEvaluator();
-        this.projectionRefreshDispatcher = new ProjectionRefreshDispatcher();
+        this.projectionRefreshDispatcher = null;
         this.adminMonitoringEnabled = config.adminMonitoring().enabled();
         WriteBehindConfig effectiveWriteBehindConfig = RuntimeCoordinationSupport.withInstanceIdentity(
                 config.writeBehind(),
@@ -195,12 +197,14 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 foregroundJedis,
                 config.redisFunctions(),
                 config.redisGuardrail(),
+                effectiveWriteBehindConfig,
                 new RedisFunctionArgsMapper()
         );
         RedisFunctionExecutor backgroundFunctionExecutor = new RedisFunctionExecutor(
                 backgroundJedis,
                 config.redisFunctions(),
                 config.redisGuardrail(),
+                effectiveWriteBehindConfig,
                 new RedisFunctionArgsMapper()
         );
         RedisWriteBehindQueue queue = new RedisWriteBehindQueue(
@@ -553,7 +557,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 dataSource,
                 metadata,
                 codec,
-                config.readThrough().maxQueryLoadRows()
+                config.readThrough().maxQueryLoadRows(),
+                config.readThrough().queryTimeoutSeconds()
         );
         EntityPageLoader<T> resolvedPageLoader = pageLoader == null ? sourceLoader : pageLoader;
         return register(
@@ -708,6 +713,14 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return dataSource;
     }
 
+    JedisPooled backgroundRedisClient() {
+        return backgroundJedis;
+    }
+
+    String redisKeyPrefix() {
+        return config.keyspace().keyPrefix();
+    }
+
     public StoragePerformanceSnapshot resetStoragePerformance() {
         return storagePerformanceMirror.reset();
     }
@@ -843,19 +856,47 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return new CacheDatabaseAdminHttpServer(this, adminHttpConfig);
     }
 
+    void ownResource(AutoCloseable resource) {
+        if (resource != null && !ownedResources.contains(resource)) {
+            ownedResources.add(resource);
+        }
+    }
+
     @Override
     public void close() {
-        writeBehindWorker.close();
-        deadLetterRecoveryWorker.close();
-        recoveryCleanupWorker.close();
-        adminIncidentDeliveryManager.close();
-        adminReportJobWorker.close();
-        monitoringHistoryBuffer.close();
-        alertRouteHistoryBuffer.close();
-        performanceHistoryBuffer.close();
-        if (projectionRefreshWorker != null) {
-            projectionRefreshWorker.close();
+        RuntimeException closeFailure = null;
+        closeFailure = closeResource(writeBehindWorker, closeFailure);
+        closeFailure = closeResource(deadLetterRecoveryWorker, closeFailure);
+        closeFailure = closeResource(recoveryCleanupWorker, closeFailure);
+        closeFailure = closeResource(adminIncidentDeliveryManager, closeFailure);
+        closeFailure = closeResource(adminReportJobWorker, closeFailure);
+        closeFailure = closeResource(monitoringHistoryBuffer, closeFailure);
+        closeFailure = closeResource(alertRouteHistoryBuffer, closeFailure);
+        closeFailure = closeResource(performanceHistoryBuffer, closeFailure);
+        closeFailure = closeResource(projectionRefreshWorker, closeFailure);
+        closeFailure = closeResource(projectionRefreshDispatcher, closeFailure);
+        for (AutoCloseable resource : ownedResources) {
+            closeFailure = closeResource(resource, closeFailure);
         }
-        projectionRefreshDispatcher.close();
+        ownedResources.clear();
+        if (closeFailure != null) {
+            throw closeFailure;
+        }
+    }
+
+    private RuntimeException closeResource(AutoCloseable resource, RuntimeException currentFailure) {
+        if (resource == null) {
+            return currentFailure;
+        }
+        try {
+            resource.close();
+            return currentFailure;
+        } catch (Exception exception) {
+            if (currentFailure == null) {
+                return new IllegalStateException("Failed to close a CacheDatabase resource", exception);
+            }
+            currentFailure.addSuppressed(exception);
+            return currentFailure;
+        }
     }
 }

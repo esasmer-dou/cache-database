@@ -2,6 +2,7 @@ package com.reactor.cachedb.mssql;
 
 import com.reactor.cachedb.core.queue.WriteFailureCategory;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
+import com.reactor.cachedb.core.queue.StaleWriteRejectedException;
 import com.reactor.cachedb.jdbc.SqlFailureClassifierSupport;
 
 import java.sql.SQLException;
@@ -9,6 +10,16 @@ import java.sql.SQLException;
 public final class MssqlFailureClassifier {
 
     public WriteFailureDetails classify(Exception exception) {
+        if (SqlFailureClassifierSupport.rootCause(exception) instanceof StaleWriteRejectedException staleWrite) {
+            return new WriteFailureDetails(
+                    WriteFailureCategory.STALE_WRITE,
+                    staleWrite.getSQLState(),
+                    staleWrite.getErrorCode(),
+                    false,
+                    staleWrite.getClass().getName(),
+                    SqlFailureClassifierSupport.blankToEmpty(staleWrite.getMessage())
+            );
+        }
         SQLException sqlException = SqlFailureClassifierSupport.rootSqlException(exception);
         if (sqlException == null) {
             return WriteFailureDetails.unknown(SqlFailureClassifierSupport.rootCause(exception));
@@ -60,7 +71,7 @@ public final class MssqlFailureClassifier {
     private boolean isRetryable(WriteFailureCategory category, int vendorCode) {
         return switch (category) {
             case CONNECTION, AVAILABILITY, TIMEOUT, SERIALIZATION, DEADLOCK, LOCK_CONFLICT -> true;
-            case CONSTRAINT, DATA, SCHEMA, PERMISSION, UNKNOWN -> false;
+            case CONSTRAINT, DATA, SCHEMA, PERMISSION, STALE_WRITE, UNKNOWN -> false;
         };
     }
 }

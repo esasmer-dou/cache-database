@@ -2,6 +2,7 @@ package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
+import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.model.WriteOperation;
 import com.reactor.cachedb.core.queue.PerformanceObservationContext;
 
@@ -17,15 +18,26 @@ public final class RedisFunctionArgsMapper {
             RedisGuardrailConfig guardrailConfig,
             boolean cacheEntity
     ) {
+        return upsertArgs(operation, cachePolicy, guardrailConfig, WriteBehindConfig.defaults(), cacheEntity);
+    }
+
+    public <T, ID> List<String> upsertArgs(
+            WriteOperation<T, ID> operation,
+            CachePolicy cachePolicy,
+            RedisGuardrailConfig guardrailConfig,
+            WriteBehindConfig writeBehindConfig,
+            boolean cacheEntity
+    ) {
         Map<String, Object> columns = filteredColumns(operation);
         List<String> args = new ArrayList<>(16 + (columns.size() * 2));
         args.add(operation.redisPayload());
         args.add(cacheEntity ? "1" : "0");
         args.add(String.valueOf(cachePolicy.entityTtlSeconds()));
-        args.add(String.valueOf(guardrailConfig.compactionPayloadTtlSeconds()));
-        args.add(String.valueOf(guardrailConfig.compactionPendingTtlSeconds()));
-        args.add(String.valueOf(guardrailConfig.versionKeyTtlSeconds()));
+        args.add("0");
+        args.add("0");
+        args.add("0");
         args.add(String.valueOf(guardrailConfig.tombstoneTtlSeconds()));
+        args.add(writeBehindConfig.compactionActive() ? "1" : "0");
         args.add(normalizeObservationTag(PerformanceObservationContext.currentTag()));
         args.add(operation.type().name());
         args.add(operation.metadata().entityName());
@@ -46,12 +58,17 @@ public final class RedisFunctionArgsMapper {
         return args;
     }
 
-    public <T, ID> List<String> deleteArgs(WriteOperation<T, ID> operation, RedisGuardrailConfig guardrailConfig) {
+    public <T, ID> List<String> deleteArgs(
+            WriteOperation<T, ID> operation,
+            RedisGuardrailConfig guardrailConfig,
+            WriteBehindConfig writeBehindConfig
+    ) {
         return List.of(
-                String.valueOf(guardrailConfig.compactionPayloadTtlSeconds()),
-                String.valueOf(guardrailConfig.compactionPendingTtlSeconds()),
-                String.valueOf(guardrailConfig.versionKeyTtlSeconds()),
+                "0",
+                "0",
+                "0",
                 String.valueOf(guardrailConfig.tombstoneTtlSeconds()),
+                writeBehindConfig.compactionActive() ? "1" : "0",
                 normalizeObservationTag(PerformanceObservationContext.currentTag()),
                 operation.metadata().entityName(),
                 operation.metadata().tableName(),
@@ -63,6 +80,13 @@ public final class RedisFunctionArgsMapper {
                 String.valueOf(operation.id()),
                 operation.createdAt().toString()
         );
+    }
+
+    public <T, ID> List<String> deleteArgs(
+            WriteOperation<T, ID> operation,
+            RedisGuardrailConfig guardrailConfig
+    ) {
+        return deleteArgs(operation, guardrailConfig, WriteBehindConfig.defaults());
     }
 
     private <T, ID> Map<String, Object> filteredColumns(WriteOperation<T, ID> operation) {

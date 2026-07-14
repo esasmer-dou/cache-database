@@ -33,11 +33,10 @@ import java.util.UUID;
 
 public final class FaultInjectionSuiteRunner {
 
-    private static final String JDBC_USER = System.getProperty("cachedb.prod.postgres.user", "postgres");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.prod.postgres.password", "postgresql");
-    private static final String REDIS_PASSWORD = System.getProperty("cachedb.prod.redis.password", "welcome1");
-    private static final String REDIS_URI = System.getProperty("cachedb.prod.redis.uri", "redis://default:" + REDIS_PASSWORD + "@127.0.0.1:6379");
-    private static final String JDBC_URL = System.getProperty("cachedb.prod.postgres.url", "jdbc:postgresql://127.0.0.1:5432/postgres");
+    private static final String JDBC_USER = ProductionTestEnvironment.postgresUser();
+    private static final String JDBC_PASSWORD = ProductionTestEnvironment.postgresPassword();
+    private static final String REDIS_URI = ProductionTestEnvironment.redisUri();
+    private static final String JDBC_URL = ProductionTestEnvironment.postgresUrl();
     private static final String BAD_JDBC_URL = System.getProperty("cachedb.prod.postgres.faultUrl", "jdbc:postgresql://127.0.0.1:1/postgres?connectTimeout=2&socketTimeout=2");
 
     public FaultInjectionSuiteReport run() throws Exception {

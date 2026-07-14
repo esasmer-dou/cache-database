@@ -4,6 +4,7 @@ import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
+import com.reactor.cachedb.core.queue.StaleWriteRejectedException;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -47,7 +48,7 @@ class MssqlWriteBehindFlusherTest {
     }
 
     @Test
-    void shouldSkipInsertWhenVersionGuardUpdateMissesExistingRow() throws Exception {
+    void shouldTreatEqualVersionAsIdempotentWhenGuardedUpdateMisses() throws Exception {
         RecordingDataSource dataSource = new RecordingDataSource(0, true);
         MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(dataSource, emptyRegistry());
 
@@ -56,6 +57,20 @@ class MssqlWriteBehindFlusherTest {
         assertEquals(List.of("UPDATE", "SELECT"), dataSource.statementKinds());
         assertTrue(dataSource.committed);
         assertFalse(dataSource.rolledBack);
+    }
+
+    @Test
+    void shouldRejectOlderVersionWhenDatabaseAlreadyHasNewerState() {
+        RecordingDataSource dataSource = new RecordingDataSource(0, 7L);
+        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(dataSource, emptyRegistry());
+
+        assertThrows(
+                StaleWriteRejectedException.class,
+                () -> flusher.flush(operation(OperationType.UPSERT, "2", 3))
+        );
+
+        assertTrue(dataSource.rolledBack);
+        assertFalse(dataSource.committed);
     }
 
     @Test
@@ -247,7 +262,7 @@ class MssqlWriteBehindFlusherTest {
 
     private static final class RecordingDataSource implements DataSource {
         private final int updateCount;
-        private final boolean exists;
+        private final Long currentVersion;
         private final List<String> sqlCalls = new ArrayList<>();
         private final List<String> sessionSqlCalls = new ArrayList<>();
         private final List<Integer> queryTimeouts = new ArrayList<>();
@@ -259,8 +274,12 @@ class MssqlWriteBehindFlusherTest {
         private int currentLockTimeout = MssqlWriteBehindOptions.LOCK_TIMEOUT_WAIT_FOREVER;
 
         private RecordingDataSource(int updateCount, boolean exists) {
+            this(updateCount, exists ? 3L : null);
+        }
+
+        private RecordingDataSource(int updateCount, Long currentVersion) {
             this.updateCount = updateCount;
-            this.exists = exists;
+            this.currentVersion = currentVersion;
         }
 
         private List<String> statementKinds() {
@@ -370,15 +389,35 @@ class MssqlWriteBehindFlusherTest {
 
     private static PreparedStatement preparedStatement(RecordingDataSource dataSource, String sql) {
         dataSource.sqlCalls.add(sql);
-        InvocationHandler handler = (proxy, method, args) -> switch (method.getName()) {
-            case "executeUpdate" -> sql.startsWith("UPDATE") ? dataSource.updateCount : 1;
-            case "executeQuery" -> resultSet(dataSource.exists);
-            case "setQueryTimeout" -> {
-                dataSource.queryTimeouts.add((Integer) args[0]);
-                yield null;
+        InvocationHandler handler = new InvocationHandler() {
+            private int batchSize;
+
+            @Override
+            public Object invoke(Object proxy, Method method, Object[] args) {
+                return switch (method.getName()) {
+                    case "executeUpdate" -> sql.startsWith("UPDATE") ? dataSource.updateCount : 1;
+                    case "executeQuery" -> resultSet(dataSource.currentVersion);
+                    case "addBatch" -> {
+                        batchSize++;
+                        yield null;
+                    }
+                    case "executeBatch" -> {
+                        int[] results = new int[batchSize];
+                        java.util.Arrays.fill(results, dataSource.updateCount);
+                        yield results;
+                    }
+                    case "clearBatch" -> {
+                        batchSize = 0;
+                        yield null;
+                    }
+                    case "setQueryTimeout" -> {
+                        dataSource.queryTimeouts.add((Integer) args[0]);
+                        yield null;
+                    }
+                    case "setObject", "setLong", "clearParameters", "close" -> null;
+                    default -> defaultValue(method.getReturnType());
+                };
             }
-            case "setObject", "setLong", "close" -> null;
-            default -> defaultValue(method.getReturnType());
         };
         return (PreparedStatement) Proxy.newProxyInstance(
                 PreparedStatement.class.getClassLoader(),
@@ -416,16 +455,22 @@ class MssqlWriteBehindFlusherTest {
         );
     }
 
-    private static ResultSet resultSet(boolean exists) {
+    private static ResultSet resultSet(Long currentVersion) {
         InvocationHandler handler = new InvocationHandler() {
             private boolean first = true;
 
             @Override
             public Object invoke(Object proxy, Method method, Object[] args) {
                 if ("next".equals(method.getName())) {
-                    boolean result = first && exists;
+                    boolean result = first && currentVersion != null;
                     first = false;
                     return result;
+                }
+                if ("getLong".equals(method.getName())) {
+                    return currentVersion == null ? 0L : currentVersion;
+                }
+                if ("wasNull".equals(method.getName())) {
+                    return currentVersion == null;
                 }
                 if ("close".equals(method.getName())) {
                     return null;

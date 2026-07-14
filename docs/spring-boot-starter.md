@@ -523,6 +523,11 @@ cachedb:
     base-path: /cachedb-admin
     dashboard-enabled: true
     title: My CacheDB Admin
+    request-queue-capacity: 128
+    background-worker-threads: 2
+    background-queue-capacity: 32
+    max-request-body-bytes: 1048576
+    job-status-ttl-seconds: 86400
 ```
 
 With this setup:
@@ -537,6 +542,9 @@ Production exposure rule:
 - keep `/cachedb-admin/**` behind your gateway or operations network
 - terminate TLS at the gateway or reverse proxy when that is your platform standard
 - use gateway authentication, or enable CacheDB token auth with `cachedb.admin.auth-enabled=true`
+- keep warm/comparison workers below the capacity of their dedicated SQL connection pool
+- keep request and background queues bounded; overload must return an explicit error instead of growing heap usage
+- job status is stored in Redis, so another pod can read the result while the configured TTL is active
 
 ## Production Redis Topology Default
 

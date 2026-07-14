@@ -57,6 +57,11 @@ class CacheDbSpringPropertiesTest {
         assertFalse(properties.getAdmin().isHttpEnabled());
         assertFalse(properties.getAdmin().isAuthEnabled());
         assertEquals("Authorization", properties.getAdmin().getAuthHeaderName());
+        assertEquals(128, properties.getAdmin().getRequestQueueCapacity());
+        assertEquals(2, properties.getAdmin().getBackgroundWorkerThreads());
+        assertEquals(32, properties.getAdmin().getBackgroundQueueCapacity());
+        assertEquals(1_048_576, properties.getAdmin().getMaxRequestBodyBytes());
+        assertEquals(86_400, properties.getAdmin().getJobStatusTtlSeconds());
     }
 
     @Test

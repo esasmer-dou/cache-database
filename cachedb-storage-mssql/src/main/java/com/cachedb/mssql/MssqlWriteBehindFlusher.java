@@ -9,6 +9,7 @@ import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
+import com.reactor.cachedb.jdbc.VersionGuardedWriteSupport;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -202,8 +203,15 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
             statement.addBatch();
             index++;
         }
-        statement.executeBatch();
+        int[] affectedRows = statement.executeBatch();
         statement.clearBatch();
+        VersionGuardedWriteSupport.verifyBatchOutcome(
+                statements.connection(),
+                entityRegistry,
+                operations.subList(startIndex, index),
+                affectedRows,
+                options.queryTimeoutSeconds()
+        );
         return index;
     }
 
@@ -221,8 +229,17 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
         if (updated > 0) {
             return;
         }
-        if (exists(statements, operation)) {
+        Long currentVersion = VersionGuardedWriteSupport.currentVersion(
+                statements.connection(),
+                entityRegistry,
+                operation,
+                options.queryTimeoutSeconds()
+        );
+        if (currentVersion != null && currentVersion == operation.version()) {
             return;
+        }
+        if (currentVersion != null) {
+            throw new com.reactor.cachedb.core.queue.StaleWriteRejectedException(operation, currentVersion);
         }
         insert(statements, operation, entries);
     }
@@ -250,18 +267,6 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
         ));
         statement.setLong(parameterIndex, operation.version());
         return statement.executeUpdate();
-    }
-
-    private boolean exists(StatementCache statements, QueuedWriteOperation operation) throws SQLException {
-        PreparedStatement statement = statements.get(dialect.existsSql(operation));
-        statement.clearParameters();
-        statement.setObject(1, JdbcWriteBehindSupport.convertValue(
-                operation.id(),
-                JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
-        ));
-        try (ResultSet resultSet = statement.executeQuery()) {
-            return resultSet.next();
-        }
     }
 
     private void insert(
@@ -297,6 +302,10 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
             PreparedStatement prepared = prepareStatement(connection, sql);
             statements.put(sql, prepared);
             return prepared;
+        }
+
+        private Connection connection() {
+            return connection;
         }
 
         @Override

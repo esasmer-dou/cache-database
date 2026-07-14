@@ -93,6 +93,7 @@ public final class CacheDatabaseConfigOverrides {
                 .postgresMultiRowStatementRowLimit(lookup.integer("postgresMultiRowStatementRowLimit", base.postgresMultiRowStatementRowLimit()))
                 .postgresCopyBulkLoadEnabled(lookup.bool("postgresCopyBulkLoadEnabled", base.postgresCopyBulkLoadEnabled()))
                 .postgresCopyThreshold(lookup.integer("postgresCopyThreshold", base.postgresCopyThreshold()))
+                .statementTimeoutSeconds(lookup.integer("statementTimeoutSeconds", base.statementTimeoutSeconds()))
                 .blockTimeoutMillis(lookup.longValue("blockTimeoutMillis", base.blockTimeoutMillis()))
                 .idleSleepMillis(lookup.longValue("idleSleepMillis", base.idleSleepMillis()))
                 .maxFlushRetries(lookup.integer("maxFlushRetries", base.maxFlushRetries()))
@@ -186,6 +187,7 @@ public final class CacheDatabaseConfigOverrides {
                 .compactionCompleteFunctionName(lookup.string("compactionCompleteFunctionName", base.compactionCompleteFunctionName()))
                 .templateResourcePath(lookup.string("templateResourcePath", base.templateResourcePath()))
                 .sourceOverride(lookup.string("sourceOverride", base.sourceOverride()))
+                .libraryVersion(lookup.string("libraryVersion", base.libraryVersion()))
                 .build();
     }
 
@@ -211,6 +213,7 @@ public final class CacheDatabaseConfigOverrides {
                 .failOnMissingLoader(lookup.bool("failOnMissingLoader", base.failOnMissingLoader()))
                 .hydrateLoadedEntities(lookup.bool("hydrateLoadedEntities", base.hydrateLoadedEntities()))
                 .maxQueryLoadRows(lookup.integer("maxQueryLoadRows", base.maxQueryLoadRows()))
+                .queryTimeoutSeconds(lookup.integer("queryTimeoutSeconds", base.queryTimeoutSeconds()))
                 .build();
     }
 
@@ -248,6 +251,7 @@ public final class CacheDatabaseConfigOverrides {
                 .textTokenMinLength(lookup.integer("textTokenMinLength", base.textTokenMinLength()))
                 .textTokenMaxLength(lookup.integer("textTokenMaxLength", base.textTokenMaxLength()))
                 .textMaxTokensPerValue(lookup.integer("textMaxTokensPerValue", base.textMaxTokensPerValue()))
+                .maxMaterializedCandidateIds(lookup.integer("maxMaterializedCandidateIds", base.maxMaterializedCandidateIds()))
                 .build();
     }
 
@@ -496,6 +500,11 @@ public final class CacheDatabaseConfigOverrides {
                 .authEnabled(lookup.bool("authEnabled", base.authEnabled()))
                 .authToken(lookup.string("authToken", base.authToken()))
                 .authHeaderName(lookup.string("authHeaderName", base.authHeaderName()))
+                .requestQueueCapacity(lookup.integer("requestQueueCapacity", base.requestQueueCapacity()))
+                .backgroundWorkerThreads(lookup.integer("backgroundWorkerThreads", base.backgroundWorkerThreads()))
+                .backgroundQueueCapacity(lookup.integer("backgroundQueueCapacity", base.backgroundQueueCapacity()))
+                .maxRequestBodyBytes(lookup.integer("maxRequestBodyBytes", base.maxRequestBodyBytes()))
+                .jobStatusTtlSeconds(lookup.integer("jobStatusTtlSeconds", base.jobStatusTtlSeconds()))
                 .build();
     }
 

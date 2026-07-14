@@ -12,14 +12,27 @@ import com.reactor.cachedb.core.route.RouteCacheContext;
 import com.reactor.cachedb.core.route.RouteCacheContract;
 import com.reactor.cachedb.core.route.TenantCacheQuota;
 import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.params.SetParams;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.function.Supplier;
 import java.nio.charset.StandardCharsets;
 
 public final class RedisPageCacheManager<T, ID> {
+
+    private static final long TENANT_ADMISSION_LOCK_MILLIS = 30_000L;
+    private static final String RELEASE_LOCK_SCRIPT = """
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+            return 0
+            """;
 
     private final JedisPooled jedis;
     private final EntityMetadata<T, ID> metadata;
@@ -31,6 +44,7 @@ public final class RedisPageCacheManager<T, ID> {
     private final RedisProducerGuard producerGuard;
     private final ReadShapeGuardrailConfig readShapeGuardrailConfig;
     private final StoragePerformanceCollector performanceCollector;
+    private final ThreadLocal<Set<String>> heldTenantLocks = ThreadLocal.withInitial(HashSet::new);
 
     public RedisPageCacheManager(
             JedisPooled jedis,
@@ -151,6 +165,7 @@ public final class RedisPageCacheManager<T, ID> {
         List<String> encodedValues = jedis.mget(keys.toArray(String[]::new));
         List<String> tombstones = jedis.mget(tombstoneKeys.toArray(String[]::new));
         List<T> entities = new ArrayList<>(encodedValues.size());
+        boolean complete = true;
         for (int index = 0; index < encodedValues.size(); index++) {
             String encoded = encodedValues.get(index);
             if (encoded != null && tombstones.get(index) == null) {
@@ -161,8 +176,16 @@ public final class RedisPageCacheManager<T, ID> {
                     recordEntityAccess(id);
                 } else if (effectiveCachePolicy().hotPolicy().evictWhenRejected()) {
                     removeEntity(id);
+                    complete = false;
                 }
+            } else {
+                queryIndexManager.removeById(ids.get(index));
+                complete = false;
             }
+        }
+        if (!complete || entities.size() != ids.size()) {
+            jedis.del(keyStrategy.pageKey(metadata.redisNamespace(), pageWindow.pageNumber()));
+            return Optional.empty();
         }
         return Optional.of(entities);
     }
@@ -207,6 +230,26 @@ public final class RedisPageCacheManager<T, ID> {
         }
     }
 
+    public void cachePageMembership(PageWindow pageWindow, List<T> entities) {
+        if (producerGuard != null && producerGuard.shouldShedPageCacheWrites(metadata.redisNamespace())) {
+            return;
+        }
+        String pageKey = keyStrategy.pageKey(metadata.redisNamespace(), pageWindow.pageNumber());
+        jedis.del(pageKey);
+        if (entities == null || entities.isEmpty()) {
+            return;
+        }
+        String[] ids = entities.stream()
+                .map(metadata.idAccessor())
+                .map(String::valueOf)
+                .toArray(String[]::new);
+        jedis.rpush(pageKey, ids);
+        CachePolicy effectiveCachePolicy = effectiveCachePolicy();
+        if (effectiveCachePolicy.pageTtlSeconds() > 0) {
+            jedis.expire(pageKey, effectiveCachePolicy.pageTtlSeconds());
+        }
+    }
+
     public List<String> hotEntityIds() {
         CachePolicy effectiveCachePolicy = effectiveCachePolicy();
         return jedis.zrevrange(keyStrategy.hotSetKey(metadata.redisNamespace()), 0, Math.max(0, effectiveCachePolicy.hotEntityLimit() - 1));
@@ -237,6 +280,31 @@ public final class RedisPageCacheManager<T, ID> {
         }
         String tenantSetKey = keyStrategy.tenantHotSetKey(metadata.redisNamespace(), quota.tenantColumn(), tenantValue);
         String payloadBytesKey = keyStrategy.tenantHotPayloadBytesKey(metadata.redisNamespace(), quota.tenantColumn(), tenantValue);
+        try {
+            return withTenantAdmissionLock(tenantSetKey, () -> allowTenantQuotaLocked(
+                    id,
+                    contract,
+                    quota,
+                    tenantValue,
+                    tenantSetKey,
+                    payloadBytesKey,
+                    estimatedPayloadBytes
+            ));
+        } catch (TenantAdmissionBusyException exception) {
+            recordTenantAdmission(contract, String.valueOf(tenantValue), false);
+            return false;
+        }
+    }
+
+    private boolean allowTenantQuotaLocked(
+            ID id,
+            RouteCacheContract contract,
+            TenantCacheQuota quota,
+            Object tenantValue,
+            String tenantSetKey,
+            String payloadBytesKey,
+            long estimatedPayloadBytes
+    ) {
         String idValue = String.valueOf(id);
         TenantOwnerRecord previousOwner = readTenantOwner(id);
         long replacedPayloadBytes = tenantSetKey.equals(previousOwner.tenantSetKey()) ? previousOwner.payloadBytes() : 0L;
@@ -261,6 +329,7 @@ public final class RedisPageCacheManager<T, ID> {
             recordTenantAdmission(contract, String.valueOf(tenantValue), false);
             return false;
         }
+        reserveTenantMembershipLocked(id, tenantSetKey, payloadBytesKey, Math.max(1L, estimatedPayloadBytes));
         recordTenantAdmission(contract, String.valueOf(tenantValue), true);
         return true;
     }
@@ -281,6 +350,48 @@ public final class RedisPageCacheManager<T, ID> {
         }
         String tenantSetKey = keyStrategy.tenantHotSetKey(metadata.redisNamespace(), quota.tenantColumn(), tenantValue);
         String payloadBytesKey = keyStrategy.tenantHotPayloadBytesKey(metadata.redisNamespace(), quota.tenantColumn(), tenantValue);
+        try {
+            withTenantAdmissionLock(tenantSetKey, () -> {
+                recordTenantAccessLocked(id, contract, quota, tenantValue, tenantSetKey, payloadBytesKey, payloadBytes);
+                return null;
+            });
+        } catch (TenantAdmissionBusyException exception) {
+            recordTenantAdmission(contract, String.valueOf(tenantValue), false);
+        }
+    }
+
+    private void recordTenantAccessLocked(
+            ID id,
+            RouteCacheContract contract,
+            TenantCacheQuota quota,
+            Object tenantValue,
+            String tenantSetKey,
+            String payloadBytesKey,
+            long payloadBytes
+    ) {
+        TenantOwnerRecord reservation = readTenantOwner(id);
+        if (!tenantSetKey.equals(reservation.tenantSetKey())) {
+            jedis.del(keyStrategy.entityKey(metadata.redisNamespace(), id));
+            hotSetManager.remove(metadata.redisNamespace(), id);
+            queryIndexManager.removeById(id);
+            recordTenantAdmission(contract, String.valueOf(tenantValue), false);
+            return;
+        }
+        reserveTenantMembershipLocked(id, tenantSetKey, payloadBytesKey, payloadBytes);
+        String idValue = String.valueOf(id);
+        jedis.zadd(tenantSetKey, System.currentTimeMillis(), idValue);
+        if (quota.memoryBudgetBytes() > 0L && !tenantWithinMemoryBudget(tenantSetKey, payloadBytesKey, quota)) {
+            if (quota.evictOnBreach()) {
+                evictUntilTenantMemoryFits(tenantSetKey, payloadBytesKey, idValue, quota, 0L, 0L);
+            }
+            if (!tenantWithinMemoryBudget(tenantSetKey, payloadBytesKey, quota)) {
+                removeEntity(id);
+                recordTenantAdmission(contract, String.valueOf(tenantValue), false);
+            }
+        }
+    }
+
+    private void reserveTenantMembershipLocked(ID id, String tenantSetKey, String payloadBytesKey, long payloadBytes) {
         String ownerKey = keyStrategy.tenantHotOwnerKey(metadata.redisNamespace(), id);
         String idValue = String.valueOf(id);
         TenantOwnerRecord previousOwner = readTenantOwner(id);
@@ -293,25 +404,24 @@ public final class RedisPageCacheManager<T, ID> {
         jedis.zadd(tenantSetKey, System.currentTimeMillis(), idValue);
         incrementPayloadBytes(payloadBytesKey, payloadBytes);
         jedis.set(ownerKey, TenantOwnerRecord.encode(tenantSetKey, payloadBytesKey, payloadBytes));
-        if (quota.memoryBudgetBytes() > 0L && !tenantWithinMemoryBudget(tenantSetKey, payloadBytesKey, quota)) {
-            if (quota.evictOnBreach()) {
-                evictUntilTenantMemoryFits(tenantSetKey, payloadBytesKey, idValue, quota, 0L, 0L);
-            }
-            if (!tenantWithinMemoryBudget(tenantSetKey, payloadBytesKey, quota)) {
-                removeEntity(id);
-                recordTenantAdmission(contract, String.valueOf(tenantValue), false);
-            }
-        }
     }
 
     private void removeTenantMembership(ID id) {
         String ownerKey = keyStrategy.tenantHotOwnerKey(metadata.redisNamespace(), id);
         TenantOwnerRecord ownerRecord = TenantOwnerRecord.decode(jedis.get(ownerKey));
-        if (ownerRecord.tenantSetKey() != null) {
-            jedis.zrem(ownerRecord.tenantSetKey(), String.valueOf(id));
-            decrementPayloadBytes(ownerRecord.payloadBytesKey(), ownerRecord.payloadBytes());
+        if (ownerRecord.tenantSetKey() == null) {
+            jedis.del(ownerKey);
+            return;
         }
-        jedis.del(ownerKey);
+        withTenantAdmissionLock(ownerRecord.tenantSetKey(), () -> {
+            TenantOwnerRecord currentOwner = TenantOwnerRecord.decode(jedis.get(ownerKey));
+            if (currentOwner.tenantSetKey() != null) {
+                jedis.zrem(currentOwner.tenantSetKey(), String.valueOf(id));
+                decrementPayloadBytes(currentOwner.payloadBytesKey(), currentOwner.payloadBytes());
+            }
+            jedis.del(ownerKey);
+            return null;
+        });
     }
 
     private boolean allowTenantMemoryBudget(
@@ -452,6 +562,54 @@ public final class RedisPageCacheManager<T, ID> {
             return;
         }
         performanceCollector.recordCacheEviction("entity:" + metadata.entityName(), evictedCount);
+    }
+
+    private <R> R withTenantAdmissionLock(String tenantSetKey, Supplier<R> action) {
+        String lockKey = tenantSetKey + ":admission-lock";
+        Set<String> heldLocks = heldTenantLocks.get();
+        if (heldLocks.contains(lockKey)) {
+            return action.get();
+        }
+        String owner = UUID.randomUUID().toString();
+        boolean acquired = false;
+        for (int attempt = 0; attempt < 100 && !acquired; attempt++) {
+            acquired = jedis.set(
+                    lockKey,
+                    owner,
+                    SetParams.setParams().nx().px(TENANT_ADMISSION_LOCK_MILLIS)
+            ) != null;
+            if (!acquired) {
+                sleepTenantLockRetry();
+            }
+        }
+        if (!acquired) {
+            throw new TenantAdmissionBusyException();
+        }
+        heldLocks.add(lockKey);
+        try {
+            return action.get();
+        } finally {
+            heldLocks.remove(lockKey);
+            if (heldLocks.isEmpty()) {
+                heldTenantLocks.remove();
+            }
+            jedis.eval(RELEASE_LOCK_SCRIPT, List.of(lockKey), List.of(owner));
+        }
+    }
+
+    private void sleepTenantLockRetry() {
+        try {
+            Thread.sleep(10L);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for tenant cache admission", exception);
+        }
+    }
+
+    private static final class TenantAdmissionBusyException extends IllegalStateException {
+        private TenantAdmissionBusyException() {
+            super("Tenant cache admission is busy");
+        }
     }
 
     private long parseLong(String value, long fallback) {

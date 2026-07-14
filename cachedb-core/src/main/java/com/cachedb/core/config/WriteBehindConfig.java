@@ -23,6 +23,7 @@ public record WriteBehindConfig(
         int postgresMultiRowStatementRowLimit,
         boolean postgresCopyBulkLoadEnabled,
         int postgresCopyThreshold,
+        int statementTimeoutSeconds,
         long blockTimeoutMillis,
         long idleSleepMillis,
         int maxFlushRetries,
@@ -46,12 +47,76 @@ public record WriteBehindConfig(
         String deadLetterStreamKey,
         long compactionMaxLength
 ) {
+    public WriteBehindConfig(
+            boolean enabled,
+            int workerThreads,
+            int batchSize,
+            boolean dedicatedWriteConsumerGroupEnabled,
+            boolean durableCompactionEnabled,
+            boolean batchFlushEnabled,
+            boolean tableAwareBatchingEnabled,
+            int flushGroupParallelism,
+            int flushPipelineDepth,
+            boolean coalescingEnabled,
+            int maxFlushBatchSize,
+            boolean batchStaleCheckEnabled,
+            long adaptiveBacklogHighWatermark,
+            long adaptiveBacklogCriticalWatermark,
+            int adaptiveHighFlushBatchSize,
+            int adaptiveCriticalFlushBatchSize,
+            boolean postgresMultiRowFlushEnabled,
+            int postgresMultiRowStatementRowLimit,
+            boolean postgresCopyBulkLoadEnabled,
+            int postgresCopyThreshold,
+            long blockTimeoutMillis,
+            long idleSleepMillis,
+            int maxFlushRetries,
+            long retryBackoffMillis,
+            String streamKey,
+            String consumerGroup,
+            String consumerNamePrefix,
+            String compactionStreamKey,
+            String compactionConsumerGroup,
+            String compactionConsumerNamePrefix,
+            int compactionShardCount,
+            boolean autoCreateConsumerGroup,
+            long shutdownAwaitMillis,
+            boolean daemonThreads,
+            boolean recoverPendingEntries,
+            long claimIdleMillis,
+            int claimBatchSize,
+            List<WriteRetryPolicyOverride> retryOverrides,
+            List<EntityFlushPolicy> entityFlushPolicies,
+            long deadLetterMaxLength,
+            String deadLetterStreamKey,
+            long compactionMaxLength
+    ) {
+        this(
+                enabled, workerThreads, batchSize, dedicatedWriteConsumerGroupEnabled,
+                durableCompactionEnabled, batchFlushEnabled, tableAwareBatchingEnabled,
+                flushGroupParallelism, flushPipelineDepth, coalescingEnabled, maxFlushBatchSize,
+                batchStaleCheckEnabled, adaptiveBacklogHighWatermark, adaptiveBacklogCriticalWatermark,
+                adaptiveHighFlushBatchSize, adaptiveCriticalFlushBatchSize, postgresMultiRowFlushEnabled,
+                postgresMultiRowStatementRowLimit, postgresCopyBulkLoadEnabled, postgresCopyThreshold,
+                30, blockTimeoutMillis, idleSleepMillis, maxFlushRetries, retryBackoffMillis, streamKey,
+                consumerGroup, consumerNamePrefix, compactionStreamKey, compactionConsumerGroup,
+                compactionConsumerNamePrefix, compactionShardCount, autoCreateConsumerGroup,
+                shutdownAwaitMillis, daemonThreads, recoverPendingEntries, claimIdleMillis,
+                claimBatchSize, retryOverrides, entityFlushPolicies, deadLetterMaxLength,
+                deadLetterStreamKey, compactionMaxLength
+        );
+    }
+
+    public boolean compactionActive() {
+        return dedicatedWriteConsumerGroupEnabled && durableCompactionEnabled;
+    }
+
     public String activeStreamKey() {
-        return dedicatedWriteConsumerGroupEnabled ? compactionStreamKey : streamKey;
+        return compactionActive() ? compactionStreamKey : streamKey;
     }
 
     public List<String> activeStreamKeys() {
-        if (!dedicatedWriteConsumerGroupEnabled) {
+        if (!compactionActive()) {
             return List.of(streamKey);
         }
         if (compactionShardCount <= 1) {
@@ -66,11 +131,11 @@ public record WriteBehindConfig(
     }
 
     public String activeConsumerGroup() {
-        return dedicatedWriteConsumerGroupEnabled ? compactionConsumerGroup : consumerGroup;
+        return compactionActive() ? compactionConsumerGroup : consumerGroup;
     }
 
     public String activeConsumerNamePrefix() {
-        return dedicatedWriteConsumerGroupEnabled ? compactionConsumerNamePrefix : consumerNamePrefix;
+        return compactionActive() ? compactionConsumerNamePrefix : consumerNamePrefix;
     }
 
     public static Builder builder() {
@@ -102,6 +167,7 @@ public record WriteBehindConfig(
         private int postgresMultiRowStatementRowLimit = 64;
         private boolean postgresCopyBulkLoadEnabled = true;
         private int postgresCopyThreshold = 128;
+        private int statementTimeoutSeconds = 30;
         private long blockTimeoutMillis = 2_000;
         private long idleSleepMillis = 250;
         private int maxFlushRetries = 3;
@@ -125,7 +191,7 @@ public record WriteBehindConfig(
         private List<EntityFlushPolicy> entityFlushPolicies = List.of();
         private long deadLetterMaxLength = 10_000;
         private String deadLetterStreamKey = "cachedb:stream:write-behind:dlq";
-        private long compactionMaxLength = 10_000;
+        private long compactionMaxLength;
 
         public Builder enabled(boolean enabled) {
             this.enabled = enabled;
@@ -225,6 +291,11 @@ public record WriteBehindConfig(
 
         public Builder postgresCopyThreshold(int postgresCopyThreshold) {
             this.postgresCopyThreshold = postgresCopyThreshold;
+            return this;
+        }
+
+        public Builder statementTimeoutSeconds(int statementTimeoutSeconds) {
+            this.statementTimeoutSeconds = statementTimeoutSeconds;
             return this;
         }
 
@@ -346,6 +417,15 @@ public record WriteBehindConfig(
         }
 
         public WriteBehindConfig build() {
+            if (statementTimeoutSeconds <= 0) {
+                throw new IllegalArgumentException("Write-behind statementTimeoutSeconds must be greater than zero");
+            }
+            if (dedicatedWriteConsumerGroupEnabled && durableCompactionEnabled && compactionMaxLength > 0) {
+                throw new IllegalArgumentException(
+                        "The durable compaction stream cannot be trimmed while entries may still be pending; "
+                                + "configure compactionMaxLength as 0"
+                );
+            }
             return new WriteBehindConfig(
                     enabled,
                     workerThreads,
@@ -367,6 +447,7 @@ public record WriteBehindConfig(
                     postgresMultiRowStatementRowLimit,
                     postgresCopyBulkLoadEnabled,
                     postgresCopyThreshold,
+                    statementTimeoutSeconds,
                     blockTimeoutMillis,
                     idleSleepMillis,
                     maxFlushRetries,

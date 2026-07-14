@@ -11,5 +11,6 @@ public enum WriteFailureCategory {
     DATA,
     SCHEMA,
     PERMISSION,
+    STALE_WRITE,
     UNKNOWN
 }

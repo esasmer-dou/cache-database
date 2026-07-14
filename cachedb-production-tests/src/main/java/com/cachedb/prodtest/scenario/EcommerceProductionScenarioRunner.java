@@ -59,11 +59,10 @@ import java.util.stream.Collectors;
 
 public final class EcommerceProductionScenarioRunner {
 
-    private static final String JDBC_USER = System.getProperty("cachedb.prod.postgres.user", "postgres");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.prod.postgres.password", "postgresql");
-    private static final String REDIS_PASSWORD = System.getProperty("cachedb.prod.redis.password", "welcome1");
-    private static final String REDIS_URI = System.getProperty("cachedb.prod.redis.uri", "redis://default:" + REDIS_PASSWORD + "@127.0.0.1:6379");
-    private static final String JDBC_URL = System.getProperty("cachedb.prod.postgres.url", "jdbc:postgresql://127.0.0.1:5432/postgres");
+    private static final String JDBC_USER = ProductionTestEnvironment.postgresUser();
+    private static final String JDBC_PASSWORD = ProductionTestEnvironment.postgresPassword();
+    private static final String REDIS_URI = ProductionTestEnvironment.redisUri();
+    private static final String JDBC_URL = ProductionTestEnvironment.postgresUrl();
     private static final int REDIS_TIMEOUT_MILLIS = Integer.getInteger("cachedb.prod.redis.timeoutMillis", 60_000);
     private static final int POSTGRES_CONNECT_TIMEOUT_SECONDS = Integer.getInteger("cachedb.prod.postgres.connectTimeoutSeconds", 30);
     private static final int POSTGRES_SOCKET_TIMEOUT_SECONDS = Integer.getInteger("cachedb.prod.postgres.socketTimeoutSeconds", 300);
@@ -95,9 +94,9 @@ public final class EcommerceProductionScenarioRunner {
     private static final long REDIS_USED_MEMORY_CRITICAL_BYTES = Long.getLong("cachedb.prod.redis.usedMemoryCriticalBytes", 0L);
     private static final long COMPACTION_PENDING_WARN_THRESHOLD = Long.getLong("cachedb.prod.redis.compactionPendingWarnThreshold", 1_000L);
     private static final long COMPACTION_PENDING_CRITICAL_THRESHOLD = Long.getLong("cachedb.prod.redis.compactionPendingCriticalThreshold", 5_000L);
-    private static final int COMPACTION_PAYLOAD_TTL_SECONDS = Integer.getInteger("cachedb.prod.redis.compactionPayloadTtlSeconds", 3_600);
-    private static final int COMPACTION_PENDING_TTL_SECONDS = Integer.getInteger("cachedb.prod.redis.compactionPendingTtlSeconds", 3_600);
-    private static final int VERSION_KEY_TTL_SECONDS = Integer.getInteger("cachedb.prod.redis.versionKeyTtlSeconds", 86_400);
+    private static final int COMPACTION_PAYLOAD_TTL_SECONDS = Integer.getInteger("cachedb.prod.redis.compactionPayloadTtlSeconds", 0);
+    private static final int COMPACTION_PENDING_TTL_SECONDS = Integer.getInteger("cachedb.prod.redis.compactionPendingTtlSeconds", 0);
+    private static final int VERSION_KEY_TTL_SECONDS = Integer.getInteger("cachedb.prod.redis.versionKeyTtlSeconds", 0);
     private static final int TOMBSTONE_TTL_SECONDS = Integer.getInteger("cachedb.prod.redis.tombstoneTtlSeconds", 86_400);
     private static final boolean SHED_QUERY_INDEX_WRITES_ON_HARD_LIMIT = Boolean.parseBoolean(System.getProperty("cachedb.prod.redis.shedQueryIndexWritesOnHardLimit", "true"));
     private static final boolean SHED_QUERY_INDEX_READS_ON_HARD_LIMIT = Boolean.parseBoolean(System.getProperty("cachedb.prod.redis.shedQueryIndexReadsOnHardLimit", "true"));

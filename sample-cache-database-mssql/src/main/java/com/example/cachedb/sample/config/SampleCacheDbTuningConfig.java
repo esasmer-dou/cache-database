@@ -32,6 +32,7 @@ public class SampleCacheDbTuningConfig {
                         .failOnMissingLoader(true)
                         .hydrateLoadedEntities(true)
                         .maxQueryLoadRows(500)
+                        .queryTimeoutSeconds(15)
                         .build())
                 .redisGuardrail(RedisGuardrailConfig.builder()
                         .enabled(true)
@@ -53,6 +54,7 @@ public class SampleCacheDbTuningConfig {
                         .coalescingEnabled(true)
                         .maxFlushRetries(5)
                         .retryBackoffMillis(500)
+                        .statementTimeoutSeconds(20)
                         .build());
     }
 }

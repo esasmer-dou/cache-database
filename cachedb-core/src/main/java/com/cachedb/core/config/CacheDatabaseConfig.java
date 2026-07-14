@@ -24,6 +24,59 @@ public record CacheDatabaseConfig(
 ) {
     public CacheDatabaseConfig(
             WriteBehindConfig writeBehind,
+            WriteBehindFlusherFactory writeBehindFlusherFactory,
+            ResourceLimits resourceLimits,
+            KeyspaceConfig keyspace,
+            RuntimeCoordinationConfig runtimeCoordination,
+            RedisFunctionsConfig redisFunctions,
+            RelationConfig relations,
+            PageCacheConfig pageCache,
+            ReadShapeGuardrailConfig readShapeGuardrail,
+            QueryIndexConfig queryIndex,
+            ProjectionRefreshConfig projectionRefresh,
+            RedisGuardrailConfig redisGuardrail,
+            DeadLetterRecoveryConfig deadLetterRecovery,
+            AdminMonitoringConfig adminMonitoring,
+            AdminReportJobConfig adminReportJob,
+            AdminHttpConfig adminHttp,
+            SchemaBootstrapConfig schemaBootstrap
+    ) {
+        this(
+                writeBehind, writeBehindFlusherFactory, resourceLimits, keyspace, runtimeCoordination,
+                redisFunctions, relations, pageCache, ReadThroughConfig.defaults(), readShapeGuardrail,
+                queryIndex, projectionRefresh, redisGuardrail, deadLetterRecovery, adminMonitoring,
+                adminReportJob, adminHttp, schemaBootstrap
+        );
+    }
+
+    public CacheDatabaseConfig(
+            WriteBehindConfig writeBehind,
+            ResourceLimits resourceLimits,
+            KeyspaceConfig keyspace,
+            RuntimeCoordinationConfig runtimeCoordination,
+            RedisFunctionsConfig redisFunctions,
+            RelationConfig relations,
+            PageCacheConfig pageCache,
+            ReadShapeGuardrailConfig readShapeGuardrail,
+            QueryIndexConfig queryIndex,
+            ProjectionRefreshConfig projectionRefresh,
+            RedisGuardrailConfig redisGuardrail,
+            DeadLetterRecoveryConfig deadLetterRecovery,
+            AdminMonitoringConfig adminMonitoring,
+            AdminReportJobConfig adminReportJob,
+            AdminHttpConfig adminHttp,
+            SchemaBootstrapConfig schemaBootstrap
+    ) {
+        this(
+                writeBehind, null, resourceLimits, keyspace, runtimeCoordination, redisFunctions,
+                relations, pageCache, ReadThroughConfig.defaults(), readShapeGuardrail, queryIndex,
+                projectionRefresh, redisGuardrail, deadLetterRecovery, adminMonitoring, adminReportJob,
+                adminHttp, schemaBootstrap
+        );
+    }
+
+    public CacheDatabaseConfig(
+            WriteBehindConfig writeBehind,
             ResourceLimits resourceLimits,
             KeyspaceConfig keyspace,
             RuntimeCoordinationConfig runtimeCoordination,

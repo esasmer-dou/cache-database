@@ -215,6 +215,7 @@ back to PostgreSQL.
 | `cachedb.config.writeBehind.postgresMultiRowStatementRowLimit` | `64` | Row cap per generated multi-row PostgreSQL statement. |
 | `cachedb.config.writeBehind.postgresCopyBulkLoadEnabled` | `true` | Enables PostgreSQL `COPY`-based bulk path. |
 | `cachedb.config.writeBehind.postgresCopyThreshold` | `128` | Minimum rows before switching to PostgreSQL `COPY`. |
+| `cachedb.config.writeBehind.statementTimeoutSeconds` | `30` | JDBC timeout for write-behind statements and version-fence slow-path checks. |
 | `cachedb.config.writeBehind.blockTimeoutMillis` | `2000` | Redis stream blocking read timeout. |
 | `cachedb.config.writeBehind.idleSleepMillis` | `250` | Worker sleep when idle. |
 | `cachedb.config.writeBehind.maxFlushRetries` | `3` | Flush retry count for generic failures. |
@@ -234,7 +235,7 @@ back to PostgreSQL.
 | `cachedb.config.writeBehind.claimBatchSize` | `100` | Max claimed pending entries per cycle. |
 | `cachedb.config.writeBehind.deadLetterMaxLength` | `10000` | Redis DLQ stream trim target for write-behind failures. |
 | `cachedb.config.writeBehind.deadLetterStreamKey` | `cachedb:stream:write-behind:dlq` | Write-behind DLQ stream key. |
-| `cachedb.config.writeBehind.compactionMaxLength` | `10000` | Compaction stream trim target. |
+| `cachedb.config.writeBehind.compactionMaxLength` | `0` | Must remain `0`. Durable compaction tokens cannot be trimmed before acknowledgement. |
 | `cachedb.config.writeBehind.retryOverrides` | empty | Per-entity retry overrides. Format below. |
 | `cachedb.config.writeBehind.entityFlushPolicies` | empty | Per-entity PostgreSQL flush policies. Format below. |
 
@@ -311,12 +312,23 @@ as time or state.
 | `cachedb.config.redisFunctions.compactionCompleteFunctionName` | `compaction_complete` | Compaction-complete function entrypoint. |
 | `cachedb.config.redisFunctions.templateResourcePath` | `/functions/cachedb-functions.lua` | Redis Function source template path. |
 | `cachedb.config.redisFunctions.sourceOverride` | empty | Full source override for the library. |
+| `cachedb.config.redisFunctions.libraryVersion` | `0.3.0` | Semantic deployment version. Publish a new version whenever function source changes. |
 | `cachedb.config.relations.batchSize` | `250` | Default relation batch loader size. |
 | `cachedb.config.relations.maxFetchDepth` | `3` | Max relation fetch depth. |
 | `cachedb.config.relations.failOnMissingPreloader` | `false` | Fails when fetch plans require missing relation preloaders. |
 | `cachedb.config.pageCache.readThroughEnabled` | `true` | Enables page-cache read-through. |
 | `cachedb.config.pageCache.failOnMissingPageLoader` | `false` | Fails when page read-through has no loader. |
 | `cachedb.config.pageCache.evictionBatchSize` | `100` | Page-cache eviction work chunk size. |
+
+### Read-Through
+
+| Property | Default | What it does |
+| --- | --- | --- |
+| `cachedb.config.readThrough.mode` | `REDIS_ONLY` | Selects Redis-only, entity, query, or full SQL fallback behavior. Enable fallback only for explicitly bounded routes. |
+| `cachedb.config.readThrough.failOnMissingLoader` | `false` | Fails when an enabled fallback route has no source loader. |
+| `cachedb.config.readThrough.hydrateLoadedEntities` | `true` | Admits versioned SQL results into Redis when cache policy allows it. Versionless custom loaders are returned but are not cached. |
+| `cachedb.config.readThrough.maxQueryLoadRows` | `500` | Maximum rows accepted from one SQL query loader call. |
+| `cachedb.config.readThrough.queryTimeoutSeconds` | `30` | JDBC statement timeout for SQL read-through. |
 
 ### Read-Shape Guardrails
 
@@ -342,8 +354,8 @@ These properties protect Redis from accidental wide reads. The default rule is s
 | --- | --- | --- |
 | `cachedb.config.queryIndex.exactIndexEnabled` | `true` | Enables exact-match indexes. |
 | `cachedb.config.queryIndex.rangeIndexEnabled` | `true` | Enables range indexes. |
-| `cachedb.config.queryIndex.prefixIndexEnabled` | `true` | Enables prefix indexes. |
-| `cachedb.config.queryIndex.textIndexEnabled` | `true` | Enables text indexes. |
+| `cachedb.config.queryIndex.prefixIndexEnabled` | `false` | Enables prefix indexes. Opt in only for measured prefix routes because write amplification grows with value length. |
+| `cachedb.config.queryIndex.textIndexEnabled` | `false` | Enables token indexes. Opt in only for bounded search fields; use a search engine for general full-text workloads. |
 | `cachedb.config.queryIndex.plannerStatisticsEnabled` | `true` | Enables planner statistics collection. |
 | `cachedb.config.queryIndex.plannerStatisticsPersisted` | `true` | Persists planner statistics in Redis. |
 | `cachedb.config.queryIndex.plannerStatisticsTtlMillis` | `60000` | Planner statistics TTL. |
@@ -356,6 +368,7 @@ These properties protect Redis from accidental wide reads. The default rule is s
 | `cachedb.config.queryIndex.textTokenMinLength` | `2` | Minimum indexed text token length. |
 | `cachedb.config.queryIndex.textTokenMaxLength` | `32` | Maximum indexed text token length. |
 | `cachedb.config.queryIndex.textMaxTokensPerValue` | `16` | Max indexed tokens per field value. |
+| `cachedb.config.queryIndex.maxMaterializedCandidateIds` | `10000` | Fails before a broad query allocates a larger in-memory candidate set. Use a projection or narrower predicate instead of increasing this blindly. |
 
 ### Projection Refresh
 
@@ -391,7 +404,7 @@ Operational notes:
 - the model remains eventually consistent by design
 - poisoned projection refresh events are moved to a dedicated Redis Stream dead-letter queue
 - replay is available through the admin API and the bundled ops tooling
-- this is not yet a full projection platform with poison-queue handling, replay tooling, or dedicated admin telemetry
+- poison handling, replay, lag and failure telemetry are available; production routes must still alert on their own lag and dead-letter thresholds
 - projection refresh consumer names are now pod-unique by default when runtime coordination suffixing is enabled
 
 ### Redis Guardrails
@@ -429,9 +442,9 @@ Operational notes:
 | `cachedb.config.redisGuardrail.criticalSamplesToAggressive` | `2` | Samples needed to escalate to `AGGRESSIVE`. |
 | `cachedb.config.redisGuardrail.warnSamplesToDeescalateAggressive` | `4` | Samples needed to de-escalate from `AGGRESSIVE` to `BALANCED`. |
 | `cachedb.config.redisGuardrail.normalSamplesToStandard` | `5` | Samples needed to return to `STANDARD`. |
-| `cachedb.config.redisGuardrail.compactionPayloadTtlSeconds` | `3600` | TTL for compaction payload keys. |
-| `cachedb.config.redisGuardrail.compactionPendingTtlSeconds` | `3600` | TTL for compaction pending keys. |
-| `cachedb.config.redisGuardrail.versionKeyTtlSeconds` | `86400` | TTL for version keys. |
+| `cachedb.config.redisGuardrail.compactionPayloadTtlSeconds` | `0` | Must remain `0`; expiring an unflushed durable payload can lose a SQL write. |
+| `cachedb.config.redisGuardrail.compactionPendingTtlSeconds` | `0` | Must remain `0`; pending state is removed only after a successful flush. |
+| `cachedb.config.redisGuardrail.versionKeyTtlSeconds` | `0` | Must remain `0`; an expired version fence can allow stale data to overwrite newer state. |
 | `cachedb.config.redisGuardrail.tombstoneTtlSeconds` | `86400` | TTL for tombstones. |
 | `cachedb.config.redisGuardrail.autoRecoverDegradedIndexesEnabled` | `true` | Auto-rebuilds degraded indexes when pressure falls. |
 | `cachedb.config.redisGuardrail.degradedIndexRebuildCooldownMillis` | `30000` | Cooldown before another degraded-index rebuild. |
@@ -530,6 +543,11 @@ Operational notes:
 | `cachedb.config.adminHttp.authEnabled` | `false` | Requires an admin token for native admin HTTP requests. |
 | `cachedb.config.adminHttp.authToken` | empty | Admin token used when auth is enabled. |
 | `cachedb.config.adminHttp.authHeaderName` | `Authorization` | Header checked for the admin token. `Authorization: Bearer <token>` is supported. |
+| `cachedb.config.adminHttp.requestQueueCapacity` | `128` | Bounded native admin HTTP request queue. Requests are rejected under overload instead of allocating without limit. |
+| `cachedb.config.adminHttp.backgroundWorkerThreads` | `2` | Worker count for warm and comparison jobs. Keep this below the dedicated SQL pool capacity. |
+| `cachedb.config.adminHttp.backgroundQueueCapacity` | `32` | Bounded warm/comparison queue. Full queues fail explicitly. |
+| `cachedb.config.adminHttp.maxRequestBodyBytes` | `1048576` | Maximum admin API request body. Both native HTTP and Spring servlet paths enforce it. |
+| `cachedb.config.adminHttp.jobStatusTtlSeconds` | `86400` | Redis retention for cross-pod warm/comparison job status. |
 | `cachedb.config.schemaBootstrap.mode` | `DISABLED` | Schema bootstrap mode. |
 | `cachedb.config.schemaBootstrap.autoApplyOnStart` | `false` | Applies schema bootstrap on startup. |
 | `cachedb.config.schemaBootstrap.includeVersionColumn` | `true` | Includes version column in generated DDL. |

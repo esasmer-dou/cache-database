@@ -11,8 +11,33 @@ public record AdminHttpConfig(
         String dashboardTitle,
         boolean authEnabled,
         String authToken,
-        String authHeaderName
+        String authHeaderName,
+        int requestQueueCapacity,
+        int backgroundWorkerThreads,
+        int backgroundQueueCapacity,
+        int maxRequestBodyBytes,
+        int jobStatusTtlSeconds
 ) {
+    public AdminHttpConfig(
+            boolean enabled,
+            String host,
+            int port,
+            int backlog,
+            int workerThreads,
+            boolean dashboardEnabled,
+            boolean corsEnabled,
+            String dashboardTitle,
+            boolean authEnabled,
+            String authToken,
+            String authHeaderName
+    ) {
+        this(
+                enabled, host, port, backlog, workerThreads, dashboardEnabled, corsEnabled,
+                dashboardTitle, authEnabled, authToken, authHeaderName,
+                128, 2, 32, 1_048_576, 86_400
+        );
+    }
+
     public AdminHttpConfig {
         host = host == null || host.isBlank() ? "127.0.0.1" : host.trim();
         dashboardTitle = dashboardTitle == null || dashboardTitle.isBlank() ? "CacheDB Admin" : dashboardTitle.trim();
@@ -20,6 +45,10 @@ public record AdminHttpConfig(
         authHeaderName = authHeaderName == null || authHeaderName.isBlank() ? "Authorization" : authHeaderName.trim();
         if (authEnabled && authToken.isBlank()) {
             throw new IllegalArgumentException("Admin HTTP auth is enabled but authToken is blank.");
+        }
+        if (workerThreads <= 0 || requestQueueCapacity <= 0 || backgroundWorkerThreads <= 0
+                || backgroundQueueCapacity <= 0 || maxRequestBodyBytes <= 0 || jobStatusTtlSeconds <= 0) {
+            throw new IllegalArgumentException("Admin HTTP worker, queue, body, and job TTL limits must be greater than zero.");
         }
     }
 
@@ -43,6 +72,11 @@ public record AdminHttpConfig(
         private boolean authEnabled;
         private String authToken = "";
         private String authHeaderName = "Authorization";
+        private int requestQueueCapacity = 128;
+        private int backgroundWorkerThreads = 2;
+        private int backgroundQueueCapacity = 32;
+        private int maxRequestBodyBytes = 1_048_576;
+        private int jobStatusTtlSeconds = 86_400;
 
         public Builder enabled(boolean enabled) {
             this.enabled = enabled;
@@ -99,6 +133,31 @@ public record AdminHttpConfig(
             return this;
         }
 
+        public Builder requestQueueCapacity(int requestQueueCapacity) {
+            this.requestQueueCapacity = requestQueueCapacity;
+            return this;
+        }
+
+        public Builder backgroundWorkerThreads(int backgroundWorkerThreads) {
+            this.backgroundWorkerThreads = backgroundWorkerThreads;
+            return this;
+        }
+
+        public Builder backgroundQueueCapacity(int backgroundQueueCapacity) {
+            this.backgroundQueueCapacity = backgroundQueueCapacity;
+            return this;
+        }
+
+        public Builder maxRequestBodyBytes(int maxRequestBodyBytes) {
+            this.maxRequestBodyBytes = maxRequestBodyBytes;
+            return this;
+        }
+
+        public Builder jobStatusTtlSeconds(int jobStatusTtlSeconds) {
+            this.jobStatusTtlSeconds = jobStatusTtlSeconds;
+            return this;
+        }
+
         public AdminHttpConfig build() {
             return new AdminHttpConfig(
                     enabled,
@@ -111,7 +170,12 @@ public record AdminHttpConfig(
                     dashboardTitle,
                     authEnabled,
                     authToken,
-                    authHeaderName
+                    authHeaderName,
+                    requestQueueCapacity,
+                    backgroundWorkerThreads,
+                    backgroundQueueCapacity,
+                    maxRequestBodyBytes,
+                    jobStatusTtlSeconds
             );
         }
     }

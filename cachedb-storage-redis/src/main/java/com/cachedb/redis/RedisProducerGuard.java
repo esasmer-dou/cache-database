@@ -7,6 +7,7 @@ import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.query.HardLimitQueryClass;
 import com.reactor.cachedb.core.queue.RedisGuardrailSnapshot;
+import com.reactor.cachedb.core.queue.RedisBackpressureException;
 import com.reactor.cachedb.core.queue.RedisRuntimeProfileEvent;
 import com.reactor.cachedb.core.queue.RedisRuntimeProfileSnapshot;
 import redis.clients.jedis.JedisPooled;
@@ -66,6 +67,9 @@ public final class RedisProducerGuard {
         RedisGuardrailSnapshot snapshot = sampleSafely();
         if ("CRITICAL".equals(snapshot.pressureLevel())) {
             producerCriticalPressureDelayCount.incrementAndGet();
+            if (config.rejectWritesOnHardLimit() && isHardLimitActive(snapshot)) {
+                throw new RedisBackpressureException(snapshot);
+            }
             sleepQuietly(effectiveCriticalSleepMillis());
             return;
         }
@@ -407,7 +411,10 @@ public final class RedisProducerGuard {
     }
 
     private boolean isHardLimitActive() {
-        RedisGuardrailSnapshot snapshot = sampleSafely();
+        return isHardLimitActive(sampleSafely());
+    }
+
+    private boolean isHardLimitActive(RedisGuardrailSnapshot snapshot) {
         if (config.usedMemoryCriticalBytes() > 0
                 && snapshot.usedMemoryBytes() >= config.usedMemoryCriticalBytes()) {
             return true;

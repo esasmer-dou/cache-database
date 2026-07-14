@@ -374,9 +374,11 @@ Useful overrides:
 - `cachedb.prod.redis.usedMemoryCriticalBytes=3221225472`
 - `cachedb.prod.redis.compactionPendingWarnThreshold=1000`
 - `cachedb.prod.redis.compactionPendingCriticalThreshold=5000`
-- `cachedb.prod.redis.compactionPayloadTtlSeconds=3600`
-- `cachedb.prod.redis.compactionPendingTtlSeconds=3600`
-- `cachedb.prod.redis.versionKeyTtlSeconds=86400`
+- `cachedb.prod.redis.compactionPayloadTtlSeconds=0`
+- `cachedb.prod.redis.compactionPendingTtlSeconds=0`
+- `cachedb.prod.redis.versionKeyTtlSeconds=0`
+
+These three durability fences must remain `0`. Expiring payload or pending state before SQL flush can lose a write; expiring a version fence can let an older event overwrite newer state.
 - `cachedb.prod.redis.tombstoneTtlSeconds=86400`
 - `cachedb.prod.redis.shedQueryIndexWritesOnHardLimit=true`
 - `cachedb.prod.redis.shedQueryIndexReadsOnHardLimit=true`

@@ -59,6 +59,7 @@ final class RuntimeCoordinationSupport {
                 .postgresMultiRowStatementRowLimit(config.postgresMultiRowStatementRowLimit())
                 .postgresCopyBulkLoadEnabled(config.postgresCopyBulkLoadEnabled())
                 .postgresCopyThreshold(config.postgresCopyThreshold())
+                .statementTimeoutSeconds(config.statementTimeoutSeconds())
                 .blockTimeoutMillis(config.blockTimeoutMillis())
                 .idleSleepMillis(config.idleSleepMillis())
                 .maxFlushRetries(config.maxFlushRetries())

@@ -337,6 +337,11 @@ public class CacheDbSpringProperties {
         private boolean authEnabled;
         private String authToken = "";
         private String authHeaderName = "Authorization";
+        private int requestQueueCapacity = 128;
+        private int backgroundWorkerThreads = 2;
+        private int backgroundQueueCapacity = 32;
+        private int maxRequestBodyBytes = 1_048_576;
+        private int jobStatusTtlSeconds = 86_400;
 
         public boolean isEnabled() {
             return enabled;
@@ -400,6 +405,46 @@ public class CacheDbSpringProperties {
 
         public void setAuthHeaderName(String authHeaderName) {
             this.authHeaderName = authHeaderName;
+        }
+
+        public int getRequestQueueCapacity() {
+            return requestQueueCapacity;
+        }
+
+        public void setRequestQueueCapacity(int requestQueueCapacity) {
+            this.requestQueueCapacity = requestQueueCapacity;
+        }
+
+        public int getBackgroundWorkerThreads() {
+            return backgroundWorkerThreads;
+        }
+
+        public void setBackgroundWorkerThreads(int backgroundWorkerThreads) {
+            this.backgroundWorkerThreads = backgroundWorkerThreads;
+        }
+
+        public int getBackgroundQueueCapacity() {
+            return backgroundQueueCapacity;
+        }
+
+        public void setBackgroundQueueCapacity(int backgroundQueueCapacity) {
+            this.backgroundQueueCapacity = backgroundQueueCapacity;
+        }
+
+        public int getMaxRequestBodyBytes() {
+            return maxRequestBodyBytes;
+        }
+
+        public void setMaxRequestBodyBytes(int maxRequestBodyBytes) {
+            this.maxRequestBodyBytes = maxRequestBodyBytes;
+        }
+
+        public int getJobStatusTtlSeconds() {
+            return jobStatusTtlSeconds;
+        }
+
+        public void setJobStatusTtlSeconds(int jobStatusTtlSeconds) {
+            this.jobStatusTtlSeconds = jobStatusTtlSeconds;
         }
     }
 

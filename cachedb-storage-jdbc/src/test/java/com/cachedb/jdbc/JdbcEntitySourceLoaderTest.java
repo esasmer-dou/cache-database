@@ -39,6 +39,16 @@ class JdbcEntitySourceLoaderTest {
     }
 
     @Test
+    void shouldCarryDatabaseVersionWithLoadedEntity() throws SQLException {
+        JdbcEntitySourceLoader<TestEntity, Long> loader = newLoader(seedDataSource());
+
+        var loaded = loader.loadVersionedById(2L).orElseThrow();
+
+        assertEquals(2L, loaded.entity().id());
+        assertEquals(20L, loaded.version());
+    }
+
+    @Test
     void shouldLoadBoundedSortedQuery() throws SQLException {
         JdbcEntitySourceLoader<TestEntity, Long> loader = newLoader(seedDataSource());
 
@@ -116,14 +126,15 @@ class JdbcEntitySourceLoaderTest {
                         id BIGINT PRIMARY KEY,
                         status VARCHAR(32),
                         created_at BIGINT,
+                        entity_version BIGINT NOT NULL,
                         deleted_flag VARCHAR(8)
                     )
                     """);
-            statement.execute("INSERT INTO test_entities(id, status, created_at, deleted_flag) VALUES (1, 'OPEN', 100, NULL)");
-            statement.execute("INSERT INTO test_entities(id, status, created_at, deleted_flag) VALUES (2, 'PENDING', 200, NULL)");
-            statement.execute("INSERT INTO test_entities(id, status, created_at, deleted_flag) VALUES (3, 'OPEN', 300, NULL)");
-            statement.execute("INSERT INTO test_entities(id, status, created_at, deleted_flag) VALUES (4, 'OPEN', 400, 'true')");
-            statement.execute("INSERT INTO test_entities(id, status, created_at, deleted_flag) VALUES (5, 'CLOSED', 500, NULL)");
+            statement.execute("INSERT INTO test_entities(id, status, created_at, entity_version, deleted_flag) VALUES (1, 'OPEN', 100, 10, NULL)");
+            statement.execute("INSERT INTO test_entities(id, status, created_at, entity_version, deleted_flag) VALUES (2, 'PENDING', 200, 20, NULL)");
+            statement.execute("INSERT INTO test_entities(id, status, created_at, entity_version, deleted_flag) VALUES (3, 'OPEN', 300, 30, NULL)");
+            statement.execute("INSERT INTO test_entities(id, status, created_at, entity_version, deleted_flag) VALUES (4, 'OPEN', 400, 40, 'true')");
+            statement.execute("INSERT INTO test_entities(id, status, created_at, entity_version, deleted_flag) VALUES (5, 'CLOSED', 500, 50, NULL)");
         }
         return dataSource;
     }

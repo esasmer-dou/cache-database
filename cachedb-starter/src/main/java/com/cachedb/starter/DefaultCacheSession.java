@@ -30,6 +30,8 @@ import com.reactor.cachedb.redis.RedisQueryIndexManager;
 import com.reactor.cachedb.core.queue.WriteBehindQueue;
 import redis.clients.jedis.JedisPooled;
 
+import java.util.concurrent.ConcurrentHashMap;
+
 public final class DefaultCacheSession implements CacheSession {
 
     private final JedisPooled foregroundJedis;
@@ -45,6 +47,7 @@ public final class DefaultCacheSession implements CacheSession {
     private final StoragePerformanceCollector performanceCollector;
     private final ProjectionRefreshDispatcher projectionRefreshDispatcher;
     private final RedisProjectionRefreshQueue projectionRefreshQueue;
+    private final ConcurrentHashMap<RepositoryKey, EntityRepository<?, ?>> repositories = new ConcurrentHashMap<>();
 
     public DefaultCacheSession(
             JedisPooled foregroundJedis,
@@ -77,6 +80,7 @@ public final class DefaultCacheSession implements CacheSession {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public <T, ID> EntityRepository<T, ID> repository(
             EntityMetadata<T, ID> metadata,
             EntityCodec<T> codec
@@ -111,6 +115,30 @@ public final class DefaultCacheSession implements CacheSession {
         CachePolicy resolvedCachePolicy = cachePolicy != null
                 ? cachePolicy
                 : (binding.cachePolicy() == null ? defaultPolicy : binding.cachePolicy());
+        RepositoryKey repositoryKey = new RepositoryKey(metadata.entityName(), resolvedCachePolicy);
+        return (EntityRepository<T, ID>) repositories.computeIfAbsent(
+                repositoryKey,
+                ignored -> createRepository(
+                        metadata,
+                        codec,
+                        resolvedCachePolicy,
+                        relationBatchLoader,
+                        pageLoader,
+                        byIdLoader,
+                        queryLoader
+                )
+        );
+    }
+
+    private <T, ID> EntityRepository<T, ID> createRepository(
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            CachePolicy resolvedCachePolicy,
+            RelationBatchLoader<T> relationBatchLoader,
+            EntityPageLoader<T> pageLoader,
+            EntityByIdLoader<T, ID> byIdLoader,
+            EntityQueryLoader<T> queryLoader
+    ) {
         RedisQueryIndexManager<T, ID> queryIndexManager = new RedisQueryIndexManager<>(
                 foregroundJedis,
                 metadata,
@@ -165,6 +193,9 @@ public final class DefaultCacheSession implements CacheSession {
                 projectionRefreshDispatcher,
                 projectionRefreshQueue
         );
+    }
+
+    private record RepositoryKey(String entityName, CachePolicy cachePolicy) {
     }
 
     @SuppressWarnings("unchecked")

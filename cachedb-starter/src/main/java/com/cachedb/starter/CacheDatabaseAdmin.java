@@ -576,6 +576,8 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.writeBehind().maxFlushBatchSize(), "Maximum PostgreSQL flush batch size.");
         addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.postgresCopyThreshold",
                 cacheDatabaseConfig.writeBehind().postgresCopyThreshold(), "Row threshold before COPY bulk path.");
+        addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.statementTimeoutSeconds",
+                cacheDatabaseConfig.writeBehind().statementTimeoutSeconds(), "JDBC statement timeout for write-behind and stale checks.");
         addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.compactionShardCount",
                 cacheDatabaseConfig.writeBehind().compactionShardCount(), "Compaction shard count.");
         addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.enabled",
@@ -612,6 +614,12 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.queryIndex().exactIndexEnabled(), "Enables exact-match indexes.");
         addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.rangeIndexEnabled",
                 cacheDatabaseConfig.queryIndex().rangeIndexEnabled(), "Enables range indexes.");
+        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.prefixIndexEnabled",
+                cacheDatabaseConfig.queryIndex().prefixIndexEnabled(), "Enables opt-in prefix indexes.");
+        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.textIndexEnabled",
+                cacheDatabaseConfig.queryIndex().textIndexEnabled(), "Enables opt-in token indexes.");
+        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.maxMaterializedCandidateIds",
+                cacheDatabaseConfig.queryIndex().maxMaterializedCandidateIds(), "Rejects broad query shapes before large candidate materialization.");
         addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.learnedStatisticsEnabled",
                 cacheDatabaseConfig.queryIndex().learnedStatisticsEnabled(), "Enables learned planner statistics.");
         addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.plannerStatisticsPersisted",
@@ -640,6 +648,10 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.pageCache().readThroughEnabled(), "Enables page-cache read-through.");
         addTuning(items, modeledProperties, "page-cache", "cachedb.config.pageCache.evictionBatchSize",
                 cacheDatabaseConfig.pageCache().evictionBatchSize(), "Page-cache eviction batch size.");
+        addTuning(items, modeledProperties, "read-through", "cachedb.config.readThrough.maxQueryLoadRows",
+                cacheDatabaseConfig.readThrough().maxQueryLoadRows(), "Maximum rows accepted from one SQL query loader call.");
+        addTuning(items, modeledProperties, "read-through", "cachedb.config.readThrough.queryTimeoutSeconds",
+                cacheDatabaseConfig.readThrough().queryTimeoutSeconds(), "JDBC timeout for read-through SQL statements.");
         addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.enabled",
                 cacheDatabaseConfig.readShapeGuardrail().enabled(), "Enables read-shape safety guardrails.");
         addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.maxEntityQueryLimit",
@@ -680,6 +692,16 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.adminHttp().port(), "Admin HTTP port.");
         addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.dashboardEnabled",
                 cacheDatabaseConfig.adminHttp().dashboardEnabled(), "Enables the built-in admin dashboard.");
+        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.requestQueueCapacity",
+                cacheDatabaseConfig.adminHttp().requestQueueCapacity(), "Bounded native admin HTTP request queue capacity.");
+        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.backgroundWorkerThreads",
+                cacheDatabaseConfig.adminHttp().backgroundWorkerThreads(), "Admin warm and comparison worker count.");
+        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.backgroundQueueCapacity",
+                cacheDatabaseConfig.adminHttp().backgroundQueueCapacity(), "Bounded admin background job queue capacity.");
+        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.maxRequestBodyBytes",
+                cacheDatabaseConfig.adminHttp().maxRequestBodyBytes(), "Maximum accepted admin request body size.");
+        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.jobStatusTtlSeconds",
+                cacheDatabaseConfig.adminHttp().jobStatusTtlSeconds(), "Redis retention for cross-pod admin job status.");
         addTuning(items, modeledProperties, "schema", "cachedb.config.schemaBootstrap.mode",
                 cacheDatabaseConfig.schemaBootstrap().mode().name(), "Schema bootstrap mode.");
         addTuning(items, modeledProperties, "schema", "cachedb.config.schemaBootstrap.autoApplyOnStart",

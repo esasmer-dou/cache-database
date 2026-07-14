@@ -6,6 +6,8 @@ import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.page.EntityByIdLoader;
 import com.reactor.cachedb.core.page.EntityPageLoader;
 import com.reactor.cachedb.core.page.EntityQueryLoader;
+import com.reactor.cachedb.core.page.VersionedEntity;
+import com.reactor.cachedb.core.page.VersionedEntitySourceLoader;
 import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QueryGroup;
 import com.reactor.cachedb.core.query.QueryNode;
@@ -24,13 +26,14 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.StringJoiner;
 
 public final class JdbcEntitySourceLoader<T, ID>
-        implements EntityByIdLoader<T, ID>, EntityQueryLoader<T>, EntityPageLoader<T> {
+        implements VersionedEntitySourceLoader<T, ID> {
 
     private static final String IDENTIFIER_SEGMENT = "[A-Za-z_][A-Za-z0-9_]*";
     private static final String IDENTIFIER = IDENTIFIER_SEGMENT;
@@ -40,6 +43,7 @@ public final class JdbcEntitySourceLoader<T, ID>
     private final EntityMetadata<T, ID> metadata;
     private final EntityCodec<T> codec;
     private final int maxRows;
+    private final int queryTimeoutSeconds;
     private final String tableName;
     private final List<String> selectColumns;
     private final Set<String> allowedColumns;
@@ -50,10 +54,24 @@ public final class JdbcEntitySourceLoader<T, ID>
             EntityCodec<T> codec,
             int maxRows
     ) {
+        this(dataSource, metadata, codec, maxRows, 30);
+    }
+
+    public JdbcEntitySourceLoader(
+            DataSource dataSource,
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            int maxRows,
+            int queryTimeoutSeconds
+    ) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.metadata = Objects.requireNonNull(metadata, "metadata");
         this.codec = Objects.requireNonNull(codec, "codec");
         this.maxRows = Math.max(1, maxRows);
+        if (queryTimeoutSeconds <= 0) {
+            throw new IllegalArgumentException("queryTimeoutSeconds must be greater than zero");
+        }
+        this.queryTimeoutSeconds = queryTimeoutSeconds;
         this.tableName = requireQualifiedIdentifier(metadata.tableName(), "tableName");
         this.selectColumns = validateColumns(metadata.columns());
         this.allowedColumns = new HashSet<>(selectColumns);
@@ -67,7 +85,7 @@ public final class JdbcEntitySourceLoader<T, ID>
     }
 
     @Override
-    public Optional<T> load(ID id) {
+    public Optional<VersionedEntity<T>> loadVersionedById(ID id) {
         Objects.requireNonNull(id, "id");
         ArrayList<Object> parameters = new ArrayList<>();
         parameters.add(id);
@@ -79,12 +97,12 @@ public final class JdbcEntitySourceLoader<T, ID>
                 + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
         parameters.add(0);
         parameters.add(1);
-        List<T> rows = execute(sql, parameters, 1);
+        List<VersionedEntity<T>> rows = executeVersioned(sql, parameters, 1);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
     @Override
-    public List<T> load(PageWindow pageWindow) {
+    public List<VersionedEntity<T>> loadVersionedPage(PageWindow pageWindow) {
         PageWindow normalized = pageWindow == null ? new PageWindow(0, Math.min(maxRows, 100)) : pageWindow;
         int pageSize = boundedLimit(normalized.pageSize());
         ArrayList<Object> parameters = new ArrayList<>();
@@ -96,11 +114,11 @@ public final class JdbcEntitySourceLoader<T, ID>
                 + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
         parameters.add(Math.max(0, normalized.offset()));
         parameters.add(pageSize);
-        return execute(sql, parameters, pageSize);
+        return executeVersioned(sql, parameters, pageSize);
     }
 
     @Override
-    public List<T> load(QuerySpec querySpec) {
+    public List<VersionedEntity<T>> loadVersionedQuery(QuerySpec querySpec) {
         QuerySpec normalized = querySpec == null ? QuerySpec.builder().limit(Math.min(maxRows, 100)).build() : querySpec;
         int limit = boundedLimit(normalized.limit());
         ArrayList<Object> parameters = new ArrayList<>();
@@ -112,26 +130,28 @@ public final class JdbcEntitySourceLoader<T, ID>
                 + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
         parameters.add(Math.max(0, normalized.offset()));
         parameters.add(limit);
-        return execute(sql, parameters, limit);
+        return executeVersioned(sql, parameters, limit);
     }
 
-    private List<T> execute(String sql, List<Object> parameters, int expectedLimit) {
+    private List<VersionedEntity<T>> executeVersioned(String sql, List<Object> parameters, int expectedLimit) {
         int boundedExpectedLimit = boundedLimit(expectedLimit);
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setQueryTimeout(queryTimeoutSeconds);
             statement.setFetchSize(Math.min(boundedExpectedLimit, maxRows));
             statement.setMaxRows(boundedExpectedLimit);
             for (int index = 0; index < parameters.size(); index++) {
                 statement.setObject(index + 1, parameters.get(index));
             }
             try (ResultSet resultSet = statement.executeQuery()) {
-                ArrayList<T> rows = new ArrayList<>(Math.min(boundedExpectedLimit, 128));
+                ArrayList<VersionedEntity<T>> rows = new ArrayList<>(Math.min(boundedExpectedLimit, 128));
                 while (resultSet.next()) {
                     if (rows.size() >= boundedExpectedLimit) {
                         throw new IllegalStateException("JDBC source loader exceeded maxRows=" + boundedExpectedLimit
                                 + " for " + metadata.entityName());
                     }
-                    rows.add(codec.fromColumns(rowColumns(resultSet)));
+                    LinkedHashMap<String, Object> columns = rowColumns(resultSet);
+                    rows.add(new VersionedEntity<>(codec.fromColumns(columns), versionFrom(columns)));
                 }
                 return List.copyOf(rows);
             }
@@ -139,6 +159,32 @@ public final class JdbcEntitySourceLoader<T, ID>
             throw new IllegalStateException("JDBC source load failed for " + metadata.entityName() + ": "
                     + exception.getMessage(), exception);
         }
+    }
+
+    private long versionFrom(Map<String, Object> columns) {
+        String versionColumn = metadata.versionColumn();
+        if (versionColumn == null || versionColumn.isBlank()) {
+            throw new IllegalStateException("JDBC source loader requires a version column for " + metadata.entityName());
+        }
+        Object value = columns.entrySet().stream()
+                .filter(entry -> entry.getKey().equalsIgnoreCase(versionColumn))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse(null);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value != null) {
+            try {
+                return Long.parseLong(String.valueOf(value));
+            } catch (NumberFormatException ignored) {
+                // Report a single domain-specific error below.
+            }
+        }
+        throw new IllegalStateException(
+                "JDBC source row has no positive numeric version in column " + versionColumn
+                        + " for " + metadata.entityName()
+        );
     }
 
     private LinkedHashMap<String, Object> rowColumns(ResultSet resultSet) throws SQLException {
@@ -255,9 +301,13 @@ public final class JdbcEntitySourceLoader<T, ID>
         if (columns == null || columns.isEmpty()) {
             throw new IllegalArgumentException("Entity " + metadata.entityName() + " must expose at least one JDBC source column");
         }
-        ArrayList<String> validated = new ArrayList<>(columns.size());
+        ArrayList<String> validated = new ArrayList<>(columns.size() + 1);
         for (String column : columns) {
             validated.add(requireIdentifier(column, "column"));
+        }
+        String versionColumn = requireIdentifier(metadata.versionColumn(), "versionColumn");
+        if (validated.stream().noneMatch(column -> column.equalsIgnoreCase(versionColumn))) {
+            validated.add(versionColumn);
         }
         return List.copyOf(validated);
     }

@@ -36,6 +36,17 @@ public final class DefaultEntityRegistry implements EntityRegistry {
             EntityCodec<T> codec,
             CachePolicy cachePolicy,
             RelationBatchLoader<T> relationBatchLoader,
+            EntityPageLoader<T> pageLoader
+    ) {
+        return EntityRegistry.super.register(metadata, codec, cachePolicy, relationBatchLoader, pageLoader);
+    }
+
+    @Override
+    public synchronized <T, ID> EntityBinding<T, ID> register(
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            CachePolicy cachePolicy,
+            RelationBatchLoader<T> relationBatchLoader,
             EntityPageLoader<T> pageLoader,
             EntityByIdLoader<T, ID> byIdLoader,
             EntityQueryLoader<T> queryLoader

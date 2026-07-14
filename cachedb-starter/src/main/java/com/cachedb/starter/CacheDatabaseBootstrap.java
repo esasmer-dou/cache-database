@@ -169,6 +169,12 @@ public final class CacheDatabaseBootstrap {
         CacheDatabase cacheDatabase = null;
         try {
             cacheDatabase = new CacheDatabase(resolvedForeground, resolvedBackground, dataSource, resolvedConfig);
+            if (createdForeground) {
+                cacheDatabase.ownResource(resolvedForeground);
+            }
+            if (createdBackground && resolvedBackground != resolvedForeground) {
+                cacheDatabase.ownResource(resolvedBackground);
+            }
             for (Consumer<CacheDatabase> registration : registrations) {
                 registration.accept(cacheDatabase);
             }
