@@ -23,11 +23,9 @@ import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
@@ -37,9 +35,6 @@ import java.util.UUID;
 
 public final class ProductionScenarioCertificationRunner {
 
-    private static final String JDBC_USER = ProductionTestEnvironment.postgresUser();
-    private static final String JDBC_PASSWORD = ProductionTestEnvironment.postgresPassword();
-    private static final String REDIS_URI = ProductionTestEnvironment.redisUri();
     private static final String JDBC_URL = ProductionTestEnvironment.postgresUrl();
 
     public ProductionScenarioCertificationReport run() throws Exception {
@@ -124,7 +119,7 @@ public final class ProductionScenarioCertificationRunner {
             strictProjectionContract = true;
         }
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase cacheDatabase = new CacheDatabase(jedis, dataSource(), config)) {
             cacheDatabase.register(
                     EcomOrderEntityCacheBinding.METADATA,
@@ -158,7 +153,7 @@ public final class ProductionScenarioCertificationRunner {
 
     private OutboxOutcome verifyPostgresOutboxAdapter() throws Exception {
         dropOutboxTables();
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("""
                     CREATE TABLE cachedb_prod_scenario_outbox (
@@ -208,15 +203,11 @@ public final class ProductionScenarioCertificationRunner {
     }
 
     private PGSimpleDataSource dataSource() {
-        PGSimpleDataSource dataSource = new PGSimpleDataSource();
-        dataSource.setURL(JDBC_URL);
-        dataSource.setUser(JDBC_USER);
-        dataSource.setPassword(JDBC_PASSWORD);
-        return dataSource;
+        return ProductionTestEnvironment.postgresDataSource();
     }
 
     private void dropOutboxTables() throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_prod_scenario_outbox_checkpoint");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_prod_scenario_outbox");
@@ -224,7 +215,7 @@ public final class ProductionScenarioCertificationRunner {
     }
 
     private long countRows(String sql) throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery(sql)) {
             resultSet.next();

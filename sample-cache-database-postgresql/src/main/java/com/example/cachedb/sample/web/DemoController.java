@@ -1,6 +1,7 @@
 package com.example.cachedb.sample.web;
 
 import com.example.cachedb.sample.service.SampleSeedService;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -8,6 +9,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/demo")
+@ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
 public class DemoController {
 
     private final SampleSeedService seedService;

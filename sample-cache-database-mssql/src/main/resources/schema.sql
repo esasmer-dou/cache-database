@@ -17,7 +17,7 @@ EXEC(N'CREATE TABLE sample_products (
     product_name NVARCHAR(160) NOT NULL,
     category NVARCHAR(64) NOT NULL,
     active_status NVARCHAR(16) NOT NULL,
-    unit_price FLOAT NOT NULL,
+    unit_price DECIMAL(19, 4) NOT NULL,
     stock_quantity INT NOT NULL,
     reserved_quantity INT NOT NULL CONSTRAINT df_sample_products_reserved_quantity DEFAULT 0,
     stock_status NVARCHAR(24) NOT NULL CONSTRAINT df_sample_products_stock_status DEFAULT ''IN_STOCK'',
@@ -42,7 +42,7 @@ EXEC(N'CREATE TABLE sample_orders (
     order_id BIGINT NOT NULL CONSTRAINT pk_sample_orders PRIMARY KEY,
     customer_id BIGINT NOT NULL,
     order_date BIGINT NOT NULL,
-    order_amount FLOAT NOT NULL,
+    order_amount DECIMAL(19, 4) NOT NULL,
     currency_code NVARCHAR(8) NOT NULL,
     order_type NVARCHAR(32) NOT NULL,
     status NVARCHAR(24) NOT NULL,
@@ -60,8 +60,8 @@ EXEC(N'CREATE TABLE sample_order_lines (
     line_number INT NOT NULL,
     sku NVARCHAR(64) NOT NULL,
     quantity INT NOT NULL,
-    unit_price FLOAT NOT NULL,
-    line_total FLOAT NOT NULL,
+    unit_price DECIMAL(19, 4) NOT NULL,
+    line_total DECIMAL(19, 4) NOT NULL,
     status NVARCHAR(24) NOT NULL,
     CONSTRAINT fk_sample_order_lines_order FOREIGN KEY (order_id) REFERENCES sample_orders(order_id),
     CONSTRAINT fk_sample_order_lines_product FOREIGN KEY (product_id) REFERENCES sample_products(product_id)
@@ -140,12 +140,16 @@ CREATE INDEX idx_sample_orders_customer_date ON sample_orders(customer_id, order
 @@
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_orders_priority' AND object_id = OBJECT_ID(N'sample_orders'))
-CREATE INDEX idx_sample_orders_priority ON sample_orders(priority_score DESC, order_date DESC)
+CREATE INDEX idx_sample_orders_priority ON sample_orders(priority_score DESC, order_date DESC, order_id DESC)
 @@
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_order_lines_order_number' AND object_id = OBJECT_ID(N'sample_order_lines'))
 CREATE INDEX idx_sample_order_lines_order_number ON sample_order_lines(order_id, line_number ASC)
 @@
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_customers_active' AND object_id = OBJECT_ID(N'sample_customers'))
+CREATE INDEX idx_sample_customers_active ON sample_customers(status, updated_at DESC, customer_id ASC)
+@@
+
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_tickets_customer_status' AND object_id = OBJECT_ID(N'sample_support_tickets'))
 CREATE INDEX idx_sample_tickets_customer_status ON sample_support_tickets(customer_id, status)
@@ -154,10 +158,18 @@ CREATE INDEX idx_sample_tickets_customer_status ON sample_support_tickets(custom
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_tickets_status_priority' AND object_id = OBJECT_ID(N'sample_support_tickets'))
 CREATE INDEX idx_sample_tickets_status_priority ON sample_support_tickets(status, priority, updated_at DESC)
 @@
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_tickets_open_updated' AND object_id = OBJECT_ID(N'sample_support_tickets'))
+CREATE INDEX idx_sample_tickets_open_updated ON sample_support_tickets(status, updated_at DESC, ticket_id ASC)
+@@
+
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_products_category_stock' AND object_id = OBJECT_ID(N'sample_products'))
 CREATE INDEX idx_sample_products_category_stock ON sample_products(category, active_status, stock_status, updated_at DESC)
 @@
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_products_low_stock' AND object_id = OBJECT_ID(N'sample_products'))
+CREATE INDEX idx_sample_products_low_stock ON sample_products(active_status, stock_status, updated_at DESC, sku ASC)
+@@
+
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_shipments_active' AND object_id = OBJECT_ID(N'sample_shipments'))
 CREATE INDEX idx_sample_shipments_active ON sample_shipments(shipment_status, risk_score DESC, updated_at DESC)
@@ -174,6 +186,10 @@ CREATE INDEX idx_sample_shipment_events_shipment_time ON sample_shipment_events(
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_report_jobs_live' AND object_id = OBJECT_ID(N'sample_report_jobs'))
 CREATE INDEX idx_sample_report_jobs_live ON sample_report_jobs(status, updated_at DESC, report_job_id DESC)
 @@
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_report_jobs_type_created' AND object_id = OBJECT_ID(N'sample_report_jobs'))
+CREATE INDEX idx_sample_report_jobs_type_created ON sample_report_jobs(report_type, created_at DESC, report_job_id DESC)
+@@
+
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sample_audit_events_entity_time' AND object_id = OBJECT_ID(N'sample_audit_events'))
 CREATE INDEX idx_sample_audit_events_entity_time ON sample_audit_events(entity_name, entity_id, created_at DESC)

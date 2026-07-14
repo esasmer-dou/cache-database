@@ -108,7 +108,7 @@ Keep `cachedb.version` aligned with the release you use.
 
 ```xml
 <properties>
-    <cachedb.version>0.3.1</cachedb.version>
+    <cachedb.version>0.3.2</cachedb.version>
 </properties>
 
 <dependencies>

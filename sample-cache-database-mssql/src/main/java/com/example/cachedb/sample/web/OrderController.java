@@ -2,10 +2,20 @@ package com.example.cachedb.sample.web;
 
 import com.example.cachedb.sample.domain.OrderEntity;
 import com.example.cachedb.sample.domain.OrderEntityCacheBinding;
+import com.example.cachedb.sample.domain.OrderLineEntity;
 import com.example.cachedb.sample.readmodel.OrderReadModels;
+import com.example.cachedb.sample.service.DurableReferenceGuard;
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.api.ProjectionRepository;
-import org.springframework.http.HttpStatus;
+import com.reactor.cachedb.core.query.QueryFilter;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,11 +26,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/api/orders")
@@ -29,31 +38,35 @@ public class OrderController {
     private static final String ARCHIVE_SQL = """
             SELECT order_id, customer_id, order_date, order_amount, currency_code, order_type, status, line_count, priority_score
             FROM sample_orders
-            WHERE customer_id = ? AND order_date < ?
+            WHERE customer_id = ?
+              AND (order_date < ? OR (order_date = ? AND order_id < ?))
             ORDER BY order_date DESC, order_id DESC
             OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
             """;
 
     private final EntityRepository<OrderEntity, Long> orderRepository;
+    private final EntityRepository<OrderLineEntity, Long> orderLineRepository;
     private final ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository;
     private final JdbcTemplate jdbcTemplate;
+    private final DurableReferenceGuard durableReferenceGuard;
 
     public OrderController(
             EntityRepository<OrderEntity, Long> orderRepository,
+            EntityRepository<OrderLineEntity, Long> orderLineRepository,
             ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository,
-            JdbcTemplate jdbcTemplate
+            JdbcTemplate jdbcTemplate,
+            DurableReferenceGuard durableReferenceGuard
     ) {
         this.orderRepository = orderRepository;
+        this.orderLineRepository = orderLineRepository;
         this.orderSummaryRepository = orderSummaryRepository;
         this.jdbcTemplate = jdbcTemplate;
+        this.durableReferenceGuard = durableReferenceGuard;
     }
 
     @PostMapping
-    public OrderEntity create(@RequestBody CreateOrderRequest request) {
-        if (request.customerId() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "customerId is required");
-        }
-        waitForDurableCustomer(request.customerId());
+    public ResponseEntity<WriteAccepted<OrderEntity>> create(@Valid @RequestBody CreateOrderRequest request) {
+        durableReferenceGuard.requireCustomer(request.customerId());
         OrderEntity entity = new OrderEntity();
         entity.orderId = request.orderId();
         entity.customerId = request.customerId();
@@ -64,7 +77,8 @@ public class OrderController {
         entity.status = request.status() == null ? "NEW" : request.status();
         entity.lineCount = request.lineCount() == null ? 0 : request.lineCount();
         entity.priorityScore = priorityScore(entity);
-        return orderRepository.save(entity);
+        OrderEntity saved = orderRepository.save(entity);
+        return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "OrderEntity", saved.orderId, saved));
     }
 
     @GetMapping("/{orderId}")
@@ -73,20 +87,20 @@ public class OrderController {
             @RequestParam(defaultValue = "5") int linePreview
     ) {
         return OrderEntityCacheBinding
-                .linePreviewRepository(orderRepository, clamp(linePreview, 1, 50))
+                .linePreviewRepository(orderRepository, ApiLimits.requireInRange("linePreview", linePreview, 1, 50))
                 .findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + orderId));
     }
 
     @GetMapping("/high-value")
     public List<OrderReadModels.OrderSummary> highValue(
-            @RequestParam(defaultValue = "500") double minimumAmount,
+            @RequestParam(defaultValue = "500.00") BigDecimal minimumAmount,
             @RequestParam(defaultValue = "25") int limit
     ) {
         return OrderEntityCacheBinding.recentHighValueOrders(
                 orderSummaryRepository,
                 minimumAmount,
-                clamp(limit, 1, 1_000)
+                ApiLimits.requireInRange("limit", limit, 1, 1_000)
         );
     }
 
@@ -94,17 +108,19 @@ public class OrderController {
     public List<OrderReadModels.OrderSummary> archiveFromSql(
             @RequestParam long customerId,
             @RequestParam(required = false) Long beforeOrderDate,
+            @RequestParam(required = false) Long beforeOrderId,
             @RequestParam(defaultValue = "100") int limit
     ) {
         long upperBound = beforeOrderDate == null ? Long.MAX_VALUE : beforeOrderDate;
-        int safeLimit = clamp(limit, 1, 500);
+        long upperId = beforeOrderId == null ? Long.MAX_VALUE : beforeOrderId;
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 500);
         return jdbcTemplate.query(
                 ARCHIVE_SQL,
                 (resultSet, rowNumber) -> new OrderReadModels.OrderSummary(
                         resultSet.getLong("order_id"),
                         resultSet.getLong("customer_id"),
                         resultSet.getLong("order_date"),
-                        resultSet.getDouble("order_amount"),
+                        resultSet.getBigDecimal("order_amount"),
                         resultSet.getString("currency_code"),
                         resultSet.getString("order_type"),
                         resultSet.getString("status"),
@@ -113,75 +129,60 @@ public class OrderController {
                 ),
                 customerId,
                 upperBound,
+                upperBound,
+                upperId,
                 safeLimit
         );
     }
 
     @PatchMapping("/{orderId}/status")
-    public OrderEntity updateStatus(@PathVariable long orderId, @RequestBody UpdateStatusRequest request) {
+    public ResponseEntity<WriteAccepted<OrderEntity>> updateStatus(
+            @PathVariable long orderId,
+            @Valid @RequestBody UpdateStatusRequest request
+    ) {
         OrderEntity entity = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + orderId));
         entity.status = request.status();
         entity.priorityScore = priorityScore(entity);
-        return orderRepository.save(entity);
+        OrderEntity saved = orderRepository.save(entity);
+        return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "OrderEntity", saved.orderId, saved));
     }
 
     @DeleteMapping("/{orderId}")
-    public DeleteResponse delete(@PathVariable long orderId) {
+    public ResponseEntity<WriteAccepted<Void>> delete(@PathVariable long orderId) {
+        durableReferenceGuard.requireOrder(orderId);
+        if (durableReferenceGuard.orderHasDurableLines(orderId)
+                || !orderLineRepository.query(QueryFilter.eq("order_id", orderId), 1).isEmpty()) {
+            throw new SampleConflictException(
+                    "Order " + orderId + " has order lines. This sample permits leaf-order deletion only; "
+                            + "implement an explicit transactional cascade command for aggregate deletion."
+            );
+        }
         orderRepository.deleteById(orderId);
-        return new DeleteResponse(orderId, "DELETE_ACCEPTED");
+        return ResponseEntity.accepted().body(WriteAccepted.of("DELETE", "OrderEntity", orderId, null));
     }
 
     private double priorityScore(OrderEntity entity) {
-        double amountScore = entity.orderAmount == null ? 0.0 : entity.orderAmount / 10.0;
+        double amountScore = entity.orderAmount == null
+                ? 0.0
+                : entity.orderAmount.divide(BigDecimal.TEN).doubleValue();
         double expressScore = "EXPRESS".equals(entity.orderType) ? 25.0 : 0.0;
         double statusScore = "PAID".equals(entity.status) ? 10.0 : 0.0;
         return amountScore + expressScore + statusScore;
     }
 
-    private void waitForDurableCustomer(long customerId) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (System.nanoTime() < deadline) {
-            Long count = jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM sample_customers WHERE customer_id = ?",
-                    Long.class,
-                    customerId
-            );
-            if (count != null && count > 0) {
-                return;
-            }
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        throw new ResponseStatusException(
-                HttpStatus.CONFLICT,
-                "Customer is not durable in SQL yet. Retry after the write-behind worker flushes the parent row."
-        );
-    }
-
-    private int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(value, max));
-    }
-
     public record CreateOrderRequest(
-            Long orderId,
-            Long customerId,
+            @NotNull @Positive Long orderId,
+            @NotNull @Positive Long customerId,
             Long orderDate,
-            Double orderAmount,
-            String currencyCode,
-            String orderType,
-            String status,
-            Integer lineCount
+            @NotNull @DecimalMin("0.00") BigDecimal orderAmount,
+            @Size(min = 3, max = 3) String currencyCode,
+            @Size(max = 32) String orderType,
+            @Size(max = 32) String status,
+            @PositiveOrZero Integer lineCount
     ) {
     }
 
-    public record UpdateStatusRequest(String status) {
-    }
-
-    public record DeleteResponse(Long orderId, String status) {
+    public record UpdateStatusRequest(@NotBlank @Size(max = 32) String status) {
     }
 }

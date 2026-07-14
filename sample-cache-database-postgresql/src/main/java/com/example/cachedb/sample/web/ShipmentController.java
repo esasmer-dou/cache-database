@@ -5,8 +5,15 @@ import com.example.cachedb.sample.domain.ShipmentEntityCacheBinding;
 import com.example.cachedb.sample.domain.ShipmentEventEntity;
 import com.example.cachedb.sample.domain.ShipmentEventEntityCacheBinding;
 import com.example.cachedb.sample.readmodel.ShipmentReadModels;
+import com.example.cachedb.sample.service.DurableReferenceGuard;
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.api.ProjectionRepository;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -37,27 +44,36 @@ public class ShipmentController {
     private final EntityRepository<ShipmentEventEntity, Long> shipmentEventRepository;
     private final ProjectionRepository<ShipmentReadModels.ShipmentSummary, Long> shipmentSummaryRepository;
     private final JdbcTemplate jdbcTemplate;
+    private final DurableReferenceGuard durableReferenceGuard;
 
     public ShipmentController(
             EntityRepository<ShipmentEntity, Long> shipmentRepository,
             EntityRepository<ShipmentEventEntity, Long> shipmentEventRepository,
             ProjectionRepository<ShipmentReadModels.ShipmentSummary, Long> shipmentSummaryRepository,
-            JdbcTemplate jdbcTemplate
+            JdbcTemplate jdbcTemplate,
+            DurableReferenceGuard durableReferenceGuard
     ) {
         this.shipmentRepository = shipmentRepository;
         this.shipmentEventRepository = shipmentEventRepository;
         this.shipmentSummaryRepository = shipmentSummaryRepository;
         this.jdbcTemplate = jdbcTemplate;
+        this.durableReferenceGuard = durableReferenceGuard;
     }
 
     @GetMapping("/active")
     public List<ShipmentReadModels.ShipmentSummary> active(@RequestParam(defaultValue = "50") int limit) {
-        return ShipmentEntityCacheBinding.activeShipments(shipmentSummaryRepository, clamp(limit, 1, 2_000));
+        return ShipmentEntityCacheBinding.activeShipments(
+                shipmentSummaryRepository,
+                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        );
     }
 
     @GetMapping("/exceptions")
     public List<ShipmentReadModels.ShipmentSummary> exceptions(@RequestParam(defaultValue = "25") int limit) {
-        return ShipmentEntityCacheBinding.shipmentExceptions(shipmentSummaryRepository, clamp(limit, 1, 2_000));
+        return ShipmentEntityCacheBinding.shipmentExceptions(
+                shipmentSummaryRepository,
+                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        );
     }
 
     @GetMapping("/customer/{customerId}")
@@ -68,7 +84,7 @@ public class ShipmentController {
         return ShipmentEntityCacheBinding.customerShipments(
                 shipmentSummaryRepository,
                 customerId,
-                clamp(limit, 1, 2_000)
+                ApiLimits.requireInRange("limit", limit, 1, 1_000)
         );
     }
 
@@ -78,7 +94,10 @@ public class ShipmentController {
             @RequestParam(defaultValue = "5") int eventPreview
     ) {
         return ShipmentEntityCacheBinding
-                .eventPreviewRepository(shipmentRepository, clamp(eventPreview, 1, 20))
+                .eventPreviewRepository(
+                        shipmentRepository,
+                        ApiLimits.requireInRange("eventPreview", eventPreview, 1, 20)
+                )
                 .findById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment not found in active set: " + shipmentId));
     }
@@ -88,7 +107,11 @@ public class ShipmentController {
             @PathVariable long shipmentId,
             @RequestParam(defaultValue = "20") int limit
     ) {
-        return ShipmentEventEntityCacheBinding.eventsForShipment(shipmentEventRepository, shipmentId, clamp(limit, 1, 100));
+        return ShipmentEventEntityCacheBinding.eventsForShipment(
+                shipmentEventRepository,
+                shipmentId,
+                ApiLimits.requireInRange("limit", limit, 1, 100)
+        );
     }
 
     @GetMapping("/archive")
@@ -110,12 +133,15 @@ public class ShipmentController {
                         resultSet.getDouble("risk_score")
                 ),
                 customerId,
-                clamp(limit, 1, 500)
+                ApiLimits.requireInRange("limit", limit, 1, 500)
         );
     }
 
     @PostMapping
-    public ShipmentEntity create(@RequestBody CreateShipmentRequest request) {
+    public ResponseEntity<WriteAccepted<ShipmentEntity>> create(
+            @Valid @RequestBody CreateShipmentRequest request
+    ) {
+        durableReferenceGuard.requireCustomer(request.customerId());
         long now = Instant.now().getEpochSecond();
         ShipmentEntity shipment = new ShipmentEntity();
         shipment.shipmentId = request.shipmentId();
@@ -127,11 +153,16 @@ public class ShipmentController {
         shipment.promisedAt = request.promisedAt() == null ? now + 86_400L : request.promisedAt();
         shipment.updatedAt = now;
         shipment.riskScore = riskScore(shipment.shipmentStatus);
-        return shipmentRepository.save(shipment);
+        ShipmentEntity saved = shipmentRepository.save(shipment);
+        return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "ShipmentEntity", saved.shipmentId, saved));
     }
 
     @PostMapping("/{shipmentId}/events")
-    public ShipmentEventEntity addEvent(@PathVariable long shipmentId, @RequestBody CreateShipmentEventRequest request) {
+    public ResponseEntity<WriteAccepted<ShipmentEventEntity>> addEvent(
+            @PathVariable long shipmentId,
+            @Valid @RequestBody CreateShipmentEventRequest request
+    ) {
+        durableReferenceGuard.requireShipment(shipmentId);
         long now = Instant.now().getEpochSecond();
         ShipmentEventEntity event = new ShipmentEventEntity();
         event.eventId = request.eventId();
@@ -141,18 +172,23 @@ public class ShipmentController {
         event.eventTime = request.eventTime() == null ? now : request.eventTime();
         event.severity = request.severity() == null ? "INFO" : request.severity();
         event.description = request.description() == null ? "Manual shipment event" : request.description();
-        return shipmentEventRepository.save(event);
+        ShipmentEventEntity saved = shipmentEventRepository.save(event);
+        return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "ShipmentEventEntity", saved.eventId, saved));
     }
 
     @PatchMapping("/{shipmentId}/status")
-    public ShipmentEntity updateStatus(@PathVariable long shipmentId, @RequestBody UpdateShipmentStatusRequest request) {
+    public ResponseEntity<WriteAccepted<ShipmentEntity>> updateStatus(
+            @PathVariable long shipmentId,
+            @Valid @RequestBody UpdateShipmentStatusRequest request
+    ) {
         ShipmentEntity shipment = shipmentRepository.findById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment not found in active set: " + shipmentId));
         shipment.shipmentStatus = request.shipmentStatus();
         shipment.currentCity = request.currentCity() == null ? shipment.currentCity : request.currentCity();
         shipment.updatedAt = Instant.now().getEpochSecond();
         shipment.riskScore = riskScore(shipment.shipmentStatus);
-        return shipmentRepository.save(shipment);
+        ShipmentEntity saved = shipmentRepository.save(shipment);
+        return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "ShipmentEntity", saved.shipmentId, saved));
     }
 
     private double riskScore(String status) {
@@ -168,31 +204,30 @@ public class ShipmentController {
         return 20.0;
     }
 
-    private int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(value, max));
-    }
-
     public record CreateShipmentRequest(
-            Long shipmentId,
-            Long customerId,
-            String trackingNumber,
-            String carrierCode,
-            String shipmentStatus,
-            String currentCity,
+            @NotNull @Positive Long shipmentId,
+            @NotNull @Positive Long customerId,
+            @Size(max = 64) String trackingNumber,
+            @Size(max = 32) String carrierCode,
+            @Size(max = 32) String shipmentStatus,
+            @Size(max = 128) String currentCity,
             Long promisedAt
     ) {
     }
 
     public record CreateShipmentEventRequest(
-            Long eventId,
-            String eventType,
-            String eventCity,
+            @NotNull @Positive Long eventId,
+            @Size(max = 32) String eventType,
+            @Size(max = 128) String eventCity,
             Long eventTime,
-            String severity,
-            String description
+            @Size(max = 32) String severity,
+            @Size(max = 2_000) String description
     ) {
     }
 
-    public record UpdateShipmentStatusRequest(String shipmentStatus, String currentCity) {
+    public record UpdateShipmentStatusRequest(
+            @NotBlank @Size(max = 32) String shipmentStatus,
+            @Size(max = 128) String currentCity
+    ) {
     }
 }

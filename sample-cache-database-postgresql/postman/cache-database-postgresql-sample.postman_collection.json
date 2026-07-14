@@ -32,6 +32,24 @@
     {
       "key": "reportJobId",
       "value": "1"
+    },
+    {
+      "key": "warmJobId",
+      "value": ""
+    }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (pm.response.code === 202) {",
+          "  const body = pm.response.json();",
+          "  if (body.jobId) pm.collectionVariables.set('warmJobId', body.jobId);",
+          "}"
+        ]
+      }
     }
   ],
   "item": [
@@ -111,6 +129,13 @@
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/warm/orders/customer/{{customerId}}?limit=100&projectionOnly=false"
+          }
+        },
+        {
+          "name": "Warm Job Status (run until COMPLETED)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/warm/jobs/{{warmJobId}}"
           }
         },
         {

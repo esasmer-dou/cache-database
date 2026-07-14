@@ -15,6 +15,7 @@ import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySpec;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @CacheEntity(
@@ -34,7 +35,7 @@ public class OrderEntity {
     public Long orderDate;
 
     @CacheColumn("order_amount")
-    public Double orderAmount;
+    public BigDecimal orderAmount;
 
     @CacheColumn("currency_code")
     public String currencyCode;
@@ -75,7 +76,7 @@ public class OrderEntity {
     }
 
     @CacheNamedQuery("recentHighValueOrders")
-    public static QuerySpec recentHighValueOrdersQuery(double minimumAmount, int limit) {
+    public static QuerySpec recentHighValueOrdersQuery(BigDecimal minimumAmount, int limit) {
         return QuerySpec.where(QueryFilter.gte("order_amount", minimumAmount))
                 .orderBy(QuerySort.desc("priority_score"), QuerySort.desc("order_date"))
                 .limitTo(limit);

@@ -6,6 +6,12 @@ import com.example.cachedb.sample.domain.OrderEntityCacheBinding;
 import com.example.cachedb.sample.readmodel.OrderReadModels;
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.api.ProjectionRepository;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -33,7 +39,7 @@ public class CustomerController {
     }
 
     @PostMapping
-    public CustomerEntity create(@RequestBody CreateCustomerRequest request) {
+    public ResponseEntity<WriteAccepted<CustomerEntity>> create(@Valid @RequestBody CreateCustomerRequest request) {
         CustomerEntity entity = new CustomerEntity();
         entity.customerId = request.customerId();
         entity.taxNumber = request.taxNumber();
@@ -42,7 +48,8 @@ public class CustomerController {
         entity.status = request.status() == null ? "ACTIVE" : request.status();
         entity.createdAt = Instant.now().getEpochSecond();
         entity.updatedAt = entity.createdAt;
-        return customerRepository.save(entity);
+        CustomerEntity saved = customerRepository.save(entity);
+        return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "CustomerEntity", saved.customerId, saved));
     }
 
     @GetMapping("/{customerId}")
@@ -51,7 +58,10 @@ public class CustomerController {
             @RequestParam(defaultValue = "5") int orderPreview
     ) {
         return CustomerEntityCacheBinding
-                .ordersPreviewRepository(customerRepository, clamp(orderPreview, 1, 25))
+                .ordersPreviewRepository(
+                        customerRepository,
+                        ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25)
+                )
                 .findById(customerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Customer not found: " + customerId));
     }
@@ -64,25 +74,24 @@ public class CustomerController {
         return OrderEntityCacheBinding.customerTimeline(
                 orderSummaryRepository,
                 customerId,
-                clamp(limit, 1, 1_000)
+                ApiLimits.requireInRange("limit", limit, 1, 1_000)
         );
     }
 
     @GetMapping("/active")
     public List<CustomerEntity> active(@RequestParam(defaultValue = "25") int limit) {
-        return CustomerEntityCacheBinding.activeCustomers(customerRepository, clamp(limit, 1, 250));
-    }
-
-    private int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(value, max));
+        return CustomerEntityCacheBinding.activeCustomers(
+                customerRepository,
+                ApiLimits.requireInRange("limit", limit, 1, 100)
+        );
     }
 
     public record CreateCustomerRequest(
-            Long customerId,
-            String taxNumber,
-            String customerType,
-            String segment,
-            String status
+            @NotNull @Positive Long customerId,
+            @NotBlank @Size(max = 64) String taxNumber,
+            @NotBlank @Size(max = 32) String customerType,
+            @Size(max = 32) String segment,
+            @Size(max = 32) String status
     ) {
     }
 }

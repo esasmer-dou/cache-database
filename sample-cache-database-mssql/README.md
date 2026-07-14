@@ -41,7 +41,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.3.1</cachedb.version>
+  <cachedb.version>0.3.2</cachedb.version>
 </properties>
 
 <repositories>
@@ -100,7 +100,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 </build>
 ```
 
-Users should not build the parent repository first. CacheDB `0.3.1` is published from the main repository to GitHub Packages.
+Users should not build the parent repository first. CacheDB `0.3.2` is published from the main repository to GitHub Packages.
 The annotation dependency and `cachedb-processor` are required for generated bindings such as `OrderEntityCacheBinding`.
 The `cachedb-storage-mssql` dependency is required when the application selects the MSSQL provider explicitly.
 
@@ -131,9 +131,9 @@ mvn clean package
 
 If you do not configure credentials, Maven will usually fail with `401 Unauthorized` even though the repository URL is correct.
 
-## 0.3.1 Verified Path
+## 0.3.2 Verified Path
 
-This sample is wired for CacheDB `0.3.1`. The important runtime contract is:
+This sample is wired for CacheDB `0.3.2`. The important runtime contract is:
 
 1. Writes go through CacheDB and are flushed to SQL Server by write-behind.
 2. Existing SQL Server rows are not magically loaded into Redis at startup.
@@ -143,10 +143,22 @@ This sample is wired for CacheDB `0.3.1`. The important runtime contract is:
 
 The sample code makes that contract explicit.
 
-Version `0.3.1` also keeps JDBC reads and writes bounded: read-through queries
-time out after 15 seconds, write-behind statements after 20 seconds, and the
+### Production contracts added in 0.3.2
+
+- Command endpoints return `202 Accepted`; this means Redis accepted the command, not that SQL durability is complete.
+- Child writes perform one indexed SQL `EXISTS` check. A non-durable parent returns `409 Conflict` with `Retry-After` instead of polling a request thread.
+- Aggregate deletion is not implicit. The order endpoint rejects deletion while line rows exist; a real aggregate delete needs an explicit transactional command.
+- Every entity has a route-specific admission policy. Order, catalog, support, logistics, reporting and audit data no longer share one misleading default policy.
+- Monetary fields use `BigDecimal` and `DECIMAL(19,4)`. Redis ranking scores remain non-monetary `double` values.
+- Relation loaders use bounded `IN (...)` batches rather than one query per parent.
+- Warm/backfill is an asynchronous bounded job (`1` worker, queue capacity `8`). Submit with `POST`, then poll `/api/warm/jobs/{jobId}`.
+- `/api/health/live` reports process liveness. `/api/health/ready` checks Redis, SQL Server and write-behind telemetry.
+- Oversized route limits return `400 Bad Request`; they are never silently clamped.
+
+Version `0.3.2` also keeps JDBC reads and writes bounded: registered JDBC warm
+queries time out after 15 seconds, write-behind statements after 20 seconds, and the
 admin request/background queues have explicit capacities in `application.yml`.
-Version-aware hydration prevents an older warm/read-through result from
+Version-aware hydration prevents an older warm result from
 overwriting newer Redis state.
 
 ```java
@@ -154,10 +166,10 @@ overwriting newer Redis state.
 CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
     return (builder, properties) -> builder
             .readThrough(ReadThroughConfig.builder()
-                    .mode(ReadThroughMode.READ_THROUGH_QUERY)
-                    .failOnMissingLoader(true)
-                    .hydrateLoadedEntities(true)
-                    .maxQueryLoadRows(500)
+                    .mode(ReadThroughMode.REDIS_ONLY)
+                    .failOnMissingLoader(false)
+                    .hydrateLoadedEntities(false)
+                    .maxQueryLoadRows(1_000)
                     .queryTimeoutSeconds(15)
                     .build())
             .writeBehind(WriteBehindConfig.builder()
@@ -168,12 +180,12 @@ CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
 }
 ```
 
-`registerJdbcBacked(...)` is what lets CacheDB read a bounded query from SQL Server when you intentionally warm or read through:
+`registerJdbcBacked(...)` supplies the bounded SQL Server loader used by explicit warm/backfill. This sample does not enable query read-through:
 
 ```java
 @Bean
 EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
-    CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
+    CachePolicy policy = SampleCachePolicies.orderTimelinePolicy();
     OrderEntityCacheBinding.registerJdbcBacked(cacheDatabase, policy);
     return OrderEntityCacheBinding.repository(cacheDatabase, policy);
 }
@@ -323,7 +335,19 @@ warmed, but it does not mutate Redis:
 curl.exe -X POST "http://127.0.0.1:8092/api/warm/orders/customer/1?limit=100&dryRun=true"
 ```
 
-Warm only the `OrderSummary` projection for the customer timeline route:
+Every warm `POST` returns `202` with a `jobId`. Do not run the target route until
+the job reaches `COMPLETED`:
+
+```powershell
+$job = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8092/api/warm/orders/customer/1?limit=100&projectionOnly=true"
+do {
+    Start-Sleep -Milliseconds 250
+    $state = Invoke-RestMethod "http://127.0.0.1:8092/api/warm/jobs/$($job.jobId)"
+} while ($state.status -in @("QUEUED", "RUNNING"))
+if ($state.status -ne "COMPLETED") { throw ($state.error | ConvertTo-Json -Compress) }
+```
+
+The submitted job warms only the `OrderSummary` projection for the customer timeline route:
 
 ```bash
 curl.exe -X POST "http://127.0.0.1:8092/api/warm/orders/customer/1?limit=100&projectionOnly=true"
@@ -392,7 +416,7 @@ Use the explicit SQL Server route for old history, export, audit, and one-off
 lookups:
 
 ```bash
-curl.exe "http://127.0.0.1:8092/api/orders/archive?customerId=1&beforeOrderDate=9999999999999&limit=20"
+curl.exe "http://127.0.0.1:8092/api/orders/archive?customerId=1&beforeOrderDate=9999999999999&beforeOrderId=9999999999999&limit=20"
 ```
 
 Do not implement archive by widening the Redis hot set until it contains the
@@ -422,12 +446,19 @@ public record CustomerOrdersRouteContract(
         return new CustomerOrdersRouteContract(20, 1_000, 500, true);
     }
 
-    public int clampTimelineLimit(int requested) {
-        return Math.max(1, Math.min(requested, hotWindowPerCustomer));
+    public int requireTimelineLimit(int requested) {
+        return requireRange("limit", requested, 1, hotWindowPerCustomer);
     }
 
-    public int clampArchiveLimit(int requested) {
-        return Math.max(1, Math.min(requested, maxSqlArchivePageSize));
+    public int requireArchiveLimit(int requested) {
+        return requireRange("limit", requested, 1, maxSqlArchivePageSize);
+    }
+
+    private int requireRange(String name, int value, int min, int max) {
+        if (value < min || value > max) {
+            throw new IllegalArgumentException(name + " must be between " + min + " and " + max);
+        }
+        return value;
     }
 }
 ```
@@ -452,6 +483,8 @@ import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySpec;
 
+import java.math.BigDecimal;
+
 @CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
 public class OrderEntity {
     @CacheId(column = "order_id")
@@ -464,7 +497,7 @@ public class OrderEntity {
     public Long orderDate;
 
     @CacheColumn("order_amount")
-    public Double orderAmount;
+    public BigDecimal orderAmount;
 
     @CacheColumn("currency_code")
     public String currencyCode;
@@ -504,6 +537,7 @@ import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
 import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.projection.ProjectionCodec;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -533,7 +567,7 @@ public final class OrderReadModels {
                                     Long.valueOf(values.get("order_id")),
                                     Long.valueOf(values.get("customer_id")),
                                     Long.valueOf(values.get("order_date")),
-                                    Double.valueOf(values.get("order_amount")),
+                                    new BigDecimal(values.get("order_amount")),
                                     values.get("currency_code"),
                                     values.get("status"),
                                     Double.valueOf(values.get("priority_score"))
@@ -571,7 +605,7 @@ public final class OrderReadModels {
             Long orderId,
             Long customerId,
             Long orderDate,
-            Double orderAmount,
+            BigDecimal orderAmount,
             String currencyCode,
             String status,
             Double priorityScore
@@ -671,7 +705,7 @@ public class CustomerOrdersController {
         return OrderEntityCacheBinding.customerTimeline(
                 orderSummaryRepository,
                 customerId,
-                routeContract.clampTimelineLimit(limit)
+                routeContract.requireTimelineLimit(limit)
         );
     }
 }
@@ -679,8 +713,10 @@ public class CustomerOrdersController {
 
 #### 5. Add a warm/backfill service
 
-This is the critical migration path. It reads SQL Server, then hydrates Redis
+This is the critical migration operation. It reads SQL Server, then hydrates Redis
 without calling `save(...)`, so it does not enqueue duplicate write-behind work.
+Run this operation only behind the bounded asynchronous job service shown below;
+never execute a large warm operation on the HTTP request thread.
 
 ```java
 // src/main/java/com/example/orders/CustomerOrdersWarmBackfillService.java
@@ -720,7 +756,7 @@ public class CustomerOrdersWarmBackfillService {
     }
 
     public WarmResult warm(long customerId, int requestedLimit, boolean projectionOnly, boolean dryRun) {
-        int limit = routeContract.clampTimelineLimit(requestedLimit);
+        int limit = routeContract.requireTimelineLimit(requestedLimit);
         List<OrderEntity> orders = jdbcTemplate.query(
                 CUSTOMER_ORDER_WINDOW_SQL,
                 (rs, rowNumber) -> {
@@ -728,7 +764,7 @@ public class CustomerOrdersWarmBackfillService {
                     order.orderId = rs.getLong("order_id");
                     order.customerId = rs.getLong("customer_id");
                     order.orderDate = rs.getLong("order_date");
-                    order.orderAmount = rs.getDouble("order_amount");
+                    order.orderAmount = rs.getBigDecimal("order_amount");
                     order.currencyCode = rs.getString("currency_code");
                     order.orderType = rs.getString("order_type");
                     order.status = rs.getString("status");
@@ -774,24 +810,34 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.ResponseEntity;
 
 @RestController
 @RequestMapping("/api/warm")
 public class WarmBackfillController {
     private final CustomerOrdersWarmBackfillService warmBackfillService;
+    private final WarmJobService warmJobService;
 
-    public WarmBackfillController(CustomerOrdersWarmBackfillService warmBackfillService) {
+    public WarmBackfillController(
+            CustomerOrdersWarmBackfillService warmBackfillService,
+            WarmJobService warmJobService
+    ) {
         this.warmBackfillService = warmBackfillService;
+        this.warmJobService = warmJobService;
     }
 
     @PostMapping("/orders/customer/{customerId}")
-    public CustomerOrdersWarmBackfillService.WarmResult warmCustomerOrders(
+    public ResponseEntity<WarmJobService.WarmJob> warmCustomerOrders(
             @PathVariable long customerId,
             @RequestParam(defaultValue = "100") int limit,
-            @RequestParam(defaultValue = "false") boolean projectionOnly,
+            @RequestParam(defaultValue = "true") boolean projectionOnly,
             @RequestParam(defaultValue = "false") boolean dryRun
     ) {
-        return warmBackfillService.warm(customerId, limit, projectionOnly, dryRun);
+        int safeLimit = CustomerOrdersRouteContract.timeline().requireTimelineLimit(limit);
+        return ResponseEntity.accepted().body(warmJobService.submit(
+                "customer-orders",
+                () -> warmBackfillService.warm(customerId, safeLimit, projectionOnly, dryRun)
+        ));
     }
 }
 ```
@@ -820,7 +866,8 @@ public class OrderArchiveController {
     private static final String ARCHIVE_SQL = """
             SELECT order_id, customer_id, order_date, order_amount, currency_code, status, priority_score
             FROM sample_orders
-            WHERE customer_id = ? AND order_date < ?
+            WHERE customer_id = ?
+              AND (order_date < ? OR (order_date = ? AND order_id < ?))
             ORDER BY order_date DESC, order_id DESC
             OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
             """;
@@ -837,23 +884,27 @@ public class OrderArchiveController {
     public List<OrderReadModels.OrderSummary> archive(
             @RequestParam long customerId,
             @RequestParam(required = false) Long beforeOrderDate,
+            @RequestParam(required = false) Long beforeOrderId,
             @RequestParam(defaultValue = "100") int limit
     ) {
         long upperBound = beforeOrderDate == null ? Long.MAX_VALUE : beforeOrderDate;
-        int safeLimit = routeContract.clampArchiveLimit(limit);
+        long upperId = beforeOrderId == null ? Long.MAX_VALUE : beforeOrderId;
+        int safeLimit = routeContract.requireArchiveLimit(limit);
         return jdbcTemplate.query(
                 ARCHIVE_SQL,
                 (rs, rowNumber) -> new OrderReadModels.OrderSummary(
                         rs.getLong("order_id"),
                         rs.getLong("customer_id"),
                         rs.getLong("order_date"),
-                        rs.getDouble("order_amount"),
+                        rs.getBigDecimal("order_amount"),
                         rs.getString("currency_code"),
                         rs.getString("status"),
                         rs.getDouble("priority_score")
                 ),
                 customerId,
                 upperBound,
+                upperBound,
+                upperId,
                 safeLimit
         );
     }
@@ -896,7 +947,7 @@ This sample is intentionally small, but it follows the same shape a production s
 
 | Layer | Main files | Responsibility | Production rule |
 |---|---|---|---|
-| API | `web/*Controller.java` | Validate request shape, clamp limits, expose bounded endpoints | Never expose unbounded list endpoints |
+| API | `web/*Controller.java` | Validate request shape, reject invalid limits, expose bounded endpoints | Never expose unbounded list endpoints |
 | Service | `SampleSeedService.java`, controller methods | Apply business flow, ordering, retry-aware behavior | Keep write and relation ordering explicit |
 | CacheDB repository | `SampleRepositories.java` | Creates generated `EntityRepository` and `ProjectionRepository` beans | Treat generated bindings as the ORM surface |
 | Entity mapping | `domain/*Entity.java` | Maps Java fields to SQL Server columns and Redis namespaces | Keep table, id, column, relation definitions explicit |
@@ -907,7 +958,7 @@ This sample is intentionally small, but it follows the same shape a production s
 
 ### API Layer: Bound the Request Before It Reaches the ORM
 
-`CustomerController` does not pass arbitrary user limits into CacheDB. It clamps the request first:
+`CustomerController` does not pass arbitrary user limits into CacheDB. It rejects an out-of-contract request before repository execution:
 
 ```java
 @GetMapping("/{customerId}/orders")
@@ -918,7 +969,7 @@ public List<OrderReadModels.OrderSummary> orderTimeline(
     return OrderEntityCacheBinding.customerTimeline(
             orderSummaryRepository,
             customerId,
-            clamp(limit, 1, 1_000)
+            ApiLimits.requireInRange("limit", limit, 1, 1_000)
     );
 }
 ```
@@ -1021,7 +1072,10 @@ public static FetchPlan ordersPreviewFetchPlan(int orderLimit) {
 
 ```java
 return CustomerEntityCacheBinding
-        .ordersPreviewRepository(customerRepository, clamp(orderPreview, 1, 25))
+        .ordersPreviewRepository(
+                customerRepository,
+                ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25)
+        )
         .findById(customerId)
         .orElseThrow(...);
 ```
@@ -1037,7 +1091,7 @@ public record OrderSummary(
         Long orderId,
         Long customerId,
         Long orderDate,
-        Double orderAmount,
+        BigDecimal orderAmount,
         String currencyCode,
         String orderType,
         String status,
@@ -1068,7 +1122,7 @@ public record OrderSummary(
         Long orderId,
         Long customerId,
         Long orderDate,
-        Double orderAmount,
+        BigDecimal orderAmount,
         String currencyCode,
         String orderType,
         String status,
@@ -1138,7 +1192,7 @@ public List<OrderReadModels.OrderSummary> orderTimeline(
     return OrderEntityCacheBinding.customerTimeline(
             orderSummaryRepository,
             customerId,
-            clamp(limit, 1, 1_000)
+            ApiLimits.requireInRange("limit", limit, 1, 1_000)
     );
 }
 ```
@@ -1157,7 +1211,7 @@ This sample now shows both paths explicitly. Hot operational reads go through Ca
 | `GET /api/orders/high-value` | `ProjectionRepository<OrderSummary>` | Not used for the hot list route | Reads ranked Redis projection data | Fast global sorted business list |
 | `GET /api/orders/{id}` | `EntityRepository.findById` with `linePreview` fetch preset | Not used by this sample endpoint on a cache miss | Reads Redis entity payload, then relation loader queries Redis for bounded lines | Detail screen for hot orders |
 | `GET /api/orders/archive` | `JdbcTemplate.query` | Direct SQL Server read | Does not mutate Redis | Cold/archive history path |
-| `GET /api/products/active` | `EntityRepository.query` | Not used by this sample endpoint | Bounded Redis entity query | Small catalog list |
+| `GET /api/products/active` | `ProjectionRepository<ProductAvailability>` | Not used by this sample endpoint | Bounded Redis projection query | Compact catalog list |
 | `GET /api/tickets/open` | `EntityRepository.query` | Not used by this sample endpoint | Bounded Redis entity query | Operational queue |
 | `GET /api/dashboard/commerce` | Projection query plus ticket entity query | Not used by this sample endpoint | Combines Redis projection and Redis entity query | Dashboard first paint |
 
@@ -1168,9 +1222,10 @@ The important rule: CacheDB repository reads are not a license to scan the datab
 public List<OrderReadModels.OrderSummary> archiveFromSql(
         @RequestParam long customerId,
         @RequestParam(required = false) Long beforeOrderDate,
+        @RequestParam(required = false) Long beforeOrderId,
         @RequestParam(defaultValue = "100") int limit
 ) {
-    return jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, safeLimit);
+    return jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, upperBound, upperId, safeLimit);
 }
 ```
 
@@ -1180,7 +1235,8 @@ The SQL route uses the same response model, but a different source:
 SELECT order_id, customer_id, order_date, order_amount, currency_code,
        order_type, status, line_count, priority_score
 FROM sample_orders
-WHERE customer_id = ? AND order_date < ?
+WHERE customer_id = ?
+  AND (order_date < ? OR (order_date = ? AND order_id < ?))
 ORDER BY order_date DESC, order_id DESC
 OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
 ```
@@ -1332,10 +1388,10 @@ These recipes are starting profiles, not universal defaults. Use them to decide 
 | Scenario | Entities and read models | Suggested values | Why these values |
 |---|---|---|---|
 | E-commerce customer order timeline | `CustomerEntity`, `OrderEntity`, `OrderLineEntity`, `OrderSummary` projection | `hotEntityLimit=100_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=60`, `compositeHotPolicy=ANY`, `timeWindow("order_date", 90 days)`, `stateWindow("status", NEW/PAID/PICKING/OPEN/PENDING)`, `maxEntityQueryLimit=250`, `maxProjectionQueryLimit=1_000`, Redis warn/critical `75/88`, `workerThreads=4`, `batchSize=256`, `maxFlushBatchSize=256` | The list screen must read `OrderSummary` from Redis projection, while selected order detail can read full entity with a bounded line preview. The 90-day window keeps recent commerce traffic hot, and active statuses keep operational orders hot even when they are older. |
-| Logistics shipment tracking | `ShipmentEntity`, `ShipmentEventEntity`, `RouteStopEntity`, `ShipmentTimelineSummary` projection | `hotEntityLimit=150_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=30`, `compositeHotPolicy=ANY`, `timeWindow("updated_at", 14 days)`, `stateWindow("shipment_status", IN_TRANSIT/OUT_FOR_DELIVERY/DELAYED/EXCEPTION)`, `maxEntityQueryLimit=200`, `maxProjectionQueryLimit=2_000`, Redis warn/critical `70/85`, `workerThreads=4`, `batchSize=256`, `maxFlushRetries=8`, `retryBackoffMillis=1_000` | Logistics data changes frequently and users repeatedly open the same active shipments. Keep active and exception shipments hot, keep event timelines as projections, and keep retry/backoff less aggressive to survive transient database or network pressure. |
+| Logistics shipment tracking | `ShipmentEntity`, `ShipmentEventEntity`, `RouteStopEntity`, `ShipmentTimelineSummary` projection | `hotEntityLimit=150_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=30`, `compositeHotPolicy=ANY`, `timeWindow("updated_at", 14 days)`, `stateWindow("shipment_status", IN_TRANSIT/OUT_FOR_DELIVERY/DELAYED/EXCEPTION)`, `maxEntityQueryLimit=200`, `maxProjectionQueryLimit=1_000`, Redis warn/critical `70/85`, `workerThreads=4`, `batchSize=256`, `maxFlushRetries=8`, `retryBackoffMillis=1_000` | Logistics data changes frequently and users repeatedly open the same active shipments. Keep active and exception shipments hot, keep event timelines as projections, and keep retry/backoff less aggressive to survive transient database or network pressure. |
 | Reporting and audit archive | `ReportJobEntity`, `AuditEventEntity`, `LedgerEntryEntity`, `ReportRunSummary` projection | `hotEntityLimit=5_000`, `pageSize=50`, `entityTtlSeconds=0`, `pageTtlSeconds=30`, `compositeHotPolicy=ANY`, `timeWindow("created_at", 1 day)`, `stateWindow("status", QUEUED/RUNNING/FAILED)`, `maxEntityQueryLimit=100`, `maxProjectionQueryLimit=500`, Redis warn/critical `70/80`, `workerThreads=2`, `batchSize=64`, use `admitOnRead=false` if you customize archive policies | Reporting should be SQL Server-first for large scans and exports. Redis should hold only live report jobs and small run summaries; old audit and ledger history should stay in SQL Server and be read through explicit SQL/reporting routes. |
 | Support operations queue | `SupportTicketEntity`, `TicketMessageEntity`, `CustomerEntity`, `OpenTicketSummary` projection | `hotEntityLimit=50_000`, `pageSize=50`, `entityTtlSeconds=0`, `pageTtlSeconds=20`, `compositeHotPolicy=ANY`, `timeWindow("updated_at", 30 days)`, `stateWindow("status", OPEN/PENDING/ESCALATED/SLA_BREACH)`, `maxEntityQueryLimit=200`, `maxProjectionQueryLimit=1_000`, Redis warn/critical `75/88`, `workerThreads=3`, `batchSize=128`, `coalescingEnabled=true` | Agents reopen the same tickets and queues many times. Keep open/escalated tickets hot, keep queue rows as compact projections, and load full messages only on explicit detail screens. |
-| Product catalog and inventory availability | `ProductEntity`, `WarehouseStockEntity`, `InventoryReservationEntity`, `ProductAvailabilitySummary` projection | `hotEntityLimit=25_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=15`, `compositeHotPolicy=ANY`, `stateWindow("active_status", ACTIVE)`, `stateWindow("stock_status", IN_STOCK/LOW_STOCK)`, `timeWindow("updated_at", 7 days)`, `maxEntityQueryLimit=250`, `maxProjectionQueryLimit=2_000`, Redis warn/critical `70/85`, `workerThreads=3`, `batchSize=256`, `coalescingEnabled=true` | Catalog pages need fast availability reads, but stock changes can be noisy. Active products and low-stock items stay hot, projection rows serve list/category pages, and coalescing reduces repeated stock-update flushes for the same item. |
+| Product catalog and inventory availability | `ProductEntity`, `WarehouseStockEntity`, `InventoryReservationEntity`, `ProductAvailabilitySummary` projection | `hotEntityLimit=25_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=15`, `compositeHotPolicy=ANY`, `stateWindow("active_status", ACTIVE)`, `stateWindow("stock_status", IN_STOCK/LOW_STOCK)`, `timeWindow("updated_at", 7 days)`, `maxEntityQueryLimit=250`, `maxProjectionQueryLimit=1_000`, Redis warn/critical `70/85`, `workerThreads=3`, `batchSize=256`, `coalescingEnabled=true` | Catalog pages need fast availability reads, but stock changes can be noisy. Active products and low-stock items stay hot, projection rows serve list/category pages, and coalescing reduces repeated stock-update flushes for the same item. |
 
 BEST: start from the closest recipe, then run a staging warm-up and compare estimated Redis memory with actual `MEMORY USAGE` by key prefix. For SQL Server, also check lock waits before increasing `workerThreads` or `batchSize`. ANTI-PATTERN: copy the largest `hotEntityLimit` into every service and hope Redis absorbs the model.
 
@@ -1551,7 +1607,7 @@ The schema is created by `src/main/resources/schema.sql`. It includes primary ke
 
 The seed endpoint writes through CacheDB and waits for parent rows before writing dependent child rows. That is intentional because the database has foreign keys.
 
-`POST /api/orders` also waits briefly until the customer row is durable in SQL Server. If the parent customer was just created and write-behind has not flushed it yet, the endpoint returns `409` and the client should retry.
+`POST /api/orders` performs one indexed SQL existence check. If the parent customer is not durable yet, the endpoint immediately returns `409` with `Retry-After: 1`; it never blocks a request thread by polling.
 
 ## Troubleshooting
 

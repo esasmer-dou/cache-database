@@ -949,6 +949,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                     "long", "java.lang.Long",
                     "boolean", "java.lang.Boolean",
                     "double", "java.lang.Double",
+                    "java.math.BigDecimal",
                     "float", "java.lang.Float",
                     "short", "java.lang.Short",
                     "byte", "java.lang.Byte",
@@ -2280,6 +2281,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         return switch (field.typeName()) {
             case "java.lang.String" -> accessor;
             case "java.lang.Integer", "java.lang.Long", "java.lang.Boolean", "java.lang.Double",
+                    "java.math.BigDecimal",
                     "java.lang.Float", "java.lang.Short", "java.lang.Byte",
                     "java.time.Instant", "java.time.LocalDate", "java.time.LocalDateTime", "java.time.OffsetDateTime" ->
                     accessor + " == null ? null : String.valueOf(" + accessor + ")";
@@ -2304,6 +2306,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             case "java.lang.Boolean" -> source + " == null ? null : Boolean.valueOf(" + source + ")";
             case "double" -> source + " == null ? 0D : Double.parseDouble(" + source + ")";
             case "java.lang.Double" -> source + " == null ? null : Double.valueOf(" + source + ")";
+            case "java.math.BigDecimal" -> source + " == null ? null : new java.math.BigDecimal(" + source + ")";
             case "float" -> source + " == null ? 0F : Float.parseFloat(" + source + ")";
             case "java.lang.Float" -> source + " == null ? null : Float.valueOf(" + source + ")";
             case "short" -> source + " == null ? (short) 0 : Short.parseShort(" + source + ")";
@@ -2335,6 +2338,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             case "java.lang.Boolean" -> source + " instanceof Boolean bool ? bool : (" + source + " == null ? null : Boolean.valueOf(String.valueOf(" + source + ")))";
             case "double" -> source + " instanceof Number number ? number.doubleValue() : (" + source + " == null ? 0D : Double.parseDouble(String.valueOf(" + source + ")))";
             case "java.lang.Double" -> source + " instanceof Number number ? Double.valueOf(number.doubleValue()) : (" + source + " == null ? null : Double.valueOf(String.valueOf(" + source + ")))";
+            case "java.math.BigDecimal" -> source + " == null ? null : new java.math.BigDecimal(String.valueOf(" + source + "))";
             case "float" -> source + " instanceof Number number ? number.floatValue() : (" + source + " == null ? 0F : Float.parseFloat(String.valueOf(" + source + ")))";
             case "java.lang.Float" -> source + " instanceof Number number ? Float.valueOf(number.floatValue()) : (" + source + " == null ? null : Float.valueOf(String.valueOf(" + source + ")))";
             case "short" -> source + " instanceof Number number ? number.shortValue() : (" + source + " == null ? (short) 0 : Short.parseShort(String.valueOf(" + source + ")))";

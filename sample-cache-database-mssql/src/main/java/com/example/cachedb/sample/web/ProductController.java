@@ -5,6 +5,10 @@ import com.example.cachedb.sample.domain.ProductEntityCacheBinding;
 import com.example.cachedb.sample.readmodel.ProductReadModels;
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.api.ProjectionRepository;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -53,13 +57,16 @@ public class ProductController {
         return ProductEntityCacheBinding.activeProductsByCategory(
                 productAvailabilityRepository,
                 category,
-                clamp(limit, 1, 2_000)
+                ApiLimits.requireInRange("limit", limit, 1, 1_000)
         );
     }
 
     @GetMapping("/low-stock")
     public List<ProductReadModels.ProductAvailability> lowStock(@RequestParam(defaultValue = "25") int limit) {
-        return ProductEntityCacheBinding.lowStockProducts(productAvailabilityRepository, clamp(limit, 1, 2_000));
+        return ProductEntityCacheBinding.lowStockProducts(
+                productAvailabilityRepository,
+                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        );
     }
 
     @GetMapping("/{productId}")
@@ -80,22 +87,26 @@ public class ProductController {
                         resultSet.getString("active_status"),
                         resultSet.getString("stock_status"),
                         resultSet.getInt("available_quantity"),
-                        resultSet.getDouble("unit_price"),
+                        resultSet.getBigDecimal("unit_price"),
                         resultSet.getLong("updated_at")
                 ),
-                clamp(limit, 1, 500)
+                ApiLimits.requireInRange("limit", limit, 1, 500)
         );
     }
 
     @PatchMapping("/{productId}/stock")
-    public ProductEntity updateStock(@PathVariable long productId, @RequestBody UpdateStockRequest request) {
+    public ResponseEntity<WriteAccepted<ProductEntity>> updateStock(
+            @PathVariable long productId,
+            @Valid @RequestBody UpdateStockRequest request
+    ) {
         ProductEntity product = productRepository.findById(productId)
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found in active set: " + productId));
         product.stockQuantity = request.stockQuantity() == null ? product.stockQuantity : request.stockQuantity();
         product.reservedQuantity = request.reservedQuantity() == null ? product.reservedQuantity : request.reservedQuantity();
         product.stockStatus = request.stockStatus() == null ? stockStatus(product) : request.stockStatus();
         product.updatedAt = Instant.now().getEpochSecond();
-        return productRepository.save(product);
+        ProductEntity saved = productRepository.save(product);
+        return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "ProductEntity", saved.productId, saved));
     }
 
     private String stockStatus(ProductEntity product) {
@@ -108,10 +119,10 @@ public class ProductController {
         return available <= 10 ? "LOW_STOCK" : "IN_STOCK";
     }
 
-    private int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(value, max));
-    }
-
-    public record UpdateStockRequest(Integer stockQuantity, Integer reservedQuantity, String stockStatus) {
+    public record UpdateStockRequest(
+            @PositiveOrZero Integer stockQuantity,
+            @PositiveOrZero Integer reservedQuantity,
+            @Size(max = 32) String stockStatus
+    ) {
     }
 }

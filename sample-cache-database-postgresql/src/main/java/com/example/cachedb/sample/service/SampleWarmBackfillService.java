@@ -1,7 +1,14 @@
 package com.example.cachedb.sample.service;
 
+import com.example.cachedb.sample.domain.AuditEventEntityCacheBinding;
 import com.example.cachedb.sample.domain.OrderEntity;
 import com.example.cachedb.sample.domain.OrderEntityCacheBinding;
+import com.example.cachedb.sample.domain.ProductEntity;
+import com.example.cachedb.sample.domain.ProductEntityCacheBinding;
+import com.example.cachedb.sample.domain.ReportJobEntityCacheBinding;
+import com.example.cachedb.sample.domain.ShipmentEntity;
+import com.example.cachedb.sample.domain.ShipmentEntityCacheBinding;
+import com.example.cachedb.sample.domain.SupportTicketEntityCacheBinding;
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.page.EntityQueryLoader;
 import com.reactor.cachedb.core.page.NoOpEntityQueryLoader;
@@ -22,49 +29,176 @@ public class SampleWarmBackfillService {
 
     private final CacheDatabase cacheDatabase;
     private final EntityRepository<OrderEntity, Long> orderRepository;
+    private final EntityRepository<ProductEntity, Long> productRepository;
+    private final EntityRepository<ShipmentEntity, Long> shipmentRepository;
 
     public SampleWarmBackfillService(
             CacheDatabase cacheDatabase,
-            EntityRepository<OrderEntity, Long> orderRepository
+            EntityRepository<OrderEntity, Long> orderRepository,
+            EntityRepository<ProductEntity, Long> productRepository,
+            EntityRepository<ShipmentEntity, Long> shipmentRepository
     ) {
         this.cacheDatabase = cacheDatabase;
         this.orderRepository = orderRepository;
+        this.productRepository = productRepository;
+        this.shipmentRepository = shipmentRepository;
     }
 
-    public WarmResult warmCustomerOrders(long customerId, int requestedLimit, boolean projectionOnly, boolean dryRun) {
-        int limit = clamp(requestedLimit, 1, 1_000);
-        QuerySpec querySpec = customerOrderWindowSpec(customerId, limit);
+    public WarmResult warmCustomerOrders(long customerId, int limit, boolean projectionOnly, boolean dryRun) {
+        QuerySpec querySpec = QuerySpec.where(QueryFilter.eq("customer_id", customerId))
+                .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
+                .limitTo(limit);
+        return warm(
+                "customer-orders",
+                "customerId=" + customerId,
+                OrderEntityCacheBinding.METADATA.entityName(),
+                querySpec,
+                limit,
+                projectionOnly,
+                dryRun,
+                orderRepository
+        );
+    }
+
+    public WarmResult warmActiveProducts(String category, int limit, boolean projectionOnly, boolean dryRun) {
+        QuerySpec query = QuerySpec.where(QueryFilter.eq("active_status", "ACTIVE"));
+        if (category != null && !category.isBlank()) {
+            query = query.and(QueryFilter.eq("category", category.trim()));
+        }
+        QuerySpec querySpec = query.orderBy(QuerySort.asc("sku")).limitTo(limit);
+        return warm(
+                "active-products",
+                category == null || category.isBlank() ? "all-categories" : "category=" + category.trim(),
+                ProductEntityCacheBinding.METADATA.entityName(),
+                querySpec,
+                limit,
+                projectionOnly,
+                dryRun,
+                productRepository
+        );
+    }
+
+    public WarmResult warmOpenTickets(int limit, boolean dryRun) {
+        QuerySpec querySpec = QuerySpec.where(QueryFilter.eq("status", "OPEN"))
+                .orderBy(QuerySort.desc("updated_at"), QuerySort.asc("ticket_id"))
+                .limitTo(limit);
+        return warmEntity(
+                "open-tickets",
+                "status=OPEN",
+                SupportTicketEntityCacheBinding.METADATA.entityName(),
+                querySpec,
+                limit,
+                dryRun
+        );
+    }
+
+    public WarmResult warmActiveShipments(int limit, boolean projectionOnly, boolean dryRun) {
+        QuerySpec querySpec = QuerySpec.where(QueryFilter.in(
+                        "shipment_status",
+                        List.<Object>of("IN_TRANSIT", "OUT_FOR_DELIVERY", "DELAYED", "EXCEPTION")
+                ))
+                .orderBy(QuerySort.desc("risk_score"), QuerySort.desc("updated_at"), QuerySort.desc("shipment_id"))
+                .limitTo(limit);
+        return warm(
+                "active-shipments",
+                "operational-statuses",
+                ShipmentEntityCacheBinding.METADATA.entityName(),
+                querySpec,
+                limit,
+                projectionOnly,
+                dryRun,
+                shipmentRepository
+        );
+    }
+
+    public WarmResult warmLiveReportJobs(int limit, boolean dryRun) {
+        QuerySpec querySpec = QuerySpec.where(QueryFilter.in(
+                        "status",
+                        List.<Object>of("QUEUED", "RUNNING", "FAILED")
+                ))
+                .orderBy(QuerySort.desc("updated_at"), QuerySort.desc("report_job_id"))
+                .limitTo(limit);
+        return warmEntity(
+                "live-report-jobs",
+                "status=QUEUED|RUNNING|FAILED",
+                ReportJobEntityCacheBinding.METADATA.entityName(),
+                querySpec,
+                limit,
+                dryRun
+        );
+    }
+
+    public WarmResult warmSecurityAudit(int limit, boolean dryRun) {
+        QuerySpec querySpec = QuerySpec.where(QueryFilter.in(
+                        "severity",
+                        List.<Object>of("WARN", "ERROR", "SECURITY")
+                ))
+                .orderBy(QuerySort.desc("created_at"), QuerySort.desc("audit_event_id"))
+                .limitTo(limit);
+        return warmEntity(
+                "security-audit",
+                "severity=WARN|ERROR|SECURITY",
+                AuditEventEntityCacheBinding.METADATA.entityName(),
+                querySpec,
+                limit,
+                dryRun
+        );
+    }
+
+    private WarmResult warmEntity(
+            String route,
+            String scope,
+            String entityName,
+            QuerySpec querySpec,
+            int limit,
+            boolean dryRun
+    ) {
+        return warm(route, scope, entityName, querySpec, limit, false, dryRun, null);
+    }
+
+    private <T, ID> WarmResult warm(
+            String route,
+            String scope,
+            String entityName,
+            QuerySpec querySpec,
+            int limit,
+            boolean projectionOnly,
+            boolean dryRun,
+            EntityRepository<T, ID> projectionSourceRepository
+    ) {
         if (dryRun || projectionOnly) {
-            List<OrderEntity> orders = loadFromRegisteredJdbcSource(querySpec);
+            List<T> entities = loadFromRegisteredJdbcSource(entityName, querySpec);
             int submittedRows = 0;
-            RedisEntityRepository<OrderEntity, Long> redisRepository = redisOrderRepository();
-            if (!dryRun && !orders.isEmpty()) {
-                redisRepository.hydrateProjectionWarmBatch(orders);
-                submittedRows = orders.size();
+            if (!dryRun && projectionOnly && !entities.isEmpty()) {
+                redisRepository(projectionSourceRepository).hydrateProjectionWarmBatch(entities);
+                submittedRows = entities.size();
             }
             return new WarmResult(
-                    customerId,
+                    route,
+                    scope,
                     limit,
-                    orders.size(),
+                    entities.size(),
                     submittedRows,
                     0,
                     projectionOnly,
                     dryRun,
                     "registered-jdbc-loader",
                     dryRun
-                            ? List.of("Dry run used the registered JDBC EntityQueryLoader and did not mutate Redis.")
-                            : List.of("Projection warm used the registered JDBC EntityQueryLoader and refreshed projection rows.")
+                            ? List.of("Dry run read SQL through the registered EntityQueryLoader and did not mutate Redis.")
+                            : List.of("Projection warm loaded the bounded SQL window and refreshed projection rows only.")
             );
         }
-        CacheWarmResult result = cacheDatabase.warm(CacheWarmPlan.builder(OrderEntityCacheBinding.METADATA.entityName())
-                .name("sample-customer-order-window-" + customerId)
+
+        CacheWarmResult result = cacheDatabase.warm(CacheWarmPlan.builder(entityName)
+                .name("sample-" + route)
                 .querySpec(querySpec)
                 .maxRows(limit)
                 .forceImmediateProjectionRefresh(true)
                 .reindexQueryIndexes(true)
                 .build());
         return new WarmResult(
-                customerId,
+                route,
+                scope,
                 limit,
                 result.loadedRows(),
                 result.submittedRows(),
@@ -76,38 +210,29 @@ public class SampleWarmBackfillService {
         );
     }
 
-    private QuerySpec customerOrderWindowSpec(long customerId, int limit) {
-        return QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
-                .limitTo(limit);
-    }
-
     @SuppressWarnings("unchecked")
-    private List<OrderEntity> loadFromRegisteredJdbcSource(QuerySpec querySpec) {
-        EntityBinding<OrderEntity, Long> binding = (EntityBinding<OrderEntity, Long>) cacheDatabase.entityRegistry()
-                .find(OrderEntityCacheBinding.METADATA.entityName())
-                .orElseThrow(() -> new IllegalStateException("OrderEntity must be registered before warm execution"));
-        EntityQueryLoader<OrderEntity> queryLoader = binding.queryLoader();
+    private <T> List<T> loadFromRegisteredJdbcSource(String entityName, QuerySpec querySpec) {
+        EntityBinding<T, ?> binding = (EntityBinding<T, ?>) cacheDatabase.entityRegistry()
+                .find(entityName)
+                .orElseThrow(() -> new IllegalStateException(entityName + " must be registered before warm execution"));
+        EntityQueryLoader<T> queryLoader = binding.queryLoader();
         if (queryLoader == null || queryLoader instanceof NoOpEntityQueryLoader) {
-            throw new IllegalStateException("OrderEntity warm requires registerJdbcBacked(...) so the JDBC query loader is available");
+            throw new IllegalStateException(entityName + " requires registerJdbcBacked(...) for warm execution");
         }
         return queryLoader.load(querySpec);
     }
 
     @SuppressWarnings("unchecked")
-    private RedisEntityRepository<OrderEntity, Long> redisOrderRepository() {
-        if (orderRepository instanceof RedisEntityRepository<?, ?> redisRepository) {
-            return (RedisEntityRepository<OrderEntity, Long>) redisRepository;
+    private <T, ID> RedisEntityRepository<T, ID> redisRepository(EntityRepository<T, ID> repository) {
+        if (repository instanceof RedisEntityRepository<?, ?> redisRepository) {
+            return (RedisEntityRepository<T, ID>) redisRepository;
         }
-        throw new IllegalStateException("Warm backfill requires RedisEntityRepository");
-    }
-
-    private int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(value, max));
+        throw new IllegalStateException("Projection-only warm requires RedisEntityRepository");
     }
 
     public record WarmResult(
-            long customerId,
+            String route,
+            String scope,
             int requestedWindow,
             int rowsReadFromSql,
             int rowsSubmittedToRedis,

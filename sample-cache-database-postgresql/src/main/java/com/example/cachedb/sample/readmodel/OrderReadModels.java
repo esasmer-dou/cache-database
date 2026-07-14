@@ -5,6 +5,7 @@ import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
 import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.projection.ProjectionCodec;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,7 +38,7 @@ public final class OrderReadModels {
                                     longValue(values.get("order_id")),
                                     longValue(values.get("customer_id")),
                                     longValue(values.get("order_date")),
-                                    doubleValue(values.get("order_amount")),
+                                    decimalValue(values.get("order_amount")),
                                     values.get("currency_code"),
                                     values.get("order_type"),
                                     values.get("status"),
@@ -89,7 +90,7 @@ public final class OrderReadModels {
             Long orderId,
             Long customerId,
             Long orderDate,
-            Double orderAmount,
+            BigDecimal orderAmount,
             String currencyCode,
             String orderType,
             String status,
@@ -120,5 +121,9 @@ public final class OrderReadModels {
 
     private static Double doubleValue(String value) {
         return value == null ? null : Double.valueOf(value);
+    }
+
+    private static BigDecimal decimalValue(String value) {
+        return value == null ? null : new BigDecimal(value);
     }
 }

@@ -28,6 +28,8 @@ on:
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
       - "cachedb-examples/**"
+      - "sample-cache-database-postgresql/**"
+      - "sample-cache-database-mssql/**"
       - "pom.xml"
       - "tools/ci/**"
   push:
@@ -59,6 +61,8 @@ on:
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
       - "cachedb-examples/**"
+      - "sample-cache-database-postgresql/**"
+      - "sample-cache-database-mssql/**"
       - "pom.xml"
       - "tools/ci/**"
 
@@ -86,6 +90,10 @@ jobs:
         shell: pwsh
         run: ./tools/ci/check-tr-docs.ps1 -SummaryPath ./target/tr-docs-quality-summary.md
 
+      - name: Validate sample provider parity
+        shell: pwsh
+        run: ./tools/ci/check-sample-provider-parity.ps1
+
       - name: Verify OSS release packaging
         shell: pwsh
         run: mvn -B -P oss-release -DskipTests "-Dgpg.skip=true" package
@@ -110,3 +118,29 @@ jobs:
             target/tr-docs-quality-summary.md
           if-no-files-found: error
           retention-days: 14
+
+  sample-provider-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Setup Java
+        uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Install CacheDB reactor artifacts
+        run: mvn -B -DskipTests install
+
+      - name: Verify PostgreSQL sample with real providers
+        working-directory: sample-cache-database-postgresql
+        run: mvn -B clean verify -Pprovider-integration
+
+      - name: Verify MSSQL sample with real providers
+        working-directory: sample-cache-database-mssql
+        run: mvn -B clean verify -Pprovider-integration

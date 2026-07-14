@@ -1,13 +1,14 @@
 server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
   port: 8092
 
 spring:
   application:
     name: sample-cache-database-mssql
   datasource:
-    url: jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true;loginTimeout=5
-    username: sa
-    password: YourStrong!Passw0rd
+    url: ${DB_URL:jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true;loginTimeout=5}
+    username: ${DB_USERNAME:sa}
+    password: ${DB_PASSWORD:YourStrong!Passw0rd}
     hikari:
       maximum-pool-size: 12
       minimum-idle: 2
@@ -22,7 +23,7 @@ cachedb:
   enabled: true
   profile: development
   redis:
-    uri: redis://127.0.0.1:56380
+    uri: ${REDIS_URI:redis://127.0.0.1:56380}
     background:
       enabled: true
   sql:
@@ -33,7 +34,7 @@ cachedb:
       transaction-isolation: serializable
       restore-lock-timeout-after-transaction: true
   admin:
-    enabled: true
+    enabled: ${CACHEDB_ADMIN_ENABLED:true}
     http-enabled: true
     base-path: /cachedb-admin
     dashboard-enabled: true
@@ -46,3 +47,7 @@ cachedb:
   runtime:
     append-instance-id-to-consumer-names: true
     leader-lease-enabled: true
+
+sample:
+  demo:
+    write-tools-enabled: ${SAMPLE_WRITE_TOOLS_ENABLED:true}

@@ -11,6 +11,8 @@ import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySpec;
 
+import java.math.BigDecimal;
+
 @CacheEntity(table = "sample_products", redisNamespace = "sample-products")
 public class ProductEntity {
 
@@ -30,7 +32,7 @@ public class ProductEntity {
     public String activeStatus;
 
     @CacheColumn("unit_price")
-    public Double unitPrice;
+    public BigDecimal unitPrice;
 
     @CacheColumn("stock_quantity")
     public Integer stockQuantity;

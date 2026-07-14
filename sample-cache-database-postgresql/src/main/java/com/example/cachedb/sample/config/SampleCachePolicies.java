@@ -16,40 +16,29 @@ public final class SampleCachePolicies {
 
     public static CachePolicy platformDefaultPolicy() {
         return CachePolicy.builder()
-                .hotEntityLimit(25_000)
-                .pageSize(100)
+                .hotEntityLimit(5_000)
+                .pageSize(50)
                 .entityTtlSeconds(0)
                 .pageTtlSeconds(90)
+                .countWindow()
+                .build();
+    }
+
+    public static CachePolicy customerDirectoryPolicy() {
+        return CachePolicy.builder()
+                .hotEntityLimit(50_000)
+                .pageSize(100)
+                .entityTtlSeconds(0)
+                .pageTtlSeconds(60)
                 .compositeHotPolicy(EntityHotPolicyCompositeOperator.ANY, List.of(
-                        EntityHotPolicy.timeWindow("order_date", 90L * DAY),
-                        EntityHotPolicy.timeWindow("updated_at", 30L * DAY),
-                        EntityHotPolicy.timeWindow("created_at", 1L * DAY),
-                        EntityHotPolicy.stateWindow("status", List.of(
-                                "ACTIVE",
-                                "NEW",
-                                "PAID",
-                                "PICKING",
-                                "OPEN",
-                                "PENDING",
-                                "ESCALATED",
-                                "SLA_BREACH",
-                                "QUEUED",
-                                "RUNNING",
-                                "FAILED"
-                        )),
-                        EntityHotPolicy.stateWindow("active_status", List.of("ACTIVE")),
-                        EntityHotPolicy.stateWindow("shipment_status", List.of(
-                                "IN_TRANSIT",
-                                "OUT_FOR_DELIVERY",
-                                "DELAYED",
-                                "EXCEPTION"
-                        )),
-                        EntityHotPolicy.stateWindow("stock_status", List.of("IN_STOCK", "LOW_STOCK", "RESERVED"))
+                        EntityHotPolicy.stateWindow("status", List.of("ACTIVE")),
+                        EntityHotPolicy.stateWindow("segment", List.of("VIP")),
+                        EntityHotPolicy.timeWindow("updated_at", 30L * DAY)
                 ))
                 .build();
     }
 
-    public static CachePolicy commerceTimelinePolicy() {
+    public static CachePolicy orderTimelinePolicy() {
         return CachePolicy.builder()
                 .hotEntityLimit(100_000)
                 .pageSize(100)
@@ -57,9 +46,18 @@ public final class SampleCachePolicies {
                 .pageTtlSeconds(60)
                 .compositeHotPolicy(EntityHotPolicyCompositeOperator.ANY, List.of(
                         EntityHotPolicy.timeWindow("order_date", 90L * DAY),
-                        EntityHotPolicy.stateWindow("status", List.of("NEW", "PAID", "PICKING", "OPEN", "PENDING")),
-                        EntityHotPolicy.stateWindow("segment", List.of("VIP"))
+                        EntityHotPolicy.stateWindow("status", List.of("NEW", "PAID", "PICKING", "OPEN", "PENDING"))
                 ))
+                .build();
+    }
+
+    public static CachePolicy orderLinePreviewPolicy() {
+        return CachePolicy.builder()
+                .hotEntityLimit(250_000)
+                .pageSize(100)
+                .entityTtlSeconds(0)
+                .pageTtlSeconds(30)
+                .countWindow()
                 .build();
     }
 
@@ -103,7 +101,20 @@ public final class SampleCachePolicies {
                                 "OUT_FOR_DELIVERY",
                                 "DELAYED",
                                 "EXCEPTION"
-                        )),
+                        ))
+                ))
+                .build();
+    }
+
+    public static CachePolicy shipmentEventTimelinePolicy() {
+        return CachePolicy.builder()
+                .hotEntityLimit(300_000)
+                .pageSize(100)
+                .entityTtlSeconds(0)
+                .pageTtlSeconds(30)
+                .compositeHotPolicy(EntityHotPolicyCompositeOperator.ANY, List.of(
+                        EntityHotPolicy.timeWindow("event_time", 30L * DAY),
+                        EntityHotPolicy.stateWindow("severity", List.of("WARN", "ERROR", "SECURITY")),
                         EntityHotPolicy.stateWindow("event_type", List.of("DELAY", "EXCEPTION", "DELIVERED"))
                 ))
                 .build();
@@ -146,8 +157,8 @@ public final class SampleCachePolicies {
                         "commerceTimeline",
                         "Customer order timeline and high-value order screens",
                         "OrderSummary projection; full entity only for explicit detail",
-                        commerceTimelinePolicy().hotEntityLimit(),
-                        commerceTimelinePolicy().pageSize(),
+                        orderTimelinePolicy().hotEntityLimit(),
+                        orderTimelinePolicy().pageSize(),
                         1_000
                 ),
                 new PolicyProfile(
@@ -156,7 +167,7 @@ public final class SampleCachePolicies {
                         "ProductAvailability projection; SQL route for inactive catalog archive",
                         catalogAvailabilityPolicy().hotEntityLimit(),
                         catalogAvailabilityPolicy().pageSize(),
-                        2_000
+                        1_000
                 ),
                 new PolicyProfile(
                         "supportOperations",
@@ -172,7 +183,7 @@ public final class SampleCachePolicies {
                         "ShipmentSummary projection; event preview only on detail",
                         logisticsTrackingPolicy().hotEntityLimit(),
                         logisticsTrackingPolicy().pageSize(),
-                        2_000
+                        1_000
                 ),
                 new PolicyProfile(
                         "reportingLive",

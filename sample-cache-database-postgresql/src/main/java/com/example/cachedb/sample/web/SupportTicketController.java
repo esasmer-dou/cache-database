@@ -2,7 +2,14 @@ package com.example.cachedb.sample.web;
 
 import com.example.cachedb.sample.domain.SupportTicketEntity;
 import com.example.cachedb.sample.domain.SupportTicketEntityCacheBinding;
+import com.example.cachedb.sample.service.DurableReferenceGuard;
 import com.reactor.cachedb.core.api.EntityRepository;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,14 +27,22 @@ import java.util.List;
 public class SupportTicketController {
 
     private final EntityRepository<SupportTicketEntity, Long> ticketRepository;
+    private final DurableReferenceGuard durableReferenceGuard;
 
-    public SupportTicketController(EntityRepository<SupportTicketEntity, Long> ticketRepository) {
+    public SupportTicketController(
+            EntityRepository<SupportTicketEntity, Long> ticketRepository,
+            DurableReferenceGuard durableReferenceGuard
+    ) {
         this.ticketRepository = ticketRepository;
+        this.durableReferenceGuard = durableReferenceGuard;
     }
 
     @GetMapping("/open")
     public List<SupportTicketEntity> open(@RequestParam(defaultValue = "25") int limit) {
-        return SupportTicketEntityCacheBinding.openTickets(ticketRepository, clamp(limit, 1, 1_000));
+        return SupportTicketEntityCacheBinding.openTickets(
+                ticketRepository,
+                ApiLimits.requireInRange("limit", limit, 1, 50)
+        );
     }
 
     @GetMapping("/{ticketId}")
@@ -37,7 +52,10 @@ public class SupportTicketController {
     }
 
     @PostMapping
-    public SupportTicketEntity create(@RequestBody CreateTicketRequest request) {
+    public ResponseEntity<WriteAccepted<SupportTicketEntity>> create(
+            @Valid @RequestBody CreateTicketRequest request
+    ) {
+        durableReferenceGuard.requireCustomer(request.customerId());
         long now = Instant.now().getEpochSecond();
         SupportTicketEntity ticket = new SupportTicketEntity();
         ticket.ticketId = request.ticketId();
@@ -47,26 +65,36 @@ public class SupportTicketController {
         ticket.subject = request.subject() == null ? "Sample support case" : request.subject();
         ticket.openedAt = now;
         ticket.updatedAt = now;
-        return ticketRepository.save(ticket);
+        SupportTicketEntity saved = ticketRepository.save(ticket);
+        return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "SupportTicketEntity", saved.ticketId, saved));
     }
 
     @PatchMapping("/{ticketId}/status")
-    public SupportTicketEntity updateStatus(@PathVariable long ticketId, @RequestBody UpdateTicketStatusRequest request) {
+    public ResponseEntity<WriteAccepted<SupportTicketEntity>> updateStatus(
+            @PathVariable long ticketId,
+            @Valid @RequestBody UpdateTicketStatusRequest request
+    ) {
         SupportTicketEntity ticket = ticketRepository.findById(ticketId)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket not found in active set: " + ticketId));
         ticket.status = request.status();
         ticket.priority = request.priority() == null ? ticket.priority : request.priority();
         ticket.updatedAt = Instant.now().getEpochSecond();
-        return ticketRepository.save(ticket);
+        SupportTicketEntity saved = ticketRepository.save(ticket);
+        return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "SupportTicketEntity", saved.ticketId, saved));
     }
 
-    private int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(value, max));
+    public record CreateTicketRequest(
+            @NotNull @Positive Long ticketId,
+            @NotNull @Positive Long customerId,
+            @Size(max = 32) String priority,
+            @Size(max = 32) String status,
+            @NotBlank @Size(max = 512) String subject
+    ) {
     }
 
-    public record CreateTicketRequest(Long ticketId, Long customerId, String priority, String status, String subject) {
-    }
-
-    public record UpdateTicketStatusRequest(String status, String priority) {
+    public record UpdateTicketStatusRequest(
+            @NotBlank @Size(max = 32) String status,
+            @Size(max = 32) String priority
+    ) {
     }
 }

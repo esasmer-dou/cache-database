@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS sample_products (
     product_name VARCHAR(160) NOT NULL,
     category VARCHAR(64) NOT NULL,
     active_status VARCHAR(16) NOT NULL,
-    unit_price DOUBLE PRECISION NOT NULL,
+    unit_price NUMERIC(19, 4) NOT NULL,
     stock_quantity INT NOT NULL,
     reserved_quantity INT NOT NULL DEFAULT 0,
     stock_status VARCHAR(24) NOT NULL DEFAULT 'IN_STOCK',
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS sample_orders (
     order_id BIGINT PRIMARY KEY,
     customer_id BIGINT NOT NULL REFERENCES sample_customers(customer_id),
     order_date BIGINT NOT NULL,
-    order_amount DOUBLE PRECISION NOT NULL,
+    order_amount NUMERIC(19, 4) NOT NULL,
     currency_code VARCHAR(8) NOT NULL,
     order_type VARCHAR(32) NOT NULL,
     status VARCHAR(24) NOT NULL,
@@ -44,8 +44,8 @@ CREATE TABLE IF NOT EXISTS sample_order_lines (
     line_number INT NOT NULL,
     sku VARCHAR(64) NOT NULL,
     quantity INT NOT NULL,
-    unit_price DOUBLE PRECISION NOT NULL,
-    line_total DOUBLE PRECISION NOT NULL,
+    unit_price NUMERIC(19, 4) NOT NULL,
+    line_total NUMERIC(19, 4) NOT NULL,
     status VARCHAR(24) NOT NULL
 );
 
@@ -104,15 +104,19 @@ CREATE TABLE IF NOT EXISTS sample_audit_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sample_orders_customer_date ON sample_orders(customer_id, order_date DESC, order_id DESC);
-CREATE INDEX IF NOT EXISTS idx_sample_orders_priority ON sample_orders(priority_score DESC, order_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sample_orders_priority ON sample_orders(priority_score DESC, order_date DESC, order_id DESC);
 CREATE INDEX IF NOT EXISTS idx_sample_order_lines_order_number ON sample_order_lines(order_id, line_number ASC);
+CREATE INDEX IF NOT EXISTS idx_sample_customers_active ON sample_customers(status, updated_at DESC, customer_id ASC);
 CREATE INDEX IF NOT EXISTS idx_sample_tickets_customer_status ON sample_support_tickets(customer_id, status);
 CREATE INDEX IF NOT EXISTS idx_sample_tickets_status_priority ON sample_support_tickets(status, priority, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sample_tickets_open_updated ON sample_support_tickets(status, updated_at DESC, ticket_id ASC);
 CREATE INDEX IF NOT EXISTS idx_sample_products_category_stock ON sample_products(category, active_status, stock_status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sample_products_low_stock ON sample_products(active_status, stock_status, updated_at DESC, sku ASC);
 CREATE INDEX IF NOT EXISTS idx_sample_shipments_active ON sample_shipments(shipment_status, risk_score DESC, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sample_shipments_customer_updated ON sample_shipments(customer_id, updated_at DESC, shipment_id DESC);
 CREATE INDEX IF NOT EXISTS idx_sample_shipment_events_shipment_time ON sample_shipment_events(shipment_id, event_time DESC, event_id DESC);
 CREATE INDEX IF NOT EXISTS idx_sample_report_jobs_live ON sample_report_jobs(status, updated_at DESC, report_job_id DESC);
+CREATE INDEX IF NOT EXISTS idx_sample_report_jobs_type_created ON sample_report_jobs(report_type, created_at DESC, report_job_id DESC);
 CREATE INDEX IF NOT EXISTS idx_sample_audit_events_entity_time ON sample_audit_events(entity_name, entity_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sample_audit_events_security ON sample_audit_events(severity, created_at DESC);
 

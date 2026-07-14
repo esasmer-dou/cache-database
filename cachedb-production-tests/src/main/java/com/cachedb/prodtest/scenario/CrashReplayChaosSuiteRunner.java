@@ -23,11 +23,9 @@ import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.XAddParams;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
@@ -40,9 +38,6 @@ import java.util.UUID;
 
 public final class CrashReplayChaosSuiteRunner {
 
-    private static final String JDBC_USER = ProductionTestEnvironment.postgresUser();
-    private static final String JDBC_PASSWORD = ProductionTestEnvironment.postgresPassword();
-    private static final String REDIS_URI = ProductionTestEnvironment.redisUri();
     private static final String JDBC_URL = ProductionTestEnvironment.postgresUrl();
 
     public CrashReplayChaosSuiteReport run() throws Exception {
@@ -72,7 +67,7 @@ public final class CrashReplayChaosSuiteRunner {
         boolean rebuildVerified;
         String finalHealthStatus;
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase first = new CacheDatabase(jedis, dataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(first);
             first.start();
@@ -91,7 +86,7 @@ public final class CrashReplayChaosSuiteRunner {
             EcomCustomerEntityCacheBinding.deleteById(first, CachePolicy.defaults(), 9101L);
         }
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase second = new CacheDatabase(jedis, dataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(second);
             second.start();
@@ -126,7 +121,7 @@ public final class CrashReplayChaosSuiteRunner {
         boolean rebuildVerified;
         String finalHealthStatus;
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase first = new CacheDatabase(jedis, dataSource(), configFor(keyPrefix, functionPrefix))) {
             registerOrderBinding(first);
             first.start();
@@ -148,7 +143,7 @@ public final class CrashReplayChaosSuiteRunner {
             EcomOrderEntityCacheBinding.save(first, CachePolicy.defaults(), order);
         }
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase second = new CacheDatabase(jedis, dataSource(), configFor(keyPrefix, functionPrefix))) {
             registerOrderBinding(second);
             second.start();
@@ -180,7 +175,7 @@ public final class CrashReplayChaosSuiteRunner {
         String functionPrefix = keyPrefix.replace('-', '_');
         dropTables("cachedb_prodtest_customers");
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase first = new CacheDatabase(jedis, dataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(first);
             first.start();
@@ -193,7 +188,7 @@ public final class CrashReplayChaosSuiteRunner {
         boolean rebuildVerified;
         String finalHealthStatus;
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase second = new CacheDatabase(jedis, dataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(second);
             second.start();
@@ -326,15 +321,11 @@ public final class CrashReplayChaosSuiteRunner {
     }
 
     private PGSimpleDataSource dataSource() {
-        PGSimpleDataSource dataSource = new PGSimpleDataSource();
-        dataSource.setURL(JDBC_URL);
-        dataSource.setUser(JDBC_USER);
-        dataSource.setPassword(JDBC_PASSWORD);
-        return dataSource;
+        return ProductionTestEnvironment.postgresDataSource();
     }
 
     private void dropTables(String... tables) throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement()) {
             for (String table : tables) {
                 statement.executeUpdate("DROP TABLE IF EXISTS " + table);
@@ -343,7 +334,7 @@ public final class CrashReplayChaosSuiteRunner {
     }
 
     private int countRows(String sql) throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery(sql)) {
             resultSet.next();
@@ -352,7 +343,7 @@ public final class CrashReplayChaosSuiteRunner {
     }
 
     private String singleString(String sql) throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery(sql)) {
             if (!resultSet.next()) {

@@ -18,11 +18,9 @@ import org.postgresql.ds.PGSimpleDataSource;
 import redis.clients.jedis.JedisPooled;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
@@ -33,9 +31,6 @@ import java.util.UUID;
 
 public final class FaultInjectionSuiteRunner {
 
-    private static final String JDBC_USER = ProductionTestEnvironment.postgresUser();
-    private static final String JDBC_PASSWORD = ProductionTestEnvironment.postgresPassword();
-    private static final String REDIS_URI = ProductionTestEnvironment.redisUri();
     private static final String JDBC_URL = ProductionTestEnvironment.postgresUrl();
     private static final String BAD_JDBC_URL = System.getProperty("cachedb.prod.postgres.faultUrl", "jdbc:postgresql://127.0.0.1:1/postgres?connectTimeout=2&socketTimeout=2");
 
@@ -62,7 +57,7 @@ public final class FaultInjectionSuiteRunner {
         String functionPrefix = keyPrefix.replace('-', '_');
         dropCustomerTable();
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase first = new CacheDatabase(jedis, goodDataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(first);
             first.start();
@@ -79,7 +74,7 @@ public final class FaultInjectionSuiteRunner {
         boolean orderingVerified;
         boolean rebuildVerified;
         String health;
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase second = new CacheDatabase(jedis, goodDataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(second);
             second.start();
@@ -111,7 +106,7 @@ public final class FaultInjectionSuiteRunner {
 
         boolean faultInjected;
         String entryId;
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase broken = new CacheDatabase(jedis, badDataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(broken);
             broken.start();
@@ -126,7 +121,7 @@ public final class FaultInjectionSuiteRunner {
         boolean replayOrderingVerified;
         boolean rebuildVerified;
         String health;
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase recovered = new CacheDatabase(jedis, goodDataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(recovered);
             recovered.start();
@@ -158,7 +153,7 @@ public final class FaultInjectionSuiteRunner {
         dropCustomerTable();
 
         String staleEntryId;
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase broken = new CacheDatabase(jedis, badDataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(broken);
             broken.start();
@@ -172,7 +167,7 @@ public final class FaultInjectionSuiteRunner {
         boolean orderingVerified;
         boolean rebuildVerified;
         String health;
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase recovered = new CacheDatabase(jedis, goodDataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(recovered);
             recovered.start();
@@ -212,7 +207,7 @@ public final class FaultInjectionSuiteRunner {
 
         for (int cycle = 1; cycle <= 3; cycle++) {
             long id = 9700L + cycle;
-            try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+            try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
                  CacheDatabase broken = new CacheDatabase(jedis, badDataSource(), configFor(keyPrefix, functionPrefix))) {
                 registerCustomerBinding(broken);
                 broken.start();
@@ -222,7 +217,7 @@ public final class FaultInjectionSuiteRunner {
                 faultInjected = true;
             }
 
-            try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+            try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
                  CacheDatabase recovered = new CacheDatabase(jedis, goodDataSource(), configFor(keyPrefix, functionPrefix))) {
                 registerCustomerBinding(recovered);
                 recovered.start();
@@ -327,13 +322,7 @@ public final class FaultInjectionSuiteRunner {
     }
 
     private PGSimpleDataSource dataSource(String url) {
-        PGSimpleDataSource dataSource = new PGSimpleDataSource();
-        dataSource.setURL(url);
-        dataSource.setUser(JDBC_USER);
-        dataSource.setPassword(JDBC_PASSWORD);
-        dataSource.setConnectTimeout(2);
-        dataSource.setSocketTimeout(2);
-        return dataSource;
+        return ProductionTestEnvironment.postgresDataSource(url);
     }
 
     private void registerCustomerBinding(CacheDatabase cacheDatabase) {
@@ -351,14 +340,14 @@ public final class FaultInjectionSuiteRunner {
     }
 
     private void dropCustomerTable() throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_prodtest_customers");
         }
     }
 
     private int countRows(String sql) throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery(sql)) {
             resultSet.next();
@@ -367,7 +356,7 @@ public final class FaultInjectionSuiteRunner {
     }
 
     private String singleString(String sql) throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery(sql)) {
             if (!resultSet.next()) {

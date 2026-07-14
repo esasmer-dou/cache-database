@@ -15,11 +15,9 @@ import org.postgresql.ds.PGSimpleDataSource;
 import redis.clients.jedis.JedisPooled;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
@@ -30,9 +28,6 @@ import java.util.UUID;
 
 public final class ProductionCertificationRunner {
 
-    private static final String JDBC_USER = ProductionTestEnvironment.postgresUser();
-    private static final String JDBC_PASSWORD = ProductionTestEnvironment.postgresPassword();
-    private static final String REDIS_URI = ProductionTestEnvironment.redisUri();
     private static final String JDBC_URL = ProductionTestEnvironment.postgresUrl();
 
     public ProductionCertificationReport run() throws Exception {
@@ -118,10 +113,7 @@ public final class ProductionCertificationRunner {
     private RestartRecoveryCertificationResult verifyRestartRecovery() throws Exception {
         String keyPrefix = "cachedb-cert-" + UUID.randomUUID();
         String functionPrefix = keyPrefix.replace('-', '_');
-        PGSimpleDataSource dataSource = new PGSimpleDataSource();
-        dataSource.setURL(JDBC_URL);
-        dataSource.setUser(JDBC_USER);
-        dataSource.setPassword(JDBC_PASSWORD);
+        PGSimpleDataSource dataSource = ProductionTestEnvironment.postgresDataSource();
         dropCertificationTable();
 
         CacheDatabaseConfig config = copyWithKeyPrefix(CacheDatabaseProfiles.benchmark(), keyPrefix, functionPrefix);
@@ -137,7 +129,7 @@ public final class ProductionCertificationRunner {
         boolean rebuildSuccessful;
         String healthStatus;
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase first = new CacheDatabase(jedis, dataSource, config)) {
             EcomCustomerEntityCacheBinding.register(first, CachePolicy.defaults(), new com.reactor.cachedb.core.relation.NoOpRelationBatchLoader<>(), new com.reactor.cachedb.core.page.NoOpEntityPageLoader<>());
             first.start();
@@ -146,7 +138,7 @@ public final class ProductionCertificationRunner {
             persistedBeforeRestart = countRows("select count(*) from cachedb_prodtest_customers where id = 9001") == 1;
         }
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI));
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase second = new CacheDatabase(jedis, dataSource, config)) {
             EcomCustomerEntityCacheBinding.register(second, CachePolicy.defaults(), new com.reactor.cachedb.core.relation.NoOpRelationBatchLoader<>(), new com.reactor.cachedb.core.page.NoOpEntityPageLoader<>());
             second.start();
@@ -313,14 +305,14 @@ public final class ProductionCertificationRunner {
     }
 
     private void dropCertificationTable() throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_prodtest_customers");
         }
     }
 
     private int countRows(String sql) throws Exception {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery(sql)) {
             resultSet.next();

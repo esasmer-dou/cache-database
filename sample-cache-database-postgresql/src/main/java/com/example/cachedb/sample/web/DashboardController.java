@@ -45,7 +45,7 @@ public class DashboardController {
 
     @GetMapping("/commerce")
     public DashboardResponse commerce(@RequestParam(defaultValue = "25") int limit) {
-        int safeLimit = Math.max(1, Math.min(limit, 100));
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 100);
         List<OrderReadModels.OrderSummary> highValueOrders = orderSummaryRepository.query(
                 QueryFilter.gte("priority_score", 60.0),
                 safeLimit,
@@ -56,14 +56,14 @@ public class DashboardController {
         double totalAmount = highValueOrders.stream()
                 .map(OrderReadModels.OrderSummary::orderAmount)
                 .filter(value -> value != null)
-                .mapToDouble(Double::doubleValue)
+                .mapToDouble(java.math.BigDecimal::doubleValue)
                 .sum();
         return new DashboardResponse(highValueOrders.size(), totalAmount, openTickets.size(), highValueOrders, openTickets);
     }
 
     @GetMapping("/operations")
     public OperationsDashboardResponse operations(@RequestParam(defaultValue = "25") int limit) {
-        int safeLimit = Math.max(1, Math.min(limit, 100));
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 100);
         List<ProductReadModels.ProductAvailability> lowStockProducts = productAvailabilityRepository.query(
                 QueryFilter.eq("stock_status", "LOW_STOCK"),
                 safeLimit,

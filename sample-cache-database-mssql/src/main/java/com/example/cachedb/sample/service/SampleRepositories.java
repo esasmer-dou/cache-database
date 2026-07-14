@@ -34,7 +34,7 @@ public class SampleRepositories {
 
     @Bean
     EntityRepository<CustomerEntity, Long> customerRepository(CacheDatabase cacheDatabase) {
-        CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
+        CachePolicy policy = SampleCachePolicies.customerDirectoryPolicy();
         CustomerEntityCacheBinding.registerJdbcBacked(cacheDatabase, policy);
         return CustomerEntityCacheBinding.repository(cacheDatabase, policy);
     }
@@ -48,14 +48,14 @@ public class SampleRepositories {
 
     @Bean
     EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
-        CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
+        CachePolicy policy = SampleCachePolicies.orderTimelinePolicy();
         OrderEntityCacheBinding.registerJdbcBacked(cacheDatabase, policy);
         return OrderEntityCacheBinding.repository(cacheDatabase, policy);
     }
 
     @Bean
     EntityRepository<OrderLineEntity, Long> orderLineRepository(CacheDatabase cacheDatabase) {
-        CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
+        CachePolicy policy = SampleCachePolicies.orderLinePreviewPolicy();
         OrderLineEntityCacheBinding.registerJdbcBacked(cacheDatabase, policy);
         return OrderLineEntityCacheBinding.repository(cacheDatabase, policy);
     }
@@ -76,7 +76,7 @@ public class SampleRepositories {
 
     @Bean
     EntityRepository<ShipmentEventEntity, Long> shipmentEventRepository(CacheDatabase cacheDatabase) {
-        CachePolicy policy = SampleCachePolicies.logisticsTrackingPolicy();
+        CachePolicy policy = SampleCachePolicies.shipmentEventTimelinePolicy();
         ShipmentEventEntityCacheBinding.registerJdbcBacked(cacheDatabase, policy);
         return ShipmentEventEntityCacheBinding.repository(cacheDatabase, policy);
     }

@@ -5,6 +5,13 @@ import com.example.cachedb.sample.domain.AuditEventEntityCacheBinding;
 import com.example.cachedb.sample.domain.ReportJobEntity;
 import com.example.cachedb.sample.domain.ReportJobEntityCacheBinding;
 import com.reactor.cachedb.core.api.EntityRepository;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -46,7 +53,10 @@ public class ReportingController {
 
     @GetMapping("/jobs/live")
     public List<ReportJobEntity> liveJobs(@RequestParam(defaultValue = "25") int limit) {
-        return ReportJobEntityCacheBinding.liveReportJobs(reportJobRepository, clamp(limit, 1, 500));
+        return ReportJobEntityCacheBinding.liveReportJobs(
+                reportJobRepository,
+                ApiLimits.requireInRange("limit", limit, 1, 50)
+        );
     }
 
     @GetMapping("/jobs/type/{reportType}")
@@ -54,11 +64,17 @@ public class ReportingController {
             @PathVariable String reportType,
             @RequestParam(defaultValue = "25") int limit
     ) {
-        return ReportJobEntityCacheBinding.reportJobsByType(reportJobRepository, reportType, clamp(limit, 1, 500));
+        return ReportJobEntityCacheBinding.reportJobsByType(
+                reportJobRepository,
+                reportType,
+                ApiLimits.requireInRange("limit", limit, 1, 50)
+        );
     }
 
     @PostMapping("/jobs")
-    public ReportJobEntity createJob(@RequestBody CreateReportJobRequest request) {
+    public ResponseEntity<WriteAccepted<ReportJobEntity>> createJob(
+            @Valid @RequestBody CreateReportJobRequest request
+    ) {
         long now = Instant.now().getEpochSecond();
         ReportJobEntity job = new ReportJobEntity();
         job.reportJobId = request.reportJobId();
@@ -69,13 +85,14 @@ public class ReportingController {
         job.updatedAt = now;
         job.rowCount = 0;
         job.failureReason = null;
-        return reportJobRepository.save(job);
+        ReportJobEntity saved = reportJobRepository.save(job);
+        return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "ReportJobEntity", saved.reportJobId, saved));
     }
 
     @PatchMapping("/jobs/{reportJobId}/status")
-    public ReportJobEntity updateJobStatus(
+    public ResponseEntity<WriteAccepted<ReportJobEntity>> updateJobStatus(
             @PathVariable long reportJobId,
-            @RequestBody UpdateReportJobStatusRequest request
+            @Valid @RequestBody UpdateReportJobStatusRequest request
     ) {
         ReportJobEntity job = reportJobRepository.findById(reportJobId)
                 .orElseThrow(() -> new ResourceNotFoundException("Report job not found in active set: " + reportJobId));
@@ -83,12 +100,16 @@ public class ReportingController {
         job.rowCount = request.rowCount() == null ? job.rowCount : request.rowCount();
         job.failureReason = request.failureReason();
         job.updatedAt = Instant.now().getEpochSecond();
-        return reportJobRepository.save(job);
+        ReportJobEntity saved = reportJobRepository.save(job);
+        return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "ReportJobEntity", saved.reportJobId, saved));
     }
 
     @GetMapping("/audit/security")
     public List<AuditEventEntity> securityAuditEvents(@RequestParam(defaultValue = "25") int limit) {
-        return AuditEventEntityCacheBinding.securityAuditEvents(auditEventRepository, clamp(limit, 1, 100));
+        return AuditEventEntityCacheBinding.securityAuditEvents(
+                auditEventRepository,
+                ApiLimits.requireInRange("limit", limit, 1, 50)
+        );
     }
 
     @GetMapping("/audit/archive")
@@ -113,17 +134,22 @@ public class ReportingController {
                 },
                 entityName,
                 entityId,
-                clamp(limit, 1, 500)
+                ApiLimits.requireInRange("limit", limit, 1, 500)
         );
     }
 
-    private int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(value, max));
+    public record CreateReportJobRequest(
+            @NotNull @Positive Long reportJobId,
+            @NotBlank @Size(max = 64) String reportType,
+            @Size(max = 32) String status,
+            @NotBlank @Size(max = 128) String requestedBy
+    ) {
     }
 
-    public record CreateReportJobRequest(Long reportJobId, String reportType, String status, String requestedBy) {
-    }
-
-    public record UpdateReportJobStatusRequest(String status, Integer rowCount, String failureReason) {
+    public record UpdateReportJobStatusRequest(
+            @NotBlank @Size(max = 32) String status,
+            @PositiveOrZero Integer rowCount,
+            @Size(max = 2_000) String failureReason
+    ) {
     }
 }

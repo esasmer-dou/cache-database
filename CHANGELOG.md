@@ -6,6 +6,35 @@ The format is intentionally simple and release-focused.
 
 ## Unreleased
 
+## 0.3.2 - 2026-07-14
+
+### Added
+
+- `BigDecimal` support in generated entity codecs and JDBC write conversion
+- production-contract PostgreSQL and MSSQL samples with entity-specific hot policies, bounded relation batching, asynchronous warm jobs, and strict route limits
+- real Redis 8 plus PostgreSQL/SQL Server provider integration tests for the sample command, readiness, warm, foreign-key, and delete contracts
+- CI parity gate that prevents provider-neutral sample Java code from drifting between PostgreSQL and MSSQL variants
+
+### Changed
+
+- sample command endpoints return `202 Accepted` and distinguish Redis command acceptance from SQL durability
+- child writes use one indexed durable-parent check and return retryable `409` instead of polling request threads
+- sample money fields use exact SQL decimal types and `BigDecimal`; archive pagination uses a stable date-and-id cursor
+- load tests wait for asynchronous warm jobs to complete before measuring active routes
+
+### Fixed
+
+- relation preview loaders no longer issue one query per parent
+- warm jobs can no longer consume unbounded HTTP worker time or queue capacity
+- sample delete no longer implies unsafe aggregate cascade behavior
+- sample documentation and Postman flows now match the runtime write, warm, cursor, and projection contracts
+
+### Validation
+
+- full CacheDB reactor tests pass on Java 21
+- PostgreSQL sample passes unit tests and real Redis/PostgreSQL integration tests
+- MSSQL sample passes unit tests and real Redis/SQL Server integration tests
+
 ## 0.3.1 - 2026-07-14
 
 ### Fixed

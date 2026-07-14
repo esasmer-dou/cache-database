@@ -41,7 +41,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.3.1</cachedb.version>
+  <cachedb.version>0.3.2</cachedb.version>
 </properties>
 
 <repositories>
@@ -95,7 +95,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 </build>
 ```
 
-Yani kullanıcı ana projeyi önce build etmek zorunda değildir. CacheDB `0.3.1`, ana repodan GitHub Packages'a yayınlanır ve bu örnek proje paketi oradan çeker.
+Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.3.2`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
 `cachedb-annotations` ve `cachedb-processor`, `OrderEntityCacheBinding` gibi generated binding sınıflarının üretilmesi için gereklidir.
 
 Çalıştırma ve build gereksinimi: JDK 21 kullan. Örnek `pom.xml` içinde
@@ -125,9 +125,9 @@ mvn clean package
 
 Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir.
 
-## 0.3.1 İçin Doğrulanmış Akış
+## 0.3.2 İçin Doğrulanmış Akış
 
-Bu örnek CacheDB `0.3.1` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
+Bu örnek CacheDB `0.3.2` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
 sözleşme şudur:
 
 1. Yazılar CacheDB üzerinden alınır ve PostgreSQL’e write-behind ile aktarılır.
@@ -138,10 +138,22 @@ sözleşme şudur:
 
 Bu sözleşme örnek kodda açıkça görünür.
 
-`0.3.1` sürümünde JDBC işlemleri de sınırlıdır: read-through sorguları 15
+### 0.3.2 ile gelen production sözleşmeleri
+
+- Komut endpoint’leri `202 Accepted` döner. Bu yanıt, komutun Redis tarafından kabul edildiğini söyler; SQL’e kalıcı yazımın tamamlandığını söylemez.
+- Alt kayıt yazılmadan önce indeksli tek bir SQL `EXISTS` sorgusu çalışır. Ana kayıt henüz kalıcı değilse request thread’i bekletilmez; `Retry-After` ile birlikte `409 Conflict` döner.
+- Aggregate silme işlemi örtük değildir. Siparişin satırları varsa silme reddedilir. Aggregate’in tamamını silmek için açık ve transactional bir command yazılmalıdır.
+- Her entity, kullanıldığı okuma yoluna uygun bir admission policy kullanır. Sipariş, katalog, destek, lojistik, raporlama ve audit verileri tek bir yanıltıcı varsayılan policy’yi paylaşmaz.
+- Parasal alanlarda `BigDecimal` ve `NUMERIC(19,4)` kullanılır. Redis sıralama puanları parasal değer olmadığı için `double` kalır.
+- Relation loader’lar her ana kayıt için ayrı sorgu çalıştırmak yerine sınırlı `IN (...)` batch’leri kullanır.
+- Warm/backfill işlemi sınırlı bir asenkron job olarak çalışır: `1` worker ve `8` elemanlık kuyruk. İşlemi `POST` ile başlat, sonucu `/api/warm/jobs/{jobId}` üzerinden izle.
+- `/api/health/live` process’in çalıştığını, `/api/health/ready` ise Redis, SQL ve write-behind durumunu gösterir.
+- Sınırı aşan route limitleri sessizce küçültülmez; `400 Bad Request` ile reddedilir.
+
+`0.3.2` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
 saniyede, write-behind SQL işlemleri 20 saniyede zaman aşımına uğrar. Admin
 istek ve arka plan kuyruklarının kapasitesi `application.yml` içinde açıkça
-tanımlanmıştır. Sürüm kontrollü hydration, eski bir warm/read-through sonucunun
+tanımlanmıştır. Sürüm kontrollü hydration, eski bir warm sonucunun
 Redis'teki daha yeni kaydı ezmesini engeller.
 
 ```java
@@ -149,10 +161,10 @@ Redis'teki daha yeni kaydı ezmesini engeller.
 CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
     return (builder, properties) -> builder
             .readThrough(ReadThroughConfig.builder()
-                    .mode(ReadThroughMode.READ_THROUGH_QUERY)
-                    .failOnMissingLoader(true)
-                    .hydrateLoadedEntities(true)
-                    .maxQueryLoadRows(500)
+                    .mode(ReadThroughMode.REDIS_ONLY)
+                    .failOnMissingLoader(false)
+                    .hydrateLoadedEntities(false)
+                    .maxQueryLoadRows(1_000)
                     .queryTimeoutSeconds(15)
                     .build())
             .writeBehind(WriteBehindConfig.builder()
@@ -163,13 +175,13 @@ CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
 }
 ```
 
-`registerJdbcBacked(...)`, kontrollü warm veya read-through gerektiğinde
-CacheDB’nin PostgreSQL’den sınırlı sorgu okuyabilmesini sağlar:
+`registerJdbcBacked(...)`, açık warm/backfill işleminin kullanacağı sınırlı
+PostgreSQL loader’ını sağlar. Bu sample query read-through özelliğini açmaz:
 
 ```java
 @Bean
 EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
-    CachePolicy policy = SampleCachePolicies.commerceTimelinePolicy();
+    CachePolicy policy = SampleCachePolicies.orderTimelinePolicy();
     OrderEntityCacheBinding.registerJdbcBacked(cacheDatabase, policy);
     return OrderEntityCacheBinding.repository(cacheDatabase, policy);
 }
@@ -321,7 +333,19 @@ ama Redis’i değiştirmez:
 curl.exe -X POST "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&dryRun=true"
 ```
 
-Müşteri sipariş listesi için yalnızca `OrderSummary` projection’ını warm et:
+Her warm `POST` çağrısı `202` ve bir `jobId` döner. Job `COMPLETED` durumuna
+gelmeden hedef okuma yolunu çalıştırma:
+
+```powershell
+$job = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&projectionOnly=true"
+do {
+    Start-Sleep -Milliseconds 250
+    $state = Invoke-RestMethod "http://127.0.0.1:8091/api/warm/jobs/$($job.jobId)"
+} while ($state.status -in @("QUEUED", "RUNNING"))
+if ($state.status -ne "COMPLETED") { throw ($state.error | ConvertTo-Json -Compress) }
+```
+
+Başlatılan job, müşteri sipariş listesi için yalnızca `OrderSummary` projection’ını warm eder:
 
 ```bash
 curl.exe -X POST "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&projectionOnly=true"
@@ -389,7 +413,7 @@ CacheDB yazıları ayrıca warm gerektirmez.
 Eski geçmiş, export, audit ve tek seferlik arama için açık SQL yolunu kullan:
 
 ```bash
-curl.exe "http://127.0.0.1:8091/api/orders/archive?customerId=1&beforeOrderDate=9999999999999&limit=20"
+curl.exe "http://127.0.0.1:8091/api/orders/archive?customerId=1&beforeOrderDate=9999999999999&beforeOrderId=9999999999999&limit=20"
 ```
 
 Arşiv ihtiyacını Redis aktif veri setini tüm tabloyu kapsayacak kadar büyüterek
@@ -420,12 +444,19 @@ public record CustomerOrdersRouteContract(
         return new CustomerOrdersRouteContract(20, 1_000, 500, true);
     }
 
-    public int clampTimelineLimit(int requested) {
-        return Math.max(1, Math.min(requested, hotWindowPerCustomer));
+    public int requireTimelineLimit(int requested) {
+        return requireRange("limit", requested, 1, hotWindowPerCustomer);
     }
 
-    public int clampArchiveLimit(int requested) {
-        return Math.max(1, Math.min(requested, maxSqlArchivePageSize));
+    public int requireArchiveLimit(int requested) {
+        return requireRange("limit", requested, 1, maxSqlArchivePageSize);
+    }
+
+    private int requireRange(String name, int value, int min, int max) {
+        if (value < min || value > max) {
+            throw new IllegalArgumentException(name + " must be between " + min + " and " + max);
+        }
+        return value;
     }
 }
 ```
@@ -450,6 +481,8 @@ import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySpec;
 
+import java.math.BigDecimal;
+
 @CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
 public class OrderEntity {
     @CacheId(column = "order_id")
@@ -462,7 +495,7 @@ public class OrderEntity {
     public Long orderDate;
 
     @CacheColumn("order_amount")
-    public Double orderAmount;
+    public BigDecimal orderAmount;
 
     @CacheColumn("currency_code")
     public String currencyCode;
@@ -502,6 +535,7 @@ import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
 import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.projection.ProjectionCodec;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -531,7 +565,7 @@ public final class OrderReadModels {
                                     Long.valueOf(values.get("order_id")),
                                     Long.valueOf(values.get("customer_id")),
                                     Long.valueOf(values.get("order_date")),
-                                    Double.valueOf(values.get("order_amount")),
+                                    new BigDecimal(values.get("order_amount")),
                                     values.get("currency_code"),
                                     values.get("status"),
                                     Double.valueOf(values.get("priority_score"))
@@ -569,7 +603,7 @@ public final class OrderReadModels {
             Long orderId,
             Long customerId,
             Long orderDate,
-            Double orderAmount,
+            BigDecimal orderAmount,
             String currencyCode,
             String status,
             Double priorityScore
@@ -669,7 +703,7 @@ public class CustomerOrdersController {
         return OrderEntityCacheBinding.customerTimeline(
                 orderSummaryRepository,
                 customerId,
-                routeContract.clampTimelineLimit(limit)
+                routeContract.requireTimelineLimit(limit)
         );
     }
 }
@@ -677,9 +711,10 @@ public class CustomerOrdersController {
 
 #### 5. Warm/backfill servis kodunu ekle
 
-Geçiş sürecindeki kritik parça burasıdır. Servis PostgreSQL’den okur, sonra
+Geçiş sürecindeki kritik operasyon budur. Servis PostgreSQL’den okur, sonra
 `save(...)` çağırmadan Redis’i doldurur. Böylece aynı kayıtlar için tekrar
-write-behind işi üretmez.
+write-behind işi üretmez. Bu operasyonu yalnızca aşağıdaki sınırlı asenkron job
+servisinin arkasında çalıştır; büyük bir warm işlemini HTTP request thread’inde çalıştırma.
 
 ```java
 // src/main/java/com/example/orders/CustomerOrdersWarmBackfillService.java
@@ -719,7 +754,7 @@ public class CustomerOrdersWarmBackfillService {
     }
 
     public WarmResult warm(long customerId, int requestedLimit, boolean projectionOnly, boolean dryRun) {
-        int limit = routeContract.clampTimelineLimit(requestedLimit);
+        int limit = routeContract.requireTimelineLimit(requestedLimit);
         List<OrderEntity> orders = jdbcTemplate.query(
                 CUSTOMER_ORDER_WINDOW_SQL,
                 (rs, rowNumber) -> {
@@ -727,7 +762,7 @@ public class CustomerOrdersWarmBackfillService {
                     order.orderId = rs.getLong("order_id");
                     order.customerId = rs.getLong("customer_id");
                     order.orderDate = rs.getLong("order_date");
-                    order.orderAmount = rs.getDouble("order_amount");
+                    order.orderAmount = rs.getBigDecimal("order_amount");
                     order.currencyCode = rs.getString("currency_code");
                     order.orderType = rs.getString("order_type");
                     order.status = rs.getString("status");
@@ -773,24 +808,34 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.ResponseEntity;
 
 @RestController
 @RequestMapping("/api/warm")
 public class WarmBackfillController {
     private final CustomerOrdersWarmBackfillService warmBackfillService;
+    private final WarmJobService warmJobService;
 
-    public WarmBackfillController(CustomerOrdersWarmBackfillService warmBackfillService) {
+    public WarmBackfillController(
+            CustomerOrdersWarmBackfillService warmBackfillService,
+            WarmJobService warmJobService
+    ) {
         this.warmBackfillService = warmBackfillService;
+        this.warmJobService = warmJobService;
     }
 
     @PostMapping("/orders/customer/{customerId}")
-    public CustomerOrdersWarmBackfillService.WarmResult warmCustomerOrders(
+    public ResponseEntity<WarmJobService.WarmJob> warmCustomerOrders(
             @PathVariable long customerId,
             @RequestParam(defaultValue = "100") int limit,
-            @RequestParam(defaultValue = "false") boolean projectionOnly,
+            @RequestParam(defaultValue = "true") boolean projectionOnly,
             @RequestParam(defaultValue = "false") boolean dryRun
     ) {
-        return warmBackfillService.warm(customerId, limit, projectionOnly, dryRun);
+        int safeLimit = CustomerOrdersRouteContract.timeline().requireTimelineLimit(limit);
+        return ResponseEntity.accepted().body(warmJobService.submit(
+                "customer-orders",
+                () -> warmBackfillService.warm(customerId, safeLimit, projectionOnly, dryRun)
+        ));
     }
 }
 ```
@@ -819,7 +864,8 @@ public class OrderArchiveController {
     private static final String ARCHIVE_SQL = """
             SELECT order_id, customer_id, order_date, order_amount, currency_code, status, priority_score
             FROM sample_orders
-            WHERE customer_id = ? AND order_date < ?
+            WHERE customer_id = ?
+              AND (order_date < ? OR (order_date = ? AND order_id < ?))
             ORDER BY order_date DESC, order_id DESC
             OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
             """;
@@ -836,23 +882,27 @@ public class OrderArchiveController {
     public List<OrderReadModels.OrderSummary> archive(
             @RequestParam long customerId,
             @RequestParam(required = false) Long beforeOrderDate,
+            @RequestParam(required = false) Long beforeOrderId,
             @RequestParam(defaultValue = "100") int limit
     ) {
         long upperBound = beforeOrderDate == null ? Long.MAX_VALUE : beforeOrderDate;
-        int safeLimit = routeContract.clampArchiveLimit(limit);
+        long upperId = beforeOrderId == null ? Long.MAX_VALUE : beforeOrderId;
+        int safeLimit = routeContract.requireArchiveLimit(limit);
         return jdbcTemplate.query(
                 ARCHIVE_SQL,
                 (rs, rowNumber) -> new OrderReadModels.OrderSummary(
                         rs.getLong("order_id"),
                         rs.getLong("customer_id"),
                         rs.getLong("order_date"),
-                        rs.getDouble("order_amount"),
+                        rs.getBigDecimal("order_amount"),
                         rs.getString("currency_code"),
                         rs.getString("status"),
                         rs.getDouble("priority_score")
                 ),
                 customerId,
                 upperBound,
+                upperBound,
+                upperId,
                 safeLimit
         );
     }
@@ -895,7 +945,7 @@ Bu örnek küçük tutuldu, fakat production servislerde kullanılması gereken 
 
 | Katman | Ana dosyalar | Sorumluluk | Production kuralı |
 |---|---|---|---|
-| API | `web/*Controller.java` | İsteği doğrular, limitleri sınırlar, güvenli endpoint sunar | Sınırsız liste çağrısı açma |
+| API | `web/*Controller.java` | İsteği doğrular, geçersiz limitleri reddeder ve güvenli endpoint sunar | Sınırsız liste çağrısı açma |
 | Service | `SampleSeedService.java`, controller metotları | İş akışını, kayıt sırasını ve retry davranışını yönetir | Yazma ve ilişki sırasını açık tut |
 | CacheDB repository | `SampleRepositories.java` | Generated `EntityRepository` ve `ProjectionRepository` bean’lerini üretir | Generated binding’leri ORM yüzeyi olarak kullan |
 | Entity mapping | `domain/*Entity.java` | Java alanlarını SQL kolonlarına ve Redis namespace’lerine bağlar | Tablo, id, kolon ve relation tanımı açık olmalı |
@@ -917,7 +967,7 @@ public List<OrderReadModels.OrderSummary> orderTimeline(
     return OrderEntityCacheBinding.customerTimeline(
             orderSummaryRepository,
             customerId,
-            clamp(limit, 1, 1_000)
+            ApiLimits.requireInRange("limit", limit, 1, 1_000)
     );
 }
 ```
@@ -1019,7 +1069,10 @@ public static FetchPlan ordersPreviewFetchPlan(int orderLimit) {
 
 ```java
 return CustomerEntityCacheBinding
-        .ordersPreviewRepository(customerRepository, clamp(orderPreview, 1, 25))
+        .ordersPreviewRepository(
+                customerRepository,
+                ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25)
+        )
         .findById(customerId)
         .orElseThrow(...);
 ```
@@ -1035,7 +1088,7 @@ public record OrderSummary(
         Long orderId,
         Long customerId,
         Long orderDate,
-        Double orderAmount,
+        BigDecimal orderAmount,
         String currencyCode,
         String orderType,
         String status,
@@ -1066,7 +1119,7 @@ public record OrderSummary(
         Long orderId,
         Long customerId,
         Long orderDate,
-        Double orderAmount,
+        BigDecimal orderAmount,
         String currencyCode,
         String orderType,
         String status,
@@ -1136,7 +1189,7 @@ public List<OrderReadModels.OrderSummary> orderTimeline(
     return OrderEntityCacheBinding.customerTimeline(
             orderSummaryRepository,
             customerId,
-            clamp(limit, 1, 1_000)
+            ApiLimits.requireInRange("limit", limit, 1, 1_000)
     );
 }
 ```
@@ -1155,7 +1208,7 @@ Bu örnek artık iki yolu da açık gösterir. Sık kullanılan operasyonel okum
 | `GET /api/orders/high-value` | `ProjectionRepository<OrderSummary>` | Sık kullanılan liste yolunda kullanılmaz | Ranked Redis projection verisini okur | Hızlı global sıralı iş listesi |
 | `GET /api/orders/{id}` | `linePreview` fetch preset ile `EntityRepository.findById` | Bu örnek endpoint’i Redis’te bulunamama durumunda SQL’e gitmez | Redis entity verisini okur, relation loader sınırlı satır sorgusunu Redis üzerinden yapar | Sık kullanılan sipariş detay ekranı |
 | `GET /api/orders/archive` | `JdbcTemplate.query` | Doğrudan PostgreSQL okur | Redis’i değiştirmez | Arşiv/geçmiş okuması |
-| `GET /api/products/active` | `EntityRepository.query` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis entity sorgusu | Küçük katalog listesi |
+| `GET /api/products/active` | `ProjectionRepository<ProductAvailability>` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis projection sorgusu | Küçük katalog listesi |
 | `GET /api/tickets/open` | `EntityRepository.query` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis entity sorgusu | Operasyon kuyruğu |
 | `GET /api/dashboard/commerce` | Projection sorgusu + destek talebi entity sorgusu | Bu örnek endpoint’inde kullanılmaz | Redis projection ve Redis entity sorgusunu birleştirir | Panel ilk ekranı |
 
@@ -1166,9 +1219,10 @@ Bu örnek artık iki yolu da açık gösterir. Sık kullanılan operasyonel okum
 public List<OrderReadModels.OrderSummary> archiveFromSql(
         @RequestParam long customerId,
         @RequestParam(required = false) Long beforeOrderDate,
+        @RequestParam(required = false) Long beforeOrderId,
         @RequestParam(defaultValue = "100") int limit
 ) {
-    return jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, safeLimit);
+    return jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, upperBound, upperId, safeLimit);
 }
 ```
 
@@ -1178,7 +1232,8 @@ SQL yolu aynı yanıt modelini kullanır, fakat veri kaynağı farklıdır:
 SELECT order_id, customer_id, order_date, order_amount, currency_code,
        order_type, status, line_count, priority_score
 FROM sample_orders
-WHERE customer_id = ? AND order_date < ?
+WHERE customer_id = ?
+  AND (order_date < ? OR (order_date = ? AND order_id < ?))
 ORDER BY order_date DESC, order_id DESC
 OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
 ```
@@ -1328,10 +1383,10 @@ Bu senaryolar evrensel default değildir; ilk staging denemesi için başlangı�
 | Senaryo | Entity ve okuma modeli | Önerilen değerler | Neden bu değerler? |
 |---|---|---|---|
 | E-ticaret müşteri sipariş zaman çizelgesi | `CustomerEntity`, `OrderEntity`, `OrderLineEntity`, `OrderSummary` projection | `hotEntityLimit=100_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=60`, `compositeHotPolicy=ANY`, `timeWindow("order_date", 90 gün)`, `stateWindow("status", NEW/PAID/PICKING/OPEN/PENDING)`, `maxEntityQueryLimit=250`, `maxProjectionQueryLimit=1_000`, Redis uyarı/kritik `75/88`, `workerThreads=4`, `batchSize=256`, `maxFlushBatchSize=256` | Liste ekranı Redis projection üzerinden `OrderSummary` okumalıdır; seçilen sipariş detayı ise sınırlı satır önizlemesiyle tam entity okuyabilir. 90 günlük pencere güncel ticaret trafiğini aktif veri setinde tutar; aktif durumlar daha eski ama operasyonel siparişleri de Redis’te tutar. |
-| Lojistik gönderi takibi | `ShipmentEntity`, `ShipmentEventEntity`, `RouteStopEntity`, `ShipmentTimelineSummary` projection | `hotEntityLimit=150_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=30`, `compositeHotPolicy=ANY`, `timeWindow("updated_at", 14 gün)`, `stateWindow("shipment_status", IN_TRANSIT/OUT_FOR_DELIVERY/DELAYED/EXCEPTION)`, `maxEntityQueryLimit=200`, `maxProjectionQueryLimit=2_000`, Redis uyarı/kritik `70/85`, `workerThreads=4`, `batchSize=256`, `maxFlushRetries=8`, `retryBackoffMillis=1_000` | Lojistik verisi sık değişir ve kullanıcılar aynı aktif gönderileri tekrar tekrar açar. Aktif ve problemli gönderiler Redis’te kalır, olay zaman çizelgesi projection olur, retry/backoff ise geçici veritabanı veya ağ baskısını daha güvenli karşılar. |
+| Lojistik gönderi takibi | `ShipmentEntity`, `ShipmentEventEntity`, `RouteStopEntity`, `ShipmentTimelineSummary` projection | `hotEntityLimit=150_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=30`, `compositeHotPolicy=ANY`, `timeWindow("updated_at", 14 gün)`, `stateWindow("shipment_status", IN_TRANSIT/OUT_FOR_DELIVERY/DELAYED/EXCEPTION)`, `maxEntityQueryLimit=200`, `maxProjectionQueryLimit=1_000`, Redis uyarı/kritik `70/85`, `workerThreads=4`, `batchSize=256`, `maxFlushRetries=8`, `retryBackoffMillis=1_000` | Lojistik verisi sık değişir ve kullanıcılar aynı aktif gönderileri tekrar tekrar açar. Aktif ve problemli gönderiler Redis’te kalır, olay zaman çizelgesi projection olur, retry/backoff ise geçici veritabanı veya ağ baskısını daha güvenli karşılar. |
 | Raporlama ve denetim arşivi | `ReportJobEntity`, `AuditEventEntity`, `LedgerEntryEntity`, `ReportRunSummary` projection | `hotEntityLimit=5_000`, `pageSize=50`, `entityTtlSeconds=0`, `pageTtlSeconds=30`, `compositeHotPolicy=ANY`, `timeWindow("created_at", 1 gün)`, `stateWindow("status", QUEUED/RUNNING/FAILED)`, `maxEntityQueryLimit=100`, `maxProjectionQueryLimit=500`, Redis uyarı/kritik `70/80`, `workerThreads=2`, `batchSize=64`, arşiv policy özelleştirilecekse `admitOnRead=false` | Büyük rapor ve export okumaları SQL öncelikli olmalıdır. Redis sadece canlı rapor işleri ve küçük özetleri tutmalı; eski audit ve ledger geçmişi PostgreSQL’de kalmalı ve açık SQL/raporlama yolu üzerinden okunmalıdır. |
 | Destek operasyon kuyruğu | `SupportTicketEntity`, `TicketMessageEntity`, `CustomerEntity`, `OpenTicketSummary` projection | `hotEntityLimit=50_000`, `pageSize=50`, `entityTtlSeconds=0`, `pageTtlSeconds=20`, `compositeHotPolicy=ANY`, `timeWindow("updated_at", 30 gün)`, `stateWindow("status", OPEN/PENDING/ESCALATED/SLA_BREACH)`, `maxEntityQueryLimit=200`, `maxProjectionQueryLimit=1_000`, Redis uyarı/kritik `75/88`, `workerThreads=3`, `batchSize=128`, `coalescingEnabled=true` | Operasyon ekipleri aynı açık destek taleplerini ve kuyrukları defalarca açar. Açık ve eskale destek talepleri Redis’te kalır, kuyruk satırları küçük projection olur, tüm mesaj geçmişi sadece detay ekranında yüklenir. |
-| Ürün katalog ve stok uygunluğu | `ProductEntity`, `WarehouseStockEntity`, `InventoryReservationEntity`, `ProductAvailabilitySummary` projection | `hotEntityLimit=25_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=15`, `compositeHotPolicy=ANY`, `stateWindow("active_status", ACTIVE)`, `stateWindow("stock_status", IN_STOCK/LOW_STOCK)`, `timeWindow("updated_at", 7 gün)`, `maxEntityQueryLimit=250`, `maxProjectionQueryLimit=2_000`, Redis uyarı/kritik `70/85`, `workerThreads=3`, `batchSize=256`, `coalescingEnabled=true` | Kategori ve ürün liste ekranları hızlı uygunluk bilgisi ister, fakat stok güncellemeleri gürültülü olabilir. Aktif ürünler ve düşük stoklu ürünler Redis’te kalır, liste ekranları projection okur, coalescing aynı ürün için tekrarlanan stok update’lerini azaltır. |
+| Ürün katalog ve stok uygunluğu | `ProductEntity`, `WarehouseStockEntity`, `InventoryReservationEntity`, `ProductAvailabilitySummary` projection | `hotEntityLimit=25_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=15`, `compositeHotPolicy=ANY`, `stateWindow("active_status", ACTIVE)`, `stateWindow("stock_status", IN_STOCK/LOW_STOCK)`, `timeWindow("updated_at", 7 gün)`, `maxEntityQueryLimit=250`, `maxProjectionQueryLimit=1_000`, Redis uyarı/kritik `70/85`, `workerThreads=3`, `batchSize=256`, `coalescingEnabled=true` | Kategori ve ürün liste ekranları hızlı uygunluk bilgisi ister, fakat stok güncellemeleri gürültülü olabilir. Aktif ürünler ve düşük stoklu ürünler Redis’te kalır, liste ekranları projection okur, coalescing aynı ürün için tekrarlanan stok update’lerini azaltır. |
 
 BEST: en yakın senaryodan başla, staging warm-up çalıştır, sonra tahmini Redis belleğini gerçek `MEMORY USAGE` değerleriyle key prefix bazında karşılaştır. ANTI-PATTERN: en büyük `hotEntityLimit` değerini her servise kopyalayıp Redis’in modeli taşımasını beklemek.
 
@@ -1526,7 +1581,7 @@ Koleksiyon senaryoya göre gruplanmıştır: platform hazırlığı, ticaret, ka
 
 Seed endpoint’i veriyi CacheDB üzerinden yazar ve alt kayıtları yazmadan önce üst kayıtların SQL tarafına düşmesini bekler. Bunun nedeni şemada foreign key bulunmasıdır.
 
-`POST /api/orders` da müşteri satırı PostgreSQL tarafında kalıcı hale gelene kadar kısa süre bekler. Müşteri az önce oluşturulduysa ve write-behind henüz SQL’e yazmadıysa çağrı `409` döner; istemci kısa süre sonra tekrar denemelidir.
+`POST /api/orders`, indeksli tek bir SQL varlık kontrolü yapar. Ana müşteri henüz kalıcı değilse request thread’ini bekletmeden `Retry-After: 1` ile birlikte `409` döner; istemci kısa bir süre sonra tekrar denemelidir.
 
 ## Sorun Giderme
 

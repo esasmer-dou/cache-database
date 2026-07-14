@@ -6,6 +6,7 @@ import com.reactor.cachedb.core.registry.EntityRegistry;
 
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -59,6 +60,7 @@ public final class JdbcWriteBehindSupport {
             case "long", "java.lang.Long" -> Long.valueOf(value);
             case "boolean", "java.lang.Boolean" -> Boolean.valueOf(value);
             case "double", "java.lang.Double" -> Double.valueOf(value);
+            case "java.math.BigDecimal" -> new BigDecimal(value);
             case "float", "java.lang.Float" -> Float.valueOf(value);
             case "short", "java.lang.Short" -> Short.valueOf(value);
             case "byte", "java.lang.Byte" -> Byte.valueOf(value);

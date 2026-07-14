@@ -13,6 +13,7 @@ import com.reactor.cachedb.core.api.EntityRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 
@@ -55,9 +56,9 @@ public class SampleSeedService {
     }
 
     public SeedResult seed(int customerCount, int ordersPerCustomer, int linesPerOrder) {
-        int customers = clamp(customerCount, 1, 200);
-        int ordersEach = clamp(ordersPerCustomer, 1, 200);
-        int linesEach = clamp(linesPerOrder, 1, 12);
+        int customers = requireInRange("customerCount", customerCount, 1, 200);
+        int ordersEach = requireInRange("ordersPerCustomer", ordersPerCustomer, 1, 200);
+        int linesEach = requireInRange("linesPerOrder", linesPerOrder, 1, 12);
         long now = Instant.now().getEpochSecond();
 
         for (long productId = 1; productId <= 50; productId++) {
@@ -145,7 +146,7 @@ public class SampleSeedService {
         product.productName = "Sample Product " + productId;
         product.category = productId % 3 == 0 ? "electronics" : productId % 3 == 1 ? "grocery" : "home";
         product.activeStatus = productId % 17 == 0 ? "INACTIVE" : "ACTIVE";
-        product.unitPrice = 10.0 + productId;
+        product.unitPrice = BigDecimal.valueOf(1_000L + (productId * 100L), 2);
         product.stockQuantity = productId % 10 == 0 ? 8 : 500 - (int) productId;
         product.reservedQuantity = productId % 10 == 0 ? 5 : (int) (productId % 7);
         product.stockStatus = productId % 10 == 0 ? "LOW_STOCK" : productId % 8 == 0 ? "RESERVED" : "IN_STOCK";
@@ -170,12 +171,13 @@ public class SampleSeedService {
         order.orderId = orderId;
         order.customerId = customerId;
         order.orderDate = orderId % 37 == 0 ? orderDate - (120L * 86_400L) : orderDate;
-        order.orderAmount = 100.0 + (orderId % 700);
+        order.orderAmount = BigDecimal.valueOf(10_000L + ((orderId % 700) * 100L), 2);
         order.currencyCode = "USD";
         order.orderType = orderId % 4 == 0 ? "EXPRESS" : "STANDARD";
         order.status = orderId % 37 == 0 ? "COMPLETED" : orderId % 6 == 0 ? "PAID" : "NEW";
         order.lineCount = linesEach;
-        order.priorityScore = (order.orderAmount / 10.0) + (order.orderType.equals("EXPRESS") ? 25.0 : 0.0);
+        order.priorityScore = order.orderAmount.divide(BigDecimal.TEN).doubleValue()
+                + (order.orderType.equals("EXPRESS") ? 25.0 : 0.0);
         return order;
     }
 
@@ -188,8 +190,8 @@ public class SampleSeedService {
         line.lineNumber = lineNumber;
         line.sku = "SKU-" + productId;
         line.quantity = (lineNumber % 4) + 1;
-        line.unitPrice = 10.0 + productId;
-        line.lineTotal = line.quantity * line.unitPrice;
+        line.unitPrice = BigDecimal.valueOf(1_000L + (productId * 100L), 2);
+        line.lineTotal = line.unitPrice.multiply(BigDecimal.valueOf(line.quantity));
         line.status = "ACTIVE";
         return line;
     }
@@ -280,13 +282,19 @@ public class SampleSeedService {
 
     private void waitForRows(String table, long expectedRows) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        long observedRows = 0;
         while (System.nanoTime() < deadline) {
             Long rows = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
+            observedRows = rows == null ? 0 : rows;
             if (rows != null && rows >= expectedRows) {
                 return;
             }
             sleepQuietly();
         }
+        throw new IllegalStateException(
+                "Seed write-behind did not reach the durable row target for " + table
+                        + ": expected=" + expectedRows + ", observed=" + observedRows
+        );
     }
 
     private void sleepQuietly() {
@@ -297,8 +305,13 @@ public class SampleSeedService {
         }
     }
 
-    private int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(value, max));
+    private int requireInRange(String parameter, int value, int min, int max) {
+        if (value < min || value > max) {
+            throw new IllegalArgumentException(
+                    parameter + " must be between " + min + " and " + max + "; received " + value
+            );
+        }
+        return value;
     }
 
     public record SeedResult(

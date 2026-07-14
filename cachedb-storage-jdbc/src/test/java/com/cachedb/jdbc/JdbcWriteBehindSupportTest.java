@@ -5,6 +5,7 @@ import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,6 +14,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 class JdbcWriteBehindSupportTest {
+
+    @Test
+    void shouldConvertBigDecimalWithoutLosingPrecision() {
+        Object converted = JdbcWriteBehindSupport.convertValue("1234567890.1234", "java.math.BigDecimal");
+
+        assertEquals(new BigDecimal("1234567890.1234"), converted);
+    }
 
     @Test
     void shouldPreservePerOperationColumnOrder() {

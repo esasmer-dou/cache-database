@@ -18,7 +18,8 @@ import java.util.Objects;
 public final class OrderLinesRelationBatchLoader implements RelationBatchLoader<OrderEntity> {
 
     private static final String RELATION_NAME = "lines";
-    private static final int ORDER_ID_CHUNK_SIZE = 100;
+    private static final int MAX_ROWS_PER_BATCH = 100;
+    private static final int MAX_PARENT_IDS_PER_BATCH = 2;
 
     private final EntityRepository<OrderLineEntity, Long> lineRepository;
 
@@ -42,43 +43,36 @@ public final class OrderLinesRelationBatchLoader implements RelationBatchLoader<
             linesByOrderId.put(order.orderId, new ArrayList<>());
         }
         List<Long> orderIds = new ArrayList<>(ordersById.keySet());
-        for (int start = 0; start < orderIds.size(); start += ORDER_ID_CHUNK_SIZE) {
-            List<Long> chunk = orderIds.subList(start, Math.min(orderIds.size(), start + ORDER_ID_CHUNK_SIZE));
-            if (relationLimit < Integer.MAX_VALUE) {
-                preloadLimitedLines(linesByOrderId, chunk, relationLimit);
-            } else {
-                List<Object> rawIds = new ArrayList<>(chunk);
-                List<OrderLineEntity> lines = lineRepository.query(
-                        QuerySpec.where(QueryFilter.in("order_id", rawIds))
-                                .orderBy(QuerySort.asc("order_id"), QuerySort.asc("line_number"))
-                                .limitTo(chunk.size() * 50)
-                );
-                groupLines(linesByOrderId, lines);
-            }
+        int parentBatchSize = Math.max(
+                1,
+                Math.min(MAX_PARENT_IDS_PER_BATCH, MAX_ROWS_PER_BATCH / relationLimit)
+        );
+        for (int start = 0; start < orderIds.size(); start += parentBatchSize) {
+            List<Long> chunk = orderIds.subList(start, Math.min(orderIds.size(), start + parentBatchSize));
+            List<Object> rawIds = new ArrayList<>(chunk);
+            List<OrderLineEntity> lines = lineRepository.query(
+                    QuerySpec.where(QueryFilter.in("order_id", rawIds))
+                            .orderBy(QuerySort.asc("order_id"), QuerySort.asc("line_number"))
+                            .limitTo(chunk.size() * relationLimit)
+            );
+            groupLines(linesByOrderId, lines, relationLimit);
         }
         for (Map.Entry<Long, OrderEntity> entry : ordersById.entrySet()) {
             entry.getValue().lines = List.copyOf(linesByOrderId.getOrDefault(entry.getKey(), List.of()));
         }
     }
 
-    private void preloadLimitedLines(Map<Long, List<OrderLineEntity>> linesByOrderId, List<Long> orderIds, int relationLimit) {
-        for (Long orderId : orderIds) {
-            List<OrderLineEntity> lines = lineRepository.query(
-                    QueryFilter.eq("order_id", orderId),
-                    relationLimit,
-                    QuerySort.asc("line_number")
-            );
-            groupLines(linesByOrderId, lines);
-        }
-    }
-
-    private void groupLines(Map<Long, List<OrderLineEntity>> linesByOrderId, List<OrderLineEntity> lines) {
+    private void groupLines(
+            Map<Long, List<OrderLineEntity>> linesByOrderId,
+            List<OrderLineEntity> lines,
+            int relationLimit
+    ) {
         for (OrderLineEntity line : lines) {
             if (line == null || line.orderId == null) {
                 continue;
             }
             List<OrderLineEntity> bucket = linesByOrderId.get(line.orderId);
-            if (bucket != null) {
+            if (bucket != null && bucket.size() < relationLimit) {
                 bucket.add(line);
             }
         }

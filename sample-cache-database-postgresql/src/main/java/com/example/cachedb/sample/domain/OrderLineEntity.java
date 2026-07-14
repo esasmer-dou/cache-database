@@ -8,6 +8,7 @@ import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySpec;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @CacheEntity(table = "sample_order_lines", redisNamespace = "sample-order-lines")
@@ -32,10 +33,10 @@ public class OrderLineEntity {
     public Integer quantity;
 
     @CacheColumn("unit_price")
-    public Double unitPrice;
+    public BigDecimal unitPrice;
 
     @CacheColumn("line_total")
-    public Double lineTotal;
+    public BigDecimal lineTotal;
 
     @CacheColumn("status")
     public String status;

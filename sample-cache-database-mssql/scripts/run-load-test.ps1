@@ -18,7 +18,29 @@ $ErrorActionPreference = "Stop"
 
 function Invoke-SamplePost {
     param([string] $Path)
-    Invoke-RestMethod -Method Post -Uri ($BaseUrl.TrimEnd("/") + $Path) | Out-Null
+    Invoke-RestMethod -Method Post -Uri ($BaseUrl.TrimEnd("/") + $Path)
+}
+
+function Wait-WarmJob {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $JobId,
+        [int] $TimeoutSeconds = 120
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $job = Invoke-RestMethod -Uri ($BaseUrl.TrimEnd("/") + "/api/warm/jobs/$JobId") -TimeoutSec 5
+        if ($job.status -eq "COMPLETED") {
+            return $job
+        }
+        if ($job.status -eq "FAILED") {
+            throw "Warm job $JobId failed: $($job.error | ConvertTo-Json -Compress)"
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Warm job $JobId did not complete within $TimeoutSeconds seconds."
 }
 
 function Wait-SampleReady {
@@ -49,15 +71,19 @@ function Wait-SampleReady {
 
 if (-not $SkipSeed) {
     Write-Host "Seeding sample data..."
-    Invoke-SamplePost "/api/demo/seed?customers=$SeedCustomers&ordersPerCustomer=$OrdersPerCustomer&linesPerOrder=$LinesPerOrder"
+    Invoke-SamplePost "/api/demo/seed?customers=$SeedCustomers&ordersPerCustomer=$OrdersPerCustomer&linesPerOrder=$LinesPerOrder" | Out-Null
     Write-Host "Waiting for write-behind health after seed..."
     Wait-SampleReady "seed"
 }
 
 if (-not $SkipWarm) {
-    Write-Host "Warming customer order windows through CacheWarmPlan..."
+    Write-Host "Warming customer order projection windows..."
     1..([Math]::Min($WarmCustomers, $SeedCustomers)) | ForEach-Object {
-        Invoke-SamplePost "/api/warm/orders/customer/${_}?limit=$WarmLimit&dryRun=false"
+        $accepted = Invoke-SamplePost "/api/warm/orders/customer/${_}?limit=$WarmLimit&projectionOnly=true&dryRun=false"
+        if ([string]::IsNullOrWhiteSpace([string] $accepted.jobId)) {
+            throw "Warm endpoint did not return a jobId for customer $_."
+        }
+        Wait-WarmJob -JobId $accepted.jobId | Out-Null
     }
     Wait-SampleReady "warm"
 }

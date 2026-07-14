@@ -33,11 +33,9 @@ import com.reactor.cachedb.redis.RedisBacklogEstimator;
 import redis.clients.jedis.JedisPooled;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -59,13 +57,7 @@ import java.util.stream.Collectors;
 
 public final class EcommerceProductionScenarioRunner {
 
-    private static final String JDBC_USER = ProductionTestEnvironment.postgresUser();
-    private static final String JDBC_PASSWORD = ProductionTestEnvironment.postgresPassword();
-    private static final String REDIS_URI = ProductionTestEnvironment.redisUri();
     private static final String JDBC_URL = ProductionTestEnvironment.postgresUrl();
-    private static final int REDIS_TIMEOUT_MILLIS = Integer.getInteger("cachedb.prod.redis.timeoutMillis", 60_000);
-    private static final int POSTGRES_CONNECT_TIMEOUT_SECONDS = Integer.getInteger("cachedb.prod.postgres.connectTimeoutSeconds", 30);
-    private static final int POSTGRES_SOCKET_TIMEOUT_SECONDS = Integer.getInteger("cachedb.prod.postgres.socketTimeoutSeconds", 300);
     private static final String SEED_MODE = System.getProperty("cachedb.prod.seed.mode", "bulk").trim().toLowerCase();
     private static final boolean UNLOGGED_SEED_TABLES = Boolean.parseBoolean(System.getProperty("cachedb.prod.seed.unloggedTables", "true"));
     private static final boolean BATCH_FLUSH_ENABLED = Boolean.parseBoolean(System.getProperty("cachedb.prod.writeBehind.batchFlushEnabled", "true"));
@@ -125,7 +117,7 @@ public final class EcommerceProductionScenarioRunner {
         RedisKeyStrategy keyStrategy = new RedisKeyStrategy(keyPrefix, "entity", "page", "version", "hotset", "index", "compaction");
         DegradeProfile degradeProfile = resolveDegradeProfile();
 
-        try (JedisPooled jedis = new JedisPooled(URI.create(REDIS_URI), REDIS_TIMEOUT_MILLIS);
+        try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
              CacheDatabase cacheDatabase = new CacheDatabase(jedis, dataSource(), buildConfig(profile, keyPrefix, scaleFactor, degradeProfile))) {
             recreateTables();
             registerBindings(cacheDatabase, profile);
@@ -357,7 +349,7 @@ public final class EcommerceProductionScenarioRunner {
 
     private void seedBulk(JedisPooled jedis, RedisKeyStrategy keyStrategy, EcommerceScenarioProfile profile) throws SQLException {
         BulkBootstrapSeeder seeder = new BulkBootstrapSeeder();
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD)) {
+        try (Connection connection = ProductionTestEnvironment.postgresConnection()) {
             seeder.seedRange(
                     connection,
                     jedis,
@@ -629,7 +621,7 @@ public final class EcommerceProductionScenarioRunner {
     }
 
     private void recreateTables() throws SQLException {
-        try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
+        try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement()) {
             String tableType = UNLOGGED_SEED_TABLES ? "UNLOGGED TABLE" : "TABLE";
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_prodtest_orders");
@@ -693,13 +685,7 @@ public final class EcommerceProductionScenarioRunner {
     }
 
     private PGSimpleDataSource dataSource() {
-        PGSimpleDataSource dataSource = new PGSimpleDataSource();
-        dataSource.setURL(JDBC_URL);
-        dataSource.setUser(JDBC_USER);
-        dataSource.setPassword(JDBC_PASSWORD);
-        dataSource.setConnectTimeout(POSTGRES_CONNECT_TIMEOUT_SECONDS);
-        dataSource.setSocketTimeout(POSTGRES_SOCKET_TIMEOUT_SECONDS);
-        return dataSource;
+        return ProductionTestEnvironment.postgresDataSource();
     }
 
     private String buildNotes(

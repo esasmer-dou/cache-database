@@ -5,6 +5,7 @@ import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
 import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.projection.ProjectionCodec;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +42,7 @@ public final class ProductReadModels {
                                     values.get("active_status"),
                                     values.get("stock_status"),
                                     integerValue(values.get("available_quantity")),
-                                    doubleValue(values.get("unit_price")),
+                                    decimalValue(values.get("unit_price")),
                                     longValue(values.get("updated_at"))
                             );
                         }
@@ -93,7 +94,7 @@ public final class ProductReadModels {
             String activeStatus,
             String stockStatus,
             Integer availableQuantity,
-            Double unitPrice,
+            BigDecimal unitPrice,
             Long updatedAt
     ) {
     }
@@ -124,7 +125,7 @@ public final class ProductReadModels {
         return value == null ? null : Integer.valueOf(value);
     }
 
-    private static Double doubleValue(String value) {
-        return value == null ? null : Double.valueOf(value);
+    private static BigDecimal decimalValue(String value) {
+        return value == null ? null : new BigDecimal(value);
     }
 }
