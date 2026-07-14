@@ -235,11 +235,17 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
                 operation,
                 options.queryTimeoutSeconds()
         );
-        if (currentVersion != null && currentVersion == operation.version()) {
+        if (currentVersion != null && currentVersion >= operation.version()) {
             return;
         }
         if (currentVersion != null) {
-            throw new com.reactor.cachedb.core.queue.StaleWriteRejectedException(operation, currentVersion);
+            throw new SQLException(
+                    "Version-guarded MSSQL upsert did not reach durable state for entity=" + operation.entityName()
+                            + ", id=" + operation.id()
+                            + ", incomingVersion=" + operation.version()
+                            + ", currentVersion=" + currentVersion,
+                    "CDB02"
+            );
         }
         insert(statements, operation, entries);
     }

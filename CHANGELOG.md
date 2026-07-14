@@ -6,6 +6,24 @@ The format is intentionally simple and release-focused.
 
 ## Unreleased
 
+## 0.3.1 - 2026-07-14
+
+### Fixed
+
+- version-guarded SQL flushers now treat an already persisted equal or newer
+  version as a durable idempotent/stale no-op instead of a write failure
+- MSSQL concurrent same-id upserts and high-volume stale batches no longer
+  create poison/retry work when the database already contains newer state
+- zero-row outcomes still fail when the durable database state is older than
+  the incoming command or otherwise does not satisfy the requested operation
+
+### Validation
+
+- local Docker Redis outage/recovery evidence passed
+- live SQL Server provider evidence passed before and after container restart
+- PostgreSQL and MSSQL sample consumer builds pull the published package through
+  GitHub Packages on clean GitHub runners
+
 ## 0.3.0 - 2026-07-14
 
 ### Added

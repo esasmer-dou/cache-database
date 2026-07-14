@@ -4,7 +4,6 @@ import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
-import com.reactor.cachedb.core.queue.StaleWriteRejectedException;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -60,17 +59,14 @@ class MssqlWriteBehindFlusherTest {
     }
 
     @Test
-    void shouldRejectOlderVersionWhenDatabaseAlreadyHasNewerState() {
+    void shouldTreatOlderVersionAsDurablySatisfiedWhenDatabaseHasNewerState() throws Exception {
         RecordingDataSource dataSource = new RecordingDataSource(0, 7L);
         MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(dataSource, emptyRegistry());
 
-        assertThrows(
-                StaleWriteRejectedException.class,
-                () -> flusher.flush(operation(OperationType.UPSERT, "2", 3))
-        );
+        flusher.flush(operation(OperationType.UPSERT, "2", 3));
 
-        assertTrue(dataSource.rolledBack);
-        assertFalse(dataSource.committed);
+        assertTrue(dataSource.committed);
+        assertFalse(dataSource.rolledBack);
     }
 
     @Test

@@ -41,7 +41,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.3.0</cachedb.version>
+  <cachedb.version>0.3.1</cachedb.version>
 </properties>
 
 <repositories>
@@ -95,7 +95,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 </build>
 ```
 
-Users should not build the parent repository first. CacheDB `0.3.0` is published from the main repository to GitHub Packages.
+Users should not build the parent repository first. CacheDB `0.3.1` is published from the main repository to GitHub Packages.
 The annotation dependency and `cachedb-processor` are required for generated bindings such as `OrderEntityCacheBinding`.
 
 Runtime and build requirement: use JDK 21. The sample `pom.xml` sets
@@ -125,9 +125,9 @@ mvn clean package
 
 If you do not configure credentials, Maven will usually fail with `401 Unauthorized` even though the repository URL is correct.
 
-## 0.3.0 Verified Path
+## 0.3.1 Verified Path
 
-This sample is wired for CacheDB `0.3.0`. The important runtime contract is:
+This sample is wired for CacheDB `0.3.1`. The important runtime contract is:
 
 1. Writes go through CacheDB and are flushed to PostgreSQL by write-behind.
 2. Existing PostgreSQL rows are not magically loaded into Redis at startup.
@@ -137,7 +137,7 @@ This sample is wired for CacheDB `0.3.0`. The important runtime contract is:
 
 The sample code makes that contract explicit.
 
-Version `0.3.0` also keeps JDBC reads and writes bounded: read-through queries
+Version `0.3.1` also keeps JDBC reads and writes bounded: read-through queries
 time out after 15 seconds, write-behind statements after 20 seconds, and the
 admin request/background queues have explicit capacities in `application.yml`.
 Version-aware hydration prevents an older warm/read-through result from

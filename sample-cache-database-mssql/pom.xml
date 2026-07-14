@@ -13,14 +13,14 @@
 
     <groupId>com.example.cachedb</groupId>
     <artifactId>sample-cache-database-mssql</artifactId>
-    <version>0.3.0</version>
+    <version>0.3.1</version>
     <name>sample-cache-database-mssql</name>
     <description>CacheDB REST API sample using Redis and Microsoft SQL Server</description>
 
     <properties>
         <java.version>21</java.version>
         <cachedb.groupId>com.reactor.cachedb</cachedb.groupId>
-        <cachedb.version>0.3.0</cachedb.version>
+        <cachedb.version>0.3.1</cachedb.version>
     </properties>
 
     <repositories>

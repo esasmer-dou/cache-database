@@ -2,7 +2,6 @@ package com.reactor.cachedb.jdbc;
 
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
-import com.reactor.cachedb.core.queue.StaleWriteRejectedException;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 
 import java.sql.Connection;
@@ -40,13 +39,10 @@ public final class VersionGuardedWriteSupport {
             throw new SQLException("JDBC batch execution failed for entity=" + operation.entityName() + ", id=" + operation.id());
         }
         Long currentVersion = currentVersion(connection, entityRegistry, operation, queryTimeoutSeconds);
-        if (operation.type() == OperationType.DELETE && currentVersion == null) {
+        if (isDurablySatisfied(operation, currentVersion)) {
             return;
         }
-        if (currentVersion != null && currentVersion == operation.version()) {
-            return;
-        }
-        throw new StaleWriteRejectedException(operation, currentVersion);
+        throw outcomeMismatch(operation, currentVersion);
     }
 
     public static void verifyBatchOutcome(
@@ -103,14 +99,29 @@ public final class VersionGuardedWriteSupport {
         }
         for (QueuedWriteOperation operation : operations) {
             Long currentVersion = currentVersion(connection, entityRegistry, operation, queryTimeoutSeconds);
-            if (operation.type() == OperationType.DELETE && currentVersion == null) {
+            if (isDurablySatisfied(operation, currentVersion)) {
                 continue;
             }
-            if (currentVersion != null && currentVersion == operation.version()) {
-                continue;
-            }
-            throw new StaleWriteRejectedException(operation, currentVersion);
+            throw outcomeMismatch(operation, currentVersion);
         }
+    }
+
+    private static boolean isDurablySatisfied(QueuedWriteOperation operation, Long currentVersion) {
+        if (operation.type() == OperationType.DELETE) {
+            return currentVersion == null || currentVersion > operation.version();
+        }
+        return currentVersion != null && currentVersion >= operation.version();
+    }
+
+    private static SQLException outcomeMismatch(QueuedWriteOperation operation, Long currentVersion) {
+        return new SQLException(
+                "Version-guarded write did not reach durable state for entity=" + operation.entityName()
+                        + ", id=" + operation.id()
+                        + ", operation=" + operation.type()
+                        + ", incomingVersion=" + operation.version()
+                        + ", currentVersion=" + (currentVersion == null ? "missing" : currentVersion),
+                "CDB02"
+        );
     }
 
     public static Long currentVersion(
