@@ -6,6 +6,18 @@ The format is intentionally simple and release-focused.
 
 ## Unreleased
 
+## 0.4.1 - 2026-07-15
+
+### Fixed
+
+- restored the pre-0.4.0 Spring auto-configuration `cacheDatabase(...)` factory signature as a delegating compatibility overload
+- refreshed the committed public API baseline only after proving that the 0.4.x API delta is additive and removes no prior signature
+
+### Validation
+
+- public API comparison reports 66 additive signature lines and zero removed signature lines
+- Spring Boot starter and all upstream modules pass after the compatibility overload is restored
+
 ## 0.4.0 - 2026-07-15
 
 ### Added

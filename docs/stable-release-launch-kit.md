@@ -19,10 +19,10 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Official Distribution Channel
 
-For `v0.4.0`, the official distribution channel is the GitHub Release asset:
+For `v0.4.1`, the official distribution channel is the GitHub Release asset:
 
 ```text
-cache-database-0.4.0-github-release.zip
+cache-database-0.4.1-github-release.zip
 ```
 
 The bundle contains the Maven module jars, source jars, javadocs, README,
@@ -32,9 +32,9 @@ package distribution channel.
 
 ## Release Positioning
 
-`cache-database v0.4.0`
+`cache-database v0.4.1`
 
-CacheDB `v0.4.0` is a stable framework release focused on a declarative consumer
+CacheDB `v0.4.1` is a stable framework release focused on a declarative consumer
 surface. Applications use one generated domain scope, configure per-entity hot
 policies in YAML, and execute typed query, projection, relation, and warm paths
 without manual repository factories. The release keeps the Redis-first model,
@@ -54,7 +54,7 @@ topologies must be proven in the consuming application's staging environment.
 ## Release Notes Template
 
 ```markdown
-## cache-database v0.4.0
+## cache-database v0.4.1
 
 This stable release improves the practical migration path for existing SQL-backed applications.
 
@@ -89,13 +89,13 @@ comparison, Redis memory budget, and rollback plan.
 ## Publication Checklist
 
 - `pom.xml` and all module parent versions use the stable version.
-- Release notes exist at `docs/releases/v0.4.0.md`.
+- Release notes exist at `docs/releases/v0.4.1.md`.
 - `mvn -DskipTests package` passes.
 - Public API compatibility check passes.
 - Turkish documentation quality check passes.
 - Local Docker HA preflight passes or the latest CI evidence is green.
 - `Public Beta Readiness` and `Production Evidence` are green for the release
   commit.
-- `Production GA Release Readiness` is green for `v0.4.0`.
+- `Production GA Release Readiness` is green for `v0.4.1`.
 - GitHub Release is not marked as prerelease.
-- GitHub Release asset `cache-database-0.4.0-github-release.zip` is attached.
+- GitHub Release asset `cache-database-0.4.1-github-release.zip` is attached.

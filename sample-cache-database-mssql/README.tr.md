@@ -41,7 +41,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.4.0</cachedb.version>
+  <cachedb.version>0.4.1</cachedb.version>
 </properties>
 
 <repositories>
@@ -100,7 +100,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 </build>
 ```
 
-Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.4.0`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
+Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.4.1`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
 `cachedb-annotations` ve `cachedb-processor`, `OrderEntityCacheBinding` gibi generated binding sınıflarının üretilmesi için gereklidir.
 `cachedb-storage-mssql`, uygulama MSSQL provider'ını açıkça seçtiğinde gerekli olan CacheDB modülüdür.
 
@@ -131,9 +131,9 @@ mvn clean package
 
 Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir.
 
-## 0.4.0 İçin Doğrulanmış Deklaratif Akış
+## 0.4.1 İçin Doğrulanmış Deklaratif Akış
 
-Bu örnek CacheDB `0.4.0` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
+Bu örnek CacheDB `0.4.1` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
 sözleşme şudur:
 
 1. Yazılar CacheDB üzerinden alınır ve SQL Server’a write-behind ile aktarılır.
@@ -144,7 +144,7 @@ sözleşme şudur:
 
 Bu sözleşme örnek kodda açıkça görünür.
 
-### 0.4.0 Sürümünde Doğrulanan Production Sözleşmeleri
+### 0.4.1 Sürümünde Doğrulanan Production Sözleşmeleri
 
 - Komut endpoint’leri `202 Accepted` döner. Bu yanıt, komutun Redis tarafından kabul edildiğini söyler; SQL’e kalıcı yazımın tamamlandığını söylemez.
 - Alt kayıt yazılmadan önce indeksli tek bir SQL `EXISTS` sorgusu çalışır. Ana kayıt henüz kalıcı değilse request thread’i bekletilmez; `Retry-After` ile birlikte `409 Conflict` döner.
@@ -159,7 +159,7 @@ Bu sözleşme örnek kodda açıkça görünür.
 - Her entity için admission policy `application.yml` üzerinden tanımlanır. `cachedb.registration.source: jdbc` ayarı, veritabanı kayıt kaynağını açıkça belirtir.
 - Named query, fetch planı, projection ve tip güvenli warm planları derleme sırasında üretilir. `ProjectionSchema`, projection alan sırasını ve serileştirme sözleşmesini açık tutar.
 
-`0.4.0` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
+`0.4.1` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
 saniyede, write-behind SQL işlemleri 20 saniyede zaman aşımına uğrar. Admin
 istek ve arka plan kuyruklarının kapasitesi `application.yml` içinde açıkça
 tanımlanmıştır. Sürüm kontrollü hydration, eski bir warm sonucunun

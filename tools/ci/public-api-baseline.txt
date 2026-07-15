@@ -139,6 +139,16 @@ public final class com.reactor.cachedb.core.cache.CachePolicy extends java.lang.
   public com.reactor.cachedb.core.cache.EntityHotPolicy hotPolicy();
 }
 
+## cachedb-core :: com.reactor.cachedb.core.cache.CachePolicyCatalog
+public final class com.reactor.cachedb.core.cache.CachePolicyCatalog {
+  public static com.reactor.cachedb.core.cache.CachePolicyCatalog empty();
+  public static com.reactor.cachedb.core.cache.CachePolicyCatalog$Builder builder();
+  public java.util.Optional<com.reactor.cachedb.core.cache.CachePolicy> find(java.lang.String);
+  public com.reactor.cachedb.core.cache.CachePolicy resolve(java.lang.String, com.reactor.cachedb.core.cache.CachePolicy);
+  public java.util.Set<java.lang.String> entityNames();
+  public boolean isEmpty();
+}
+
 ## cachedb-core :: com.reactor.cachedb.core.cache.EntityHotPolicy
 public final class com.reactor.cachedb.core.cache.EntityHotPolicy extends java.lang.Record {
   public com.reactor.cachedb.core.cache.EntityHotPolicy(com.reactor.cachedb.core.cache.EntityHotPolicyMode, java.lang.String, long, java.lang.String, java.util.List<java.lang.String>, boolean, boolean, boolean, boolean, com.reactor.cachedb.core.cache.CacheAdmissionPredicate);
@@ -1145,6 +1155,7 @@ public final class com.reactor.cachedb.core.plan.FetchPlan {
 ## cachedb-core :: com.reactor.cachedb.core.projection.EntityProjection
 public final class com.reactor.cachedb.core.projection.EntityProjection<T, P, ID> {
   public static <T, P, ID> com.reactor.cachedb.core.projection.EntityProjection<T, P, ID> of(java.lang.String, com.reactor.cachedb.core.projection.ProjectionCodec<P>, java.util.function.Function<P, ID>, java.util.List<java.lang.String>, java.util.function.Function<P, java.util.Map<java.lang.String, java.lang.Object>>, java.util.function.Function<T, P>);
+  public static <T, P, ID> com.reactor.cachedb.core.projection.EntityProjection<T, P, ID> of(java.lang.String, com.reactor.cachedb.core.projection.ProjectionSchema<P>, java.util.function.Function<P, ID>, java.util.function.Function<T, P>);
   public java.lang.String name();
   public com.reactor.cachedb.core.projection.ProjectionCodec<P> codec();
   public java.util.function.Function<P, ID> idAccessor();
@@ -1204,6 +1215,45 @@ public final class com.reactor.cachedb.core.projection.ProjectionRefreshMode ext
   public static com.reactor.cachedb.core.projection.ProjectionRefreshMode[] values();
   public static com.reactor.cachedb.core.projection.ProjectionRefreshMode valueOf(java.lang.String);
   public boolean isAsync();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.projection.ProjectionRow
+public final class com.reactor.cachedb.core.projection.ProjectionRow {
+  public <V> V value(java.lang.String, com.reactor.cachedb.core.projection.ProjectionValueCodec<V>);
+  public java.lang.String string(java.lang.String);
+  public java.lang.Long longValue(java.lang.String);
+  public java.lang.Integer integer(java.lang.String);
+  public java.lang.Double doubleValue(java.lang.String);
+  public java.lang.Boolean booleanValue(java.lang.String);
+  public java.math.BigDecimal decimal(java.lang.String);
+  public java.util.UUID uuid(java.lang.String);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.projection.ProjectionSchema
+public final class com.reactor.cachedb.core.projection.ProjectionSchema<P> implements com.reactor.cachedb.core.projection.ProjectionCodec<P> {
+  public static <P> com.reactor.cachedb.core.projection.ProjectionSchema$Builder<P> builder();
+  public java.lang.String toRedisValue(P);
+  public P fromRedisValue(java.lang.String);
+  public java.util.List<java.lang.String> columns();
+  public java.util.Map<java.lang.String, java.lang.Object> columnValues(P);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.projection.ProjectionValueCodec
+public interface com.reactor.cachedb.core.projection.ProjectionValueCodec<V> {
+  public abstract java.lang.String encode(V);
+  public abstract V decode(java.lang.String);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.projection.ProjectionValueCodecs
+public final class com.reactor.cachedb.core.projection.ProjectionValueCodecs {
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.String> STRING;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Long> LONG;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Integer> INTEGER;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Double> DOUBLE;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Boolean> BOOLEAN;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.math.BigDecimal> BIG_DECIMAL;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.util.UUID> UUID_VALUE;
+  public static <V> com.reactor.cachedb.core.projection.ProjectionValueCodec<V> codec(java.util.function.Function<V, java.lang.String>, java.util.function.Function<java.lang.String, V>);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.query.HardLimitQueryClass
@@ -2981,11 +3031,14 @@ public final class com.reactor.cachedb.starter.CacheDatabase implements com.reac
   public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>);
   public <T, ID> com.reactor.cachedb.core.registry.EntityBinding<T, ID> register(com.reactor.cachedb.core.registry.EntityBinding<T, ID>);
   public com.reactor.cachedb.starter.CacheWarmResult warm(com.reactor.cachedb.starter.CacheWarmPlan);
+  public com.reactor.cachedb.starter.CacheWarmResult dryRun(com.reactor.cachedb.starter.CacheWarmPlan);
+  public com.reactor.cachedb.starter.CacheWarmResult warmProjections(com.reactor.cachedb.starter.CacheWarmPlan);
   public java.util.List<com.reactor.cachedb.starter.CacheWarmResult> warmAll(java.util.Collection<com.reactor.cachedb.starter.CacheWarmPlan>);
   public <T, ID, P> com.reactor.cachedb.core.projection.EntityProjectionBinding<T, P, ID> registerProjection(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.projection.EntityProjection<T, P, ID>);
   public <T, ID> com.reactor.cachedb.core.api.EntityRepository<T, ID> repository(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>);
   public <T, ID> com.reactor.cachedb.core.api.EntityRepository<T, ID> repository(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.cache.CachePolicy);
   public com.reactor.cachedb.core.registry.EntityRegistry entityRegistry();
+  public java.util.Optional<com.reactor.cachedb.core.cache.CachePolicy> registeredPolicy(java.lang.String);
   public com.reactor.cachedb.core.queue.WriteBehindWorkerSnapshot workerSnapshot();
   public com.reactor.cachedb.core.queue.DeadLetterRecoverySnapshot deadLetterRecoverySnapshot();
   public com.reactor.cachedb.core.queue.DeadLetterManagement deadLetterManagement();
@@ -3222,6 +3275,8 @@ public final class com.reactor.cachedb.starter.CacheWarmResult extends java.lang
 public final class com.reactor.cachedb.starter.CacheWarmRunner {
   public com.reactor.cachedb.starter.CacheWarmRunner(com.reactor.cachedb.starter.CacheDatabase);
   public com.reactor.cachedb.starter.CacheWarmResult execute(com.reactor.cachedb.starter.CacheWarmPlan);
+  public com.reactor.cachedb.starter.CacheWarmResult dryRun(com.reactor.cachedb.starter.CacheWarmPlan);
+  public com.reactor.cachedb.starter.CacheWarmResult executeProjectionsOnly(com.reactor.cachedb.starter.CacheWarmPlan);
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.DefaultCacheSession
@@ -3307,6 +3362,7 @@ public final class com.reactor.cachedb.starter.FailingSignalSnapshot extends jav
 public final class com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery {
   public static java.util.List<com.reactor.cachedb.starter.GeneratedCacheBindingsRegistrar> discover(java.lang.ClassLoader);
   public static int registerDiscovered(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.core.cache.CachePolicy, java.lang.ClassLoader);
+  public static int registerDiscoveredJdbcBacked(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.core.cache.CachePolicyCatalog, java.lang.ClassLoader, boolean);
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.GeneratedCacheBindingsRegistrar
@@ -3314,6 +3370,9 @@ public interface com.reactor.cachedb.starter.GeneratedCacheBindingsRegistrar {
   public abstract java.lang.String packageName();
   public abstract void register(com.reactor.cachedb.starter.CacheDatabase);
   public abstract void register(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.core.cache.CachePolicy);
+  public default java.util.List<java.lang.String> entityNames();
+  public default void registerJdbcSources(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.core.cache.CachePolicyCatalog);
+  public default void registerDeclaredLoaders(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.core.cache.CachePolicyCatalog);
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.IncidentSeverityTrendPoint
@@ -3620,6 +3679,8 @@ public class com.reactor.cachedb.spring.boot.CacheDatabaseSpringBootAutoConfigur
   public redis.clients.jedis.JedisPooled cacheDbJedisPooled(com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
   public redis.clients.jedis.JedisPooled cacheDbBackgroundJedisPooled(com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
   public com.reactor.cachedb.core.config.CacheDatabaseConfig cacheDatabaseConfig(com.reactor.cachedb.spring.boot.CacheDbSpringProperties, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CacheDatabaseConfigCustomizer>);
+  public com.reactor.cachedb.core.cache.CachePolicyCatalog cachePolicyCatalog(com.reactor.cachedb.spring.boot.CacheDbSpringProperties, com.reactor.cachedb.core.config.CacheDatabaseConfig, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CachePolicyCatalogCustomizer>);
+  public com.reactor.cachedb.starter.CacheDatabase cacheDatabase(org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, javax.sql.DataSource, com.reactor.cachedb.core.config.CacheDatabaseConfig, com.reactor.cachedb.core.cache.CachePolicyCatalog, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
   public com.reactor.cachedb.starter.CacheDatabase cacheDatabase(org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, javax.sql.DataSource, com.reactor.cachedb.core.config.CacheDatabaseConfig, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
   public org.springframework.beans.factory.SmartInitializingSingleton cacheDatabaseMigrationPlannerDemoConfigurer(com.reactor.cachedb.starter.CacheDatabase, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.starter.MigrationPlannerDemoSupport>);
   public com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer cacheDatabaseSpringBootAdminHandler(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
@@ -3641,4 +3702,9 @@ public class com.reactor.cachedb.spring.boot.CacheDbSpringProperties {
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$AdminUiProperties getAdmin();
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$RegistrationProperties getRegistration();
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$RuntimeProperties getRuntime();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CachePolicyCatalogCustomizer
+public interface com.reactor.cachedb.spring.boot.CachePolicyCatalogCustomizer {
+  public abstract void customize(com.reactor.cachedb.core.cache.CachePolicyCatalog$Builder, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
 }

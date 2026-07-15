@@ -41,7 +41,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.4.0</cachedb.version>
+  <cachedb.version>0.4.1</cachedb.version>
 </properties>
 
 <repositories>
@@ -100,7 +100,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 </build>
 ```
 
-Users should not build the parent repository first. CacheDB `0.4.0` is published from the main repository to GitHub Packages.
+Users should not build the parent repository first. CacheDB `0.4.1` is published from the main repository to GitHub Packages.
 The annotation dependency and `cachedb-processor` are required for generated bindings such as `OrderEntityCacheBinding`.
 The `cachedb-storage-mssql` dependency is required when the application selects the MSSQL provider explicitly.
 
@@ -131,9 +131,9 @@ mvn clean package
 
 If you do not configure credentials, Maven will usually fail with `401 Unauthorized` even though the repository URL is correct.
 
-## 0.4.0 Verified Declarative Path
+## 0.4.1 Verified Declarative Path
 
-This sample is wired for CacheDB `0.4.0`. The important runtime contract is:
+This sample is wired for CacheDB `0.4.1`. The important runtime contract is:
 
 1. Writes go through CacheDB and are flushed to SQL Server by write-behind.
 2. Existing SQL Server rows are not magically loaded into Redis at startup.
@@ -143,7 +143,7 @@ This sample is wired for CacheDB `0.4.0`. The important runtime contract is:
 
 The sample code makes that contract explicit.
 
-### Production contracts validated in 0.4.0
+### Production contracts validated in 0.4.1
 
 - Command endpoints return `202 Accepted`; this means Redis accepted the command, not that SQL durability is complete.
 - Child writes perform one indexed SQL `EXISTS` check. A non-durable parent returns `409 Conflict` with `Retry-After` instead of polling a request thread.
@@ -158,7 +158,7 @@ The sample code makes that contract explicit.
 - Per-entity admission policies come from `application.yml`, while `cachedb.registration.source: jdbc` makes the database registration source explicit.
 - Named queries, fetch plans, projections and typed warm plans are generated at compile time. `ProjectionSchema` keeps projection serialization and field order explicit.
 
-Version `0.4.0` also keeps JDBC reads and writes bounded: registered JDBC warm
+Version `0.4.1` also keeps JDBC reads and writes bounded: registered JDBC warm
 queries time out after 15 seconds, write-behind statements after 20 seconds, and the
 admin request/background queues have explicit capacities in `application.yml`.
 Version-aware hydration prevents an older warm result from

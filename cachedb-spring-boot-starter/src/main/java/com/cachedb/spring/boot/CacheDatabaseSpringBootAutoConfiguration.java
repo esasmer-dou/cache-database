@@ -144,6 +144,36 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         return cacheDatabase;
     }
 
+    /**
+     * Preserves the pre-0.4.0 factory surface for direct auto-configuration callers.
+     * Spring uses the policy-catalog-aware {@link Bean} method above.
+     */
+    @Deprecated(since = "0.4.0", forRemoval = false)
+    public CacheDatabase cacheDatabase(
+            ObjectProvider<JedisPooled> namedForegroundJedisProvider,
+            ObjectProvider<JedisPooled> jedisProvider,
+            ObjectProvider<JedisPooled> backgroundJedisProvider,
+            DataSource dataSource,
+            CacheDatabaseConfig config,
+            CacheDbSpringProperties properties
+    ) {
+        CachePolicyCatalog.Builder policies = CachePolicyCatalog.builder();
+        CachePolicyCatalogFactory.addConfiguredPolicies(
+                policies,
+                properties.getRegistration(),
+                config.resourceLimits().defaultCachePolicy()
+        );
+        return cacheDatabase(
+                namedForegroundJedisProvider,
+                jedisProvider,
+                backgroundJedisProvider,
+                dataSource,
+                config,
+                policies.build(),
+                properties
+        );
+    }
+
     @Bean
     @ConditionalOnBean(MigrationPlannerDemoSupport.class)
     public SmartInitializingSingleton cacheDatabaseMigrationPlannerDemoConfigurer(

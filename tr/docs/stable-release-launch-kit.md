@@ -19,10 +19,10 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Resmi Dağıtım Kanalı
 
-`v0.4.0` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
+`v0.4.1` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
 
 ```text
-cache-database-0.4.0-github-release.zip
+cache-database-0.4.1-github-release.zip
 ```
 
 Paket; Maven modül jar'larını, source jar'larını, javadoc dosyalarını, README'yi,
@@ -32,9 +32,9 @@ paket dağıtım kanalı GitHub Release'tir.
 
 ## Release Konumlandırması
 
-`cache-database v0.4.0`
+`cache-database v0.4.1`
 
-CacheDB `v0.4.0`, uygulama tarafındaki kullanımı deklaratif hale getiren stable
+CacheDB `v0.4.1`, uygulama tarafındaki kullanımı deklaratif hale getiren stable
 framework release'idir. Uygulama tek bir generated domain scope kullanır,
 entity bazlı aktif veri politikalarını YAML içinde tanımlar ve query,
 projection, relation ile warm işlemlerini manuel repository factory yazmadan
@@ -56,7 +56,7 @@ kanıtlanmalıdır.
 ## Release Note Şablonu
 
 ```markdown
-## cache-database v0.4.0
+## cache-database v0.4.1
 
 Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uygulanabilir hale getirir.
 
@@ -91,12 +91,12 @@ comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
 ## Yayın Kontrol Listesi
 
 - `pom.xml` ve tüm modül parent versiyonları stable sürümü kullanıyor.
-- Release note `docs/releases/v0.4.0.md` altında var.
+- Release note `docs/releases/v0.4.1.md` altında var.
 - `mvn -DskipTests package` geçiyor.
 - Public API compatibility kontrolü geçiyor.
 - Türkçe dokümantasyon kalite kontrolü geçiyor.
 - Lokal Docker HA preflight geçiyor veya son CI evidence yeşil.
 - `Public Beta Readiness` ve `Production Evidence` release commit'i için yeşil.
-- `Production GA Release Readiness`, `v0.4.0` için yeşil.
+- `Production GA Release Readiness`, `v0.4.1` için yeşil.
 - GitHub Release prerelease olarak işaretli değil.
-- GitHub Release asset'i `cache-database-0.4.0-github-release.zip` olarak eklendi.
+- GitHub Release asset'i `cache-database-0.4.1-github-release.zip` olarak eklendi.
