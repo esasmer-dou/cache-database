@@ -91,6 +91,28 @@ class PostgresqlSampleIT {
         assertEquals(HttpStatus.OK, activeCustomers.getStatusCode());
         assertEquals(2, activeCustomers.getBody().size());
 
+        ResponseEntity<Map> customerDetail = rest.getForEntity(
+                url("/api/customers/1?orderPreview=2"),
+                Map.class
+        );
+        assertEquals(HttpStatus.OK, customerDetail.getStatusCode());
+        assertEquals(2, ((List<?>) customerDetail.getBody().get("orders")).size());
+
+        ResponseEntity<Map> orderDetail = rest.getForEntity(
+                url("/api/orders/10001?linePreview=2"),
+                Map.class
+        );
+        assertEquals(HttpStatus.OK, orderDetail.getStatusCode());
+        assertEquals(2, ((List<?>) orderDetail.getBody().get("lines")).size());
+
+        ResponseEntity<List> policyProfiles = rest.getForEntity(url("/api/tuning/profiles"), List.class);
+        assertEquals(HttpStatus.OK, policyProfiles.getStatusCode());
+        Map<?, ?> commercePolicy = (Map<?, ?>) policyProfiles.getBody().stream()
+                .filter(profile -> "commerceTimeline".equals(((Map<?, ?>) profile).get("name")))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(100_000, ((Number) commercePolicy.get("hotEntityLimit")).intValue());
+
         ResponseEntity<Map> oversizedRoute = rest.getForEntity(url("/api/customers/active?limit=101"), Map.class);
         assertEquals(HttpStatus.BAD_REQUEST, oversizedRoute.getStatusCode());
 

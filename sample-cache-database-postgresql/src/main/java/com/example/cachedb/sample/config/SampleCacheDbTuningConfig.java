@@ -1,5 +1,6 @@
 package com.example.cachedb.sample.config;
 
+import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.config.ReadThroughConfig;
 import com.reactor.cachedb.core.config.ReadThroughMode;
@@ -17,7 +18,13 @@ public class SampleCacheDbTuningConfig {
     CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
         return (builder, properties) -> builder
                 .resourceLimits(ResourceLimits.builder()
-                        .defaultCachePolicy(SampleCachePolicies.platformDefaultPolicy())
+                        .defaultCachePolicy(CachePolicy.builder()
+                                .hotEntityLimit(5_000)
+                                .pageSize(50)
+                                .entityTtlSeconds(0)
+                                .pageTtlSeconds(90)
+                                .countWindow()
+                                .build())
                         .maxRegisteredEntities(128)
                         .maxColumnsPerOperation(64)
                         .build())

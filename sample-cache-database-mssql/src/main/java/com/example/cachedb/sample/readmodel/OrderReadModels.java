@@ -1,76 +1,43 @@
 package com.example.cachedb.sample.readmodel;
 
 import com.example.cachedb.sample.domain.OrderEntity;
-import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
 import com.reactor.cachedb.core.projection.EntityProjection;
-import com.reactor.cachedb.core.projection.ProjectionCodec;
+import com.reactor.cachedb.core.projection.ProjectionSchema;
 
 import java.math.BigDecimal;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
 public final class OrderReadModels {
 
-    public static final EntityProjection<OrderEntity, OrderSummary, Long> ORDER_SUMMARY_PROJECTION =
-            EntityProjection.of(
-                    "order-summary",
-                    new ProjectionCodec<>() {
-                        @Override
-                        public String toRedisValue(OrderSummary projection) {
-                            LinkedHashMap<String, String> values = new LinkedHashMap<>();
-                            values.put("order_id", stringValue(projection.orderId()));
-                            values.put("customer_id", stringValue(projection.customerId()));
-                            values.put("order_date", stringValue(projection.orderDate()));
-                            values.put("order_amount", stringValue(projection.orderAmount()));
-                            values.put("currency_code", projection.currencyCode());
-                            values.put("order_type", projection.orderType());
-                            values.put("status", projection.status());
-                            values.put("line_count", stringValue(projection.lineCount()));
-                            values.put("priority_score", stringValue(projection.priorityScore()));
-                            return LengthPrefixedPayloadCodec.encode(values);
-                        }
+    private static final ProjectionSchema<OrderSummary> ORDER_SUMMARY_SCHEMA =
+            ProjectionSchema.<OrderSummary>builder()
+                    .longColumn("order_id", OrderSummary::orderId)
+                    .longColumn("customer_id", OrderSummary::customerId)
+                    .longColumn("order_date", OrderSummary::orderDate)
+                    .decimalColumn("order_amount", OrderSummary::orderAmount)
+                    .stringColumn("currency_code", OrderSummary::currencyCode)
+                    .stringColumn("order_type", OrderSummary::orderType)
+                    .stringColumn("status", OrderSummary::status)
+                    .integerColumn("line_count", OrderSummary::lineCount)
+                    .doubleColumn("priority_score", OrderSummary::priorityScore)
+                    .decodeWith(row -> new OrderSummary(
+                            row.longValue("order_id"),
+                            row.longValue("customer_id"),
+                            row.longValue("order_date"),
+                            row.decimal("order_amount"),
+                            row.string("currency_code"),
+                            row.string("order_type"),
+                            row.string("status"),
+                            row.integer("line_count"),
+                            row.doubleValue("priority_score")
+                    ))
+                    .build();
 
-                        @Override
-                        public OrderSummary fromRedisValue(String encoded) {
-                            Map<String, String> values = LengthPrefixedPayloadCodec.decode(encoded);
-                            return new OrderSummary(
-                                    longValue(values.get("order_id")),
-                                    longValue(values.get("customer_id")),
-                                    longValue(values.get("order_date")),
-                                    decimalValue(values.get("order_amount")),
-                                    values.get("currency_code"),
-                                    values.get("order_type"),
-                                    values.get("status"),
-                                    integerValue(values.get("line_count")),
-                                    doubleValue(values.get("priority_score"))
-                            );
-                        }
-                    },
+    public static final EntityProjection<OrderEntity, OrderSummary, Long> ORDER_SUMMARY_PROJECTION =
+            EntityProjection.<OrderEntity, OrderSummary, Long>of(
+                    "order-summary",
+                    ORDER_SUMMARY_SCHEMA,
                     OrderSummary::orderId,
-                    List.of(
-                            "order_id",
-                            "customer_id",
-                            "order_date",
-                            "order_amount",
-                            "currency_code",
-                            "order_type",
-                            "status",
-                            "line_count",
-                            "priority_score"
-                    ),
-                    projection -> columns(
-                            "order_id", projection.orderId(),
-                            "customer_id", projection.customerId(),
-                            "order_date", projection.orderDate(),
-                            "order_amount", projection.orderAmount(),
-                            "currency_code", projection.currencyCode(),
-                            "order_type", projection.orderType(),
-                            "status", projection.status(),
-                            "line_count", projection.lineCount(),
-                            "priority_score", projection.priorityScore()
-                    ),
-                    (OrderEntity order) -> new OrderSummary(
+                    order -> new OrderSummary(
                             order.orderId,
                             order.customerId,
                             order.orderDate,
@@ -97,33 +64,5 @@ public final class OrderReadModels {
             Integer lineCount,
             Double priorityScore
     ) {
-    }
-
-    private static LinkedHashMap<String, Object> columns(Object... values) {
-        LinkedHashMap<String, Object> columns = new LinkedHashMap<>();
-        for (int index = 0; index < values.length; index += 2) {
-            columns.put(String.valueOf(values[index]), values[index + 1]);
-        }
-        return columns;
-    }
-
-    private static String stringValue(Object value) {
-        return value == null ? null : String.valueOf(value);
-    }
-
-    private static Long longValue(String value) {
-        return value == null ? null : Long.valueOf(value);
-    }
-
-    private static Integer integerValue(String value) {
-        return value == null ? null : Integer.valueOf(value);
-    }
-
-    private static Double doubleValue(String value) {
-        return value == null ? null : Double.valueOf(value);
-    }
-
-    private static BigDecimal decimalValue(String value) {
-        return value == null ? null : new BigDecimal(value);
     }
 }

@@ -2,6 +2,7 @@ package com.example.cachedb.sample.service;
 
 import com.example.cachedb.sample.domain.AuditEventEntity;
 import com.example.cachedb.sample.domain.CustomerEntity;
+import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.domain.OrderEntity;
 import com.example.cachedb.sample.domain.OrderLineEntity;
 import com.example.cachedb.sample.domain.ProductEntity;
@@ -9,7 +10,6 @@ import com.example.cachedb.sample.domain.ReportJobEntity;
 import com.example.cachedb.sample.domain.ShipmentEntity;
 import com.example.cachedb.sample.domain.ShipmentEventEntity;
 import com.example.cachedb.sample.domain.SupportTicketEntity;
-import com.reactor.cachedb.core.api.EntityRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -20,38 +20,14 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class SampleSeedService {
 
-    private final EntityRepository<CustomerEntity, Long> customerRepository;
-    private final EntityRepository<ProductEntity, Long> productRepository;
-    private final EntityRepository<OrderEntity, Long> orderRepository;
-    private final EntityRepository<OrderLineEntity, Long> lineRepository;
-    private final EntityRepository<SupportTicketEntity, Long> ticketRepository;
-    private final EntityRepository<ShipmentEntity, Long> shipmentRepository;
-    private final EntityRepository<ShipmentEventEntity, Long> shipmentEventRepository;
-    private final EntityRepository<ReportJobEntity, Long> reportJobRepository;
-    private final EntityRepository<AuditEventEntity, Long> auditEventRepository;
+    private final GeneratedCacheModule.Scope domain;
     private final JdbcTemplate jdbcTemplate;
 
     public SampleSeedService(
-            EntityRepository<CustomerEntity, Long> customerRepository,
-            EntityRepository<ProductEntity, Long> productRepository,
-            EntityRepository<OrderEntity, Long> orderRepository,
-            EntityRepository<OrderLineEntity, Long> lineRepository,
-            EntityRepository<SupportTicketEntity, Long> ticketRepository,
-            EntityRepository<ShipmentEntity, Long> shipmentRepository,
-            EntityRepository<ShipmentEventEntity, Long> shipmentEventRepository,
-            EntityRepository<ReportJobEntity, Long> reportJobRepository,
-            EntityRepository<AuditEventEntity, Long> auditEventRepository,
+            GeneratedCacheModule.Scope domain,
             JdbcTemplate jdbcTemplate
     ) {
-        this.customerRepository = customerRepository;
-        this.productRepository = productRepository;
-        this.orderRepository = orderRepository;
-        this.lineRepository = lineRepository;
-        this.ticketRepository = ticketRepository;
-        this.shipmentRepository = shipmentRepository;
-        this.shipmentEventRepository = shipmentEventRepository;
-        this.reportJobRepository = reportJobRepository;
-        this.auditEventRepository = auditEventRepository;
+        this.domain = domain;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -62,10 +38,10 @@ public class SampleSeedService {
         long now = Instant.now().getEpochSecond();
 
         for (long productId = 1; productId <= 50; productId++) {
-            productRepository.save(product(productId));
+            domain.products().save(product(productId));
         }
         for (long customerId = 1; customerId <= customers; customerId++) {
-            customerRepository.save(customer(customerId, now));
+            domain.customers().save(customer(customerId, now));
         }
 
         waitForRows("sample_products", 50);
@@ -81,18 +57,18 @@ public class SampleSeedService {
             for (int index = 1; index <= ordersEach; index++) {
                 long orderId = (customerId * 10_000L) + index;
                 OrderEntity order = order(orderId, customerId, now - (index * 3_600L), linesEach);
-                orderRepository.save(order);
+                domain.orders().save(order);
                 orderCount++;
             }
             for (int shipmentIndex = 1; shipmentIndex <= 3; shipmentIndex++) {
                 long shipmentId = (customerId * 20_000L) + shipmentIndex;
-                shipmentRepository.save(shipment(shipmentId, customerId, shipmentIndex, now));
+                domain.shipments().save(shipment(shipmentId, customerId, shipmentIndex, now));
                 shipmentCount++;
             }
         }
 
         for (long reportJobId = 1; reportJobId <= 20; reportJobId++) {
-            reportJobRepository.save(reportJob(reportJobId, now));
+            domain.reportJobs().save(reportJob(reportJobId, now));
             reportJobCount++;
         }
 
@@ -104,19 +80,19 @@ public class SampleSeedService {
             for (int orderIndex = 1; orderIndex <= ordersEach; orderIndex++) {
                 long orderId = (customerId * 10_000L) + orderIndex;
                 for (int lineNumber = 1; lineNumber <= linesEach; lineNumber++) {
-                    lineRepository.save(line(orderId, lineNumber));
+                    domain.orderLines().save(line(orderId, lineNumber));
                     lineCount++;
                 }
             }
             for (int shipmentIndex = 1; shipmentIndex <= 3; shipmentIndex++) {
                 long shipmentId = (customerId * 20_000L) + shipmentIndex;
                 for (int eventIndex = 1; eventIndex <= 4; eventIndex++) {
-                    shipmentEventRepository.save(shipmentEvent(shipmentId, eventIndex, now));
+                    domain.shipmentEvents().save(shipmentEvent(shipmentId, eventIndex, now));
                     shipmentEventCount++;
                 }
             }
-            ticketRepository.save(ticket(customerId, now));
-            auditEventRepository.save(auditEvent(auditEventCount + 1, "CustomerEntity", customerId, now));
+            domain.supportTickets().save(ticket(customerId, now));
+            domain.auditEvents().save(auditEvent(auditEventCount + 1, "CustomerEntity", customerId, now));
             auditEventCount++;
         }
 

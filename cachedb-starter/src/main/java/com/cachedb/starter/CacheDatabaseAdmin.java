@@ -60,6 +60,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -73,6 +74,8 @@ public final class CacheDatabaseAdmin {
 
     private static final int ADMIN_KEY_SCAN_COUNT = 500;
     private static final int ADMIN_KEY_SCAN_CAP = 50_000;
+    private static final int ADMIN_METRICS_SCAN_COUNT = 2_000;
+    private static final int ADMIN_METRICS_SCAN_STEPS = 1;
 
     private final DeadLetterManagement deadLetterManagement;
     private final JedisPooled jedis;
@@ -141,6 +144,7 @@ public final class CacheDatabaseAdmin {
     private final AtomicLong lastTriageSampleAtEpochMillis = new AtomicLong();
     private final AtomicReference<List<AlertRouteSnapshot>> lastAlertRoutesSnapshot = new AtomicReference<>();
     private final AtomicLong lastAlertRoutesSampleAtEpochMillis = new AtomicLong();
+    private final Map<String, IncrementalKeyScan> plannerKeyScans = new ConcurrentHashMap<>();
 
     public CacheDatabaseAdmin(
             DeadLetterManagement deadLetterManagement,
@@ -2079,27 +2083,32 @@ public final class CacheDatabaseAdmin {
 
     private long keyCount(String pattern) {
         try {
-            return scanKeyCount(pattern, ADMIN_KEY_SCAN_CAP);
+            return scanKeyCountIncrementally(pattern, ADMIN_KEY_SCAN_CAP);
         } catch (RuntimeException exception) {
-            return 0L;
+            IncrementalKeyScan scan = plannerKeyScans.get(pattern);
+            return scan == null ? 0L : scan.completedCount();
         }
     }
 
-    private long scanKeyCount(String pattern, int maxKeys) {
-        long count = 0L;
-        String cursor = "0";
+    private long scanKeyCountIncrementally(String pattern, int maxKeys) {
+        IncrementalKeyScan progress = plannerKeyScans.computeIfAbsent(pattern, ignored -> new IncrementalKeyScan());
         redis.clients.jedis.params.ScanParams params = new redis.clients.jedis.params.ScanParams()
                 .match(pattern)
-                .count(ADMIN_KEY_SCAN_COUNT);
-        do {
-            redis.clients.jedis.resps.ScanResult<String> scan = jedis.scan(cursor, params);
-            count += scan.getResult().size();
-            if (count >= maxKeys) {
-                return maxKeys;
+                .count(ADMIN_METRICS_SCAN_COUNT);
+        synchronized (progress) {
+            for (int step = 0; step < ADMIN_METRICS_SCAN_STEPS; step++) {
+                redis.clients.jedis.resps.ScanResult<String> scan = jedis.scan(progress.cursor(), params);
+                progress.add(scan.getResult().size());
+                if (progress.currentCount() >= maxKeys) {
+                    return progress.complete(maxKeys);
+                }
+                progress.cursor(scan.getCursor());
+                if ("0".equals(scan.getCursor())) {
+                    return progress.complete(progress.currentCount());
+                }
             }
-            cursor = scan.getCursor();
-        } while (!"0".equals(cursor));
-        return count;
+            return progress.completedCount();
+        }
     }
 
     private long deleteKeysByScan(String pattern, int maxKeys) {
@@ -2124,6 +2133,41 @@ public final class CacheDatabaseAdmin {
             cursor = scan.getCursor();
         } while (!"0".equals(cursor));
         return deleted;
+    }
+
+    private static final class IncrementalKeyScan {
+        private String cursor = "0";
+        private long currentCount;
+        private long completedCount;
+
+        String cursor() {
+            return cursor;
+        }
+
+        void cursor(String cursor) {
+            this.cursor = cursor;
+        }
+
+        long currentCount() {
+            return currentCount;
+        }
+
+        long completedCount() {
+            synchronized (this) {
+                return completedCount;
+            }
+        }
+
+        void add(long count) {
+            currentCount += count;
+        }
+
+        long complete(long count) {
+            completedCount = count;
+            currentCount = 0L;
+            cursor = "0";
+            return completedCount;
+        }
     }
 
     private boolean recentError(long lastErrorAtEpochMillis) {

@@ -1,15 +1,11 @@
 package com.example.cachedb.sample.web;
 
+import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.domain.ReportJobEntity;
-import com.example.cachedb.sample.domain.ReportJobEntityCacheBinding;
-import com.example.cachedb.sample.domain.ShipmentEntityCacheBinding;
 import com.example.cachedb.sample.domain.SupportTicketEntity;
-import com.example.cachedb.sample.domain.SupportTicketEntityCacheBinding;
 import com.example.cachedb.sample.readmodel.OrderReadModels;
 import com.example.cachedb.sample.readmodel.ProductReadModels;
 import com.example.cachedb.sample.readmodel.ShipmentReadModels;
-import com.reactor.cachedb.core.api.EntityRepository;
-import com.reactor.cachedb.core.api.ProjectionRepository;
 import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,36 +19,22 @@ import java.util.List;
 @RequestMapping("/api/dashboard")
 public class DashboardController {
 
-    private final ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository;
-    private final ProjectionRepository<ProductReadModels.ProductAvailability, Long> productAvailabilityRepository;
-    private final ProjectionRepository<ShipmentReadModels.ShipmentSummary, Long> shipmentSummaryRepository;
-    private final EntityRepository<SupportTicketEntity, Long> ticketRepository;
-    private final EntityRepository<ReportJobEntity, Long> reportJobRepository;
+    private final GeneratedCacheModule.Scope domain;
 
-    public DashboardController(
-            ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository,
-            ProjectionRepository<ProductReadModels.ProductAvailability, Long> productAvailabilityRepository,
-            ProjectionRepository<ShipmentReadModels.ShipmentSummary, Long> shipmentSummaryRepository,
-            EntityRepository<SupportTicketEntity, Long> ticketRepository,
-            EntityRepository<ReportJobEntity, Long> reportJobRepository
-    ) {
-        this.orderSummaryRepository = orderSummaryRepository;
-        this.productAvailabilityRepository = productAvailabilityRepository;
-        this.shipmentSummaryRepository = shipmentSummaryRepository;
-        this.ticketRepository = ticketRepository;
-        this.reportJobRepository = reportJobRepository;
+    public DashboardController(GeneratedCacheModule.Scope domain) {
+        this.domain = domain;
     }
 
     @GetMapping("/commerce")
     public DashboardResponse commerce(@RequestParam(defaultValue = "25") int limit) {
         int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 100);
-        List<OrderReadModels.OrderSummary> highValueOrders = orderSummaryRepository.query(
+        List<OrderReadModels.OrderSummary> highValueOrders = domain.orders().projections().orderSummary().query(
                 QueryFilter.gte("priority_score", 60.0),
                 safeLimit,
                 QuerySort.desc("priority_score"),
                 QuerySort.desc("order_date")
         );
-        List<SupportTicketEntity> openTickets = SupportTicketEntityCacheBinding.openTickets(ticketRepository, safeLimit);
+        List<SupportTicketEntity> openTickets = domain.supportTickets().queries().openTickets(safeLimit);
         double totalAmount = highValueOrders.stream()
                 .map(OrderReadModels.OrderSummary::orderAmount)
                 .filter(value -> value != null)
@@ -64,16 +46,15 @@ public class DashboardController {
     @GetMapping("/operations")
     public OperationsDashboardResponse operations(@RequestParam(defaultValue = "25") int limit) {
         int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 100);
-        List<ProductReadModels.ProductAvailability> lowStockProducts = productAvailabilityRepository.query(
+        List<ProductReadModels.ProductAvailability> lowStockProducts = domain.products().projections().productAvailability().query(
                 QueryFilter.eq("stock_status", "LOW_STOCK"),
                 safeLimit,
                 QuerySort.desc("updated_at")
         );
-        List<ShipmentReadModels.ShipmentSummary> shipmentExceptions = ShipmentEntityCacheBinding.shipmentExceptions(
-                shipmentSummaryRepository,
-                safeLimit
+        List<ShipmentReadModels.ShipmentSummary> shipmentExceptions = domain.shipments().projections().shipmentSummary().query(
+                domain.shipments().queries().shipmentExceptionsQuery(safeLimit)
         );
-        List<ReportJobEntity> liveReportJobs = ReportJobEntityCacheBinding.liveReportJobs(reportJobRepository, safeLimit);
+        List<ReportJobEntity> liveReportJobs = domain.reportJobs().queries().liveReportJobs(safeLimit);
         return new OperationsDashboardResponse(
                 lowStockProducts.size(),
                 shipmentExceptions.size(),

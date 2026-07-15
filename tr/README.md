@@ -116,7 +116,7 @@ otomatik hızlandırmasını beklemek.
 
 ```xml
 <properties>
-    <cachedb.version>0.3.2</cachedb.version>
+    <cachedb.version>0.4.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -187,6 +187,17 @@ cachedb:
   profile: production
   redis:
     uri: redis://127.0.0.1:6379
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      CustomerEntity:
+        hot-entity-limit: 50000
+        page-size: 100
+        hot-policy:
+          mode: STATE_WINDOW
+          state-column: status
+          state-values: [ACTIVE]
   admin:
     http-enabled: true
 ```
@@ -231,11 +242,18 @@ runtime'da entity field'larını reflection ile keşfetme maliyeti hedeflenmez.
 
 ## İlk Okuma ve Yazma
 
-Normal servis kodunda önce generated yüzeyden başla:
+Paket için üretilen erişim yüzeyini tek bean olarak aç:
 
 ```java
-var domain = GeneratedCacheModule.using(session);
+@Bean
+GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
+    return GeneratedCacheModule.using(cacheDatabase);
+}
+```
 
+Normal servis koduna yalnızca `GeneratedCacheModule.Scope` enjekte et:
+
+```java
 CustomerEntity customer = new CustomerEntity();
 customer.customerId = 42L;
 customer.taxNumber = "1234567890";
@@ -253,8 +271,8 @@ Davranış:
 
 - `save` entity'yi Redis'e yazar.
 - Kalıcı yazım seçilen SQL write-behind hattına girer.
-- `findById` önce Redis'teki hot entity'yi okur.
-- Entity hot policy'ye uymuyorsa Redis'e kabul edilmeyebilir veya Redis'ten
+- `findById`, Redis’teki etkin entity’yi okur.
+- Entity etkin veri politikasına uymuyorsa Redis’e kabul edilmeyebilir veya Redis’ten
   düşürülebilir.
 
 ## Relation Nasıl Düşünülmeli?

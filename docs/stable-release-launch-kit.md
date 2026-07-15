@@ -19,10 +19,10 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Official Distribution Channel
 
-For `v0.3.2`, the official distribution channel is the GitHub Release asset:
+For `v0.4.0`, the official distribution channel is the GitHub Release asset:
 
 ```text
-cache-database-0.3.2-github-release.zip
+cache-database-0.4.0-github-release.zip
 ```
 
 The bundle contains the Maven module jars, source jars, javadocs, README,
@@ -32,14 +32,13 @@ package distribution channel.
 
 ## Release Positioning
 
-`cache-database v0.3.2`
+`cache-database v0.4.0`
 
-CacheDB `v0.3.2` is a stable framework release focused on explicit active-route
-adoption, JDBC-backed warm/read-through, PostgreSQL and MSSQL sample coverage,
-and deterministic sample load gates. It keeps the Redis-first data-layer model,
-compile-time generated APIs, bounded hot-set policies, and projection/read-model
-guidance from `v0.1.0`, then tightens the SQL provider path used by migration
-and sample projects.
+CacheDB `v0.4.0` is a stable framework release focused on a declarative consumer
+surface. Applications use one generated domain scope, configure per-entity hot
+policies in YAML, and execute typed query, projection, relation, and warm paths
+without manual repository factories. The release keeps the Redis-first model,
+bounded active data sets, durable SQL write-behind, and explicit route contracts.
 
 This release does not claim that every consuming application can cut production
 traffic over without its own validation. Before cutover, each application still
@@ -55,16 +54,17 @@ topologies must be proven in the consuming application's staging environment.
 ## Release Notes Template
 
 ```markdown
-## cache-database v0.3.2
+## cache-database v0.4.0
 
 This stable release improves the practical migration path for existing SQL-backed applications.
 
 ### What is stable
 
 - Redis-first entity repositories with bounded hot-set policies.
-- Compile-time generated metadata and ORM-like APIs.
+- One compile-time generated domain scope for typed CRUD, query, relation, projection, and warm operations.
+- Declarative per-entity policy configuration with explicit JDBC registration.
 - PostgreSQL and explicitly selected MSSQL durable SQL provider paths.
-- JDBC-backed generated bindings through `registerJdbcBacked(...)`.
+- Two-phase generated JDBC source and relation-loader registration.
 - Controlled read-through and warm/backfill through route-shaped query loaders.
 - Projection/read-model recipes for relation-heavy and globally ranked routes.
 - Migration Planner flow for schema discovery, warm-up, comparison, and report generation.
@@ -89,13 +89,13 @@ comparison, Redis memory budget, and rollback plan.
 ## Publication Checklist
 
 - `pom.xml` and all module parent versions use the stable version.
-- Release notes exist at `docs/releases/v0.3.2.md`.
+- Release notes exist at `docs/releases/v0.4.0.md`.
 - `mvn -DskipTests package` passes.
 - Public API compatibility check passes.
 - Turkish documentation quality check passes.
 - Local Docker HA preflight passes or the latest CI evidence is green.
 - `Public Beta Readiness` and `Production Evidence` are green for the release
   commit.
-- `Production GA Release Readiness` is green for `v0.3.2`.
+- `Production GA Release Readiness` is green for `v0.4.0`.
 - GitHub Release is not marked as prerelease.
-- GitHub Release asset `cache-database-0.3.2-github-release.zip` is attached.
+- GitHub Release asset `cache-database-0.4.0-github-release.zip` is attached.

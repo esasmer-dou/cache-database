@@ -1,13 +1,10 @@
 package com.example.cachedb.sample.web;
 
+import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.domain.ShipmentEntity;
-import com.example.cachedb.sample.domain.ShipmentEntityCacheBinding;
 import com.example.cachedb.sample.domain.ShipmentEventEntity;
-import com.example.cachedb.sample.domain.ShipmentEventEntityCacheBinding;
 import com.example.cachedb.sample.readmodel.ShipmentReadModels;
 import com.example.cachedb.sample.service.DurableReferenceGuard;
-import com.reactor.cachedb.core.api.EntityRepository;
-import com.reactor.cachedb.core.api.ProjectionRepository;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -40,39 +37,33 @@ public class ShipmentController {
             OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
             """;
 
-    private final EntityRepository<ShipmentEntity, Long> shipmentRepository;
-    private final EntityRepository<ShipmentEventEntity, Long> shipmentEventRepository;
-    private final ProjectionRepository<ShipmentReadModels.ShipmentSummary, Long> shipmentSummaryRepository;
+    private final GeneratedCacheModule.Scope domain;
     private final JdbcTemplate jdbcTemplate;
     private final DurableReferenceGuard durableReferenceGuard;
 
     public ShipmentController(
-            EntityRepository<ShipmentEntity, Long> shipmentRepository,
-            EntityRepository<ShipmentEventEntity, Long> shipmentEventRepository,
-            ProjectionRepository<ShipmentReadModels.ShipmentSummary, Long> shipmentSummaryRepository,
+            GeneratedCacheModule.Scope domain,
             JdbcTemplate jdbcTemplate,
             DurableReferenceGuard durableReferenceGuard
     ) {
-        this.shipmentRepository = shipmentRepository;
-        this.shipmentEventRepository = shipmentEventRepository;
-        this.shipmentSummaryRepository = shipmentSummaryRepository;
+        this.domain = domain;
         this.jdbcTemplate = jdbcTemplate;
         this.durableReferenceGuard = durableReferenceGuard;
     }
 
     @GetMapping("/active")
     public List<ShipmentReadModels.ShipmentSummary> active(@RequestParam(defaultValue = "50") int limit) {
-        return ShipmentEntityCacheBinding.activeShipments(
-                shipmentSummaryRepository,
-                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
+        return domain.shipments().projections().shipmentSummary().query(
+                domain.shipments().queries().activeShipmentsQuery(safeLimit)
         );
     }
 
     @GetMapping("/exceptions")
     public List<ShipmentReadModels.ShipmentSummary> exceptions(@RequestParam(defaultValue = "25") int limit) {
-        return ShipmentEntityCacheBinding.shipmentExceptions(
-                shipmentSummaryRepository,
-                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
+        return domain.shipments().projections().shipmentSummary().query(
+                domain.shipments().queries().shipmentExceptionsQuery(safeLimit)
         );
     }
 
@@ -81,10 +72,9 @@ public class ShipmentController {
             @PathVariable long customerId,
             @RequestParam(defaultValue = "25") int limit
     ) {
-        return ShipmentEntityCacheBinding.customerShipments(
-                shipmentSummaryRepository,
-                customerId,
-                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
+        return domain.shipments().projections().shipmentSummary().query(
+                domain.shipments().queries().customerShipmentsQuery(customerId, safeLimit)
         );
     }
 
@@ -93,11 +83,8 @@ public class ShipmentController {
             @PathVariable long shipmentId,
             @RequestParam(defaultValue = "5") int eventPreview
     ) {
-        return ShipmentEntityCacheBinding
-                .eventPreviewRepository(
-                        shipmentRepository,
-                        ApiLimits.requireInRange("eventPreview", eventPreview, 1, 20)
-                )
+        return domain.shipments().fetches()
+                .eventPreview(ApiLimits.requireInRange("eventPreview", eventPreview, 1, 20))
                 .findById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment not found in active set: " + shipmentId));
     }
@@ -107,11 +94,8 @@ public class ShipmentController {
             @PathVariable long shipmentId,
             @RequestParam(defaultValue = "20") int limit
     ) {
-        return ShipmentEventEntityCacheBinding.eventsForShipment(
-                shipmentEventRepository,
-                shipmentId,
-                ApiLimits.requireInRange("limit", limit, 1, 100)
-        );
+        return domain.shipmentEvents().queries()
+                .eventsForShipment(shipmentId, ApiLimits.requireInRange("limit", limit, 1, 100));
     }
 
     @GetMapping("/archive")
@@ -153,7 +137,7 @@ public class ShipmentController {
         shipment.promisedAt = request.promisedAt() == null ? now + 86_400L : request.promisedAt();
         shipment.updatedAt = now;
         shipment.riskScore = riskScore(shipment.shipmentStatus);
-        ShipmentEntity saved = shipmentRepository.save(shipment);
+        ShipmentEntity saved = domain.shipments().save(shipment);
         return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "ShipmentEntity", saved.shipmentId, saved));
     }
 
@@ -172,7 +156,7 @@ public class ShipmentController {
         event.eventTime = request.eventTime() == null ? now : request.eventTime();
         event.severity = request.severity() == null ? "INFO" : request.severity();
         event.description = request.description() == null ? "Manual shipment event" : request.description();
-        ShipmentEventEntity saved = shipmentEventRepository.save(event);
+        ShipmentEventEntity saved = domain.shipmentEvents().save(event);
         return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "ShipmentEventEntity", saved.eventId, saved));
     }
 
@@ -181,13 +165,13 @@ public class ShipmentController {
             @PathVariable long shipmentId,
             @Valid @RequestBody UpdateShipmentStatusRequest request
     ) {
-        ShipmentEntity shipment = shipmentRepository.findById(shipmentId)
+        ShipmentEntity shipment = domain.shipments().findById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment not found in active set: " + shipmentId));
         shipment.shipmentStatus = request.shipmentStatus();
         shipment.currentCity = request.currentCity() == null ? shipment.currentCity : request.currentCity();
         shipment.updatedAt = Instant.now().getEpochSecond();
         shipment.riskScore = riskScore(shipment.shipmentStatus);
-        ShipmentEntity saved = shipmentRepository.save(shipment);
+        ShipmentEntity saved = domain.shipments().save(shipment);
         return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "ShipmentEntity", saved.shipmentId, saved));
     }
 

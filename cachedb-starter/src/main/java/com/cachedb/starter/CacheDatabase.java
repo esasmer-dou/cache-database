@@ -66,6 +66,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 public final class CacheDatabase implements CacheSession, AutoCloseable {
 
@@ -603,6 +604,14 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return new CacheWarmRunner(this).execute(plan);
     }
 
+    public CacheWarmResult dryRun(CacheWarmPlan plan) {
+        return new CacheWarmRunner(this).dryRun(plan);
+    }
+
+    public CacheWarmResult warmProjections(CacheWarmPlan plan) {
+        return new CacheWarmRunner(this).executeProjectionsOnly(plan);
+    }
+
     public List<CacheWarmResult> warmAll(Collection<CacheWarmPlan> plans) {
         if (plans == null || plans.isEmpty()) {
             return List.of();
@@ -659,6 +668,13 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
 
     public EntityRegistry entityRegistry() {
         return entityRegistry;
+    }
+
+    public Optional<CachePolicy> registeredPolicy(String entityName) {
+        if (entityName == null || entityName.isBlank()) {
+            return Optional.empty();
+        }
+        return entityRegistry.find(entityName.trim()).map(EntityBinding::cachePolicy);
     }
 
     public com.reactor.cachedb.core.queue.WriteBehindWorkerSnapshot workerSnapshot() {

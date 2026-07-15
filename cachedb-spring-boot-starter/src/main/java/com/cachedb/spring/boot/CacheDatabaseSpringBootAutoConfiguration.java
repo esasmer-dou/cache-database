@@ -5,6 +5,7 @@ import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.RuntimeCoordinationConfig;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
+import com.reactor.cachedb.core.cache.CachePolicyCatalog;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer;
 import com.reactor.cachedb.starter.CacheDatabaseProfiles;
@@ -90,6 +91,25 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         return builder.build();
     }
 
+    @Bean
+    @ConditionalOnMissingBean
+    public CachePolicyCatalog cachePolicyCatalog(
+            CacheDbSpringProperties properties,
+            CacheDatabaseConfig config,
+            ObjectProvider<CachePolicyCatalogCustomizer> customizers
+    ) {
+        CachePolicyCatalog.Builder builder = CachePolicyCatalog.builder();
+        CachePolicyCatalogFactory.addConfiguredPolicies(
+                builder,
+                properties.getRegistration(),
+                config.resourceLimits().defaultCachePolicy()
+        );
+        for (CachePolicyCatalogCustomizer customizer : customizers.orderedStream().toList()) {
+            customizer.customize(builder, properties);
+        }
+        return builder.build();
+    }
+
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
     public CacheDatabase cacheDatabase(
@@ -98,17 +118,27 @@ public class CacheDatabaseSpringBootAutoConfiguration {
             @Qualifier("cacheDbBackgroundJedisPooled") ObjectProvider<JedisPooled> backgroundJedisProvider,
             DataSource dataSource,
             CacheDatabaseConfig config,
+            CachePolicyCatalog policyCatalog,
             CacheDbSpringProperties properties
     ) {
         JedisPooled jedisPooled = namedForegroundJedisProvider.getIfAvailable(jedisProvider::getIfAvailable);
         JedisPooled backgroundJedis = backgroundJedisProvider.getIfAvailable(() -> jedisPooled);
         CacheDatabase cacheDatabase = new CacheDatabase(jedisPooled, backgroundJedis, dataSource, config);
         if (properties.getRegistration().isEnabled()) {
-            GeneratedCacheBindingsDiscovery.registerDiscovered(
-                    cacheDatabase,
-                    config.resourceLimits().defaultCachePolicy(),
-                    resolveRegistrationClassLoader()
-            );
+            if (properties.getRegistration().getSource() == CacheDbSpringProperties.RegistrationSource.JDBC) {
+                GeneratedCacheBindingsDiscovery.registerDiscoveredJdbcBacked(
+                        cacheDatabase,
+                        policyCatalog,
+                        resolveRegistrationClassLoader(),
+                        properties.getRegistration().isFailOnUnknownEntity()
+                );
+            } else {
+                GeneratedCacheBindingsDiscovery.registerDiscovered(
+                        cacheDatabase,
+                        config.resourceLimits().defaultCachePolicy(),
+                        resolveRegistrationClassLoader()
+                );
+            }
         }
         cacheDatabase.start();
         return cacheDatabase;

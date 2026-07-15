@@ -1,6 +1,13 @@
 package com.reactor.cachedb.spring.boot;
 
+import com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator;
+import com.reactor.cachedb.core.cache.EntityHotPolicyMode;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @ConfigurationProperties(prefix = "cachedb")
 public class CacheDbSpringProperties {
@@ -82,6 +89,11 @@ public class CacheDbSpringProperties {
         READ_COMMITTED,
         REPEATABLE_READ,
         SERIALIZABLE
+    }
+
+    public enum RegistrationSource {
+        JDBC,
+        METADATA_ONLY
     }
 
     public static final class RedisProperties {
@@ -507,6 +519,9 @@ public class CacheDbSpringProperties {
 
     public static final class RegistrationProperties {
         private boolean enabled = true;
+        private RegistrationSource source = RegistrationSource.METADATA_ONLY;
+        private boolean failOnUnknownEntity = true;
+        private final Map<String, EntityPolicyProperties> entities = new LinkedHashMap<>();
 
         public boolean isEnabled() {
             return enabled;
@@ -514,6 +529,185 @@ public class CacheDbSpringProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public RegistrationSource getSource() {
+            return source;
+        }
+
+        public void setSource(RegistrationSource source) {
+            this.source = source == null ? RegistrationSource.METADATA_ONLY : source;
+        }
+
+        public boolean isFailOnUnknownEntity() {
+            return failOnUnknownEntity;
+        }
+
+        public void setFailOnUnknownEntity(boolean failOnUnknownEntity) {
+            this.failOnUnknownEntity = failOnUnknownEntity;
+        }
+
+        public Map<String, EntityPolicyProperties> getEntities() {
+            return entities;
+        }
+    }
+
+    public static final class EntityPolicyProperties {
+        private Integer hotEntityLimit;
+        private Integer pageSize;
+        private Boolean lruEvictionEnabled;
+        private Long entityTtlSeconds;
+        private Long pageTtlSeconds;
+        private HotPolicyProperties hotPolicy;
+
+        public Integer getHotEntityLimit() {
+            return hotEntityLimit;
+        }
+
+        public void setHotEntityLimit(Integer hotEntityLimit) {
+            this.hotEntityLimit = hotEntityLimit;
+        }
+
+        public Integer getPageSize() {
+            return pageSize;
+        }
+
+        public void setPageSize(Integer pageSize) {
+            this.pageSize = pageSize;
+        }
+
+        public Boolean getLruEvictionEnabled() {
+            return lruEvictionEnabled;
+        }
+
+        public void setLruEvictionEnabled(Boolean lruEvictionEnabled) {
+            this.lruEvictionEnabled = lruEvictionEnabled;
+        }
+
+        public Long getEntityTtlSeconds() {
+            return entityTtlSeconds;
+        }
+
+        public void setEntityTtlSeconds(Long entityTtlSeconds) {
+            this.entityTtlSeconds = entityTtlSeconds;
+        }
+
+        public Long getPageTtlSeconds() {
+            return pageTtlSeconds;
+        }
+
+        public void setPageTtlSeconds(Long pageTtlSeconds) {
+            this.pageTtlSeconds = pageTtlSeconds;
+        }
+
+        public HotPolicyProperties getHotPolicy() {
+            return hotPolicy;
+        }
+
+        public void setHotPolicy(HotPolicyProperties hotPolicy) {
+            this.hotPolicy = hotPolicy;
+        }
+    }
+
+    public static final class HotPolicyProperties {
+        private EntityHotPolicyMode mode;
+        private String timeColumn;
+        private Long hotForSeconds;
+        private String stateColumn;
+        private List<String> stateValues = new ArrayList<>();
+        private Boolean admitOnWrite;
+        private Boolean admitOnRead;
+        private Boolean admitOnWarm;
+        private Boolean evictWhenRejected;
+        private EntityHotPolicyCompositeOperator compositeOperator;
+        private List<HotPolicyProperties> children = new ArrayList<>();
+
+        public EntityHotPolicyMode getMode() {
+            return mode;
+        }
+
+        public void setMode(EntityHotPolicyMode mode) {
+            this.mode = mode;
+        }
+
+        public String getTimeColumn() {
+            return timeColumn;
+        }
+
+        public void setTimeColumn(String timeColumn) {
+            this.timeColumn = timeColumn;
+        }
+
+        public Long getHotForSeconds() {
+            return hotForSeconds;
+        }
+
+        public void setHotForSeconds(Long hotForSeconds) {
+            this.hotForSeconds = hotForSeconds;
+        }
+
+        public String getStateColumn() {
+            return stateColumn;
+        }
+
+        public void setStateColumn(String stateColumn) {
+            this.stateColumn = stateColumn;
+        }
+
+        public List<String> getStateValues() {
+            return stateValues;
+        }
+
+        public void setStateValues(List<String> stateValues) {
+            this.stateValues = stateValues == null ? new ArrayList<>() : new ArrayList<>(stateValues);
+        }
+
+        public Boolean getAdmitOnWrite() {
+            return admitOnWrite;
+        }
+
+        public void setAdmitOnWrite(Boolean admitOnWrite) {
+            this.admitOnWrite = admitOnWrite;
+        }
+
+        public Boolean getAdmitOnRead() {
+            return admitOnRead;
+        }
+
+        public void setAdmitOnRead(Boolean admitOnRead) {
+            this.admitOnRead = admitOnRead;
+        }
+
+        public Boolean getAdmitOnWarm() {
+            return admitOnWarm;
+        }
+
+        public void setAdmitOnWarm(Boolean admitOnWarm) {
+            this.admitOnWarm = admitOnWarm;
+        }
+
+        public Boolean getEvictWhenRejected() {
+            return evictWhenRejected;
+        }
+
+        public void setEvictWhenRejected(Boolean evictWhenRejected) {
+            this.evictWhenRejected = evictWhenRejected;
+        }
+
+        public EntityHotPolicyCompositeOperator getCompositeOperator() {
+            return compositeOperator;
+        }
+
+        public void setCompositeOperator(EntityHotPolicyCompositeOperator compositeOperator) {
+            this.compositeOperator = compositeOperator;
+        }
+
+        public List<HotPolicyProperties> getChildren() {
+            return children;
+        }
+
+        public void setChildren(List<HotPolicyProperties> children) {
+            this.children = children == null ? new ArrayList<>() : new ArrayList<>(children);
         }
     }
 }

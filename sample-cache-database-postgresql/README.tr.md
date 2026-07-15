@@ -41,7 +41,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.3.2</cachedb.version>
+  <cachedb.version>0.4.0</cachedb.version>
 </properties>
 
 <repositories>
@@ -95,7 +95,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 </build>
 ```
 
-Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.3.2`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
+Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.4.0`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
 `cachedb-annotations` ve `cachedb-processor`, `OrderEntityCacheBinding` gibi generated binding sınıflarının üretilmesi için gereklidir.
 
 Çalıştırma ve build gereksinimi: JDK 21 kullan. Örnek `pom.xml` içinde
@@ -125,9 +125,9 @@ mvn clean package
 
 Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir.
 
-## 0.3.2 İçin Doğrulanmış Akış
+## 0.4.0 İçin Doğrulanmış Deklaratif Akış
 
-Bu örnek CacheDB `0.3.2` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
+Bu örnek CacheDB `0.4.0` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
 sözleşme şudur:
 
 1. Yazılar CacheDB üzerinden alınır ve PostgreSQL’e write-behind ile aktarılır.
@@ -138,7 +138,7 @@ sözleşme şudur:
 
 Bu sözleşme örnek kodda açıkça görünür.
 
-### 0.3.2 ile gelen production sözleşmeleri
+### 0.4.0 Sürümünde Doğrulanan Production Sözleşmeleri
 
 - Komut endpoint’leri `202 Accepted` döner. Bu yanıt, komutun Redis tarafından kabul edildiğini söyler; SQL’e kalıcı yazımın tamamlandığını söylemez.
 - Alt kayıt yazılmadan önce indeksli tek bir SQL `EXISTS` sorgusu çalışır. Ana kayıt henüz kalıcı değilse request thread’i bekletilmez; `Retry-After` ile birlikte `409 Conflict` döner.
@@ -149,8 +149,11 @@ Bu sözleşme örnek kodda açıkça görünür.
 - Warm/backfill işlemi sınırlı bir asenkron job olarak çalışır: `1` worker ve `8` elemanlık kuyruk. İşlemi `POST` ile başlat, sonucu `/api/warm/jobs/{jobId}` üzerinden izle.
 - `/api/health/live` process’in çalıştığını, `/api/health/ready` ise Redis, SQL ve write-behind durumunu gösterir.
 - Sınırı aşan route limitleri sessizce küçültülmez; `400 Bad Request` ile reddedilir.
+- Uygulama servisleri yalnızca üretilmiş bir `GeneratedCacheModule.Scope` kullanır; repository veya binding nesnelerini elle oluşturmaz.
+- Her entity için admission policy `application.yml` üzerinden tanımlanır. `cachedb.registration.source: jdbc` ayarı, veritabanı kayıt kaynağını açıkça belirtir.
+- Named query, fetch planı, projection ve tip güvenli warm planları derleme sırasında üretilir. `ProjectionSchema`, projection alan sırasını ve serileştirme sözleşmesini açık tutar.
 
-`0.3.2` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
+`0.4.0` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
 saniyede, write-behind SQL işlemleri 20 saniyede zaman aşımına uğrar. Admin
 istek ve arka plan kuyruklarının kapasitesi `application.yml` içinde açıkça
 tanımlanmıştır. Sürüm kontrollü hydration, eski bir warm sonucunun
@@ -175,35 +178,25 @@ CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
 }
 ```
 
-`registerJdbcBacked(...)`, açık warm/backfill işleminin kullanacağı sınırlı
-PostgreSQL loader’ını sağlar. Bu sample query read-through özelliğini açmaz:
+Spring Boot, generated registrar ve `application.yml` içindeki entity bazlı policy kataloğunu kullanarak JDBC kaydını otomatik yapar. Uygulama kodu `registerJdbcBacked(...)` çağırmamalı ve her entity için ayrı repository bean’i oluşturmamalıdır.
 
-```java
-@Bean
-EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
-    CachePolicy policy = SampleCachePolicies.orderTimelinePolicy();
-    OrderEntityCacheBinding.registerJdbcBacked(cacheDatabase, policy);
-    return OrderEntityCacheBinding.repository(cacheDatabase, policy);
-}
+```yaml
+cachedb:
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
 ```
 
-Warm endpoint’i tam tablo taramaz; müşteri sipariş ekranının ihtiyacı olan
-pencereyi okur:
+Ön yükleme yolu, tam tablo taraması yerine generated domain scope ve sorgu şekline uygun tip güvenli plan kullanır:
 
 ```java
-QuerySpec querySpec = QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-        .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
-        .limitTo(limit);
-
-CacheWarmResult result = cacheDatabase.warm(CacheWarmPlan.builder(OrderEntityCacheBinding.METADATA.entityName())
-        .name("sample-customer-order-window-" + customerId)
-        .querySpec(querySpec)
-        .maxRows(limit)
-        .forceImmediateProjectionRefresh(true)
-        .reindexQueryIndexes(true)
-        .build());
+CacheWarmPlan plan = domain.orders().warmPlan(
+        "sample-customer-orders",
+        domain.orders().queries().customerTimelineQuery(customerId, limit),
+        limit
+);
+CacheWarmResult result = cacheDatabase.warmProjections(plan);
 ```
-
 Uygulama hazır olduktan sonra yerel yük kapısını şu komutla çalıştır:
 
 ```powershell
@@ -419,70 +412,13 @@ curl.exe "http://127.0.0.1:8091/api/orders/archive?customerId=1&beforeOrderDate=
 Arşiv ihtiyacını Redis aktif veri setini tüm tabloyu kapsayacak kadar büyüterek
 çözmeye çalışma. Bu yaklaşım Redis’i ikinci bir arşiv veritabanına çevirir.
 
-### Kopyala-Çalıştır Java Uygulama Paketi
+### Kopyala-Çalıştır Deklaratif Uygulama
 
-Yukarıdaki komutlar davranışı test eder. Aşağıdaki kod ise gerçek projeye
-taşınacak parçayı gösterir. Kendi sisteminde tablo ve kolon adlarını değiştirmen
-yeterlidir.
+Uygulama yalnızca modeli ve sorgu yollarının sınırlarını tanımlar. CacheDB tip güvenli erişim katmanını üretir; Spring Boot da JDBC yükleyicilerini otomatik kaydeder.
 
-#### 1. Okuma yolunun sözleşmesini açık yaz
-
-Her controller kendi sayfa boyutunu veya Redis penceresini belirlememeli. Bu
-kararı tek bir sınıfa koy:
+#### 1. Entity ve sınırlı sorguyu tanımla
 
 ```java
-// src/main/java/com/example/orders/CustomerOrdersRouteContract.java
-package com.example.orders;
-
-public record CustomerOrdersRouteContract(
-        int firstPageSize,
-        int hotWindowPerCustomer,
-        int maxSqlArchivePageSize,
-        boolean projectionRequired
-) {
-    public static CustomerOrdersRouteContract timeline() {
-        return new CustomerOrdersRouteContract(20, 1_000, 500, true);
-    }
-
-    public int requireTimelineLimit(int requested) {
-        return requireRange("limit", requested, 1, hotWindowPerCustomer);
-    }
-
-    public int requireArchiveLimit(int requested) {
-        return requireRange("limit", requested, 1, maxSqlArchivePageSize);
-    }
-
-    private int requireRange(String name, int value, int min, int max) {
-        if (value < min || value > max) {
-            throw new IllegalArgumentException(name + " must be between " + min + " and " + max);
-        }
-        return value;
-    }
-}
-```
-
-#### 2. Entity, projection ve named query tanımını yap
-
-Named query, Redis’ten çalışacak okuma yolunun sözleşmesidir. Projection, ekranın
-okuyacağı küçük satırdır. Full entity ise seçilmiş detay ekranları için ayrılır.
-
-```java
-// src/main/java/com/example/orders/domain/OrderEntity.java
-package com.example.orders.domain;
-
-import com.example.orders.readmodel.OrderReadModels;
-import com.reactor.cachedb.annotations.CacheColumn;
-import com.reactor.cachedb.annotations.CacheEntity;
-import com.reactor.cachedb.annotations.CacheId;
-import com.reactor.cachedb.annotations.CacheNamedQuery;
-import com.reactor.cachedb.annotations.CacheProjectionDefinition;
-import com.reactor.cachedb.core.projection.EntityProjection;
-import com.reactor.cachedb.core.query.QueryFilter;
-import com.reactor.cachedb.core.query.QuerySort;
-import com.reactor.cachedb.core.query.QuerySpec;
-
-import java.math.BigDecimal;
-
 @CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
 public class OrderEntity {
     @CacheId(column = "order_id")
@@ -497,20 +433,8 @@ public class OrderEntity {
     @CacheColumn("order_amount")
     public BigDecimal orderAmount;
 
-    @CacheColumn("currency_code")
-    public String currencyCode;
-
-    @CacheColumn("order_type")
-    public String orderType;
-
     @CacheColumn("status")
     public String status;
-
-    @CacheColumn("line_count")
-    public Integer lineCount;
-
-    @CacheColumn("priority_score")
-    public Double priorityScore;
 
     @CacheProjectionDefinition("orderSummary")
     public static EntityProjection<OrderEntity, OrderReadModels.OrderSummary, Long> orderSummaryProjection() {
@@ -526,173 +450,106 @@ public class OrderEntity {
 }
 ```
 
+Sorgunun adı ve üst sınırı bellidir. Controller, çalışma anında sınırsız veya rastgele sorgu üretmez.
+
+#### 2. Serileştirme ve indeks kolonlarını bir kez tanımla
+
 ```java
-// src/main/java/com/example/orders/readmodel/OrderReadModels.java
-package com.example.orders.readmodel;
-
-import com.example.orders.domain.OrderEntity;
-import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
-import com.reactor.cachedb.core.projection.EntityProjection;
-import com.reactor.cachedb.core.projection.ProjectionCodec;
-
-import java.math.BigDecimal;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-
 public final class OrderReadModels {
-    public static final EntityProjection<OrderEntity, OrderSummary, Long> ORDER_SUMMARY_PROJECTION =
-            EntityProjection.of(
-                    "order-summary",
-                    new ProjectionCodec<>() {
-                        @Override
-                        public String toRedisValue(OrderSummary projection) {
-                            LinkedHashMap<String, String> values = new LinkedHashMap<>();
-                            values.put("order_id", String.valueOf(projection.orderId()));
-                            values.put("customer_id", String.valueOf(projection.customerId()));
-                            values.put("order_date", String.valueOf(projection.orderDate()));
-                            values.put("order_amount", String.valueOf(projection.orderAmount()));
-                            values.put("currency_code", projection.currencyCode());
-                            values.put("status", projection.status());
-                            values.put("priority_score", String.valueOf(projection.priorityScore()));
-                            return LengthPrefixedPayloadCodec.encode(values);
-                        }
+    private static final ProjectionSchema<OrderSummary> ORDER_SUMMARY_SCHEMA =
+            ProjectionSchema.<OrderSummary>builder()
+                    .longColumn("order_id", OrderSummary::orderId)
+                    .longColumn("customer_id", OrderSummary::customerId)
+                    .longColumn("order_date", OrderSummary::orderDate)
+                    .decimalColumn("order_amount", OrderSummary::orderAmount)
+                    .stringColumn("status", OrderSummary::status)
+                    .decodeWith(row -> new OrderSummary(
+                            row.longValue("order_id"),
+                            row.longValue("customer_id"),
+                            row.longValue("order_date"),
+                            row.decimal("order_amount"),
+                            row.string("status")
+                    ))
+                    .build();
 
-                        @Override
-                        public OrderSummary fromRedisValue(String encoded) {
-                            Map<String, String> values = LengthPrefixedPayloadCodec.decode(encoded);
-                            return new OrderSummary(
-                                    Long.valueOf(values.get("order_id")),
-                                    Long.valueOf(values.get("customer_id")),
-                                    Long.valueOf(values.get("order_date")),
-                                    new BigDecimal(values.get("order_amount")),
-                                    values.get("currency_code"),
-                                    values.get("status"),
-                                    Double.valueOf(values.get("priority_score"))
-                            );
-                        }
-                    },
+    public static final EntityProjection<OrderEntity, OrderSummary, Long> ORDER_SUMMARY_PROJECTION =
+            EntityProjection.<OrderEntity, OrderSummary, Long>of(
+                    "order-summary",
+                    ORDER_SUMMARY_SCHEMA,
                     OrderSummary::orderId,
-                    List.of("order_id", "customer_id", "order_date", "order_amount", "currency_code", "status", "priority_score"),
-                    projection -> {
-                        LinkedHashMap<String, Object> columns = new LinkedHashMap<>();
-                        columns.put("order_id", projection.orderId());
-                        columns.put("customer_id", projection.customerId());
-                        columns.put("order_date", projection.orderDate());
-                        columns.put("order_amount", projection.orderAmount());
-                        columns.put("currency_code", projection.currencyCode());
-                        columns.put("status", projection.status());
-                        columns.put("priority_score", projection.priorityScore());
-                        return columns;
-                    },
                     order -> new OrderSummary(
                             order.orderId,
                             order.customerId,
                             order.orderDate,
                             order.orderAmount,
-                            order.currencyCode,
-                            order.status,
-                            order.priorityScore
+                            order.status
                     )
-            ).rankedBy("order_date", "priority_score").asyncRefresh();
-
-    private OrderReadModels() {
-    }
+            ).rankedBy("order_date").asyncRefresh();
 
     public record OrderSummary(
             Long orderId,
             Long customerId,
             Long orderDate,
             BigDecimal orderAmount,
-            String currencyCode,
-            String status,
-            Double priorityScore
+            String status
     ) {
     }
 }
 ```
 
-#### 3. Entity ve projection repository kayıtlarını yap
+`ProjectionSchema` reflection kullanmaz. Redis’e yazma, Redis’ten okuma ve sorgu indeksi kolonları için tek doğruluk kaynağıdır.
 
-Annotation processing sonrasında `OrderEntityCacheBinding`, CacheDB tarafından
-üretilir. Uygulama kodu reflection veya string tabanlı lookup yerine bu generated
-binding sınıfını kullanmalıdır.
+#### 3. Her entity için policy değerlerini yapılandırmaya koy
+
+```yaml
+cachedb:
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      OrderEntity:
+        hot-entity-limit: 100000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 60
+        hot-policy:
+          mode: COMPOSITE
+          composite-operator: ANY
+          children:
+            - mode: TIME_WINDOW
+              time-column: order_date
+              hot-for-seconds: 7776000
+            - mode: STATE_WINDOW
+              state-column: status
+              state-values: [NEW, PAID, PICKING, OPEN, PENDING]
+```
+
+CacheDB başlangıçta iki aşama çalıştırır. Önce her entity kendi policy değeri ve JDBC kaynağıyla kaydedilir; sonra ilişki ve sayfa yükleyicileri bağlanır. Böylece ana entity’nin policy değeri yanlışlıkla alt entity’ye taşınmaz. Entity adı hatalıysa uygulama başlangıçta durur.
+
+#### 4. Tek bir generated domain bean’i aç
 
 ```java
-// src/main/java/com/example/orders/OrderCacheDbConfig.java
-package com.example.orders;
-
-import com.example.orders.domain.OrderEntity;
-import com.example.orders.domain.OrderEntityCacheBinding;
-import com.example.orders.readmodel.OrderReadModels;
-import com.reactor.cachedb.core.api.EntityRepository;
-import com.reactor.cachedb.core.api.ProjectionRepository;
-import com.reactor.cachedb.core.cache.CachePolicy;
-import com.reactor.cachedb.starter.CacheDatabase;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-
-@Configuration
-public class OrderCacheDbConfig {
+@Configuration(proxyBeanMethods = false)
+public class CacheDbDomainConfig {
     @Bean
-    EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
-        CachePolicy policy = CachePolicy.builder()
-                .hotEntityLimit(100_000)
-                .pageSize(100)
-                .entityTtlSeconds(0)
-                .pageTtlSeconds(60)
-                .build();
-        OrderEntityCacheBinding.register(cacheDatabase, policy);
-        return OrderEntityCacheBinding.repository(cacheDatabase, policy);
-    }
-
-    @Bean
-    ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository(
-            EntityRepository<OrderEntity, Long> orderRepository
-    ) {
-        return OrderEntityCacheBinding.orderSummary(orderRepository);
-    }
-
-    @Bean
-    CustomerOrdersRouteContract customerOrdersRouteContract() {
-        return CustomerOrdersRouteContract.timeline();
+    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
+        return GeneratedCacheModule.using(cacheDatabase);
     }
 }
 ```
 
-#### 4. Redis projection okuma yolunu yaz
+Her entity veya projection için ayrı Spring bean’i oluşturma. `GeneratedCacheModule.Scope`, derleme sırasında üretilen ve paketteki tüm entity’leri tip güvenli biçimde açan değişmez uygulama yüzeyidir.
 
-Bu yol, Redis boşsa PostgreSQL’i otomatik taramaz. Bu bir aktif veri seti
-yoludur. Veri eksikse warm/backfill çalıştırılmalı veya açık SQL yolu
-kullanılmalıdır.
+#### 5. Uygulama kodunda generated DSL’i kullan
 
 ```java
-// src/main/java/com/example/orders/CustomerOrdersController.java
-package com.example.orders;
-
-import com.example.orders.domain.OrderEntityCacheBinding;
-import com.example.orders.readmodel.OrderReadModels;
-import com.reactor.cachedb.core.api.ProjectionRepository;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.util.List;
-
 @RestController
 @RequestMapping("/api/customers")
-public class CustomerOrdersController {
-    private final ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository;
-    private final CustomerOrdersRouteContract routeContract;
+public class CustomerController {
+    private final GeneratedCacheModule.Scope domain;
 
-    public CustomerOrdersController(
-            ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository,
-            CustomerOrdersRouteContract routeContract
-    ) {
-        this.orderSummaryRepository = orderSummaryRepository;
-        this.routeContract = routeContract;
+    public CustomerController(GeneratedCacheModule.Scope domain) {
+        this.domain = domain;
     }
 
     @GetMapping("/{customerId}/orders")
@@ -700,299 +557,112 @@ public class CustomerOrdersController {
             @PathVariable long customerId,
             @RequestParam(defaultValue = "20") int limit
     ) {
-        return OrderEntityCacheBinding.customerTimeline(
-                orderSummaryRepository,
-                customerId,
-                routeContract.requireTimelineLimit(limit)
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
+        return domain.orders().projections().orderSummary().query(
+                domain.orders().queries().customerTimelineQuery(customerId, safeLimit)
         );
     }
 }
 ```
 
-#### 5. Warm/backfill servis kodunu ekle
+Controller; `EntityRegistry`, Redis anahtarları, codec, JDBC loader veya projection implementasyon sınıflarını bilmez.
 
-Geçiş sürecindeki kritik operasyon budur. Servis PostgreSQL’den okur, sonra
-`save(...)` çağırmadan Redis’i doldurur. Böylece aynı kayıtlar için tekrar
-write-behind işi üretmez. Bu operasyonu yalnızca aşağıdaki sınırlı asenkron job
-servisinin arkasında çalıştır; büyük bir warm işlemini HTTP request thread’inde çalıştırma.
+#### 6. Tip güvenli planla ön yükleme yap
 
 ```java
-// src/main/java/com/example/orders/CustomerOrdersWarmBackfillService.java
-package com.example.orders;
-
-import com.example.orders.domain.OrderEntity;
-import com.reactor.cachedb.core.api.EntityRepository;
-import com.reactor.cachedb.redis.RedisEntityRepository;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Service;
-
-import java.util.Collections;
-import java.util.List;
-
 @Service
-public class CustomerOrdersWarmBackfillService {
-    private static final String CUSTOMER_ORDER_WINDOW_SQL = """
-            SELECT order_id, customer_id, order_date, order_amount, currency_code, order_type, status, line_count, priority_score
-            FROM sample_orders
-            WHERE customer_id = ?
-            ORDER BY order_date DESC, order_id DESC
-            OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
-            """;
+public class CustomerOrderWarmService {
+    private final CacheDatabase cacheDatabase;
+    private final GeneratedCacheModule.Scope domain;
 
-    private final JdbcTemplate jdbcTemplate;
-    private final EntityRepository<OrderEntity, Long> orderRepository;
-    private final CustomerOrdersRouteContract routeContract;
-
-    public CustomerOrdersWarmBackfillService(
-            JdbcTemplate jdbcTemplate,
-            EntityRepository<OrderEntity, Long> orderRepository,
-            CustomerOrdersRouteContract routeContract
-    ) {
-        this.jdbcTemplate = jdbcTemplate;
-        this.orderRepository = orderRepository;
-        this.routeContract = routeContract;
+    public CustomerOrderWarmService(CacheDatabase cacheDatabase, GeneratedCacheModule.Scope domain) {
+        this.cacheDatabase = cacheDatabase;
+        this.domain = domain;
     }
 
-    public WarmResult warm(long customerId, int requestedLimit, boolean projectionOnly, boolean dryRun) {
-        int limit = routeContract.requireTimelineLimit(requestedLimit);
-        List<OrderEntity> orders = jdbcTemplate.query(
-                CUSTOMER_ORDER_WINDOW_SQL,
-                (rs, rowNumber) -> {
-                    OrderEntity order = new OrderEntity();
-                    order.orderId = rs.getLong("order_id");
-                    order.customerId = rs.getLong("customer_id");
-                    order.orderDate = rs.getLong("order_date");
-                    order.orderAmount = rs.getBigDecimal("order_amount");
-                    order.currencyCode = rs.getString("currency_code");
-                    order.orderType = rs.getString("order_type");
-                    order.status = rs.getString("status");
-                    order.lineCount = rs.getInt("line_count");
-                    order.priorityScore = rs.getDouble("priority_score");
-                    return order;
-                },
-                customerId,
+    public CacheWarmResult dryRun(long customerId, int limit) {
+        return cacheDatabase.dryRun(plan(customerId, limit));
+    }
+
+    public CacheWarmResult warmProjection(long customerId, int limit) {
+        return cacheDatabase.warmProjections(plan(customerId, limit));
+    }
+
+    public CacheWarmResult warmEntityAndProjection(long customerId, int limit) {
+        return cacheDatabase.warm(plan(customerId, limit));
+    }
+
+    private CacheWarmPlan plan(long customerId, int limit) {
+        return domain.orders().warmPlan(
+                "customer-order-window-" + customerId,
+                domain.orders().queries().customerTimelineQuery(customerId, limit),
                 limit
         );
-
-        if (!dryRun && !orders.isEmpty()) {
-            RedisEntityRepository<OrderEntity, Long> redisRepository = redisOrderRepository();
-            if (projectionOnly) {
-                redisRepository.hydrateProjectionWarmBatch(orders);
-            } else {
-                redisRepository.hydrateWarmBatch(orders, Collections.nCopies(orders.size(), 1L), true, false);
-            }
-        }
-
-        return new WarmResult(customerId, limit, orders.size(), projectionOnly, dryRun);
-    }
-
-    @SuppressWarnings("unchecked")
-    private RedisEntityRepository<OrderEntity, Long> redisOrderRepository() {
-        if (orderRepository instanceof RedisEntityRepository<?, ?> redisRepository) {
-            return (RedisEntityRepository<OrderEntity, Long>) redisRepository;
-        }
-        throw new IllegalStateException("Warm/backfill requires RedisEntityRepository");
-    }
-
-    public record WarmResult(long customerId, int requestedWindow, int rowsReadFromSql, boolean projectionOnly, boolean dryRun) {
     }
 }
 ```
 
-```java
-// src/main/java/com/example/orders/WarmBackfillController.java
-package com.example.orders;
+Değişiklik yapmadan önce `dryRun`, liste ve dashboard yolları için `warmProjections`, aynı aralıkta tam entity detayı da gerekiyorsa `warm` kullan. HTTP üzerinden başlatılan ön yükleme işi asenkron ve sınırlı kalmalıdır.
 
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
-import org.springframework.http.ResponseEntity;
+#### 7. Arşiv ve geçmiş sorgularını açık SQL yolu olarak bırak
 
-@RestController
-@RequestMapping("/api/warm")
-public class WarmBackfillController {
-    private final CustomerOrdersWarmBackfillService warmBackfillService;
-    private final WarmJobService warmJobService;
+CacheDB, Redis’te bulunamayan her kayıt için sınırsız veritabanı sorgusu çalıştırmaz. Eski geçmiş, dışa aktarım ve denetim sorguları indeksli ve açık SQL yollarında kalır. Keyset pagination ve kesin bir sayfa üst sınırı kullan.
 
-    public WarmBackfillController(
-            CustomerOrdersWarmBackfillService warmBackfillService,
-            WarmJobService warmJobService
-    ) {
-        this.warmBackfillService = warmBackfillService;
-        this.warmJobService = warmJobService;
-    }
-
-    @PostMapping("/orders/customer/{customerId}")
-    public ResponseEntity<WarmJobService.WarmJob> warmCustomerOrders(
-            @PathVariable long customerId,
-            @RequestParam(defaultValue = "100") int limit,
-            @RequestParam(defaultValue = "true") boolean projectionOnly,
-            @RequestParam(defaultValue = "false") boolean dryRun
-    ) {
-        int safeLimit = CustomerOrdersRouteContract.timeline().requireTimelineLimit(limit);
-        return ResponseEntity.accepted().body(warmJobService.submit(
-                "customer-orders",
-                () -> warmBackfillService.warm(customerId, safeLimit, projectionOnly, dryRun)
-        ));
-    }
-}
-```
-
-#### 6. Arşiv ve geçmiş için açık SQL yolu bırak
-
-Bu endpoint bilinçli olarak CacheDB entity sorgusu değildir. Aktif veri setinin
-dışındaki okumalar, eski geçmiş, export ve audit ekranları için güvenli yoldur.
-
-```java
-// src/main/java/com/example/orders/OrderArchiveController.java
-package com.example.orders;
-
-import com.example.orders.readmodel.OrderReadModels;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.util.List;
-
-@RestController
-@RequestMapping("/api/orders")
-public class OrderArchiveController {
-    private static final String ARCHIVE_SQL = """
-            SELECT order_id, customer_id, order_date, order_amount, currency_code, status, priority_score
-            FROM sample_orders
-            WHERE customer_id = ?
-              AND (order_date < ? OR (order_date = ? AND order_id < ?))
-            ORDER BY order_date DESC, order_id DESC
-            OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
-            """;
-
-    private final JdbcTemplate jdbcTemplate;
-    private final CustomerOrdersRouteContract routeContract;
-
-    public OrderArchiveController(JdbcTemplate jdbcTemplate, CustomerOrdersRouteContract routeContract) {
-        this.jdbcTemplate = jdbcTemplate;
-        this.routeContract = routeContract;
-    }
-
-    @GetMapping("/archive")
-    public List<OrderReadModels.OrderSummary> archive(
-            @RequestParam long customerId,
-            @RequestParam(required = false) Long beforeOrderDate,
-            @RequestParam(required = false) Long beforeOrderId,
-            @RequestParam(defaultValue = "100") int limit
-    ) {
-        long upperBound = beforeOrderDate == null ? Long.MAX_VALUE : beforeOrderDate;
-        long upperId = beforeOrderId == null ? Long.MAX_VALUE : beforeOrderId;
-        int safeLimit = routeContract.requireArchiveLimit(limit);
-        return jdbcTemplate.query(
-                ARCHIVE_SQL,
-                (rs, rowNumber) -> new OrderReadModels.OrderSummary(
-                        rs.getLong("order_id"),
-                        rs.getLong("customer_id"),
-                        rs.getLong("order_date"),
-                        rs.getBigDecimal("order_amount"),
-                        rs.getString("currency_code"),
-                        rs.getString("status"),
-                        rs.getDouble("priority_score")
-                ),
-                customerId,
-                upperBound,
-                upperBound,
-                upperId,
-                safeLimit
-        );
-    }
-}
-```
-
-Yol karar özeti:
-
-| Route | Redis entity | Redis projection | PostgreSQL |
+| Sorgu yolu | Redis entity | Redis projection | PostgreSQL |
 |---|---:|---:|---:|
-| Müşteri sipariş listesi | Hayır | Evet | Sadece warm/backfill sırasında |
-| Seçilmiş sipariş detayı | Evet | Opsiyonel | Sadece açık cold-detail yolu varsa |
-| Sipariş oluşturma/güncelleme | Policy kabul ederse evet | Projection varsa evet | Write-behind flush |
-| Arşiv/export | Hayır | Hayır | Evet |
+| Müşteri sipariş listesi | Hayır | Evet | Yalnızca ön yükleme sırasında |
+| Seçilmiş güncel sipariş detayı | Evet | İsteğe bağlı | Yalnızca açık eski-detay yolunda |
+| Sipariş oluşturma/güncelleme | Policy sonucuna bağlı | Tanımlıysa yenilenir | Write-behind ile kalıcılaştırılır |
+| Arşiv/dışa aktarım | Hayır | Hayır | Evet |
 
 ## Bu README’de Geçen Temel Terimler
 
-CacheDB’ye yeni başlıyorsan önce bu bölümü oku. Örnek projede bazı CacheDB terimleri sık geçer; kodu incelemeden önce bu kavramların ne anlama geldiğini bilmek işleri netleştirir.
-
-| Terim | Bu örnekte ne anlama gelir? | Nerede görülür? |
+| Terim | Bu örnekteki anlamı | Somut karşılığı |
 |---|---|---|
-| CacheDB entity | `@CacheEntity` ile işaretlenmiş Java sınıfıdır. Bir SQL tablosunu, bir Redis namespace’ini ve generated repository yüzeyini temsil eder. | `domain/CustomerEntity.java`, `domain/OrderEntity.java` |
-| Generated binding | Derleme sırasında üretilen bağlayıcı sınıftır. Örneğin `OrderEntityCacheBinding`; repository oluşturma, named query, fetch preset ve projection repository metotlarını tip güvenli şekilde sunar. Uygulamanın kullandığı pratik ORM yüzeyi budur. | `SampleRepositories.java`, `OrderEntityCacheBinding.customerTimeline(...)` gibi controller çağrıları |
-| Entity repository | Tam entity nesneleri için CRUD ve sınırlı sorgu API’sidir. Oluşturma, güncelleme, silme ve detay okumalarında kullanılır. | `EntityRepository<OrderEntity, Long>` |
-| Projection | Entity’den türetilmiş küçük okuma modelidir. Liste, panel ve global sıralı ekranlarda tam entity yükleme maliyetini önlemek için kullanılır. | `OrderReadModels.OrderSummary` |
-| Okuma modeli | Kullanıcı ekranının ihtiyaç duyduğu sade veri şeklidir. Bu örnekte `OrderSummary`, sipariş listesi ve yüksek değerli sipariş ekranının okuma modelidir. | `readmodel/OrderReadModels.java` |
-| Projection repository | Tam entity yerine projection satırlarını sorgulayan repository’dir. | `ProjectionRepository<OrderSummary, Long>` |
-| Named query | Entity üzerinde tanımlanan ve generated binding üzerinden kullanılan hazır `QuerySpec` metodudur. Controller içinde kontrolsüz ve sınırsız sorgu yazılmasını engeller. | `customerTimelineQuery`, `recentHighValueOrdersQuery` |
-| Fetch preset | Detay yolu için adlandırılmış fetch planıdır. Hangi ilişkinin yükleneceğini ve kaç alt satıra izin verileceğini belirler. | `ordersPreviewFetchPlan`, `linePreviewFetchPlan` |
-| Relation loader | Alt koleksiyonları sadece fetch preset istediğinde dolduran açık koddur. Yanlışlıkla `N+1` benzeri yükleme yapılmasını engeller. | `CustomerOrdersRelationBatchLoader`, `OrderLinesRelationBatchLoader` |
-| Aktif veri seti | Policy’ye göre Redis’te kalmasına izin verilen veri alt kümesidir. Örneğin son siparişler veya operasyonel olarak aktif kayıtlar. | `SampleCacheDbTuningConfig` |
-| Write-behind | Yazının önce Redis üzerinden kabul edilip kalıcı SQL satırına arka planda taşındığı yazma modelidir. | Veri üretme akışı, oluşturma çağrıları, yönetim ekranındaki write-behind paneli |
-| Guardrail | Production’da pahalı hataları engelleyen güvenlik sınırıdır. Örneğin sınırsız entity taraması veya Redis bellek baskısı. | `ReadShapeGuardrailConfig`, `RedisGuardrailConfig` |
-
-README’de “generated binding mantığını öğren” denildiğinde kastedilen şudur: `@CacheEntity`, named query, fetch preset ve projection tanımlarının derleme sırasında `repository(...)`, `customerTimeline(...)`, `ordersPreviewRepository(...)` ve `orderSummary(...)` gibi üretilmiş metotlara nasıl dönüştüğünü incelemek. Uygulamanın ORM gibi kullandığı yüzey bu üretilmiş metotlardır.
+| Entity | Bir SQL tablosuna ve Redis namespace’ine bağlanan tam komut/detay modeli | `OrderEntity` |
+| Generated binding | Derleme sırasında üretilen metadata, sorgu, fetch preset, komut ve projection kodu | `OrderEntityCacheBinding` |
+| Generated domain module | Controller ve servislerin kullandığı, paket düzeyindeki tek tip güvenli giriş noktası | `GeneratedCacheModule.Scope` |
+| Projection | Tam aggregate yerine liste veya dashboard için kullanılan küçük okuma modeli | `OrderSummary` |
+| Projection schema | Payload ve indeks kolonlarını tek yerde tanımlayan reflection’sız şema | `ProjectionSchema<OrderSummary>` |
+| Named query | Adı, sıralaması ve sınırı belirli tekrar kullanılabilir sorgu sözleşmesi | `customerTimelineQuery(...)` |
+| Fetch preset | Detay ekranında hangi ilişkinin kaç satır yükleneceğini belirleyen tanım | `linePreview(...)` |
+| Policy kataloğu | Her entity’ye ayrı etkin veri ve boyut kuralı atayan YAML haritası | `cachedb.registration.entities` |
+| Warm plan | JDBC’den Redis’e yapılacak sınırlı ön yükleme sözleşmesi | `domain.orders().warmPlan(...)` |
+| Write-behind | Komutun önce Redis tarafından kabul edilmesi, SQL kalıcılığının asenkron tamamlanması | `202 Accepted`, worker metrikleri |
+| Guardrail | Aşırı sonuç boyutunu veya bellek baskısını reddeden kesin sınır | API, sorgu şekli ve Redis sınırları |
 
 ## Katman Katman Mimari
 
-Bu örnek küçük tutuldu, fakat production servislerde kullanılması gereken yapıyı izler.
-
-| Katman | Ana dosyalar | Sorumluluk | Production kuralı |
+| Katman | Ana dosyalar | Sorumluluk | Kural |
 |---|---|---|---|
-| API | `web/*Controller.java` | İsteği doğrular, geçersiz limitleri reddeder ve güvenli endpoint sunar | Sınırsız liste çağrısı açma |
-| Service | `SampleSeedService.java`, controller metotları | İş akışını, kayıt sırasını ve retry davranışını yönetir | Yazma ve ilişki sırasını açık tut |
-| CacheDB repository | `SampleRepositories.java` | Generated `EntityRepository` ve `ProjectionRepository` bean’lerini üretir | Generated binding’leri ORM yüzeyi olarak kullan |
-| Entity mapping | `domain/*Entity.java` | Java alanlarını SQL kolonlarına ve Redis namespace’lerine bağlar | Tablo, id, kolon ve relation tanımı açık olmalı |
-| Relation yükleme | `relation/*BatchLoader.java` | Child koleksiyonları sadece fetch preset istediğinde yükler | Tam aggregate yerine sınırlı önizleme kullan |
-| Okuma modeli | `readmodel/OrderReadModels.java` | Liste ve panel satırlarını küçük projection veri gövdesi olarak tutar | Büyüyen listelerde projection kullan |
-| Kalıcı veri | `schema.sql` | Primary key, foreign key ve okuma yolu indekslerini sahiplenir | Tam geçmişin doğruluk kaynağı SQL’dir |
-| Çalışma zamanı ayarları | `SampleCacheDbTuningConfig.java` | Aktif veri politikası, limitler, koruma eşikleri ve write-behind ayarlarını verir | Ayarı tahminle değil okuma yolu ve bellek bütçesiyle yap |
+| API | `web/*Controller.java` | Girdiyi doğrular ve generated domain DSL’i çağırır | Sınırsız liste açma |
+| Domain tanımı | `domain/*Entity.java` | SQL mapping, sorgu, ilişki, fetch preset ve komutlar | Sözleşmeleri açık ve derleme zamanında üretilebilir tut |
+| Okuma modeli | `readmodel/*ReadModels.java` | Küçük projection şeması ve entity’den ekrana dönüşüm | Büyüyen veya genel sıralı listelerde projection kullan |
+| Domain erişimi | `SampleCacheDbDomainConfig.java` | Tek generated package scope bean’ini açar | Entity başına repository bean’i oluşturma |
+| Ön yükleme servisi | `SampleWarmBackfillService.java` | Tip güvenli planı ve dry-run/projection/full modunu seçer | İşi sınırla, HTTP çalıştırmasını asenkron tut |
+| Kalıcı veri sorgusu | `JdbcTemplate` kullanan arşiv metotları | Eski geçmişi ve dışa aktarımı indeksli SQL’den okur | Keyset pagination ve kesin üst sınır kullan |
+| Runtime policy | `application.yml` | Entity bazlı etkin veri kuralı ve JDBC kaydı | Bilinmeyen entity adında başlangıcı durdur |
+| Platform ayarı | `SampleCacheDbTuningConfig.java` | Thread, kuyruk, timeout, bellek ve write-behind sınırları | Ölçülmüş yüke göre ayarla |
 
 ### API Katmanı: ORM’e Gitmeden Önce İsteği Sınırla
 
-`CustomerController`, kullanıcının verdiği limiti olduğu gibi CacheDB’ye taşımaz. Önce güvenli aralığa çeker:
-
 ```java
-@GetMapping("/{customerId}/orders")
-public List<OrderReadModels.OrderSummary> orderTimeline(
-        @PathVariable long customerId,
-        @RequestParam(defaultValue = "20") int limit
-) {
-    return OrderEntityCacheBinding.customerTimeline(
-            orderSummaryRepository,
-            customerId,
-            ApiLimits.requireInRange("limit", limit, 1, 1_000)
-    );
-}
+int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
+return domain.orders().projections().orderSummary().query(
+        domain.orders().queries().customerTimelineQuery(customerId, safeLimit)
+);
 ```
 
-Buradaki asıl mesele `1_000` sayısı değildir. Asıl mesele okuma yolu sözleşmesidir. Bir liste çağrısı Redis’e veya PostgreSQL’e gitmeden önce maksimum sonuç sınırını bilmelidir.
-
-### Repository Katmanı: Generated Binding ORM Yüzeyidir
-
-`SampleRepositories`, CacheDB’nin generated binding sınıflarını Spring bean haline getirir:
+### Deklaratif Domain Erişimi: Tek Bean, Repository Wiring Yok
 
 ```java
 @Bean
-EntityRepository<OrderEntity, Long> orderRepository(CacheDatabase cacheDatabase) {
-    return OrderEntityCacheBinding.repository(cacheDatabase);
-}
-
-@Bean
-ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository(
-        EntityRepository<OrderEntity, Long> orderRepository
-) {
-    return OrderEntityCacheBinding.orderSummary(orderRepository);
+GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
+    return GeneratedCacheModule.using(cacheDatabase);
 }
 ```
 
-Controller’lar bu repository’leri ORM gibi kullanır. Fakat bu yüzey klasik dinamik ORM sorgu katmanı gibi sınırsız değildir. Named query, fetch preset, projection ve relation loader tanımları kodda açıktır ve derleme sırasında generated binding’e dönüşür.
+Spring Boot generated registrar sınıflarını bulur ve uygulama bean’i oluşturulmadan önce YAML policy değerlerini uygular. Uygulama kodu binding’leri elle kaydetmez.
 
 ### Entity Katmanı: SQL Mapping ve Cache Mapping Açık Tanımlıdır
 
@@ -1108,93 +778,21 @@ Böylece Redis içinde liste satırları küçük kalır. Tam entity hâlâ deta
 
 ## Uçtan Uca OrderSummary Örneği
 
-`OrderSummary`, “müşteri sipariş listesi ve yüksek değerli sipariş listesi için `OrderSummary` kullan” önerisinin gerçek karşılığıdır. Yer tutucu bir kavram değildir.
+`OrderSummary`, müşteri sipariş listesi ve sıralı sipariş ekranları için kullanılan okuma modelidir. Sipariş satırlarını, müşteri detayını ve denetim geçmişini bilerek içermez.
 
-### 1. Okuma modelinin şekli
-
-`OrderSummary` sadece liste ekranının ihtiyaç duyduğu kolonları taşır:
-
-```java
-public record OrderSummary(
-        Long orderId,
-        Long customerId,
-        Long orderDate,
-        BigDecimal orderAmount,
-        String currencyCode,
-        String orderType,
-        String status,
-        Integer lineCount,
-        Double priorityScore
-) {
-}
-```
-
-Bu modelde sipariş satırı, ürün detayı, müşteri detayı veya denetim geçmişi yoktur. Bunlar detay ekranının veya arşiv akışının konusudur.
-
-### 2. Projection tam entity’den summary üretir
-
-`OrderReadModels.ORDER_SUMMARY_PROJECTION`, CacheDB’ye küçük satırın nasıl üretileceğini ve saklanacağını söyler:
+1. `OrderEntity`, `@CacheProjectionDefinition("orderSummary")` tanımını yapar.
+2. `OrderReadModels`, tek bir `ProjectionSchema<OrderSummary>` ve entity’den summary’ye dönüşüm tanımlar.
+3. Processor, `domain.orders().projections().orderSummary()` yolunu üretir.
+4. Ön yükleme kodu `domain.orders().warmPlan(...)` kullanır.
+5. Controller, generated named query ile generated projection repository’yi birleştirir.
 
 ```java
-(OrderEntity order) -> new OrderSummary(
-        order.orderId,
-        order.customerId,
-        order.orderDate,
-        order.orderAmount,
-        order.currencyCode,
-        order.orderType,
-        order.status,
-        order.lineCount,
-        order.priorityScore
-)
+return domain.orders().projections().orderSummary().query(
+        domain.orders().queries().recentHighValueOrdersQuery(minimumAmount, safeLimit)
+);
 ```
 
-Projection, sık kullanılan ekranların sıralama alanlarına göre önceden sıralı tutulur:
-
-```java
-).rankedBy("order_date", "priority_score").asyncRefresh();
-```
-
-Bu yüzden müşteri sipariş listesi `order_date` ile, yüksek değerli sipariş listesi `priority_score` ile sıralanabilir; tam `OrderEntity` veri gövdesi yüklenmez.
-
-### 3. Entity projection’ı CacheDB’ye açar
-
-`OrderEntity`, projection tanımını CacheDB’ye tanıtır:
-
-```java
-@CacheProjectionDefinition("orderSummary")
-public static EntityProjection<OrderEntity, OrderReadModels.OrderSummary, Long> orderSummaryProjection() {
-    return OrderReadModels.ORDER_SUMMARY_PROJECTION;
-}
-```
-
-Generated binding sonrasında şu metotları sunar:
-
-```java
-OrderEntityCacheBinding.orderSummary(orderRepository)
-OrderEntityCacheBinding.customerTimeline(orderSummaryRepository, customerId, limit)
-OrderEntityCacheBinding.recentHighValueOrders(orderSummaryRepository, minimumAmount, limit)
-```
-
-### 4. API yolu projection repository kullanır
-
-Sık kullanılan müşteri sipariş listesi bilinçli olarak projection yoludur:
-
-```java
-@GetMapping("/{customerId}/orders")
-public List<OrderReadModels.OrderSummary> orderTimeline(
-        @PathVariable long customerId,
-        @RequestParam(defaultValue = "20") int limit
-) {
-    return OrderEntityCacheBinding.customerTimeline(
-            orderSummaryRepository,
-            customerId,
-            ApiLimits.requireInRange("limit", limit, 1, 1_000)
-    );
-}
-```
-
-Yanıt zaten ekranın ihtiyaç duyduğu şekildedir. UI arka planda gizli tam `OrderEntity` almaz.
+Yanıt doğrudan ekranın ihtiyacı olan şekildedir. Arka planda tam entity yüklenmez; aynı şema Redis serileştirmesini ve indeks kolonlarını yönetir.
 
 ## Sorgu Akışı: Redis mi PostgreSQL mi?
 
@@ -1202,17 +800,17 @@ Bu örnek artık iki yolu da açık gösterir. Sık kullanılan operasyonel okum
 
 | Çağrı | İlk çalışma yolu | PostgreSQL ne zaman kullanılır? | Redis davranışı | Neden? |
 |---|---|---|---|---|
-| `POST /api/customers` | `EntityRepository.save` | Write-behind satırı arka planda kalıcılaştırır | Aktif veri politikası kabul ederse entity Redis’e girer | Normal yazma yolu |
-| `POST /api/orders` | `JdbcTemplate` FK hazırlık kontrolü, sonra `EntityRepository.save` | Alt kayıt yazmadan önce üst müşteri SQL’de kalıcı mı diye bakılır | Sipariş Redis üzerinden kaydedilir ve write-behind kuyruğuna girer | FK ihlalini engeller, Redis-first yazma modelini korur |
-| `GET /api/customers/{id}/orders` | `ProjectionRepository<OrderSummary>` | Sık kullanılan liste yolunda kullanılmaz | Redis projection verisini ve indeksini okur; eksik projection satırını Redis’teki base entity verisinden ısıtabilir | Hızlı müşteri zaman çizelgesi |
-| `GET /api/orders/high-value` | `ProjectionRepository<OrderSummary>` | Sık kullanılan liste yolunda kullanılmaz | Ranked Redis projection verisini okur | Hızlı global sıralı iş listesi |
-| `GET /api/orders/{id}` | `linePreview` fetch preset ile `EntityRepository.findById` | Bu örnek endpoint’i Redis’te bulunamama durumunda SQL’e gitmez | Redis entity verisini okur, relation loader sınırlı satır sorgusunu Redis üzerinden yapar | Sık kullanılan sipariş detay ekranı |
+| `POST /api/customers` | `domain.<entity>().save(...)` | Write-behind satırı arka planda kalıcılaştırır | Aktif veri politikası kabul ederse entity Redis’e girer | Normal yazma yolu |
+| `POST /api/orders` | `JdbcTemplate` FK hazırlık kontrolü, sonra `domain.<entity>().save(...)` | Alt kayıt yazmadan önce üst müşteri SQL’de kalıcı mı diye bakılır | Sipariş Redis üzerinden kaydedilir ve write-behind kuyruğuna girer | FK ihlalini engeller, Redis-first yazma modelini korur |
+| `GET /api/customers/{id}/orders` | `domain.orders().projections().orderSummary()` | Sık kullanılan liste yolunda kullanılmaz | Redis projection verisini ve indeksini okur; eksik projection satırını Redis’teki base entity verisinden ısıtabilir | Hızlı müşteri zaman çizelgesi |
+| `GET /api/orders/high-value` | `domain.orders().projections().orderSummary()` | Sık kullanılan liste yolunda kullanılmaz | Ranked Redis projection verisini okur | Hızlı global sıralı iş listesi |
+| `GET /api/orders/{id}` | `linePreview` fetch preset ile `domain.<entity>().findById(...)` | Bu örnek endpoint’i Redis’te bulunamama durumunda SQL’e gitmez | Redis entity verisini okur, relation loader sınırlı satır sorgusunu Redis üzerinden yapar | Sık kullanılan sipariş detay ekranı |
 | `GET /api/orders/archive` | `JdbcTemplate.query` | Doğrudan PostgreSQL okur | Redis’i değiştirmez | Arşiv/geçmiş okuması |
-| `GET /api/products/active` | `ProjectionRepository<ProductAvailability>` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis projection sorgusu | Küçük katalog listesi |
-| `GET /api/tickets/open` | `EntityRepository.query` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis entity sorgusu | Operasyon kuyruğu |
+| `GET /api/products/active` | `domain.products().projections().productAvailability()` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis projection sorgusu | Küçük katalog listesi |
+| `GET /api/tickets/open` | `domain.<entity>().queries()` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis entity sorgusu | Operasyon kuyruğu |
 | `GET /api/dashboard/commerce` | Projection sorgusu + destek talebi entity sorgusu | Bu örnek endpoint’inde kullanılmaz | Redis projection ve Redis entity sorgusunu birleştirir | Panel ilk ekranı |
 
-Önemli kural: CacheDB repository okumaları, Redis’te bulunamayan her kayıt için otomatik veritabanı taraması yapacak anlamına gelmez. Bu örnekte `EntityRepository.findById` ve normal `query(...)` yolları Redis/aktif veri seti yollarıdır. Arşiv veya tam geçmiş okuması gerekiyorsa bunu açık SQL yolu olarak tasarla. Bu örnekteki arşiv yolu:
+Önemli kural: CacheDB repository okumaları, Redis’te bulunamayan her kayıt için otomatik veritabanı taraması yapacak anlamına gelmez. Bu örnekte `domain.<entity>().findById(...)` ve normal `query(...)` yolları Redis/aktif veri seti yollarıdır. Arşiv veya tam geçmiş okuması gerekiyorsa bunu açık SQL yolu olarak tasarla. Bu örnekteki arşiv yolu:
 
 ```java
 @GetMapping("/archive")

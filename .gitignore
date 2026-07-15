@@ -32,6 +32,7 @@ tools/out/
 
 # Test, benchmark, and generated evidence output
 coverage/
+output/
 reports/
 surefire-reports/
 failsafe-reports/

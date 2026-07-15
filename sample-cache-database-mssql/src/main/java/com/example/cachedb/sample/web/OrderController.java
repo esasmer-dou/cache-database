@@ -1,13 +1,12 @@
 package com.example.cachedb.sample.web;
 
+import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.domain.OrderEntity;
-import com.example.cachedb.sample.domain.OrderEntityCacheBinding;
 import com.example.cachedb.sample.domain.OrderLineEntity;
 import com.example.cachedb.sample.readmodel.OrderReadModels;
 import com.example.cachedb.sample.service.DurableReferenceGuard;
-import com.reactor.cachedb.core.api.EntityRepository;
-import com.reactor.cachedb.core.api.ProjectionRepository;
 import com.reactor.cachedb.core.query.QueryFilter;
+import com.reactor.cachedb.core.query.QuerySpec;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
@@ -44,22 +43,16 @@ public class OrderController {
             OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
             """;
 
-    private final EntityRepository<OrderEntity, Long> orderRepository;
-    private final EntityRepository<OrderLineEntity, Long> orderLineRepository;
-    private final ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository;
+    private final GeneratedCacheModule.Scope domain;
     private final JdbcTemplate jdbcTemplate;
     private final DurableReferenceGuard durableReferenceGuard;
 
     public OrderController(
-            EntityRepository<OrderEntity, Long> orderRepository,
-            EntityRepository<OrderLineEntity, Long> orderLineRepository,
-            ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository,
+            GeneratedCacheModule.Scope domain,
             JdbcTemplate jdbcTemplate,
             DurableReferenceGuard durableReferenceGuard
     ) {
-        this.orderRepository = orderRepository;
-        this.orderLineRepository = orderLineRepository;
-        this.orderSummaryRepository = orderSummaryRepository;
+        this.domain = domain;
         this.jdbcTemplate = jdbcTemplate;
         this.durableReferenceGuard = durableReferenceGuard;
     }
@@ -77,7 +70,7 @@ public class OrderController {
         entity.status = request.status() == null ? "NEW" : request.status();
         entity.lineCount = request.lineCount() == null ? 0 : request.lineCount();
         entity.priorityScore = priorityScore(entity);
-        OrderEntity saved = orderRepository.save(entity);
+        OrderEntity saved = domain.orders().save(entity);
         return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "OrderEntity", saved.orderId, saved));
     }
 
@@ -86,8 +79,8 @@ public class OrderController {
             @PathVariable long orderId,
             @RequestParam(defaultValue = "5") int linePreview
     ) {
-        return OrderEntityCacheBinding
-                .linePreviewRepository(orderRepository, ApiLimits.requireInRange("linePreview", linePreview, 1, 50))
+        return domain.orders().fetches()
+                .linePreview(ApiLimits.requireInRange("linePreview", linePreview, 1, 50))
                 .findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + orderId));
     }
@@ -97,10 +90,9 @@ public class OrderController {
             @RequestParam(defaultValue = "500.00") BigDecimal minimumAmount,
             @RequestParam(defaultValue = "25") int limit
     ) {
-        return OrderEntityCacheBinding.recentHighValueOrders(
-                orderSummaryRepository,
-                minimumAmount,
-                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
+        return domain.orders().projections().orderSummary().query(
+                domain.orders().queries().recentHighValueOrdersQuery(minimumAmount, safeLimit)
         );
     }
 
@@ -140,11 +132,11 @@ public class OrderController {
             @PathVariable long orderId,
             @Valid @RequestBody UpdateStatusRequest request
     ) {
-        OrderEntity entity = orderRepository.findById(orderId)
+        OrderEntity entity = domain.orders().findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + orderId));
         entity.status = request.status();
         entity.priorityScore = priorityScore(entity);
-        OrderEntity saved = orderRepository.save(entity);
+        OrderEntity saved = domain.orders().save(entity);
         return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "OrderEntity", saved.orderId, saved));
     }
 
@@ -152,13 +144,15 @@ public class OrderController {
     public ResponseEntity<WriteAccepted<Void>> delete(@PathVariable long orderId) {
         durableReferenceGuard.requireOrder(orderId);
         if (durableReferenceGuard.orderHasDurableLines(orderId)
-                || !orderLineRepository.query(QueryFilter.eq("order_id", orderId), 1).isEmpty()) {
+                || !domain.orderLines().query(
+                        QuerySpec.where(QueryFilter.eq("order_id", orderId)).limitTo(1)
+                ).isEmpty()) {
             throw new SampleConflictException(
                     "Order " + orderId + " has order lines. This sample permits leaf-order deletion only; "
                             + "implement an explicit transactional cascade command for aggregate deletion."
             );
         }
-        orderRepository.deleteById(orderId);
+        domain.orders().deleteById(orderId);
         return ResponseEntity.accepted().body(WriteAccepted.of("DELETE", "OrderEntity", orderId, null));
     }
 

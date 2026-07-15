@@ -37,7 +37,7 @@ Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur.
 
 ```xml
 <properties>
-    <cachedb.version>0.3.2</cachedb.version>
+    <cachedb.version>0.4.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -100,7 +100,7 @@ Spring Boot kullanmıyorsan:
 
 ```xml
 <properties>
-    <cachedb.version>0.3.2</cachedb.version>
+    <cachedb.version>0.4.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -145,6 +145,19 @@ cachedb:
   profile: production
   redis:
     uri: redis://127.0.0.1:6379
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      CustomerEntity:
+        hot-entity-limit: 50000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 60
+        hot-policy:
+          mode: STATE_WINDOW
+          state-column: status
+          state-values: [ACTIVE]
   admin:
     http-enabled: true
 ```
@@ -158,7 +171,7 @@ DataSource dataSource = createDataSource();
 try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .production()
         .keyPrefix("app-cache")
-        .register(com.example.cache.GeneratedCacheBindings::register)
+        .register(com.example.cache.GeneratedCacheModule::registerJdbcBacked)
         .start()) {
     // uygulama kodu
 }
@@ -210,33 +223,44 @@ public class CustomerEntity {
 - Entity küçük tutulmalıdır.
 - İlişki alanları ancak ihtiyaç varsa eklenmelidir.
 
+Paket için üretilen tek domain scope bean’ini aç. Her entity repository ve
+projection için ayrı Spring bean’i oluşturma:
+
+```java
+@Configuration(proxyBeanMethods = false)
+public class CacheDbDomainConfig {
+    @Bean
+    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
+        return GeneratedCacheModule.using(cacheDatabase);
+    }
+}
+```
+
 ## 6. İlk Save ve Read
 
 ```java
-var customers = CustomerEntityCacheBinding.using(session).repository();
-
 CustomerEntity customer = new CustomerEntity();
 customer.customerId = 1001L;
 customer.taxNumber = "1234567890";
 customer.customerType = "RETAIL";
 customer.status = "ACTIVE";
 
-customers.save(customer);
+domain.customers().save(customer);
 
-CustomerEntity loaded = customers.findById(1001L).orElseThrow();
+CustomerEntity loaded = domain.customers().findById(1001L).orElseThrow();
 ```
 
 Beklenen davranış:
 
-- `save` Redis hot entity yoluna yazar.
+- `save`, policy tarafından kabul edilen entity’yi Redis’e yazar.
 - Kalıcı yazım seçilen SQL write-behind hattına alınır.
 - `findById` Redis'teki entity'yi okur.
-- Entity hot policy'ye uymuyorsa Redis'e kabul edilmeyebilir.
+- Entity etkin veri politikasına uymuyorsa Redis’e kabul edilmeyebilir.
 
 ## 7. İlk Delete
 
 ```java
-customers.deleteById(1001L);
+domain.customers().deleteById(1001L);
 ```
 
 Davranış:
@@ -251,7 +275,7 @@ Davranış:
 Küçük ve kontrollü query:
 
 ```java
-List<CustomerEntity> activeCustomers = customers.query(
+List<CustomerEntity> activeCustomers = domain.customers().query(
         QuerySpec.where(QueryFilter.eq("status", "ACTIVE"))
                 .orderBy(QuerySort.asc("customer_id"))
                 .limitTo(100)
@@ -285,17 +309,29 @@ public class OrderEntity {
 }
 ```
 
-Parent tarafındaki relation tanımı:
+Ana entity üzerinde loader ve sınırlı fetch preset tanımla:
 
 ```java
-@CacheRelation(
-        targetEntity = "OrderEntity",
-        // OrderEntity.customerId alanı orders.customer_id kolonuna map edilir.
-        mappedBy = "customerId",
-        kind = CacheRelation.RelationKind.ONE_TO_MANY,
-        batchLoadOnly = true
+@CacheEntity(
+        table = "customers",
+        redisNamespace = "customers",
+        relationLoader = CustomerOrdersRelationBatchLoader.class
 )
-public List<OrderEntity> orders;
+public class CustomerEntity {
+    @CacheRelation(
+            targetEntity = "OrderEntity",
+            // OrderEntity.customerId alanı orders.customer_id kolonuna map edilir.
+            mappedBy = "customerId",
+            kind = CacheRelation.RelationKind.ONE_TO_MANY,
+            batchLoadOnly = true
+    )
+    public List<OrderEntity> orders;
+
+    @CacheFetchPreset("ordersPreview")
+    public static FetchPlan ordersPreviewFetchPlan(int limit) {
+        return FetchPlan.of("orders").withRelationLimit("orders", Math.max(1, limit));
+    }
+}
 ```
 
 Bu annotation CacheDB metadata'sıdır; veritabanı foreign key'i değildir. DB'de
@@ -308,8 +344,8 @@ sorumluluğundadır.
 Okuma:
 
 ```java
-CustomerEntity customer = customerRepository
-        .withRelationLimit("orders", 10)
+CustomerEntity customer = domain.customers().fetches()
+        .ordersPreview(10)
         .findById(customerId)
         .orElseThrow();
 ```

@@ -6,6 +6,38 @@ The format is intentionally simple and release-focused.
 
 ## Unreleased
 
+## 0.4.0 - 2026-07-15
+
+### Added
+
+- package-level `GeneratedCacheModule.Scope` as the single typed application surface for entity CRUD, named queries, fetch presets, projections, commands, deletes, and warm plans
+- declarative per-entity `CachePolicyCatalog` configuration with composite hot policies, customizers, and unknown-entity validation
+- `ProjectionSchema` and typed projection rows/codecs so one schema defines Redis serialization and indexed columns
+- explicit dry-run, projection-only, and full warm execution helpers
+
+### Changed
+
+- generated package scopes create entity scopes lazily and safely reuse them across concurrent application requests
+- generated JDBC registration runs in two phases so every entity keeps its own policy before relation and page loaders are connected
+- PostgreSQL and MSSQL samples use one generated domain bean instead of manual repository and policy factories
+- sample cache policies are configured in YAML and the JDBC registration source is selected explicitly
+- planner key telemetry uses bounded incremental Redis scans instead of full keyspace scans during startup and health sampling
+- Spring Boot keeps `metadata-only` as the backward-compatible registration default; JDBC read-through and warm loading require an explicit `source: jdbc`
+
+### Fixed
+
+- package-level generated modules no longer initialize unrelated repositories when a consumer uses only one entity surface
+- repository benchmark adapters can use partial/focused sessions without failing on unrelated generated entities
+- monitoring history startup no longer blocks on repeated full Redis keyspace scans
+- relation loader construction no longer leaks a parent entity policy into a child repository
+
+### Validation
+
+- full 13-module CacheDB reactor passed on Java 21
+- 83 integration tests passed against isolated Redis 8 and PostgreSQL, with two explicitly profile-gated MSSQL tests skipped
+- all 27 production benchmark, recovery, coordination, fault-injection, and certification tests passed
+- PostgreSQL and MSSQL samples passed unit tests plus live provider integration tests against Redis 8 and their selected SQL provider
+
 ## 0.3.2 - 2026-07-14
 
 ### Added

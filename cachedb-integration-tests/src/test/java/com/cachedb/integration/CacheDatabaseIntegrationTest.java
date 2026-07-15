@@ -1480,7 +1480,11 @@ public final class CacheDatabaseIntegrationTest {
 
         QueryExplainPlan explainPlan = repository.explain(querySpec);
         Assertions.assertTrue(explainPlan.estimatedCost() > 0);
-        Assertions.assertTrue(cacheDatabase.admin().metrics().plannerStatisticsSnapshot().learnedStatisticsKeyCount() > 0);
+        waitUntil(
+                () -> cacheDatabase.admin().metrics().plannerStatisticsSnapshot().learnedStatisticsKeyCount() > 0,
+                Duration.ofSeconds(45),
+                "Expected bounded planner telemetry scan to complete"
+        );
     }
 
     @Test

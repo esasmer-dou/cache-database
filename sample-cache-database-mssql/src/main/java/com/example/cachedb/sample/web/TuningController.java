@@ -1,6 +1,5 @@
 package com.example.cachedb.sample.web;
 
-import com.example.cachedb.sample.config.SampleCachePolicies;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.starter.CacheDatabase;
@@ -46,8 +45,40 @@ public class TuningController {
     }
 
     @GetMapping("/profiles")
-    public List<SampleCachePolicies.PolicyProfile> profiles() {
-        return SampleCachePolicies.profiles();
+    public List<PolicyProfile> profiles() {
+        return List.of(
+                profile("commerceTimeline", "OrderEntity", "Customer order timeline and high-value order screens",
+                        "OrderSummary projection; full entity only for explicit detail", 1_000),
+                profile("catalogAvailability", "ProductEntity", "Product list, category page, and low-stock operational screens",
+                        "ProductAvailability projection; SQL route for inactive catalog archive", 1_000),
+                profile("supportOperations", "SupportTicketEntity", "Open ticket queue, escalations, and customer support detail",
+                        "Open queue in Redis; closed ticket history from SQL", 1_000),
+                profile("logisticsTracking", "ShipmentEntity", "Active shipment tracking and exception dashboard",
+                        "ShipmentSummary projection; event preview only on detail", 1_000),
+                profile("reportingLive", "ReportJobEntity", "Live report jobs and small run summaries",
+                        "Only live jobs in Redis; audit/export queries stay SQL-first", 500),
+                profile("auditArchive", "AuditEventEntity", "Audit archive and one-off old-history reads",
+                        "Do not promote one-off archive reads into Redis", 100)
+        );
+    }
+
+    private PolicyProfile profile(
+            String name,
+            String entityName,
+            String useCase,
+            String routeContract,
+            int suggestedRouteLimit
+    ) {
+        CachePolicy policy = cacheDatabase.registeredPolicy(entityName)
+                .orElseThrow(() -> new IllegalStateException("CacheDB entity is not registered: " + entityName));
+        return new PolicyProfile(
+                name,
+                useCase,
+                routeContract,
+                policy.hotEntityLimit(),
+                policy.pageSize(),
+                suggestedRouteLimit
+        );
     }
 
     public record TuningResponse(
@@ -63,6 +94,16 @@ public class TuningController {
             int redisWarnPercent,
             int redisCriticalPercent,
             List<String> notes
+    ) {
+    }
+
+    public record PolicyProfile(
+            String name,
+            String useCase,
+            String routeContract,
+            int hotEntityLimit,
+            int pageSize,
+            int suggestedRouteLimit
     ) {
     }
 }

@@ -19,10 +19,10 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Resmi Dağıtım Kanalı
 
-`v0.3.2` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
+`v0.4.0` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
 
 ```text
-cache-database-0.3.2-github-release.zip
+cache-database-0.4.0-github-release.zip
 ```
 
 Paket; Maven modül jar'larını, source jar'larını, javadoc dosyalarını, README'yi,
@@ -32,14 +32,14 @@ paket dağıtım kanalı GitHub Release'tir.
 
 ## Release Konumlandırması
 
-`cache-database v0.3.2`
+`cache-database v0.4.0`
 
-CacheDB `v0.3.2`, mevcut SQL tabanlı uygulamaları kontrollü biçimde CacheDB'ye
-taşımaya odaklanan stable framework release'idir. `v0.1.0` ile gelen
-Redis-first data-layer modeli, compile-time generated API'ler, sınırlı hot-set
-policy'leri ve projection/read-model rehberliği korunur; üzerine
-JDBC-backed warm/read-through, PostgreSQL ve MSSQL örnek kapsamı ve çalıştırılabilir
-sample load gate'leri eklenir.
+CacheDB `v0.4.0`, uygulama tarafındaki kullanımı deklaratif hale getiren stable
+framework release'idir. Uygulama tek bir generated domain scope kullanır,
+entity bazlı aktif veri politikalarını YAML içinde tanımlar ve query,
+projection, relation ile warm işlemlerini manuel repository factory yazmadan
+çalıştırır. Redis-first model, sınırlı aktif veri setleri, kalıcı SQL
+write-behind ve açık route sözleşmeleri korunur.
 
 Bu release, her uygulamanın kendi production trafiğini ek doğrulama olmadan
 CacheDB'ye kesebileceği anlamına gelmez. Cutover öncesinde her uygulama için
@@ -56,16 +56,17 @@ kanıtlanmalıdır.
 ## Release Note Şablonu
 
 ```markdown
-## cache-database v0.3.2
+## cache-database v0.4.0
 
 Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uygulanabilir hale getirir.
 
 ### Stable olan alanlar
 
 - Sınırlı hot-set policy'leriyle Redis-first entity repository'leri.
-- Compile-time generated metadata ve ORM benzeri API'ler.
+- Tip güvenli CRUD, query, relation, projection ve warm işlemleri için tek compile-time generated domain scope.
+- Entity bazlı deklaratif policy yapılandırması ve açık JDBC registration seçimi.
 - PostgreSQL ve açıkça seçilen MSSQL kalıcı SQL provider yolları.
-- `registerJdbcBacked(...)` ile generated JDBC-backed binding'ler.
+- İki aşamalı generated JDBC source ve relation-loader registration.
 - Route'a göre şekillenen query loader'lar üzerinden kontrollü read-through ve warm/backfill.
 - İlişki yoğun ve global sıralı route'lar için projection/read-model reçeteleri.
 - Şema keşfi, warm-up, comparison ve rapor üretimi için Migration Planner akışı.
@@ -90,12 +91,12 @@ comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
 ## Yayın Kontrol Listesi
 
 - `pom.xml` ve tüm modül parent versiyonları stable sürümü kullanıyor.
-- Release note `docs/releases/v0.3.2.md` altında var.
+- Release note `docs/releases/v0.4.0.md` altında var.
 - `mvn -DskipTests package` geçiyor.
 - Public API compatibility kontrolü geçiyor.
 - Türkçe dokümantasyon kalite kontrolü geçiyor.
 - Lokal Docker HA preflight geçiyor veya son CI evidence yeşil.
 - `Public Beta Readiness` ve `Production Evidence` release commit'i için yeşil.
-- `Production GA Release Readiness`, `v0.3.2` için yeşil.
+- `Production GA Release Readiness`, `v0.4.0` için yeşil.
 - GitHub Release prerelease olarak işaretli değil.
-- GitHub Release asset'i `cache-database-0.3.2-github-release.zip` olarak eklendi.
+- GitHub Release asset'i `cache-database-0.4.0-github-release.zip` olarak eklendi.

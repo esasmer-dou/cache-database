@@ -31,6 +31,45 @@ Release hazırlığı ve production sınırları için ayrıca [Production GA Cr
 Bu yol, başlangıç maliyetini düşük tutar ve CacheDB'nin birinci önceliği olan
 düşük çalışma zamanı ek yükü hedefinden ödün vermez.
 
+### Deklaratif Uygulama Yüzeyi
+
+Entity bazlı policy değerlerini yapılandırmada tut; uygulama koduna ise paket
+için üretilen tek domain scope bean’ini aç:
+
+```yaml
+cachedb:
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      OrderEntity:
+        hot-entity-limit: 100000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 60
+        hot-policy:
+          mode: TIME_WINDOW
+          time-column: order_date
+          hot-for-seconds: 7776000
+```
+
+```java
+@Configuration(proxyBeanMethods = false)
+public class CacheDbDomainConfig {
+    @Bean
+    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
+        return GeneratedCacheModule.using(cacheDatabase);
+    }
+}
+```
+
+Spring kaydı bilinçli olarak iki aşamalıdır. Önce tüm generated entity’ler kendi
+policy değerleri ve JDBC kaynaklarıyla kaydedilir; ilişki ve sayfa yükleyicileri
+ancak bütün alt repository’ler bilindikten sonra bağlanır. Böylece constructor
+ile verilen relation loader üzerinden ana entity policy değerinin alt entity’ye
+taşınması engellenir. `fail-on-unknown-entity=true`, hatalı policy anahtarını
+varsayılan değere düşürmek yerine uygulama başlangıcında reddeder.
+
 ## En Hızlı Giriş Yolları
 
 ### Düz Java, en az seremoni
@@ -42,7 +81,7 @@ DataSource dataSource = ...;
 try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .production()
         .keyPrefix("app-cache")
-        .register(com.reactor.cachedb.examples.entity.GeneratedCacheBindings::register)
+        .register(com.reactor.cachedb.examples.entity.GeneratedCacheModule::registerJdbcBacked)
         .start()) {
     // repository kullanımı burada
 }
@@ -89,7 +128,7 @@ Processor artık package seviyesinde toplu registrar da üretir:
 CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .production()
         .keyPrefix("app-cache")
-        .register(com.reactor.cachedb.examples.entity.GeneratedCacheBindings::register)
+        .register(com.reactor.cachedb.examples.entity.GeneratedCacheModule::registerJdbcBacked)
         .start();
 ```
 
@@ -115,6 +154,15 @@ cachedb:
   profile: production
   redis:
     uri: redis://127.0.0.1:6379
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      UserEntity:
+        hot-entity-limit: 50000
+        page-size: 100
+        hot-policy:
+          mode: COUNT_WINDOW
 ```
 
 Bu ayarlarla şunlar hazır gelir:
@@ -315,6 +363,8 @@ Notlar:
 - `cachedb.profile` şu değerleri kabul eder: `default`, `development`, `production`, `benchmark`, `memory-constrained`, `minimal-overhead`.
 - üretilmiş package registrar'ları `ServiceLoader` ile otomatik keşfedilir; normal Spring Boot yolunda entity binding'leri için elle `register(...)` çağrısı gerekmez
 - tamamen manuel binding registration istiyorsan `cachedb.registration.enabled=false` kullanabilirsin
+- `cachedb.registration.source=metadata-only` geriye uyumlu varsayılandır; read-through ve ön yükleme için sınırlı JDBC kaynak yükleyicilerini açmak istiyorsan `jdbc` değerini açıkça seç
+- `cachedb.registration.entities.<EntityName>` her generated entity’yi ayrı ayarlar; `fail-on-unknown-entity=true` eski veya hatalı entity adlarını başlangıçta reddeder
 - `cachedb.runtime.append-instance-id-to-consumer-names=true` çok pod'lu güvenli varsayılandır; consumer group'ları ortak bırakır ama consumer adlarını pod-unique yapar
 - `cachedb.runtime.leader-lease-enabled=true` cleanup/report/history döngülerini Redis leader lease altına alır; böylece her pod aynı singleton işi koşmaz
 
@@ -374,7 +424,7 @@ DataSource dataSource = ...;
 CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .development()
         .keyPrefix("app-cache")
-        .register(com.reactor.cachedb.examples.entity.GeneratedCacheBindings::register)
+        .register(com.reactor.cachedb.examples.entity.GeneratedCacheModule::registerJdbcBacked)
         .start();
 ```
 

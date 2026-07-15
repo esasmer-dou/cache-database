@@ -1,9 +1,8 @@
 package com.example.cachedb.sample.web;
 
+import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.domain.SupportTicketEntity;
-import com.example.cachedb.sample.domain.SupportTicketEntityCacheBinding;
 import com.example.cachedb.sample.service.DurableReferenceGuard;
-import com.reactor.cachedb.core.api.EntityRepository;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -26,28 +25,26 @@ import java.util.List;
 @RequestMapping("/api/tickets")
 public class SupportTicketController {
 
-    private final EntityRepository<SupportTicketEntity, Long> ticketRepository;
+    private final GeneratedCacheModule.Scope domain;
     private final DurableReferenceGuard durableReferenceGuard;
 
     public SupportTicketController(
-            EntityRepository<SupportTicketEntity, Long> ticketRepository,
+            GeneratedCacheModule.Scope domain,
             DurableReferenceGuard durableReferenceGuard
     ) {
-        this.ticketRepository = ticketRepository;
+        this.domain = domain;
         this.durableReferenceGuard = durableReferenceGuard;
     }
 
     @GetMapping("/open")
     public List<SupportTicketEntity> open(@RequestParam(defaultValue = "25") int limit) {
-        return SupportTicketEntityCacheBinding.openTickets(
-                ticketRepository,
-                ApiLimits.requireInRange("limit", limit, 1, 50)
-        );
+        return domain.supportTickets().queries()
+                .openTickets(ApiLimits.requireInRange("limit", limit, 1, 50));
     }
 
     @GetMapping("/{ticketId}")
     public SupportTicketEntity detail(@PathVariable long ticketId) {
-        return ticketRepository.findById(ticketId)
+        return domain.supportTickets().findById(ticketId)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket not found in active set: " + ticketId));
     }
 
@@ -65,7 +62,7 @@ public class SupportTicketController {
         ticket.subject = request.subject() == null ? "Sample support case" : request.subject();
         ticket.openedAt = now;
         ticket.updatedAt = now;
-        SupportTicketEntity saved = ticketRepository.save(ticket);
+        SupportTicketEntity saved = domain.supportTickets().save(ticket);
         return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "SupportTicketEntity", saved.ticketId, saved));
     }
 
@@ -74,12 +71,12 @@ public class SupportTicketController {
             @PathVariable long ticketId,
             @Valid @RequestBody UpdateTicketStatusRequest request
     ) {
-        SupportTicketEntity ticket = ticketRepository.findById(ticketId)
+        SupportTicketEntity ticket = domain.supportTickets().findById(ticketId)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket not found in active set: " + ticketId));
         ticket.status = request.status();
         ticket.priority = request.priority() == null ? ticket.priority : request.priority();
         ticket.updatedAt = Instant.now().getEpochSecond();
-        SupportTicketEntity saved = ticketRepository.save(ticket);
+        SupportTicketEntity saved = domain.supportTickets().save(ticket);
         return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "SupportTicketEntity", saved.ticketId, saved));
     }
 

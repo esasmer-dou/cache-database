@@ -1,10 +1,8 @@
 package com.example.cachedb.sample.web;
 
 import com.example.cachedb.sample.domain.ProductEntity;
-import com.example.cachedb.sample.domain.ProductEntityCacheBinding;
+import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.readmodel.ProductReadModels;
-import com.reactor.cachedb.core.api.EntityRepository;
-import com.reactor.cachedb.core.api.ProjectionRepository;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
@@ -35,17 +33,14 @@ public class ProductController {
             OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
             """;
 
-    private final EntityRepository<ProductEntity, Long> productRepository;
-    private final ProjectionRepository<ProductReadModels.ProductAvailability, Long> productAvailabilityRepository;
+    private final GeneratedCacheModule.Scope domain;
     private final JdbcTemplate jdbcTemplate;
 
     public ProductController(
-            EntityRepository<ProductEntity, Long> productRepository,
-            ProjectionRepository<ProductReadModels.ProductAvailability, Long> productAvailabilityRepository,
+            GeneratedCacheModule.Scope domain,
             JdbcTemplate jdbcTemplate
     ) {
-        this.productRepository = productRepository;
-        this.productAvailabilityRepository = productAvailabilityRepository;
+        this.domain = domain;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -54,24 +49,23 @@ public class ProductController {
             @RequestParam(defaultValue = "electronics") String category,
             @RequestParam(defaultValue = "20") int limit
     ) {
-        return ProductEntityCacheBinding.activeProductsByCategory(
-                productAvailabilityRepository,
-                category,
-                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
+        return domain.products().projections().productAvailability().query(
+                domain.products().queries().activeProductsByCategoryQuery(category, safeLimit)
         );
     }
 
     @GetMapping("/low-stock")
     public List<ProductReadModels.ProductAvailability> lowStock(@RequestParam(defaultValue = "25") int limit) {
-        return ProductEntityCacheBinding.lowStockProducts(
-                productAvailabilityRepository,
-                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
+        return domain.products().projections().productAvailability().query(
+                domain.products().queries().lowStockProductsQuery(safeLimit)
         );
     }
 
     @GetMapping("/{productId}")
     public ProductEntity detail(@PathVariable long productId) {
-        return productRepository.findById(productId)
+        return domain.products().findById(productId)
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found in active set: " + productId));
     }
 
@@ -99,13 +93,13 @@ public class ProductController {
             @PathVariable long productId,
             @Valid @RequestBody UpdateStockRequest request
     ) {
-        ProductEntity product = productRepository.findById(productId)
+        ProductEntity product = domain.products().findById(productId)
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found in active set: " + productId));
         product.stockQuantity = request.stockQuantity() == null ? product.stockQuantity : request.stockQuantity();
         product.reservedQuantity = request.reservedQuantity() == null ? product.reservedQuantity : request.reservedQuantity();
         product.stockStatus = request.stockStatus() == null ? stockStatus(product) : request.stockStatus();
         product.updatedAt = Instant.now().getEpochSecond();
-        ProductEntity saved = productRepository.save(product);
+        ProductEntity saved = domain.products().save(product);
         return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "ProductEntity", saved.productId, saved));
     }
 

@@ -36,7 +36,7 @@ Use this path for most Spring Boot applications.
 
 ```xml
 <properties>
-    <cachedb.version>0.3.2</cachedb.version>
+    <cachedb.version>0.4.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -98,7 +98,7 @@ Use this path when you do not use Spring Boot.
 
 ```xml
 <properties>
-    <cachedb.version>0.3.2</cachedb.version>
+    <cachedb.version>0.4.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -143,6 +143,19 @@ cachedb:
   profile: production
   redis:
     uri: redis://127.0.0.1:6379
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      CustomerEntity:
+        hot-entity-limit: 50000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 60
+        hot-policy:
+          mode: STATE_WINDOW
+          state-column: status
+          state-values: [ACTIVE]
   admin:
     http-enabled: true
 ```
@@ -156,7 +169,7 @@ DataSource dataSource = createDataSource();
 try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .production()
         .keyPrefix("app-cache")
-        .register(com.example.cache.GeneratedCacheBindings::register)
+        .register(com.example.cache.GeneratedCacheModule::registerJdbcBacked)
         .start()) {
     // application code
 }
@@ -208,33 +221,44 @@ Important:
 - Keep the entity small.
 - Add relation fields only when there is a clear read requirement.
 
+Expose one generated package scope. Do not create a Spring bean for every
+entity repository and projection:
+
+```java
+@Configuration(proxyBeanMethods = false)
+public class CacheDbDomainConfig {
+    @Bean
+    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
+        return GeneratedCacheModule.using(cacheDatabase);
+    }
+}
+```
+
 ## 6. First Save And Read
 
 ```java
-var customers = CustomerEntityCacheBinding.using(session).repository();
-
 CustomerEntity customer = new CustomerEntity();
 customer.customerId = 1001L;
 customer.taxNumber = "1234567890";
 customer.customerType = "RETAIL";
 customer.status = "ACTIVE";
 
-customers.save(customer);
+domain.customers().save(customer);
 
-CustomerEntity loaded = customers.findById(1001L).orElseThrow();
+CustomerEntity loaded = domain.customers().findById(1001L).orElseThrow();
 ```
 
 Expected behavior:
 
-- `save` writes to the Redis hot entity path.
+- `save` writes the entity to Redis when its policy admits it.
 - Durable persistence enters the selected SQL write-behind path.
-- `findById` reads the hot entity from Redis.
-- The entity may be rejected from Redis if it does not satisfy the hot policy.
+- `findById` reads the active entity from Redis.
+- The entity may be rejected from Redis if it does not satisfy the active-data policy.
 
 ## 7. First Delete
 
 ```java
-customers.deleteById(1001L);
+domain.customers().deleteById(1001L);
 ```
 
 Behavior:
@@ -249,7 +273,7 @@ Behavior:
 Small bounded query:
 
 ```java
-List<CustomerEntity> activeCustomers = customers.query(
+List<CustomerEntity> activeCustomers = domain.customers().query(
         QuerySpec.where(QueryFilter.eq("status", "ACTIVE"))
                 .orderBy(QuerySort.asc("customer_id"))
                 .limitTo(100)
@@ -283,17 +307,29 @@ public class OrderEntity {
 }
 ```
 
-Parent relation:
+Declare the loader and a bounded fetch preset on the parent entity:
 
 ```java
-@CacheRelation(
-        targetEntity = "OrderEntity",
-        // OrderEntity.customerId maps to orders.customer_id.
-        mappedBy = "customerId",
-        kind = CacheRelation.RelationKind.ONE_TO_MANY,
-        batchLoadOnly = true
+@CacheEntity(
+        table = "customers",
+        redisNamespace = "customers",
+        relationLoader = CustomerOrdersRelationBatchLoader.class
 )
-public List<OrderEntity> orders;
+public class CustomerEntity {
+    @CacheRelation(
+            targetEntity = "OrderEntity",
+            // OrderEntity.customerId maps to orders.customer_id.
+            mappedBy = "customerId",
+            kind = CacheRelation.RelationKind.ONE_TO_MANY,
+            batchLoadOnly = true
+    )
+    public List<OrderEntity> orders;
+
+    @CacheFetchPreset("ordersPreview")
+    public static FetchPlan ordersPreviewFetchPlan(int limit) {
+        return FetchPlan.of("orders").withRelationLimit("orders", Math.max(1, limit));
+    }
+}
 ```
 
 This annotation is CacheDB metadata. It is not a database foreign key. If the
@@ -306,8 +342,8 @@ integrity is now your responsibility.
 Read:
 
 ```java
-CustomerEntity customer = customerRepository
-        .withRelationLimit("orders", 10)
+CustomerEntity customer = domain.customers().fetches()
+        .ordersPreview(10)
         .findById(customerId)
         .orElseThrow();
 ```

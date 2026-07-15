@@ -21,16 +21,32 @@ public final class CacheWarmRunner {
     }
 
     public CacheWarmResult execute(CacheWarmPlan plan) {
+        return execute(plan, WarmMode.ENTITY_AND_PROJECTIONS);
+    }
+
+    public CacheWarmResult dryRun(CacheWarmPlan plan) {
+        return execute(plan, WarmMode.DRY_RUN);
+    }
+
+    public CacheWarmResult executeProjectionsOnly(CacheWarmPlan plan) {
+        return execute(plan, WarmMode.PROJECTIONS_ONLY);
+    }
+
+    private CacheWarmResult execute(CacheWarmPlan plan, WarmMode mode) {
         CacheWarmPlan normalized = Objects.requireNonNull(plan, "plan");
         EntityBinding<?, ?> rawBinding = cacheDatabase.entityRegistry()
                 .find(normalized.entityName())
                 .orElseThrow(() -> new IllegalStateException("No registered CacheDB entity found for warm plan entity: "
                         + normalized.entityName()));
-        return executeTyped(normalized, rawBinding);
+        return executeTyped(normalized, rawBinding, mode);
     }
 
     @SuppressWarnings("unchecked")
-    private <T, ID> CacheWarmResult executeTyped(CacheWarmPlan plan, EntityBinding<?, ?> rawBinding) {
+    private <T, ID> CacheWarmResult executeTyped(
+            CacheWarmPlan plan,
+            EntityBinding<?, ?> rawBinding,
+            WarmMode mode
+    ) {
         EntityBinding<T, ID> binding = (EntityBinding<T, ID>) rawBinding;
         EntityQueryLoader<T> queryLoader = binding.queryLoader();
         if (queryLoader == null || queryLoader instanceof NoOpEntityQueryLoader) {
@@ -63,13 +79,28 @@ public final class CacheWarmRunner {
                     elapsedMillis(startedAtNanos),
                     plan.forceImmediateProjectionRefresh(),
                     plan.reindexQueryIndexes(),
-                    List.of("Warm source returned no rows.")
+                    List.of(mode == WarmMode.DRY_RUN
+                            ? "Warm dry run returned no rows and did not mutate Redis."
+                            : "Warm source returned no rows.")
             );
         }
         if (loaded.size() > plan.maxRows()) {
             throw new IllegalArgumentException("Warm plan " + plan.name()
                     + " loader returned " + loaded.size()
                     + " rows but maxRows=" + plan.maxRows());
+        }
+
+        if (mode == WarmMode.DRY_RUN) {
+            return new CacheWarmResult(
+                    plan.name(),
+                    plan.entityName(),
+                    loaded.size(),
+                    0,
+                    elapsedMillis(startedAtNanos),
+                    false,
+                    false,
+                    List.of("Warm dry run read the registered JDBC source and did not mutate Redis.")
+            );
         }
 
         EntityRepository<T, ID> repository = cacheDatabase.repository(
@@ -82,25 +113,38 @@ public final class CacheWarmRunner {
                     + " requires the Redis entity repository runtime");
         }
         RedisEntityRepository<T, ID> redisRepository = (RedisEntityRepository<T, ID>) rawRedisRepository;
-        redisRepository.hydrateWarmBatch(
-                loaded.stream().map(VersionedEntity::entity).toList(),
-                loaded.stream().map(VersionedEntity::version).toList(),
-                plan.forceImmediateProjectionRefresh(),
-                plan.reindexQueryIndexes()
-        );
+        List<T> entities = loaded.stream().map(VersionedEntity::entity).toList();
+        if (mode == WarmMode.PROJECTIONS_ONLY) {
+            redisRepository.hydrateProjectionWarmBatch(entities);
+        } else {
+            redisRepository.hydrateWarmBatch(
+                    entities,
+                    loaded.stream().map(VersionedEntity::version).toList(),
+                    plan.forceImmediateProjectionRefresh(),
+                    plan.reindexQueryIndexes()
+            );
+        }
         return new CacheWarmResult(
                 plan.name(),
                 plan.entityName(),
                 loaded.size(),
                 loaded.size(),
                 elapsedMillis(startedAtNanos),
-                plan.forceImmediateProjectionRefresh(),
-                plan.reindexQueryIndexes(),
-                List.of("Rows were submitted to Redis warm hydration. Hot policy and tenant quota may still reject individual rows.")
+                mode == WarmMode.ENTITY_AND_PROJECTIONS && plan.forceImmediateProjectionRefresh(),
+                mode == WarmMode.ENTITY_AND_PROJECTIONS && plan.reindexQueryIndexes(),
+                List.of(mode == WarmMode.PROJECTIONS_ONLY
+                        ? "Rows were submitted to projection-only Redis hydration; full entities were not retained."
+                        : "Rows were submitted to Redis warm hydration. Hot policy and tenant quota may still reject individual rows.")
         );
     }
 
     private static long elapsedMillis(long startedAtNanos) {
         return Math.max(0L, (System.nanoTime() - startedAtNanos) / 1_000_000L);
+    }
+
+    private enum WarmMode {
+        ENTITY_AND_PROJECTIONS,
+        PROJECTIONS_ONLY,
+        DRY_RUN
     }
 }

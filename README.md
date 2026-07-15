@@ -108,7 +108,7 @@ Keep `cachedb.version` aligned with the release you use.
 
 ```xml
 <properties>
-    <cachedb.version>0.3.2</cachedb.version>
+    <cachedb.version>0.4.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -180,6 +180,17 @@ cachedb:
   profile: production
   redis:
     uri: redis://127.0.0.1:6379
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      CustomerEntity:
+        hot-entity-limit: 50000
+        page-size: 100
+        hot-policy:
+          mode: STATE_WINDOW
+          state-column: status
+          state-values: [ACTIVE]
   admin:
     http-enabled: true
 ```
@@ -224,11 +235,18 @@ does not rely on runtime reflection to discover persisted fields.
 
 ## First Read And Write
 
-Start normal service code from the generated surface:
+Expose the generated package surface once:
 
 ```java
-var domain = GeneratedCacheModule.using(session);
+@Bean
+GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
+    return GeneratedCacheModule.using(cacheDatabase);
+}
+```
 
+Then inject `GeneratedCacheModule.Scope` into normal service code:
+
+```java
 CustomerEntity customer = new CustomerEntity();
 customer.customerId = 42L;
 customer.taxNumber = "1234567890";
@@ -244,9 +262,9 @@ CustomerEntity loaded = domain.customers()
 
 Behavior:
 
-- `save` writes the hot entity to Redis.
+- `save` writes the entity to Redis when its policy admits it.
 - Durable persistence is sent to the selected SQL write-behind path.
-- `findById` reads the hot entity from Redis.
+- `findById` reads the active entity from Redis.
 - If the entity does not satisfy the hot policy, it may be rejected or evicted
   from Redis.
 

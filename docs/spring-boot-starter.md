@@ -27,6 +27,45 @@ For most teams, the recommended default is:
 
 That gives you the easiest startup path without giving up the project's first priority of keeping runtime overhead low.
 
+### Declarative Application Surface
+
+Use configuration for per-entity policy and one generated package scope for
+application code:
+
+```yaml
+cachedb:
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      OrderEntity:
+        hot-entity-limit: 100000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 60
+        hot-policy:
+          mode: TIME_WINDOW
+          time-column: order_date
+          hot-for-seconds: 7776000
+```
+
+```java
+@Configuration(proxyBeanMethods = false)
+public class CacheDbDomainConfig {
+    @Bean
+    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
+        return GeneratedCacheModule.using(cacheDatabase);
+    }
+}
+```
+
+Spring registration is deliberately two-phase. All generated entities receive
+their own policy and JDBC source first; relation/page loaders are wired only
+after every child repository is known. This avoids policy leakage through
+constructor-injected relation loaders. `fail-on-unknown-entity=true` turns a
+misspelled policy key into a startup failure instead of silently using the
+default policy.
+
 ## Fastest Paths
 
 ### Plain Java, lowest ceremony
@@ -38,7 +77,7 @@ DataSource dataSource = ...;
 try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .production()
         .keyPrefix("app-cache")
-        .register(com.reactor.cachedb.examples.entity.GeneratedCacheBindings::register)
+        .register(com.reactor.cachedb.examples.entity.GeneratedCacheModule::registerJdbcBacked)
         .start()) {
     // use repositories here
 }
@@ -85,7 +124,7 @@ The processor now also generates a package-level registrar:
 CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .production()
         .keyPrefix("app-cache")
-        .register(com.reactor.cachedb.examples.entity.GeneratedCacheBindings::register)
+        .register(com.reactor.cachedb.examples.entity.GeneratedCacheModule::registerJdbcBacked)
         .start();
 ```
 
@@ -111,6 +150,15 @@ cachedb:
   profile: production
   redis:
     uri: redis://127.0.0.1:6379
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      UserEntity:
+        hot-entity-limit: 50000
+        page-size: 100
+        hot-policy:
+          mode: COUNT_WINDOW
 ```
 
 This is enough to get:
@@ -306,6 +354,8 @@ Notes:
 - `cachedb.profile` accepts `default`, `development`, `production`, `benchmark`, `memory-constrained`, or `minimal-overhead`.
 - generated package registrars are discovered automatically through `ServiceLoader`, so entity bindings do not need a manual `register(...)` call in the normal Spring Boot path
 - set `cachedb.registration.enabled=false` only if you want to opt back into fully manual binding registration
+- `cachedb.registration.source=metadata-only` preserves the backward-compatible default; select `jdbc` explicitly to register bounded JDBC source loaders for read-through and warm/backfill
+- `cachedb.registration.entities.<EntityName>` configures each generated entity independently; `fail-on-unknown-entity=true` rejects stale or misspelled names at startup
 - `cachedb.runtime.append-instance-id-to-consumer-names=true` is the safe multi-pod default; it keeps consumer groups shared but makes consumer names pod-unique
 - `cachedb.runtime.leader-lease-enabled=true` turns on Redis leader leasing for cleanup/report/history loops so those singleton tasks do not fan out across every pod
 
@@ -364,7 +414,7 @@ DataSource dataSource = ...;
 CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .development()
         .keyPrefix("app-cache")
-        .register(com.reactor.cachedb.examples.entity.GeneratedCacheBindings::register)
+        .register(com.reactor.cachedb.examples.entity.GeneratedCacheModule::registerJdbcBacked)
         .start();
 ```
 

@@ -64,6 +64,16 @@ public final class EntityProjection<T, P, ID> {
         );
     }
 
+    public static <T, P, ID> EntityProjection<T, P, ID> of(
+            String name,
+            ProjectionSchema<P> schema,
+            Function<P, ID> idAccessor,
+            Function<T, P> projector
+    ) {
+        Objects.requireNonNull(schema, "schema");
+        return of(name, schema, idAccessor, schema.columns(), schema::columnValues, projector);
+    }
+
     public String name() {
         return name;
     }

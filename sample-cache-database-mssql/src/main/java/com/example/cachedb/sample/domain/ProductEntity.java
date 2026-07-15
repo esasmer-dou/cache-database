@@ -62,6 +62,13 @@ public class ProductEntity {
                 .limitTo(limit);
     }
 
+    @CacheNamedQuery("activeProducts")
+    public static QuerySpec activeProductsQuery(int limit) {
+        return QuerySpec.where(QueryFilter.eq("active_status", "ACTIVE"))
+                .orderBy(QuerySort.asc("sku"))
+                .limitTo(limit);
+    }
+
     @CacheNamedQuery("lowStockProducts")
     public static QuerySpec lowStockProductsQuery(int limit) {
         return QuerySpec.where(QueryFilter.eq("stock_status", "LOW_STOCK"))

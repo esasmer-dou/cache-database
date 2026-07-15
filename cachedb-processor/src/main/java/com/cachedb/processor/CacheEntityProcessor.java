@@ -1014,7 +1014,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         try {
             JavaFileObject fileObject = filer.createSourceFile(qualifiedName);
             try (Writer writer = fileObject.openWriter()) {
-                writer.write(renderPackageBindingsRegistrar(packageName));
+                writer.write(renderPackageBindingsRegistrar(packageName, models));
             }
         } catch (IOException exception) {
             messager.printMessage(Diagnostic.Kind.ERROR, "Could not generate package binding registrar class: " + exception.getMessage());
@@ -1078,6 +1078,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("import com.reactor.cachedb.core.query.QuerySpec;\n");
         builder.append("import com.reactor.cachedb.core.relation.RelationBatchLoader;\n");
         builder.append("import com.reactor.cachedb.starter.CacheDatabase;\n");
+        builder.append("import com.reactor.cachedb.starter.CacheWarmPlan;\n");
         builder.append("import java.util.LinkedHashMap;\n");
         builder.append("import java.util.List;\n");
         builder.append("import java.util.Map;\n");
@@ -1142,6 +1143,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         StringBuilder builder = new StringBuilder();
         builder.append("package ").append(packageName).append(";\n\n");
         builder.append("import com.reactor.cachedb.core.cache.CachePolicy;\n");
+        builder.append("import com.reactor.cachedb.core.cache.CachePolicyCatalog;\n");
         builder.append("import com.reactor.cachedb.starter.CacheDatabase;\n\n");
         builder.append("public final class GeneratedCacheBindings {\n");
         builder.append("    private GeneratedCacheBindings() {\n");
@@ -1155,15 +1157,32 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         for (EntityModel model : models) {
             builder.append("        ").append(model.bindingName()).append(".register(cacheDatabase, cachePolicy);\n");
         }
+        builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcSources(CacheDatabase cacheDatabase, CachePolicyCatalog policyCatalog) {\n");
+        builder.append("        CachePolicyCatalog resolvedCatalog = policyCatalog == null ? CachePolicyCatalog.empty() : policyCatalog;\n");
+        builder.append("        CachePolicy fallback = cacheDatabase.config().resourceLimits().defaultCachePolicy();\n");
+        for (EntityModel model : models) {
+            builder.append("        ").append(model.bindingName()).append(".registerJdbcSource(cacheDatabase, resolvedCatalog.resolve(\"")
+                    .append(model.simpleName()).append("\", fallback));\n");
+        }
+        builder.append("    }\n\n");
+        builder.append("    public static void registerDeclaredLoaders(CacheDatabase cacheDatabase, CachePolicyCatalog policyCatalog) {\n");
+        builder.append("        CachePolicyCatalog resolvedCatalog = policyCatalog == null ? CachePolicyCatalog.empty() : policyCatalog;\n");
+        builder.append("        CachePolicy fallback = cacheDatabase.config().resourceLimits().defaultCachePolicy();\n");
+        for (EntityModel model : models) {
+            builder.append("        ").append(model.bindingName()).append(".registerDeclaredLoaders(cacheDatabase, resolvedCatalog.resolve(\"")
+                    .append(model.simpleName()).append("\", fallback));\n");
+        }
         builder.append("    }\n");
         builder.append("}\n");
         return builder.toString();
     }
 
-    private String renderPackageBindingsRegistrar(String packageName) {
+    private String renderPackageBindingsRegistrar(String packageName, List<EntityModel> models) {
         StringBuilder builder = new StringBuilder();
         builder.append("package ").append(packageName).append(";\n\n");
         builder.append("import com.reactor.cachedb.core.cache.CachePolicy;\n");
+        builder.append("import com.reactor.cachedb.core.cache.CachePolicyCatalog;\n");
         builder.append("import com.reactor.cachedb.starter.CacheDatabase;\n");
         builder.append('\n');
         builder.append("public final class GeneratedCacheBindingsRegistrar implements ")
@@ -1179,6 +1198,25 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    @Override\n");
         builder.append("    public void register(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
         builder.append("        GeneratedCacheBindings.register(cacheDatabase, cachePolicy);\n");
+        builder.append("    }\n\n");
+        builder.append("    @Override\n");
+        builder.append("    public java.util.List<String> entityNames() {\n");
+        builder.append("        return java.util.List.of(");
+        for (int index = 0; index < models.size(); index++) {
+            if (index > 0) {
+                builder.append(", ");
+            }
+            builder.append("\"").append(models.get(index).simpleName()).append("\"");
+        }
+        builder.append(");\n");
+        builder.append("    }\n\n");
+        builder.append("    @Override\n");
+        builder.append("    public void registerJdbcSources(CacheDatabase cacheDatabase, CachePolicyCatalog policyCatalog) {\n");
+        builder.append("        GeneratedCacheBindings.registerJdbcSources(cacheDatabase, policyCatalog);\n");
+        builder.append("    }\n\n");
+        builder.append("    @Override\n");
+        builder.append("    public void registerDeclaredLoaders(CacheDatabase cacheDatabase, CachePolicyCatalog policyCatalog) {\n");
+        builder.append("        GeneratedCacheBindings.registerDeclaredLoaders(cacheDatabase, policyCatalog);\n");
         builder.append("    }\n");
         builder.append("}\n");
         return builder.toString();
@@ -1189,6 +1227,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("package ").append(packageName).append(";\n\n");
         builder.append("import com.reactor.cachedb.core.api.CacheSession;\n");
         builder.append("import com.reactor.cachedb.core.cache.CachePolicy;\n");
+        builder.append("import com.reactor.cachedb.core.cache.CachePolicyCatalog;\n");
         builder.append("import com.reactor.cachedb.starter.CacheDatabase;\n\n");
         builder.append("public final class GeneratedCacheModule {\n");
         builder.append("    private GeneratedCacheModule() {\n");
@@ -1198,6 +1237,13 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    }\n\n");
         builder.append("    public static void register(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
         builder.append("        GeneratedCacheBindings.register(cacheDatabase, cachePolicy);\n");
+        builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase) {\n");
+        builder.append("        registerJdbcBacked(cacheDatabase, CachePolicyCatalog.empty());\n");
+        builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase, CachePolicyCatalog policyCatalog) {\n");
+        builder.append("        GeneratedCacheBindings.registerJdbcSources(cacheDatabase, policyCatalog);\n");
+        builder.append("        GeneratedCacheBindings.registerDeclaredLoaders(cacheDatabase, policyCatalog);\n");
         builder.append("    }\n\n");
         builder.append("    public static Scope using(CacheSession cacheSession) {\n");
         builder.append("        return new Scope(cacheSession, null);\n");
@@ -1210,23 +1256,32 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("        private final CachePolicy cachePolicy;\n");
         for (EntityModel model : models) {
             String accessorName = packageScopeAccessorName(model, models);
-            builder.append("        private ").append(model.bindingName()).append(".Scope ").append(accessorName).append("Scope;\n");
+            builder.append("        private volatile ").append(model.bindingName()).append(".Scope ")
+                    .append(accessorName).append("Scope;\n");
         }
         builder.append('\n');
         builder.append("        private Scope(CacheSession cacheSession, CachePolicy cachePolicy) {\n");
-        builder.append("            this.cacheSession = cacheSession;\n");
+        builder.append("            this.cacheSession = java.util.Objects.requireNonNull(cacheSession, \"cacheSession\");\n");
         builder.append("            this.cachePolicy = cachePolicy;\n");
         builder.append("        }\n\n");
         for (int index = 0; index < models.size(); index++) {
             EntityModel model = models.get(index);
             String accessorName = packageScopeAccessorName(model, models);
             builder.append("        public ").append(model.bindingName()).append(".Scope ").append(accessorName).append("() {\n");
-            builder.append("            if (").append(accessorName).append("Scope == null) {\n");
-            builder.append("                ").append(accessorName).append("Scope = cachePolicy == null ? ")
+            builder.append("            ").append(model.bindingName()).append(".Scope resolved = ")
+                    .append(accessorName).append("Scope;\n");
+            builder.append("            if (resolved == null) {\n");
+            builder.append("                synchronized (this) {\n");
+            builder.append("                    resolved = ").append(accessorName).append("Scope;\n");
+            builder.append("                    if (resolved == null) {\n");
+            builder.append("                        resolved = cachePolicy == null ? ")
                     .append(model.bindingName()).append(".using(cacheSession) : ")
                     .append(model.bindingName()).append(".using(cacheSession, cachePolicy);\n");
+            builder.append("                        ").append(accessorName).append("Scope = resolved;\n");
+            builder.append("                    }\n");
+            builder.append("                }\n");
             builder.append("            }\n");
-            builder.append("            return ").append(accessorName).append("Scope;\n");
+            builder.append("            return resolved;\n");
             builder.append("        }\n");
             if (index < models.size() - 1) {
                 builder.append('\n');
@@ -1441,7 +1496,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             builder.append(switch (dependency.kind()) {
                 case CACHE_DATABASE, CACHE_SESSION -> "cacheDatabase";
                 case CACHE_POLICY -> "cachePolicy";
-                case ENTITY_REPOSITORY -> dependency.bindingTypeName() + ".repository(cacheDatabase, cachePolicy)";
+                case ENTITY_REPOSITORY -> dependency.bindingTypeName() + ".repository(cacheDatabase)";
             });
         }
     }
@@ -1798,6 +1853,19 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 .append(");\n");
         renderProjectionRegistrationStatements(builder, model);
         builder.append("    }\n\n");
+        builder.append("    public static void registerJdbcSource(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
+        builder.append("        cacheDatabase.registerJdbcBacked(METADATA, CODEC, cachePolicy, null, null);\n");
+        renderProjectionRegistrationStatements(builder, model);
+        builder.append("    }\n\n");
+        builder.append("    public static void registerDeclaredLoaders(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
+        if (model.relationLoader() != null || model.pageLoader() != null) {
+            builder.append("        cacheDatabase.register(METADATA, CODEC, cachePolicy, ")
+                    .append(model.relationLoader() == null ? "null" : "relationLoader(cacheDatabase, cachePolicy)")
+                    .append(", ")
+                    .append(model.pageLoader() == null ? "null" : "pageLoader(cacheDatabase, cachePolicy)")
+                    .append(");\n");
+        }
+        builder.append("    }\n\n");
         builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase, RelationBatchLoader<")
                 .append(model.simpleName()).append("> relationBatchLoader) {\n");
         builder.append("        cacheDatabase.registerJdbcBacked(METADATA, CODEC, cacheDatabase.config().resourceLimits().defaultCachePolicy(), relationBatchLoader, null);\n");
@@ -1841,6 +1909,13 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 .append("> pageLoader) {\n");
         builder.append("        cacheDatabase.register(METADATA, CODEC, cachePolicy, relationBatchLoader, pageLoader);\n");
         renderProjectionRegistrationStatements(builder, model);
+        builder.append("    }\n\n");
+        builder.append("    public static CacheWarmPlan warmPlan(String name, QuerySpec querySpec, int maxRows) {\n");
+        builder.append("        return CacheWarmPlan.builder(METADATA.entityName())\n");
+        builder.append("                .name(name)\n");
+        builder.append("                .querySpec(querySpec)\n");
+        builder.append("                .maxRows(maxRows)\n");
+        builder.append("                .build();\n");
         builder.append("    }\n\n");
         builder.append("    public static ActiveRecordInstance<").append(model.simpleName()).append(", ").append(model.idField().typeName())
                 .append("> attach(CacheSession session, ").append(model.simpleName()).append(" entity) {\n");
@@ -1933,129 +2008,112 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
     private void renderScopeClass(StringBuilder builder, EntityModel model) {
         builder.append("    public static final class Scope {\n");
-        builder.append("        private final CacheSession cacheSession;\n");
-        builder.append("        private final CachePolicy cachePolicy;\n");
-        builder.append("        private EntityRepository<").append(model.simpleName()).append(", ")
+        builder.append("        private final EntityRepository<").append(model.simpleName()).append(", ")
                 .append(model.idField().typeName()).append("> repository;\n");
         if (!model.namedQueries().isEmpty()) {
-            builder.append("        private Queries queries;\n");
+            builder.append("        private final Queries queries;\n");
         }
         if (!model.projections().isEmpty()) {
-            builder.append("        private Projections projections;\n");
+            builder.append("        private final Projections projections;\n");
         }
         if (!model.fetchPresets().isEmpty()) {
-            builder.append("        private Fetches fetches;\n");
+            builder.append("        private final Fetches fetches;\n");
         }
         if (!model.pagePresets().isEmpty()) {
-            builder.append("        private Pages pages;\n");
+            builder.append("        private final Pages pages;\n");
         }
         if (!model.saveCommands().isEmpty()) {
-            builder.append("        private Commands commands;\n");
+            builder.append("        private final Commands commands;\n");
         }
         if (!model.deleteCommands().isEmpty()) {
-            builder.append("        private Deletes deletes;\n");
+            builder.append("        private final Deletes deletes;\n");
         }
         builder.append('\n');
         builder.append("        private Scope(CacheSession cacheSession, CachePolicy cachePolicy) {\n");
-        builder.append("            this.cacheSession = cacheSession;\n");
-        builder.append("            this.cachePolicy = cachePolicy;\n");
+        builder.append("            this.repository = cachePolicy == null ? ").append(model.bindingName())
+                .append(".repository(cacheSession) : ").append(model.bindingName())
+                .append(".repository(cacheSession, cachePolicy);\n");
+        if (!model.namedQueries().isEmpty()) {
+            builder.append("            this.queries = new Queries(this);\n");
+        }
+        if (!model.projections().isEmpty()) {
+            builder.append("            this.projections = new Projections(this);\n");
+        }
+        if (!model.fetchPresets().isEmpty()) {
+            builder.append("            this.fetches = new Fetches(this);\n");
+        }
+        if (!model.pagePresets().isEmpty()) {
+            builder.append("            this.pages = new Pages(this);\n");
+        }
+        if (!model.saveCommands().isEmpty()) {
+            builder.append("            this.commands = new Commands(this);\n");
+        }
+        if (!model.deleteCommands().isEmpty()) {
+            builder.append("            this.deletes = new Deletes(this);\n");
+        }
         builder.append("        }\n\n");
         builder.append("        public EntityRepository<").append(model.simpleName()).append(", ")
                 .append(model.idField().typeName()).append("> repository() {\n");
-        builder.append("            if (repository == null) {\n");
-        builder.append("                repository = cachePolicy == null ? ").append(model.bindingName())
-                .append(".repository(cacheSession) : ").append(model.bindingName())
-                .append(".repository(cacheSession, cachePolicy);\n");
-        builder.append("            }\n");
         builder.append("            return repository;\n");
         builder.append("        }\n\n");
         builder.append("        public ActiveRecordInstance<").append(model.simpleName()).append(", ")
                 .append(model.idField().typeName()).append("> attach(").append(model.simpleName())
                 .append(" entity) {\n");
-        builder.append("            return cachePolicy == null ? ").append(model.bindingName())
-                .append(".attach(cacheSession, entity) : ").append(model.bindingName())
-                .append(".attach(cacheSession, cachePolicy, entity);\n");
+        builder.append("            return new ActiveRecordInstance<>(entity, METADATA.idAccessor().apply(entity), repository);\n");
         builder.append("        }\n\n");
         builder.append("        public ").append(model.simpleName()).append(" save(").append(model.simpleName())
                 .append(" entity) {\n");
-        builder.append("            return cachePolicy == null ? ").append(model.bindingName())
-                .append(".save(cacheSession, entity) : ").append(model.bindingName())
-                .append(".save(cacheSession, cachePolicy, entity);\n");
+        builder.append("            return repository.save(entity);\n");
         builder.append("        }\n\n");
         builder.append("        public Optional<").append(model.simpleName()).append("> findById(")
                 .append(model.idField().typeName()).append(" id) {\n");
-        builder.append("            return cachePolicy == null ? ").append(model.bindingName())
-                .append(".findById(cacheSession, id) : ").append(model.bindingName())
-                .append(".findById(cacheSession, cachePolicy, id);\n");
+        builder.append("            return repository.findById(id);\n");
         builder.append("        }\n\n");
         builder.append("        public List<").append(model.simpleName()).append("> findPage(PageWindow pageWindow) {\n");
-        builder.append("            return cachePolicy == null ? ").append(model.bindingName())
-                .append(".findPage(cacheSession, pageWindow) : ").append(model.bindingName())
-                .append(".findPage(cacheSession, cachePolicy, pageWindow);\n");
+        builder.append("            return repository.findPage(pageWindow);\n");
         builder.append("        }\n\n");
         builder.append("        public List<").append(model.simpleName()).append("> query(QuerySpec querySpec) {\n");
-        builder.append("            return cachePolicy == null ? ").append(model.bindingName())
-                .append(".query(cacheSession, querySpec) : ").append(model.bindingName())
-                .append(".query(cacheSession, cachePolicy, querySpec);\n");
+        builder.append("            return repository.query(querySpec);\n");
         builder.append("        }\n\n");
         builder.append("        public void deleteById(").append(model.idField().typeName()).append(" id) {\n");
-        builder.append("            if (cachePolicy == null) {\n");
-        builder.append("                ").append(model.bindingName()).append(".deleteById(cacheSession, id);\n");
-        builder.append("            } else {\n");
-        builder.append("                ").append(model.bindingName()).append(".deleteById(cacheSession, cachePolicy, id);\n");
-        builder.append("            }\n");
+        builder.append("            repository.deleteById(id);\n");
+        builder.append("        }\n\n");
+        builder.append("        public CacheWarmPlan warmPlan(String name, QuerySpec querySpec, int maxRows) {\n");
+        builder.append("            return ").append(model.bindingName()).append(".warmPlan(name, querySpec, maxRows);\n");
         builder.append("        }\n");
         if (!model.namedQueries().isEmpty()) {
             builder.append('\n');
             builder.append("        public Queries queries() {\n");
-            builder.append("            if (queries == null) {\n");
-            builder.append("                queries = new Queries(this);\n");
-            builder.append("            }\n");
             builder.append("            return queries;\n");
             builder.append("        }\n");
         }
         if (!model.projections().isEmpty()) {
             builder.append('\n');
             builder.append("        public Projections projections() {\n");
-            builder.append("            if (projections == null) {\n");
-            builder.append("                projections = new Projections(this);\n");
-            builder.append("            }\n");
             builder.append("            return projections;\n");
             builder.append("        }\n");
         }
         if (!model.fetchPresets().isEmpty()) {
             builder.append('\n');
             builder.append("        public Fetches fetches() {\n");
-            builder.append("            if (fetches == null) {\n");
-            builder.append("                fetches = new Fetches(this);\n");
-            builder.append("            }\n");
             builder.append("            return fetches;\n");
             builder.append("        }\n");
         }
         if (!model.pagePresets().isEmpty()) {
             builder.append('\n');
             builder.append("        public Pages pages() {\n");
-            builder.append("            if (pages == null) {\n");
-            builder.append("                pages = new Pages(this);\n");
-            builder.append("            }\n");
             builder.append("            return pages;\n");
             builder.append("        }\n");
         }
         if (!model.saveCommands().isEmpty()) {
             builder.append('\n');
             builder.append("        public Commands commands() {\n");
-            builder.append("            if (commands == null) {\n");
-            builder.append("                commands = new Commands(this);\n");
-            builder.append("            }\n");
             builder.append("            return commands;\n");
             builder.append("        }\n");
         }
         if (!model.deleteCommands().isEmpty()) {
             builder.append('\n');
             builder.append("        public Deletes deletes() {\n");
-            builder.append("            if (deletes == null) {\n");
-            builder.append("                deletes = new Deletes(this);\n");
-            builder.append("            }\n");
             builder.append("            return deletes;\n");
             builder.append("        }\n");
         }
@@ -2094,7 +2152,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    public static final class Projections {\n");
         builder.append("        private final Scope scope;\n");
         for (ProjectionModel projection : model.projections()) {
-            builder.append("        private ProjectionRepository<").append(projection.projectionTypeName()).append(", ")
+            builder.append("        private volatile ProjectionRepository<").append(projection.projectionTypeName()).append(", ")
                     .append(model.idField().typeName()).append("> ").append(projection.accessorName()).append(";\n");
         }
         builder.append('\n');
@@ -2111,11 +2169,19 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             builder.append("        public ProjectionRepository<").append(projection.projectionTypeName()).append(", ")
                     .append(model.idField().typeName()).append("> ").append(projection.accessorName())
                     .append("() {\n");
-            builder.append("            if (").append(projection.accessorName()).append(" == null) {\n");
-            builder.append("                ").append(projection.accessorName()).append(" = scope.repository().projected(")
+            builder.append("            ProjectionRepository<").append(projection.projectionTypeName()).append(", ")
+                    .append(model.idField().typeName()).append("> resolved = ").append(projection.accessorName()).append(";\n");
+            builder.append("            if (resolved == null) {\n");
+            builder.append("                synchronized (this) {\n");
+            builder.append("                    resolved = ").append(projection.accessorName()).append(";\n");
+            builder.append("                    if (resolved == null) {\n");
+            builder.append("                        resolved = scope.repository().projected(")
                     .append(projection.accessorName()).append("Projection());\n");
+            builder.append("                        ").append(projection.accessorName()).append(" = resolved;\n");
+            builder.append("                    }\n");
+            builder.append("                }\n");
             builder.append("            }\n");
-            builder.append("            return ").append(projection.accessorName()).append(";\n");
+            builder.append("            return resolved;\n");
             builder.append("        }\n");
             if (index < model.projections().size() - 1) {
                 builder.append('\n');

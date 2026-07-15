@@ -3,15 +3,18 @@ package com.reactor.cachedb.examples;
 import com.reactor.cachedb.core.api.CacheSession;
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.cache.CachePolicy;
+import com.reactor.cachedb.core.cache.CachePolicyCatalog;
 import com.reactor.cachedb.core.cache.PageWindow;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.plan.FetchPlan;
+import com.reactor.cachedb.core.projection.ProjectionSchema;
 import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.examples.entity.GeneratedCacheModule;
 import com.reactor.cachedb.examples.entity.UserEntity;
 import com.reactor.cachedb.examples.entity.UserEntityCacheBinding;
 import com.reactor.cachedb.starter.CacheDatabase;
+import com.reactor.cachedb.starter.CacheWarmPlan;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsRegistrar;
 import org.junit.jupiter.api.Test;
@@ -21,6 +24,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GeneratedBindingDeclarativeHelpersTest {
@@ -95,39 +100,83 @@ class GeneratedBindingDeclarativeHelpersTest {
                         .getMethod("registerJdbcBacked", CacheDatabase.class, CachePolicy.class)
                         .getReturnType()
         );
+        assertEquals(
+                Void.TYPE,
+                GeneratedCacheModule.class
+                        .getMethod("registerJdbcBacked", CacheDatabase.class, CachePolicyCatalog.class)
+                        .getReturnType()
+        );
+    }
+
+    @Test
+    void shouldUseOneProjectionSchemaForSerializationAndIndexColumns() {
+        ProjectionSchema<UserSummary> schema = ProjectionSchema.<UserSummary>builder()
+                .longColumn("id", UserSummary::id)
+                .stringColumn("username", UserSummary::username)
+                .stringColumn("status", UserSummary::status)
+                .decodeWith(row -> new UserSummary(
+                        row.longValue("id"),
+                        row.string("username"),
+                        row.string("status")
+                ))
+                .build();
+
+        UserSummary summary = new UserSummary(7L, "alice", "ACTIVE");
+        assertEquals(summary, schema.fromRedisValue(schema.toRedisValue(summary)));
+        assertEquals(List.of("id", "username", "status"), schema.columns());
+        assertEquals("ACTIVE", schema.columnValues(summary).get("status"));
+
+        assertThrows(IllegalArgumentException.class, () -> ProjectionSchema.<UserSummary>builder()
+                .longColumn("id", UserSummary::id)
+                .stringColumn(" id ", UserSummary::username));
     }
 
     @Test
     void shouldExposePackageLevelDomainModule() {
         CapturingUserSession session = new CapturingUserSession();
+        GeneratedCacheModule.Scope domain = GeneratedCacheModule.using(session);
+        assertEquals(0, session.repositoryRequests);
 
-        QuerySpec activeUsers = GeneratedCacheModule.using(session).users().queries().activeUsersQuery(9);
+        QuerySpec activeUsers = domain.users().queries().activeUsersQuery(9);
+        assertEquals(1, session.repositoryRequests);
         assertEquals(9, activeUsers.limit());
 
-        GeneratedCacheModule.using(session).users().queries().activeUsers(9);
+        domain.users().queries().activeUsers(9);
         assertEquals(9, session.repository.lastQuery.limit());
 
-        GeneratedCacheModule.using(session).users().commands().activateUser(11L, "zoe");
+        domain.users().commands().activateUser(11L, "zoe");
         assertEquals(11L, session.repository.lastSaved.id);
 
-        GeneratedCacheModule.using(session).users().deletes().deleteUser(11L);
+        domain.users().deletes().deleteUser(11L);
         assertEquals(11L, session.repository.lastDeletedId);
+        assertSame(domain.users(), domain.users());
+
+        CacheWarmPlan warmPlan = domain.users().warmPlan("active-users", activeUsers, 9);
+        assertEquals("UserEntity", warmPlan.entityName());
+        assertEquals(9, warmPlan.maxRows());
+        assertEquals(1, session.repositoryRequests);
     }
 
     private static final class CapturingUserSession implements CacheSession {
         private final CapturingUserRepository repository = new CapturingUserRepository();
+        private int repositoryRequests;
 
         @Override
         @SuppressWarnings("unchecked")
         public <T, ID> EntityRepository<T, ID> repository(EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
+            repositoryRequests++;
             return (EntityRepository<T, ID>) repository;
         }
 
         @Override
         @SuppressWarnings("unchecked")
         public <T, ID> EntityRepository<T, ID> repository(EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy cachePolicy) {
+            repositoryRequests++;
             return (EntityRepository<T, ID>) repository;
         }
+    }
+
+    private record UserSummary(Long id, String username, String status) {
     }
 
     private static final class CapturingUserRepository implements EntityRepository<UserEntity, Long> {

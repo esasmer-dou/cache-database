@@ -1,75 +1,41 @@
 package com.example.cachedb.sample.readmodel;
 
 import com.example.cachedb.sample.domain.ShipmentEntity;
-import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
 import com.reactor.cachedb.core.projection.EntityProjection;
-import com.reactor.cachedb.core.projection.ProjectionCodec;
-
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import com.reactor.cachedb.core.projection.ProjectionSchema;
 
 public final class ShipmentReadModels {
 
-    public static final EntityProjection<ShipmentEntity, ShipmentSummary, Long> SHIPMENT_SUMMARY_PROJECTION =
-            EntityProjection.of(
-                    "shipment-summary",
-                    new ProjectionCodec<>() {
-                        @Override
-                        public String toRedisValue(ShipmentSummary projection) {
-                            LinkedHashMap<String, String> values = new LinkedHashMap<>();
-                            values.put("shipment_id", stringValue(projection.shipmentId()));
-                            values.put("customer_id", stringValue(projection.customerId()));
-                            values.put("tracking_number", projection.trackingNumber());
-                            values.put("carrier_code", projection.carrierCode());
-                            values.put("shipment_status", projection.shipmentStatus());
-                            values.put("current_city", projection.currentCity());
-                            values.put("promised_at", stringValue(projection.promisedAt()));
-                            values.put("updated_at", stringValue(projection.updatedAt()));
-                            values.put("risk_score", stringValue(projection.riskScore()));
-                            return LengthPrefixedPayloadCodec.encode(values);
-                        }
+    private static final ProjectionSchema<ShipmentSummary> SHIPMENT_SUMMARY_SCHEMA =
+            ProjectionSchema.<ShipmentSummary>builder()
+                    .longColumn("shipment_id", ShipmentSummary::shipmentId)
+                    .longColumn("customer_id", ShipmentSummary::customerId)
+                    .stringColumn("tracking_number", ShipmentSummary::trackingNumber)
+                    .stringColumn("carrier_code", ShipmentSummary::carrierCode)
+                    .stringColumn("shipment_status", ShipmentSummary::shipmentStatus)
+                    .stringColumn("current_city", ShipmentSummary::currentCity)
+                    .longColumn("promised_at", ShipmentSummary::promisedAt)
+                    .longColumn("updated_at", ShipmentSummary::updatedAt)
+                    .doubleColumn("risk_score", ShipmentSummary::riskScore)
+                    .decodeWith(row -> new ShipmentSummary(
+                            row.longValue("shipment_id"),
+                            row.longValue("customer_id"),
+                            row.string("tracking_number"),
+                            row.string("carrier_code"),
+                            row.string("shipment_status"),
+                            row.string("current_city"),
+                            row.longValue("promised_at"),
+                            row.longValue("updated_at"),
+                            row.doubleValue("risk_score")
+                    ))
+                    .build();
 
-                        @Override
-                        public ShipmentSummary fromRedisValue(String encoded) {
-                            Map<String, String> values = LengthPrefixedPayloadCodec.decode(encoded);
-                            return new ShipmentSummary(
-                                    longValue(values.get("shipment_id")),
-                                    longValue(values.get("customer_id")),
-                                    values.get("tracking_number"),
-                                    values.get("carrier_code"),
-                                    values.get("shipment_status"),
-                                    values.get("current_city"),
-                                    longValue(values.get("promised_at")),
-                                    longValue(values.get("updated_at")),
-                                    doubleValue(values.get("risk_score"))
-                            );
-                        }
-                    },
+    public static final EntityProjection<ShipmentEntity, ShipmentSummary, Long> SHIPMENT_SUMMARY_PROJECTION =
+            EntityProjection.<ShipmentEntity, ShipmentSummary, Long>of(
+                    "shipment-summary",
+                    SHIPMENT_SUMMARY_SCHEMA,
                     ShipmentSummary::shipmentId,
-                    List.of(
-                            "shipment_id",
-                            "customer_id",
-                            "tracking_number",
-                            "carrier_code",
-                            "shipment_status",
-                            "current_city",
-                            "promised_at",
-                            "updated_at",
-                            "risk_score"
-                    ),
-                    projection -> columns(
-                            "shipment_id", projection.shipmentId(),
-                            "customer_id", projection.customerId(),
-                            "tracking_number", projection.trackingNumber(),
-                            "carrier_code", projection.carrierCode(),
-                            "shipment_status", projection.shipmentStatus(),
-                            "current_city", projection.currentCity(),
-                            "promised_at", projection.promisedAt(),
-                            "updated_at", projection.updatedAt(),
-                            "risk_score", projection.riskScore()
-                    ),
-                    (ShipmentEntity shipment) -> new ShipmentSummary(
+                    shipment -> new ShipmentSummary(
                             shipment.shipmentId,
                             shipment.customerId,
                             shipment.trackingNumber,
@@ -96,25 +62,5 @@ public final class ShipmentReadModels {
             Long updatedAt,
             Double riskScore
     ) {
-    }
-
-    private static LinkedHashMap<String, Object> columns(Object... values) {
-        LinkedHashMap<String, Object> columns = new LinkedHashMap<>();
-        for (int index = 0; index < values.length; index += 2) {
-            columns.put(String.valueOf(values[index]), values[index + 1]);
-        }
-        return columns;
-    }
-
-    private static String stringValue(Object value) {
-        return value == null ? null : String.valueOf(value);
-    }
-
-    private static Long longValue(String value) {
-        return value == null ? null : Long.valueOf(value);
-    }
-
-    private static Double doubleValue(String value) {
-        return value == null ? null : Double.valueOf(value);
     }
 }

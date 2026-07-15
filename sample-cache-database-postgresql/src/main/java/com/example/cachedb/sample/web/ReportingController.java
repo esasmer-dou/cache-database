@@ -1,10 +1,8 @@
 package com.example.cachedb.sample.web;
 
 import com.example.cachedb.sample.domain.AuditEventEntity;
-import com.example.cachedb.sample.domain.AuditEventEntityCacheBinding;
+import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.domain.ReportJobEntity;
-import com.example.cachedb.sample.domain.ReportJobEntityCacheBinding;
-import com.reactor.cachedb.core.api.EntityRepository;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -37,26 +35,21 @@ public class ReportingController {
             OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
             """;
 
-    private final EntityRepository<ReportJobEntity, Long> reportJobRepository;
-    private final EntityRepository<AuditEventEntity, Long> auditEventRepository;
+    private final GeneratedCacheModule.Scope domain;
     private final JdbcTemplate jdbcTemplate;
 
     public ReportingController(
-            EntityRepository<ReportJobEntity, Long> reportJobRepository,
-            EntityRepository<AuditEventEntity, Long> auditEventRepository,
+            GeneratedCacheModule.Scope domain,
             JdbcTemplate jdbcTemplate
     ) {
-        this.reportJobRepository = reportJobRepository;
-        this.auditEventRepository = auditEventRepository;
+        this.domain = domain;
         this.jdbcTemplate = jdbcTemplate;
     }
 
     @GetMapping("/jobs/live")
     public List<ReportJobEntity> liveJobs(@RequestParam(defaultValue = "25") int limit) {
-        return ReportJobEntityCacheBinding.liveReportJobs(
-                reportJobRepository,
-                ApiLimits.requireInRange("limit", limit, 1, 50)
-        );
+        return domain.reportJobs().queries()
+                .liveReportJobs(ApiLimits.requireInRange("limit", limit, 1, 50));
     }
 
     @GetMapping("/jobs/type/{reportType}")
@@ -64,11 +57,8 @@ public class ReportingController {
             @PathVariable String reportType,
             @RequestParam(defaultValue = "25") int limit
     ) {
-        return ReportJobEntityCacheBinding.reportJobsByType(
-                reportJobRepository,
-                reportType,
-                ApiLimits.requireInRange("limit", limit, 1, 50)
-        );
+        return domain.reportJobs().queries()
+                .reportJobsByType(reportType, ApiLimits.requireInRange("limit", limit, 1, 50));
     }
 
     @PostMapping("/jobs")
@@ -85,7 +75,7 @@ public class ReportingController {
         job.updatedAt = now;
         job.rowCount = 0;
         job.failureReason = null;
-        ReportJobEntity saved = reportJobRepository.save(job);
+        ReportJobEntity saved = domain.reportJobs().save(job);
         return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "ReportJobEntity", saved.reportJobId, saved));
     }
 
@@ -94,22 +84,20 @@ public class ReportingController {
             @PathVariable long reportJobId,
             @Valid @RequestBody UpdateReportJobStatusRequest request
     ) {
-        ReportJobEntity job = reportJobRepository.findById(reportJobId)
+        ReportJobEntity job = domain.reportJobs().findById(reportJobId)
                 .orElseThrow(() -> new ResourceNotFoundException("Report job not found in active set: " + reportJobId));
         job.status = request.status();
         job.rowCount = request.rowCount() == null ? job.rowCount : request.rowCount();
         job.failureReason = request.failureReason();
         job.updatedAt = Instant.now().getEpochSecond();
-        ReportJobEntity saved = reportJobRepository.save(job);
+        ReportJobEntity saved = domain.reportJobs().save(job);
         return ResponseEntity.accepted().body(WriteAccepted.of("UPDATE", "ReportJobEntity", saved.reportJobId, saved));
     }
 
     @GetMapping("/audit/security")
     public List<AuditEventEntity> securityAuditEvents(@RequestParam(defaultValue = "25") int limit) {
-        return AuditEventEntityCacheBinding.securityAuditEvents(
-                auditEventRepository,
-                ApiLimits.requireInRange("limit", limit, 1, 50)
-        );
+        return domain.auditEvents().queries()
+                .securityAuditEvents(ApiLimits.requireInRange("limit", limit, 1, 50));
     }
 
     @GetMapping("/audit/archive")

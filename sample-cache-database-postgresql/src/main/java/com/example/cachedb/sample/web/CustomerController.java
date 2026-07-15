@@ -1,11 +1,8 @@
 package com.example.cachedb.sample.web;
 
 import com.example.cachedb.sample.domain.CustomerEntity;
-import com.example.cachedb.sample.domain.CustomerEntityCacheBinding;
-import com.example.cachedb.sample.domain.OrderEntityCacheBinding;
+import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.readmodel.OrderReadModels;
-import com.reactor.cachedb.core.api.EntityRepository;
-import com.reactor.cachedb.core.api.ProjectionRepository;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -27,15 +24,10 @@ import java.util.List;
 @RequestMapping("/api/customers")
 public class CustomerController {
 
-    private final EntityRepository<CustomerEntity, Long> customerRepository;
-    private final ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository;
+    private final GeneratedCacheModule.Scope domain;
 
-    public CustomerController(
-            EntityRepository<CustomerEntity, Long> customerRepository,
-            ProjectionRepository<OrderReadModels.OrderSummary, Long> orderSummaryRepository
-    ) {
-        this.customerRepository = customerRepository;
-        this.orderSummaryRepository = orderSummaryRepository;
+    public CustomerController(GeneratedCacheModule.Scope domain) {
+        this.domain = domain;
     }
 
     @PostMapping
@@ -48,7 +40,7 @@ public class CustomerController {
         entity.status = request.status() == null ? "ACTIVE" : request.status();
         entity.createdAt = Instant.now().getEpochSecond();
         entity.updatedAt = entity.createdAt;
-        CustomerEntity saved = customerRepository.save(entity);
+        CustomerEntity saved = domain.customers().save(entity);
         return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "CustomerEntity", saved.customerId, saved));
     }
 
@@ -57,11 +49,8 @@ public class CustomerController {
             @PathVariable long customerId,
             @RequestParam(defaultValue = "5") int orderPreview
     ) {
-        return CustomerEntityCacheBinding
-                .ordersPreviewRepository(
-                        customerRepository,
-                        ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25)
-                )
+        return domain.customers().fetches()
+                .ordersPreview(ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25))
                 .findById(customerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Customer not found: " + customerId));
     }
@@ -71,19 +60,16 @@ public class CustomerController {
             @PathVariable long customerId,
             @RequestParam(defaultValue = "20") int limit
     ) {
-        return OrderEntityCacheBinding.customerTimeline(
-                orderSummaryRepository,
-                customerId,
-                ApiLimits.requireInRange("limit", limit, 1, 1_000)
+        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
+        return domain.orders().projections().orderSummary().query(
+                domain.orders().queries().customerTimelineQuery(customerId, safeLimit)
         );
     }
 
     @GetMapping("/active")
     public List<CustomerEntity> active(@RequestParam(defaultValue = "25") int limit) {
-        return CustomerEntityCacheBinding.activeCustomers(
-                customerRepository,
-                ApiLimits.requireInRange("limit", limit, 1, 100)
-        );
+        return domain.customers().queries()
+                .activeCustomers(ApiLimits.requireInRange("limit", limit, 1, 100));
     }
 
     public record CreateCustomerRequest(
