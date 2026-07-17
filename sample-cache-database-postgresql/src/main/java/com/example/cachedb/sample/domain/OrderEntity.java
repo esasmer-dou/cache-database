@@ -82,6 +82,16 @@ public class OrderEntity {
                 .limitTo(limit);
     }
 
+    @CacheNamedQuery("activeOrderWindow")
+    public static QuerySpec activeOrderWindowQuery(long cutoffEpochSeconds, int limit) {
+        return QuerySpec.anyOf(
+                        QueryFilter.gte("order_date", cutoffEpochSeconds),
+                        QueryFilter.in("status", List.<Object>of("NEW", "PAID", "PICKING", "OPEN", "PENDING"))
+                )
+                .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
+                .limitTo(limit);
+    }
+
     @CacheFetchPreset("linePreview")
     public static FetchPlan linePreviewFetchPlan(int lineLimit) {
         return FetchPlan.of("lines").withRelationLimit("lines", Math.max(1, lineLimit));

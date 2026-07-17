@@ -37,7 +37,7 @@ Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur.
 
 ```xml
 <properties>
-    <cachedb.version>0.4.1</cachedb.version>
+    <cachedb.version>0.5.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -100,7 +100,7 @@ Spring Boot kullanmıyorsan:
 
 ```xml
 <properties>
-    <cachedb.version>0.4.1</cachedb.version>
+    <cachedb.version>0.5.0</cachedb.version>
 </properties>
 
 <dependencies>

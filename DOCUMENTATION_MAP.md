@@ -33,6 +33,7 @@ production tuning should be approached.
 | How do I model customer-order, invoice-payment, stock, or ticket cases? | [Use Case Examples](docs/use-case-examples.md) |
 | How do I speed up relation-heavy screens? | [Production Recipes](docs/production-recipes.md) |
 | How do I control Redis memory? | [Production Tuning Guide](docs/production-tuning-guide.md) |
+| How do I refresh and reconcile a hot set periodically across multiple pods? | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) |
 | Where are all config properties? | [Tuning Parameters](docs/tuning-parameters.md) |
 | How do I migrate an existing SQL database + ORM app? | [Migration Planner](docs/migration-planner.md) |
 | How do I keep Redis fresh when the source database changes outside CacheDB? | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
@@ -106,12 +107,14 @@ with evidence.
 | [Tuning Parameters](docs/tuning-parameters.md) | Property reference and defaults |
 | [Migration Planner](docs/migration-planner.md) | Migration flow from existing SQL database systems |
 | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) | External database changes, outbox/CDC events, cache-only apply behavior |
+| [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) | Declarative periodic warm, Redis lease, bounded waiting, and incremental cache cleanup |
 | [Database Provider SPI Direction](docs/database-provider-spi.md) | Storage provider boundary for PostgreSQL, MSSQL, and future SQL dialects |
 | [Production Recipes](docs/production-recipes.md) | BEST/ACCEPTABLE/ANTI-PATTERN production usage patterns |
 | [Architecture](docs/architecture.md) | Internal architecture, data flow, registry, relation loading |
 | [Production Test Report](docs/production-test-report.md) | Test evidence, smoke results, benchmark, certification lane |
 | [Production Readiness Report](docs/production-readiness-report.md) | Current production maturity assessment |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
+| [v0.5.0 Release Notes](docs/releases/v0.5.0.md) | Scheduled warm, reconciliation, validation evidence, and production boundaries |
 | [Stable Release Launch Kit](docs/stable-release-launch-kit.md) | GitHub description, release message, stable release positioning |
 | [Public Beta Launch Kit](docs/public-beta-launch-kit.md) | Historical public beta release positioning |
 | [Release Checklist](docs/release-checklist.md) | Release readiness checklist |

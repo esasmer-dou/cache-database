@@ -161,6 +161,7 @@ jobs:
           path: |
             target/cachedb-prodtest-reports/multi-instance-coordination-smoke.*
             cachedb-production-tests/target/surefire-reports/**
+            cachedb-spring-boot-starter/target/surefire-reports/**
           if-no-files-found: error
           retention-days: 14
 

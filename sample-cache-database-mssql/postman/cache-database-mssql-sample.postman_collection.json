@@ -139,6 +139,13 @@
           }
         },
         {
+          "name": "Scheduled Warm Status (local pod)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/warm/schedules"
+          }
+        },
+        {
           "name": "Order Detail With Line Preview",
           "request": {
             "method": "GET",

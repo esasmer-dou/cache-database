@@ -19,6 +19,7 @@ public class CacheDbSpringProperties {
     private final AdminUiProperties admin = new AdminUiProperties();
     private final RegistrationProperties registration = new RegistrationProperties();
     private final RuntimeProperties runtime = new RuntimeProperties();
+    private final ScheduledWarmProperties scheduledWarm = new ScheduledWarmProperties();
 
     public boolean isEnabled() {
         return enabled;
@@ -68,6 +69,10 @@ public class CacheDbSpringProperties {
 
     public RuntimeProperties getRuntime() {
         return runtime;
+    }
+
+    public ScheduledWarmProperties getScheduledWarm() {
+        return scheduledWarm;
     }
 
     public enum Profile {
@@ -514,6 +519,63 @@ public class CacheDbSpringProperties {
 
         public void setLeaderLeaseRenewIntervalMillis(long leaderLeaseRenewIntervalMillis) {
             this.leaderLeaseRenewIntervalMillis = leaderLeaseRenewIntervalMillis;
+        }
+    }
+
+    public static final class ScheduledWarmProperties {
+        private boolean enabled = true;
+        private int schedulerPoolSize = 2;
+        private int heartbeatThreads = 1;
+        private String threadNamePrefix = "cachedb-scheduled-warm-";
+        private String lockKeySegment = "coordination:scheduled-warm";
+        private long shutdownAwaitMillis = 10_000L;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getSchedulerPoolSize() {
+            return schedulerPoolSize;
+        }
+
+        public void setSchedulerPoolSize(int schedulerPoolSize) {
+            this.schedulerPoolSize = schedulerPoolSize;
+        }
+
+        public int getHeartbeatThreads() {
+            return heartbeatThreads;
+        }
+
+        public void setHeartbeatThreads(int heartbeatThreads) {
+            this.heartbeatThreads = heartbeatThreads;
+        }
+
+        public String getThreadNamePrefix() {
+            return threadNamePrefix;
+        }
+
+        public void setThreadNamePrefix(String threadNamePrefix) {
+            this.threadNamePrefix = threadNamePrefix;
+        }
+
+        public String getLockKeySegment() {
+            return lockKeySegment;
+        }
+
+        public void setLockKeySegment(String lockKeySegment) {
+            this.lockKeySegment = lockKeySegment;
+        }
+
+        public long getShutdownAwaitMillis() {
+            return shutdownAwaitMillis;
+        }
+
+        public void setShutdownAwaitMillis(long shutdownAwaitMillis) {
+            this.shutdownAwaitMillis = shutdownAwaitMillis;
         }
     }
 

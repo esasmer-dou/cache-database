@@ -74,6 +74,7 @@ happens when the requested data is outside the active set.
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
+| "How do multiple pods refresh and clean a hot set periodically?" | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) |
 | "What are entity, relation, projection, and route contract?" | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | "How do I model real production cases?" | [Use Case Examples](docs/use-case-examples.md) |
 | "How should I tune Redis memory and performance?" | [Production Tuning Guide](docs/production-tuning-guide.md) |
@@ -108,7 +109,7 @@ Keep `cachedb.version` aligned with the release you use.
 
 ```xml
 <properties>
-    <cachedb.version>0.4.1</cachedb.version>
+    <cachedb.version>0.5.0</cachedb.version>
 </properties>
 
 <dependencies>

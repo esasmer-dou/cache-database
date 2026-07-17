@@ -23,8 +23,10 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
@@ -51,6 +53,32 @@ public class CacheDatabaseSpringBootAutoConfiguration {
     public JedisPooled cacheDbBackgroundJedisPooled(CacheDbSpringProperties properties) {
         CacheDbSpringProperties.BackgroundRedisProperties background = properties.getRedis().getBackground();
         return toConnectionConfig(background.resolveUri(properties.getRedis().getUri()), background.getPool()).createClient();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "cachedb.scheduled-warm", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CacheScheduledWarmRegistry cacheScheduledWarmRegistry() {
+        return new CacheScheduledWarmRegistry();
+    }
+
+    @Bean(name = "cacheDbScheduledWarmTaskScheduler")
+    @ConditionalOnMissingBean(name = "cacheDbScheduledWarmTaskScheduler")
+    @ConditionalOnProperty(prefix = "cachedb.scheduled-warm", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public ThreadPoolTaskScheduler cacheDbScheduledWarmTaskScheduler(CacheDbSpringProperties properties) {
+        CacheDbSpringProperties.ScheduledWarmProperties scheduledWarm = properties.getScheduledWarm();
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(Math.max(1, scheduledWarm.getSchedulerPoolSize()));
+        String threadNamePrefix = scheduledWarm.getThreadNamePrefix();
+        scheduler.setThreadNamePrefix(
+                threadNamePrefix == null || threadNamePrefix.isBlank()
+                        ? "cachedb-scheduled-warm-"
+                        : threadNamePrefix
+        );
+        scheduler.setRemoveOnCancelPolicy(true);
+        scheduler.setWaitForTasksToCompleteOnShutdown(true);
+        scheduler.setAwaitTerminationMillis(Math.max(0L, scheduledWarm.getShutdownAwaitMillis()));
+        return scheduler;
     }
 
     @Bean
@@ -142,6 +170,44 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         }
         cacheDatabase.start();
         return cacheDatabase;
+    }
+
+    @Bean(destroyMethod = "close")
+    @ConditionalOnBean(CacheDatabase.class)
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "cachedb.scheduled-warm", name = "enabled", havingValue = "true", matchIfMissing = true)
+    CacheScheduledWarmCoordinator cacheScheduledWarmCoordinator(
+            CacheDatabase cacheDatabase,
+            @Qualifier("cacheDbBackgroundJedisPooled") ObjectProvider<JedisPooled> backgroundJedisProvider,
+            @Qualifier("cacheDbJedisPooled") ObjectProvider<JedisPooled> foregroundJedisProvider,
+            CacheScheduledWarmRegistry registry,
+            CacheDbSpringProperties properties
+    ) {
+        JedisPooled jedis = backgroundJedisProvider.getIfAvailable(foregroundJedisProvider::getIfAvailable);
+        if (jedis == null) {
+            throw new IllegalStateException("@CacheScheduledWarm requires a CacheDB Redis client");
+        }
+        CacheDbSpringProperties.ScheduledWarmProperties scheduledWarm = properties.getScheduledWarm();
+        return new CacheScheduledWarmCoordinator(
+                cacheDatabase,
+                jedis,
+                registry,
+                scheduledWarm.getLockKeySegment(),
+                scheduledWarm.getHeartbeatThreads(),
+                scheduledWarm.getShutdownAwaitMillis()
+        );
+    }
+
+    @Bean
+    @ConditionalOnBean(CacheScheduledWarmCoordinator.class)
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "cachedb.scheduled-warm", name = "enabled", havingValue = "true", matchIfMissing = true)
+    CacheScheduledWarmRegistrar cacheScheduledWarmRegistrar(
+            ConfigurableListableBeanFactory beanFactory,
+            @Qualifier("cacheDbScheduledWarmTaskScheduler") ThreadPoolTaskScheduler taskScheduler,
+            CacheScheduledWarmCoordinator coordinator
+    ) {
+        return new CacheScheduledWarmRegistrar(beanFactory, taskScheduler, coordinator);
     }
 
     /**

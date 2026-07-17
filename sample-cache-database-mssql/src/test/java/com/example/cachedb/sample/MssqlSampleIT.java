@@ -205,6 +205,12 @@ class MssqlSampleIT {
         });
         ResponseEntity<Map> warmJob = rest.getForEntity(url("/api/warm/jobs/" + jobId), Map.class);
         assertEquals("COMPLETED", warmJob.getBody().get("status"));
+
+        ResponseEntity<List> scheduledWarm = rest.getForEntity(url("/api/warm/schedules"), List.class);
+        assertEquals(HttpStatus.OK, scheduledWarm.getStatusCode());
+        assertTrue(scheduledWarm.getBody().stream()
+                .anyMatch(snapshot -> snapshot instanceof Map<?, ?> values
+                        && "sample-active-order-window".equals(values.get("jobName"))));
     }
 
     private ResponseEntity<Map> postJson(String path, Map<String, ?> body) {

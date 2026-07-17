@@ -650,6 +650,39 @@ cachedb:
 
 If you provide your own foreground `JedisPooled` bean and still want split pools, also expose a bean named `cacheDbBackgroundJedisPooled`.
 
+## Declarative Scheduled Warm Across Pods
+
+Use `@CacheScheduledWarm` for a bounded route that must be refreshed from SQL
+at a fixed delay, fixed rate, or cron schedule. Every pod registers the same
+method, but a Redis lease allows only one pod to call the JDBC loader for a
+cluster-wide cycle. The owner renews the lease while it runs; losing pods wait
+for a bounded time and then skip duplicate work.
+
+```java
+@CacheScheduledWarm(
+        name = "active-order-window",
+        fixedDelayString = "${app.warm.orders.fixed-delay:PT15M}",
+        lockAtMostForString = "PT2M",
+        lockWaitTimeoutString = "PT20S",
+        minimumIntervalString = "PT15M",
+        reconcileHotSet = true
+)
+public CacheWarmPlan activeOrders() {
+    long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
+    return domain.orders().warmPlan(
+            "active-order-window",
+            domain.orders().queries().activeOrderWindowQuery(cutoff, 1000),
+            1000
+    );
+}
+```
+
+The method must take no arguments and return a bounded `CacheWarmPlan`.
+Reconciliation removes Redis entity/projection data that no longer matches the
+current hot policy; it never deletes or updates the SQL row. Scheduled warm is
+not zero-lag CDC for direct SQL writes. See [Scheduled Warm and Hot-Set
+Reconciliation](scheduled-warm.md) for the full contract and capacity model.
+
 ## Minimal Overhead In Spring Boot
 
 If you want the Spring integration but do not want admin UI or admin monitoring overhead:
@@ -678,6 +711,7 @@ If missing, the starter creates:
 - `JedisPooled`
 - `CacheDatabaseConfig`
 - `CacheDatabase`
+- `CacheScheduledWarmRegistry`, scheduler, and Redis lease coordinator when `cachedb.scheduled-warm.enabled=true`
 - a native admin servlet when `cachedb.admin.http-enabled=true`
 - a Thymeleaf-backed dashboard page when `cachedb.admin.http-enabled=true`
 

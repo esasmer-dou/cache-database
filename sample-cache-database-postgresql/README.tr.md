@@ -41,7 +41,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.4.1</cachedb.version>
+  <cachedb.version>0.5.0</cachedb.version>
 </properties>
 
 <repositories>
@@ -95,7 +95,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 </build>
 ```
 
-Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.4.1`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
+Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.5.0`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
 `cachedb-annotations` ve `cachedb-processor`, `OrderEntityCacheBinding` gibi generated binding sınıflarının üretilmesi için gereklidir.
 
 Çalıştırma ve build gereksinimi: JDK 21 kullan. Örnek `pom.xml` içinde
@@ -125,9 +125,9 @@ mvn clean package
 
 Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir.
 
-## 0.4.1 İçin Doğrulanmış Deklaratif Akış
+## 0.5.0 İçin Doğrulanmış Deklaratif Akış
 
-Bu örnek CacheDB `0.4.1` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
+Bu örnek CacheDB `0.5.0` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
 sözleşme şudur:
 
 1. Yazılar CacheDB üzerinden alınır ve PostgreSQL’e write-behind ile aktarılır.
@@ -138,7 +138,7 @@ sözleşme şudur:
 
 Bu sözleşme örnek kodda açıkça görünür.
 
-### 0.4.1 Sürümünde Doğrulanan Production Sözleşmeleri
+### 0.5.0 Sürümünde Doğrulanan Production Sözleşmeleri
 
 - Komut endpoint’leri `202 Accepted` döner. Bu yanıt, komutun Redis tarafından kabul edildiğini söyler; SQL’e kalıcı yazımın tamamlandığını söylemez.
 - Alt kayıt yazılmadan önce indeksli tek bir SQL `EXISTS` sorgusu çalışır. Ana kayıt henüz kalıcı değilse request thread’i bekletilmez; `Retry-After` ile birlikte `409 Conflict` döner.
@@ -153,7 +153,7 @@ Bu sözleşme örnek kodda açıkça görünür.
 - Her entity için admission policy `application.yml` üzerinden tanımlanır. `cachedb.registration.source: jdbc` ayarı, veritabanı kayıt kaynağını açıkça belirtir.
 - Named query, fetch planı, projection ve tip güvenli warm planları derleme sırasında üretilir. `ProjectionSchema`, projection alan sırasını ve serileştirme sözleşmesini açık tutar.
 
-`0.4.1` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
+`0.5.0` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
 saniyede, write-behind SQL işlemleri 20 saniyede zaman aşımına uğrar. Admin
 istek ve arka plan kuyruklarının kapasitesi `application.yml` içinde açıkça
 tanımlanmıştır. Sürüm kontrollü hydration, eski bir warm sonucunun
@@ -222,6 +222,69 @@ Bu sonuç production benchmark değildir; örnek proje için smoke gate kanıtı
 Staging ortamında veri hacmini büyüt, testi daha uzun çalıştır ve Redis bellek
 kullanımı, projection gecikmesi, write-behind backlog, PostgreSQL gecikmesi ve
 JVM GC metriklerini birlikte izle.
+
+## Deklaratif Periyodik Warm ve Reconciliation
+
+[`SampleScheduledWarmPlans.java`](src/main/java/com/example/cachedb/sample/config/SampleScheduledWarmPlans.java),
+uygulama servislerine `@Scheduled`, Redis kilit kodu veya repository wiring
+eklemeden aktif sipariş yolunu düzenli olarak yeniler.
+
+```java
+@CacheScheduledWarm(
+        name = "sample-active-order-window",
+        enabledString = "${sample.scheduled-warm.enabled:true}",
+        fixedDelayString = "${sample.scheduled-warm.orders.fixed-delay:PT15M}",
+        initialDelayString = "${sample.scheduled-warm.orders.initial-delay:PT30S}",
+        lockAtMostForString = "${sample.scheduled-warm.orders.lock-at-most-for:PT2M}",
+        lockWaitTimeoutString = "${sample.scheduled-warm.orders.lock-wait-timeout:PT20S}",
+        minimumIntervalString = "${sample.scheduled-warm.orders.minimum-interval:PT15M}",
+        reconcileHotSet = true,
+        reconcileMaxRowsPerRunString = "${sample.scheduled-warm.orders.reconcile-max-rows:10000}",
+        reconcileScanCountString = "${sample.scheduled-warm.orders.reconcile-scan-count:500}"
+)
+public CacheWarmPlan activeOrderWindow() {
+    long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
+    return domain.orders().warmPlan(
+            "sample-active-order-window",
+            domain.orders().queries().activeOrderWindowQuery(cutoff, orderWarmMaxRows),
+            orderWarmMaxRows
+    );
+}
+```
+
+Örnekteki policy yalnızca son 90 gün değildir; **son 90 gün VEYA aktif sipariş
+durumu** anlamına gelir. Eski olmasına rağmen `OPEN` veya `PENDING` durumundaki
+bir sipariş aktif iş kümesinde kalır. İhtiyaç kesin olarak yalnızca son 90 günse
+tek bir `TIME_WINDOW` policy ve onunla aynı koşulu kullanan sorgu tanımlanmalıdır.
+
+Çalışma sırası şöyledir:
+
+1. Her uygulama pod'u aynı annotation'ı tetikler.
+2. Bir pod Redis lease'i alır ve heartbeat ile yeniler; diğer pod'lar en fazla 20 saniye bekler.
+3. Lease sahibi, kayıtlı ve sınırlı PostgreSQL JDBC loader üzerinden en fazla `warm-max-rows` kadar kayıt okur.
+4. Sürüm kontrollü hydration, policy'nin kabul ettiği kayıtları Redis'e alır ve projection'ları yeniler.
+5. Reconciliation, policy dışına çıkan kayıtları Redis'ten kaldırır; PostgreSQL'i değiştirmez.
+6. Lease sahibi tamamlanma kaydını yazar; bekleyen pod'lar aynı çevrimi ikinci kez çalıştırmaz.
+
+Pod'a özel çalışma durumunu görmek için:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8091/api/warm/schedules"
+```
+
+`COMPLETED`; yüklenen/gönderilen kayıt sayılarını, reconciliation cursor'unu,
+tam tarama durumunu ve incelenen/silinen/eksik/bozuk payload sayılarını gösterir.
+`SKIPPED_LOCK_TIMEOUT`, sınırlı bekleme bittiğinde lease'in hâlâ başka pod'da
+olduğunu gösterir. `LEASE_LOST` durumunda tamamlanma kaydı yazılmaz; sonraki
+çevrim işi yeniden dener.
+
+- `warm-max-rows`, `cachedb.config.readThrough.maxQueryLoadRows` değerini aşmamalıdır.
+- 100.000 aktif kayıt, çevrim başına 10.000 reconciliation kaydı ve 15 dakikalık aralık yaklaşık 150 dakikalık tam tarama süresi oluşturur.
+- Doğrudan PostgreSQL'e yazılan kayıt bir sonraki başarılı çevrimde görünür. Bu gecikme kabul edilmiyorsa outbox/CDC kullanılmalıdır.
+- CacheDB üzerinden yazılan kayıt Redis'e hemen girer; scheduler'ı beklemez.
+
+Tüm parametreler, hata davranışı ve kapasite hesabı [Periyodik Warm ve Aktif Veri
+Seti Uzlaştırması](../tr/docs/periodik-warm.md) belgesinde açıklanır.
 
 ## Yerelde Çalıştırma
 

@@ -48,6 +48,7 @@ import com.reactor.cachedb.redis.RedisDeadLetterManagement;
 import com.reactor.cachedb.redis.RedisDeadLetterRecoveryWorker;
 import com.reactor.cachedb.redis.RedisRecoveryCleanupWorker;
 import com.reactor.cachedb.redis.RedisHotSetManager;
+import com.reactor.cachedb.redis.RedisHotSetReconciliationResult;
 import com.reactor.cachedb.redis.RedisIndexMaintenance;
 import com.reactor.cachedb.redis.RedisKeyStrategy;
 import com.reactor.cachedb.redis.RedisLeaderLease;
@@ -612,6 +613,24 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return new CacheWarmRunner(this).executeProjectionsOnly(plan);
     }
 
+    /**
+     * Incrementally evicts Redis entities and projections that no longer satisfy
+     * their registered hot policy. The durable SQL row is never changed.
+     */
+    public CacheHotSetReconciliationResult reconcileHotSet(
+            String entityName,
+            String cursor,
+            int maxRows,
+            int scanCount
+    ) {
+        String normalizedEntityName = entityName == null ? "" : entityName.trim();
+        EntityBinding<?, ?> rawBinding = entityRegistry.find(normalizedEntityName)
+                .orElseThrow(() -> new IllegalStateException(
+                        "No registered CacheDB entity found for hot-set reconciliation: " + normalizedEntityName
+                ));
+        return reconcileHotSet(rawBinding, cursor, maxRows, scanCount);
+    }
+
     public List<CacheWarmResult> warmAll(Collection<CacheWarmPlan> plans) {
         if (plans == null || plans.isEmpty()) {
             return List.of();
@@ -622,6 +641,33 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             results.add(runner.execute(plan));
         }
         return List.copyOf(results);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private CacheHotSetReconciliationResult reconcileHotSet(
+            EntityBinding<?, ?> rawBinding,
+            String cursor,
+            int maxRows,
+            int scanCount
+    ) {
+        EntityBinding binding = rawBinding;
+        EntityRepository repository = repository(binding.metadata(), binding.codec(), binding.cachePolicy());
+        if (!(repository instanceof com.reactor.cachedb.redis.RedisEntityRepository redisRepository)) {
+            throw new IllegalStateException(
+                    "Hot-set reconciliation requires the Redis entity repository runtime for "
+                            + rawBinding.metadata().entityName()
+            );
+        }
+        RedisHotSetReconciliationResult result = redisRepository.reconcileHotSet(cursor, maxRows, scanCount);
+        return new CacheHotSetReconciliationResult(
+                rawBinding.metadata().entityName(),
+                result.nextCursor(),
+                result.inspectedRows(),
+                result.evictedRows(),
+                result.missingRows(),
+                result.invalidRows(),
+                result.fullCycleCompleted()
+        );
     }
 
     private WriteBehindFlusher createWriteBehindFlusher(

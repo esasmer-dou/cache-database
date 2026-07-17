@@ -106,12 +106,14 @@ if (Test-Path $reportsDir) {
 New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
 
 Invoke-Maven @(
-    "-pl", "cachedb-production-tests",
+    "-pl", "cachedb-production-tests,cachedb-spring-boot-starter",
     "-am",
     "test",
     "-DforkCount=0",
-    "-Dtest=MultiInstanceCoordinationSmokeTest",
+    "-Dtest=MultiInstanceCoordinationSmokeTest,CacheScheduledWarmCoordinatorTest",
     "-Dsurefire.failIfNoSpecifiedTests=false",
+    "-Dcachedb.test.redis.required=true",
+    "-Dcachedb.test.redis.uri=$RedisUri",
     "-Dcachedb.prod.reportDir=$reportsDir",
     "-Dcachedb.prod.redis.uri=$RedisUri",
     "-Dcachedb.prod.postgres.url=$PostgresUrl",
@@ -121,6 +123,7 @@ Invoke-Maven @(
 
 Write-Host ""
 Write-Host "Multi-instance coordination evidence run completed."
+Write-Host "Scheduled warm lease and heartbeat evidence passed."
 Write-Host "Reports:"
 Write-Host " - $(Join-Path $reportsDir "multi-instance-coordination-smoke.json")"
 Write-Host " - $(Join-Path $reportsDir "multi-instance-coordination-smoke.md")"

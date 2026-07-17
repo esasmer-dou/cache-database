@@ -41,7 +41,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.4.1</cachedb.version>
+  <cachedb.version>0.5.0</cachedb.version>
 </properties>
 
 <repositories>
@@ -95,7 +95,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 </build>
 ```
 
-Users should not build the parent repository first. CacheDB `0.4.1` is published from the main repository to GitHub Packages.
+Users should not build the parent repository first. CacheDB `0.5.0` is published from the main repository to GitHub Packages.
 The annotation dependency and `cachedb-processor` are required for generated bindings such as `OrderEntityCacheBinding`.
 
 Runtime and build requirement: use JDK 21. The sample `pom.xml` sets
@@ -125,9 +125,9 @@ mvn clean package
 
 If you do not configure credentials, Maven will usually fail with `401 Unauthorized` even though the repository URL is correct.
 
-## 0.4.1 Verified Declarative Path
+## 0.5.0 Verified Declarative Path
 
-This sample is wired for CacheDB `0.4.1`. The important runtime contract is:
+This sample is wired for CacheDB `0.5.0`. The important runtime contract is:
 
 1. Writes go through CacheDB and are flushed to PostgreSQL by write-behind.
 2. Existing PostgreSQL rows are not magically loaded into Redis at startup.
@@ -137,7 +137,7 @@ This sample is wired for CacheDB `0.4.1`. The important runtime contract is:
 
 The sample code makes that contract explicit.
 
-### Production contracts validated in 0.4.1
+### Production contracts validated in 0.5.0
 
 - Command endpoints return `202 Accepted`; this means Redis accepted the command, not that SQL durability is complete.
 - Child writes perform one indexed SQL `EXISTS` check. A non-durable parent returns `409 Conflict` with `Retry-After` instead of polling a request thread.
@@ -152,7 +152,7 @@ The sample code makes that contract explicit.
 - Per-entity admission policies come from `application.yml`, while `cachedb.registration.source: jdbc` makes the database registration source explicit.
 - Named queries, fetch plans, projections and typed warm plans are generated at compile time. `ProjectionSchema` keeps projection serialization and field order explicit.
 
-Version `0.4.1` also keeps JDBC reads and writes bounded: registered JDBC warm
+Version `0.5.0` also keeps JDBC reads and writes bounded: registered JDBC warm
 queries time out after 15 seconds, write-behind statements after 20 seconds, and the
 admin request/background queues have explicit capacities in `application.yml`.
 Version-aware hydration prevents an older warm result from
@@ -220,6 +220,69 @@ Historical local load baseline retained from `0.2.0`:
 This is a sample-machine smoke gate, not a production benchmark. In staging,
 increase data volume, run longer duration tests, and watch Redis memory,
 projection lag, write-behind backlog, PostgreSQL latency, and JVM GC.
+
+## Declarative Periodic Warm And Reconciliation
+
+[`SampleScheduledWarmPlans.java`](src/main/java/com/example/cachedb/sample/config/SampleScheduledWarmPlans.java)
+keeps the active order route refreshed without putting `@Scheduled`, Redis lock
+code, or repository wiring in application services.
+
+```java
+@CacheScheduledWarm(
+        name = "sample-active-order-window",
+        enabledString = "${sample.scheduled-warm.enabled:true}",
+        fixedDelayString = "${sample.scheduled-warm.orders.fixed-delay:PT15M}",
+        initialDelayString = "${sample.scheduled-warm.orders.initial-delay:PT30S}",
+        lockAtMostForString = "${sample.scheduled-warm.orders.lock-at-most-for:PT2M}",
+        lockWaitTimeoutString = "${sample.scheduled-warm.orders.lock-wait-timeout:PT20S}",
+        minimumIntervalString = "${sample.scheduled-warm.orders.minimum-interval:PT15M}",
+        reconcileHotSet = true,
+        reconcileMaxRowsPerRunString = "${sample.scheduled-warm.orders.reconcile-max-rows:10000}",
+        reconcileScanCountString = "${sample.scheduled-warm.orders.reconcile-scan-count:500}"
+)
+public CacheWarmPlan activeOrderWindow() {
+    long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
+    return domain.orders().warmPlan(
+            "sample-active-order-window",
+            domain.orders().queries().activeOrderWindowQuery(cutoff, orderWarmMaxRows),
+            orderWarmMaxRows
+    );
+}
+```
+
+The sample policy is **last 90 days OR an active order status**, not strictly
+only 90 days. This is intentional: an old order still in `OPEN` or `PENDING`
+remains part of the active business set. Use a single `TIME_WINDOW` policy and a
+matching query when the requirement is strictly the last 90 days.
+
+Runtime flow:
+
+1. Every app pod triggers the same annotation.
+2. One pod obtains and renews the Redis lease; other pods wait for at most 20 seconds.
+3. The owner reads at most `warm-max-rows` through the registered, bounded PostgreSQL JDBC loader.
+4. Version-fenced hydration admits matching rows into Redis and refreshes projections.
+5. Reconciliation removes rows that no longer match the policy from Redis without mutating PostgreSQL.
+6. The owner writes a completion marker; waiting pods skip the duplicate cycle.
+
+Inspect pod-local status with:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8091/api/warm/schedules"
+```
+
+`COMPLETED` includes loaded/submitted counts plus reconciliation cursor,
+full-cycle, inspected, evicted, missing, and invalid-payload counters.
+`SKIPPED_LOCK_TIMEOUT` means another pod still owned the lease after the bounded
+wait. `LEASE_LOST` means no completion marker was committed and a later cycle
+will retry.
+
+- `warm-max-rows` must not exceed `cachedb.config.readThrough.maxQueryLoadRows`.
+- With 100,000 hot rows, 10,000 reconciliation rows, and a 15-minute interval, a full cleanup scan is approximately 150 minutes.
+- Direct PostgreSQL writes appear on the next successful schedule. Use outbox/CDC when that lag is unacceptable.
+- CacheDB writes enter Redis immediately and do not wait for this scheduler.
+
+See [Scheduled Warm and Hot-Set Reconciliation](../docs/scheduled-warm.md) for
+the full parameter, failure, and capacity contract.
 
 ## Run Locally
 

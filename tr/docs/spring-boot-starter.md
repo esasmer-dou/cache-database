@@ -665,6 +665,40 @@ cachedb:
 Eğer kendi foreground `JedisPooled` bean'ini veriyorsan ve ayrılmış havuz yapısı
 da istiyorsan, ek olarak `cacheDbBackgroundJedisPooled` adlı bean'i de expose et.
 
+## Çok Pod'lu Deklaratif Periyodik Warm
+
+SQL'deki sınırlı bir route sabit gecikme, sabit aralık veya cron ile düzenli
+olarak Redis'e alınacaksa `@CacheScheduledWarm` kullanılır. Aynı metot her
+pod'da kaydedilir; Redis lease sayesinde cluster genelinde yalnızca bir pod JDBC
+loader'ı çalıştırır. Lease sahibi çalışma boyunca heartbeat gönderir. Diğer
+pod'lar sınırlı süre bekler ve tamamlanan işi ikinci kez çalıştırmaz.
+
+```java
+@CacheScheduledWarm(
+        name = "active-order-window",
+        fixedDelayString = "${app.warm.orders.fixed-delay:PT15M}",
+        lockAtMostForString = "PT2M",
+        lockWaitTimeoutString = "PT20S",
+        minimumIntervalString = "PT15M",
+        reconcileHotSet = true
+)
+public CacheWarmPlan activeOrders() {
+    long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
+    return domain.orders().warmPlan(
+            "active-order-window",
+            domain.orders().queries().activeOrderWindowQuery(cutoff, 1000),
+            1000
+    );
+}
+```
+
+Metot parametre almaz ve sınırlı bir `CacheWarmPlan` döndürür. Reconciliation,
+artık aktif veri policy'sine uymayan entity ve projection verisini yalnızca
+Redis'ten kaldırır; SQL kaydını silmez veya değiştirmez. Scheduled warm,
+doğrudan SQL yazıları için sıfır gecikmeli CDC değildir. Ayrıntılı sözleşme ve
+kapasite hesabı için [Periyodik Warm ve Aktif Veri Seti
+Uzlaştırması](periodik-warm.md) belgesini oku.
+
 ## Spring Boot İçinde Minimal Overhead
 
 Spring entegrasyonu kalsın ama yönetim paneli ve admin monitoring ek yükü
@@ -694,6 +728,7 @@ Eksikse starter şu bean ve bileşenleri oluşturur:
 - `JedisPooled`
 - `CacheDatabaseConfig`
 - `CacheDatabase`
+- `cachedb.scheduled-warm.enabled=true` ise `CacheScheduledWarmRegistry`, scheduler ve Redis lease coordinator
 - `cachedb.admin.http-enabled=true` ise Spring Boot servlet konteyneri içinde aynı porttan çalışan native CacheDB admin API servlet'i
 - `cachedb.admin.http-enabled=true` ise aynı base path altında Thymeleaf ile render edilen yönetim paneli sayfası
 

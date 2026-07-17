@@ -28,12 +28,13 @@ import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
 import redis.clients.jedis.JedisPooled;
 
+import java.net.URI;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -65,13 +66,14 @@ final class CacheDatabaseSafetyIntegrationTest {
     @BeforeEach
     void setUp() throws Exception {
         recreateTable();
-        jedis = new JedisPooled(REDIS_URI);
+        jedis = new JedisPooled(URI.create(REDIS_URI));
         keyPrefix = "cachedb-safety-" + UUID.randomUUID();
         CachePolicy policy = CachePolicy.builder()
                 .hotEntityLimit(100)
                 .pageSize(10)
                 .entityTtlSeconds(300)
                 .pageTtlSeconds(300)
+                .stateWindow("status", List.of("ACTIVE"))
                 .build();
         cacheDatabase = new CacheDatabase(jedis, dataSource(), CacheDatabaseConfig.builder()
                 .writeBehind(WriteBehindConfig.builder()
@@ -139,6 +141,35 @@ final class CacheDatabaseSafetyIntegrationTest {
         );
 
         assertSame(first, second);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void policyReconciliationMustEvictStaleAndMissingRowsWithoutWriteBehind() {
+        RedisEntityRepository<UserEntity, Long> repository = (RedisEntityRepository<UserEntity, Long>)
+                cacheDatabase.repository(UserEntityCacheBinding.METADATA, UserEntityCacheBinding.CODEC);
+        RedisKeyStrategy keys = new RedisKeyStrategy(keyPrefix, "entity", "page", "version", "hotset", "index");
+
+        repository.hydrateWarm(user(21L, "stale", "ACTIVE"), 1L);
+        jedis.set(
+                keys.entityKey(UserEntityCacheBinding.METADATA.redisNamespace(), 21L),
+                UserEntityCacheBinding.CODEC.toRedisValue(user(21L, "stale", "INACTIVE"))
+        );
+        jedis.zadd(keys.hotSetKey(UserEntityCacheBinding.METADATA.redisNamespace()), System.currentTimeMillis(), "22");
+        jedis.set(keys.entityKey(UserEntityCacheBinding.METADATA.redisNamespace(), 23L), "not-a-valid-cache-payload");
+        jedis.zadd(keys.hotSetKey(UserEntityCacheBinding.METADATA.redisNamespace()), System.currentTimeMillis(), "23");
+        long writeBehindBefore = jedis.xlen(keyPrefix + ":stream");
+
+        var result = cacheDatabase.reconcileHotSet("UserEntity", "0", 100, 10);
+
+        assertEquals(3, result.inspectedRows());
+        assertEquals(3, result.evictedRows());
+        assertEquals(1, result.missingRows());
+        assertEquals(1, result.invalidRows());
+        assertTrue(result.fullCycleCompleted());
+        assertFalse(jedis.exists(keys.entityKey(UserEntityCacheBinding.METADATA.redisNamespace(), 21L)));
+        assertEquals(0L, jedis.zcard(keys.hotSetKey(UserEntityCacheBinding.METADATA.redisNamespace())));
+        assertEquals(writeBehindBefore, jedis.xlen(keyPrefix + ":stream"));
     }
 
     @Test

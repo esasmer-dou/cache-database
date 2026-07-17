@@ -132,6 +132,21 @@ Operational notes:
 - size worker threads for the whole cluster, not per pod in isolation
 - for same-host local smoke, prefer explicit `cachedb.runtime.instance-id` values or the bundled `tools/ops/cluster/run-multi-instance-coordination-smoke.ps1` runner because `HOSTNAME` is usually shared across local processes
 
+### Scheduled Warm Coordination
+
+| Property | Default | What it does |
+| --- | --- | --- |
+| `cachedb.scheduled-warm.enabled` | `true` | Creates the annotation registrar, bounded scheduler, Redis coordinator, and local status registry. Set `false` to disable every `@CacheScheduledWarm` method in the process. |
+| `cachedb.scheduled-warm.scheduler-pool-size` | `2` | Threads available to scheduled warm jobs and bounded lease waits. Keep this no larger than the SQL connections reserved for warm work. |
+| `cachedb.scheduled-warm.heartbeat-threads` | `1` | Dedicated lease-renewal threads. Increase only when several scheduled warm jobs may execute concurrently. |
+| `cachedb.scheduled-warm.thread-name-prefix` | `cachedb-scheduled-warm-` | Scheduler thread-name prefix for logs and thread dumps. |
+| `cachedb.scheduled-warm.lock-key-segment` | `coordination:scheduled-warm` | Redis key segment under the CacheDB key prefix. Changing it creates a new lock namespace and must be coordinated across all pods. |
+| `cachedb.scheduled-warm.shutdown-await-millis` | `10000` | Graceful shutdown wait for scheduler and heartbeat executors. Kubernetes `terminationGracePeriodSeconds` must be longer than this plus application shutdown time. |
+
+Job-level timing, lease, mode, and reconciliation limits live on
+`@CacheScheduledWarm`; see [Scheduled Warm and Hot-Set
+Reconciliation](scheduled-warm.md). The scheduler is not a CDC replacement.
+
 ## PostgreSQL Client Tuning
 
 | Property | Default | What it does |

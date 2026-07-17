@@ -184,5 +184,16 @@ cachedb:
     leader-lease-enabled: true
 
 sample:
+  scheduled-warm:
+    enabled: ${SAMPLE_SCHEDULED_WARM_ENABLED:true}
+    orders:
+      fixed-delay: ${SAMPLE_ORDER_WARM_FIXED_DELAY:PT15M}
+      initial-delay: ${SAMPLE_ORDER_WARM_INITIAL_DELAY:PT30S}
+      minimum-interval: ${SAMPLE_ORDER_WARM_MINIMUM_INTERVAL:PT15M}
+      lock-at-most-for: ${SAMPLE_ORDER_WARM_LOCK_AT_MOST_FOR:PT2M}
+      lock-wait-timeout: ${SAMPLE_ORDER_WARM_LOCK_WAIT_TIMEOUT:PT20S}
+      warm-max-rows: ${SAMPLE_ORDER_WARM_MAX_ROWS:1000}
+      reconcile-max-rows: ${SAMPLE_ORDER_RECONCILE_MAX_ROWS:10000}
+      reconcile-scan-count: ${SAMPLE_ORDER_RECONCILE_SCAN_COUNT:500}
   demo:
     write-tools-enabled: ${SAMPLE_WRITE_TOOLS_ENABLED:true}

@@ -131,6 +131,22 @@ Operasyonel notlar:
 - worker thread sayısını pod bazlı değil, cluster toplamı olarak düşün
 - aynı host üzerinde local smoke koşarken açık `cachedb.runtime.instance-id` değerleri ver ya da `tools/ops/cluster/run-multi-instance-coordination-smoke.ps1` script'ini kullan; çünkü `HOSTNAME` genelde tüm local process'lerde ortaktır
 
+### Periyodik Warm Koordinasyonu
+
+| Property | Varsayılan | Ne işe yarar |
+| --- | --- | --- |
+| `cachedb.scheduled-warm.enabled` | `true` | Annotation registrar, sınırlı scheduler, Redis coordinator ve pod'a özel durum registry'sini oluşturur. Process içindeki tüm `@CacheScheduledWarm` metotlarını kapatmak için `false` kullan. |
+| `cachedb.scheduled-warm.scheduler-pool-size` | `2` | Scheduled warm işleri ve sınırlı lease beklemeleri için kullanılacak thread sayısıdır. Warm işlerine ayrılan SQL connection sayısından büyük olmamalıdır. |
+| `cachedb.scheduled-warm.heartbeat-threads` | `1` | Lease yenilemek için ayrılmış thread sayısıdır. Yalnızca birden fazla warm işi aynı anda çalışabiliyorsa artırılmalıdır. |
+| `cachedb.scheduled-warm.thread-name-prefix` | `cachedb-scheduled-warm-` | Log ve thread dump içinde scheduler thread'lerini ayırt etmeyi sağlayan prefix'tir. |
+| `cachedb.scheduled-warm.lock-key-segment` | `coordination:scheduled-warm` | CacheDB ana key prefix'i altındaki Redis koordinasyon segment'idir. Değişiklik yeni bir lock alanı oluşturur; tüm pod'larda birlikte uygulanmalıdır. |
+| `cachedb.scheduled-warm.shutdown-await-millis` | `10000` | Scheduler ve heartbeat executor için düzgün kapanışta beklenecek süredir. Kubernetes `terminationGracePeriodSeconds`, bu değerden ve uygulamanın kalan kapanış süresinden uzun olmalıdır. |
+
+İş bazlı zamanlama, lease, çalışma modu ve reconciliation sınırları
+`@CacheScheduledWarm` üzerinde tanımlanır. Ayrıntılar için [Periyodik Warm ve
+Aktif Veri Seti Uzlaştırması](periodik-warm.md) belgesini oku. Bu scheduler CDC
+yerine geçmez.
+
 ## PostgreSQL Client Tuning
 
 | Property | Varsayılan | Ne işe yarar |

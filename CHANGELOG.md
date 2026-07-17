@@ -6,6 +6,34 @@ The format is intentionally simple and release-focused.
 
 ## Unreleased
 
+## 0.5.0 - 2026-07-17
+
+### Added
+
+- declarative `@CacheScheduledWarm` methods for cron, fixed-delay, and fixed-rate warm plans
+- Redis lease ownership, heartbeat renewal, bounded waiter behavior, and cluster-wide successful-cycle deduplication for multi-pod deployments
+- incremental cursor-based hot-set reconciliation that physically removes rows and projections rejected by the current active-data policy
+- pod-local scheduled-warm telemetry for execution, skip, failure, cursor, full-cycle, missing-payload, and invalid-payload state
+- PostgreSQL and MSSQL sample periodic-warm plans plus `/api/warm/schedules` operational endpoints
+
+### Changed
+
+- production coordination evidence now verifies scheduled-warm lease and heartbeat behavior alongside existing multi-instance workers
+- stable release bundles now include the Spring Boot, scheduled-warm, and tuning guides in English and Turkish
+- public API baseline includes the additive scheduled-warm and reconciliation surfaces
+
+### Fixed
+
+- invalid Redis entity payloads no longer block reconciliation cursor progress
+- a failed lease owner does not commit a successful warm marker; another pod can retry the cycle
+- reconciliation removes cache state without creating SQL mutations, tombstones, or write-behind commands
+
+### Validation
+
+- full 13-module reactor: 250 tests, 0 failures, 0 errors, and 12 environment-gated skips; the two Redis-gated coordination tests passed in a dedicated live Redis run, while the remaining 10 tests require the live SQL Server profile
+- PostgreSQL and MSSQL samples: 8 tests each, including real Redis 8.2.1 and provider Testcontainers integration
+- multi-instance production evidence, public API compatibility, Turkish documentation quality, Postman JSON, and release-package checks passed
+
 ## 0.4.1 - 2026-07-15
 
 ### Fixed

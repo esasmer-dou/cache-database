@@ -45,6 +45,9 @@ import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import com.reactor.cachedb.core.route.RouteCacheContext;
 import com.reactor.cachedb.core.route.RouteCacheContract;
 import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.params.ScanParams;
+import redis.clients.jedis.resps.ScanResult;
+import redis.clients.jedis.resps.Tuple;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -584,6 +587,76 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         hydrateWarmBatchInternal(entities, versions, forceImmediateProjectionRefresh, reindexQueryIndexes);
     }
 
+    /**
+     * Incrementally removes cached rows that no longer satisfy the current hot policy.
+     * This is cache-only maintenance: it never creates a tombstone or write-behind command.
+     */
+    public RedisHotSetReconciliationResult reconcileHotSet(
+            String cursor,
+            int maxRows,
+            int scanCount
+    ) {
+        if (maxRows <= 0) {
+            throw new IllegalArgumentException("maxRows must be greater than zero");
+        }
+        if (scanCount <= 0) {
+            throw new IllegalArgumentException("scanCount must be greater than zero");
+        }
+
+        String nextCursor = normalizeScanCursor(cursor);
+        int inspectedRows = 0;
+        int evictedRows = 0;
+        int missingRows = 0;
+        int invalidRows = 0;
+        CachePolicy effectivePolicy = effectiveCachePolicy();
+        String hotSetKey = keyStrategy.hotSetKey(metadata.redisNamespace());
+
+        do {
+            int remaining = Math.max(1, maxRows - inspectedRows);
+            ScanParams params = new ScanParams().count(Math.min(scanCount, remaining));
+            ScanResult<Tuple> batch = backgroundJedis.zscan(hotSetKey, nextCursor, params);
+            nextCursor = normalizeScanCursor(batch.getCursor());
+            for (Tuple tuple : batch.getResult()) {
+                String rawId = tuple.getElement();
+                inspectedRows++;
+                String encoded = backgroundJedis.get(keyStrategy.entityKey(metadata.redisNamespace(), rawId));
+                if (encoded == null) {
+                    evictCacheOnly(rawId);
+                    evictedRows++;
+                    missingRows++;
+                    continue;
+                }
+
+                T entity;
+                try {
+                    entity = codec.fromRedisValue(encoded);
+                } catch (RuntimeException invalidPayload) {
+                    evictCacheOnly(rawId);
+                    evictedRows++;
+                    invalidRows++;
+                    continue;
+                }
+                if (effectivePolicy.hotPolicy().shouldAdmit(codec.toColumns(entity), CacheAdmissionSource.SERVE)) {
+                    continue;
+                }
+                evictCacheOnly(metadata.idAccessor().apply(entity));
+                evictedRows++;
+            }
+        } while (!"0".equals(nextCursor) && inspectedRows < maxRows);
+
+        if (performanceCollector != null && evictedRows > 0) {
+            performanceCollector.recordCacheEviction("policy-reconciliation:" + metadata.entityName(), evictedRows);
+        }
+        return new RedisHotSetReconciliationResult(
+                nextCursor,
+                inspectedRows,
+                evictedRows,
+                missingRows,
+                invalidRows,
+                "0".equals(nextCursor)
+        );
+    }
+
     private List<T> hydrateWarmBatchInternal(
             List<T> entities,
             List<Long> versions,
@@ -919,6 +992,17 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
 
     private CachePolicy effectiveCachePolicy() {
         return producerGuard == null ? cachePolicy : producerGuard.effectiveCachePolicy(cachePolicy);
+    }
+
+    private void evictCacheOnly(Object id) {
+        @SuppressWarnings("unchecked")
+        ID typedId = (ID) id;
+        pageCacheManager.removeEntity(typedId);
+        deleteProjectionPayloads(id, true);
+    }
+
+    private String normalizeScanCursor(String cursor) {
+        return cursor == null || cursor.isBlank() ? "0" : cursor.trim();
     }
 
     private boolean shouldCacheEntity(

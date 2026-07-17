@@ -2421,6 +2421,7 @@ public final class com.reactor.cachedb.redis.RedisEntityRepository<T, ID> implem
   public void hydrateWarmBatch(java.util.List<T>, java.util.List<java.lang.Long>);
   public void hydrateWarmBatch(java.util.List<T>, java.util.List<java.lang.Long>, boolean);
   public void hydrateWarmBatch(java.util.List<T>, java.util.List<java.lang.Long>, boolean, boolean);
+  public com.reactor.cachedb.redis.RedisHotSetReconciliationResult reconcileHotSet(java.lang.String, int, int);
   public void hydrateProjectionWarmBatch(java.util.List<T>);
   public void deleteById(ID);
   public com.reactor.cachedb.core.api.EntityRepository<T, ID> withFetchPlan(com.reactor.cachedb.core.plan.FetchPlan);
@@ -2466,6 +2467,20 @@ public final class com.reactor.cachedb.redis.RedisHotSetManager {
   public com.reactor.cachedb.redis.RedisHotSetManager(redis.clients.jedis.JedisPooled, com.reactor.cachedb.redis.RedisKeyStrategy);
   public <ID> java.util.List<java.lang.String> recordAccess(java.lang.String, ID, com.reactor.cachedb.core.cache.CachePolicy);
   public <ID> void remove(java.lang.String, ID);
+}
+
+## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisHotSetReconciliationResult
+public final class com.reactor.cachedb.redis.RedisHotSetReconciliationResult extends java.lang.Record {
+  public com.reactor.cachedb.redis.RedisHotSetReconciliationResult(java.lang.String, int, int, int, int, boolean);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String nextCursor();
+  public int inspectedRows();
+  public int evictedRows();
+  public int missingRows();
+  public int invalidRows();
+  public boolean fullCycleCompleted();
 }
 
 ## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisIndexMaintenance
@@ -3033,6 +3048,7 @@ public final class com.reactor.cachedb.starter.CacheDatabase implements com.reac
   public com.reactor.cachedb.starter.CacheWarmResult warm(com.reactor.cachedb.starter.CacheWarmPlan);
   public com.reactor.cachedb.starter.CacheWarmResult dryRun(com.reactor.cachedb.starter.CacheWarmPlan);
   public com.reactor.cachedb.starter.CacheWarmResult warmProjections(com.reactor.cachedb.starter.CacheWarmPlan);
+  public com.reactor.cachedb.starter.CacheHotSetReconciliationResult reconcileHotSet(java.lang.String, java.lang.String, int, int);
   public java.util.List<com.reactor.cachedb.starter.CacheWarmResult> warmAll(java.util.Collection<com.reactor.cachedb.starter.CacheWarmPlan>);
   public <T, ID, P> com.reactor.cachedb.core.projection.EntityProjectionBinding<T, P, ID> registerProjection(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.projection.EntityProjection<T, P, ID>);
   public <T, ID> com.reactor.cachedb.core.api.EntityRepository<T, ID> repository(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>);
@@ -3238,6 +3254,21 @@ public final class com.reactor.cachedb.starter.CacheDatabaseSchemaAdmin {
   public com.reactor.cachedb.core.queue.SchemaMigrationPlan planMigration();
   public com.reactor.cachedb.core.queue.SchemaMigrationPlan applyMigrationPlan();
   public java.util.List<com.reactor.cachedb.starter.SchemaMigrationHistoryEntry> migrationHistory(int);
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.CacheHotSetReconciliationResult
+public final class com.reactor.cachedb.starter.CacheHotSetReconciliationResult extends java.lang.Record {
+  public com.reactor.cachedb.starter.CacheHotSetReconciliationResult(java.lang.String, java.lang.String, int, int, int, int, boolean);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String entityName();
+  public java.lang.String nextCursor();
+  public int inspectedRows();
+  public int evictedRows();
+  public int missingRows();
+  public int invalidRows();
+  public boolean fullCycleCompleted();
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.CacheWarmPlan
@@ -3678,6 +3709,8 @@ public class com.reactor.cachedb.spring.boot.CacheDatabaseSpringBootAutoConfigur
   public com.reactor.cachedb.spring.boot.CacheDatabaseSpringBootAutoConfiguration();
   public redis.clients.jedis.JedisPooled cacheDbJedisPooled(com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
   public redis.clients.jedis.JedisPooled cacheDbBackgroundJedisPooled(com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
+  public com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry cacheScheduledWarmRegistry();
+  public org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler cacheDbScheduledWarmTaskScheduler(com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
   public com.reactor.cachedb.core.config.CacheDatabaseConfig cacheDatabaseConfig(com.reactor.cachedb.spring.boot.CacheDbSpringProperties, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CacheDatabaseConfigCustomizer>);
   public com.reactor.cachedb.core.cache.CachePolicyCatalog cachePolicyCatalog(com.reactor.cachedb.spring.boot.CacheDbSpringProperties, com.reactor.cachedb.core.config.CacheDatabaseConfig, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CachePolicyCatalogCustomizer>);
   public com.reactor.cachedb.starter.CacheDatabase cacheDatabase(org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, javax.sql.DataSource, com.reactor.cachedb.core.config.CacheDatabaseConfig, com.reactor.cachedb.core.cache.CachePolicyCatalog, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
@@ -3702,9 +3735,84 @@ public class com.reactor.cachedb.spring.boot.CacheDbSpringProperties {
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$AdminUiProperties getAdmin();
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$RegistrationProperties getRegistration();
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$RuntimeProperties getRuntime();
+  public com.reactor.cachedb.spring.boot.CacheDbSpringProperties$ScheduledWarmProperties getScheduledWarm();
 }
 
 ## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CachePolicyCatalogCustomizer
 public interface com.reactor.cachedb.spring.boot.CachePolicyCatalogCustomizer {
   public abstract void customize(com.reactor.cachedb.core.cache.CachePolicyCatalog$Builder, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheScheduledWarm
+public interface com.reactor.cachedb.spring.boot.CacheScheduledWarm extends java.lang.annotation.Annotation {
+  public abstract java.lang.String name();
+  public abstract java.lang.String cron();
+  public abstract java.lang.String zone();
+  public abstract java.lang.String fixedDelayString();
+  public abstract java.lang.String fixedRateString();
+  public abstract java.lang.String initialDelayString();
+  public abstract java.lang.String enabledString();
+  public abstract com.reactor.cachedb.spring.boot.CacheScheduledWarmMode mode();
+  public abstract java.lang.String lockAtMostForString();
+  public abstract java.lang.String lockWaitTimeoutString();
+  public abstract java.lang.String lockRetryIntervalString();
+  public abstract java.lang.String minimumIntervalString();
+  public abstract boolean reconcileHotSet();
+  public abstract java.lang.String reconcileMaxRowsPerRunString();
+  public abstract java.lang.String reconcileScanCountString();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheScheduledWarmMode
+public final class com.reactor.cachedb.spring.boot.CacheScheduledWarmMode extends java.lang.Enum<com.reactor.cachedb.spring.boot.CacheScheduledWarmMode> {
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmMode ENTITY_AND_PROJECTIONS;
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmMode PROJECTIONS_ONLY;
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmMode DRY_RUN;
+  public static com.reactor.cachedb.spring.boot.CacheScheduledWarmMode[] values();
+  public static com.reactor.cachedb.spring.boot.CacheScheduledWarmMode valueOf(java.lang.String);
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry
+public final class com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry {
+  public com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry();
+  public java.util.List<com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot> snapshots();
+  public com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot snapshot(java.lang.String);
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot
+public final class com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot extends java.lang.Record {
+  public com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot(java.lang.String, com.reactor.cachedb.spring.boot.CacheScheduledWarmState, java.lang.String, long, long, long, java.time.Instant, java.time.Instant, long, int, int, int, int, int, int, java.lang.String, boolean, java.lang.String);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String jobName();
+  public com.reactor.cachedb.spring.boot.CacheScheduledWarmState state();
+  public java.lang.String instanceId();
+  public long executionCount();
+  public long skippedCount();
+  public long failureCount();
+  public java.time.Instant lastStartedAt();
+  public java.time.Instant lastFinishedAt();
+  public long lastDurationMillis();
+  public int lastLoadedRows();
+  public int lastSubmittedRows();
+  public int lastInspectedRows();
+  public int lastEvictedRows();
+  public int lastMissingRows();
+  public int lastInvalidRows();
+  public java.lang.String lastReconciliationCursor();
+  public boolean lastReconciliationCycleCompleted();
+  public java.lang.String detail();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheScheduledWarmState
+public final class com.reactor.cachedb.spring.boot.CacheScheduledWarmState extends java.lang.Enum<com.reactor.cachedb.spring.boot.CacheScheduledWarmState> {
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmState REGISTERED;
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmState RUNNING;
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmState COMPLETED;
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmState SKIPPED_NOT_DUE;
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmState SKIPPED_LOCK_TIMEOUT;
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmState FAILED;
+  public static final com.reactor.cachedb.spring.boot.CacheScheduledWarmState LEASE_LOST;
+  public static com.reactor.cachedb.spring.boot.CacheScheduledWarmState[] values();
+  public static com.reactor.cachedb.spring.boot.CacheScheduledWarmState valueOf(java.lang.String);
 }
