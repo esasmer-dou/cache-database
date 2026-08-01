@@ -7,6 +7,7 @@ import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.model.RelationDefinition;
 import com.reactor.cachedb.core.plan.FetchPlan;
 import com.reactor.cachedb.core.query.HardLimitQueryClass;
+import com.reactor.cachedb.core.query.PartitionedQuerySpec;
 import com.reactor.cachedb.core.query.QueryCardinalityEstimate;
 import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QueryGroup;
@@ -39,6 +40,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -742,9 +744,6 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private PartitionedExactSortPlan buildPartitionedExactSortPlan(QuerySpec querySpec) {
-        if (!(metadata instanceof ProjectionEntityMetadata<?, ?>)) {
-            return null;
-        }
         if (querySpec == null || querySpec.sorts().isEmpty() || querySpec.filters().size() != 1) {
             return null;
         }
@@ -759,7 +758,7 @@ public final class RedisQueryIndexManager<T, ID> {
         if (filter.column().contains(".") || filter.operator() != QueryOperator.EQ) {
             return null;
         }
-        if (!isPartitionedExactSortColumn(filter.column())) {
+        if (!supportsPartitionedPair(filter.column(), primarySort.column())) {
             return null;
         }
         return new PartitionedExactSortPlan(
@@ -773,6 +772,98 @@ public final class RedisQueryIndexManager<T, ID> {
                         primarySort.column()
                 )
         );
+    }
+
+    public <K> Map<K, List<String>> resolvePartitionedIds(PartitionedQuerySpec<K> partitionedQuery) {
+        if (partitionedQuery == null || partitionedQuery.partitionValues().isEmpty()) {
+            return Map.of();
+        }
+        QuerySort primarySort = partitionedQuery.sorts().get(0);
+        if (!supportsPartitionedPair(partitionedQuery.partitionColumn(), primarySort.column())) {
+            throw new IllegalStateException(
+                    "No partitioned sorted index is declared for " + metadata.entityName()
+                            + " on " + partitionedQuery.partitionColumn()
+                            + " ordered by " + primarySort.column()
+            );
+        }
+        LinkedHashMap<K, String> sortKeys = new LinkedHashMap<>(partitionedQuery.partitionValues().size());
+        for (K partitionValue : partitionedQuery.partitionValues()) {
+            sortKeys.put(partitionValue, keyStrategy.indexPartitionSortKey(
+                    metadata.redisNamespace(),
+                    partitionedQuery.partitionColumn(),
+                    encodeKeyPart(serializeValue(partitionValue)),
+                    primarySort.column()
+            ));
+        }
+        return partitionedQuery.sorts().size() == 1
+                ? resolveSingleSortPartitionedIds(sortKeys, primarySort, partitionedQuery.limitPerPartition())
+                : resolveMultiSortPartitionedIds(sortKeys, primarySort, partitionedQuery.limitPerPartition());
+    }
+
+    private <K> Map<K, List<String>> resolveSingleSortPartitionedIds(
+            Map<K, String> sortKeys,
+            QuerySort primarySort,
+            int limit
+    ) {
+        LinkedHashMap<K, Response<List<String>>> responses = new LinkedHashMap<>(sortKeys.size());
+        try (Pipeline pipeline = jedis.pipelined()) {
+            sortKeys.forEach((partition, sortKey) -> responses.put(
+                    partition,
+                    primarySort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
+                            ? pipeline.zrevrange(sortKey, 0, limit - 1L)
+                            : pipeline.zrange(sortKey, 0, limit - 1L)
+            ));
+            pipeline.sync();
+        }
+        LinkedHashMap<K, List<String>> resolved = new LinkedHashMap<>(responses.size());
+        responses.forEach((partition, response) -> resolved.put(partition, List.copyOf(response.get())));
+        return Collections.unmodifiableMap(resolved);
+    }
+
+    private <K> Map<K, List<String>> resolveMultiSortPartitionedIds(
+            Map<K, String> sortKeys,
+            QuerySort primarySort,
+            int limit
+    ) {
+        LinkedHashMap<K, Response<List<Tuple>>> headResponses = new LinkedHashMap<>(sortKeys.size());
+        try (Pipeline pipeline = jedis.pipelined()) {
+            sortKeys.forEach((partition, sortKey) -> headResponses.put(
+                    partition,
+                    primarySort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
+                            ? pipeline.zrevrangeWithScores(sortKey, 0, limit - 1L)
+                            : pipeline.zrangeWithScores(sortKey, 0, limit - 1L)
+            ));
+            pipeline.sync();
+        }
+
+        LinkedHashMap<K, List<Tuple>> heads = new LinkedHashMap<>(headResponses.size());
+        headResponses.forEach((partition, response) -> heads.put(partition, List.copyOf(response.get())));
+        LinkedHashMap<K, Response<List<String>>> boundaryResponses = new LinkedHashMap<>();
+        try (Pipeline pipeline = jedis.pipelined()) {
+            heads.forEach((partition, tuples) -> {
+                if (tuples.size() >= limit) {
+                    double boundaryScore = tuples.get(tuples.size() - 1).getScore();
+                    boundaryResponses.put(
+                            partition,
+                            pipeline.zrangeByScore(sortKeys.get(partition), boundaryScore, boundaryScore)
+                    );
+                }
+            });
+            pipeline.sync();
+        }
+
+        LinkedHashMap<K, List<String>> resolved = new LinkedHashMap<>(heads.size());
+        heads.forEach((partition, tuples) -> {
+            LinkedHashSet<String> candidates = tuples.stream()
+                    .map(Tuple::getElement)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            Response<List<String>> boundary = boundaryResponses.get(partition);
+            if (boundary != null) {
+                candidates.addAll(boundary.get());
+            }
+            resolved.put(partition, List.copyOf(candidates));
+        });
+        return Collections.unmodifiableMap(resolved);
     }
 
     private List<String> resolveSortedIdsFromCandidateScores(QuerySpec querySpec) {
@@ -1931,7 +2022,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 continue;
             }
             String encodedExactValue = encodeKeyPart(serializeValue(exactValue));
-            for (String sortColumn : partitionedSortColumns()) {
+            for (String sortColumn : partitionedSortColumns(exactColumn)) {
                 Double score = RedisScoreSupport.toScore(metadata.columnTypes(), sortColumn, columns.get(sortColumn));
                 if (score == null) {
                     continue;
@@ -1955,7 +2046,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 continue;
             }
             String encodedExactValue = encodeKeyPart(serializedExactValue);
-            for (String sortColumn : partitionedSortColumns()) {
+            for (String sortColumn : partitionedSortColumns(exactColumn)) {
                 pipeline.zrem(
                         keyStrategy.indexPartitionSortKey(metadata.redisNamespace(), exactColumn, encodedExactValue, sortColumn),
                         idValue
@@ -1965,7 +2056,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private boolean supportsPartitionedExactSortIndexes() {
-        return metadata instanceof ProjectionEntityMetadata<?, ?>
+        return (metadata instanceof ProjectionEntityMetadata<?, ?> || !metadata.partitionedSortIndexes().isEmpty())
                 && config.exactIndexEnabled()
                 && config.rangeIndexEnabled();
     }
@@ -1974,9 +2065,10 @@ public final class RedisQueryIndexManager<T, ID> {
         if (!supportsPartitionedExactSortIndexes()) {
             return List.of();
         }
-        return metadata.columns().stream()
-                .filter(this::isPartitionedExactSortColumn)
-                .toList();
+        if (!(metadata instanceof ProjectionEntityMetadata<?, ?>)) {
+            return List.copyOf(metadata.partitionedSortIndexes().keySet());
+        }
+        return metadata.columns().stream().filter(this::isPartitionedExactSortColumn).toList();
     }
 
     private boolean isPartitionedExactSortColumn(String column) {
@@ -1989,13 +2081,28 @@ public final class RedisQueryIndexManager<T, ID> {
         return column.toLowerCase(Locale.ROOT).endsWith("_id");
     }
 
-    private List<String> partitionedSortColumns() {
+    private List<String> partitionedSortColumns(String partitionColumn) {
         if (!supportsPartitionedExactSortIndexes()) {
             return List.of();
         }
-        return metadata.columns().stream()
-                .filter(this::supportsScoreOrdering)
-                .toList();
+        if (!(metadata instanceof ProjectionEntityMetadata<?, ?>)) {
+            return metadata.partitionedSortIndexes().getOrDefault(partitionColumn, List.of()).stream()
+                    .filter(this::supportsScoreOrdering)
+                    .toList();
+        }
+        return metadata.columns().stream().filter(this::supportsScoreOrdering).toList();
+    }
+
+    private boolean supportsPartitionedPair(String partitionColumn, String sortColumn) {
+        if (!supportsPartitionedExactSortIndexes() || !supportsScoreOrdering(sortColumn)) {
+            return false;
+        }
+        if (metadata instanceof ProjectionEntityMetadata<?, ?>) {
+            return isPartitionedExactSortColumn(partitionColumn);
+        }
+        return metadata.partitionedSortIndexes()
+                .getOrDefault(partitionColumn, List.of())
+                .contains(sortColumn);
     }
 
     private List<String> tokenize(String rawValue) {

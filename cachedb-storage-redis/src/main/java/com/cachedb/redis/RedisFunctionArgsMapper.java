@@ -18,7 +18,7 @@ public final class RedisFunctionArgsMapper {
             RedisGuardrailConfig guardrailConfig,
             boolean cacheEntity
     ) {
-        return upsertArgs(operation, cachePolicy, guardrailConfig, WriteBehindConfig.defaults(), cacheEntity);
+        return upsertArgs(operation, cachePolicy, guardrailConfig, WriteBehindConfig.defaults(), cacheEntity, -1L);
     }
 
     public <T, ID> List<String> upsertArgs(
@@ -27,6 +27,17 @@ public final class RedisFunctionArgsMapper {
             RedisGuardrailConfig guardrailConfig,
             WriteBehindConfig writeBehindConfig,
             boolean cacheEntity
+    ) {
+        return upsertArgs(operation, cachePolicy, guardrailConfig, writeBehindConfig, cacheEntity, -1L);
+    }
+
+    public <T, ID> List<String> upsertArgs(
+            WriteOperation<T, ID> operation,
+            CachePolicy cachePolicy,
+            RedisGuardrailConfig guardrailConfig,
+            WriteBehindConfig writeBehindConfig,
+            boolean cacheEntity,
+            long expectedVersion
     ) {
         Map<String, Object> columns = filteredColumns(operation);
         List<String> args = new ArrayList<>(16 + (columns.size() * 2));
@@ -54,6 +65,16 @@ public final class RedisFunctionArgsMapper {
         for (Map.Entry<String, Object> entry : columns.entrySet()) {
             args.add(entry.getKey());
             args.add(entry.getValue() == null ? "__NULL__" : String.valueOf(entry.getValue()));
+        }
+        args.add(String.valueOf(expectedVersion));
+        if (operation.dependency() == null) {
+            args.add("");
+            args.add("");
+            args.add("0");
+        } else {
+            args.add(operation.dependency().redisNamespace());
+            args.add(operation.dependency().id());
+            args.add(String.valueOf(operation.dependency().version()));
         }
         return args;
     }

@@ -327,7 +327,7 @@ edilemiyorsa kayıtlı Java predicate kullan.
 | `cachedb.config.redisFunctions.compactionCompleteFunctionName` | `compaction_complete` | Compaction-complete function giriş noktası. |
 | `cachedb.config.redisFunctions.templateResourcePath` | `/functions/cachedb-functions.lua` | Function kaynak template yolu. |
 | `cachedb.config.redisFunctions.sourceOverride` | boş | Library için tam kaynak override'i. |
-| `cachedb.config.redisFunctions.libraryVersion` | `0.3.0` | Semantik dağıtım sürümüdür. Function kaynağı değiştiğinde yeni sürüm yayımlanmalıdır. |
+| `cachedb.config.redisFunctions.libraryVersion` | `0.4.0` | Semantik dağıtım sürümüdür. Paket içindeki Function kaynağıyla aynı tutulmalıdır; yazma sözleşmesi değiştiği için `0.6.0` sürümünde varsayılan değer yükseltilmiştir. |
 | `cachedb.config.relations.batchSize` | `250` | Varsayılan relation batch boyu. |
 | `cachedb.config.relations.maxFetchDepth` | `3` | Maksimum relation fetch derinliği. |
 | `cachedb.config.relations.failOnMissingPreloader` | `false` | Eksik relation preloader durumunda fail davranışını belirler. |

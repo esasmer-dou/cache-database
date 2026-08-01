@@ -19,10 +19,10 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Resmi Dağıtım Kanalı
 
-`v0.5.0` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
+`v0.6.0` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
 
 ```text
-cache-database-0.5.0-github-release.zip
+cache-database-0.6.0-github-release.zip
 ```
 
 Paket; Maven modül jar'larını, source jar'larını, javadoc dosyalarını, README'yi,
@@ -32,14 +32,13 @@ paket dağıtım kanalı GitHub Release'tir.
 
 ## Release Konumlandırması
 
-`cache-database v0.5.0`
+`cache-database v0.6.0`
 
-CacheDB `v0.5.0`, kararlı generated API yüzeyine deklaratif ve cluster genelinde
-koordine edilen periyodik warm ile artımlı aktif veri reconciliation desteğini
-ekler. Uygulama sınırlı bir `CacheWarmPlan` metodunu `@CacheScheduledWarm` ile
-işaretler. Redis lease sahipliği, heartbeat yenilemesi, güvenli tamamlanma kaydı
-ve cursor telemetrisi sayesinde normal çok podlu kurulumlarda aynı warm çevrimi
-eş zamanlı olarak birden fazla pod tarafından çalıştırılmaz.
+CacheDB `v0.6.0`; kararlı generated API yüzeyini paket düzeyinde domain kaydı,
+sınırlı relation loader'lar, tip güvenli projection record'ları, route
+sözleşmeleri, iyimser yazma receipt'leri, kalıcı yazma bağımlılıkları ve çok podlu
+Redis Stream işleriyle genişletir. PostgreSQL ve MSSQL örnekleri, generated okuma
+modelleri ve application service katmanıyla aynı sözleşmeyi uygular.
 
 Bu release, her uygulamanın kendi production trafiğini ek doğrulama olmadan
 CacheDB'ye kesebileceği anlamına gelmez. Cutover öncesinde her uygulama için
@@ -56,7 +55,7 @@ kanıtlanmalıdır.
 ## Release Note Şablonu
 
 ```markdown
-## cache-database v0.5.0
+## cache-database v0.6.0
 
 Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uygulanabilir hale getirir.
 
@@ -73,6 +72,10 @@ Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uyg
 - Çok pod coordination, leader lease ve lokal Docker HA preflight evidence.
 - Redis lease, heartbeat, sınırlı bekleme ve cluster genelinde tekrar önleme kullanan deklaratif periyodik warm planları.
 - SQL'i değiştirmeden eski, eksik veya bozuk cache payload'larını kaldıran artımlı policy reconciliation.
+- Üretilen sınırlı relation loader'lar, parent bazlı sıralı indeksler, projection record'ları ve strict route sözleşmeleri.
+- İyimser yazma receipt'leri, kalıcı parent bağımlılıkları ve açık SQL kalıcılık takibi.
+- Pod kaybında işi devralma, terk edilmiş işi sahiplenme ve sınırlı retry sağlayan tip güvenli Redis Stream işleri.
+- Redis, SQL, write-behind backlog, dead-letter ve recovery durumu için Spring Boot Actuator health sinyali.
 - Docker Compose, Postman koleksiyonu ve yerel hot-route load script'leri olan PostgreSQL ve MSSQL REST örnekleri.
 - Resmi paket dağıtım kanalı olarak GitHub Release asset'i.
 
@@ -93,12 +96,12 @@ comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
 ## Yayın Kontrol Listesi
 
 - `pom.xml` ve tüm modül parent versiyonları stable sürümü kullanıyor.
-- Release note `docs/releases/v0.5.0.md` altında var.
+- Release note `docs/releases/v0.6.0.md` altında var.
 - `mvn -DskipTests package` geçiyor.
 - Public API compatibility kontrolü geçiyor.
 - Türkçe dokümantasyon kalite kontrolü geçiyor.
 - Lokal Docker HA preflight geçiyor veya son CI evidence yeşil.
 - `Public Beta Readiness` ve `Production Evidence` release commit'i için yeşil.
-- `Production GA Release Readiness`, `v0.5.0` için yeşil.
+- `Production GA Release Readiness`, `v0.6.0` için yeşil.
 - GitHub Release prerelease olarak işaretli değil.
-- GitHub Release asset'i `cache-database-0.5.0-github-release.zip` olarak eklendi.
+- GitHub Release asset'i `cache-database-0.6.0-github-release.zip` olarak eklendi.

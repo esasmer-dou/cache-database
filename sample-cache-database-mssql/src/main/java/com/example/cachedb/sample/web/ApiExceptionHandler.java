@@ -1,7 +1,9 @@
 package com.example.cachedb.sample.web;
 
+import com.example.cachedb.sample.application.SampleEntityNotFoundException;
 import com.example.cachedb.sample.service.DurableReferenceUnavailableException;
-import com.example.cachedb.sample.service.WarmQueueFullException;
+import com.reactor.cachedb.core.model.OptimisticWriteConflictException;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobQueueFullException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -50,14 +52,20 @@ public class ApiExceptionHandler {
                 .body(detail);
     }
 
-    @ExceptionHandler(SampleConflictException.class)
-    ResponseEntity<ProblemDetail> conflict(SampleConflictException exception) {
+    @ExceptionHandler(SampleEntityNotFoundException.class)
+    ResponseEntity<ProblemDetail> entityNotFound(SampleEntityNotFoundException exception) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(problem(HttpStatus.NOT_FOUND, exception.getMessage()));
+    }
+
+    @ExceptionHandler(OptimisticWriteConflictException.class)
+    ResponseEntity<ProblemDetail> optimisticConflict(OptimisticWriteConflictException exception) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(problem(HttpStatus.CONFLICT, exception.getMessage()));
     }
 
-    @ExceptionHandler(WarmQueueFullException.class)
-    ResponseEntity<ProblemDetail> warmQueueFull(WarmQueueFullException exception) {
+    @ExceptionHandler(CacheDistributedJobQueueFullException.class)
+    ResponseEntity<ProblemDetail> warmQueueFull(CacheDistributedJobQueueFullException exception) {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .header(HttpHeaders.RETRY_AFTER, "5")
                 .body(problem(HttpStatus.TOO_MANY_REQUESTS, exception.getMessage()));

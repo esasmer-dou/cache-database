@@ -60,7 +60,7 @@
           "name": "Ready",
           "request": {
             "method": "GET",
-            "url": "{{baseUrl}}/api/health/ready"
+            "url": "{{baseUrl}}/actuator/health/readiness"
           }
         },
         {

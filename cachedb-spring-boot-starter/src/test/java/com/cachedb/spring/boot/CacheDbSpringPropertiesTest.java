@@ -56,6 +56,12 @@ class CacheDbSpringPropertiesTest {
         assertEquals("cachedb-scheduled-warm-", properties.getScheduledWarm().getThreadNamePrefix());
         assertEquals("coordination:scheduled-warm", properties.getScheduledWarm().getLockKeySegment());
         assertEquals(10_000L, properties.getScheduledWarm().getShutdownAwaitMillis());
+        assertTrue(properties.getJobs().isEnabled());
+        assertEquals(1, properties.getJobs().getWorkerThreads());
+        assertEquals(8, properties.getJobs().getQueueCapacity());
+        assertEquals(3_600, properties.getJobs().getStatusTtlSeconds());
+        assertEquals(262_144, properties.getJobs().getMaxResultBytes());
+        assertEquals("cachedb:jobs:warm", properties.getJobs().getKeyPrefix());
         assertTrue(properties.getRegistration().isEnabled());
         assertEquals(CacheDbSpringProperties.RegistrationSource.METADATA_ONLY, properties.getRegistration().getSource());
         assertTrue(properties.getRegistration().isFailOnUnknownEntity());

@@ -32,8 +32,12 @@ import com.reactor.cachedb.core.config.WriteRetryPolicyOverride;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.model.OperationType;
+import com.reactor.cachedb.core.model.OptimisticWriteConflictException;
 import com.reactor.cachedb.core.model.RelationDefinition;
 import com.reactor.cachedb.core.model.WriteOperation;
+import com.reactor.cachedb.core.model.WriteDependency;
+import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.page.VersionedEntity;
 import com.reactor.cachedb.core.plan.FetchPlan;
 import com.reactor.cachedb.core.queue.AdminExportFormat;
 import com.reactor.cachedb.core.queue.DeadLetterQuery;
@@ -97,6 +101,7 @@ import java.net.Socket;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -218,6 +223,114 @@ public final class CacheDatabaseIntegrationTest {
                 "worker=" + cacheDatabase.workerSnapshot() + ", stream=" + streamDiagnostics()
         );
         Assertions.assertEquals(1, countRows("select count(*) from cachedb_example_users where id = 101"));
+    }
+
+    @Test
+    void optimisticSaveShouldRejectAStaleWriterWithoutOverwritingTheWinner() {
+        EntityRepository<UserEntity, Long> repository = cacheDatabase.repository(
+                UserEntityCacheBinding.METADATA,
+                UserEntityCacheBinding.CODEC,
+                CachePolicy.defaults()
+        );
+        UserEntity initial = new UserEntity();
+        initial.id = 111L;
+        initial.username = "initial";
+        initial.status = "ACTIVE";
+        repository.saveWithReceipt(initial);
+
+        VersionedEntity<UserEntity> firstRead = repository.findVersionedById(initial.id).orElseThrow();
+        UserEntity winner = firstRead.entity();
+        winner.username = "winner";
+        repository.save(winner, firstRead.version());
+
+        UserEntity stale = new UserEntity();
+        stale.id = initial.id;
+        stale.username = "stale";
+        stale.status = "ACTIVE";
+        Assertions.assertThrows(
+                OptimisticWriteConflictException.class,
+                () -> repository.save(stale, firstRead.version())
+        );
+        Assertions.assertEquals("winner", repository.findById(initial.id).orElseThrow().username);
+    }
+
+    @Test
+    void bulkSaveShouldReturnReceiptsAndReachSqlWithoutPerEntityApiCalls() throws Exception {
+        EntityRepository<UserEntity, Long> repository = cacheDatabase.repository(
+                UserEntityCacheBinding.METADATA,
+                UserEntityCacheBinding.CODEC,
+                CachePolicy.defaults()
+        );
+        List<UserEntity> users = java.util.stream.LongStream.rangeClosed(201L, 205L)
+                .mapToObj(id -> {
+                    UserEntity user = new UserEntity();
+                    user.id = id;
+                    user.username = "bulk-" + id;
+                    user.status = "ACTIVE";
+                    return user;
+                })
+                .toList();
+
+        List<WriteReceipt<UserEntity, Long>> receipts = repository.saveAll(users);
+
+        Assertions.assertEquals(users.size(), receipts.size());
+        Assertions.assertTrue(cacheDatabase.awaitDurable(receipts, Duration.ofSeconds(15)));
+        Assertions.assertEquals(5, countRows("select count(*) from cachedb_example_users where id between 201 and 205"));
+    }
+
+    @Test
+    void bulkSaveShouldRejectDuplicateIdsAcrossPipelineChunksBeforeMutatingRedis() {
+        EntityRepository<UserEntity, Long> repository = cacheDatabase.repository(
+                UserEntityCacheBinding.METADATA,
+                UserEntityCacheBinding.CODEC,
+                CachePolicy.defaults()
+        );
+        ArrayList<UserEntity> users = new ArrayList<>();
+        for (long id = 401L; id <= 529L; id++) {
+            UserEntity user = new UserEntity();
+            user.id = id;
+            user.username = "bulk-duplicate-" + id;
+            user.status = "ACTIVE";
+            users.add(user);
+        }
+        UserEntity duplicate = new UserEntity();
+        duplicate.id = 401L;
+        duplicate.username = "duplicate";
+        duplicate.status = "ACTIVE";
+        users.add(duplicate);
+
+        Assertions.assertThrows(IllegalArgumentException.class, () -> repository.saveAll(users));
+        Assertions.assertNull(jedis.get(keyPrefix + ":users:entity:401"));
+    }
+
+    @Test
+    void dependencyAwareChildWriteShouldWaitForItsParentDurabilityMarker() throws Exception {
+        EntityRepository<UserEntity, Long> users = cacheDatabase.repository(
+                UserEntityCacheBinding.METADATA,
+                UserEntityCacheBinding.CODEC,
+                CachePolicy.defaults()
+        );
+        EntityRepository<OrderEntity, Long> orders = cacheDatabase.repository(
+                OrderEntityCacheBinding.METADATA,
+                OrderEntityCacheBinding.CODEC,
+                CachePolicy.defaults()
+        );
+        UserEntity parent = new UserEntity();
+        parent.id = 301L;
+        parent.username = "parent";
+        parent.status = "ACTIVE";
+        WriteReceipt<UserEntity, Long> parentReceipt = users.saveWithReceipt(parent);
+        OrderEntity child = new OrderEntity();
+        child.id = 301_001L;
+        child.userId = parent.id;
+        child.totalAmount = 125.0;
+        child.status = "NEW";
+
+        WriteReceipt<OrderEntity, Long> childReceipt = orders.saveAfter(child, parentReceipt.asDependency());
+
+        Assertions.assertTrue(cacheDatabase.awaitDurable(parentReceipt, Duration.ofSeconds(15)));
+        Assertions.assertTrue(cacheDatabase.awaitDurable(childReceipt, Duration.ofSeconds(15)));
+        Assertions.assertEquals(1, countRows("select count(*) from cachedb_example_orders where id = 301001"));
     }
 
     @Test
@@ -2131,6 +2244,148 @@ public final class CacheDatabaseIntegrationTest {
         Assertions.assertTrue(worker.snapshot().retriedCount() >= 2);
         Assertions.assertEquals(3, attempts[0]);
         worker.close();
+    }
+
+    @Test
+    void dependencyAwareWorkerShouldPreserveParentFirstOrderWithoutBatchingOrPendingClaim() throws Exception {
+        String localPrefix = "cachedb-it-" + UUID.randomUUID();
+        String localStreamKey = localPrefix + ":stream";
+        RedisKeyStrategy keyStrategy = new RedisKeyStrategy(localPrefix, "entity", "page", "version", "hotset", "index");
+        RedisWriteOperationMapper mapper = new RedisWriteOperationMapper();
+        List<String> flushOrder = new java.util.concurrent.CopyOnWriteArrayList<>();
+        WriteBehindConfig workerConfig = WriteBehindConfig.builder()
+                .workerThreads(1)
+                .batchSize(10)
+                .batchFlushEnabled(false)
+                .dedicatedWriteConsumerGroupEnabled(false)
+                .recoverPendingEntries(false)
+                .blockTimeoutMillis(100)
+                .idleSleepMillis(10)
+                .retryBackoffMillis(25)
+                .streamKey(localStreamKey)
+                .consumerGroup(localPrefix + "-group")
+                .consumerNamePrefix(localPrefix + "-worker")
+                .build();
+        RedisWriteBehindWorker worker = new RedisWriteBehindWorker(
+                jedis,
+                operation -> flushOrder.add(operation.entityName()),
+                workerConfig,
+                mapper,
+                keyStrategy
+        );
+
+        WriteOperation<OrderEntity, Long> child = new WriteOperation<>(
+                OperationType.UPSERT,
+                OrderEntityCacheBinding.METADATA,
+                777_001L,
+                Map.of(
+                        "id", 777_001L,
+                        "user_id", 777L,
+                        "total_amount", 50.0,
+                        "status", "NEW",
+                        "entity_version", 1L
+                ),
+                "child",
+                1L,
+                Instant.now(),
+                new WriteDependency("users", "777", 1L)
+        );
+        WriteOperation<UserEntity, Long> parent = new WriteOperation<>(
+                OperationType.UPSERT,
+                UserEntityCacheBinding.METADATA,
+                777L,
+                Map.of(
+                        "id", 777L,
+                        "username", "dependency-parent",
+                        "status", "ACTIVE",
+                        "entity_version", 1L
+                ),
+                "parent",
+                1L,
+                Instant.now()
+        );
+        jedis.xadd(localStreamKey, XAddParams.xAddParams(), mapper.toBody(child));
+        jedis.xadd(localStreamKey, XAddParams.xAddParams(), mapper.toBody(parent));
+
+        worker.start();
+        try {
+            waitUntil(
+                    () -> flushOrder.size() == 2,
+                    Duration.ofSeconds(5),
+                    "flushOrder=" + flushOrder + ", worker=" + worker.snapshot()
+            );
+            Assertions.assertEquals(List.of("UserEntity", "OrderEntity"), flushOrder);
+        } finally {
+            worker.close();
+        }
+    }
+
+    @Test
+    void workerShouldRetryPendingClaimAfterConfiguredIdleThreshold() throws Exception {
+        String localPrefix = "cachedb-it-" + UUID.randomUUID();
+        String localStreamKey = localPrefix + ":stream";
+        String consumerGroup = localPrefix + "-group";
+        RedisKeyStrategy keyStrategy = new RedisKeyStrategy(localPrefix, "entity", "page", "version", "hotset", "index");
+        RedisWriteOperationMapper mapper = new RedisWriteOperationMapper();
+        AtomicInteger flushCount = new AtomicInteger();
+        WriteBehindConfig workerConfig = WriteBehindConfig.builder()
+                .workerThreads(1)
+                .batchSize(10)
+                .batchFlushEnabled(false)
+                .dedicatedWriteConsumerGroupEnabled(false)
+                .recoverPendingEntries(true)
+                .claimIdleMillis(500)
+                .claimBatchSize(10)
+                .blockTimeoutMillis(50)
+                .idleSleepMillis(10)
+                .streamKey(localStreamKey)
+                .consumerGroup(consumerGroup)
+                .consumerNamePrefix(localPrefix + "-worker")
+                .build();
+        RedisWriteBehindWorker worker = new RedisWriteBehindWorker(
+                jedis,
+                operation -> flushCount.incrementAndGet(),
+                workerConfig,
+                mapper,
+                keyStrategy
+        );
+
+        QueuedWriteOperation operation = new QueuedWriteOperation(
+                OperationType.DELETE,
+                "UserEntity",
+                "cachedb_example_users",
+                "users",
+                "restart-recovery",
+                "id",
+                "entity_version",
+                null,
+                "778",
+                Map.of("id", "778", "entity_version", "2"),
+                2L,
+                Instant.now()
+        );
+        jedis.xadd(localStreamKey, XAddParams.xAddParams(), mapper.toBody(operation));
+        jedis.xgroupCreate(localStreamKey, consumerGroup, new StreamEntryID("0-0"), false);
+        var pending = jedis.xreadGroup(
+                consumerGroup,
+                "stopped-pod",
+                new XReadGroupParams().count(1),
+                Map.of(localStreamKey, StreamEntryID.UNRECEIVED_ENTRY)
+        );
+        Assertions.assertNotNull(pending);
+        Assertions.assertFalse(pending.isEmpty());
+
+        worker.start();
+        try {
+            waitUntil(
+                    () -> flushCount.get() == 1,
+                    Duration.ofSeconds(5),
+                    "worker=" + worker.snapshot()
+            );
+            Assertions.assertTrue(worker.snapshot().claimedCount() > 0);
+        } finally {
+            worker.close();
+        }
     }
 
     @Test

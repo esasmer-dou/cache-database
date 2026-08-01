@@ -1,7 +1,7 @@
 package com.example.cachedb.sample.domain;
 
-import com.example.cachedb.sample.readmodel.ShipmentReadModels;
-import com.example.cachedb.sample.relation.ShipmentEventsRelationBatchLoader;
+import com.example.cachedb.sample.readmodel.ShipmentSummary;
+import com.example.cachedb.sample.readmodel.ShipmentSummaryProjection;
 import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheEntity;
 import com.reactor.cachedb.annotations.CacheFetchPreset;
@@ -9,6 +9,7 @@ import com.reactor.cachedb.annotations.CacheId;
 import com.reactor.cachedb.annotations.CacheNamedQuery;
 import com.reactor.cachedb.annotations.CacheProjectionDefinition;
 import com.reactor.cachedb.annotations.CacheRelation;
+import com.reactor.cachedb.annotations.CacheRoute;
 import com.reactor.cachedb.core.plan.FetchPlan;
 import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.query.QueryFilter;
@@ -19,8 +20,7 @@ import java.util.List;
 
 @CacheEntity(
         table = "sample_shipments",
-        redisNamespace = "sample-shipments",
-        relationLoader = ShipmentEventsRelationBatchLoader.class
+        redisNamespace = "sample-shipments"
 )
 public class ShipmentEntity {
 
@@ -52,10 +52,13 @@ public class ShipmentEntity {
     public Double riskScore;
 
     @CacheRelation(
-            targetEntity = "ShipmentEventEntity",
+            target = ShipmentEventEntity.class,
             mappedBy = "shipmentId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 20,
+            parentBatchSize = 16,
+            orderBy = {"eventTime DESC", "eventId DESC"}
     )
     public List<ShipmentEventEntity> events;
 
@@ -63,11 +66,13 @@ public class ShipmentEntity {
     }
 
     @CacheProjectionDefinition("shipmentSummary")
-    public static EntityProjection<ShipmentEntity, ShipmentReadModels.ShipmentSummary, Long> shipmentSummaryProjection() {
-        return ShipmentReadModels.SHIPMENT_SUMMARY_PROJECTION;
+    public static EntityProjection<ShipmentEntity, ShipmentSummary, Long> shipmentSummaryProjection() {
+        return ShipmentSummaryProjection.PROJECTION;
     }
 
     @CacheNamedQuery("activeShipments")
+    @CacheRoute(value = "active-shipments", projection = "shipmentSummary", pageSize = 100,
+            hotWindow = 10_000, maxColdReadSize = 500, memoryBudgetBytes = 33_554_432)
     public static QuerySpec activeShipmentsQuery(int limit) {
         return QuerySpec.where(QueryFilter.in("shipment_status", List.<Object>of(
                         "IN_TRANSIT",
@@ -80,6 +85,8 @@ public class ShipmentEntity {
     }
 
     @CacheNamedQuery("customerShipments")
+    @CacheRoute(value = "customer-shipments", projection = "shipmentSummary", pageSize = 100,
+            hotWindow = 1_000, maxColdReadSize = 500, memoryBudgetBytes = 16_777_216)
     public static QuerySpec customerShipmentsQuery(long customerId, int limit) {
         return QuerySpec.where(QueryFilter.eq("customer_id", customerId))
                 .orderBy(QuerySort.desc("updated_at"), QuerySort.desc("shipment_id"))
@@ -87,9 +94,21 @@ public class ShipmentEntity {
     }
 
     @CacheNamedQuery("shipmentExceptions")
+    @CacheRoute(value = "shipment-exceptions", projection = "shipmentSummary", pageSize = 100,
+            hotWindow = 2_000, maxColdReadSize = 500, memoryBudgetBytes = 8_388_608)
     public static QuerySpec shipmentExceptionsQuery(int limit) {
         return QuerySpec.where(QueryFilter.in("shipment_status", List.<Object>of("DELAYED", "EXCEPTION")))
                 .orderBy(QuerySort.desc("risk_score"), QuerySort.desc("updated_at"))
+                .limitTo(limit);
+    }
+
+    @CacheNamedQuery("deliveredShipmentArchive")
+    @CacheRoute(value = "delivered-shipment-archive", pageSize = 100, hotWindow = 100,
+            maxColdReadSize = 500, memoryBudgetBytes = 0, strict = true)
+    public static QuerySpec deliveredShipmentArchiveQuery(long customerId, int limit) {
+        return QuerySpec.where(QueryFilter.eq("customer_id", customerId))
+                .and(QueryFilter.eq("shipment_status", "DELIVERED"))
+                .orderBy(QuerySort.desc("updated_at"), QuerySort.desc("shipment_id"))
                 .limitTo(limit);
     }
 

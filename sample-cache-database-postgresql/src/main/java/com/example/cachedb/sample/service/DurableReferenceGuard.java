@@ -1,53 +1,82 @@
 package com.example.cachedb.sample.service;
 
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.example.cachedb.sample.domain.GeneratedCacheModule;
+import com.reactor.cachedb.core.api.EntityRepository;
+import com.reactor.cachedb.core.model.WriteDependency;
+import com.reactor.cachedb.core.model.WriteReceipt;
 import org.springframework.stereotype.Service;
 
+import java.util.Optional;
+import java.util.function.BooleanSupplier;
+
 @Service
-public class DurableReferenceGuard {
+public final class DurableReferenceGuard {
 
-    private static final String CUSTOMER_EXISTS_SQL =
-            "SELECT CASE WHEN EXISTS (SELECT 1 FROM sample_customers WHERE customer_id = ?) THEN 1 ELSE 0 END";
-    private static final String ORDER_EXISTS_SQL =
-            "SELECT CASE WHEN EXISTS (SELECT 1 FROM sample_orders WHERE order_id = ?) THEN 1 ELSE 0 END";
-    private static final String ORDER_HAS_LINES_SQL =
-            "SELECT CASE WHEN EXISTS (SELECT 1 FROM sample_order_lines WHERE order_id = ?) THEN 1 ELSE 0 END";
-    private static final String SHIPMENT_EXISTS_SQL =
-            "SELECT CASE WHEN EXISTS (SELECT 1 FROM sample_shipments WHERE shipment_id = ?) THEN 1 ELSE 0 END";
+    private final GeneratedCacheModule.Scope domain;
 
-    private final JdbcTemplate jdbcTemplate;
-
-    public DurableReferenceGuard(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    public DurableReferenceGuard(GeneratedCacheModule.Scope domain) {
+        this.domain = domain;
     }
 
-    public void requireCustomer(long customerId) {
-        requireExists(CUSTOMER_EXISTS_SQL, customerId, "Customer", "customerId");
+    public DurableReference requireCustomer(long customerId) {
+        return resolve(
+                "Customer",
+                "customerId",
+                customerId,
+                domain.customers().dependency(customerId),
+                () -> domain.customers().source().findById(customerId).isPresent()
+        );
     }
 
-    public void requireOrder(long orderId) {
-        requireExists(ORDER_EXISTS_SQL, orderId, "Order", "orderId");
+    public DurableReference requireOrder(long orderId) {
+        return resolve(
+                "Order",
+                "orderId",
+                orderId,
+                domain.orders().dependency(orderId),
+                () -> domain.orders().source().findById(orderId).isPresent()
+        );
     }
 
-    public void requireShipment(long shipmentId) {
-        requireExists(SHIPMENT_EXISTS_SQL, shipmentId, "Shipment", "shipmentId");
+    public DurableReference requireShipment(long shipmentId) {
+        return resolve(
+                "Shipment",
+                "shipmentId",
+                shipmentId,
+                domain.shipments().dependency(shipmentId),
+                () -> domain.shipments().source().findById(shipmentId).isPresent()
+        );
     }
 
-    public boolean orderHasDurableLines(long orderId) {
-        return exists(ORDER_HAS_LINES_SQL, orderId);
-    }
-
-    private void requireExists(String sql, long id, String entityName, String idName) {
-        if (!exists(sql, id)) {
-            throw new DurableReferenceUnavailableException(
-                    entityName + " " + idName + "=" + id
-                            + " is not durable in SQL yet. Retry after write-behind flushes the parent row."
-            );
+    private DurableReference resolve(
+            String entityName,
+            String idName,
+            long id,
+            Optional<WriteDependency> activeDependency,
+            BooleanSupplier durableSourceLookup
+    ) {
+        if (activeDependency.isPresent()) {
+            return new DurableReference(activeDependency.orElseThrow());
         }
+        if (durableSourceLookup.getAsBoolean()) {
+            return new DurableReference(null);
+        }
+        throw new DurableReferenceUnavailableException(
+                entityName + " " + idName + "=" + id
+                        + " does not exist in the active Redis set or durable SQL source."
+        );
     }
 
-    private boolean exists(String sql, long id) {
-        Integer present = jdbcTemplate.queryForObject(sql, Integer.class, id);
-        return present != null && present == 1;
+    /**
+     * A hot parent carries a write-behind dependency. A cold parent that already
+     * exists in SQL needs no queue dependency and can accept the child directly.
+     */
+    public record DurableReference(WriteDependency pendingDependency) {
+
+        public <T, ID> WriteReceipt<T, ID> save(EntityRepository<T, ID> repository, T entity) {
+            return pendingDependency == null
+                    ? repository.saveWithReceipt(entity)
+                    : repository.saveAfter(entity, pendingDependency);
+        }
     }
 }

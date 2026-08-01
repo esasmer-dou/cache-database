@@ -3,6 +3,10 @@ target/
 **/target/
 out/
 build/
+!tools/build/
+tools/build/*
+!tools/build/invoke-maven-semeru.ps1
+!tools/build/resolve-java-home.ps1
 *.class
 *.jar
 *.war

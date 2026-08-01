@@ -116,6 +116,7 @@ kararını kanıtla vermek.
 | [Production Test Raporu](docs/production-test-report.md) | Test kanıtları, smoke sonuçları, benchmark ve certification lane |
 | [Production Readiness Raporu](docs/production-readiness-report.md) | Ürünün production seviyesine ne kadar yakın olduğu |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Stabil GA release için sert go/no-go akışı |
+| [v0.6.0 Sürüm Notları](docs/releases/v0.6.0.md) | Deklaratif domain, üretilen relation/projection/route yüzeyleri, dayanıklı işler ve yükseltme notları |
 | [v0.5.0 Sürüm Notları](docs/releases/v0.5.0.md) | Periyodik warm, uzlaştırma, doğrulama kanıtları ve production sınırları |
 | [Stable Release Launch Kit](docs/stable-release-launch-kit.md) | GitHub açıklaması, release mesajı ve stable release konumlandırması |
 | [Public Beta Launch Kit](docs/public-beta-launch-kit.md) | Geçmiş public beta release konumlandırması |

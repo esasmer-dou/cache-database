@@ -1,7 +1,6 @@
 package com.example.cachedb.sample.service;
 
 import com.example.cachedb.sample.domain.GeneratedCacheModule;
-import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheWarmPlan;
 import com.reactor.cachedb.starter.CacheWarmResult;
@@ -24,11 +23,7 @@ public class SampleWarmBackfillService {
         return execute(
                 "customer-orders",
                 "customerId=" + customerId,
-                domain.orders().warmPlan(
-                        "sample-customer-orders",
-                        domain.orders().queries().customerTimelineQuery(customerId, limit),
-                        limit
-                ),
+                domain.orders().queries().customerTimelineWarmPlan(customerId, limit),
                 projectionOnly,
                 dryRun
         );
@@ -36,13 +31,13 @@ public class SampleWarmBackfillService {
 
     public WarmResult warmActiveProducts(String category, int limit, boolean projectionOnly, boolean dryRun) {
         String normalizedCategory = category == null ? "" : category.trim();
-        QuerySpec query = normalizedCategory.isEmpty()
-                ? domain.products().queries().activeProductsQuery(limit)
-                : domain.products().queries().activeProductsByCategoryQuery(normalizedCategory, limit);
+        CacheWarmPlan plan = normalizedCategory.isEmpty()
+                ? domain.products().queries().activeProductsWarmPlan(limit)
+                : domain.products().queries().activeProductsByCategoryWarmPlan(normalizedCategory, limit);
         return execute(
                 "active-products",
                 normalizedCategory.isEmpty() ? "all-categories" : "category=" + normalizedCategory,
-                domain.products().warmPlan("sample-active-products", query, limit),
+                plan,
                 projectionOnly,
                 dryRun
         );
@@ -52,11 +47,7 @@ public class SampleWarmBackfillService {
         return execute(
                 "open-tickets",
                 "status=OPEN",
-                domain.supportTickets().warmPlan(
-                        "sample-open-tickets",
-                        domain.supportTickets().queries().openTicketsQuery(limit),
-                        limit
-                ),
+                domain.supportTickets().queries().openTicketsWarmPlan(limit),
                 false,
                 dryRun
         );
@@ -66,11 +57,7 @@ public class SampleWarmBackfillService {
         return execute(
                 "active-shipments",
                 "operational-statuses",
-                domain.shipments().warmPlan(
-                        "sample-active-shipments",
-                        domain.shipments().queries().activeShipmentsQuery(limit),
-                        limit
-                ),
+                domain.shipments().queries().activeShipmentsWarmPlan(limit),
                 projectionOnly,
                 dryRun
         );
@@ -80,11 +67,7 @@ public class SampleWarmBackfillService {
         return execute(
                 "live-report-jobs",
                 "status=QUEUED|RUNNING|FAILED",
-                domain.reportJobs().warmPlan(
-                        "sample-live-report-jobs",
-                        domain.reportJobs().queries().liveReportJobsQuery(limit),
-                        limit
-                ),
+                domain.reportJobs().queries().liveReportJobsWarmPlan(limit),
                 false,
                 dryRun
         );
@@ -94,11 +77,7 @@ public class SampleWarmBackfillService {
         return execute(
                 "security-audit",
                 "severity=WARN|ERROR|SECURITY",
-                domain.auditEvents().warmPlan(
-                        "sample-security-audit",
-                        domain.auditEvents().queries().securityAuditEventsQuery(limit),
-                        limit
-                ),
+                domain.auditEvents().queries().securityAuditEventsWarmPlan(limit),
                 false,
                 dryRun
         );

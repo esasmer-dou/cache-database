@@ -1,6 +1,5 @@
 package com.example.cachedb.sample.domain;
 
-import com.example.cachedb.sample.relation.CustomerOrdersRelationBatchLoader;
 import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheEntity;
 import com.reactor.cachedb.annotations.CacheFetchPreset;
@@ -16,8 +15,7 @@ import java.util.List;
 
 @CacheEntity(
         table = "sample_customers",
-        redisNamespace = "sample-customers",
-        relationLoader = CustomerOrdersRelationBatchLoader.class
+        redisNamespace = "sample-customers"
 )
 public class CustomerEntity {
 
@@ -43,10 +41,13 @@ public class CustomerEntity {
     public Long updatedAt;
 
     @CacheRelation(
-            targetEntity = "OrderEntity",
+            target = OrderEntity.class,
             mappedBy = "customerId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 25,
+            parentBatchSize = 16,
+            orderBy = {"orderDate DESC", "orderId DESC"}
     )
     public List<OrderEntity> orders;
 

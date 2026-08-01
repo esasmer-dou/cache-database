@@ -6,6 +6,36 @@ The format is intentionally simple and release-focused.
 
 ## Unreleased
 
+## 0.6.0 - 2026-08-01
+
+### Added
+
+- package-level `@CacheDomain` generation for a single declarative application scope and optional Spring configuration
+- generated bounded relation loaders, partitioned sorted indexes, projection records, and strict route-level warm contracts
+- write receipts, optimistic version checks, durable write dependencies, and SQL durability tracking
+- typed Redis Stream jobs with consumer-group failover, abandoned-work claiming, bounded retries, and result/status limits
+- Spring Boot Actuator health evidence for Redis, durable SQL, write-behind backlog, dead letters, and recovery state
+- layered PostgreSQL and MSSQL sample application services, declarative read models, and distributed warm/seed handlers
+
+### Changed
+
+- generated bindings now own standard relation construction instead of requiring handwritten N+1-prone loaders
+- sample controllers delegate to focused application services and use generated projections and relation surfaces
+- Redis Function deployment version is `0.4.0` because the write protocol now carries expected-version and dependency metadata
+- provider parity checks cover the expanded declarative sample contract
+
+### Fixed
+
+- generated child relation repositories retain the child entity policy instead of inheriting the parent policy
+- multi-pod sample jobs no longer depend on node-local Java closures for work that must survive pod loss
+- health reporting distinguishes current backlog saturation from historical worker attention signals
+
+### Validation
+
+- full 13-module reactor, integration suite, production suite, public API compatibility, and documentation checks passed locally
+- PostgreSQL and MSSQL samples passed unit and live provider integration tests against Redis 8 and their selected SQL provider
+- release artifacts include binary, source, and javadoc jars for all public CacheDB modules
+
 ## 0.5.0 - 2026-07-17
 
 ### Added

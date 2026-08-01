@@ -114,6 +114,7 @@ with evidence.
 | [Production Test Report](docs/production-test-report.md) | Test evidence, smoke results, benchmark, certification lane |
 | [Production Readiness Report](docs/production-readiness-report.md) | Current production maturity assessment |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
+| [v0.6.0 Release Notes](docs/releases/v0.6.0.md) | Declarative domain, generated relations/projections/routes, durable jobs, and upgrade notes |
 | [v0.5.0 Release Notes](docs/releases/v0.5.0.md) | Scheduled warm, reconciliation, validation evidence, and production boundaries |
 | [Stable Release Launch Kit](docs/stable-release-launch-kit.md) | GitHub description, release message, stable release positioning |
 | [Public Beta Launch Kit](docs/public-beta-launch-kit.md) | Historical public beta release positioning |

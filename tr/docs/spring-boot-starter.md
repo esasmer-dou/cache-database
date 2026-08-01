@@ -53,15 +53,15 @@ cachedb:
           hot-for-seconds: 7776000
 ```
 
+Entity paketindeki `package-info.java` dosyasına şunu ekle:
+
 ```java
-@Configuration(proxyBeanMethods = false)
-public class CacheDbDomainConfig {
-    @Bean
-    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-        return GeneratedCacheModule.using(cacheDatabase);
-    }
-}
+@com.reactor.cachedb.annotations.CacheDomain(spring = true)
+package com.acme.orders.domain;
 ```
+
+Processor Spring yapılandırmasını üretir ve tek bir
+`GeneratedCacheModule.Scope` bean'i açar.
 
 Spring kaydı bilinçli olarak iki aşamalıdır. Önce tüm generated entity’ler kendi
 policy değerleri ve JDBC kaynaklarıyla kaydedilir; ilişki ve sayfa yükleyicileri
@@ -101,26 +101,39 @@ List<UserEntity> activeUsers = users.query(
 );
 ```
 
-Relation ve page loader tanımları artık doğrudan entity üzerinden verilebilir:
+Standart relation loader tip güvenli ve sınırlı metadata'dan üretilir. Özel
+page loader yine doğrudan entity üzerinde tanımlanabilir:
 
 ```java
 @CacheEntity(
         table = "cachedb_example_users",
         redisNamespace = "users",
-        relationLoader = UserOrdersRelationBatchLoader.class,
         pageLoader = UserPageLoader.class
 )
 public class UserEntity {
+    @CacheRelation(
+            target = OrderEntity.class,
+            mappedBy = "userId",
+            kind = CacheRelation.RelationKind.ONE_TO_MANY,
+            maxRowsPerParent = 50,
+            parentBatchSize = 32,
+            orderBy = {"createdAt DESC", "orderId DESC"}
+    )
+    public List<OrderEntity> orders;
 }
 ```
 
-Bu tanımdan sonra generated binding loader'ları kendi kurar:
+Bu tanımdan sonra generated binding, üretilen relation loader'ı ve özel page
+loader'ı kendi bağlar:
 
 ```java
 UserEntityCacheBinding.register(cacheDatabase);
 ```
 
-Böylece çoğu uygulama kodunda `new UserOrdersRelationBatchLoader()` veya `new UserPageLoader()` seremonisi ortadan kalkar. `DemoOrderLinesRelationBatchLoader(EntityRepository<DemoOrderLineEntity, Long>)` gibi repository bağımlı loader'lar da generated binding tarafından constructor injection ile kurulabilir.
+Böylece uygulama kodunda relation loader oluşturma ve `new UserPageLoader()`
+seremonisi ortadan kalkar. Yalnızca istisnai relation stratejilerinde
+`@CacheEntity.relationLoader` kullan; repository bağımlılıklarını generated
+binding constructor üzerinden verebilir.
 
 Processor artık package seviyesinde toplu registrar da üretir:
 

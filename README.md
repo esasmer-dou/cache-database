@@ -109,7 +109,7 @@ Keep `cachedb.version` aligned with the release you use.
 
 ```xml
 <properties>
-    <cachedb.version>0.5.0</cachedb.version>
+    <cachedb.version>0.6.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -236,16 +236,15 @@ does not rely on runtime reflection to discover persisted fields.
 
 ## First Read And Write
 
-Expose the generated package surface once:
+Enable the generated Spring domain surface once in the entity package:
 
 ```java
-@Bean
-GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-    return GeneratedCacheModule.using(cacheDatabase);
-}
+@com.reactor.cachedb.annotations.CacheDomain(spring = true)
+package com.acme.orders.domain;
 ```
 
-Then inject `GeneratedCacheModule.Scope` into normal service code:
+The processor generates the Spring configuration and one
+`GeneratedCacheModule.Scope` bean. Inject that scope into application services:
 
 ```java
 CustomerEntity customer = new CustomerEntity();
@@ -280,7 +279,7 @@ Think about relation in three separate layers:
 | --- | --- | --- |
 | Source database primary/foreign key | Protects durable data integrity and prevents orphan rows | Recommended, but not enough by itself |
 | `@CacheRelation` metadata | Tells CacheDB that a parent field represents a relation and which target field joins it | Yes |
-| `RelationBatchLoader` + `FetchPlan` | Executes the bounded batch load when the caller asks for the relation | Yes |
+| Generated or custom loader + `FetchPlan` | Executes the bounded batch load when the caller asks for the relation | Yes |
 
 So the rule is precise:
 
@@ -288,26 +287,26 @@ So the rule is precise:
 - `@CacheRelation` does not create a database constraint.
 - `kind = ONE_TO_MANY` is relation-shape metadata, not a DDL declaration.
 - `mappedBy` points to the target entity field that carries the parent id.
-- Relation preload works only when the source entity is registered with a
-  concrete `RelationBatchLoader` and the caller requests the relation through
-  `FetchPlan` or `withRelationLimit(...)`.
+- A typed target plus bounded ordering lets the processor generate the standard
+  partitioned loader. Use `@CacheEntity.relationLoader` only for custom loading.
+- The caller must still request the relation through `FetchPlan` or
+  `withRelationLimit(...)`.
 
 ```java
-@CacheEntity(
-        table = "customers",
-        redisNamespace = "customers",
-        relationLoader = CustomerOrdersRelationBatchLoader.class
-)
+@CacheEntity(table = "customers", redisNamespace = "customers")
 public class CustomerEntity {
     @CacheId(column = "customer_id")
     public Long customerId;
 
     @CacheRelation(
-            targetEntity = "OrderEntity",
+            target = OrderEntity.class,
             // OrderEntity.customerId, mapped to the order table's customer_id column.
             mappedBy = "customerId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 100,
+            parentBatchSize = 32,
+            orderBy = {"orderDate DESC", "orderId DESC"}
     )
     public List<OrderEntity> orders;
 }
@@ -324,11 +323,11 @@ CustomerEntity customer = customerRepository
 
 What happens in common cases:
 
-| Database FK | `@CacheRelation` | Loader | Result |
+| Database FK | `@CacheRelation` | Generated/custom loader | Result |
 | --- | --- | --- | --- |
 | Yes | No | No | The database is consistent, but CacheDB has no relation path to preload. |
 | No | Yes | Yes | CacheDB can preload if `mappedBy` is queryable, but orphan or inconsistent rows are your risk. Use only for legacy or soft relations. |
-| Yes | Yes | No | Metadata exists, but fetch preload cannot run; strict relation config can fail fast. |
+| Yes | Yes | No | A batch-only relation without generated or custom loading information is rejected at compile time. |
 | Yes | Yes | Yes | BEST: durable integrity, explicit metadata, and bounded batch preload. |
 
 BEST: use `withRelationLimit(...)` for a small detail-page preview.

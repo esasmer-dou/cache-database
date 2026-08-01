@@ -4,6 +4,7 @@ import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheEntity;
 import com.reactor.cachedb.annotations.CacheId;
 import com.reactor.cachedb.annotations.CacheNamedQuery;
+import com.reactor.cachedb.annotations.CacheRoute;
 import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySpec;
@@ -36,6 +37,8 @@ public class SupportTicketEntity {
     }
 
     @CacheNamedQuery("openTickets")
+    @CacheRoute(value = "open-tickets", pageSize = 50, hotWindow = 1_000,
+            maxColdReadSize = 100, memoryBudgetBytes = 8_388_608)
     public static QuerySpec openTicketsQuery(int limit) {
         return QuerySpec.where(QueryFilter.eq("status", "OPEN"))
                 .orderBy(QuerySort.desc("updated_at"), QuerySort.asc("ticket_id"))

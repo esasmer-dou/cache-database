@@ -3,6 +3,7 @@ package com.example.cachedb.sample.domain;
 import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheEntity;
 import com.reactor.cachedb.annotations.CacheId;
+import com.reactor.cachedb.annotations.CachePartitionedIndex;
 import com.reactor.cachedb.annotations.CacheNamedQuery;
 import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
@@ -11,6 +12,7 @@ import com.reactor.cachedb.core.query.QuerySpec;
 import java.util.List;
 
 @CacheEntity(table = "sample_shipment_events", redisNamespace = "sample-shipment-events")
+@CachePartitionedIndex(partitionBy = "shipment_id", sortBy = "event_time")
 public class ShipmentEventEntity {
 
     @CacheId(column = "event_id")

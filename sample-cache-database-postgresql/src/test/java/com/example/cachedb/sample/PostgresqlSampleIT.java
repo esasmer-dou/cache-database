@@ -14,6 +14,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -33,7 +35,9 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Testcontainers
+@ActiveProfiles("demo")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class PostgresqlSampleIT {
 
     @Container
@@ -85,7 +89,12 @@ class PostgresqlSampleIT {
                 null,
                 Map.class
         );
-        assertEquals(HttpStatus.OK, seed.getStatusCode());
+        assertEquals(HttpStatus.ACCEPTED, seed.getStatusCode());
+        String seedJobId = String.valueOf(seed.getBody().get("jobId"));
+        await(Duration.ofSeconds(30), () -> {
+            ResponseEntity<Map> job = rest.getForEntity(url("/api/warm/jobs/" + seedJobId), Map.class);
+            return job.getStatusCode().is2xxSuccessful() && "COMPLETED".equals(job.getBody().get("status"));
+        });
 
         ResponseEntity<List> activeCustomers = rest.getForEntity(url("/api/customers/active?limit=10"), List.class);
         assertEquals(HttpStatus.OK, activeCustomers.getStatusCode());
@@ -167,28 +176,32 @@ class PostgresqlSampleIT {
         assertEquals(HttpStatus.OK, secondArchivePage.getStatusCode());
         assertNotEquals(firstArchiveRow.get("orderId"), ((Map) secondArchivePage.getBody().getFirst()).get("orderId"));
 
-        ResponseEntity<Map> deleteParentWithChildren = rest.exchange(
+        ResponseEntity<Map> deactivateParentWithChildren = rest.exchange(
                 url("/api/orders/10001"),
                 HttpMethod.DELETE,
                 HttpEntity.EMPTY,
                 Map.class
         );
-        assertEquals(HttpStatus.CONFLICT, deleteParentWithChildren.getStatusCode());
+        assertEquals(HttpStatus.ACCEPTED, deactivateParentWithChildren.getStatusCode());
+        await(Duration.ofSeconds(15), () -> "DELETED".equals(orderStatus(10_001L)));
         assertEquals(1, rowCount("sample_orders", "order_id", 10_001L));
 
-        ResponseEntity<Map> deleteLeafOrder = rest.exchange(
+        ResponseEntity<Map> deactivateLeafOrder = rest.exchange(
                 url("/api/orders/901"),
                 HttpMethod.DELETE,
                 HttpEntity.EMPTY,
                 Map.class
         );
-        assertEquals(HttpStatus.ACCEPTED, deleteLeafOrder.getStatusCode());
-        await(Duration.ofSeconds(15), () -> rowCount("sample_orders", "order_id", 901L) == 0);
+        assertEquals(HttpStatus.ACCEPTED, deactivateLeafOrder.getStatusCode());
+        await(Duration.ofSeconds(15), () -> "DELETED".equals(orderStatus(901L)));
+        assertEquals(1, rowCount("sample_orders", "order_id", 901L));
 
-        ResponseEntity<Map> readiness = rest.getForEntity(url("/api/health/ready"), Map.class);
+        ResponseEntity<Map> readiness = rest.getForEntity(url("/actuator/health/readiness"), Map.class);
         assertEquals(HttpStatus.OK, readiness.getStatusCode());
-        assertEquals(Boolean.TRUE, readiness.getBody().get("ready"));
-        assertNotNull(readiness.getBody().get("database"));
+        assertEquals("UP", readiness.getBody().get("status"));
+        Map<?, ?> healthComponents = (Map<?, ?>) readiness.getBody().get("components");
+        assertNotNull(healthComponents);
+        assertNotNull(healthComponents.get("cacheDatabase"));
 
         ResponseEntity<Map> warmAccepted = rest.postForEntity(
                 url("/api/warm/orders/customer/1?limit=2&projectionOnly=true"),
@@ -226,6 +239,14 @@ class PostgresqlSampleIT {
                 id
         );
         return count == null ? 0 : count;
+    }
+
+    private String orderStatus(long orderId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT status FROM sample_orders WHERE order_id = ?",
+                String.class,
+                orderId
+        );
     }
 
     private void await(Duration timeout, BooleanSupplier condition) {

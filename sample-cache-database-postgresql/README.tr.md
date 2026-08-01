@@ -41,7 +41,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.5.0</cachedb.version>
+  <cachedb.version>0.6.0</cachedb.version>
 </properties>
 
 <repositories>
@@ -95,7 +95,7 @@ Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
 </build>
 ```
 
-Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.5.0`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
+Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.6.0`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
 `cachedb-annotations` ve `cachedb-processor`, `OrderEntityCacheBinding` gibi generated binding sınıflarının üretilmesi için gereklidir.
 
 Çalıştırma ve build gereksinimi: JDK 21 kullan. Örnek `pom.xml` içinde
@@ -125,9 +125,9 @@ mvn clean package
 
 Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir.
 
-## 0.5.0 İçin Doğrulanmış Deklaratif Akış
+## 0.6.0 İçin Doğrulanmış Deklaratif Akış
 
-Bu örnek CacheDB `0.5.0` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
+Bu örnek CacheDB `0.6.0` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
 sözleşme şudur:
 
 1. Yazılar CacheDB üzerinden alınır ve PostgreSQL’e write-behind ile aktarılır.
@@ -138,22 +138,22 @@ sözleşme şudur:
 
 Bu sözleşme örnek kodda açıkça görünür.
 
-### 0.5.0 Sürümünde Doğrulanan Production Sözleşmeleri
+### 0.6.0 Sürümünde Doğrulanan Production Sözleşmeleri
 
 - Komut endpoint’leri `202 Accepted` döner. Bu yanıt, komutun Redis tarafından kabul edildiğini söyler; SQL’e kalıcı yazımın tamamlandığını söylemez.
-- Alt kayıt yazılmadan önce indeksli tek bir SQL `EXISTS` sorgusu çalışır. Ana kayıt henüz kalıcı değilse request thread’i bekletilmez; `Retry-After` ile birlikte `409 Conflict` döner.
-- Aggregate silme işlemi örtük değildir. Siparişin satırları varsa silme reddedilir. Aggregate’in tamamını silmek için açık ve transactional bir command yazılmalıdır.
+- Alt kayıt yazılırken mümkünse bekleyen kalıcılık makbuzu kullanılır; bu bilgi yoksa indeksli tek bir SQL varlık sorgusu çalışır. Ana kayıt henüz kalıcı değilse istek thread’i bekletilmez; `Retry-After` ile birlikte `409 Conflict` döner.
+- `DELETE /api/orders/{id}`, durumu `DELETED` yapan açık bir mantıksal silme işlemidir. Aggregate’in fiziksel olarak silinmesi asenkron write-behind üzerinden sunulmaz.
 - Her entity, kullanıldığı okuma yoluna uygun bir admission policy kullanır. Sipariş, katalog, destek, lojistik, raporlama ve audit verileri tek bir yanıltıcı varsayılan policy’yi paylaşmaz.
 - Parasal alanlarda `BigDecimal` ve `NUMERIC(19,4)` kullanılır. Redis sıralama puanları parasal değer olmadığı için `double` kalır.
-- Relation loader’lar her ana kayıt için ayrı sorgu çalıştırmak yerine sınırlı `IN (...)` batch’leri kullanır.
-- Warm/backfill işlemi sınırlı bir asenkron job olarak çalışır: `1` worker ve `8` elemanlık kuyruk. İşlemi `POST` ile başlat, sonucu `/api/warm/jobs/{jobId}` üzerinden izle.
-- `/api/health/live` process’in çalıştığını, `/api/health/ready` ise Redis, SQL ve write-behind durumunu gösterir.
+- Relation loader’lar tip güvenli `@CacheRelation` tanımından üretilir ve her ana kayıt için ayrı sorgu çalıştırmak yerine sınırlı `IN (...)` grupları kullanır.
+- Warm/backfill işlemi Redis Stream üzerinde kalıcı ve sınırlı bir job olarak çalışır: `1` worker ve `8` elemanlık kuyruk. Bir pod kapanırsa başka bir pod işi devralıp checkpoint’ten sürdürebilir.
+- `/actuator/health/liveness` uygulama sürecinin çalıştığını, `/actuator/health/readiness` ise Redis, SQL ve write-behind durumunu gösterir.
 - Sınırı aşan route limitleri sessizce küçültülmez; `400 Bad Request` ile reddedilir.
 - Uygulama servisleri yalnızca üretilmiş bir `GeneratedCacheModule.Scope` kullanır; repository veya binding nesnelerini elle oluşturmaz.
 - Her entity için admission policy `application.yml` üzerinden tanımlanır. `cachedb.registration.source: jdbc` ayarı, veritabanı kayıt kaynağını açıkça belirtir.
 - Named query, fetch planı, projection ve tip güvenli warm planları derleme sırasında üretilir. `ProjectionSchema`, projection alan sırasını ve serileştirme sözleşmesini açık tutar.
 
-`0.5.0` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
+`0.6.0` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
 saniyede, write-behind SQL işlemleri 20 saniyede zaman aşımına uğrar. Admin
 istek ve arka plan kuyruklarının kapasitesi `application.yml` içinde açıkça
 tanımlanmıştır. Sürüm kontrollü hydration, eski bir warm sonucunun
@@ -190,11 +190,8 @@ cachedb:
 Ön yükleme yolu, tam tablo taraması yerine generated domain scope ve sorgu şekline uygun tip güvenli plan kullanır:
 
 ```java
-CacheWarmPlan plan = domain.orders().warmPlan(
-        "sample-customer-orders",
-        domain.orders().queries().customerTimelineQuery(customerId, limit),
-        limit
-);
+CacheWarmPlan plan = domain.orders().queries()
+        .customerTimelineWarmPlan(customerId, limit);
 CacheWarmResult result = cacheDatabase.warmProjections(plan);
 ```
 Uygulama hazır olduktan sonra yerel yük kapısını şu komutla çalıştır:
@@ -244,11 +241,8 @@ eklemeden aktif sipariş yolunu düzenli olarak yeniler.
 )
 public CacheWarmPlan activeOrderWindow() {
     long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
-    return domain.orders().warmPlan(
-            "sample-active-order-window",
-            domain.orders().queries().activeOrderWindowQuery(cutoff, orderWarmMaxRows),
-            orderWarmMaxRows
-    );
+    return domain.orders().queries()
+            .activeOrderWindowWarmPlan(cutoff, orderWarmMaxRows);
 }
 ```
 
@@ -303,13 +297,21 @@ mvn spring-boot:run
 3. Hazırlık durumunu kontrol et:
 
 ```bash
-curl http://127.0.0.1:8091/api/health/ready
+curl http://127.0.0.1:8091/actuator/health/readiness
 ```
 
 4. Demo verisini üret:
 
 ```bash
 curl -X POST "http://127.0.0.1:8091/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
+```
+
+Endpoint, uzun süren yazma boyunca HTTP bağlantısını açık tutmaz; `202 Accepted`
+ile bir `jobId` döndürür. Redis’te ortak tutulan iş durumunu sorgula ve yalnızca
+`COMPLETED` sonucundan sonra devam et:
+
+```bash
+curl "http://127.0.0.1:8091/api/warm/jobs/<jobId>"
 ```
 
 5. CacheDB yönetim ekranını aç:
@@ -322,8 +324,8 @@ http://127.0.0.1:8091/cachedb-admin
 
 | Adım | Endpoint | Ana veri yolu | Ne gösterir? |
 |---|---|---|---|
-| Sağlık | `GET /api/health/ready` | Çalışma zamanı kontrolü | Redis bağlantısı ve arka plan yazma özeti |
-| Veri üretme | `POST /api/demo/seed` | Redis yazma, PostgreSQL’e arka plan kalıcılık | CacheDB yazma yolu, SQL kalıcılığı, projection yenileme |
+| Sağlık | `GET /actuator/health/readiness` | Çalışma zamanı kontrolü | Redis, SQL ve write-behind hazırlık özeti |
+| Veri üretme | `POST /api/demo/seed` | Sınırlı arka plan işi, toplu Redis yazma, PostgreSQL’e write-behind | Geri basınç, SQL kalıcılığı, projection yenileme ve pod’lar arası iş durumu |
 | Müşteri detay | `GET /api/customers/1?orderPreview=5` | Redis entity + sınırlı ilişki önizlemesi | Sınırlı sipariş önizlemesiyle entity detayı |
 | Sipariş listesi | `GET /api/customers/1/orders?limit=20` | Redis projection: `OrderSummary` | Tüm aggregate yüklenmeden müşteri sipariş listesi |
 | Sipariş warm/backfill | `POST /api/warm/orders/customer/1?limit=100` | PostgreSQL okuma -> Redis’e yerleştirme | Aktif veri seti ve projection yolu için açık warm/backfill |
@@ -355,6 +357,10 @@ uygulamanın `8091` portunda çalıştığını ve terminalde
 ```bash
 curl.exe -X POST "http://127.0.0.1:8091/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
 ```
+
+Dönen `jobId` değerini al, `GET /api/warm/jobs/{jobId}` endpoint’ini sorgula ve
+Redis’i temizlemeden önce `"status":"COMPLETED"` sonucunu bekle. Aksi hâlde
+seed işi ile `FLUSHDB` aynı anda çalışır.
 
 Şimdi Redis’i temizle. Bu adım, PostgreSQL’de veri olan ama Redis aktif veri
 seti boş olan mevcut sistem durumunu simüle eder:
@@ -483,6 +489,7 @@ Uygulama yalnızca modeli ve sorgu yollarının sınırlarını tanımlar. Cache
 
 ```java
 @CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
+@CachePartitionedIndex(partitionBy = "customer_id", sortBy = "order_date")
 public class OrderEntity {
     @CacheId(column = "order_id")
     public Long orderId;
@@ -500,11 +507,19 @@ public class OrderEntity {
     public String status;
 
     @CacheProjectionDefinition("orderSummary")
-    public static EntityProjection<OrderEntity, OrderReadModels.OrderSummary, Long> orderSummaryProjection() {
-        return OrderReadModels.ORDER_SUMMARY_PROJECTION;
+    public static EntityProjection<OrderEntity, OrderSummary, Long> orderSummaryProjection() {
+        return OrderSummaryProjection.PROJECTION;
     }
 
     @CacheNamedQuery("customerTimeline")
+    @CacheRoute(
+            value = "customer-order-timeline",
+            projection = "orderSummary",
+            pageSize = 100,
+            hotWindow = 1_000,
+            maxColdReadSize = 500,
+            memoryBudgetBytes = 16_777_216
+    )
     public static QuerySpec customerTimelineQuery(long customerId, int limit) {
         return QuerySpec.where(QueryFilter.eq("customer_id", customerId))
                 .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
@@ -513,54 +528,38 @@ public class OrderEntity {
 }
 ```
 
-Sorgunun adı ve üst sınırı bellidir. Controller, çalışma anında sınırsız veya rastgele sorgu üretmez.
+Sorgunun adı, üst sınırı, partition indeksi ve route sözleşmesi bellidir.
+Controller çalışma anında sınırsız sorgu üretmez; projection zorunlu bir yolu
+tam entity sorgusuna düşüremez.
 
-#### 2. Serileştirme ve indeks kolonlarını bir kez tanımla
+#### 2. Projection serileştirmesini record üzerinden üret
 
 ```java
-public final class OrderReadModels {
-    private static final ProjectionSchema<OrderSummary> ORDER_SUMMARY_SCHEMA =
-            ProjectionSchema.<OrderSummary>builder()
-                    .longColumn("order_id", OrderSummary::orderId)
-                    .longColumn("customer_id", OrderSummary::customerId)
-                    .longColumn("order_date", OrderSummary::orderDate)
-                    .decimalColumn("order_amount", OrderSummary::orderAmount)
-                    .stringColumn("status", OrderSummary::status)
-                    .decodeWith(row -> new OrderSummary(
-                            row.longValue("order_id"),
-                            row.longValue("customer_id"),
-                            row.longValue("order_date"),
-                            row.decimal("order_amount"),
-                            row.string("status")
-                    ))
-                    .build();
-
-    public static final EntityProjection<OrderEntity, OrderSummary, Long> ORDER_SUMMARY_PROJECTION =
-            EntityProjection.<OrderEntity, OrderSummary, Long>of(
-                    "order-summary",
-                    ORDER_SUMMARY_SCHEMA,
-                    OrderSummary::orderId,
-                    order -> new OrderSummary(
-                            order.orderId,
-                            order.customerId,
-                            order.orderDate,
-                            order.orderAmount,
-                            order.status
-                    )
-            ).rankedBy("order_date").asyncRefresh();
-
-    public record OrderSummary(
-            Long orderId,
-            Long customerId,
-            Long orderDate,
-            BigDecimal orderAmount,
-            String status
-    ) {
-    }
+@CacheProjectionRecord(
+        source = OrderEntity.class,
+        id = "orderId",
+        name = "order-summary",
+        rankedBy = {"order_date", "priority_score"},
+        refresh = CacheProjectionRecord.Refresh.ASYNC
+)
+public record OrderSummary(
+        Long orderId,
+        Long customerId,
+        Long orderDate,
+        BigDecimal orderAmount,
+        String currencyCode,
+        String orderType,
+        String status,
+        Integer lineCount,
+        Double priorityScore
+) {
 }
 ```
 
-`ProjectionSchema` reflection kullanmaz. Redis’e yazma, Redis’ten okuma ve sorgu indeksi kolonları için tek doğruluk kaynağıdır.
+Processor, `OrderSummaryProjectionSchema` ve `OrderSummaryProjection` sınıflarını
+reflection kullanmadan üretir. Entity dönüşümü, sıralama alanları ve yenileme modu
+da annotation’dan gelir. Record tanımı Redis serileştirmesi ve sorgu indeks
+kolonları için tek doğruluk kaynağıdır.
 
 #### 3. Her entity için policy değerlerini yapılandırmaya koy
 
@@ -589,46 +588,37 @@ cachedb:
 
 CacheDB başlangıçta iki aşama çalıştırır. Önce her entity kendi policy değeri ve JDBC kaynağıyla kaydedilir; sonra ilişki ve sayfa yükleyicileri bağlanır. Böylece ana entity’nin policy değeri yanlışlıkla alt entity’ye taşınmaz. Entity adı hatalıysa uygulama başlangıçta durur.
 
-#### 4. Tek bir generated domain bean’i aç
+#### 4. Tek bir Spring domain bean’i üret
 
 ```java
-@Configuration(proxyBeanMethods = false)
-public class CacheDbDomainConfig {
-    @Bean
-    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-        return GeneratedCacheModule.using(cacheDatabase);
-    }
-}
+@CacheDomain(spring = true)
+package com.example.cachedb.sample.domain;
 ```
 
-Her entity veya projection için ayrı Spring bean’i oluşturma. `GeneratedCacheModule.Scope`, derleme sırasında üretilen ve paketteki tüm entity’leri tip güvenli biçimde açan değişmez uygulama yüzeyidir.
+Bu tanımı `domain/package-info.java` dosyasına koy. Processor, Spring
+configuration sınıfını ve değişmez `GeneratedCacheModule.Scope` bean’ini üretir;
+repository veya projection bean’lerini elle bağlamak gerekmez.
 
 #### 5. Uygulama kodunda generated DSL’i kullan
 
 ```java
-@RestController
-@RequestMapping("/api/customers")
-public class CustomerController {
+@Service
+public final class CustomerApplicationService {
     private final GeneratedCacheModule.Scope domain;
 
-    public CustomerController(GeneratedCacheModule.Scope domain) {
+    public CustomerApplicationService(GeneratedCacheModule.Scope domain) {
         this.domain = domain;
     }
 
-    @GetMapping("/{customerId}/orders")
-    public List<OrderReadModels.OrderSummary> timeline(
-            @PathVariable long customerId,
-            @RequestParam(defaultValue = "20") int limit
-    ) {
-        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
-        return domain.orders().projections().orderSummary().query(
-                domain.orders().queries().customerTimelineQuery(customerId, safeLimit)
-        );
+    public List<OrderSummary> orderTimeline(long customerId, int limit) {
+        return domain.orders().queries().customerTimelineProjection(customerId, limit);
     }
 }
 ```
 
-Controller; `EntityRegistry`, Redis anahtarları, codec, JDBC loader veya projection implementasyon sınıflarını bilmez.
+Controller HTTP girdisini doğrular ve bu servise yönlendirir. İki katman da
+`EntityRegistry`, Redis anahtarları, codec, JDBC loader veya projection
+implementasyon ayrıntılarını bilmez.
 
 #### 6. Tip güvenli planla ön yükleme yap
 
@@ -656,11 +646,7 @@ public class CustomerOrderWarmService {
     }
 
     private CacheWarmPlan plan(long customerId, int limit) {
-        return domain.orders().warmPlan(
-                "customer-order-window-" + customerId,
-                domain.orders().queries().customerTimelineQuery(customerId, limit),
-                limit
-        );
+        return domain.orders().queries().customerTimelineWarmPlan(customerId, limit);
     }
 }
 ```
@@ -684,13 +670,13 @@ CacheDB, Redis’te bulunamayan her kayıt için sınırsız veritabanı sorgusu
 |---|---|---|
 | Entity | Bir SQL tablosuna ve Redis namespace’ine bağlanan tam komut/detay modeli | `OrderEntity` |
 | Generated binding | Derleme sırasında üretilen metadata, sorgu, fetch preset, komut ve projection kodu | `OrderEntityCacheBinding` |
-| Generated domain module | Controller ve servislerin kullandığı, paket düzeyindeki tek tip güvenli giriş noktası | `GeneratedCacheModule.Scope` |
+| Generated domain module | Uygulama servislerinin kullandığı, paket düzeyindeki tek tip güvenli giriş noktası | `GeneratedCacheModule.Scope` |
 | Projection | Tam aggregate yerine liste veya dashboard için kullanılan küçük okuma modeli | `OrderSummary` |
-| Projection schema | Payload ve indeks kolonlarını tek yerde tanımlayan reflection’sız şema | `ProjectionSchema<OrderSummary>` |
-| Named query | Adı, sıralaması ve sınırı belirli tekrar kullanılabilir sorgu sözleşmesi | `customerTimelineQuery(...)` |
+| Projection şeması | Üretilen, reflection kullanmayan payload ve indeks kolonu sözleşmesi | `OrderSummaryProjectionSchema.SCHEMA` |
+| Adlandırılmış route | Sorgu, projection ve kaynak sınırlarını birlikte taşıyan sözleşme | `customerTimelineProjection(...)` |
 | Fetch preset | Detay ekranında hangi ilişkinin kaç satır yükleneceğini belirleyen tanım | `linePreview(...)` |
 | Policy kataloğu | Her entity’ye ayrı etkin veri ve boyut kuralı atayan YAML haritası | `cachedb.registration.entities` |
-| Warm plan | JDBC’den Redis’e yapılacak sınırlı ön yükleme sözleşmesi | `domain.orders().warmPlan(...)` |
+| Warm plan | `@CacheRoute` tanımından üretilen sınırlı JDBC-Redis ön yükleme sözleşmesi | `customerTimelineWarmPlan(...)` |
 | Write-behind | Komutun önce Redis tarafından kabul edilmesi, SQL kalıcılığının asenkron tamamlanması | `202 Accepted`, worker metrikleri |
 | Guardrail | Aşırı sonuç boyutunu veya bellek baskısını reddeden kesin sınır | API, sorgu şekli ve Redis sınırları |
 
@@ -698,12 +684,13 @@ CacheDB, Redis’te bulunamayan her kayıt için sınırsız veritabanı sorgusu
 
 | Katman | Ana dosyalar | Sorumluluk | Kural |
 |---|---|---|---|
-| API | `web/*Controller.java` | Girdiyi doğrular ve generated domain DSL’i çağırır | Sınırsız liste açma |
+| API | `web/*Controller.java` | HTTP girdisini doğrular ve uygulama servisine yönlendirir | Sınırsız liste açma |
+| Uygulama | `application/*Service.java` | Use case akışını, veri kaynağı seçimini ve yazma makbuzunu yönetir | Redis/SQL kararlarını controller’a taşıma |
 | Domain tanımı | `domain/*Entity.java` | SQL mapping, sorgu, ilişki, fetch preset ve komutlar | Sözleşmeleri açık ve derleme zamanında üretilebilir tut |
-| Okuma modeli | `readmodel/*ReadModels.java` | Küçük projection şeması ve entity’den ekrana dönüşüm | Büyüyen veya genel sıralı listelerde projection kullan |
-| Domain erişimi | `SampleCacheDbDomainConfig.java` | Tek generated package scope bean’ini açar | Entity başına repository bean’i oluşturma |
-| Ön yükleme servisi | `SampleWarmBackfillService.java` | Tip güvenli planı ve dry-run/projection/full modunu seçer | İşi sınırla, HTTP çalıştırmasını asenkron tut |
-| Kalıcı veri sorgusu | `JdbcTemplate` kullanan arşiv metotları | Eski geçmişi ve dışa aktarımı indeksli SQL’den okur | Keyset pagination ve kesin üst sınır kullan |
+| Okuma modeli | `readmodel/*.java` | Küçük projection record’ları ve üretilmiş entity dönüşümü | Büyüyen veya genel sıralı listelerde projection kullan |
+| Domain erişimi | `domain/package-info.java` | Paket için tek Spring scope bean’ini üretir | `@CacheDomain(spring = true)` kullan |
+| Ön yükleme servisi | `SampleWarmBackfillService.java` | Üretilmiş route planını ve dry-run/projection/full modunu seçer | İşi sınırla, HTTP çalıştırmasını asenkron tut |
+| Kalıcı veri sorgusu | Üretilen `...Source(...)` route metotları | Eski geçmişi ve dışa aktarımı indeksli SQL’den okur | Keyset pagination ve kesin üst sınır kullan |
 | Runtime policy | `application.yml` | Entity bazlı etkin veri kuralı ve JDBC kaydı | Bilinmeyen entity adında başlangıcı durdur |
 | Platform ayarı | `SampleCacheDbTuningConfig.java` | Thread, kuyruk, timeout, bellek ve write-behind sınırları | Ölçülmüş yüke göre ayarla |
 
@@ -711,18 +698,14 @@ CacheDB, Redis’te bulunamayan her kayıt için sınırsız veritabanı sorgusu
 
 ```java
 int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
-return domain.orders().projections().orderSummary().query(
-        domain.orders().queries().customerTimelineQuery(customerId, safeLimit)
-);
+return customers.orderTimeline(customerId, safeLimit);
 ```
 
 ### Deklaratif Domain Erişimi: Tek Bean, Repository Wiring Yok
 
 ```java
-@Bean
-GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-    return GeneratedCacheModule.using(cacheDatabase);
-}
+@CacheDomain(spring = true)
+package com.example.cachedb.sample.domain;
 ```
 
 Spring Boot generated registrar sınıflarını bulur ve uygulama bean’i oluşturulmadan önce YAML policy değerlerini uygular. Uygulama kodu binding’leri elle kaydetmez.
@@ -732,11 +715,7 @@ Spring Boot generated registrar sınıflarını bulur ve uygulama bean’i oluş
 `OrderEntity`; tabloyu, Redis namespace’ini, primary key’i, kolonları, ilişkiyi, named query’leri ve projection’ı tanımlar:
 
 ```java
-@CacheEntity(
-        table = "sample_orders",
-        redisNamespace = "sample-orders",
-        relationLoader = OrderLinesRelationBatchLoader.class
-)
+@CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
 public class OrderEntity {
     @CacheId(column = "order_id")
     public Long orderId;
@@ -745,10 +724,13 @@ public class OrderEntity {
     public Long customerId;
 
     @CacheRelation(
-            targetEntity = "OrderLineEntity",
+            target = OrderLineEntity.class,
             mappedBy = "orderId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 50,
+            parentBatchSize = 16,
+            orderBy = "lineNumber ASC"
     )
     public List<OrderLineEntity> lines;
 }
@@ -768,10 +750,13 @@ customer_id BIGINT NOT NULL REFERENCES sample_customers(customer_id)
 
 ```java
 @CacheRelation(
-        targetEntity = "OrderEntity",
+        target = OrderEntity.class,
         mappedBy = "customerId",
         kind = CacheRelation.RelationKind.ONE_TO_MANY,
-        batchLoadOnly = true
+        batchLoadOnly = true,
+        maxRowsPerParent = 25,
+        parentBatchSize = 16,
+        orderBy = "orderDate DESC, orderId DESC"
 )
 public List<OrderEntity> orders;
 ```
@@ -798,14 +783,11 @@ public static FetchPlan ordersPreviewFetchPlan(int orderLimit) {
 }
 ```
 
-`CustomerController.detail` bu preset’i kullanır:
+`CustomerController.detail`, üretilen fetch yüzeyini kullanır:
 
 ```java
-return CustomerEntityCacheBinding
-        .ordersPreviewRepository(
-                customerRepository,
-                ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25)
-        )
+return domain.customers().fetches()
+        .ordersPreview(ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25))
         .findById(customerId)
         .orElseThrow(...);
 ```
@@ -817,6 +799,13 @@ Yani detay ekranı “son 5 siparişi” gösterebilir; ama müşterinin tüm ta
 Sipariş listesi ve yüksek değerli sipariş ekranı tam `OrderEntity` yerine `OrderSummary` kullanır:
 
 ```java
+@CacheProjectionRecord(
+        source = OrderEntity.class,
+        id = "orderId",
+        name = "order-summary",
+        rankedBy = {"order_date", "priority_score"},
+        refresh = CacheProjectionRecord.Refresh.ASYNC
+)
 public record OrderSummary(
         Long orderId,
         Long customerId,
@@ -831,12 +820,6 @@ public record OrderSummary(
 }
 ```
 
-Projection gerçek ekranların sıralama alanlarına göre önceden sıralı tutulur:
-
-```java
-).rankedBy("order_date", "priority_score").asyncRefresh();
-```
-
 Böylece Redis içinde liste satırları küçük kalır. Tam entity hâlâ detay ekranı için vardır; fakat liste ekranı tam aggregate yükleme maliyetini ödemez.
 
 ## Uçtan Uca OrderSummary Örneği
@@ -844,15 +827,13 @@ Böylece Redis içinde liste satırları küçük kalır. Tam entity hâlâ deta
 `OrderSummary`, müşteri sipariş listesi ve sıralı sipariş ekranları için kullanılan okuma modelidir. Sipariş satırlarını, müşteri detayını ve denetim geçmişini bilerek içermez.
 
 1. `OrderEntity`, `@CacheProjectionDefinition("orderSummary")` tanımını yapar.
-2. `OrderReadModels`, tek bir `ProjectionSchema<OrderSummary>` ve entity’den summary’ye dönüşüm tanımlar.
-3. Processor, `domain.orders().projections().orderSummary()` yolunu üretir.
-4. Ön yükleme kodu `domain.orders().warmPlan(...)` kullanır.
-5. Controller, generated named query ile generated projection repository’yi birleştirir.
+2. `@CacheProjectionRecord`, derleme sırasında `OrderSummaryProjectionSchema` ve `OrderSummaryProjection` sınıflarını üretir.
+3. Annotation; kaynak entity’yi, kimlik alanını, sıralama alanlarını ve yenileme modunu tanımlar.
+4. Ön yükleme kodu üretilmiş `customerTimelineWarmPlan(...)` metodunu kullanır.
+5. Processor, sorguyu doğru projection’a bağlayan katı route metodunu üretir.
 
 ```java
-return domain.orders().projections().orderSummary().query(
-        domain.orders().queries().recentHighValueOrdersQuery(minimumAmount, safeLimit)
-);
+return domain.orders().queries().recentHighValueOrdersProjection(minimumAmount, safeLimit);
 ```
 
 Yanıt doğrudan ekranın ihtiyacı olan şekildedir. Arka planda tam entity yüklenmez; aynı şema Redis serileştirmesini ve indeks kolonlarını yönetir.
@@ -863,12 +844,13 @@ Bu örnek artık iki yolu da açık gösterir. Sık kullanılan operasyonel okum
 
 | Çağrı | İlk çalışma yolu | PostgreSQL ne zaman kullanılır? | Redis davranışı | Neden? |
 |---|---|---|---|---|
-| `POST /api/customers` | `domain.<entity>().save(...)` | Write-behind satırı arka planda kalıcılaştırır | Aktif veri politikası kabul ederse entity Redis’e girer | Normal yazma yolu |
-| `POST /api/orders` | `JdbcTemplate` FK hazırlık kontrolü, sonra `domain.<entity>().save(...)` | Alt kayıt yazmadan önce üst müşteri SQL’de kalıcı mı diye bakılır | Sipariş Redis üzerinden kaydedilir ve write-behind kuyruğuna girer | FK ihlalini engeller, Redis-first yazma modelini korur |
-| `GET /api/customers/{id}/orders` | `domain.orders().projections().orderSummary()` | Sık kullanılan liste yolunda kullanılmaz | Redis projection verisini ve indeksini okur; eksik projection satırını Redis’teki base entity verisinden ısıtabilir | Hızlı müşteri zaman çizelgesi |
-| `GET /api/orders/high-value` | `domain.orders().projections().orderSummary()` | Sık kullanılan liste yolunda kullanılmaz | Ranked Redis projection verisini okur | Hızlı global sıralı iş listesi |
+| `POST /api/customers` | `domain.customers().saveWithReceipt(...)` | Write-behind satırı arka planda kalıcılaştırır | Policy kabul ederse entity Redis’e girer; receipt kabul edilen sürümü taşır | Açık kalıcılık takibi olan normal komut yolu |
+| `POST /api/orders` | Uygulama servisi kalıcı müşteri referansını alır ve `saveAfter(...)` çağırır | Bekleyen makbuz kullanılır veya indeksli tek kaynak sorgusuyla ana kayıt doğrulanır; worker bağımlılık sırasını korur | Policy kabul ederse sipariş Redis’e girer ve bağımlılık bilgisi yazma komutuyla taşınır | İstek thread’ini bekletmeden foreign key sırasını korur |
+| `PATCH /api/orders/{id}/status` | `findVersionedById`, ardından `save(entity, expectedVersion)` | Kazanan sürüm arka planda kalıcılaştırılır | Redis compare-and-set, eski sürümle gelen eş zamanlı güncellemeyi reddeder | Kayıp güncellemeyi önler |
+| `GET /api/customers/{id}/orders` | `customerTimelineProjection(...)` | Aktif liste yolunda kullanılmaz | Partition edilmiş Redis projection indeksini okur | Entity fallback olmadan hızlı müşteri sipariş listesi |
+| `GET /api/orders/high-value` | `recentHighValueOrdersProjection(...)` | Aktif liste yolunda kullanılmaz | Sıralı Redis projection verisini okur | Hızlı genel sıralı iş listesi |
 | `GET /api/orders/{id}` | `linePreview` fetch preset ile `domain.<entity>().findById(...)` | Bu örnek endpoint’i Redis’te bulunamama durumunda SQL’e gitmez | Redis entity verisini okur, relation loader sınırlı satır sorgusunu Redis üzerinden yapar | Sık kullanılan sipariş detay ekranı |
-| `GET /api/orders/archive` | `JdbcTemplate.query` | Doğrudan PostgreSQL okur | Redis’i değiştirmez | Arşiv/geçmiş okuması |
+| `GET /api/orders/archive` | `customerOrderArchiveSource(...)` | Üretilen sınırlı kaynak sorgusu PostgreSQL’i doğrudan okur | Redis’i değiştirmez | Controller içinde SQL yazmadan arşiv/geçmiş okuması |
 | `GET /api/products/active` | `domain.products().projections().productAvailability()` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis projection sorgusu | Küçük katalog listesi |
 | `GET /api/tickets/open` | `domain.<entity>().queries()` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis entity sorgusu | Operasyon kuyruğu |
 | `GET /api/dashboard/commerce` | Projection sorgusu + destek talebi entity sorgusu | Bu örnek endpoint’inde kullanılmaz | Redis projection ve Redis entity sorgusunu birleştirir | Panel ilk ekranı |
@@ -877,27 +859,23 @@ Bu örnek artık iki yolu da açık gösterir. Sık kullanılan operasyonel okum
 
 ```java
 @GetMapping("/archive")
-public List<OrderReadModels.OrderSummary> archiveFromSql(
+public List<OrderSummary> archiveFromSql(
         @RequestParam long customerId,
         @RequestParam(required = false) Long beforeOrderDate,
         @RequestParam(required = false) Long beforeOrderId,
         @RequestParam(defaultValue = "100") int limit
 ) {
-    return jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, upperBound, upperId, safeLimit);
+    return domain.orders().queries()
+            .customerOrderArchiveSource(customerId, upperBound, upperId, safeLimit)
+            .stream()
+            .map(OrderSummaryProjection::fromEntity)
+            .toList();
 }
 ```
 
-SQL yolu aynı yanıt modelini kullanır, fakat veri kaynağı farklıdır:
-
-```sql
-SELECT order_id, customer_id, order_date, order_amount, currency_code,
-       order_type, status, line_count, priority_score
-FROM sample_orders
-WHERE customer_id = ?
-  AND (order_date < ? OR (order_date = ? AND order_id < ?))
-ORDER BY order_date DESC, order_id DESC
-OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
-```
+Üretilen kaynak route’u aynı sınırlı `QuerySpec` tanımını PostgreSQL dialect’i
+üzerinden çalıştırır. Controller aynı yanıt modelini korur; SQL metni, row mapper
+veya Redis hydration yan etkisi taşımaz.
 
 Production’da karar şu şekilde verilmelidir:
 
@@ -1248,6 +1226,6 @@ Seed endpoint’i veriyi CacheDB üzerinden yazar ve alt kayıtları yazmadan ö
 
 CacheDB dependency’leri çözülemiyorsa `pom.xml` içindeki paket repository erişimini kontrol et.
 
-Seed endpoint’i yavaş görünüyorsa `GET /api/health/ready` ve yönetim ekranındaki arka plan yazma bölümünü kontrol et. Seed akışı foreign key hatası üretmemek için SQL satırlarının oluşmasını bekler.
+Seed endpoint’i yavaş görünüyorsa `GET /actuator/health/readiness` ve yönetim ekranındaki arka plan yazma bölümünü kontrol et. Seed akışı foreign key hatası üretmemek için SQL satırlarının oluşmasını bekler.
 
 Seed sonrası liste hemen boş dönerse birkaç saniye bekleyip tekrar dene. Projection yenileme arka planda çalışır.

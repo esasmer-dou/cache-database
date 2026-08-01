@@ -147,7 +147,7 @@ This is the most important distinction:
 | --- | --- | --- |
 | Durable integrity | Source database | Primary key, foreign key, unique constraints, and indexes keep stored data correct. |
 | CacheDB relation metadata | Entity annotations | `@CacheRelation` declares that a source entity has a named relation path. |
-| Runtime relation loading | Loader and fetch plan | `RelationBatchLoader` loads the data only when `FetchPlan` requests it. |
+| Runtime relation loading | Generated/custom loader and fetch plan | The loader reads a bounded child set only when `FetchPlan` requests it. |
 
 CacheDB does not inspect a database foreign key and automatically create a
 runtime relation. The annotation is also not DDL; it does not create a foreign
@@ -156,10 +156,13 @@ contracts that should usually point to the same business relationship.
 
 ```java
 @CacheRelation(
-        targetEntity = "OrderEntity",
+        target = OrderEntity.class,
         mappedBy = "customerId",
         kind = CacheRelation.RelationKind.ONE_TO_MANY,
-        batchLoadOnly = true
+        batchLoadOnly = true,
+        maxRowsPerParent = 100,
+        parentBatchSize = 32,
+        orderBy = {"orderDate DESC", "orderId DESC"}
 )
 public List<OrderEntity> orders;
 ```
@@ -172,7 +175,9 @@ Rules:
 - `mappedBy` must match the target entity field that exposes the joining column,
   for example `OrderEntity.customerId` mapped to `orders.customer_id`.
 - Relation loading is requested explicitly with `FetchPlan`.
-- A relation cannot be safely preloaded without a registered loader.
+- With a typed target and bounded ordering, the processor generates the standard
+  partitioned loader. Custom loaders remain available for exceptional SQL or
+  business rules.
 - A source-database foreign key is strongly recommended for durable integrity,
   but it does not replace `@CacheRelation` or `RelationBatchLoader`.
 - Use `withRelationLimit(...)` for previews.
@@ -180,11 +185,11 @@ Rules:
 
 ### Constraint And Metadata Matrix
 
-| Database constraint | CacheDB metadata | Loader | Behavior |
+| Database constraint | CacheDB metadata | Generated/custom loader | Behavior |
 | --- | --- | --- | --- |
 | Present | Missing | Missing | The source database protects integrity, but CacheDB has no relation path. Fetching `orders` is unknown to CacheDB. |
 | Missing | Present | Present | CacheDB can execute the relation if the loader can query `mappedBy`, but the source database may allow orphan children. Use only when the relation is intentionally soft or legacy. |
-| Present | Present | Missing | Query explain can see the relation metadata, but preload cannot run. With strict relation config, a requested fetch path fails fast. |
+| Present | Present | Missing | A batch-only relation without enough information to generate or wire a loader is rejected at compile time. |
 | Present | Present | Present | BEST: the database protects integrity and CacheDB has an explicit bounded preload path. |
 
 ### Simple Example: Customer Detail Preview
@@ -192,20 +197,19 @@ Rules:
 Use this for a detail page that needs a small child preview:
 
 ```java
-@CacheEntity(
-        table = "customers",
-        redisNamespace = "customers",
-        relationLoader = CustomerOrdersRelationBatchLoader.class
-)
+@CacheEntity(table = "customers", redisNamespace = "customers")
 public class CustomerEntity {
     @CacheId(column = "customer_id")
     public Long customerId;
 
     @CacheRelation(
-            targetEntity = "OrderEntity",
+            target = OrderEntity.class,
             mappedBy = "customerId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 100,
+            parentBatchSize = 32,
+            orderBy = {"orderDate DESC", "orderId DESC"}
     )
     public List<OrderEntity> orders;
 }
@@ -243,36 +247,15 @@ customerRepository
         .findById(customerId);
 ```
 
-### Loader Example
+### Generated Loader
 
-The loader owns the actual read strategy. Keep it batched and bounded:
-
-```java
-public final class CustomerOrdersRelationBatchLoader
-        implements RelationBatchLoader<CustomerEntity> {
-
-    private final EntityRepository<OrderEntity, Long> orderRepository;
-
-    public CustomerOrdersRelationBatchLoader(EntityRepository<OrderEntity, Long> orderRepository) {
-        this.orderRepository = orderRepository;
-    }
-
-    @Override
-    public void preload(List<CustomerEntity> customers, RelationBatchContext context) {
-        if (customers.isEmpty() || !context.fetchPlan().includes("orders")) {
-            return;
-        }
-        int limit = context.relationLimit("orders");
-        for (CustomerEntity customer : customers) {
-            customer.orders = orderRepository.query(
-                    QueryFilter.eq("customer_id", customer.customerId),
-                    limit,
-                    QuerySort.desc("order_date")
-            );
-        }
-    }
-}
-```
+The processor turns the typed relation above into a
+`PartitionedRelationBatchLoader`. It groups parent ids into batches of 32,
+queries the indexed `customerId` partition, applies the declared deterministic
+order, and assigns at most 100 rows per parent. This avoids hand-written N+1
+loops. Set `@CacheEntity.relationLoader` only when a custom SQL source or a
+business rule cannot be represented by this contract; that custom loader must
+still batch parent ids and enforce limits.
 
 This is acceptable for a small preview. For a screen that shows the latest 1,000
 orders per customer, use a projection window instead of hydrating `OrderEntity`

@@ -24,6 +24,11 @@ public final class RedisWriteOperationMapper {
         body.put("id", String.valueOf(operation.id()));
         body.put("version", String.valueOf(operation.version()));
         body.put("createdAt", operation.createdAt().toString());
+        if (operation.dependency() != null) {
+            body.put("dependencyNamespace", operation.dependency().redisNamespace());
+            body.put("dependencyId", operation.dependency().id());
+            body.put("dependencyVersion", String.valueOf(operation.dependency().version()));
+        }
 
         for (Map.Entry<String, Object> entry : operation.columns().entrySet()) {
             body.put("col:" + entry.getKey(), entry.getValue() == null ? "__NULL__" : String.valueOf(entry.getValue()));
@@ -44,6 +49,11 @@ public final class RedisWriteOperationMapper {
         body.put("id", operation.id());
         body.put("version", String.valueOf(operation.version()));
         body.put("createdAt", operation.createdAt().toString());
+        if (operation.hasDependency()) {
+            body.put("dependencyNamespace", operation.dependencyNamespace());
+            body.put("dependencyId", operation.dependencyId());
+            body.put("dependencyVersion", String.valueOf(operation.dependencyVersion()));
+        }
         for (Map.Entry<String, String> entry : operation.columns().entrySet()) {
             body.put("col:" + entry.getKey(), entry.getValue() == null ? "__NULL__" : entry.getValue());
         }
@@ -76,7 +86,10 @@ public final class RedisWriteOperationMapper {
                 body.get("id"),
                 columns,
                 Long.parseLong(body.get("version")),
-                Instant.parse(body.get("createdAt"))
+                Instant.parse(body.get("createdAt")),
+                emptyToNull(body.get("dependencyNamespace")),
+                emptyToNull(body.get("dependencyId")),
+                parseLong(body.get("dependencyVersion"))
         );
     }
 
@@ -92,5 +105,12 @@ public final class RedisWriteOperationMapper {
             return second;
         }
         return null;
+    }
+
+    private long parseLong(String value) {
+        if (value == null || value.isBlank()) {
+            return 0L;
+        }
+        return Long.parseLong(value);
     }
 }

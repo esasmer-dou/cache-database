@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 $mvn = 'C:\apache-maven-3.9.6\bin\mvn.cmd'
-$javaHome = 'C:\java64\Semeru\jdk-21.0.2.13-openj9'
+$javaHome = & (Join-Path $repoRoot "tools\build\resolve-java-home.ps1")
 if (-not (Test-Path $mvn)) {
     throw "Maven not found at $mvn"
 }

@@ -37,7 +37,7 @@ Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur.
 
 ```xml
 <properties>
-    <cachedb.version>0.5.0</cachedb.version>
+    <cachedb.version>0.6.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -100,7 +100,7 @@ Spring Boot kullanmıyorsan:
 
 ```xml
 <properties>
-    <cachedb.version>0.5.0</cachedb.version>
+    <cachedb.version>0.6.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -223,18 +223,17 @@ public class CustomerEntity {
 - Entity küçük tutulmalıdır.
 - İlişki alanları ancak ihtiyaç varsa eklenmelidir.
 
-Paket için üretilen tek domain scope bean’ini aç. Her entity repository ve
-projection için ayrı Spring bean’i oluşturma:
+Paket için üretilen tek domain scope'u etkinleştir. Her entity repository ve
+projection için ayrı Spring bean'i oluşturma. Entity paketindeki
+`package-info.java` dosyasına şu annotation'ı ekle:
 
 ```java
-@Configuration(proxyBeanMethods = false)
-public class CacheDbDomainConfig {
-    @Bean
-    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-        return GeneratedCacheModule.using(cacheDatabase);
-    }
-}
+@com.reactor.cachedb.annotations.CacheDomain(spring = true)
+package com.acme.orders.domain;
 ```
+
+Processor Spring yapılandırmasını üretir ve uygulama servislerine enjekte
+edilebilen tek bir `GeneratedCacheModule.Scope` bean'i açar.
 
 ## 6. İlk Save ve Read
 
@@ -309,21 +308,21 @@ public class OrderEntity {
 }
 ```
 
-Ana entity üzerinde loader ve sınırlı fetch preset tanımla:
+Ana entity üzerinde tip güvenli, sınırlı relation ve fetch preset tanımla.
+Processor standart partitioned loader'ı üretir:
 
 ```java
-@CacheEntity(
-        table = "customers",
-        redisNamespace = "customers",
-        relationLoader = CustomerOrdersRelationBatchLoader.class
-)
+@CacheEntity(table = "customers", redisNamespace = "customers")
 public class CustomerEntity {
     @CacheRelation(
-            targetEntity = "OrderEntity",
+            target = OrderEntity.class,
             // OrderEntity.customerId alanı orders.customer_id kolonuna map edilir.
             mappedBy = "customerId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 100,
+            parentBatchSize = 32,
+            orderBy = {"orderDate DESC", "orderId DESC"}
     )
     public List<OrderEntity> orders;
 
@@ -336,10 +335,10 @@ public class CustomerEntity {
 
 Bu annotation CacheDB metadata'sıdır; veritabanı foreign key'i değildir. DB'de
 `orders.customer_id -> customers.customer_id` constraint'i olsa bile bu
-annotation ve kayıtlı `RelationBatchLoader` yoksa CacheDB relation preload
-yapmaz. Annotation ve loader var ama DB foreign key yoksa CacheDB `mappedBy`
-üzerinden relation'ı yükleyebilir; fakat kalıcı veri bütünlüğü artık senin
-sorumluluğundadır.
+annotation yoksa CacheDB relation preload yapmaz. Annotation ile üretilen loader
+var ama DB foreign key yoksa CacheDB `mappedBy` üzerinden relation'ı
+yükleyebilir; fakat kalıcı veri bütünlüğü artık senin sorumluluğundadır. Özel
+yükleme mantığı gerekiyorsa `@CacheEntity.relationLoader` kullan.
 
 Okuma:
 

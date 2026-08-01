@@ -69,6 +69,10 @@ public final class RedisKeyStrategy {
         return keyPrefix + ":" + namespace + ":" + tombstoneSegment + ":" + id;
     }
 
+    public String durabilityKey(String namespace, Object id) {
+        return keyPrefix + ":" + namespace + ":durable:" + id;
+    }
+
     public String entityPattern(String namespace) {
         return keyPrefix + ":" + namespace + ":" + entitySegment + ":*";
     }

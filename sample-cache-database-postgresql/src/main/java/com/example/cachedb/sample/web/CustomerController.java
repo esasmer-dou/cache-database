@@ -1,8 +1,8 @@
 package com.example.cachedb.sample.web;
 
+import com.example.cachedb.sample.application.customer.CustomerApplicationService;
 import com.example.cachedb.sample.domain.CustomerEntity;
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
-import com.example.cachedb.sample.readmodel.OrderReadModels;
+import com.example.cachedb.sample.readmodel.OrderSummary;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -17,31 +17,25 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.Instant;
 import java.util.List;
 
 @RestController
 @RequestMapping("/api/customers")
 public class CustomerController {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final CustomerApplicationService customers;
 
-    public CustomerController(GeneratedCacheModule.Scope domain) {
-        this.domain = domain;
+    public CustomerController(CustomerApplicationService customers) {
+        this.customers = customers;
     }
 
     @PostMapping
     public ResponseEntity<WriteAccepted<CustomerEntity>> create(@Valid @RequestBody CreateCustomerRequest request) {
-        CustomerEntity entity = new CustomerEntity();
-        entity.customerId = request.customerId();
-        entity.taxNumber = request.taxNumber();
-        entity.customerType = request.customerType();
-        entity.segment = request.segment();
-        entity.status = request.status() == null ? "ACTIVE" : request.status();
-        entity.createdAt = Instant.now().getEpochSecond();
-        entity.updatedAt = entity.createdAt;
-        CustomerEntity saved = domain.customers().save(entity);
-        return ResponseEntity.accepted().body(WriteAccepted.of("CREATE", "CustomerEntity", saved.customerId, saved));
+        var receipt = customers.create(new CustomerApplicationService.CreateCustomer(
+                request.customerId(), request.taxNumber(), request.customerType(),
+                request.segment(), request.status()
+        ));
+        return ResponseEntity.accepted().body(WriteAccepted.from("CREATE", "CustomerEntity", receipt));
     }
 
     @GetMapping("/{customerId}")
@@ -49,27 +43,23 @@ public class CustomerController {
             @PathVariable long customerId,
             @RequestParam(defaultValue = "5") int orderPreview
     ) {
-        return domain.customers().fetches()
-                .ordersPreview(ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25))
-                .findById(customerId)
-                .orElseThrow(() -> new ResourceNotFoundException("Customer not found: " + customerId));
+        return customers.detail(
+                customerId,
+                ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25)
+        );
     }
 
     @GetMapping("/{customerId}/orders")
-    public List<OrderReadModels.OrderSummary> orderTimeline(
+    public List<OrderSummary> orderTimeline(
             @PathVariable long customerId,
             @RequestParam(defaultValue = "20") int limit
     ) {
-        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
-        return domain.orders().projections().orderSummary().query(
-                domain.orders().queries().customerTimelineQuery(customerId, safeLimit)
-        );
+        return customers.orderTimeline(customerId, ApiLimits.requireInRange("limit", limit, 1, 1_000));
     }
 
     @GetMapping("/active")
     public List<CustomerEntity> active(@RequestParam(defaultValue = "25") int limit) {
-        return domain.customers().queries()
-                .activeCustomers(ApiLimits.requireInRange("limit", limit, 1, 100));
+        return customers.active(ApiLimits.requireInRange("limit", limit, 1, 100));
     }
 
     public record CreateCustomerRequest(

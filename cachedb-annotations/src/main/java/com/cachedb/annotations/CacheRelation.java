@@ -8,10 +8,15 @@ import java.lang.annotation.Target;
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.SOURCE)
 public @interface CacheRelation {
-    String targetEntity();
+    /** Prefer {@link #target()} for compile-time type safety. */
+    String targetEntity() default "";
+    Class<?> target() default Void.class;
     String mappedBy();
     RelationKind kind();
     boolean batchLoadOnly() default true;
+    int maxRowsPerParent() default 100;
+    int parentBatchSize() default 32;
+    String[] orderBy() default {};
 
     enum RelationKind {
         ONE_TO_ONE,

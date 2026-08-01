@@ -41,7 +41,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 ```xml
 <properties>
   <java.version>21</java.version>
-  <cachedb.version>0.5.0</cachedb.version>
+  <cachedb.version>0.6.0</cachedb.version>
 </properties>
 
 <repositories>
@@ -95,7 +95,7 @@ This project intentionally consumes CacheDB as an external Maven package:
 </build>
 ```
 
-Users should not build the parent repository first. CacheDB `0.5.0` is published from the main repository to GitHub Packages.
+Users should not build the parent repository first. CacheDB `0.6.0` is published from the main repository to GitHub Packages.
 The annotation dependency and `cachedb-processor` are required for generated bindings such as `OrderEntityCacheBinding`.
 
 Runtime and build requirement: use JDK 21. The sample `pom.xml` sets
@@ -125,9 +125,9 @@ mvn clean package
 
 If you do not configure credentials, Maven will usually fail with `401 Unauthorized` even though the repository URL is correct.
 
-## 0.5.0 Verified Declarative Path
+## 0.6.0 Verified Declarative Path
 
-This sample is wired for CacheDB `0.5.0`. The important runtime contract is:
+This sample is wired for CacheDB `0.6.0`. The important runtime contract is:
 
 1. Writes go through CacheDB and are flushed to PostgreSQL by write-behind.
 2. Existing PostgreSQL rows are not magically loaded into Redis at startup.
@@ -137,22 +137,22 @@ This sample is wired for CacheDB `0.5.0`. The important runtime contract is:
 
 The sample code makes that contract explicit.
 
-### Production contracts validated in 0.5.0
+### Production contracts validated in 0.6.0
 
 - Command endpoints return `202 Accepted`; this means Redis accepted the command, not that SQL durability is complete.
-- Child writes perform one indexed SQL `EXISTS` check. A non-durable parent returns `409 Conflict` with `Retry-After` instead of polling a request thread.
-- Aggregate deletion is not implicit. The order endpoint rejects deletion while line rows exist; a real aggregate delete needs an explicit transactional command.
+- Child writes first reuse a pending durability receipt when possible; otherwise they perform one indexed SQL existence check. A non-durable parent returns `409 Conflict` with `Retry-After` instead of polling a request thread.
+- `DELETE /api/orders/{id}` is an explicit soft delete that changes status to `DELETED`. Physical aggregate deletion is intentionally not exposed through asynchronous write-behind.
 - Every entity has a route-specific admission policy. Order, catalog, support, logistics, reporting and audit data no longer share one misleading default policy.
 - Monetary fields use `BigDecimal` and `NUMERIC(19,4)`. Redis ranking scores remain non-monetary `double` values.
-- Relation loaders use bounded `IN (...)` batches rather than one query per parent.
-- Warm/backfill is an asynchronous bounded job (`1` worker, queue capacity `8`). Submit with `POST`, then poll `/api/warm/jobs/{jobId}`.
-- `/api/health/live` reports process liveness. `/api/health/ready` checks Redis, SQL and write-behind telemetry.
+- Relation loaders are generated from typed `@CacheRelation` metadata and use bounded `IN (...)` batches rather than one query per parent.
+- Warm/backfill is a durable Redis Stream job (`1` worker, queue capacity `8`). Another pod can claim abandoned work and resume from its checkpoint.
+- `/actuator/health/liveness` reports process liveness. `/actuator/health/readiness` checks Redis, SQL and write-behind telemetry.
 - Oversized route limits return `400 Bad Request`; they are never silently clamped.
 - Application services inject one generated `GeneratedCacheModule.Scope`; they do not construct repositories or bindings manually.
 - Per-entity admission policies come from `application.yml`, while `cachedb.registration.source: jdbc` makes the database registration source explicit.
 - Named queries, fetch plans, projections and typed warm plans are generated at compile time. `ProjectionSchema` keeps projection serialization and field order explicit.
 
-Version `0.5.0` also keeps JDBC reads and writes bounded: registered JDBC warm
+Version `0.6.0` also keeps JDBC reads and writes bounded: registered JDBC warm
 queries time out after 15 seconds, write-behind statements after 20 seconds, and the
 admin request/background queues have explicit capacities in `application.yml`.
 Version-aware hydration prevents an older warm result from
@@ -189,11 +189,8 @@ cachedb:
 The warm endpoint uses the typed generated scope and a route-shaped query, never a full table scan:
 
 ```java
-CacheWarmPlan plan = domain.orders().warmPlan(
-        "sample-customer-orders",
-        domain.orders().queries().customerTimelineQuery(customerId, limit),
-        limit
-);
+CacheWarmPlan plan = domain.orders().queries()
+        .customerTimelineWarmPlan(customerId, limit);
 CacheWarmResult result = cacheDatabase.warmProjections(plan);
 ```
 Run the local load gate after the app is ready:
@@ -242,11 +239,8 @@ code, or repository wiring in application services.
 )
 public CacheWarmPlan activeOrderWindow() {
     long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
-    return domain.orders().warmPlan(
-            "sample-active-order-window",
-            domain.orders().queries().activeOrderWindowQuery(cutoff, orderWarmMaxRows),
-            orderWarmMaxRows
-    );
+    return domain.orders().queries()
+            .activeOrderWindowWarmPlan(cutoff, orderWarmMaxRows);
 }
 ```
 
@@ -301,13 +295,21 @@ mvn spring-boot:run
 3. Check readiness:
 
 ```bash
-curl http://127.0.0.1:8091/api/health/ready
+curl http://127.0.0.1:8091/actuator/health/readiness
 ```
 
 4. Seed realistic demo data:
 
 ```bash
 curl -X POST "http://127.0.0.1:8091/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
+```
+
+The endpoint returns `202 Accepted` with a `jobId`; it does not keep the HTTP
+connection open while thousands of rows are written. Poll the shared Redis job
+status and continue only after `COMPLETED`:
+
+```bash
+curl "http://127.0.0.1:8091/api/warm/jobs/<jobId>"
 ```
 
 5. Open the CacheDB admin UI:
@@ -320,8 +322,8 @@ http://127.0.0.1:8091/cachedb-admin
 
 | Step | Endpoint | Main data path | What it demonstrates |
 |---|---|---|---|
-| Health | `GET /api/health/ready` | Runtime checks | Redis connectivity and write-behind health summary |
-| Seed | `POST /api/demo/seed` | Redis write, PostgreSQL write-behind | CacheDB write path, SQL persistence, projection refresh |
+| Health | `GET /actuator/health/readiness` | Runtime checks | Redis, SQL and write-behind readiness summary |
+| Seed | `POST /api/demo/seed` | Bounded background job, batched Redis writes, PostgreSQL write-behind | Backpressure, SQL persistence, projection refresh, cross-pod job status |
 | Customer detail | `GET /api/customers/1?orderPreview=5` | Redis entity + bounded relation preview | Entity detail with bounded relation preview |
 | Timeline | `GET /api/customers/1/orders?limit=20` | Redis projection: `OrderSummary` | Customer order list without full aggregate hydration |
 | Warm customer orders | `POST /api/warm/orders/customer/1?limit=100` | PostgreSQL read -> Redis hydrate | Explicit warm/backfill for active-set and projection routes |
@@ -353,6 +355,10 @@ Seed data through CacheDB first so PostgreSQL has durable rows:
 ```bash
 curl.exe -X POST "http://127.0.0.1:8091/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
 ```
+
+Copy the returned `jobId`, poll `GET /api/warm/jobs/{jobId}`, and wait for
+`"status":"COMPLETED"` before clearing Redis. Otherwise the seed worker and
+`FLUSHDB` race with each other.
 
 Now clear Redis to simulate an existing PostgreSQL database with an empty active set:
 
@@ -479,6 +485,7 @@ The application declares model and route contracts. CacheDB generates the typed 
 
 ```java
 @CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
+@CachePartitionedIndex(partitionBy = "customer_id", sortBy = "order_date")
 public class OrderEntity {
     @CacheId(column = "order_id")
     public Long orderId;
@@ -496,11 +503,19 @@ public class OrderEntity {
     public String status;
 
     @CacheProjectionDefinition("orderSummary")
-    public static EntityProjection<OrderEntity, OrderReadModels.OrderSummary, Long> orderSummaryProjection() {
-        return OrderReadModels.ORDER_SUMMARY_PROJECTION;
+    public static EntityProjection<OrderEntity, OrderSummary, Long> orderSummaryProjection() {
+        return OrderSummaryProjection.PROJECTION;
     }
 
     @CacheNamedQuery("customerTimeline")
+    @CacheRoute(
+            value = "customer-order-timeline",
+            projection = "orderSummary",
+            pageSize = 100,
+            hotWindow = 1_000,
+            maxColdReadSize = 500,
+            memoryBudgetBytes = 16_777_216
+    )
     public static QuerySpec customerTimelineQuery(long customerId, int limit) {
         return QuerySpec.where(QueryFilter.eq("customer_id", customerId))
                 .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
@@ -509,54 +524,38 @@ public class OrderEntity {
 }
 ```
 
-The query is named and bounded. Controllers do not assemble arbitrary scans.
+The query is named, bounded, partition-indexed, and attached to an explicit
+route contract. Controllers do not assemble arbitrary scans or choose an entity
+fallback for a projection-required route.
 
-#### 2. Define serialization and index columns once
+#### 2. Generate projection serialization from the record
 
 ```java
-public final class OrderReadModels {
-    private static final ProjectionSchema<OrderSummary> ORDER_SUMMARY_SCHEMA =
-            ProjectionSchema.<OrderSummary>builder()
-                    .longColumn("order_id", OrderSummary::orderId)
-                    .longColumn("customer_id", OrderSummary::customerId)
-                    .longColumn("order_date", OrderSummary::orderDate)
-                    .decimalColumn("order_amount", OrderSummary::orderAmount)
-                    .stringColumn("status", OrderSummary::status)
-                    .decodeWith(row -> new OrderSummary(
-                            row.longValue("order_id"),
-                            row.longValue("customer_id"),
-                            row.longValue("order_date"),
-                            row.decimal("order_amount"),
-                            row.string("status")
-                    ))
-                    .build();
-
-    public static final EntityProjection<OrderEntity, OrderSummary, Long> ORDER_SUMMARY_PROJECTION =
-            EntityProjection.<OrderEntity, OrderSummary, Long>of(
-                    "order-summary",
-                    ORDER_SUMMARY_SCHEMA,
-                    OrderSummary::orderId,
-                    order -> new OrderSummary(
-                            order.orderId,
-                            order.customerId,
-                            order.orderDate,
-                            order.orderAmount,
-                            order.status
-                    )
-            ).rankedBy("order_date").asyncRefresh();
-
-    public record OrderSummary(
-            Long orderId,
-            Long customerId,
-            Long orderDate,
-            BigDecimal orderAmount,
-            String status
-    ) {
-    }
+@CacheProjectionRecord(
+        source = OrderEntity.class,
+        id = "orderId",
+        name = "order-summary",
+        rankedBy = {"order_date", "priority_score"},
+        refresh = CacheProjectionRecord.Refresh.ASYNC
+)
+public record OrderSummary(
+        Long orderId,
+        Long customerId,
+        Long orderDate,
+        BigDecimal orderAmount,
+        String currencyCode,
+        String orderType,
+        String status,
+        Integer lineCount,
+        Double priorityScore
+) {
 }
 ```
 
-`ProjectionSchema` is reflection-free. It is the single source for Redis encoding, decoding, and query-index column extraction.
+The processor generates both `OrderSummaryProjectionSchema` and
+`OrderSummaryProjection`, including entity mapping, ranking and refresh mode.
+The record remains the single source for Redis encoding, decoding and query-index
+column extraction.
 
 #### 3. Put per-entity policy in configuration
 
@@ -585,46 +584,37 @@ cachedb:
 
 At startup CacheDB first registers every entity with its own policy and JDBC source, then wires relation/page loaders. A parent relation therefore cannot create a child repository with the parent policy. A misspelled entity name fails startup.
 
-#### 4. Expose one generated domain bean
+#### 4. Generate one Spring domain bean
 
 ```java
-@Configuration(proxyBeanMethods = false)
-public class CacheDbDomainConfig {
-    @Bean
-    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-        return GeneratedCacheModule.using(cacheDatabase);
-    }
-}
+@CacheDomain(spring = true)
+package com.example.cachedb.sample.domain;
 ```
 
-Do not create one Spring bean per entity repository or projection. `GeneratedCacheModule.Scope` is an immutable, package-level typed surface generated at build time.
+Put this in `domain/package-info.java`. The processor generates the Spring
+configuration and one immutable `GeneratedCacheModule.Scope`; no repository or
+projection bean wiring is required.
 
 #### 5. Use the generated DSL
 
 ```java
-@RestController
-@RequestMapping("/api/customers")
-public class CustomerController {
+@Service
+public final class CustomerApplicationService {
     private final GeneratedCacheModule.Scope domain;
 
-    public CustomerController(GeneratedCacheModule.Scope domain) {
+    public CustomerApplicationService(GeneratedCacheModule.Scope domain) {
         this.domain = domain;
     }
 
-    @GetMapping("/{customerId}/orders")
-    public List<OrderReadModels.OrderSummary> timeline(
-            @PathVariable long customerId,
-            @RequestParam(defaultValue = "20") int limit
-    ) {
-        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
-        return domain.orders().projections().orderSummary().query(
-                domain.orders().queries().customerTimelineQuery(customerId, safeLimit)
-        );
+    public List<OrderSummary> orderTimeline(long customerId, int limit) {
+        return domain.orders().queries().customerTimelineProjection(customerId, limit);
     }
 }
 ```
 
-The controller does not know `EntityRegistry`, Redis keys, codecs, JDBC loaders, or projection implementation classes.
+The controller validates HTTP input and delegates to this service. Neither layer
+knows `EntityRegistry`, Redis keys, codecs, JDBC loaders or projection
+implementation details.
 
 #### 6. Warm with a typed plan
 
@@ -652,11 +642,7 @@ public class CustomerOrderWarmService {
     }
 
     private CacheWarmPlan plan(long customerId, int limit) {
-        return domain.orders().warmPlan(
-                "customer-order-window-" + customerId,
-                domain.orders().queries().customerTimelineQuery(customerId, limit),
-                limit
-        );
+        return domain.orders().queries().customerTimelineWarmPlan(customerId, limit);
     }
 }
 ```
@@ -680,13 +666,13 @@ CacheDB does not turn every miss into an unbounded database query. Old history, 
 |---|---|---|
 | Entity | Full command/detail model mapped to one SQL table and Redis namespace | `OrderEntity` |
 | Generated binding | Build-time metadata, named queries, fetch presets, commands, and projections | `OrderEntityCacheBinding` |
-| Generated domain module | One package-level, typed entry point for controllers and services | `GeneratedCacheModule.Scope` |
+| Generated domain module | One package-level, typed entry point for application services | `GeneratedCacheModule.Scope` |
 | Projection | Compact list/dashboard model that avoids full aggregate loading | `OrderSummary` |
-| Projection schema | One reflection-free definition for payload encoding and index columns | `ProjectionSchema<OrderSummary>` |
-| Named query | Reusable, bounded route contract generated as a typed method | `customerTimelineQuery(...)` |
+| Projection schema | Generated reflection-free payload and index-column contract | `OrderSummaryProjectionSchema.SCHEMA` |
+| Named route | Reusable bounded query plus projection/source constraints | `customerTimelineProjection(...)` |
 | Fetch preset | Explicit relation preview for a detail route | `linePreview(...)` |
 | Policy catalog | YAML map assigning each entity its own active-data and size policy | `cachedb.registration.entities` |
-| Warm plan | Bounded JDBC-to-Redis hydration contract | `domain.orders().warmPlan(...)` |
+| Warm plan | Bounded JDBC-to-Redis hydration contract generated from `@CacheRoute` | `customerTimelineWarmPlan(...)` |
 | Write-behind | Redis accepts a command first; SQL durability follows asynchronously | `202 Accepted`, worker telemetry |
 | Guardrail | Hard limit rejecting unsafe result sizes or memory pressure | API, read-shape, and Redis limits |
 
@@ -694,12 +680,13 @@ CacheDB does not turn every miss into an unbounded database query. Old history, 
 
 | Layer | Main files | Responsibility | Rule |
 |---|---|---|---|
-| API | `web/*Controller.java` | Validate input and call the generated domain DSL | Never expose an unbounded list |
+| API | `web/*Controller.java` | Validate HTTP input and delegate to application services | Never expose an unbounded list |
+| Application | `application/*Service.java` | Own use-case flow, source choice and write receipts | Keep Redis/SQL decisions out of controllers |
 | Domain declaration | `domain/*Entity.java` | SQL mapping, routes, relations, fetch presets, commands | Keep contracts explicit and compile-time generated |
-| Read model | `readmodel/*ReadModels.java` | Compact projection schema and entity-to-view mapping | Use projection for growing or globally sorted lists |
-| Domain access | `SampleCacheDbDomainConfig.java` | Expose one generated package scope | Do not create repository beans per entity |
-| Warm service | `SampleWarmBackfillService.java` | Build typed plans and select dry-run/projection/full mode | Bound jobs and keep HTTP execution asynchronous |
-| Durable query | Archive methods using `JdbcTemplate` | Read old history and exports from indexed SQL | Use keyset pagination and hard limits |
+| Read model | `readmodel/*.java` | Compact projection records and generated entity mapping | Use projection for growing or globally sorted lists |
+| Domain access | `domain/package-info.java` | Generate one package-level Spring scope | Use `@CacheDomain(spring = true)` |
+| Warm service | `SampleWarmBackfillService.java` | Use generated route plans and select dry-run/projection/full mode | Bound jobs and keep HTTP execution asynchronous |
+| Durable query | Generated `...Source(...)` route methods | Read old history and exports from indexed SQL | Use keyset pagination and hard limits |
 | Runtime policy | `application.yml` | Per-entity active-data policy and JDBC registration | Fail startup on unknown entity names |
 | Platform tuning | `SampleCacheDbTuningConfig.java` | Thread, queue, timeout, memory, write-behind limits | Tune from measured load |
 
@@ -707,18 +694,14 @@ CacheDB does not turn every miss into an unbounded database query. Old history, 
 
 ```java
 int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
-return domain.orders().projections().orderSummary().query(
-        domain.orders().queries().customerTimelineQuery(customerId, safeLimit)
-);
+return customers.orderTimeline(customerId, safeLimit);
 ```
 
 ### Declarative Domain Access: One Bean, No Repository Wiring
 
 ```java
-@Bean
-GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-    return GeneratedCacheModule.using(cacheDatabase);
-}
+@CacheDomain(spring = true)
+package com.example.cachedb.sample.domain;
 ```
 
 Spring Boot discovers generated registrars and applies YAML policies before the application bean is created. Application code does not register bindings manually.
@@ -728,11 +711,7 @@ Spring Boot discovers generated registrars and applies YAML policies before the 
 `OrderEntity` maps the table, Redis namespace, primary key, columns, relation, named queries, and projection:
 
 ```java
-@CacheEntity(
-        table = "sample_orders",
-        redisNamespace = "sample-orders",
-        relationLoader = OrderLinesRelationBatchLoader.class
-)
+@CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
 public class OrderEntity {
     @CacheId(column = "order_id")
     public Long orderId;
@@ -741,10 +720,13 @@ public class OrderEntity {
     public Long customerId;
 
     @CacheRelation(
-            targetEntity = "OrderLineEntity",
+            target = OrderLineEntity.class,
             mappedBy = "orderId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 50,
+            parentBatchSize = 16,
+            orderBy = "lineNumber ASC"
     )
     public List<OrderLineEntity> lines;
 }
@@ -764,10 +746,13 @@ customer_id BIGINT NOT NULL REFERENCES sample_customers(customer_id)
 
 ```java
 @CacheRelation(
-        targetEntity = "OrderEntity",
+        target = OrderEntity.class,
         mappedBy = "customerId",
         kind = CacheRelation.RelationKind.ONE_TO_MANY,
-        batchLoadOnly = true
+        batchLoadOnly = true,
+        maxRowsPerParent = 25,
+        parentBatchSize = 16,
+        orderBy = "orderDate DESC, orderId DESC"
 )
 public List<OrderEntity> orders;
 ```
@@ -794,14 +779,11 @@ public static FetchPlan ordersPreviewFetchPlan(int orderLimit) {
 }
 ```
 
-`CustomerController.detail` uses that preset:
+`CustomerController.detail` uses the generated fetch facade:
 
 ```java
-return CustomerEntityCacheBinding
-        .ordersPreviewRepository(
-                customerRepository,
-                ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25)
-        )
+return domain.customers().fetches()
+        .ordersPreview(ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25))
         .findById(customerId)
         .orElseThrow(...);
 ```
@@ -813,6 +795,13 @@ That means a detail screen may show "latest 5 orders", but it does not pull ever
 The order timeline and high-value order list use `OrderSummary`, not full `OrderEntity`:
 
 ```java
+@CacheProjectionRecord(
+        source = OrderEntity.class,
+        id = "orderId",
+        name = "order-summary",
+        rankedBy = {"order_date", "priority_score"},
+        refresh = CacheProjectionRecord.Refresh.ASYNC
+)
 public record OrderSummary(
         Long orderId,
         Long customerId,
@@ -827,12 +816,6 @@ public record OrderSummary(
 }
 ```
 
-The projection is ranked by fields used by real screens:
-
-```java
-).rankedBy("order_date", "priority_score").asyncRefresh();
-```
-
 This keeps list rows compact in Redis. The full entity is still available for detail screens, but list screens do not pay the cost of full aggregate hydration.
 
 ## OrderSummary End-to-End Example
@@ -840,15 +823,13 @@ This keeps list rows compact in Redis. The full entity is still available for de
 `OrderSummary` is the list shape for customer timelines and ranked order screens. It excludes lines, customer details, and audit history by design.
 
 1. `OrderEntity` declares `@CacheProjectionDefinition("orderSummary")`.
-2. `OrderReadModels` defines one `ProjectionSchema<OrderSummary>` and one entity-to-summary mapper.
-3. The processor generates `domain.orders().projections().orderSummary()`.
-4. Warm code uses `domain.orders().warmPlan(...)`.
-5. The controller combines a generated named query with the generated projection repository.
+2. `@CacheProjectionRecord` generates `OrderSummaryProjectionSchema` and `OrderSummaryProjection` at compile time.
+3. The annotation declares source entity, identifier, ranking fields and refresh mode.
+4. Warm code uses the generated `customerTimelineWarmPlan(...)` method.
+5. The processor generates a strict route method that binds the query to its projection.
 
 ```java
-return domain.orders().projections().orderSummary().query(
-        domain.orders().queries().recentHighValueOrdersQuery(minimumAmount, safeLimit)
-);
+return domain.orders().queries().recentHighValueOrdersProjection(minimumAmount, safeLimit);
 ```
 
 The response is already the screen shape. No hidden full-entity hydration occurs, and the same schema drives Redis serialization and index extraction.
@@ -859,12 +840,13 @@ This sample now shows both paths explicitly. Hot operational reads go through Ca
 
 | Route | First runtime path | When PostgreSQL is used | Redis behavior | Why |
 |---|---|---|---|---|
-| `POST /api/customers` | `domain.<entity>().save(...)` | Write-behind persists the row asynchronously | Entity enters Redis if the hot policy admits it | Normal command path |
-| `POST /api/orders` | `JdbcTemplate` FK readiness check, then `domain.<entity>().save(...)` | PostgreSQL is checked only to make sure the parent customer is durable before inserting a child row | Order is saved through Redis and queued for write-behind | Avoids FK violation while keeping Redis-first write path |
-| `GET /api/customers/{id}/orders` | `domain.orders().projections().orderSummary()` | Not used for the hot list route | Reads Redis projection payload/index; may warm missing projection rows from Redis base entity payloads | Fast customer timeline |
-| `GET /api/orders/high-value` | `domain.orders().projections().orderSummary()` | Not used for the hot list route | Reads ranked Redis projection data | Fast global sorted business list |
+| `POST /api/customers` | `domain.customers().saveWithReceipt(...)` | Write-behind persists the row asynchronously | Entity enters Redis if the hot policy admits it; the receipt exposes the accepted version | Normal command path with explicit durability tracking |
+| `POST /api/orders` | Application service obtains a durable customer reference, then calls `saveAfter(...)` | A pending receipt is reused or one indexed source check confirms the parent; the worker preserves dependency order | The admitted order enters Redis and dependency metadata travels with the write | Preserves SQL foreign-key order without request-thread polling |
+| `PATCH /api/orders/{id}/status` | `findVersionedById`, then `save(entity, expectedVersion)` | The winning version is persisted asynchronously | Redis compare-and-set rejects a stale concurrent update | Prevents lost updates |
+| `GET /api/customers/{id}/orders` | `customerTimelineProjection(...)` | Not used for the active list route | Reads the partitioned Redis projection index | Fast customer timeline without entity fallback |
+| `GET /api/orders/high-value` | `recentHighValueOrdersProjection(...)` | Not used for the active list route | Reads ranked Redis projection data | Fast global sorted business list |
 | `GET /api/orders/{id}` | `domain.<entity>().findById(...)` with `linePreview` fetch preset | Not used by this sample endpoint on a cache miss | Reads Redis entity payload, then relation loader queries Redis for bounded lines | Detail screen for hot orders |
-| `GET /api/orders/archive` | `JdbcTemplate.query` | Direct PostgreSQL read | Does not mutate Redis | Cold/archive history path |
+| `GET /api/orders/archive` | `customerOrderArchiveSource(...)` | Generated bounded source query reads PostgreSQL directly | Does not mutate Redis | Cold/archive history path without controller SQL |
 | `GET /api/products/active` | `domain.products().projections().productAvailability()` | Not used by this sample endpoint | Bounded Redis projection query | Compact catalog list |
 | `GET /api/tickets/open` | `domain.<entity>().queries()` | Not used by this sample endpoint | Bounded Redis entity query | Operational queue |
 | `GET /api/dashboard/commerce` | Projection query plus ticket entity query | Not used by this sample endpoint | Combines Redis projection and Redis entity query | Dashboard first paint |
@@ -873,27 +855,23 @@ The important rule: CacheDB repository reads are not a license to scan the datab
 
 ```java
 @GetMapping("/archive")
-public List<OrderReadModels.OrderSummary> archiveFromSql(
+public List<OrderSummary> archiveFromSql(
         @RequestParam long customerId,
         @RequestParam(required = false) Long beforeOrderDate,
         @RequestParam(required = false) Long beforeOrderId,
         @RequestParam(defaultValue = "100") int limit
 ) {
-    return jdbcTemplate.query(ARCHIVE_SQL, rowMapper, customerId, upperBound, upperBound, upperId, safeLimit);
+    return domain.orders().queries()
+            .customerOrderArchiveSource(customerId, upperBound, upperId, safeLimit)
+            .stream()
+            .map(OrderSummaryProjection::fromEntity)
+            .toList();
 }
 ```
 
-The SQL route uses the same response model, but a different source:
-
-```sql
-SELECT order_id, customer_id, order_date, order_amount, currency_code,
-       order_type, status, line_count, priority_score
-FROM sample_orders
-WHERE customer_id = ?
-  AND (order_date < ? OR (order_date = ? AND order_id < ?))
-ORDER BY order_date DESC, order_id DESC
-OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
-```
+The generated source route compiles the same bounded `QuerySpec` through the
+PostgreSQL dialect. The controller keeps the same response shape without owning
+SQL text, a row mapper, or Redis hydration side effects.
 
 This is the production pattern:
 
@@ -1244,6 +1222,6 @@ The seed endpoint writes through CacheDB and waits for parent rows before writin
 
 If the API cannot resolve CacheDB dependencies, verify access to the package repository configured in `pom.xml`.
 
-If the seed endpoint is slow, check `GET /api/health/ready` and the admin UI write-behind section. The seed flow waits for SQL rows so foreign keys are not violated.
+If the seed endpoint is slow, check `GET /actuator/health/readiness` and the admin UI write-behind section. The seed flow waits for SQL rows so foreign keys are not violated.
 
 If timeline results are empty immediately after seed, wait a few seconds and retry. Projection refresh is asynchronous.

@@ -10,6 +10,18 @@ public record WriteOperation<T, ID>(
         Map<String, Object> columns,
         String redisPayload,
         long version,
-        Instant createdAt
+        Instant createdAt,
+        WriteDependency dependency
 ) {
+    public WriteOperation(
+            OperationType type,
+            EntityMetadata<T, ID> metadata,
+            ID id,
+            Map<String, Object> columns,
+            String redisPayload,
+            long version,
+            Instant createdAt
+    ) {
+        this(type, metadata, id, columns, redisPayload, version, createdAt, null);
+    }
 }

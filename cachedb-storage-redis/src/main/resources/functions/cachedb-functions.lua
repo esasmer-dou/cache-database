@@ -28,6 +28,15 @@ redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
     local id = args[18]
     local createdAt = args[19]
     local columnCount = tonumber(args[20])
+    local trailerIndex = 21 + (columnCount * 2)
+    local expectedVersion = tonumber(args[trailerIndex] or '-1')
+    local dependencyNamespace = args[trailerIndex + 1] or ''
+    local dependencyId = args[trailerIndex + 2] or ''
+    local dependencyVersion = tonumber(args[trailerIndex + 3] or '0')
+    local currentVersion = tonumber(redis.call('GET', versionKey) or '0')
+    if expectedVersion ~= nil and expectedVersion >= 0 and currentVersion ~= expectedVersion then
+        return -(currentVersion + 1)
+    end
     local version = redis.call('INCR', versionKey)
 
     if versionKeyTtl ~= nil and versionKeyTtl > 0 then
@@ -65,6 +74,15 @@ redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
     if deletedColumn ~= nil and deletedColumn ~= '' then
         table.insert(fields, 'col:' .. deletedColumn)
         table.insert(fields, activeMarkerValue)
+    end
+
+    if dependencyNamespace ~= '' and dependencyId ~= '' and dependencyVersion > 0 then
+        table.insert(fields, 'dependencyNamespace')
+        table.insert(fields, dependencyNamespace)
+        table.insert(fields, 'dependencyId')
+        table.insert(fields, dependencyId)
+        table.insert(fields, 'dependencyVersion')
+        table.insert(fields, tostring(dependencyVersion))
     end
 
     local index = 21

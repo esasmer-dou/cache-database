@@ -3,13 +3,16 @@ package com.reactor.cachedb.processor;
 import com.reactor.cachedb.annotations.CacheCodec;
 import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheDeleteCommand;
+import com.reactor.cachedb.annotations.CacheDomain;
 import com.reactor.cachedb.annotations.CacheEntity;
 import com.reactor.cachedb.annotations.CacheFetchPreset;
 import com.reactor.cachedb.annotations.CacheId;
 import com.reactor.cachedb.annotations.CacheNamedQuery;
 import com.reactor.cachedb.annotations.CachePagePreset;
+import com.reactor.cachedb.annotations.CachePartitionedIndex;
 import com.reactor.cachedb.annotations.CacheProjectionDefinition;
 import com.reactor.cachedb.annotations.CacheRelation;
+import com.reactor.cachedb.annotations.CacheRoute;
 import com.reactor.cachedb.annotations.CacheSaveCommand;
 
 import javax.annotation.processing.AbstractProcessor;
@@ -63,7 +66,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
     private static final ProjectionModel INVALID_PROJECTION_MODEL =
             new ProjectionModel("__invalid__", "__invalid__", "__invalid__", "__invalid__");
     private static final NamedQueryModel INVALID_NAMED_QUERY_MODEL =
-            new NamedQueryModel("__invalid__", "__invalid__", List.of());
+            new NamedQueryModel("__invalid__", "__invalid__", List.of(), null);
     private static final FetchPresetModel INVALID_FETCH_PRESET_MODEL =
             new FetchPresetModel("__invalid__", "__invalid__", List.of());
     private static final PagePresetModel INVALID_PAGE_PRESET_MODEL =
@@ -118,6 +121,9 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             writePackageBindingsClass(entry.getKey(), models);
             writePackageModuleClass(entry.getKey(), models);
             writePackageBindingsRegistrarClass(entry.getKey(), models);
+            if (generateSpringConfiguration(models.get(0))) {
+                writePackageSpringConfigurationClass(entry.getKey());
+            }
             generatedRegistrarClassNames.add(entry.getKey() + ".GeneratedCacheBindingsRegistrar");
         }
         return true;
@@ -150,7 +156,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
         FieldModel idField = null;
         List<FieldModel> persistedFields = new ArrayList<>();
-        List<RelationModel> relations = new ArrayList<>();
+        List<RelationDeclaration> relationDeclarations = new ArrayList<>();
         List<ProjectionModel> projections = new ArrayList<>();
         List<NamedQueryModel> namedQueries = new ArrayList<>();
         List<FetchPresetModel> fetchPresets = new ArrayList<>();
@@ -247,13 +253,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             CacheCodec cacheCodec = field.getAnnotation(CacheCodec.class);
 
             if (cacheRelation != null) {
-                relations.add(new RelationModel(
-                        field.getSimpleName().toString(),
-                        cacheRelation.targetEntity(),
-                        cacheRelation.mappedBy(),
-                        cacheRelation.kind().name(),
-                        cacheRelation.batchLoadOnly()
-                ));
+                relationDeclarations.add(new RelationDeclaration(field, cacheRelation));
             }
 
             if (cacheId == null && cacheColumn == null) {
@@ -304,6 +304,19 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             return null;
         }
 
+        List<RelationModel> relations = resolveRelations(typeElement, idField, relationDeclarations, relationLoaderTypeName != null);
+        if (relations == null) {
+            return null;
+        }
+
+        Map<String, List<String>> partitionedSortIndexes = resolvePartitionedSortIndexes(
+                typeElement,
+                persistedFields
+        );
+        if (partitionedSortIndexes == null) {
+            return null;
+        }
+
         LoaderModel relationLoader = resolveLoaderModel(typeElement, relationLoaderTypeName, RELATION_BATCH_LOADER_TYPE, "relationLoader");
         if (relationLoaderTypeName != null && relationLoader == null) {
             return null;
@@ -328,6 +341,22 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             );
             return null;
         }
+        for (NamedQueryModel namedQuery : namedQueries) {
+            if (namedQuery.route() == null || namedQuery.route().projectionAccessor().isBlank()) {
+                continue;
+            }
+            boolean projectionExists = projections.stream()
+                    .anyMatch(projection -> projection.accessorName().equals(namedQuery.route().projectionAccessor()));
+            if (!projectionExists) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CacheRoute projection must reference a @CacheProjectionDefinition accessor: "
+                                + namedQuery.route().projectionAccessor(),
+                        typeElement
+                );
+                return null;
+            }
+        }
 
         return new EntityModel(
                 packageName,
@@ -337,6 +366,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 redisNamespace,
                 idField,
                 persistedFields,
+                partitionedSortIndexes,
                 relations,
                 projections,
                 namedQueries,
@@ -347,6 +377,293 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 relationLoader,
                 pageLoader
         );
+    }
+
+    private boolean generateSpringConfiguration(EntityModel model) {
+        TypeElement entityType = processingEnv.getElementUtils().getTypeElement(
+                model.packageName() + "." + model.simpleName()
+        );
+        if (entityType == null) {
+            return false;
+        }
+        CacheDomain domain = processingEnv.getElementUtils().getPackageOf(entityType).getAnnotation(CacheDomain.class);
+        return domain != null && domain.spring();
+    }
+
+    private List<RelationModel> resolveRelations(
+            TypeElement entityType,
+            FieldModel parentId,
+            List<RelationDeclaration> declarations,
+            boolean customLoaderDeclared
+    ) {
+        List<RelationModel> relations = new ArrayList<>(declarations.size());
+        for (RelationDeclaration declaration : declarations) {
+            VariableElement relationField = declaration.field();
+            CacheRelation relation = declaration.annotation();
+            if (relationField.getModifiers().contains(Modifier.PRIVATE)
+                    || relationField.getModifiers().contains(Modifier.FINAL)) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CacheRelation fields must not be private or final so generated loaders can assign them",
+                        relationField
+                );
+                return null;
+            }
+            if (relation.maxRowsPerParent() <= 0 || relation.parentBatchSize() <= 0) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CacheRelation maxRowsPerParent and parentBatchSize must be greater than zero",
+                        relationField
+                );
+                return null;
+            }
+
+            String targetTypeName = resolveRelationTargetTypeName(entityType, relationField, relation);
+            if (targetTypeName == null) {
+                return null;
+            }
+            TypeElement targetType = processingEnv.getElementUtils().getTypeElement(targetTypeName);
+            if (targetType == null || targetType.getAnnotation(CacheEntity.class) == null) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CacheRelation target must be an @CacheEntity type: " + targetTypeName,
+                        relationField
+                );
+                return null;
+            }
+
+            VariableElement mappedField = findField(targetType, relation.mappedBy());
+            if (mappedField == null) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CacheRelation.mappedBy field was not found on " + targetTypeName + ": " + relation.mappedBy(),
+                        relationField
+                );
+                return null;
+            }
+            String partitionColumn = persistedColumn(mappedField);
+            if (partitionColumn == null) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CacheRelation.mappedBy must reference a persisted @CacheId or @CacheColumn field",
+                        relationField
+                );
+                return null;
+            }
+            if (!sameRelationKeyType(parentId.typeName(), mappedField.asType().toString())) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CacheRelation parent id and mappedBy types must match: "
+                                + parentId.typeName() + " != " + mappedField.asType(),
+                        relationField
+                );
+                return null;
+            }
+
+            List<RelationSortModel> sorts = resolveRelationSorts(relationField, targetType, relation.orderBy());
+            if (sorts == null) {
+                return null;
+            }
+            boolean generatedLoader = relation.kind() == CacheRelation.RelationKind.ONE_TO_MANY && !sorts.isEmpty();
+            if (!generatedLoader && !customLoaderDeclared && relation.batchLoadOnly()) {
+                messager.printMessage(
+                        Diagnostic.Kind.WARNING,
+                        "Batch-only relation has no generated loader. Declare orderBy or provide @CacheEntity.relationLoader.",
+                        relationField
+                );
+            }
+            relations.add(new RelationModel(
+                    relationField.getSimpleName().toString(),
+                    targetType.getSimpleName().toString(),
+                    relation.mappedBy(),
+                    relation.kind().name(),
+                    relation.batchLoadOnly(),
+                    targetTypeName,
+                    bindingTypeName(targetTypeName),
+                    partitionColumn,
+                    relation.maxRowsPerParent(),
+                    relation.parentBatchSize(),
+                    sorts,
+                    generatedLoader
+            ));
+        }
+        return List.copyOf(relations);
+    }
+
+    private String resolveRelationTargetTypeName(
+            TypeElement entityType,
+            VariableElement relationField,
+            CacheRelation relation
+    ) {
+        String typedTarget = null;
+        try {
+            Class<?> target = relation.target();
+            if (target != Void.class) {
+                typedTarget = target.getCanonicalName();
+            }
+        } catch (MirroredTypeException exception) {
+            String mirroredType = exception.getTypeMirror().toString();
+            if (!Void.class.getCanonicalName().equals(mirroredType)) {
+                typedTarget = mirroredType;
+            }
+        }
+        String legacyTarget = relation.targetEntity() == null ? "" : relation.targetEntity().trim();
+        if (!legacyTarget.isEmpty() && !legacyTarget.contains(".")) {
+            legacyTarget = processingEnv.getElementUtils().getPackageOf(entityType).getQualifiedName() + "." + legacyTarget;
+        }
+        if (typedTarget != null && !legacyTarget.isEmpty() && !typedTarget.equals(legacyTarget)) {
+            messager.printMessage(
+                    Diagnostic.Kind.ERROR,
+                    "@CacheRelation target and targetEntity point to different types",
+                    relationField
+            );
+            return null;
+        }
+        String resolved = typedTarget != null ? typedTarget : legacyTarget;
+        if (resolved == null || resolved.isBlank()) {
+            messager.printMessage(
+                    Diagnostic.Kind.ERROR,
+                    "@CacheRelation must declare target = Entity.class (preferred) or targetEntity",
+                    relationField
+            );
+            return null;
+        }
+        return resolved;
+    }
+
+    private VariableElement findField(TypeElement type, String fieldName) {
+        for (Element enclosed : type.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.FIELD && enclosed.getSimpleName().contentEquals(fieldName)) {
+                return (VariableElement) enclosed;
+            }
+        }
+        return null;
+    }
+
+    private String persistedColumn(VariableElement field) {
+        CacheId cacheId = field.getAnnotation(CacheId.class);
+        if (cacheId != null) {
+            return cacheId.column();
+        }
+        CacheColumn cacheColumn = field.getAnnotation(CacheColumn.class);
+        return cacheColumn == null ? null : cacheColumn.value();
+    }
+
+    private boolean sameRelationKeyType(String parentType, String childType) {
+        return boxedTypeName(parentType).equals(boxedTypeName(childType));
+    }
+
+    private String boxedTypeName(String typeName) {
+        return switch (typeName) {
+            case "long" -> "java.lang.Long";
+            case "int" -> "java.lang.Integer";
+            case "short" -> "java.lang.Short";
+            case "byte" -> "java.lang.Byte";
+            case "boolean" -> "java.lang.Boolean";
+            case "double" -> "java.lang.Double";
+            case "float" -> "java.lang.Float";
+            case "char" -> "java.lang.Character";
+            default -> typeName;
+        };
+    }
+
+    private List<RelationSortModel> resolveRelationSorts(
+            VariableElement relationField,
+            TypeElement targetType,
+            String[] declarations
+    ) {
+        List<RelationSortModel> sorts = new ArrayList<>();
+        for (String declaration : declarations) {
+            if (declaration == null || declaration.isBlank()) {
+                messager.printMessage(Diagnostic.Kind.ERROR, "@CacheRelation.orderBy entries must not be blank", relationField);
+                return null;
+            }
+            String[] parts = declaration.trim().split("\\s+");
+            if (parts.length > 2 || (parts.length == 2
+                    && !"ASC".equalsIgnoreCase(parts[1])
+                    && !"DESC".equalsIgnoreCase(parts[1]))) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CacheRelation.orderBy must use '<field-or-column> ASC|DESC': " + declaration,
+                        relationField
+                );
+                return null;
+            }
+            String column = resolveTargetColumn(targetType, parts[0]);
+            if (column == null) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CacheRelation.orderBy references a non-persisted target field or column: " + parts[0],
+                        relationField
+                );
+                return null;
+            }
+            sorts.add(new RelationSortModel(column, parts.length == 2 && "DESC".equalsIgnoreCase(parts[1])));
+        }
+        return List.copyOf(sorts);
+    }
+
+    private String resolveTargetColumn(TypeElement targetType, String fieldOrColumn) {
+        for (Element enclosed : targetType.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.FIELD) {
+                continue;
+            }
+            VariableElement field = (VariableElement) enclosed;
+            String column = persistedColumn(field);
+            if (column != null && (field.getSimpleName().contentEquals(fieldOrColumn) || column.equals(fieldOrColumn))) {
+                return column;
+            }
+        }
+        return null;
+    }
+
+    private Map<String, List<String>> resolvePartitionedSortIndexes(
+            TypeElement typeElement,
+            List<FieldModel> persistedFields
+    ) {
+        CachePartitionedIndex[] declarations = typeElement.getAnnotationsByType(CachePartitionedIndex.class);
+        if (declarations == null || declarations.length == 0) {
+            return Map.of();
+        }
+        Set<String> columns = persistedFields.stream()
+                .map(FieldModel::columnName)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        LinkedHashMap<String, LinkedHashSet<String>> resolved = new LinkedHashMap<>();
+        for (CachePartitionedIndex declaration : declarations) {
+            String partitionColumn = declaration.partitionBy() == null ? "" : declaration.partitionBy().trim();
+            if (!partitionColumn.matches(SQL_IDENTIFIER_PATTERN) || !columns.contains(partitionColumn)) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CachePartitionedIndex.partitionBy must reference a persisted column: " + partitionColumn,
+                        typeElement
+                );
+                return null;
+            }
+            if (declaration.sortBy() == null || declaration.sortBy().length == 0) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "@CachePartitionedIndex.sortBy must declare at least one persisted column",
+                        typeElement
+                );
+                return null;
+            }
+            LinkedHashSet<String> sortColumns = resolved.computeIfAbsent(partitionColumn, ignored -> new LinkedHashSet<>());
+            for (String rawSortColumn : declaration.sortBy()) {
+                String sortColumn = rawSortColumn == null ? "" : rawSortColumn.trim();
+                if (!sortColumn.matches(SQL_IDENTIFIER_PATTERN) || !columns.contains(sortColumn)) {
+                    messager.printMessage(
+                            Diagnostic.Kind.ERROR,
+                            "@CachePartitionedIndex.sortBy must reference persisted columns: " + sortColumn,
+                            typeElement
+                    );
+                    return null;
+                }
+                sortColumns.add(sortColumn);
+            }
+        }
+        LinkedHashMap<String, List<String>> immutable = new LinkedHashMap<>();
+        resolved.forEach((partition, sorts) -> immutable.put(partition, List.copyOf(sorts)));
+        return Map.copyOf(immutable);
     }
 
     private String requireSqlIdentifier(Element element, String value, String label, boolean allowQualified) {
@@ -581,7 +898,50 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         return new NamedQueryModel(
                 accessorName,
                 method.getSimpleName().toString(),
-                resolveMethodParameters(method)
+                resolveMethodParameters(method),
+                resolveRouteModel(method, accessorName)
+        );
+    }
+
+    private RouteModel resolveRouteModel(ExecutableElement method, String accessorName) {
+        CacheRoute route = method.getAnnotation(CacheRoute.class);
+        if (route == null) {
+            return null;
+        }
+        if (route.pageSize() <= 0 || route.hotWindow() < route.pageSize()
+                || route.maxColdReadSize() < 0 || route.memoryBudgetBytes() < 0L) {
+            messager.printMessage(
+                    Diagnostic.Kind.ERROR,
+                    "@CacheRoute requires pageSize > 0, hotWindow >= pageSize, and non-negative limits",
+                    method
+            );
+            return null;
+        }
+        String limitParameter = route.limitParameter().trim();
+        VariableElement limitElement = method.getParameters().stream()
+                .filter(parameter -> parameter.getSimpleName().contentEquals(limitParameter))
+                .findFirst()
+                .orElse(null);
+        if (limitParameter.isEmpty() || limitElement == null
+                || !("int".equals(limitElement.asType().toString())
+                || "java.lang.Integer".equals(limitElement.asType().toString()))) {
+            messager.printMessage(
+                    Diagnostic.Kind.ERROR,
+                    "@CacheRoute.limitParameter must reference an int/Integer query method parameter",
+                    method
+            );
+            return null;
+        }
+        String routeName = route.value().isBlank() ? accessorName : route.value().trim();
+        return new RouteModel(
+                routeName,
+                route.projection().trim(),
+                route.pageSize(),
+                route.hotWindow(),
+                route.maxColdReadSize(),
+                route.memoryBudgetBytes(),
+                route.strict(),
+                limitParameter
         );
     }
 
@@ -1065,18 +1425,29 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("import com.reactor.cachedb.core.api.CacheSession;\n");
         builder.append("import com.reactor.cachedb.core.api.EntityRepository;\n");
         builder.append("import com.reactor.cachedb.core.api.ProjectionRepository;\n");
+        builder.append("import com.reactor.cachedb.core.api.SourceRepository;\n");
         builder.append("import com.reactor.cachedb.core.active.ActiveRecordInstance;\n");
         builder.append("import com.reactor.cachedb.core.cache.CachePolicy;\n");
         builder.append("import com.reactor.cachedb.core.cache.PageWindow;\n");
         builder.append("import com.reactor.cachedb.core.plan.FetchPlan;\n");
         builder.append("import com.reactor.cachedb.core.model.EntityCodec;\n");
         builder.append("import com.reactor.cachedb.core.model.EntityMetadata;\n");
+        builder.append("import com.reactor.cachedb.core.model.WriteDependency;\n");
+        builder.append("import com.reactor.cachedb.core.model.WriteReceipt;\n");
         builder.append("import com.reactor.cachedb.core.page.EntityPageLoader;\n");
+        builder.append("import com.reactor.cachedb.core.page.VersionedEntity;\n");
         builder.append("import com.reactor.cachedb.core.model.RelationDefinition;\n");
         builder.append("import com.reactor.cachedb.core.model.RelationKind;\n");
         builder.append("import com.reactor.cachedb.core.projection.EntityProjection;\n");
         builder.append("import com.reactor.cachedb.core.query.QuerySpec;\n");
+        builder.append("import com.reactor.cachedb.core.query.PartitionedQuerySpec;\n");
+        builder.append("import com.reactor.cachedb.core.query.QuerySort;\n");
+        builder.append("import com.reactor.cachedb.core.route.RouteCacheContract;\n");
+        builder.append("import com.reactor.cachedb.core.route.RouteCacheContext;\n");
+        builder.append("import com.reactor.cachedb.core.route.RouteCacheStrictMode;\n");
         builder.append("import com.reactor.cachedb.core.relation.RelationBatchLoader;\n");
+        builder.append("import com.reactor.cachedb.core.relation.CompositeRelationBatchLoader;\n");
+        builder.append("import com.reactor.cachedb.core.relation.PartitionedRelationBatchLoader;\n");
         builder.append("import com.reactor.cachedb.starter.CacheDatabase;\n");
         builder.append("import com.reactor.cachedb.starter.CacheWarmPlan;\n");
         builder.append("import java.util.LinkedHashMap;\n");
@@ -1105,7 +1476,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         renderCodec(builder, model);
         builder.append('\n');
         renderLoaderFactories(builder, model);
-        if (model.relationLoader() != null || model.pageLoader() != null) {
+        if (hasRelationLoader(model) || model.pageLoader() != null) {
             builder.append('\n');
         }
         renderProjectionHelpers(builder, model);
@@ -1176,6 +1547,33 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    }\n");
         builder.append("}\n");
         return builder.toString();
+    }
+
+    private void writePackageSpringConfigurationClass(String packageName) {
+        String qualifiedName = packageName + ".GeneratedCacheSpringConfiguration";
+        try {
+            JavaFileObject fileObject = filer.createSourceFile(qualifiedName);
+            try (Writer writer = fileObject.openWriter()) {
+                writer.write(renderPackageSpringConfiguration(packageName));
+            }
+        } catch (IOException exception) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Could not generate package Spring configuration class: " + exception.getMessage());
+        }
+    }
+
+    private String renderPackageSpringConfiguration(String packageName) {
+        return "package " + packageName + ";\n\n"
+                + "import com.reactor.cachedb.starter.CacheDatabase;\n"
+                + "import org.springframework.context.annotation.Bean;\n"
+                + "import org.springframework.context.annotation.Configuration;\n\n"
+                + "@Configuration(proxyBeanMethods = false)\n"
+                + "public class GeneratedCacheSpringConfiguration {\n\n"
+                + "    @Bean\n"
+                + "    public GeneratedCacheModule.Scope generatedCacheDomain(CacheDatabase cacheDatabase) {\n"
+                + "        return GeneratedCacheModule.using(cacheDatabase);\n"
+                + "    }\n"
+                + "}\n";
     }
 
     private String renderPackageBindingsRegistrar(String packageName, List<EntityModel> models) {
@@ -1384,6 +1782,20 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("            return columnTypes;\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
+        builder.append("        public Map<String, List<String>> partitionedSortIndexes() {\n");
+        if (model.partitionedSortIndexes().isEmpty()) {
+            builder.append("            return Map.of();\n");
+        } else {
+            builder.append("            LinkedHashMap<String, List<String>> indexes = new LinkedHashMap<>();\n");
+            for (Map.Entry<String, List<String>> entry : model.partitionedSortIndexes().entrySet()) {
+                builder.append("            indexes.put(").append(javaStringLiteral(entry.getKey())).append(", List.of(");
+                appendQuotedList(builder, entry.getValue());
+                builder.append("));\n");
+            }
+            builder.append("            return Map.copyOf(indexes);\n");
+        }
+        builder.append("        }\n\n");
+        builder.append("        @Override\n");
         builder.append("        public List<RelationDefinition> relations() {\n");
         if (model.relations().isEmpty()) {
             builder.append("            return List.of();\n");
@@ -1449,14 +1861,14 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
     private void renderLoaderFactories(StringBuilder builder, EntityModel model) {
         renderRelationLoaderFactory(builder, model);
-        if (model.relationLoader() != null && model.pageLoader() != null) {
+        if (hasRelationLoader(model) && model.pageLoader() != null) {
             builder.append('\n');
         }
         renderPageLoaderFactory(builder, model);
     }
 
     private void renderRelationLoaderFactory(StringBuilder builder, EntityModel model) {
-        if (model.relationLoader() == null) {
+        if (!hasRelationLoader(model)) {
             return;
         }
         builder.append("    public static RelationBatchLoader<").append(model.simpleName())
@@ -1465,10 +1877,62 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    }\n\n");
         builder.append("    public static RelationBatchLoader<").append(model.simpleName())
                 .append("> relationLoader(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
-        builder.append("        return new ").append(model.relationLoader().typeName()).append("(");
-        appendLoaderConstructorArguments(builder, model.relationLoader().constructor());
-        builder.append(");\n");
+        List<RelationModel> generatedRelations = model.relations().stream()
+                .filter(RelationModel::generatedLoader)
+                .toList();
+        int loaderCount = generatedRelations.size() + (model.relationLoader() == null ? 0 : 1);
+        if (loaderCount == 1) {
+            builder.append("        return ");
+            if (model.relationLoader() != null) {
+                appendCustomRelationLoader(builder, model);
+            } else {
+                appendGeneratedRelationLoader(builder, model, generatedRelations.get(0));
+            }
+            builder.append(";\n");
+        } else {
+            builder.append("        return new CompositeRelationBatchLoader<>(List.of(\n");
+            int index = 0;
+            if (model.relationLoader() != null) {
+                builder.append("                ");
+                appendCustomRelationLoader(builder, model);
+                index++;
+                builder.append(index == loaderCount ? "\n" : ",\n");
+            }
+            for (RelationModel relation : generatedRelations) {
+                builder.append("                ");
+                appendGeneratedRelationLoader(builder, model, relation);
+                index++;
+                builder.append(index == loaderCount ? "\n" : ",\n");
+            }
+            builder.append("        ));\n");
+        }
         builder.append("    }\n");
+    }
+
+    private boolean hasRelationLoader(EntityModel model) {
+        return model.relationLoader() != null || model.relations().stream().anyMatch(RelationModel::generatedLoader);
+    }
+
+    private void appendCustomRelationLoader(StringBuilder builder, EntityModel model) {
+        builder.append("new ").append(model.relationLoader().typeName()).append("(");
+        appendLoaderConstructorArguments(builder, model.relationLoader().constructor());
+        builder.append(")");
+    }
+
+    private void appendGeneratedRelationLoader(StringBuilder builder, EntityModel model, RelationModel relation) {
+        builder.append("new PartitionedRelationBatchLoader<>(")
+                .append(javaStringLiteral(relation.name())).append(", ")
+                .append(relation.maxRowsPerParent()).append(", ")
+                .append(relation.parentBatchSize()).append(", ")
+                .append(relation.targetBindingTypeName()).append(".repository(cacheDatabase), ")
+                .append("parent -> parent.").append(model.idField().fieldName()).append(", ")
+                .append("(parent, children) -> parent.").append(relation.name()).append(" = children, ")
+                .append(javaStringLiteral(relation.partitionColumn()));
+        for (RelationSortModel sort : relation.sorts()) {
+            builder.append(", QuerySort.").append(sort.descending() ? "desc" : "asc")
+                    .append("(").append(javaStringLiteral(sort.columnName())).append(")");
+        }
+        builder.append(")");
     }
 
     private void renderPageLoaderFactory(StringBuilder builder, EntityModel model) {
@@ -1823,7 +2287,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("        return session.repository(METADATA, CODEC, cachePolicy);\n");
         builder.append("    }\n\n");
         builder.append("    public static void register(CacheDatabase cacheDatabase) {\n");
-        if (model.relationLoader() != null || model.pageLoader() != null) {
+        if (hasRelationLoader(model) || model.pageLoader() != null) {
             builder.append("        register(cacheDatabase, cacheDatabase.config().resourceLimits().defaultCachePolicy());\n");
         } else {
             builder.append("        cacheDatabase.register(METADATA, CODEC);\n");
@@ -1831,9 +2295,9 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         }
         builder.append("    }\n\n");
         builder.append("    public static void register(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
-        if (model.relationLoader() != null || model.pageLoader() != null) {
+        if (hasRelationLoader(model) || model.pageLoader() != null) {
             builder.append("        cacheDatabase.register(METADATA, CODEC, cachePolicy, ")
-                    .append(model.relationLoader() == null ? "null" : "relationLoader(cacheDatabase, cachePolicy)")
+                    .append(hasRelationLoader(model) ? "relationLoader(cacheDatabase, cachePolicy)" : "null")
                     .append(", ")
                     .append(model.pageLoader() == null ? "null" : "pageLoader(cacheDatabase, cachePolicy)")
                     .append(");\n");
@@ -1847,7 +2311,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    }\n\n");
         builder.append("    public static void registerJdbcBacked(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
         builder.append("        cacheDatabase.registerJdbcBacked(METADATA, CODEC, cachePolicy, ")
-                .append(model.relationLoader() == null ? "null" : "relationLoader(cacheDatabase, cachePolicy)")
+                .append(hasRelationLoader(model) ? "relationLoader(cacheDatabase, cachePolicy)" : "null")
                 .append(", ")
                 .append(model.pageLoader() == null ? "null" : "pageLoader(cacheDatabase, cachePolicy)")
                 .append(");\n");
@@ -1858,9 +2322,9 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         renderProjectionRegistrationStatements(builder, model);
         builder.append("    }\n\n");
         builder.append("    public static void registerDeclaredLoaders(CacheDatabase cacheDatabase, CachePolicy cachePolicy) {\n");
-        if (model.relationLoader() != null || model.pageLoader() != null) {
+        if (hasRelationLoader(model) || model.pageLoader() != null) {
             builder.append("        cacheDatabase.register(METADATA, CODEC, cachePolicy, ")
-                    .append(model.relationLoader() == null ? "null" : "relationLoader(cacheDatabase, cachePolicy)")
+                    .append(hasRelationLoader(model) ? "relationLoader(cacheDatabase, cachePolicy)" : "null")
                     .append(", ")
                     .append(model.pageLoader() == null ? "null" : "pageLoader(cacheDatabase, cachePolicy)")
                     .append(");\n");
@@ -2008,8 +2472,11 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
     private void renderScopeClass(StringBuilder builder, EntityModel model) {
         builder.append("    public static final class Scope {\n");
+        builder.append("        private final CacheSession cacheSession;\n");
         builder.append("        private final EntityRepository<").append(model.simpleName()).append(", ")
                 .append(model.idField().typeName()).append("> repository;\n");
+        builder.append("        private volatile SourceRepository<").append(model.simpleName()).append(", ")
+                .append(model.idField().typeName()).append("> sourceRepository;\n");
         if (!model.namedQueries().isEmpty()) {
             builder.append("        private final Queries queries;\n");
         }
@@ -2030,6 +2497,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         }
         builder.append('\n');
         builder.append("        private Scope(CacheSession cacheSession, CachePolicy cachePolicy) {\n");
+        builder.append("            this.cacheSession = cacheSession;\n");
         builder.append("            this.repository = cachePolicy == null ? ").append(model.bindingName())
                 .append(".repository(cacheSession) : ").append(model.bindingName())
                 .append(".repository(cacheSession, cachePolicy);\n");
@@ -2065,15 +2533,63 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 .append(" entity) {\n");
         builder.append("            return repository.save(entity);\n");
         builder.append("        }\n\n");
+        builder.append("        public WriteReceipt<").append(model.simpleName()).append(", ")
+                .append(model.idField().typeName()).append("> saveWithReceipt(")
+                .append(model.simpleName()).append(" entity) {\n");
+        builder.append("            return repository.saveWithReceipt(entity);\n");
+        builder.append("        }\n\n");
+        builder.append("        public WriteReceipt<").append(model.simpleName()).append(", ")
+                .append(model.idField().typeName()).append("> save(")
+                .append(model.simpleName()).append(" entity, long expectedVersion) {\n");
+        builder.append("            return repository.save(entity, expectedVersion);\n");
+        builder.append("        }\n\n");
+        builder.append("        public WriteReceipt<").append(model.simpleName()).append(", ")
+                .append(model.idField().typeName()).append("> saveAfter(")
+                .append(model.simpleName()).append(" entity, WriteDependency dependency) {\n");
+        builder.append("            return repository.saveAfter(entity, dependency);\n");
+        builder.append("        }\n\n");
+        builder.append("        public List<WriteReceipt<").append(model.simpleName()).append(", ")
+                .append(model.idField().typeName()).append(">> saveAll(java.util.Collection<")
+                .append(model.simpleName()).append("> entities) {\n");
+        builder.append("            return repository.saveAll(entities);\n");
+        builder.append("        }\n\n");
         builder.append("        public Optional<").append(model.simpleName()).append("> findById(")
                 .append(model.idField().typeName()).append(" id) {\n");
         builder.append("            return repository.findById(id);\n");
+        builder.append("        }\n\n");
+        builder.append("        public Optional<VersionedEntity<").append(model.simpleName())
+                .append(">> findVersionedById(").append(model.idField().typeName()).append(" id) {\n");
+        builder.append("            return repository.findVersionedById(id);\n");
+        builder.append("        }\n\n");
+        builder.append("        public Optional<WriteDependency> dependency(")
+                .append(model.idField().typeName()).append(" id) {\n");
+        builder.append("            return repository.findVersionedById(id).map(versioned -> ")
+                .append("new WriteDependency(METADATA.redisNamespace(), String.valueOf(id), versioned.version()));\n");
         builder.append("        }\n\n");
         builder.append("        public List<").append(model.simpleName()).append("> findPage(PageWindow pageWindow) {\n");
         builder.append("            return repository.findPage(pageWindow);\n");
         builder.append("        }\n\n");
         builder.append("        public List<").append(model.simpleName()).append("> query(QuerySpec querySpec) {\n");
         builder.append("            return repository.query(querySpec);\n");
+        builder.append("        }\n\n");
+        builder.append("        public <K> Map<K, List<").append(model.simpleName())
+                .append(">> queryPartitions(PartitionedQuerySpec<K> querySpec) {\n");
+        builder.append("            return repository.queryPartitions(querySpec);\n");
+        builder.append("        }\n\n");
+        builder.append("        public SourceRepository<").append(model.simpleName()).append(", ")
+                .append(model.idField().typeName()).append("> source() {\n");
+        builder.append("            SourceRepository<").append(model.simpleName()).append(", ")
+                .append(model.idField().typeName()).append("> resolved = sourceRepository;\n");
+        builder.append("            if (resolved == null) {\n");
+        builder.append("                synchronized (this) {\n");
+        builder.append("                    resolved = sourceRepository;\n");
+        builder.append("                    if (resolved == null) {\n");
+        builder.append("                        resolved = cacheSession.sourceRepository(METADATA, CODEC);\n");
+        builder.append("                        sourceRepository = resolved;\n");
+        builder.append("                    }\n");
+        builder.append("                }\n");
+        builder.append("            }\n");
+        builder.append("            return resolved;\n");
         builder.append("        }\n\n");
         builder.append("        public void deleteById(").append(model.idField().typeName()).append(" id) {\n");
         builder.append("            repository.deleteById(id);\n");
@@ -2138,14 +2654,125 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             builder.append("        }\n\n");
             builder.append("        public List<").append(model.simpleName()).append("> ")
                     .append(namedQuery.accessorName()).append("(").append(parameters).append(") {\n");
-            builder.append("            return scope.repository().query(").append(namedQuery.accessorName()).append("Query(")
-                    .append(arguments).append("));\n");
+            if (namedQuery.route() == null) {
+                builder.append("            return scope.repository().query(").append(namedQuery.accessorName()).append("Query(")
+                        .append(arguments).append("));\n");
+            } else {
+                builder.append("            return RouteCacheContext.supplyWithContract(")
+                        .append(namedQuery.accessorName()).append("Route(), () -> scope.repository().query(")
+                        .append(namedQuery.accessorName()).append("Query(").append(arguments).append(")));\n");
+            }
             builder.append("        }\n");
+            if (namedQuery.route() != null) {
+                builder.append("\n");
+                renderGeneratedRoute(builder, model, namedQuery, parameters, arguments);
+            }
             if (index < model.namedQueries().size() - 1) {
                 builder.append('\n');
             }
         }
         builder.append("    }\n");
+    }
+
+    private void renderGeneratedRoute(
+            StringBuilder builder,
+            EntityModel model,
+            NamedQueryModel namedQuery,
+            String parameters,
+            String arguments
+    ) {
+        RouteModel route = namedQuery.route();
+        builder.append("        public RouteCacheContract ").append(namedQuery.accessorName()).append("Route() {\n");
+        builder.append("            return RouteCacheContract.builder()\n");
+        builder.append("                    .routeName(").append(javaStringLiteral(route.routeName())).append(")\n");
+        builder.append("                    .entityName(METADATA.entityName())\n");
+        if (!route.projectionAccessor().isBlank()) {
+            builder.append("                    .projectionName(scope.projections().")
+                    .append(route.projectionAccessor()).append("Projection().name())\n");
+            builder.append("                    .projectionRequired(true)\n");
+        }
+        builder.append("                    .pageSize(").append(route.pageSize()).append(")\n");
+        builder.append("                    .hotWindow(").append(route.hotWindow()).append(")\n");
+        builder.append("                    .maxColdReadSize(").append(route.maxColdReadSize()).append(")\n");
+        builder.append("                    .memoryBudgetBytes(").append(route.memoryBudgetBytes()).append("L)\n");
+        builder.append("                    .strictMode(RouteCacheStrictMode.")
+                .append(route.strict() ? "FAIL_FAST" : "WARN").append(")\n");
+        builder.append("                    .build();\n");
+        builder.append("        }\n");
+
+        builder.append("\n");
+        builder.append("        public List<").append(model.simpleName()).append("> ")
+                .append(namedQuery.accessorName()).append("Source(").append(parameters).append(") {\n");
+        builder.append("            return RouteCacheContext.supplyWithContract(")
+                .append(namedQuery.accessorName()).append("Route(), () -> scope.source().query(")
+                .append(namedQuery.accessorName()).append("Query(").append(arguments).append(")));\n");
+        builder.append("        }\n");
+
+        List<MethodParameterModel> warmParameters = namedQuery.parameters().stream()
+                .filter(parameter -> !parameter.parameterName().equals(route.limitParameter()))
+                .toList();
+        String requestedWarmRows = uniqueHelperParameterName(warmParameters, "warmRows");
+        String warmParameterArguments = renderInvocationArguments(warmParameters);
+        String warmArguments = renderWarmInvocationArguments(namedQuery, requestedWarmRows);
+        builder.append("\n");
+        builder.append("        public CacheWarmPlan ").append(namedQuery.accessorName()).append("WarmPlan(")
+                .append(renderMethodParameters(warmParameters)).append(") {\n");
+        builder.append("            return ").append(namedQuery.accessorName()).append("WarmPlan(")
+                .append(warmParameterArguments);
+        if (!warmParameterArguments.isEmpty()) {
+            builder.append(", ");
+        }
+        builder.append(route.hotWindow()).append(");\n");
+        builder.append("        }\n\n");
+        builder.append("        public CacheWarmPlan ").append(namedQuery.accessorName()).append("WarmPlan(")
+                .append(renderMethodParameters(warmParameters));
+        if (!warmParameters.isEmpty()) {
+            builder.append(", ");
+        }
+        builder.append("int ").append(requestedWarmRows).append(") {\n");
+        builder.append("            if (").append(requestedWarmRows).append(" <= 0 || ")
+                .append(requestedWarmRows).append(" > ").append(route.hotWindow()).append(") {\n");
+        builder.append("                throw new IllegalArgumentException(")
+                .append(javaStringLiteral("warmRows must be between 1 and " + route.hotWindow()))
+                .append(");\n");
+        builder.append("            }\n");
+        builder.append("            return ").append(model.bindingName()).append(".warmPlan(")
+                .append(javaStringLiteral(route.routeName())).append(", ")
+                .append(namedQuery.accessorName()).append("Query(").append(warmArguments)
+                .append(").limitTo(").append(requestedWarmRows).append("), ")
+                .append(requestedWarmRows).append(");\n");
+        builder.append("        }\n");
+
+        if (!route.projectionAccessor().isBlank()) {
+            ProjectionModel projection = model.projections().stream()
+                    .filter(candidate -> candidate.accessorName().equals(route.projectionAccessor()))
+                    .findFirst()
+                    .orElseThrow();
+            builder.append("\n");
+            builder.append("        public List<").append(projection.projectionTypeName()).append("> ")
+                    .append(namedQuery.accessorName()).append("Projection(").append(parameters).append(") {\n");
+            builder.append("            return RouteCacheContext.supplyWithContract(")
+                    .append(namedQuery.accessorName()).append("Route(), () -> scope.projections().")
+                    .append(route.projectionAccessor()).append("().query(")
+                    .append(namedQuery.accessorName()).append("Query(").append(arguments).append(")));\n");
+            builder.append("        }\n");
+        }
+    }
+
+    private String renderWarmInvocationArguments(NamedQueryModel namedQuery, String limitExpression) {
+        StringBuilder arguments = new StringBuilder();
+        for (int index = 0; index < namedQuery.parameters().size(); index++) {
+            if (index > 0) {
+                arguments.append(", ");
+            }
+            MethodParameterModel parameter = namedQuery.parameters().get(index);
+            if (parameter.parameterName().equals(namedQuery.route().limitParameter())) {
+                arguments.append(limitExpression);
+            } else {
+                arguments.append(parameter.parameterName());
+            }
+        }
+        return arguments.toString();
     }
 
     private void renderProjectionGroup(StringBuilder builder, EntityModel model) {
@@ -2444,6 +3071,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             String redisNamespace,
             FieldModel idField,
             List<FieldModel> persistedFields,
+            Map<String, List<String>> partitionedSortIndexes,
             List<RelationModel> relations,
             List<ProjectionModel> projections,
             List<NamedQueryModel> namedQueries,
@@ -2459,6 +3087,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             Objects.requireNonNull(simpleName);
             Objects.requireNonNull(bindingName);
             persistedFields = List.copyOf(persistedFields);
+            partitionedSortIndexes = Map.copyOf(partitionedSortIndexes);
             relations = List.copyOf(relations);
             projections = List.copyOf(projections);
             namedQueries = List.copyOf(namedQueries);
@@ -2484,8 +3113,24 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             String targetEntity,
             String mappedBy,
             String kindName,
-            boolean batchLoadOnly
+            boolean batchLoadOnly,
+            String targetTypeName,
+            String targetBindingTypeName,
+            String partitionColumn,
+            int maxRowsPerParent,
+            int parentBatchSize,
+            List<RelationSortModel> sorts,
+            boolean generatedLoader
     ) {
+        private RelationModel {
+            sorts = List.copyOf(sorts);
+        }
+    }
+
+    private record RelationDeclaration(VariableElement field, CacheRelation annotation) {
+    }
+
+    private record RelationSortModel(String columnName, boolean descending) {
     }
 
     private record LoaderModel(
@@ -2516,7 +3161,20 @@ public final class CacheEntityProcessor extends AbstractProcessor {
     private record NamedQueryModel(
             String accessorName,
             String factoryMethodName,
-            List<MethodParameterModel> parameters
+            List<MethodParameterModel> parameters,
+            RouteModel route
+    ) {
+    }
+
+    private record RouteModel(
+            String routeName,
+            String projectionAccessor,
+            int pageSize,
+            int hotWindow,
+            int maxColdReadSize,
+            long memoryBudgetBytes,
+            boolean strict,
+            String limitParameter
     ) {
     }
 

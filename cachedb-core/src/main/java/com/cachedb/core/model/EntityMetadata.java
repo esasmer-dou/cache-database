@@ -31,5 +31,8 @@ public interface EntityMetadata<T, ID> {
     default Map<String, String> columnTypes() {
         return Map.of();
     }
+    default Map<String, List<String>> partitionedSortIndexes() {
+        return Map.of();
+    }
     List<RelationDefinition> relations();
 }

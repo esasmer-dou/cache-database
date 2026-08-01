@@ -327,7 +327,7 @@ as time or state.
 | `cachedb.config.redisFunctions.compactionCompleteFunctionName` | `compaction_complete` | Compaction-complete function entrypoint. |
 | `cachedb.config.redisFunctions.templateResourcePath` | `/functions/cachedb-functions.lua` | Redis Function source template path. |
 | `cachedb.config.redisFunctions.sourceOverride` | empty | Full source override for the library. |
-| `cachedb.config.redisFunctions.libraryVersion` | `0.3.0` | Semantic deployment version. Publish a new version whenever function source changes. |
+| `cachedb.config.redisFunctions.libraryVersion` | `0.4.0` | Semantic deployment version. Keep it aligned with the bundled Function source; `0.6.0` upgrades the default because the write contract changed. |
 | `cachedb.config.relations.batchSize` | `250` | Default relation batch loader size. |
 | `cachedb.config.relations.maxFetchDepth` | `3` | Max relation fetch depth. |
 | `cachedb.config.relations.failOnMissingPreloader` | `false` | Fails when fetch plans require missing relation preloaders. |

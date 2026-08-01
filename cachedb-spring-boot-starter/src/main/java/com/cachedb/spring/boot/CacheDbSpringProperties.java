@@ -20,6 +20,7 @@ public class CacheDbSpringProperties {
     private final RegistrationProperties registration = new RegistrationProperties();
     private final RuntimeProperties runtime = new RuntimeProperties();
     private final ScheduledWarmProperties scheduledWarm = new ScheduledWarmProperties();
+    private final JobExecutorProperties jobs = new JobExecutorProperties();
 
     public boolean isEnabled() {
         return enabled;
@@ -73,6 +74,10 @@ public class CacheDbSpringProperties {
 
     public ScheduledWarmProperties getScheduledWarm() {
         return scheduledWarm;
+    }
+
+    public JobExecutorProperties getJobs() {
+        return jobs;
     }
 
     public enum Profile {
@@ -576,6 +581,117 @@ public class CacheDbSpringProperties {
 
         public void setShutdownAwaitMillis(long shutdownAwaitMillis) {
             this.shutdownAwaitMillis = shutdownAwaitMillis;
+        }
+    }
+
+    public static final class JobExecutorProperties {
+        private boolean enabled = true;
+        private int workerThreads = 1;
+        private int queueCapacity = 8;
+        private int statusTtlSeconds = 3_600;
+        private int maxResultBytes = 262_144;
+        private long shutdownAwaitMillis = 5_000L;
+        private String keyPrefix = "cachedb:jobs:warm";
+        private String consumerGroup = "cachedb-workers";
+        private long claimIdleMillis = 30_000L;
+        private int pollBlockMillis = 1_000;
+        private int maxAttempts = 3;
+        private long retryBackoffMillis = 500L;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getWorkerThreads() {
+            return workerThreads;
+        }
+
+        public void setWorkerThreads(int workerThreads) {
+            this.workerThreads = workerThreads;
+        }
+
+        public int getQueueCapacity() {
+            return queueCapacity;
+        }
+
+        public void setQueueCapacity(int queueCapacity) {
+            this.queueCapacity = queueCapacity;
+        }
+
+        public int getStatusTtlSeconds() {
+            return statusTtlSeconds;
+        }
+
+        public void setStatusTtlSeconds(int statusTtlSeconds) {
+            this.statusTtlSeconds = statusTtlSeconds;
+        }
+
+        public int getMaxResultBytes() {
+            return maxResultBytes;
+        }
+
+        public void setMaxResultBytes(int maxResultBytes) {
+            this.maxResultBytes = maxResultBytes;
+        }
+
+        public long getShutdownAwaitMillis() {
+            return shutdownAwaitMillis;
+        }
+
+        public void setShutdownAwaitMillis(long shutdownAwaitMillis) {
+            this.shutdownAwaitMillis = shutdownAwaitMillis;
+        }
+
+        public String getKeyPrefix() {
+            return keyPrefix;
+        }
+
+        public void setKeyPrefix(String keyPrefix) {
+            this.keyPrefix = keyPrefix;
+        }
+
+        public String getConsumerGroup() {
+            return consumerGroup;
+        }
+
+        public void setConsumerGroup(String consumerGroup) {
+            this.consumerGroup = consumerGroup;
+        }
+
+        public long getClaimIdleMillis() {
+            return claimIdleMillis;
+        }
+
+        public void setClaimIdleMillis(long claimIdleMillis) {
+            this.claimIdleMillis = claimIdleMillis;
+        }
+
+        public int getPollBlockMillis() {
+            return pollBlockMillis;
+        }
+
+        public void setPollBlockMillis(int pollBlockMillis) {
+            this.pollBlockMillis = pollBlockMillis;
+        }
+
+        public int getMaxAttempts() {
+            return maxAttempts;
+        }
+
+        public void setMaxAttempts(int maxAttempts) {
+            this.maxAttempts = maxAttempts;
+        }
+
+        public long getRetryBackoffMillis() {
+            return retryBackoffMillis;
+        }
+
+        public void setRetryBackoffMillis(long retryBackoffMillis) {
+            this.retryBackoffMillis = retryBackoffMillis;
         }
     }
 

@@ -9,6 +9,10 @@ public interface CacheSession {
     <T, ID> EntityRepository<T, ID> repository(EntityMetadata<T, ID> metadata, EntityCodec<T> codec);
     <T, ID> EntityRepository<T, ID> repository(EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy cachePolicy);
 
+    default <T, ID> SourceRepository<T, ID> sourceRepository(EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
+        throw new UnsupportedOperationException("Durable source reads are not supported by this CacheSession implementation");
+    }
+
     default <T, ID> EntityRepository<T, ID> repository(EntityBinding<T, ID> binding) {
         return repository(binding.metadata(), binding.codec(), binding.cachePolicy());
     }

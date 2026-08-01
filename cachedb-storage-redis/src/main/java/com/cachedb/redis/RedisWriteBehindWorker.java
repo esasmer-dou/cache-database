@@ -24,6 +24,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -43,6 +45,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private final RedisWriteOperationMapper mapper;
     private final RedisKeyStrategy keyStrategy;
     private final RedisFunctionExecutor functionExecutor;
+    private final RedisDurabilityTracker durabilityTracker;
     private final ExecutorService executorService;
     private final ExecutorService flushExecutorService;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -70,6 +73,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private final AtomicReference<String> lastErrorOrigin = new AtomicReference<>();
     private final AtomicReference<String> lastErrorStackTrace = new AtomicReference<>();
     private final ConcurrentLinkedQueue<PendingEntry> deferredAcknowledgements = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<PendingEntry> deferredDependencies = new ConcurrentLinkedQueue<>();
+    private final Set<PendingEntryIdentity> deferredDependencyKeys = ConcurrentHashMap.newKeySet();
+    private final AtomicLong nextDependencyRetryAtEpochMillis = new AtomicLong();
+    private final int deferredDependencyCapacity;
 
     public RedisWriteBehindWorker(
             JedisPooled jedis,
@@ -85,6 +92,9 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         this.mapper = mapper;
         this.keyStrategy = keyStrategy;
         this.functionExecutor = functionExecutor;
+        this.durabilityTracker = new RedisDurabilityTracker(jedis, keyStrategy);
+        long requestedDependencyCapacity = (long) config.batchSize() * Math.max(1, config.workerThreads()) * 4L;
+        this.deferredDependencyCapacity = (int) Math.max(128L, Math.min(100_000L, requestedDependencyCapacity));
         this.executorService = Executors.newFixedThreadPool(config.workerThreads(), threadFactory(config));
         this.flushExecutorService = Executors.newFixedThreadPool(
                 Math.max(1, config.flushGroupParallelism()),
@@ -137,6 +147,9 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             try {
                 drainDeferredAcknowledgements();
                 long now = System.currentTimeMillis();
+                if (drainDeferredDependencies(now)) {
+                    markProgress(now);
+                }
                 List<Entry<String, List<StreamEntry>>> responses = List.of();
                 boolean claimedRecoveryEntries = false;
                 if (!hasEntries(responses)) {
@@ -188,14 +201,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 ? resolveCompactionEntries(sourceStreamKey, entries)
                 : rawEntries(sourceStreamKey, entries);
 
-        if (!config.batchFlushEnabled() || candidates.size() == 1) {
-            for (PendingEntry pendingEntry : candidates) {
-                processOperationWithRetry(pendingEntry);
-            }
-            return;
-        }
-
-        if (config.coalescingEnabled()) {
+        if (config.batchFlushEnabled() && candidates.size() > 1 && config.coalescingEnabled()) {
             candidates = coalesceEntries(candidates);
         }
 
@@ -203,7 +209,20 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             candidates = filterFreshEntries(candidates);
         }
 
-        if (candidates.isEmpty()) {
+        DependencyPartition dependencyPartition = partitionDependencyReady(candidates);
+        deferDependencies(dependencyPartition.blocked());
+        flushReadyEntries(dependencyPartition.ready(), currentBacklog);
+    }
+
+    private void flushReadyEntries(List<PendingEntry> candidates, long currentBacklog) {
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+
+        if (!config.batchFlushEnabled() || candidates.size() == 1) {
+            for (PendingEntry pendingEntry : candidates) {
+                processOperationWithRetry(pendingEntry);
+            }
             return;
         }
 
@@ -415,6 +434,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         List<QueuedWriteOperation> operations = chunk.stream().map(PendingEntry::operation).toList();
         try {
             flusher.flushBatch(operations);
+            markDurable(chunk);
             acknowledgeOrDefer(chunk);
             batchFlushCount.incrementAndGet();
             batchFlushedOperationCount.addAndGet(chunk.size());
@@ -488,16 +508,6 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         return Math.max(1, config.maxFlushBatchSize());
     }
 
-    private void processEntry(String sourceStreamKey, StreamEntry entry) {
-        processOperationWithRetry(new PendingEntry(
-                entry,
-                mapper.fromBody(entry.getFields()),
-                List.of(entry.getID()),
-                false,
-                sourceStreamKey
-        ));
-    }
-
     private void processOperationWithRetry(PendingEntry pendingEntry) {
         WriteRetryPolicy retryPolicy = resolveRetryPolicy(pendingEntry.operation());
         if (!config.batchStaleCheckEnabled() && isStale(pendingEntry.operation())) {
@@ -509,6 +519,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         while (attempts <= retryPolicy.maxRetries()) {
             try {
                 flusher.flush(pendingEntry.operation());
+                markDurable(pendingEntry.operation());
                 acknowledgeOrDefer(pendingEntry);
                 flushedCount.incrementAndGet();
                 return;
@@ -524,6 +535,117 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 sleepQuietly(retryPolicy.backoffMillis());
             }
         }
+    }
+
+    private DependencyPartition partitionDependencyReady(List<PendingEntry> entries) {
+        if (entries == null || entries.isEmpty()) {
+            return DependencyPartition.empty();
+        }
+        ArrayList<PendingEntry> dependent = new ArrayList<>();
+        ArrayList<String> dependencyKeys = new ArrayList<>();
+        for (PendingEntry entry : entries) {
+            if (!entry.operation().hasDependency()) {
+                continue;
+            }
+            dependent.add(entry);
+            dependencyKeys.add(keyStrategy.durabilityKey(
+                    entry.operation().dependencyNamespace(),
+                    entry.operation().dependencyId()
+            ));
+        }
+        if (dependent.isEmpty()) {
+            return new DependencyPartition(entries, List.of());
+        }
+        List<String> durableVersions = jedis.mget(dependencyKeys.toArray(String[]::new));
+        LinkedHashMap<PendingEntry, Boolean> ready = new LinkedHashMap<>(dependent.size());
+        for (int index = 0; index < dependent.size(); index++) {
+            PendingEntry entry = dependent.get(index);
+            ready.put(entry, parseVersion(durableVersions.get(index)) >= entry.operation().dependencyVersion());
+        }
+        ArrayList<PendingEntry> readyEntries = new ArrayList<>(entries.size());
+        ArrayList<PendingEntry> blockedEntries = new ArrayList<>();
+        for (PendingEntry entry : entries) {
+            if (!entry.operation().hasDependency() || Boolean.TRUE.equals(ready.get(entry))) {
+                readyEntries.add(entry);
+            } else {
+                blockedEntries.add(entry);
+            }
+        }
+        return new DependencyPartition(List.copyOf(readyEntries), List.copyOf(blockedEntries));
+    }
+
+    private void deferDependencies(List<PendingEntry> blockedEntries) {
+        if (blockedEntries == null || blockedEntries.isEmpty()) {
+            return;
+        }
+        for (PendingEntry blockedEntry : blockedEntries) {
+            if (deferredDependencyKeys.size() >= deferredDependencyCapacity) {
+                break;
+            }
+            PendingEntryIdentity identity = PendingEntryIdentity.of(blockedEntry);
+            if (deferredDependencyKeys.add(identity)) {
+                deferredDependencies.offer(blockedEntry);
+            }
+        }
+        scheduleDependencyRetry(System.currentTimeMillis());
+    }
+
+    private boolean drainDeferredDependencies(long now) {
+        long scheduledAt = nextDependencyRetryAtEpochMillis.get();
+        if (scheduledAt == 0L || now < scheduledAt
+                || !nextDependencyRetryAtEpochMillis.compareAndSet(scheduledAt, now + dependencyRetryMillis())) {
+            return false;
+        }
+
+        ArrayList<PendingEntry> candidates = new ArrayList<>(Math.max(1, config.batchSize()));
+        for (int processed = 0; processed < Math.max(1, config.batchSize()); processed++) {
+            PendingEntry pendingEntry = deferredDependencies.poll();
+            if (pendingEntry == null) {
+                break;
+            }
+            deferredDependencyKeys.remove(PendingEntryIdentity.of(pendingEntry));
+            candidates.add(pendingEntry);
+        }
+        if (candidates.isEmpty()) {
+            nextDependencyRetryAtEpochMillis.compareAndSet(now + dependencyRetryMillis(), 0L);
+            return false;
+        }
+
+        int originalSize = candidates.size();
+        if (config.batchStaleCheckEnabled()) {
+            candidates = new ArrayList<>(filterFreshEntries(candidates));
+        }
+        DependencyPartition dependencyPartition = partitionDependencyReady(candidates);
+        deferDependencies(dependencyPartition.blocked());
+        if (!dependencyPartition.ready().isEmpty()) {
+            flushReadyEntries(dependencyPartition.ready(), backlogLength(now));
+        }
+        if (deferredDependencies.isEmpty()) {
+            nextDependencyRetryAtEpochMillis.set(0L);
+        }
+        return !dependencyPartition.ready().isEmpty() || candidates.size() < originalSize;
+    }
+
+    private void scheduleDependencyRetry(long now) {
+        long candidate = now + dependencyRetryMillis();
+        nextDependencyRetryAtEpochMillis.accumulateAndGet(
+                candidate,
+                (current, requested) -> current == 0L ? requested : Math.min(current, requested)
+        );
+    }
+
+    private long dependencyRetryMillis() {
+        return Math.max(50L, Math.min(1_000L, config.retryBackoffMillis()));
+    }
+
+    private void markDurable(List<PendingEntry> entries) {
+        for (PendingEntry entry : entries) {
+            markDurable(entry.operation());
+        }
+    }
+
+    private void markDurable(QueuedWriteOperation operation) {
+        durabilityTracker.advance(operation.redisNamespace(), operation.id(), operation.version());
     }
 
     private void acknowledgeOrDefer(PendingEntry pendingEntry) {
@@ -798,7 +920,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         if (lastAttemptAt == 0L) {
             return true;
         }
-        long minimumInterval = Math.max(config.claimIdleMillis(), 30_000L);
+        // A startup claim can legitimately find entries that have not reached the
+        // configured idle threshold yet. Retry when that threshold elapses instead
+        // of imposing an unrelated 30-second recovery gap.
+        long minimumInterval = Math.max(1L, config.claimIdleMillis());
         return (now - lastAttemptAt) >= minimumInterval;
     }
 
@@ -1048,6 +1173,18 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
         private static EntityKey of(QueuedWriteOperation operation) {
             return new EntityKey(operation.redisNamespace(), operation.id());
+        }
+    }
+
+    private record DependencyPartition(List<PendingEntry> ready, List<PendingEntry> blocked) {
+        private static DependencyPartition empty() {
+            return new DependencyPartition(List.of(), List.of());
+        }
+    }
+
+    private record PendingEntryIdentity(String sourceStreamKey, StreamEntryID streamEntryId) {
+        private static PendingEntryIdentity of(PendingEntry entry) {
+            return new PendingEntryIdentity(entry.sourceStreamKey(), entry.entry().getID());
         }
     }
 }

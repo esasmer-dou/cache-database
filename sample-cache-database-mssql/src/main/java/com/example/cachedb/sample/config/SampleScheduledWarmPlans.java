@@ -37,10 +37,6 @@ public class SampleScheduledWarmPlans {
     )
     public CacheWarmPlan activeOrderWindow() {
         long cutoffEpochSeconds = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
-        return domain.orders().warmPlan(
-                "sample-active-order-window",
-                domain.orders().queries().activeOrderWindowQuery(cutoffEpochSeconds, orderWarmMaxRows),
-                orderWarmMaxRows
-        );
+        return domain.orders().queries().activeOrderWindowWarmPlan(cutoffEpochSeconds, orderWarmMaxRows);
     }
 }

@@ -49,15 +49,15 @@ cachedb:
           hot-for-seconds: 7776000
 ```
 
+Add this to the entity package's `package-info.java`:
+
 ```java
-@Configuration(proxyBeanMethods = false)
-public class CacheDbDomainConfig {
-    @Bean
-    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-        return GeneratedCacheModule.using(cacheDatabase);
-    }
-}
+@com.reactor.cachedb.annotations.CacheDomain(spring = true)
+package com.acme.orders.domain;
 ```
+
+The processor generates the Spring configuration and exposes one
+`GeneratedCacheModule.Scope` bean.
 
 Spring registration is deliberately two-phase. All generated entities receive
 their own policy and JDBC source first; relation/page loaders are wired only
@@ -97,26 +97,39 @@ List<UserEntity> activeUsers = users.query(
 );
 ```
 
-Relation and page loaders can now be declared directly on the entity:
+The standard relation loader is generated from typed, bounded metadata. Custom
+page loaders can still be declared directly on the entity:
 
 ```java
 @CacheEntity(
         table = "cachedb_example_users",
         redisNamespace = "users",
-        relationLoader = UserOrdersRelationBatchLoader.class,
         pageLoader = UserPageLoader.class
 )
 public class UserEntity {
+    @CacheRelation(
+            target = OrderEntity.class,
+            mappedBy = "userId",
+            kind = CacheRelation.RelationKind.ONE_TO_MANY,
+            maxRowsPerParent = 50,
+            parentBatchSize = 32,
+            orderBy = {"createdAt DESC", "orderId DESC"}
+    )
+    public List<OrderEntity> orders;
 }
 ```
 
-After that, generated bindings self-wire those loaders:
+After that, generated bindings self-wire the generated relation loader and the
+custom page loader:
 
 ```java
 UserEntityCacheBinding.register(cacheDatabase);
 ```
 
-This removes the old `new UserOrdersRelationBatchLoader()` / `new UserPageLoader()` ceremony from most application code. The generated binding can also constructor-inject repository dependencies for loader classes such as `DemoOrderLinesRelationBatchLoader(EntityRepository<DemoOrderLineEntity, Long>)`.
+This removes manual relation-loader construction and `new UserPageLoader()`
+ceremony from application code. Use `@CacheEntity.relationLoader` only for an
+exceptional relation strategy; generated bindings can constructor-inject its
+repository dependencies.
 
 The processor now also generates a package-level registrar:
 

@@ -16,11 +16,11 @@ spring:
       validation-timeout: 1000
   sql:
     init:
-      mode: always
+      mode: never
 
 cachedb:
   enabled: true
-  profile: development
+  profile: ${CACHEDB_PROFILE:production}
   redis:
     uri: ${REDIS_URI:redis://127.0.0.1:56379}
     background:
@@ -169,10 +169,10 @@ cachedb:
               state-column: severity
               state-values: [WARN, ERROR, SECURITY]
   admin:
-    enabled: ${CACHEDB_ADMIN_ENABLED:true}
-    http-enabled: true
+    enabled: ${CACHEDB_ADMIN_ENABLED:false}
+    http-enabled: false
     base-path: /cachedb-admin
-    dashboard-enabled: true
+    dashboard-enabled: false
     title: CacheDB PostgreSQL Sample
     request-queue-capacity: 128
     background-worker-threads: 2
@@ -185,7 +185,7 @@ cachedb:
 
 sample:
   scheduled-warm:
-    enabled: ${SAMPLE_SCHEDULED_WARM_ENABLED:true}
+    enabled: ${SAMPLE_SCHEDULED_WARM_ENABLED:false}
     orders:
       fixed-delay: ${SAMPLE_ORDER_WARM_FIXED_DELAY:PT15M}
       initial-delay: ${SAMPLE_ORDER_WARM_INITIAL_DELAY:PT30S}
@@ -196,4 +196,20 @@ sample:
       reconcile-max-rows: ${SAMPLE_ORDER_RECONCILE_MAX_ROWS:10000}
       reconcile-scan-count: ${SAMPLE_ORDER_RECONCILE_SCAN_COUNT:500}
   demo:
-    write-tools-enabled: ${SAMPLE_WRITE_TOOLS_ENABLED:true}
+    write-tools-enabled: ${SAMPLE_WRITE_TOOLS_ENABLED:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        readiness:
+          include: readinessState,cacheDatabase
+        liveness:
+          include: livenessState

@@ -10,25 +10,34 @@ import com.example.cachedb.sample.domain.ReportJobEntity;
 import com.example.cachedb.sample.domain.ShipmentEntity;
 import com.example.cachedb.sample.domain.ShipmentEventEntity;
 import com.example.cachedb.sample.domain.SupportTicketEntity;
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.starter.CacheDatabase;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
-import java.util.concurrent.TimeUnit;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.function.Function;
 
 @Service
 public class SampleSeedService {
 
+    private static final int WRITE_BATCH_SIZE = 128;
+    private static final int MAX_PENDING_RECEIPTS = 1_024;
+    private static final Duration DURABILITY_TIMEOUT = Duration.ofSeconds(30);
+
     private final GeneratedCacheModule.Scope domain;
-    private final JdbcTemplate jdbcTemplate;
+    private final CacheDatabase cacheDatabase;
 
     public SampleSeedService(
             GeneratedCacheModule.Scope domain,
-            JdbcTemplate jdbcTemplate
+            CacheDatabase cacheDatabase
     ) {
         this.domain = domain;
-        this.jdbcTemplate = jdbcTemplate;
+        this.cacheDatabase = cacheDatabase;
     }
 
     public SeedResult seed(int customerCount, int ordersPerCustomer, int linesPerOrder) {
@@ -37,15 +46,16 @@ public class SampleSeedService {
         int linesEach = requireInRange("linesPerOrder", linesPerOrder, 1, 12);
         long now = Instant.now().getEpochSecond();
 
+        DurableBatch<ProductEntity, Long> products = batch("products", domain.products()::saveAll);
+        DurableBatch<CustomerEntity, Long> customerBatch = batch("customers", domain.customers()::saveAll);
         for (long productId = 1; productId <= 50; productId++) {
-            domain.products().save(product(productId));
+            products.add(product(productId));
         }
         for (long customerId = 1; customerId <= customers; customerId++) {
-            domain.customers().save(customer(customerId, now));
+            customerBatch.add(customer(customerId, now));
         }
-
-        waitForRows("sample_products", 50);
-        waitForRows("sample_customers", customers);
+        products.finish();
+        customerBatch.finish();
 
         long orderCount = 0;
         long lineCount = 0;
@@ -53,53 +63,62 @@ public class SampleSeedService {
         long shipmentEventCount = 0;
         long reportJobCount = 0;
         long auditEventCount = 0;
+        DurableBatch<OrderEntity, Long> orders = batch("orders", domain.orders()::saveAll);
+        DurableBatch<ShipmentEntity, Long> shipments = batch("shipments", domain.shipments()::saveAll);
         for (long customerId = 1; customerId <= customers; customerId++) {
             for (int index = 1; index <= ordersEach; index++) {
                 long orderId = (customerId * 10_000L) + index;
                 OrderEntity order = order(orderId, customerId, now - (index * 3_600L), linesEach);
-                domain.orders().save(order);
+                orders.add(order);
                 orderCount++;
             }
             for (int shipmentIndex = 1; shipmentIndex <= 3; shipmentIndex++) {
                 long shipmentId = (customerId * 20_000L) + shipmentIndex;
-                domain.shipments().save(shipment(shipmentId, customerId, shipmentIndex, now));
+                shipments.add(shipment(shipmentId, customerId, shipmentIndex, now));
                 shipmentCount++;
             }
         }
 
+        DurableBatch<ReportJobEntity, Long> reportJobs = batch("report jobs", domain.reportJobs()::saveAll);
         for (long reportJobId = 1; reportJobId <= 20; reportJobId++) {
-            domain.reportJobs().save(reportJob(reportJobId, now));
+            reportJobs.add(reportJob(reportJobId, now));
             reportJobCount++;
         }
+        orders.finish();
+        shipments.finish();
+        reportJobs.finish();
 
-        waitForRows("sample_orders", orderCount);
-        waitForRows("sample_shipments", shipmentCount);
-        waitForRows("sample_report_jobs", reportJobCount);
-
+        DurableBatch<OrderLineEntity, Long> lines = batch("order lines", domain.orderLines()::saveAll);
+        DurableBatch<ShipmentEventEntity, Long> shipmentEvents = batch(
+                "shipment events", domain.shipmentEvents()::saveAll
+        );
+        DurableBatch<SupportTicketEntity, Long> tickets = batch(
+                "support tickets", domain.supportTickets()::saveAll
+        );
+        DurableBatch<AuditEventEntity, Long> auditEvents = batch("audit events", domain.auditEvents()::saveAll);
         for (long customerId = 1; customerId <= customers; customerId++) {
             for (int orderIndex = 1; orderIndex <= ordersEach; orderIndex++) {
                 long orderId = (customerId * 10_000L) + orderIndex;
                 for (int lineNumber = 1; lineNumber <= linesEach; lineNumber++) {
-                    domain.orderLines().save(line(orderId, lineNumber));
+                    lines.add(line(orderId, lineNumber));
                     lineCount++;
                 }
             }
             for (int shipmentIndex = 1; shipmentIndex <= 3; shipmentIndex++) {
                 long shipmentId = (customerId * 20_000L) + shipmentIndex;
                 for (int eventIndex = 1; eventIndex <= 4; eventIndex++) {
-                    domain.shipmentEvents().save(shipmentEvent(shipmentId, eventIndex, now));
+                    shipmentEvents.add(shipmentEvent(shipmentId, eventIndex, now));
                     shipmentEventCount++;
                 }
             }
-            domain.supportTickets().save(ticket(customerId, now));
-            domain.auditEvents().save(auditEvent(auditEventCount + 1, "CustomerEntity", customerId, now));
+            tickets.add(ticket(customerId, now));
+            auditEvents.add(auditEvent(auditEventCount + 1, "CustomerEntity", customerId, now));
             auditEventCount++;
         }
-
-        waitForRows("sample_order_lines", lineCount);
-        waitForRows("sample_shipment_events", shipmentEventCount);
-        waitForRows("sample_support_tickets", customers);
-        waitForRows("sample_audit_events", auditEventCount);
+        lines.finish();
+        shipmentEvents.finish();
+        tickets.finish();
+        auditEvents.finish();
 
         return new SeedResult(
                 customers,
@@ -125,7 +144,7 @@ public class SampleSeedService {
         product.unitPrice = BigDecimal.valueOf(1_000L + (productId * 100L), 2);
         product.stockQuantity = productId % 10 == 0 ? 8 : 500 - (int) productId;
         product.reservedQuantity = productId % 10 == 0 ? 5 : (int) (productId % 7);
-        product.stockStatus = productId % 10 == 0 ? "LOW_STOCK" : productId % 8 == 0 ? "RESERVED" : "IN_STOCK";
+        product.stockStatus = SampleDomainPolicies.stockStatus(product);
         product.updatedAt = now - (productId * 3_600L);
         return product;
     }
@@ -152,8 +171,7 @@ public class SampleSeedService {
         order.orderType = orderId % 4 == 0 ? "EXPRESS" : "STANDARD";
         order.status = orderId % 37 == 0 ? "COMPLETED" : orderId % 6 == 0 ? "PAID" : "NEW";
         order.lineCount = linesEach;
-        order.priorityScore = order.orderAmount.divide(BigDecimal.TEN).doubleValue()
-                + (order.orderType.equals("EXPRESS") ? 25.0 : 0.0);
+        order.priorityScore = SampleDomainPolicies.orderPriority(order);
         return order;
     }
 
@@ -202,9 +220,7 @@ public class SampleSeedService {
         shipment.updatedAt = "DELIVERED".equals(shipment.shipmentStatus)
                 ? now - (45L * 86_400L)
                 : now - (shipmentIndex * 7_200L);
-        shipment.riskScore = "EXCEPTION".equals(shipment.shipmentStatus)
-                ? 95.0
-                : "DELAYED".equals(shipment.shipmentStatus) ? 80.0 : 25.0 + shipmentIndex;
+        shipment.riskScore = SampleDomainPolicies.shipmentRisk(shipment.shipmentStatus);
         return shipment;
     }
 
@@ -256,29 +272,11 @@ public class SampleSeedService {
         return event;
     }
 
-    private void waitForRows(String table, long expectedRows) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
-        long observedRows = 0;
-        while (System.nanoTime() < deadline) {
-            Long rows = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
-            observedRows = rows == null ? 0 : rows;
-            if (rows != null && rows >= expectedRows) {
-                return;
-            }
-            sleepQuietly();
-        }
-        throw new IllegalStateException(
-                "Seed write-behind did not reach the durable row target for " + table
-                        + ": expected=" + expectedRows + ", observed=" + observedRows
-        );
-    }
-
-    private void sleepQuietly() {
-        try {
-            Thread.sleep(100);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-        }
+    private <T, ID> DurableBatch<T, ID> batch(
+            String surface,
+            Function<Collection<T>, List<WriteReceipt<T, ID>>> writer
+    ) {
+        return new DurableBatch<>(surface, writer);
     }
 
     private int requireInRange(String parameter, int value, int min, int max) {
@@ -301,5 +299,53 @@ public class SampleSeedService {
             long reportJobs,
             long auditEvents
     ) {
+    }
+
+    private final class DurableBatch<T, ID> {
+        private final String surface;
+        private final Function<Collection<T>, List<WriteReceipt<T, ID>>> writer;
+        private final ArrayList<T> buffer = new ArrayList<>(WRITE_BATCH_SIZE);
+        private final ArrayList<WriteReceipt<?, ?>> pending = new ArrayList<>(MAX_PENDING_RECEIPTS);
+
+        private DurableBatch(String surface, Function<Collection<T>, List<WriteReceipt<T, ID>>> writer) {
+            this.surface = surface;
+            this.writer = writer;
+        }
+
+        private void add(T entity) {
+            buffer.add(entity);
+            if (buffer.size() >= WRITE_BATCH_SIZE) {
+                flush();
+            }
+        }
+
+        private void finish() {
+            flush();
+            awaitPending();
+        }
+
+        private void flush() {
+            if (buffer.isEmpty()) {
+                return;
+            }
+            pending.addAll(writer.apply(List.copyOf(buffer)));
+            buffer.clear();
+            if (pending.size() >= MAX_PENDING_RECEIPTS) {
+                awaitPending();
+            }
+        }
+
+        private void awaitPending() {
+            if (pending.isEmpty()) {
+                return;
+            }
+            if (!cacheDatabase.awaitDurable(pending, DURABILITY_TIMEOUT)) {
+                throw new IllegalStateException(
+                        "Seed write-behind did not become durable for " + surface
+                                + " within " + DURABILITY_TIMEOUT.toSeconds() + " seconds"
+                );
+            }
+            pending.clear();
+        }
     }
 }

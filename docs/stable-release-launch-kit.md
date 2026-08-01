@@ -19,10 +19,10 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Official Distribution Channel
 
-For `v0.5.0`, the official distribution channel is the GitHub Release asset:
+For `v0.6.0`, the official distribution channel is the GitHub Release asset:
 
 ```text
-cache-database-0.5.0-github-release.zip
+cache-database-0.6.0-github-release.zip
 ```
 
 The bundle contains the Maven module jars, source jars, javadocs, README,
@@ -32,14 +32,13 @@ package distribution channel.
 
 ## Release Positioning
 
-`cache-database v0.5.0`
+`cache-database v0.6.0`
 
-CacheDB `v0.5.0` adds declarative, cluster-coordinated periodic warm execution
-and incremental active-data reconciliation to the stable generated API surface.
-Applications define a bounded `CacheWarmPlan` with `@CacheScheduledWarm`.
-Redis lease ownership, heartbeat renewal, retry-safe completion markers, and
-cursor telemetry keep normal multi-pod deployments from running the same warm
-cycle concurrently.
+CacheDB `v0.6.0` expands the stable generated API into a declarative application
+surface: package-level domain wiring, bounded relation loaders, typed projection
+records, route contracts, optimistic write receipts, durable write dependencies,
+and typed multi-pod Redis Stream jobs. The PostgreSQL and MSSQL samples expose
+the same layered contract with generated read models and application services.
 
 This release does not claim that every consuming application can cut production
 traffic over without its own validation. Before cutover, each application still
@@ -55,7 +54,7 @@ topologies must be proven in the consuming application's staging environment.
 ## Release Notes Template
 
 ```markdown
-## cache-database v0.5.0
+## cache-database v0.6.0
 
 This stable release improves the practical migration path for existing SQL-backed applications.
 
@@ -72,6 +71,10 @@ This stable release improves the practical migration path for existing SQL-backe
 - Multi-pod coordination, leader lease, and local Docker HA preflight evidence.
 - Declarative periodic warm plans with Redis lease, heartbeat, bounded waiting, and cluster-wide deduplication.
 - Incremental policy reconciliation that removes stale, missing, or invalid cache payloads without mutating SQL.
+- Generated bounded relation loaders, partitioned sorted indexes, projection records, and strict route contracts.
+- Optimistic write receipts, durable parent dependencies, and explicit SQL durability tracking.
+- Typed Redis Stream jobs with pod failover, abandoned-work claiming, bounded retries, and idempotent-handler contracts.
+- Spring Boot Actuator health for Redis, SQL, write-behind backlog, dead letters, and recovery state.
 - PostgreSQL and MSSQL REST samples with Docker Compose, Postman collections, and local hot-route load scripts.
 - GitHub Release asset as the official package distribution channel.
 
@@ -92,13 +95,13 @@ comparison, Redis memory budget, and rollback plan.
 ## Publication Checklist
 
 - `pom.xml` and all module parent versions use the stable version.
-- Release notes exist at `docs/releases/v0.5.0.md`.
+- Release notes exist at `docs/releases/v0.6.0.md`.
 - `mvn -DskipTests package` passes.
 - Public API compatibility check passes.
 - Turkish documentation quality check passes.
 - Local Docker HA preflight passes or the latest CI evidence is green.
 - `Public Beta Readiness` and `Production Evidence` are green for the release
   commit.
-- `Production GA Release Readiness` is green for `v0.5.0`.
+- `Production GA Release Readiness` is green for `v0.6.0`.
 - GitHub Release is not marked as prerelease.
-- GitHub Release asset `cache-database-0.5.0-github-release.zip` is attached.
+- GitHub Release asset `cache-database-0.6.0-github-release.zip` is attached.

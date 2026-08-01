@@ -16,8 +16,11 @@ on:
       - "cachedb-spring-boot-starter/**"
       - "cachedb-examples/**"
       - "cachedb-production-tests/**"
+      - "sample-cache-database-postgresql/**"
+      - "sample-cache-database-mssql/**"
       - "tools/ci/**"
       - "tools/ops/cluster/**"
+      - "tools/samples/**"
       - "docs/**"
       - "tr/docs/**"
       - "pom.xml"
@@ -38,13 +41,28 @@ on:
       - "cachedb-spring-boot-starter/**"
       - "cachedb-examples/**"
       - "cachedb-production-tests/**"
+      - "sample-cache-database-postgresql/**"
+      - "sample-cache-database-mssql/**"
       - "tools/ci/**"
       - "tools/ops/cluster/**"
+      - "tools/samples/**"
       - "docs/**"
       - "tr/docs/**"
       - "pom.xml"
 
 jobs:
+  sample-provider-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Verify provider-neutral sample parity
+        shell: pwsh
+        run: ./tools/samples/sync-sample-provider.ps1 -Check
+
   production-evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 30

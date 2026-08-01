@@ -1,5 +1,6 @@
 package com.reactor.cachedb.spring.boot;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reactor.cachedb.core.config.AdminHttpConfig;
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
@@ -19,6 +20,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.beans.factory.ObjectProvider;
@@ -32,6 +34,7 @@ import redis.clients.jedis.JedisPooled;
 import javax.sql.DataSource;
 import java.lang.reflect.InvocationTargetException;
 import java.sql.Connection;
+import java.util.List;
 
 @AutoConfiguration
 @ConditionalOnClass({CacheDatabase.class, DataSource.class, JedisPooled.class, Servlet.class})
@@ -172,6 +175,18 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         return cacheDatabase;
     }
 
+    @Bean
+    @ConditionalOnClass(HealthIndicator.class)
+    @ConditionalOnBean(CacheDatabase.class)
+    @ConditionalOnMissingBean(name = "cacheDatabaseHealthIndicator")
+    public CacheDatabaseHealthIndicator cacheDatabaseHealthIndicator(
+            CacheDatabase cacheDatabase,
+            @Qualifier("cacheDbJedisPooled") JedisPooled jedis,
+            DataSource dataSource
+    ) {
+        return new CacheDatabaseHealthIndicator(cacheDatabase, jedis, dataSource);
+    }
+
     @Bean(destroyMethod = "close")
     @ConditionalOnBean(CacheDatabase.class)
     @ConditionalOnMissingBean
@@ -195,6 +210,56 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                 scheduledWarm.getLockKeySegment(),
                 scheduledWarm.getHeartbeatThreads(),
                 scheduledWarm.getShutdownAwaitMillis()
+        );
+    }
+
+    @Bean(destroyMethod = "close")
+    @ConditionalOnBean(CacheDatabase.class)
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "cachedb.jobs", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CacheDistributedJobExecutor cacheDistributedJobExecutor(
+            CacheDatabase cacheDatabase,
+            @Qualifier("cacheDbBackgroundJedisPooled") ObjectProvider<JedisPooled> backgroundJedisProvider,
+            @Qualifier("cacheDbJedisPooled") ObjectProvider<JedisPooled> foregroundJedisProvider,
+            ObjectProvider<ObjectMapper> objectMapperProvider,
+            ObjectProvider<CacheDistributedJobHandler<?>> handlerProvider,
+            CacheDbSpringProperties properties
+    ) {
+        JedisPooled jedis = backgroundJedisProvider.getIfAvailable(foregroundJedisProvider::getIfAvailable);
+        if (jedis == null) {
+            throw new IllegalStateException("CacheDB distributed jobs require a CacheDB Redis client");
+        }
+        return new CacheDistributedJobExecutor(
+                jedis,
+                objectMapperProvider.getIfAvailable(ObjectMapper::new),
+                cacheDatabase.instanceId(),
+                properties.getJobs(),
+                handlerProvider.orderedStream().toList()
+        );
+    }
+
+    /**
+     * Compatibility entry point for callers that instantiated the auto-configuration directly.
+     * Spring uses the handler-aware {@link Bean} method above.
+     */
+    @Deprecated(since = "0.5.0", forRemoval = false)
+    public CacheDistributedJobExecutor cacheDistributedJobExecutor(
+            CacheDatabase cacheDatabase,
+            ObjectProvider<JedisPooled> backgroundJedisProvider,
+            ObjectProvider<JedisPooled> foregroundJedisProvider,
+            ObjectProvider<ObjectMapper> objectMapperProvider,
+            CacheDbSpringProperties properties
+    ) {
+        JedisPooled jedis = backgroundJedisProvider.getIfAvailable(foregroundJedisProvider::getIfAvailable);
+        if (jedis == null) {
+            throw new IllegalStateException("CacheDB distributed jobs require a CacheDB Redis client");
+        }
+        return new CacheDistributedJobExecutor(
+                jedis,
+                objectMapperProvider.getIfAvailable(ObjectMapper::new),
+                cacheDatabase.instanceId(),
+                properties.getJobs(),
+                List.of()
         );
     }
 

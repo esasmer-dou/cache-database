@@ -28,7 +28,7 @@ public record RedisFunctionsConfig(
         this(
                 enabled, autoLoadLibrary, replaceLibraryOnLoad, strictLoading, libraryName,
                 upsertFunctionName, deleteFunctionName, compactionCompleteFunctionName,
-                templateResourcePath, sourceOverride, "0.3.0"
+                templateResourcePath, sourceOverride, "0.4.0"
         );
     }
 
@@ -51,7 +51,7 @@ public record RedisFunctionsConfig(
         private String compactionCompleteFunctionName = "compaction_complete";
         private String templateResourcePath = "/functions/cachedb-functions.lua";
         private String sourceOverride;
-        private String libraryVersion = "0.3.0";
+        private String libraryVersion = "0.4.0";
 
         public Builder enabled(boolean enabled) {
             this.enabled = enabled;

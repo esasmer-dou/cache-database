@@ -16,7 +16,9 @@ import com.reactor.cachedb.core.guardrail.ReadShapeGuardrails;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.model.OperationType;
+import com.reactor.cachedb.core.model.WriteDependency;
 import com.reactor.cachedb.core.model.WriteOperation;
+import com.reactor.cachedb.core.model.WriteReceipt;
 import com.reactor.cachedb.core.page.EntityByIdLoader;
 import com.reactor.cachedb.core.page.EntityPageLoader;
 import com.reactor.cachedb.core.page.EntityQueryLoader;
@@ -32,6 +34,8 @@ import com.reactor.cachedb.core.projection.ProjectionEntityCodec;
 import com.reactor.cachedb.core.projection.ProjectionEntityMetadata;
 import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.query.QueryExplainPlan;
+import com.reactor.cachedb.core.query.PartitionedQuerySpec;
+import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.queue.PerformanceObservationContext;
@@ -53,6 +57,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -93,6 +98,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     private final ProjectionRefreshDispatcher projectionRefreshDispatcher;
     private final RedisProjectionRefreshQueue projectionRefreshQueue;
     private final RedisVersionedHydrator versionedHydrator;
+    private final RedisDurabilityTracker durabilityTracker;
     private final Map<String, ProjectionSupport<T, ID, ?>> projectionSupportCache = new ConcurrentHashMap<>();
 
     public RedisEntityRepository(
@@ -198,6 +204,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         this.projectionRefreshDispatcher = projectionRefreshDispatcher;
         this.projectionRefreshQueue = projectionRefreshQueue;
         this.versionedHydrator = new RedisVersionedHydrator(jedis);
+        this.durabilityTracker = new RedisDurabilityTracker(this.backgroundJedis, keyStrategy);
     }
 
     @Override
@@ -449,6 +456,87 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         }
     }
 
+    @Override
+    public <K> Map<K, List<T>> queryPartitions(PartitionedQuerySpec<K> partitionedQuery) {
+        long startedAt = System.nanoTime();
+        try {
+            if (partitionedQuery == null || partitionedQuery.partitionValues().isEmpty()) {
+                return Map.of();
+            }
+            if (partitionedQuery.requestedRowCount() > 10_000) {
+                throw new IllegalArgumentException("Partitioned entity query supports at most 10000 rows per call");
+            }
+            validateEntityRouteContract("Partitioned entity query", partitionedQuery.requestedRowCount());
+            ReadShapeGuardrails.validateEntityQuery(
+                    metadata.entityName(),
+                    QuerySpec.where(QueryFilter.eq(
+                            partitionedQuery.partitionColumn(),
+                            partitionedQuery.partitionValues().get(0)
+                    )).limitTo(partitionedQuery.limitPerPartition()),
+                    effectiveCachePolicy(),
+                    readShapeGuardrailConfig
+            );
+            Map<K, List<String>> idsByPartition = queryIndexManager.resolvePartitionedIds(partitionedQuery);
+            List<String> payloadIds = idsByPartition.values().stream().flatMap(Collection::stream).distinct().toList();
+            if (payloadIds.isEmpty()) {
+                LinkedHashMap<K, List<T>> empty = new LinkedHashMap<>();
+                partitionedQuery.partitionValues().forEach(value -> empty.put(value, List.of()));
+                return Collections.unmodifiableMap(empty);
+            }
+
+            List<String> entityKeys = payloadIds.stream()
+                    .map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id))
+                    .toList();
+            List<String> tombstoneKeys = payloadIds.stream()
+                    .map(id -> keyStrategy.tombstoneKey(metadata.redisNamespace(), id))
+                    .toList();
+            List<String> values = mgetEntityAndTombstones(entityKeys, tombstoneKeys);
+            LinkedHashMap<String, T> entitiesById = new LinkedHashMap<>(payloadIds.size());
+            ArrayList<String> staleIds = new ArrayList<>();
+            for (int index = 0; index < payloadIds.size(); index++) {
+                String payload = values.get(index);
+                String tombstone = values.get(payloadIds.size() + index);
+                if (payload == null || tombstone != null) {
+                    staleIds.add(payloadIds.get(index));
+                    continue;
+                }
+                T entity = codec.fromRedisValue(payload);
+                if (pageCacheManager.shouldServeCachedEntity(entity)) {
+                    entitiesById.put(payloadIds.get(index), entity);
+                }
+            }
+            staleIds.forEach(queryIndexManager::removeById);
+
+            LinkedHashMap<K, List<T>> result = new LinkedHashMap<>(partitionedQuery.partitionValues().size());
+            for (K partitionValue : partitionedQuery.partitionValues()) {
+                ArrayList<T> partition = new ArrayList<>();
+                for (String id : idsByPartition.getOrDefault(partitionValue, List.of())) {
+                    T entity = entitiesById.get(id);
+                    if (entity != null) {
+                        partition.add(entity);
+                    }
+                }
+                Map<T, Map<String, Object>> sortColumns = new IdentityHashMap<>(partition.size());
+                for (T entity : partition) {
+                    sortColumns.put(entity, codec.toColumns(entity));
+                }
+                partition.sort((left, right) -> compareBySorts(
+                        sortColumns.get(left),
+                        sortColumns.get(right),
+                        partitionedQuery.sorts()
+                ));
+                if (partition.size() > partitionedQuery.limitPerPartition()) {
+                    partition.subList(partitionedQuery.limitPerPartition(), partition.size()).clear();
+                }
+                applyFetchPlan(partition);
+                result.put(partitionValue, List.copyOf(partition));
+            }
+            return Collections.unmodifiableMap(result);
+        } finally {
+            recordRedisRead(startedAt);
+        }
+    }
+
     private List<String> windowResolvedCandidateIds(
             QuerySpec querySpec,
             List<String> candidateIds,
@@ -475,6 +563,143 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
 
     @Override
     public T save(T entity) {
+        return saveInternal(entity, -1L, null).entity();
+    }
+
+    @Override
+    public WriteReceipt<T, ID> saveWithReceipt(T entity) {
+        return saveInternal(entity, -1L, null);
+    }
+
+    @Override
+    public WriteReceipt<T, ID> save(T entity, long expectedVersion) {
+        if (expectedVersion < 0) {
+            throw new IllegalArgumentException("expectedVersion must not be negative");
+        }
+        return saveInternal(entity, expectedVersion, null);
+    }
+
+    @Override
+    public WriteReceipt<T, ID> saveAfter(T entity, WriteDependency dependency) {
+        if (dependency == null) {
+            throw new IllegalArgumentException("dependency must not be null");
+        }
+        return saveInternal(entity, -1L, dependency);
+    }
+
+    @Override
+    public List<WriteReceipt<T, ID>> saveAll(Collection<T> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return List.of();
+        }
+        List<T> input = List.copyOf(entities);
+        if (input.size() > 10_000) {
+            throw new IllegalArgumentException("Bulk save supports at most 10000 entities per call");
+        }
+        java.util.HashSet<ID> uniqueIds = new java.util.HashSet<>(input.size());
+        for (T entity : input) {
+            ID id = entity == null ? null : metadata.idAccessor().apply(entity);
+            if (id == null || !uniqueIds.add(id)) {
+                throw new IllegalArgumentException("Bulk save requires non-null entities with unique ids");
+            }
+        }
+        if (functionExecutor == null || !functionExecutor.enabled()) {
+            return input.stream().map(this::saveWithReceipt).toList();
+        }
+
+        ArrayList<WriteReceipt<T, ID>> receipts = new ArrayList<>(input.size());
+        for (int start = 0; start < input.size(); start += 128) {
+            int end = Math.min(input.size(), start + 128);
+            receipts.addAll(saveBatch(input.subList(start, end)));
+        }
+        return List.copyOf(receipts);
+    }
+
+    private List<WriteReceipt<T, ID>> saveBatch(List<T> entities) {
+        long startedAt = System.nanoTime();
+        try {
+            producerGuard.applyBackpressure();
+            CachePolicy effectivePolicy = effectiveCachePolicy();
+            ArrayList<RedisFunctionExecutor.UpsertRequest> requests = new ArrayList<>(entities.size());
+            ArrayList<WriteOperation<T, ID>> operations = new ArrayList<>(entities.size());
+            ArrayList<ID> ids = new ArrayList<>(entities.size());
+            ArrayList<Map<String, Object>> columnsByEntity = new ArrayList<>(entities.size());
+            ArrayList<Long> payloadBytes = new ArrayList<>(entities.size());
+            ArrayList<Boolean> admitted = new ArrayList<>(entities.size());
+            for (T entity : entities) {
+                ID id = metadata.idAccessor().apply(entity);
+                String encoded = codec.toRedisValue(entity);
+                Map<String, Object> columns = codec.toColumns(entity);
+                long estimatedBytes = estimatePayloadBytes(encoded);
+                boolean cacheEntity = shouldCacheEntity(
+                        id, columns, CacheAdmissionSource.WRITE, effectivePolicy, estimatedBytes
+                );
+                WriteOperation<T, ID> operation = new WriteOperation<>(
+                        OperationType.UPSERT,
+                        metadata,
+                        id,
+                        columns,
+                        encoded,
+                        0L,
+                        Instant.now()
+                );
+                String targetCompactionStreamKey = keyStrategy.compactionStreamKey(
+                        compactionStreamKey,
+                        metadata.redisNamespace(),
+                        id,
+                        compactionShardCount
+                );
+                requests.add(new RedisFunctionExecutor.UpsertRequest(
+                        List.of(
+                                keyStrategy.entityKey(metadata.redisNamespace(), id),
+                                keyStrategy.versionKey(metadata.redisNamespace(), id),
+                                keyStrategy.tombstoneKey(metadata.redisNamespace(), id),
+                                streamKey,
+                                keyStrategy.compactionPayloadKey(metadata.redisNamespace(), id),
+                                keyStrategy.compactionPendingKey(metadata.redisNamespace(), id),
+                                targetCompactionStreamKey,
+                                keyStrategy.compactionStatsKey()
+                        ),
+                        operation,
+                        effectivePolicy,
+                        cacheEntity
+                ));
+                operations.add(operation);
+                ids.add(id);
+                columnsByEntity.add(columns);
+                payloadBytes.add(estimatedBytes);
+                admitted.add(cacheEntity);
+            }
+
+            List<Long> versions = functionExecutor.upsertBatch(requests);
+            ArrayList<T> indexedEntities = new ArrayList<>(entities.size());
+            ArrayList<WriteReceipt<T, ID>> receipts = new ArrayList<>(entities.size());
+            for (int index = 0; index < entities.size(); index++) {
+                ID id = ids.get(index);
+                if (admitted.get(index)) {
+                    indexedEntities.add(entities.get(index));
+                    pageCacheManager.recordEntityAccess(id, columnsByEntity.get(index), payloadBytes.get(index));
+                } else if (effectivePolicy.hotPolicy().evictWhenRejected()) {
+                    pageCacheManager.removeEntity(id);
+                }
+                receipts.add(new WriteReceipt<>(
+                        entities.get(index),
+                        id,
+                        metadata.redisNamespace(),
+                        OperationType.UPSERT,
+                        versions.get(index),
+                        operations.get(index).createdAt()
+                ));
+            }
+            queryIndexManager.reindexBatch(indexedEntities);
+            syncProjectionPayloadsBatch(entities, false);
+            return List.copyOf(receipts);
+        } finally {
+            recordRedisWrite(startedAt);
+        }
+    }
+
+    private WriteReceipt<T, ID> saveInternal(T entity, long expectedVersion, WriteDependency dependency) {
         long startedAt = System.nanoTime();
         try {
             producerGuard.applyBackpressure();
@@ -503,11 +728,14 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                     columns,
                     encoded,
                     0L,
-                    Instant.now()
+                    Instant.now(),
+                    dependency
             );
 
+            long version;
+
             if (functionExecutor != null && functionExecutor.enabled()) {
-                functionExecutor.upsert(
+                version = functionExecutor.upsert(
                         redisKey,
                         versionKey,
                         tombstoneKey,
@@ -518,7 +746,8 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                         compactionStatsKey,
                         operation,
                         effectiveCachePolicy,
-                        cacheEntity
+                        cacheEntity,
+                        expectedVersion
                 );
                 if (cacheEntity) {
                     queryIndexManager.reindex(entity);
@@ -527,7 +756,13 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                     pageCacheManager.removeEntity(id);
                 }
             } else {
-                long version = jedis.incr(versionKey);
+                if (expectedVersion >= 0) {
+                    throw new UnsupportedOperationException(
+                            "Atomic optimistic writes require Redis Functions for " + metadata.entityName()
+                                    + ". Enable the CacheDB Redis function executor instead of using the legacy fallback."
+                    );
+                }
+                version = jedis.incr(versionKey);
                 jedis.del(tombstoneKey);
                 Map<String, Object> persistedColumns = enrichColumnsForPersistence(operation.columns(), version, false);
                 if (cacheEntity) {
@@ -542,11 +777,19 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                         persistedColumns,
                         encoded,
                         version,
-                        operation.createdAt()
+                        operation.createdAt(),
+                        dependency
                 ));
             }
             syncProjectionPayloads(entity, false);
-            return entity;
+            return new WriteReceipt<>(
+                    entity,
+                    id,
+                    metadata.redisNamespace(),
+                    OperationType.UPSERT,
+                    version,
+                    operation.createdAt()
+            );
         } finally {
             recordRedisWrite(startedAt);
         }
@@ -717,16 +960,19 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             List<Boolean> hydrationResults = versionedHydrator.upsertBatch(hydrationOperations);
             ArrayList<T> hydratedEntities = new ArrayList<>(admittedEntities.size());
             ArrayList<ID> hydratedIds = new ArrayList<>(admittedIds.size());
+            ArrayList<Long> hydratedVersions = new ArrayList<>(admittedVersions.size());
             ArrayList<Map<String, Object>> hydratedColumns = new ArrayList<>(admittedColumns.size());
             ArrayList<Long> hydratedPayloadBytes = new ArrayList<>(admittedPayloadBytes.size());
             for (int index = 0; index < hydrationResults.size(); index++) {
                 if (hydrationResults.get(index)) {
                     hydratedEntities.add(admittedEntities.get(index));
                     hydratedIds.add(admittedIds.get(index));
+                    hydratedVersions.add(admittedVersions.get(index));
                     hydratedColumns.add(admittedColumns.get(index));
                     hydratedPayloadBytes.add(admittedPayloadBytes.get(index));
                 }
             }
+            durabilityTracker.advanceBatch(metadata.redisNamespace(), hydratedIds, hydratedVersions);
             if (effectiveCachePolicy.hotPolicy().evictWhenRejected()) {
                 for (ID rejectedId : rejectedIds) {
                     pageCacheManager.removeEntity(rejectedId);
@@ -746,6 +992,38 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             return List.copyOf(hydratedEntities);
         } finally {
             recordRedisWrite(startedAt);
+        }
+    }
+
+    @Override
+    public Optional<VersionedEntity<T>> findVersionedById(ID id) {
+        long startedAt = System.nanoTime();
+        try {
+            String entityKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
+            String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
+            String versionKey = keyStrategy.versionKey(metadata.redisNamespace(), id);
+            List<String> values = jedis.mget(entityKey, tombstoneKey, versionKey);
+            if (values.get(0) == null || values.get(1) != null) {
+                return Optional.empty();
+            }
+            long version = parsePositiveVersion(values.get(2));
+            if (version <= 0) {
+                throw new IllegalStateException(
+                        "Cached entity " + metadata.entityName() + " id=" + id + " has no positive Redis version"
+                );
+            }
+            T entity = codec.fromRedisValue(values.get(0));
+            if (!pageCacheManager.shouldServeCachedEntity(entity)) {
+                if (effectiveCachePolicy().hotPolicy().evictWhenRejected()) {
+                    pageCacheManager.removeEntity(id);
+                }
+                return Optional.empty();
+            }
+            pageCacheManager.recordEntityAccess(id);
+            applyFetchPlan(List.of(entity));
+            return Optional.of(new VersionedEntity<>(entity, version));
+        } finally {
+            recordRedisRead(startedAt);
         }
     }
 
@@ -838,6 +1116,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             if (!hydrated) {
                 return entity;
             }
+            durabilityTracker.advance(metadata.redisNamespace(), id, version);
             if (reindexQueryIndexes) {
                 queryIndexManager.reindex(entity);
             }
@@ -979,6 +1258,17 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
             throw new IllegalArgumentException(
                     "Hydration for " + metadata.entityName() + " requires a source version greater than zero"
             );
+        }
+    }
+
+    private long parsePositiveVersion(String value) {
+        if (value == null || value.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Math.max(0L, Long.parseLong(value));
+        } catch (NumberFormatException ignored) {
+            return 0L;
         }
     }
 

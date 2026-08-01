@@ -53,7 +53,7 @@ function Wait-SampleReady {
     $lastStatus = $null
     do {
         try {
-            $ready = Invoke-RestMethod -Uri ($BaseUrl.TrimEnd("/") + "/api/health/ready") -TimeoutSec 5
+            $ready = Invoke-RestMethod -Uri ($BaseUrl.TrimEnd("/") + "/actuator/health/readiness") -TimeoutSec 5
             $lastStatus = $ready
             $deadLetters = if ($null -ne $ready.deadLetterCount) { [int64] $ready.deadLetterCount } else { 0 }
             $pendingRecovery = if ($null -ne $ready.pendingRecoveryCount) { [int64] $ready.pendingRecoveryCount } else { 0 }

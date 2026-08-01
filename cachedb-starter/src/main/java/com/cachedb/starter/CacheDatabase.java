@@ -2,6 +2,7 @@ package com.reactor.cachedb.starter;
 
 import com.reactor.cachedb.core.api.CacheSession;
 import com.reactor.cachedb.core.api.EntityRepository;
+import com.reactor.cachedb.core.api.SourceRepository;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.AdminHttpConfig;
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
@@ -13,6 +14,7 @@ import com.reactor.cachedb.core.config.SchemaBootstrapMode;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
+import com.reactor.cachedb.core.model.WriteReceipt;
 import com.reactor.cachedb.core.page.EntityByIdLoader;
 import com.reactor.cachedb.core.page.EntityPageLoader;
 import com.reactor.cachedb.core.page.EntityQueryLoader;
@@ -45,6 +47,7 @@ import com.reactor.cachedb.redis.RedisFunctionExecutor;
 import com.reactor.cachedb.redis.RedisFunctionLibrarySource;
 import com.reactor.cachedb.redis.RedisFunctionLoader;
 import com.reactor.cachedb.redis.RedisDeadLetterManagement;
+import com.reactor.cachedb.redis.RedisDurabilityTracker;
 import com.reactor.cachedb.redis.RedisDeadLetterRecoveryWorker;
 import com.reactor.cachedb.redis.RedisRecoveryCleanupWorker;
 import com.reactor.cachedb.redis.RedisHotSetManager;
@@ -63,6 +66,7 @@ import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -102,6 +106,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     private final RedisProjectionRefreshWorker projectionRefreshWorker;
     private final ProductionReportCatalog productionReportCatalog;
     private final CacheDatabaseAdmin admin;
+    private final RedisDurabilityTracker durabilityTracker;
 
     public static CacheDatabaseBootstrap bootstrap(DataSource dataSource) {
         return CacheDatabaseBootstrap.using(dataSource);
@@ -195,6 +200,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 config.keyspace().indexSegment(),
                 config.keyspace().compactionSegment()
         );
+        this.durabilityTracker = new RedisDurabilityTracker(backgroundJedis, keyStrategy);
         RedisFunctionExecutor functionExecutor = new RedisFunctionExecutor(
                 foregroundJedis,
                 config.redisFunctions(),
@@ -710,6 +716,40 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             CachePolicy cachePolicy
     ) {
         return session.repository(metadata, codec, cachePolicy);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T, ID> SourceRepository<T, ID> sourceRepository(
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec
+    ) {
+        EntityBinding<?, ?> rawBinding = entityRegistry.find(metadata.entityName())
+                .orElseThrow(() -> new IllegalStateException(
+                        "No registered CacheDB entity found for source reads: " + metadata.entityName()
+                ));
+        EntityBinding<T, ID> binding = (EntityBinding<T, ID>) rawBinding;
+        return new RegisteredSourceRepository<>(
+                metadata.entityName(),
+                binding.byIdLoader(),
+                binding.pageLoader(),
+                binding.queryLoader()
+        );
+    }
+
+    public boolean isDurable(WriteReceipt<?, ?> receipt) {
+        return durabilityTracker.isDurable(receipt);
+    }
+
+    public boolean awaitDurable(WriteReceipt<?, ?> receipt, Duration timeout) {
+        return durabilityTracker.await(receipt, timeout, Duration.ofMillis(25));
+    }
+
+    public boolean awaitDurable(
+            Collection<? extends WriteReceipt<?, ?>> receipts,
+            Duration timeout
+    ) {
+        return durabilityTracker.awaitAll(receipts, timeout, Duration.ofMillis(25));
     }
 
     public EntityRegistry entityRegistry() {

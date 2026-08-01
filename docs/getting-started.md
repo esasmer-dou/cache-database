@@ -36,7 +36,7 @@ Use this path for most Spring Boot applications.
 
 ```xml
 <properties>
-    <cachedb.version>0.5.0</cachedb.version>
+    <cachedb.version>0.6.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -98,7 +98,7 @@ Use this path when you do not use Spring Boot.
 
 ```xml
 <properties>
-    <cachedb.version>0.5.0</cachedb.version>
+    <cachedb.version>0.6.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -221,18 +221,17 @@ Important:
 - Keep the entity small.
 - Add relation fields only when there is a clear read requirement.
 
-Expose one generated package scope. Do not create a Spring bean for every
-entity repository and projection:
+Enable one generated package scope. Do not create a Spring bean for every
+entity repository and projection. Add this annotation to the entity package's
+`package-info.java`:
 
 ```java
-@Configuration(proxyBeanMethods = false)
-public class CacheDbDomainConfig {
-    @Bean
-    GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-        return GeneratedCacheModule.using(cacheDatabase);
-    }
-}
+@com.reactor.cachedb.annotations.CacheDomain(spring = true)
+package com.acme.orders.domain;
 ```
+
+The processor generates the Spring configuration and exposes one
+`GeneratedCacheModule.Scope` bean for application-service injection.
 
 ## 6. First Save And Read
 
@@ -307,21 +306,21 @@ public class OrderEntity {
 }
 ```
 
-Declare the loader and a bounded fetch preset on the parent entity:
+Declare a typed, bounded relation and a fetch preset on the parent entity. The
+processor generates the standard partitioned loader:
 
 ```java
-@CacheEntity(
-        table = "customers",
-        redisNamespace = "customers",
-        relationLoader = CustomerOrdersRelationBatchLoader.class
-)
+@CacheEntity(table = "customers", redisNamespace = "customers")
 public class CustomerEntity {
     @CacheRelation(
-            targetEntity = "OrderEntity",
+            target = OrderEntity.class,
             // OrderEntity.customerId maps to orders.customer_id.
             mappedBy = "customerId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 100,
+            parentBatchSize = 32,
+            orderBy = {"orderDate DESC", "orderId DESC"}
     )
     public List<OrderEntity> orders;
 
@@ -334,10 +333,10 @@ public class CustomerEntity {
 
 This annotation is CacheDB metadata. It is not a database foreign key. If the
 database has `orders.customer_id -> customers.customer_id` but this annotation
-and a registered `RelationBatchLoader` are missing, CacheDB will not preload the
-relation. If the annotation and loader exist but the database has no foreign
-key, CacheDB can still load the relation through `mappedBy`, but durable
-integrity is now your responsibility.
+is missing, CacheDB will not preload the relation. If the annotation-generated
+loader exists but the database has no foreign key, CacheDB can still load the
+relation through `mappedBy`, but durable integrity is now your responsibility.
+Set `@CacheEntity.relationLoader` only when custom loading logic is required.
 
 Read:
 

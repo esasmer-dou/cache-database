@@ -3,6 +3,7 @@ package com.example.cachedb.sample.domain;
 import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheEntity;
 import com.reactor.cachedb.annotations.CacheId;
+import com.reactor.cachedb.annotations.CachePartitionedIndex;
 import com.reactor.cachedb.annotations.CacheNamedQuery;
 import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
@@ -12,6 +13,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 @CacheEntity(table = "sample_order_lines", redisNamespace = "sample-order-lines")
+@CachePartitionedIndex(partitionBy = "order_id", sortBy = "line_number")
 public class OrderLineEntity {
 
     @CacheId(column = "line_id")

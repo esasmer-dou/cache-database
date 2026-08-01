@@ -4,7 +4,8 @@ function Run-Proc {
     param(
         [Parameter(Mandatory = $true)][string]$File,
         [Parameter(Mandatory = $true)][string]$Arguments,
-        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [hashtable]$Environment = @{}
     )
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
@@ -15,6 +16,9 @@ function Run-Proc {
     $psi.RedirectStandardError = $true
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    foreach ($entry in $Environment.GetEnumerator()) {
+        $psi.Environment[$entry.Key] = [string]$entry.Value
+    }
 
     $process = [System.Diagnostics.Process]::Start($psi)
     $stdout = $process.StandardOutput.ReadToEnd()
@@ -32,8 +36,16 @@ $root = 'E:\ReactorRepository\cache-database'
 $cmd = 'C:\Windows\System32\cmd.exe'
 $docker = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
 $dockerWd = 'C:\Program Files\Docker\Docker\resources\bin'
+$javaHome = & (Join-Path $root "tools\build\resolve-java-home.ps1")
+$maven = 'C:\apache-maven-3.9.6\bin\mvn.cmd'
+$buildEnvironment = @{
+    JAVA_HOME = $javaHome
+    Path = "$javaHome\bin;C:\apache-maven-3.9.6\bin;" +
+            [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+            [System.Environment]::GetEnvironmentVariable("Path", "User")
+}
 
-Run-Proc $cmd '/c cd /d E:\ReactorRepository\cache-database && set "JAVA_HOME=C:\java64\Semeru\jdk-21.0.2.13-openj9" && set "PATH=C:\java64\Semeru\jdk-21.0.2.13-openj9\bin;C:\apache-maven-3.9.6\bin;%PATH%" && call C:\apache-maven-3.9.6\bin\mvn.cmd -q -s tools\build\maven-offline-settings.xml -pl cachedb-examples -am -DskipTests install' $root | Out-Null
+Run-Proc $cmd "/c call `"$maven`" -q -s tools\build\maven-offline-settings.xml -pl cachedb-examples -am -DskipTests install" $root $buildEnvironment | Out-Null
 
 try {
     Run-Proc $docker 'rm -f cachedb-demo-ui' $dockerWd | Out-Null

@@ -117,7 +117,7 @@ otomatik hızlandırmasını beklemek.
 
 ```xml
 <properties>
-    <cachedb.version>0.5.0</cachedb.version>
+    <cachedb.version>0.6.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -243,16 +243,15 @@ runtime'da entity field'larını reflection ile keşfetme maliyeti hedeflenmez.
 
 ## İlk Okuma ve Yazma
 
-Paket için üretilen erişim yüzeyini tek bean olarak aç:
+Entity paketinde Spring domain yüzeyini bir kez etkinleştir:
 
 ```java
-@Bean
-GeneratedCacheModule.Scope domain(CacheDatabase cacheDatabase) {
-    return GeneratedCacheModule.using(cacheDatabase);
-}
+@com.reactor.cachedb.annotations.CacheDomain(spring = true)
+package com.acme.orders.domain;
 ```
 
-Normal servis koduna yalnızca `GeneratedCacheModule.Scope` enjekte et:
+Processor, Spring yapılandırmasını ve tek bir `GeneratedCacheModule.Scope`
+bean'ini üretir. Uygulama servislerine yalnızca bu scope'u enjekte et:
 
 ```java
 CustomerEntity customer = new CustomerEntity();
@@ -287,7 +286,7 @@ Relation'ı üç ayrı katman olarak düşün:
 | --- | --- | --- |
 | Kaynak veritabanındaki primary/foreign key | Kalıcı veri bütünlüğünü korur, orphan satır oluşmasını engeller | Önerilir, ama tek başına yeterli değildir |
 | `@CacheRelation` metadata'sı | Parent entity alanının hangi hedef entity ile ilişkili olduğunu CacheDB'ye anlatır | Evet |
-| `RelationBatchLoader` + `FetchPlan` | İstenen relation'ı limitli ve batch halinde gerçekten yükler | Evet |
+| Üretilen veya özel loader + `FetchPlan` | İstenen relation'ı sınırlı ve toplu biçimde yükler | Evet |
 
 Kural net:
 
@@ -295,26 +294,27 @@ Kural net:
 - `@CacheRelation`, veritabanında constraint oluşturmaz.
 - `kind = ONE_TO_MANY` bir DDL tanımı değil, relation şekli bilgisidir.
 - `mappedBy`, hedef entity üzerinde parent id taşıyan alanı göstermelidir.
-- Relation preload ancak kaynak entity somut bir `RelationBatchLoader` ile
-  kayıtlıysa ve okuma tarafı relation'ı `FetchPlan` veya `withRelationLimit(...)`
-  ile açıkça isterse çalışır.
+- Tip güvenli hedef ve sınırlı sıralama bilgisi verildiğinde processor standart
+  partitioned loader'ı üretir. `@CacheEntity.relationLoader` yalnızca özel yükleme
+  mantığı gerektiğinde kullanılmalıdır.
+- Okuma tarafı relation'ı yine `FetchPlan` veya `withRelationLimit(...)` ile
+  açıkça istemelidir.
 
 ```java
-@CacheEntity(
-        table = "customers",
-        redisNamespace = "customers",
-        relationLoader = CustomerOrdersRelationBatchLoader.class
-)
+@CacheEntity(table = "customers", redisNamespace = "customers")
 public class CustomerEntity {
     @CacheId(column = "customer_id")
     public Long customerId;
 
     @CacheRelation(
-            targetEntity = "OrderEntity",
+            target = OrderEntity.class,
             // OrderEntity.customerId alanı; order tablosundaki customer_id kolonuna map edilir.
             mappedBy = "customerId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 100,
+            parentBatchSize = 32,
+            orderBy = {"orderDate DESC", "orderId DESC"}
     )
     public List<OrderEntity> orders;
 }
@@ -331,11 +331,11 @@ CustomerEntity customer = customerRepository
 
 Sık görülen durumlar:
 
-| DB foreign key | `@CacheRelation` | Loader | Sonuç |
+| DB foreign key | `@CacheRelation` | Üretilen/özel loader | Sonuç |
 | --- | --- | --- | --- |
 | Var | Yok | Yok | Veritabanı tutarlıdır, ama CacheDB'nin preload edebileceği bir relation yolu yoktur. |
 | Yok | Var | Var | `mappedBy` sorgulanabiliyorsa CacheDB preload yapabilir; fakat orphan veya tutarsız satır riski sana aittir. Bu yol sadece legacy veya soft relation için kabul edilebilir. |
-| Var | Var | Yok | Metadata vardır, ama preload çalışamaz; strict relation ayarında fail-fast olabilir. |
+| Var | Var | Yok | Batch-only relation için üretilebilir veya özel yükleme bilgisi yoksa derleme hatası alınır. |
 | Var | Var | Var | BEST: kalıcı veri bütünlüğü, açık metadata ve limitli batch preload birlikte vardır. |
 
 BEST: Detay ekranında küçük önizleme gerekiyorsa `withRelationLimit(...)` kullan.

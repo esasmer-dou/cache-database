@@ -150,7 +150,7 @@ En önemli ayrım şudur:
 | --- | --- | --- |
 | Kalıcı veri bütünlüğü | Kaynak veritabanı | Primary key, foreign key, unique constraint ve index'ler veriyi doğru tutar. |
 | CacheDB relation metadata'sı | Entity annotation'ları | `@CacheRelation`, kaynak entity üzerinde adlandırılmış bir relation yolu olduğunu söyler. |
-| Çalışma anında relation yükleme | Loader ve fetch plan | `RelationBatchLoader`, sadece `FetchPlan` isterse veriyi yükler. |
+| Çalışma anında relation yükleme | Üretilen/özel loader ve fetch plan | Loader, yalnızca `FetchPlan` istediğinde sınırlı alt kayıt kümesini okur. |
 
 CacheDB, veritabanındaki foreign key'i okuyup kendiliğinden runtime relation
 oluşturmaz. Annotation da DDL değildir; veritabanında foreign key oluşturmaz.
@@ -159,10 +159,13 @@ Production'da genellikle aynı iş ilişkisini göstermeleri gerekir.
 
 ```java
 @CacheRelation(
-        targetEntity = "OrderEntity",
+        target = OrderEntity.class,
         mappedBy = "customerId",
         kind = CacheRelation.RelationKind.ONE_TO_MANY,
-        batchLoadOnly = true
+        batchLoadOnly = true,
+        maxRowsPerParent = 100,
+        parentBatchSize = 32,
+        orderBy = {"orderDate DESC", "orderId DESC"}
 )
 public List<OrderEntity> orders;
 ```
@@ -176,7 +179,9 @@ Kural:
   olmalıdır. Örnek: `OrderEntity.customerId`, `orders.customer_id` kolonuna map
   edilir.
 - Relation yükleme açıkça `FetchPlan` ile istenir.
-- Loader yoksa relation otomatik ve güvenli biçimde yüklenemez.
+- Tip güvenli hedef ve sınırlı sıralama verildiğinde processor standart
+  partitioned loader'ı üretir. Özel SQL veya iş kuralı gerekiyorsa özel loader
+  kullanılabilir.
 - Kaynak veritabanında foreign key olması production için güçlü şekilde
   önerilen bir veri bütünlüğü kuralıdır; fakat `@CacheRelation` veya
   `RelationBatchLoader` yerine geçmez.
@@ -185,11 +190,11 @@ Kural:
 
 ### Constraint ve Metadata Matrisi
 
-| DB constraint | CacheDB metadata | Loader | Davranış |
+| DB constraint | CacheDB metadata | Üretilen/özel loader | Davranış |
 | --- | --- | --- | --- |
 | Var | Yok | Yok | Kaynak veritabanı bütünlüğü korur, ama CacheDB relation yolunu bilmez. `orders` fetch isteği CacheDB için tanımsızdır. |
 | Yok | Var | Var | Loader `mappedBy` üzerinden sorgu yapabiliyorsa CacheDB relation'ı yükleyebilir; fakat kaynak veritabanı orphan child satırlarına izin verebilir. Sadece legacy veya soft relation için kabul edilebilir. |
-| Var | Var | Yok | Query explain relation metadata'sını görebilir, ama preload çalışamaz. Strict relation ayarında istenen fetch path fail-fast olur. |
+| Var | Var | Yok | Batch-only relation için loader üretmeye veya bağlamaya yetecek bilgi yoksa derleme hatası alınır. |
 | Var | Var | Var | BEST: veritabanı bütünlüğü korur, CacheDB ise açık ve limitli preload yoluna sahiptir. |
 
 ### Basit Örnek: Müşteri Detayında Sipariş Önizleme
@@ -197,20 +202,19 @@ Kural:
 Bu model, detay ekranında az sayıda alt kayıt önizlemesi göstermek içindir:
 
 ```java
-@CacheEntity(
-        table = "customers",
-        redisNamespace = "customers",
-        relationLoader = CustomerOrdersRelationBatchLoader.class
-)
+@CacheEntity(table = "customers", redisNamespace = "customers")
 public class CustomerEntity {
     @CacheId(column = "customer_id")
     public Long customerId;
 
     @CacheRelation(
-            targetEntity = "OrderEntity",
+            target = OrderEntity.class,
             mappedBy = "customerId",
             kind = CacheRelation.RelationKind.ONE_TO_MANY,
-            batchLoadOnly = true
+            batchLoadOnly = true,
+            maxRowsPerParent = 100,
+            parentBatchSize = 32,
+            orderBy = {"orderDate DESC", "orderId DESC"}
     )
     public List<OrderEntity> orders;
 }
@@ -248,37 +252,15 @@ customerRepository
         .findById(customerId);
 ```
 
-### Loader Örneği
+### Üretilen Loader
 
-Gerçek okuma stratejisinin sahibi loader'dır. Loader batch ve limitli
-tasarlanmalıdır:
-
-```java
-public final class CustomerOrdersRelationBatchLoader
-        implements RelationBatchLoader<CustomerEntity> {
-
-    private final EntityRepository<OrderEntity, Long> orderRepository;
-
-    public CustomerOrdersRelationBatchLoader(EntityRepository<OrderEntity, Long> orderRepository) {
-        this.orderRepository = orderRepository;
-    }
-
-    @Override
-    public void preload(List<CustomerEntity> customers, RelationBatchContext context) {
-        if (customers.isEmpty() || !context.fetchPlan().includes("orders")) {
-            return;
-        }
-        int limit = context.relationLimit("orders");
-        for (CustomerEntity customer : customers) {
-            customer.orders = orderRepository.query(
-                    QueryFilter.eq("customer_id", customer.customerId),
-                    limit,
-                    QuerySort.desc("order_date")
-            );
-        }
-    }
-}
-```
+Processor yukarıdaki tip güvenli relation tanımından bir
+`PartitionedRelationBatchLoader` üretir. Parent id'leri 32'li gruplar hâlinde
+sorgular, index'li `customerId` bölümünde belirtilen kararlı sıralamayı uygular
+ve parent başına en fazla 100 satır bağlar. Böylece elle yazılmış N+1 döngüsü
+oluşmaz. Yalnızca özel SQL kaynağı veya bu sözleşmeyle anlatılamayan iş kuralı
+varsa `@CacheEntity.relationLoader` kullan; özel loader da parent id'leri toplu
+sorgulamalı ve sınır uygulamalıdır.
 
 Bu model küçük önizleme için kabul edilebilir. Müşteri başına son 1.000 sipariş
 gösteren bir ekran için `OrderEntity` nesnelerini relation olarak yüklemek

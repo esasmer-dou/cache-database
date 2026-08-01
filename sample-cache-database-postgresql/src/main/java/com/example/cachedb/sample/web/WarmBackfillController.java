@@ -1,10 +1,8 @@
 package com.example.cachedb.sample.web;
 
-import com.example.cachedb.sample.service.SampleWarmBackfillService;
-import com.example.cachedb.sample.service.WarmJobService;
-import com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry;
+import com.example.cachedb.sample.application.warm.WarmBackfillApplicationService;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobSnapshot;
 import com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,98 +19,80 @@ import java.util.List;
 @ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
 public class WarmBackfillController {
 
-    private final SampleWarmBackfillService warmBackfillService;
-    private final WarmJobService warmJobService;
-    private final ObjectProvider<CacheScheduledWarmRegistry> scheduledWarmRegistry;
+    private final WarmBackfillApplicationService warm;
 
-    public WarmBackfillController(
-            SampleWarmBackfillService warmBackfillService,
-            WarmJobService warmJobService,
-            ObjectProvider<CacheScheduledWarmRegistry> scheduledWarmRegistry
-    ) {
-        this.warmBackfillService = warmBackfillService;
-        this.warmJobService = warmJobService;
-        this.scheduledWarmRegistry = scheduledWarmRegistry;
+    public WarmBackfillController(WarmBackfillApplicationService warm) {
+        this.warm = warm;
     }
 
     @PostMapping("/orders/customer/{customerId}")
-    public ResponseEntity<WarmJobService.WarmJob> warmCustomerOrders(
+    public ResponseEntity<CacheDistributedJobSnapshot> warmCustomerOrders(
             @PathVariable long customerId,
             @RequestParam(defaultValue = "100") int limit,
             @RequestParam(defaultValue = "true") boolean projectionOnly,
             @RequestParam(defaultValue = "false") boolean dryRun
     ) {
-        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
-        return accepted("customer-orders", () ->
-                warmBackfillService.warmCustomerOrders(customerId, safeLimit, projectionOnly, dryRun));
+        return accepted(warm.customerOrders(customerId, limit(limit, 1_000), projectionOnly, dryRun));
     }
 
     @PostMapping("/products/active")
-    public ResponseEntity<WarmJobService.WarmJob> warmActiveProducts(
+    public ResponseEntity<CacheDistributedJobSnapshot> warmActiveProducts(
             @RequestParam(required = false) String category,
             @RequestParam(defaultValue = "100") int limit,
             @RequestParam(defaultValue = "true") boolean projectionOnly,
             @RequestParam(defaultValue = "false") boolean dryRun
     ) {
-        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
-        return accepted("active-products", () ->
-                warmBackfillService.warmActiveProducts(category, safeLimit, projectionOnly, dryRun));
+        return accepted(warm.activeProducts(category, limit(limit, 1_000), projectionOnly, dryRun));
     }
 
     @PostMapping("/tickets/open")
-    public ResponseEntity<WarmJobService.WarmJob> warmOpenTickets(
+    public ResponseEntity<CacheDistributedJobSnapshot> warmOpenTickets(
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(defaultValue = "false") boolean dryRun
     ) {
-        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 50);
-        return accepted("open-tickets", () -> warmBackfillService.warmOpenTickets(safeLimit, dryRun));
+        return accepted(warm.openTickets(limit(limit, 50), dryRun));
     }
 
     @PostMapping("/shipments/active")
-    public ResponseEntity<WarmJobService.WarmJob> warmActiveShipments(
+    public ResponseEntity<CacheDistributedJobSnapshot> warmActiveShipments(
             @RequestParam(defaultValue = "100") int limit,
             @RequestParam(defaultValue = "true") boolean projectionOnly,
             @RequestParam(defaultValue = "false") boolean dryRun
     ) {
-        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
-        return accepted("active-shipments", () ->
-                warmBackfillService.warmActiveShipments(safeLimit, projectionOnly, dryRun));
+        return accepted(warm.activeShipments(limit(limit, 1_000), projectionOnly, dryRun));
     }
 
     @PostMapping("/reports/live")
-    public ResponseEntity<WarmJobService.WarmJob> warmLiveReports(
+    public ResponseEntity<CacheDistributedJobSnapshot> warmLiveReports(
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(defaultValue = "false") boolean dryRun
     ) {
-        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 50);
-        return accepted("live-report-jobs", () -> warmBackfillService.warmLiveReportJobs(safeLimit, dryRun));
+        return accepted(warm.liveReports(limit(limit, 50), dryRun));
     }
 
     @PostMapping("/audit/security")
-    public ResponseEntity<WarmJobService.WarmJob> warmSecurityAudit(
+    public ResponseEntity<CacheDistributedJobSnapshot> warmSecurityAudit(
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(defaultValue = "false") boolean dryRun
     ) {
-        int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 50);
-        return accepted("security-audit", () -> warmBackfillService.warmSecurityAudit(safeLimit, dryRun));
+        return accepted(warm.securityAudit(limit(limit, 50), dryRun));
     }
 
     @GetMapping("/jobs/{jobId}")
-    public WarmJobService.WarmJob job(@PathVariable String jobId) {
-        return warmJobService.find(jobId)
-                .orElseThrow(() -> new ResourceNotFoundException("Warm job not found: " + jobId));
+    public CacheDistributedJobSnapshot job(@PathVariable String jobId) {
+        return warm.job(jobId);
     }
 
     @GetMapping("/schedules")
     public List<CacheScheduledWarmSnapshot> schedules() {
-        CacheScheduledWarmRegistry registry = scheduledWarmRegistry.getIfAvailable();
-        return registry == null ? List.of() : registry.snapshots();
+        return warm.schedules();
     }
 
-    private ResponseEntity<WarmJobService.WarmJob> accepted(
-            String route,
-            java.util.function.Supplier<SampleWarmBackfillService.WarmResult> operation
-    ) {
-        return ResponseEntity.accepted().body(warmJobService.submit(route, operation));
+    private int limit(int value, int maximum) {
+        return ApiLimits.requireInRange("limit", value, 1, maximum);
+    }
+
+    private ResponseEntity<CacheDistributedJobSnapshot> accepted(CacheDistributedJobSnapshot job) {
+        return ResponseEntity.accepted().body(job);
     }
 }
