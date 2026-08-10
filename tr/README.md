@@ -27,8 +27,8 @@ kanıtlanmalıdır.
 
 | Güncel hat | Değer |
 | --- | --- |
-| Yayımlanmış son sürüm | `v0.7.0` |
-| Repo sürümü | `0.7.0` |
+| Yayımlanmış son sürüm | `v0.7.1` |
+| Repo sürümü | `0.7.1` |
 | Kütüphane bytecode seviyesi | Java 17 |
 | Çalıştırılabilir örnekler | Java 21 |
 | Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
@@ -133,12 +133,12 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut. `0.7.0`, GitHub
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.7.1`, GitHub
 Packages ve GitHub Release paketi üzerinden dağıtılan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.7.0</cachedb.version>
+    <cachedb.version>0.7.1</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -206,9 +206,24 @@ bu repository'yi sağlamıyorsa consumer POM'a şu tanımı ekle:
         <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
     </repository>
 </repositories>
+
+<pluginRepositories>
+    <pluginRepository>
+        <id>cache-database-github-packages</id>
+        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <releases>
+            <enabled>true</enabled>
+        </releases>
+        <snapshots>
+            <enabled>false</enabled>
+        </snapshots>
+    </pluginRepository>
+</pluginRepositories>
 ```
 
-Repository kimliği Maven server kimliğiyle aynı olmalıdır:
+`repositories` CacheDB dependency'lerini, `pluginRepositories` ise
+`cachedb-maven-plugin` artefact'ını çözümler. İki tanımdaki kimlik de Maven
+server kimliğiyle aynı olmalıdır:
 
 ```xml
 <settings>
@@ -222,7 +237,7 @@ Repository kimliği Maven server kimliğiyle aynı olmalıdır:
 </settings>
 ```
 
-`read:packages` yetkili token kullan. `0.7.0` değişmez paket olarak
+`read:packages` yetkili token kullan. `0.7.1` değişmez paket olarak
 yayımlanmıştır; consumer build'i için CacheDB kaynak reposuna ihtiyaç yoktur.
 
 JDBC kuralı:

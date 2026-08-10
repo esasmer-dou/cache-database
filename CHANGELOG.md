@@ -4,6 +4,23 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.7.1 - 2026-08-10
+
+### Fixed
+
+- consumer POMs now declare the GitHub Packages URL under both
+  `repositories` and `pluginRepositories`, allowing
+  `cachedb-maven-plugin:doctor` to resolve on a clean Maven runner
+- PostgreSQL and MSSQL sample quick starts consume the immutable remote package
+  instead of instructing release users to install framework sources locally
+- release packaging retains all 16 public binary/source/javadoc artifacts, BOM,
+  and module POM files
+
+### Validation
+
+- the failure was reproduced on clean GitHub-hosted sample consumer runners;
+  `0.7.1` requires those same remote-package workflows to pass before tagging
+
 ## 0.7.0 - 2026-08-10
 
 ### Added

@@ -7,7 +7,7 @@ A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 a bounded Redis active data set, durable history stays in PostgreSQL, and
 growing lists use projections instead of full aggregates.
 
-> This sample consumes the immutable CacheDB `0.7.0` release from GitHub
+> This sample consumes the immutable CacheDB `0.7.1` release from GitHub
 > Packages; the CacheDB source repository is not part of the sample build.
 
 ## Start Here
@@ -106,7 +106,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.7.0</cachedb.version>
+    <cachedb.version>0.7.1</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -166,8 +166,30 @@ If JPA or another starter already creates the application `DataSource`, adding
 `DataSource`, one provider starter, the annotations artifact, and the annotation
 processor.
 
-For GitHub Packages, the repository ID in `pom.xml` and the server ID in Maven
-`settings.xml` must match:
+The sample POM declares GitHub Packages twice because Maven resolves normal
+dependencies and build plugins from separate repository lists:
+
+```xml
+<repositories>
+    <repository>
+        <id>cache-database-github-packages</id>
+        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+    </repository>
+</repositories>
+
+<pluginRepositories>
+    <pluginRepository>
+        <id>cache-database-github-packages</id>
+        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <releases><enabled>true</enabled></releases>
+        <snapshots><enabled>false</enabled></snapshots>
+    </pluginRepository>
+</pluginRepositories>
+```
+
+`repositories` resolves the BOM, starters, and libraries.
+`pluginRepositories` resolves `cachedb-maven-plugin:doctor`. The repository
+ID in both POM sections and the server ID in Maven `settings.xml` must match:
 
 ```xml
 <settings>
@@ -183,21 +205,19 @@ For GitHub Packages, the repository ID in `pom.xml` and the server ID in Maven
 
 ## Quick Start
 
-### 1. Install the development snapshot
+### 1. Verify published package access
 
-Skip this step after immutable `0.7.0` artifacts are published.
-
-When the framework and sample repositories are siblings:
-
-```powershell
-mvn -f ..\cache-database\pom.xml -DskipTests install
-```
-
-When this sample is opened inside the main CacheDB repository:
+Configure `GITHUB_ACTOR`, a `read:packages` token, and the matching Maven
+server entry shown above. Then prove that dependencies and the build plugin are
+resolved without the CacheDB source repository:
 
 ```powershell
-mvn -f ..\pom.xml -DskipTests install
+mvn -U -DskipTests validate
 ```
+
+The build must print `CacheDB doctor` and `OK: CacheDB build contract is
+consistent`. Install framework sources locally only when intentionally testing
+an unreleased framework change.
 
 ### 2. Start Redis and PostgreSQL
 
@@ -655,7 +675,7 @@ limits, representative payloads, and expected concurrency.
 | --- | --- | --- |
 | `/api/demo/seed` or `/api/warm/**` returns `404` | Application was not started with the `demo` profile | Set `SPRING_PROFILES_ACTIVE=demo` and restart |
 | Maven returns `401 Unauthorized` | GitHub Packages credentials are absent or server IDs differ | Configure `GITHUB_ACTOR`, a `read:packages` token, and matching server ID |
-| `0.7.0` cannot be resolved | Package credentials are absent, server IDs differ, or publication has not completed | Verify the `v0.7.0` package, configure a `read:packages` token, and use the matching Maven server ID |
+| `0.7.1` dependencies resolve but `cachedb-maven-plugin` does not | `pluginRepositories` is absent or uses another server ID | Add the GitHub Packages plugin repository, configure a `read:packages` token, and keep all three IDs identical |
 | Active route returns `503` while archive returns rows | Redis route has not been warmed, its coverage expired, or the scope differs | Run dry-run, warm the exact route/scope, poll to `COMPLETED`, then inspect coverage |
 | Detail route reports unavailable data | Entity payload is outside the active set | Warm entities for that detail scope or add a bounded source-detail route |
 | `409 Conflict` after a parent write | Parent is not durable yet or optimistic version changed | Honor `Retry-After`, verify write-behind health, retry idempotently |

@@ -121,6 +121,7 @@ kararını kanıtla vermek.
 | [Production Test Raporu](docs/production-test-report.md) | Test kanıtları, smoke sonuçları, benchmark ve certification lane |
 | [Production Readiness Raporu](docs/production-readiness-report.md) | Ürünün production seviyesine ne kadar yakın olduğu |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Stabil GA release için sert go/no-go akışı |
+| [v0.7.1 Sürüm Notları](docs/releases/v0.7.1.md) | Temiz runner'da Maven plugin çözümleme ve değişmez sample tüketimi |
 | [v0.7.0 Sürüm Notları](docs/releases/v0.7.0.md) | Deklaratif repository'ler, açık route kapsamı, güvenli güncelleme, derleme zamanında periyodik warm, test araçları ve provider eşdeğerliği |
 | [v0.6.0 Sürüm Notları](docs/releases/v0.6.0.md) | Deklaratif domain, üretilen relation/projection/route yüzeyleri, dayanıklı işler ve yükseltme notları |
 | [v0.5.0 Sürüm Notları](docs/releases/v0.5.0.md) | Periyodik warm, uzlaştırma, doğrulama kanıtları ve production sınırları |

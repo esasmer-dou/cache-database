@@ -13,10 +13,10 @@ Docker, and runtime state before treating historical evidence as current.
 - MSSQL sample: `E:\ReactorRepository\sample-cache-database-mssql`
 - Branch: `main` in all three repositories
 - Framework Maven coordinates: `com.reactor.cachedb:*`
-- Current source release: `0.7.0`
-- Intended stable tag: `v0.7.0`
+- Current source release: `0.7.1`
+- Intended stable tag: `v0.7.1`
 - Official distribution: GitHub Packages plus the GitHub Release bundle
-  `cache-database-0.7.0-github-release.zip`
+  `cache-database-0.7.1-github-release.zip`
 
 Do not mix this repository family with
 `E:\ReactorRepository\rust-spring-performance` or NMC repositories.
@@ -54,7 +54,7 @@ provider remains the durable source of truth.
 - Preserve PostgreSQL and MSSQL provider parity at the application contract;
   keep dialect, locking, retry, and topology behavior provider specific.
 
-## 0.7.0 Functional Surface
+## 0.7.1 Functional Surface
 
 - Compile-time `@CacheRepository` implementations for hot lookup/window,
   bounded source query, warm route, command, delete, generated ID, projection,
@@ -81,7 +81,7 @@ provider remains the durable source of truth.
 
 ## Sample Contract
 
-Both standalone samples use Java 21 and the published `0.7.0` Maven artifacts.
+Both standalone samples use Java 21 and the published `0.7.1` Maven artifacts.
 Their provider-neutral Java surfaces are kept equivalent by CI.
 
 - Application code depends on repository interfaces, not generated internals.
@@ -94,7 +94,7 @@ Their provider-neutral Java surfaces are kept equivalent by CI.
 - PostgreSQL and MSSQL sample executable JARs are release assets, not framework
   dependencies.
 
-## 0.7.0 Local Release Evidence
+## 0.7.1 Local Release Evidence
 
 - Semeru OpenJ9 JDK: `D:\Dropbox\java64\Semeru\jdk-21.0.2.13-openj9`
 - Clean 20-project reactor: 283 tests, 0 failures, 0 errors, 3 explicit
@@ -121,8 +121,8 @@ must still be revalidated live for every release operation.
 1. Verify the framework release commit locally.
 2. Push framework `main` and wait for Public Beta Readiness and Production
    Evidence on the exact commit.
-3. Publish `0.7.0` through GitHub Packages from the exact release ref.
-4. Create and push annotated `v0.7.0`.
+3. Publish `0.7.1` through GitHub Packages from the exact release ref.
+4. Create and push annotated `v0.7.1`.
 5. Create the non-prerelease GitHub Release and attach ZIP, public binary JARs,
    BOM POM, and SHA-256 checksums.
 6. Build standalone samples against the published remote package.
@@ -152,8 +152,8 @@ Server Always On, network, or Kubernetes topology.
 - `README.md`
 - `tr/README.md`
 - `CHANGELOG.md`
-- `docs/releases/v0.7.0.md`
-- `tr/docs/releases/v0.7.0.md`
+- `docs/releases/v0.7.1.md`
+- `tr/docs/releases/v0.7.1.md`
 - `docs/framework-ux-10-iteration-report.md`
 - `tr/docs/framework-ux-10-iterasyon-raporu.md`
 - `PRODUCTION_GA_CRITERIA.md`

@@ -89,6 +89,13 @@ foreach ($sample in $samples) {
     $port = [string]$sample.Port
     $database = [string]$sample.Database
 
+    Require-Text -RelativePath "$root/pom.xml" -Patterns @(
+        '<repositories>',
+        '<pluginRepositories>',
+        '<id>cache-database-github-packages</id>',
+        '<artifactId>cachedb-maven-plugin</artifactId>'
+    )
+
     Require-Text -RelativePath "$root/README.md" -Patterns @(
         "cachedb-spring-boot-starter-$provider",
         'SPRING_PROFILES_ACTIVE.*demo',
@@ -99,6 +106,7 @@ foreach ($sample in $samples) {
         '## Tuning by Use Case',
         '## Production Checklist',
         '## Troubleshooting',
+        '<pluginRepositories>',
         [regex]::Escape($database)
     )
 
@@ -112,6 +120,7 @@ foreach ($sample in $samples) {
         '## Kullanım Senaryosuna Göre Ayar',
         '## Canlı Ortam Kontrol Listesi',
         '## Sorun Giderme',
+        '<pluginRepositories>',
         [regex]::Escape($database)
     )
 }

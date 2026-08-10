@@ -6,7 +6,7 @@
     <parent>
         <groupId>com.reactor.cachedb</groupId>
         <artifactId>cache-database</artifactId>
-        <version>0.7.0</version>
+        <version>0.7.1</version>
     </parent>
     <artifactId>cachedb-spring-boot-starter-mssql</artifactId>
     <name>cachedb-spring-boot-starter-mssql</name>

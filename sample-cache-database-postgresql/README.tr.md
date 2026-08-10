@@ -8,7 +8,7 @@ bilinçli olarak açıktır: operasyonel yollar Redis'teki sınırlı aktif veri
 kullanır, kalıcı geçmiş PostgreSQL'de tutulur, büyüyen listeler ise tam
 aggregate yerine projection üzerinden okunur.
 
-> Bu örnek, CacheDB `0.7.0` değişmez sürümünü GitHub Packages üzerinden kullanır;
+> Bu örnek, CacheDB `0.7.1` değişmez sürümünü GitHub Packages üzerinden kullanır;
 > sample build'i CacheDB kaynak reposunu kendi içinde derlemez.
 
 ## Buradan Başla
@@ -108,7 +108,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.7.0</cachedb.version>
+    <cachedb.version>0.7.1</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -168,8 +168,32 @@ başka bir starter uygulama için zaten `DataSource` oluşturuyorsa
 ihtiyacı; çalışan bir `DataSource`, tek bir veritabanı starter'ı, annotations
 artifact'i ve annotation processor'dır.
 
-GitHub Packages için `pom.xml` içindeki repository kimliği ile Maven
-`settings.xml` içindeki server kimliği aynı olmalıdır:
+Maven, normal dependency'leri ve build plugin'lerini farklı repository
+listelerinden çözümlediği için sample POM'u GitHub Packages adresini iki yerde
+tanımlar:
+
+```xml
+<repositories>
+    <repository>
+        <id>cache-database-github-packages</id>
+        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+    </repository>
+</repositories>
+
+<pluginRepositories>
+    <pluginRepository>
+        <id>cache-database-github-packages</id>
+        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <releases><enabled>true</enabled></releases>
+        <snapshots><enabled>false</enabled></snapshots>
+    </pluginRepository>
+</pluginRepositories>
+```
+
+`repositories`; BOM, starter ve kütüphaneleri çözümler.
+`pluginRepositories` ise `cachedb-maven-plugin:doctor` eklentisini çözümler.
+POM'daki iki repository kimliği ile Maven `settings.xml` içindeki server kimliği
+aynı olmalıdır:
 
 ```xml
 <settings>
@@ -185,21 +209,19 @@ GitHub Packages için `pom.xml` içindeki repository kimliği ile Maven
 
 ## Hızlı Başlangıç
 
-### 1. Geliştirme snapshot'ını kur
+### 1. Yayın paketine erişimi doğrula
 
-Değişmez `0.7.0` paketleri yayımlandıktan sonra bu adımı atlayabilirsin.
-
-Framework ve örnek repolar aynı dizinde yan yana duruyorsa:
-
-```powershell
-mvn -f ..\cache-database\pom.xml -DskipTests install
-```
-
-Bu örneği ana CacheDB reposunun içinden çalıştırıyorsan:
+`GITHUB_ACTOR`, `read:packages` yetkili token ve yukarıdaki Maven server
+tanımını hazırla. Ardından dependency'lerin ve build plugin'inin CacheDB kaynak
+reposuna ihtiyaç duymadan çözümlendiğini doğrula:
 
 ```powershell
-mvn -f ..\pom.xml -DskipTests install
+mvn -U -DskipTests validate
 ```
+
+Build çıktısında `CacheDB doctor` ve `OK: CacheDB build contract is consistent`
+satırları görünmelidir. Framework kaynaklarını yalnızca henüz yayımlanmamış bir
+framework değişikliğini bilerek test ediyorsan yerel Maven deposuna kur.
 
 ### 2. Redis ve PostgreSQL'i başlat
 
@@ -667,7 +689,7 @@ sınırları, gerçek payload ve beklenen eş zamanlılıkla yapılmalıdır.
 | --- | --- | --- |
 | `/api/demo/seed` veya `/api/warm/**` için `404` | Uygulama `demo` profili olmadan açıldı | `SPRING_PROFILES_ACTIVE=demo` tanımlayıp yeniden başlat |
 | Maven `401 Unauthorized` döndürüyor | GitHub Packages kimlik bilgisi yok veya server kimlikleri farklı | `GITHUB_ACTOR`, `read:packages` token'ı ve aynı server kimliğini tanımla |
-| `0.7.0` çözümlenemiyor | Paket kimlik bilgisi yok, server kimlikleri farklı veya yayın tamamlanmadı | `v0.7.0` paketini doğrula, `read:packages` token'ı tanımla ve aynı Maven server kimliğini kullan |
+| `0.7.1` dependency'leri çözümleniyor ancak `cachedb-maven-plugin` bulunamıyor | `pluginRepositories` tanımı yok veya başka server kimliği kullanıyor | GitHub Packages plugin repository tanımını ekle, `read:packages` token'ı kullan ve üç kimliği aynı tut |
 | Aktif route `503` döndürüyor, arşiv route'u satır getiriyor | Redis route'u hazırlanmadı, coverage süresi doldu veya kapsam farklı | Dry-run yap, aynı route/scope'u hazırla, `COMPLETED` durumunu bekle ve coverage kaydını incele |
 | Detay yolu verinin hazır olmadığını söylüyor | Entity payload'ı aktif setin dışında | O detay kapsamı için entity warm et veya sınırlı source-detail yolu ekle |
 | Ana kaydı yazdıktan sonra `409 Conflict` | Ana kayıt henüz kalıcı değil veya optimistic version değişti | `Retry-After` değerine uy, write-behind durumunu kontrol et, idempotent retry yap |

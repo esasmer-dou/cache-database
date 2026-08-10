@@ -13,12 +13,12 @@ korunur. Yeni uygulama kodunda başlangıç noktası çoğunlukla
 
 ## 1. Provider Starter'ı Ekle
 
-BOM'u bir kez ekle ve yalnızca bir SQL provider starter seç. `0.7.0`, GitHub
+BOM'u bir kez ekle ve yalnızca bir SQL provider starter seç. `0.7.1`, GitHub
 Packages üzerinden değişmez paket olarak yayımlanmıştır.
 
 ```xml
 <properties>
-    <cachedb.version>0.7.0</cachedb.version>
+    <cachedb.version>0.7.1</cachedb.version>
 </properties>
 
 <dependencyManagement>

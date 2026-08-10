@@ -12,11 +12,11 @@ New application code should normally start with `@CacheRepository`.
 ## 1. Install The Provider Starter
 
 Import the BOM once and choose exactly one SQL provider starter. The current
-release uses the immutable `0.7.0` package published through GitHub Packages.
+release uses the immutable `0.7.1` package published through GitHub Packages.
 
 ```xml
 <properties>
-    <cachedb.version>0.7.0</cachedb.version>
+    <cachedb.version>0.7.1</cachedb.version>
 </properties>
 
 <dependencyManagement>

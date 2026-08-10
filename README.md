@@ -26,8 +26,8 @@ application's own staging topology.
 
 | Current line | Value |
 | --- | --- |
-| Latest published release | `v0.7.0` |
-| Repository version | `0.7.0` |
+| Latest published release | `v0.7.1` |
+| Repository version | `0.7.1` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
@@ -128,13 +128,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.7.0` is an
+Keep `cachedb.version` aligned with the release you use. Version `0.7.1` is an
 immutable release distributed through GitHub Packages and the GitHub Release
 bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.7.0</cachedb.version>
+    <cachedb.version>0.7.1</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -202,9 +202,23 @@ the consumer POM when it is not inherited from a company parent:
         <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
     </repository>
 </repositories>
+
+<pluginRepositories>
+    <pluginRepository>
+        <id>cache-database-github-packages</id>
+        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <releases>
+            <enabled>true</enabled>
+        </releases>
+        <snapshots>
+            <enabled>false</enabled>
+        </snapshots>
+    </pluginRepository>
+</pluginRepositories>
 ```
 
-The repository ID must match the Maven server ID:
+`repositories` resolves CacheDB dependencies and `pluginRepositories` resolves
+`cachedb-maven-plugin`. Both IDs must match the Maven server ID:
 
 ```xml
 <settings>
@@ -218,7 +232,7 @@ The repository ID must match the Maven server ID:
 </settings>
 ```
 
-Use a token with `read:packages`. Version `0.7.0` is published as an immutable
+Use a token with `read:packages`. Version `0.7.1` is published as an immutable
 package; a consumer build does not need the CacheDB source repository.
 
 JDBC rule:

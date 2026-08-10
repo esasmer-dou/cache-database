@@ -119,6 +119,7 @@ with evidence.
 | [Production Test Report](docs/production-test-report.md) | Test evidence, smoke results, benchmark, certification lane |
 | [Production Readiness Report](docs/production-readiness-report.md) | Current production maturity assessment |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
+| [v0.7.1 Release Notes](docs/releases/v0.7.1.md) | Clean-runner Maven plugin resolution and immutable sample consumption |
 | [v0.7.0 Release Notes](docs/releases/v0.7.0.md) | Declarative repositories, explicit route coverage, safe updates, compile-time scheduled warm, test tooling, and provider-equivalent samples |
 | [v0.6.0 Release Notes](docs/releases/v0.6.0.md) | Declarative domain, generated relations/projections/routes, durable jobs, and upgrade notes |
 | [v0.5.0 Release Notes](docs/releases/v0.5.0.md) | Scheduled warm, reconciliation, validation evidence, and production boundaries |
