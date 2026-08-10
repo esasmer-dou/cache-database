@@ -1,0 +1,30 @@
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: com.reactor.cachedb.migrate.UsePostgresStarter
+displayName: Use the explicit CacheDB PostgreSQL starter
+description: Replaces the legacy combined Spring Boot starter with the PostgreSQL provider starter.
+recipeList:
+  - org.openrewrite.maven.ChangeDependency:
+      oldGroupId: com.reactor.cachedb
+      oldArtifactId: cachedb-spring-boot-starter
+      newGroupId: com.reactor.cachedb
+      newArtifactId: cachedb-spring-boot-starter-postgres
+      newVersion: 0.7.0
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: com.reactor.cachedb.starter.PostgresConnectionConfig
+      newFullyQualifiedTypeName: com.reactor.cachedb.postgres.PostgresConnectionConfig
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: com.reactor.cachedb.starter.PostgresOutboxExternalChangeFeedAdapter
+      newFullyQualifiedTypeName: com.reactor.cachedb.postgres.PostgresOutboxExternalChangeFeedAdapter
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: com.reactor.cachedb.migrate.UseMssqlStarter
+displayName: Use the explicit CacheDB MSSQL starter
+description: Replaces the legacy combined Spring Boot starter with the MSSQL provider starter.
+recipeList:
+  - org.openrewrite.maven.ChangeDependency:
+      oldGroupId: com.reactor.cachedb
+      oldArtifactId: cachedb-spring-boot-starter
+      newGroupId: com.reactor.cachedb
+      newArtifactId: cachedb-spring-boot-starter-mssql
+      newVersion: 0.7.0

@@ -13,6 +13,24 @@ public record StoragePerformanceSnapshot(
         Map<String, LatencyMetricSnapshot> postgresWriteBreakdown,
         Map<String, CacheAdmissionMetricSnapshot> cacheAdmissionBreakdown
 ) {
+    /** Provider-neutral alias retained alongside the historical accessor. */
+    public LatencyMetricSnapshot sqlRead() {
+        return postgresRead;
+    }
+
+    /** Provider-neutral alias retained alongside the historical accessor. */
+    public LatencyMetricSnapshot sqlWrite() {
+        return postgresWrite;
+    }
+
+    public Map<String, LatencyMetricSnapshot> sqlReadBreakdown() {
+        return postgresReadBreakdown;
+    }
+
+    public Map<String, LatencyMetricSnapshot> sqlWriteBreakdown() {
+        return postgresWriteBreakdown;
+    }
+
     public StoragePerformanceSnapshot(
             LatencyMetricSnapshot redisRead,
             LatencyMetricSnapshot redisWrite,

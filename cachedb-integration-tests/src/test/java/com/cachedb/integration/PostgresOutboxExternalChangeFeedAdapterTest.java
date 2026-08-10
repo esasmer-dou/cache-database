@@ -2,7 +2,7 @@ package com.reactor.cachedb.integration;
 
 import com.reactor.cachedb.core.change.ExternalChangeEvent;
 import com.reactor.cachedb.core.change.ExternalChangeType;
-import com.reactor.cachedb.starter.PostgresOutboxExternalChangeFeedAdapter;
+import com.reactor.cachedb.postgres.PostgresOutboxExternalChangeFeedAdapter;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;

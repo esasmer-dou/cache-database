@@ -32,23 +32,34 @@ ANTI-PATTERN: model every table and move every route to CacheDB at once.
 
 ## 2. Spring Boot Dependencies
 
-Use this path for most Spring Boot applications.
+Use this path for most Spring Boot applications. Version `0.7.0` is published
+as an immutable package through GitHub Packages.
 
 ```xml
 <properties>
-    <cachedb.version>0.6.0</cachedb.version>
+    <cachedb.version>0.7.0</cachedb.version>
 </properties>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-bom</artifactId>
+            <version>${cachedb.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
 
 <dependencies>
     <dependency>
         <groupId>com.reactor.cachedb</groupId>
-        <artifactId>cachedb-spring-boot-starter</artifactId>
-        <version>${cachedb.version}</version>
+        <artifactId>cachedb-spring-boot-starter-postgres</artifactId>
     </dependency>
     <dependency>
         <groupId>com.reactor.cachedb</groupId>
         <artifactId>cachedb-annotations</artifactId>
-        <version>${cachedb.version}</version>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
@@ -87,10 +98,12 @@ JDBC rule:
   `DataSource`, do not add the JDBC starter again.
 - Keep the JDBC driver for your selected SQL provider as a runtime dependency.
 - Configure `cachedb-processor` as an annotation processor.
-- The dependency examples use PostgreSQL. For MSSQL, add
-  `cachedb-storage-mssql`, the Microsoft SQL Server JDBC driver, and select the
-  provider with `cachedb.sql.provider=mssql` or
-  `MssqlWriteBehindFlusher.factory(...)`; see [Database Provider SPI](database-provider-spi.md).
+- The example uses the PostgreSQL provider starter. For SQL Server, replace it
+  with `cachedb-spring-boot-starter-mssql`.
+- Add exactly one provider starter. `AUTO` resolves one provider and fails fast
+  when the classpath is ambiguous.
+- Add `cachedb-spring-boot-starter-admin` separately only when the operations UI
+  is required.
 
 ## 3. Plain Java Dependencies
 
@@ -98,7 +111,7 @@ Use this path when you do not use Spring Boot.
 
 ```xml
 <properties>
-    <cachedb.version>0.6.0</cachedb.version>
+    <cachedb.version>0.7.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -160,7 +173,8 @@ cachedb:
     http-enabled: true
 ```
 
-Plain Java:
+Plain Java low-level registration (Spring Boot users should inject the generated
+repository instead):
 
 ```java
 JedisPooled jedis = new JedisPooled("redis://127.0.0.1:6379");
@@ -221,17 +235,27 @@ Important:
 - Keep the entity small.
 - Add relation fields only when there is a clear read requirement.
 
-Enable one generated package scope. Do not create a Spring bean for every
-entity repository and projection. Add this annotation to the entity package's
-`package-info.java`:
+Declare one application-facing repository. Do not hand-wire entity bindings or
+projection repositories in application services:
 
 ```java
-@com.reactor.cachedb.annotations.CacheDomain(spring = true)
-package com.acme.orders.domain;
+@CacheRepository(entity = CustomerEntity.class)
+public interface CustomerRepository extends CacheDbRepository<CustomerEntity, Long> {
+    @CacheLookup(idParameter = "customerId")
+    HotLookup<CustomerEntity> detail(Long customerId);
+
+    @HotRoute(value = "active-customers", pageSize = 100, hotWindow = 50_000)
+    @CacheRouteQuery(
+            predicates = @CachePredicate(field = "status", constants = "ACTIVE"),
+            orderBy = @CacheOrder(field = "customerId"),
+            windowParameter = "window"
+    )
+    HotWindow<CustomerEntity> active(WindowRequest window);
+}
 ```
 
-The processor generates the Spring configuration and exposes one
-`GeneratedCacheModule.Scope` bean for application-service injection.
+The processor validates the contract and generates the Spring bean. Inject the
+`CustomerRepository` interface directly.
 
 ## 6. First Save And Read
 
@@ -242,22 +266,24 @@ customer.taxNumber = "1234567890";
 customer.customerType = "RETAIL";
 customer.status = "ACTIVE";
 
-domain.customers().save(customer);
+WriteReceipt<CustomerEntity, Long> receipt = customers.save(customer);
 
-CustomerEntity loaded = domain.customers().findById(1001L).orElseThrow();
+CustomerEntity loaded = customers.detail(1001L).orElseThrow(status ->
+        new IllegalStateException("Customer is not available in Redis: " + status)
+);
 ```
 
 Expected behavior:
 
 - `save` writes the entity to Redis when its policy admits it.
 - Durable persistence enters the selected SQL write-behind path.
-- `findById` reads the active entity from Redis.
+- `detail` reads Redis only. `NOT_CACHED` does not prove SQL absence.
 - The entity may be rejected from Redis if it does not satisfy the active-data policy.
 
 ## 7. First Delete
 
 ```java
-domain.customers().deleteById(1001L);
+WriteReceipt<CustomerEntity, Long> receipt = customers.deleteById(1001L);
 ```
 
 Behavior:
@@ -272,18 +298,18 @@ Behavior:
 Small bounded query:
 
 ```java
-List<CustomerEntity> activeCustomers = domain.customers().query(
-        QuerySpec.where(QueryFilter.eq("status", "ACTIVE"))
-                .orderBy(QuerySort.asc("customer_id"))
-                .limitTo(100)
-);
+HotWindow<CustomerEntity> activeCustomers = customers.active(WindowRequest.first(100));
 ```
 
 Rules:
 
-- Keep queries bounded.
+- Keep routes bounded and use cursor windows.
 - Use projections for large list screens.
-- Design sort and filter fields deliberately.
+- Treat `activeCustomers.coverage()` as part of the production contract.
+
+For archive or active-set-external reads, declare a bounded `@SourceRoute`.
+For a route that must be preloaded, derive a `@WarmRoute` from the same query.
+The complete pattern is in [Declarative Repositories](declarative-repositories.md).
 
 ## 9. Start Relations Correctly
 
@@ -306,8 +332,8 @@ public class OrderEntity {
 }
 ```
 
-Declare a typed, bounded relation and a fetch preset on the parent entity. The
-processor generates the standard partitioned loader:
+Declare typed, bounded relation metadata on the parent entity. The processor
+generates the standard partitioned loader:
 
 ```java
 @CacheEntity(table = "customers", redisNamespace = "customers")
@@ -323,11 +349,6 @@ public class CustomerEntity {
             orderBy = {"orderDate DESC", "orderId DESC"}
     )
     public List<OrderEntity> orders;
-
-    @CacheFetchPreset("ordersPreview")
-    public static FetchPlan ordersPreviewFetchPlan(int limit) {
-        return FetchPlan.of("orders").withRelationLimit("orders", Math.max(1, limit));
-    }
 }
 ```
 
@@ -338,13 +359,16 @@ loader exists but the database has no foreign key, CacheDB can still load the
 relation through `mappedBy`, but durable integrity is now your responsibility.
 Set `@CacheEntity.relationLoader` only when custom loading logic is required.
 
-Read:
+Put the preview limit on the repository contract and read through the injected
+interface:
 
 ```java
-CustomerEntity customer = domain.customers().fetches()
-        .ordersPreview(10)
-        .findById(customerId)
-        .orElseThrow();
+@CacheLookup(idParameter = "customerId", relation = "orders",
+        relationLimitParameter = "orderPreview", maxRelationRows = 25)
+HotLookup<CustomerEntity> detail(Long customerId, int orderPreview);
+
+CustomerEntity customer = customers.detail(customerId, 10)
+        .orElseThrow(status -> mapHotLookupFailure(customerId, status));
 ```
 
 This is acceptable for a small preview. Use a projection when hundreds or

@@ -1,6 +1,22 @@
-# cachedb-examples
+# CacheDB Örnekleri ve Operasyon Demosu
 
-Bu modül, `cache-database` için çalıştırılabilir örnekler içerir.
+[English](../../cachedb-examples/README.md)
+
+Bu modül framework geliştiricileri için hazırlanmış kapsamlı demodur. Yük
+profillerini, operasyon ekranlarını, geçiş planlamasını ve düşük seviyeli
+uyumluluk yüzeylerini çalıştırır. Uygulama ekipleri önce bağımsız REST API
+örneklerinden başlamalıdır.
+
+## Doğru Örneği Seç
+
+| Amacın | Başlangıç noktası |
+| --- | --- |
+| PostgreSQL uygulaması geliştirmek | [PostgreSQL REST API örneği](../../sample-cache-database-postgresql/README.tr.md) |
+| SQL Server uygulaması geliştirmek | [SQL Server REST API örneği](../../sample-cache-database-mssql/README.tr.md) |
+| Generated repository öğrenmek | [Deklaratif repository rehberi](../docs/deklaratif-repositoryler.md) |
+| Yönetim ekranını ve yük profillerini işletmek | Bu modülle devam et |
+| Mevcut sistem geçişini prova etmek | [Geçiş Planlayıcı Demo Akışı](#geçiş-planlayıcı-demo-akışı) |
+| Eski/generated binding uyumluluğunu incelemek | [Düşük Seviyeli Uyumluluk Örnekleri](#düşük-seviyeli-uyumluluk-örnekleri) |
 
 İki amaç için kullanılır:
 
@@ -12,14 +28,14 @@ Bu modül, `cache-database` için çalıştırılabilir örnekler içerir.
 Bu demo, şeffaf bir veritabanı cache kıyaslaması değildir. Demo şu davranışı
 gösterir: sınırları belirlenmiş aktif veri seti, projection ve açık SQL yolları.
 
-- Redis, online entity ve projection yollarını besler.
+- Redis, anlık entity ve projection yollarını besler.
 - PostgreSQL, kalıcı geçmişten ve migration kaynak verisinden sorumludur.
 - İlişki yoğun ekranlar projection veya sınırlı ilişki önizlemesiyle okunmalıdır.
 - Arşiv, tam geçmiş, export ve repair akışları açık SQL yollarıyla tasarlanmalıdır.
 
 Bir demo yolu Redis'ten veri döndürmüyorsa bu, kalıcı satırın kaybolduğu
 anlamına gelmez. Genellikle bu yol aktif veri setinin dışındadır, projection
-warm edilmemiştir veya ekranın açık bir SQL yoluna ihtiyacı vardır.
+önceden yüklenmemiştir veya ekranın açık bir SQL yoluna ihtiyacı vardır.
 
 ## Spring Boot Demo
 
@@ -28,6 +44,10 @@ warm edilmemiştir veya ekranın açık bir SQL yoluna ihtiyacı vardır.
 ```powershell
 ./tools/ops/demo/run-spring-boot-load-demo.ps1
 ```
+
+Bu script beklenen Redis/PostgreSQL topolojisini hazırlayıp doğru Spring Boot
+profilini başlattığı için desteklenen yerel giriş noktasıdır. Standalone modu
+özellikle test etmiyorsan topolojiyi ayrı Maven komutlarıyla yeniden kurma.
 
 Açılacak adresler:
 
@@ -43,7 +63,7 @@ modda ikinci bir public admin server açılmaz.
 Demo çalışma alanı şunları içerir:
 
 - veri seed etmek ve yük profillerini başlatmak için Bootstrap + AJAX kontrol arayüzü
-- backlog, incident, memory, routing ve geçiş planlama sayfalarını içeren CacheDB yönetim paneli
+- backlog, olay, bellek, yönlendirme ve geçiş planlama sayfalarını içeren CacheDB yönetim paneli
 
 Demo domain:
 
@@ -65,7 +85,7 @@ Varsayılan seed hacmi:
 Bu hacim, ilişki-ağır davranışı gösterecek kadar büyük; lokal demo tekrarlarını
 zorlamayacak kadar sınırlıdır.
 
-## Hangi Düğmeye Basmalıyım?
+## İlk Başarılı Çalıştırma
 
 Normal yük demosu için:
 
@@ -74,7 +94,9 @@ Normal yük demosu için:
 3. `LOW` yükünü başlat ve yönetim panelindeki metrikleri izle.
 4. Sistem stabil görünüyorsa `MEDIUM` yüküne geç.
 5. `HIGH` yüküne yalnızca önceki profil stabil kaldıysa geç.
-6. Write-behind backlog, Redis memory, incident ve runtime profile alanlarını izle.
+6. Write-behind backlog, Redis belleği, olay ve çalışma profili alanlarını izle.
+7. Backlog sürekli büyüyorsa, readiness bozuluyorsa veya Redis uyarı eşiğine
+   geldiyse yükü artırma; bu durumda daha yüksek profil anlamlı kanıt üretmez.
 
 Veri hazır değilken `LOW / MEDIUM / HIGH` başlatırsan arayüz hata verir ve önce
 seed ister. Yük düğmeleri artık arka planda gizlice seed başlatmaz.
@@ -83,11 +105,11 @@ Yük profilleri:
 
 - `LOW`: katalog gezme, tüm müşteri taraması ve hafif toplu sepet/ürün güncellemesi
 - `MEDIUM`: daha büyük okumalar, en çok sipariş veren müşteri sorguları ve dengeli toplu yazmalar
-- `HIGH`: kampanya saati davranışı, full customer scan, çok satırlı sipariş okumaları ve yoğun stok/sepet/sipariş dalgalanması
+- `HIGH`: kampanya saati davranışı, tam müşteri taraması, çok satırlı sipariş okumaları ve yoğun stok/sepet/sipariş dalgalanması
 
 ## Geçiş Planlayıcı Demo Akışı
 
-Mevcut SQL veritabanı geçiş davranışını varsayılan PostgreSQL demo veri setiyle
+Mevcut SQL veritabanı geçiş davranışını hazır PostgreSQL demo veri setiyle
 denemek için:
 
 1. `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr` adresini aç.
@@ -97,8 +119,8 @@ denemek için:
 5. `Forma uygula` düğmesine bas.
 6. `Planı oluştur` düğmesine bas.
 7. Java iskeleti istiyorsan scaffold üret.
-8. Dry-run ön ısıtma çalıştır.
-9. Gerçek staging ön ısıtma çalıştır.
+8. Dry-run ön yükleme çalıştır.
+9. Gerçek staging ön yükleme çalıştır.
 10. Yan yana karşılaştırma çalıştır.
 11. Geçiş raporunu indir.
 
@@ -111,7 +133,7 @@ Hazırlanan demo nesneleri:
 - `cachedb_migration_demo_ranked_orders_v`
 
 Karşılaştırma sonuç akış hazır değil diyorsa önce raporu incele. CacheDB tarafı
-hızlı görünse bile kaynak veritabanı baseline sonucu ile ilk sayfa üyeliği ve sıralaması eşleşmeden
+hızlı görünse bile kaynak veritabanı referans sonucu ile ilk sayfa üyeliği ve sıralaması eşleşmeden
 canlıya geçilmemelidir.
 
 ## Standalone Demo
@@ -132,7 +154,19 @@ Varsayılan standalone URL'ler:
 - demo yük arayüzü: `http://127.0.0.1:8090`
 - yönetim paneli: `http://127.0.0.1:8080/dashboard`
 
-## Read-Model Örneği
+## Önerilen Uygulama API'si
+
+Yeni uygulama kodunda repository-first örnek projeleri kullan:
+
+- [PostgreSQL örneği](../../sample-cache-database-postgresql/README.tr.md)
+- [SQL Server örneği](../../sample-cache-database-mssql/README.tr.md)
+- [Deklaratif repository rehberi](../docs/deklaratif-repositoryler.md)
+
+Bu uygulamalarda tablo eşlemesi entity üzerinde, route sözleşmeleri
+`@CacheRepository` arayüzlerinde, servis kullanımı ise Spring tarafından
+enjekte edilen generated repository'ler üzerindedir.
+
+## Düşük Seviyeli Uyumluluk Örnekleri
 
 Production benzeri ilişki-ağır ekran deseni için:
 
@@ -144,9 +178,11 @@ Bu örnek, yaygın "müşterinin çok siparişi var" problemini temsil eder:
 - kullanıcı satırı açınca detay ayrıca yüklenir
 - önizleme gerekiyorsa ilişki yükleme sınırlandırılır
 - geniş base entity decode etmek yerine projection'a özel Redis index'i kullanılır
-- `EntityProjection.asyncRefresh()` ile read-model bakımı foreground write path dışına taşınır
+- `EntityProjection.asyncRefresh()` ile read-model bakımı ön plandaki yazma akışının dışına taşınır
 
-Örnekte gösterilen generated helper'lar:
+Bu modül aşağıdaki düşük seviyeli generated binding örneklerini de korur. Bu
+örnekler uyumluluk testi, wrapper benchmark'ı ve framework iç yapısını göstermek
+içindir; yeni uygulamalar için önerilen API değildir:
 
 - `DemoOrderEntityCacheBinding.orderSummary(orderRepository)`
 - `DemoOrderEntityCacheBinding.topCustomerOrders(orderSummaryRepository, customerId, 24)`
@@ -161,9 +197,17 @@ Tutarlılık notu:
 - async projection refresh Redis Stream tabanlı ve durable çalışır
 - refresh event'leri process restart sonrasında kaybolmaz
 - projection okumaları tasarım gereği eventual consistency taşır
-- migration cutover kararları yine yan yana parity check ile verilmelidir
+- geçiş kararları yine yan yana veri eşitliği kontrolüyle verilmelidir
 
-## Runtime Tuning
+## Kanıtın Sınırı
+
+Bu demo bir yol şeklinin, guardrail'in, geçiş planının veya operasyon ekranının
+yerel topolojide doğru çalıştığını gösterebilir. Production kapasite sonucu
+vermez. Production kanıtı; gerçek ağ yolu, container limitleri, Redis
+topolojisi, veritabanı bağlantı bütçesi, veri şekli ve beklenen eş zamanlılıkla
+üretilmelidir.
+
+## Runtime Ayarları
 
 Yaygın demo ayarları:
 
@@ -188,3 +232,13 @@ Yaygın demo ayarları:
 Tam tuning kataloğu:
 
 - [../docs/tuning-parameters.md](../docs/tuning-parameters.md)
+
+## Sorun Giderme
+
+| Belirti | Yapılacak işlem |
+| --- | --- |
+| Yük profili verinin eksik olduğunu söylüyor | Önce `Seed Demo Data` çalıştır ve tamamlanmasını bekle |
+| Geçiş planlayıcı yol adayı göstermiyor | Demo şemasını kurup seed et, ardından keşfi yeniden çalıştır |
+| CacheDB hızlı fakat karşılaştırma hazır değil | Üyelik ve sıralama eşitliğini düzelt; gecikme tek başına geçiş sinyali değildir |
+| Backlog sürekli büyüyor | Yükü artırmayı bırak; SQL gecikmesi, worker kapasitesi, yeniden deneme ve Redis baskısını incele |
+| Uygulama portu kullanılıyor | Önceki demo sürecini durdur veya demo portunu değiştir |

@@ -11,7 +11,13 @@ param(
         "cachedb-storage-postgres",
         "cachedb-storage-mssql",
         "cachedb-starter",
-        "cachedb-spring-boot-starter"
+        "cachedb-spring-boot-starter",
+        "cachedb-spring-boot-starter-postgres",
+        "cachedb-spring-boot-starter-mssql",
+        "cachedb-spring-boot-starter-admin",
+        "cachedb-spring-boot-test",
+        "cachedb-maven-plugin",
+        "cachedb-migration-recipes"
     )
 )
 

@@ -3,8 +3,8 @@
 English version: [../../docs/use-case-examples.md](../../docs/use-case-examples.md)
 
 Bu sayfa CacheDB davranışını gerçek kullanım senaryoları üzerinden anlatır.
-Amaç, uygulama geliştiricisinin hangi durumda entity repository, projection
-repository, command route veya kaynak veritabanı soğuk veri yolu kullanacağını
+Amaç, uygulama geliştiricisinin hangi durumda yalnızca Redis'ten çalışan lookup,
+projection route'u, komut veya sınırlı kaynak veritabanı route'u kullanacağını
 net seçebilmesidir.
 
 Örneklerde ortak müşteri/sipariş modeli kullanılır:
@@ -109,7 +109,7 @@ Ekran:
 BEST tasarım:
 
 - Fatura detayında `InvoiceEntity` kullanılır.
-- Son ödeme denemeleri `withRelationLimit("payments", 5)` veya payment preview
+- Son ödeme denemeleri sınırlı bir `@CacheLookup` önizlemesi veya payment
   projection ile gösterilir.
 - Aylık mutabakat kaynak veritabanı/reporting yolunda kalır.
 
@@ -142,14 +142,21 @@ ANTI-PATTERN:
 
 | İhtiyaç | BEST route | Neden |
 | --- | --- | --- |
-| Tek full entity oluşturmak veya değiştirmek | `EntityRepository.save(fullEntity)` | Redis öncelikli yazım, kalıcı SQL write-behind |
-| Sık erişilen tek entity'yi id ile okumak | `EntityRepository.findById(id)` | Hızlı Redis lookup |
-| Küçük full-entity page okumak | `EntityRepository.findPage(PageWindow)` | Sınırlı full payload okuması |
-| Büyük müşteri sipariş listesi okumak | `ProjectionRepository<OrderSummary>` | Özet payload, sınırlı Redis penceresi |
+| Tek full entity oluşturmak veya değiştirmek | `CacheDbRepository.save(fullEntity)` | Redis öncelikli yazım, kalıcı SQL write-behind |
+| Sık erişilen tek entity'yi id ile okumak | `HotLookup<T>` döndüren `@CacheLookup` | Yanlış kalıcı 404 üretmeden hızlı Redis lookup |
+| Küçük full-entity sayfası okumak | `HotWindow<T>` döndüren `@HotRoute` | Sınırlı payload ve coverage kanıtı |
+| Büyük müşteri sipariş listesi okumak | Projection döndüren `@HotRoute` | Özet payload, sınırlı Redis penceresi |
 | Global top-N dashboard satırı okumak | Ranked projection | Tek ranked index yolu |
-| Eski geçmiş veya arşiv verisi okumak | Kaynak veritabanı soğuk veri yolu | Soğuk geçmiş Redis'i kirletmez |
-| Redis'te olmayabilecek entity üzerinde tek alan değiştirmek | Açık command route | Eksik/bozuk Redis entity'si üretilmez |
+| Eski geçmiş veya arşiv verisi okumak | Sınırlı `@SourceRoute` | Eski geçmiş Redis'i gereksiz büyütmez |
+| Redis'te olmayabilecek entity üzerinde tek alan değiştirmek | Açık kaynak komutu/adaptörü | Eksik veya geçersiz Redis entity'si üretilmez |
 | Tek entity silmek | `deleteById(id)` | Idempotent delete, tombstone, write-behind ile SQL provider delete |
+
+Aşağıdaki kodlarda `orders`, `customers`, `products`, `shipments` ve
+`supportTickets` gibi domain repository'lerinin Spring tarafından enjekte
+edildiği varsayılır. Metotlar
+[Deklaratif Repository'ler](./deklaratif-repositoryler.md) sayfasındaki
+annotation'larla tanımlanır; servis kodu `QuerySpec` veya generated binding
+zinciri kurmaz.
 
 ## Minimal Entity Şekli
 
@@ -232,11 +239,7 @@ BEST:
 - Tam line listesi yalnızca kullanıcı line detail sekmesini açarsa yüklenir.
 
 ```java
-Optional<OrderEntity> order =
-        OrderEntityCacheBinding.using(session)
-                .repository()
-                .withRelationLimit("orderLines", 8)
-                .findById(orderId);
+HotLookup<OrderEntity> order = orders.detail(orderId, 8);
 ```
 
 ANTI-PATTERN: order liste ekranındaki her order satırı için bütün order line
@@ -268,14 +271,10 @@ BEST:
 - Dashboard widget'ları kompakt `ProductStockSummary` projection'ını okur.
 
 ```java
-ProjectionRepository<ProductStockSummary, Long> stockSummary =
-        ProductEntityCacheBinding.using(session).projections().stockSummary();
-
-List<ProductStockSummary> lowStock = stockSummary.query(
-        QuerySpec.where(QueryFilter.lt("available_quantity", 10))
-                .orderBy(QuerySort.asc("available_quantity"))
-                .limitTo(50)
-);
+List<ProductStockSummary> lowStock = products.lowStock(
+        10,
+        WindowRequest.first(50)
+).items();
 ```
 
 ANTI-PATTERN: her istekte güncel stok hesaplamak için binlerce inventory
@@ -308,12 +307,7 @@ BEST:
 - Muhasebe raporları kaynak veritabanı veya özel reporting projection kullanmalıdır.
 
 ```java
-EntityRepository<InvoiceEntity, Long> invoices =
-        InvoiceEntityCacheBinding.using(session)
-                .repository()
-                .withRelationLimit("payments", 5);
-
-Optional<InvoiceEntity> invoice = invoices.findById(invoiceId);
+HotLookup<InvoiceEntity> invoice = invoices.detail(invoiceId, 5);
 ```
 
 ANTI-PATTERN: ay sonu muhasebe aggregation için CacheDB entity okumalarını
@@ -343,14 +337,10 @@ BEST:
 - Tracking ekranı çok yoğun kullanılmıyorsa tam tracking geçmişi kaynak veritabanında kalır.
 
 ```java
-ProjectionRepository<ShipmentTimelinePreview, Long> timeline =
-        ShipmentEntityCacheBinding.using(session).projections().timelinePreview();
-
-List<ShipmentTimelinePreview> latestEvents = timeline.query(
-        QuerySpec.where(QueryFilter.eq("shipment_id", shipmentId))
-                .orderBy(QuerySort.desc("event_time"))
-                .limitTo(10)
-);
+List<ShipmentTimelinePreview> latestEvents = shipments.timeline(
+        shipmentId,
+        WindowRequest.first(10)
+).items();
 ```
 
 ANTI-PATTERN: her shipment için bütün tracking event'lerini Redis'te sürekli tutmak.
@@ -380,14 +370,9 @@ BEST:
 - Eski veya nadir okunan tam mesaj geçmişi kaynak veritabanından sayfalanabilir.
 
 ```java
-ProjectionRepository<TicketSummary, Long> ticketSummaries =
-        SupportTicketEntityCacheBinding.using(session).projections().ticketSummary();
-
-List<TicketSummary> urgentOpenTickets = ticketSummaries.query(
-        QuerySpec.where(QueryFilter.eq("status", "OPEN"))
-                .orderBy(QuerySort.desc("priority_score"), QuerySort.asc("opened_at"))
-                .limitTo(25)
-);
+List<TicketSummary> urgentOpenTickets = supportTickets.urgentOpen(
+        WindowRequest.first(25)
+).items();
 ```
 
 ANTI-PATTERN: inbox satırı göstermek için her ticket mesajının body alanını
@@ -412,20 +397,15 @@ BEST:
 - Support tickets için ticket-summary projection kullanılır.
 
 ```java
-Optional<CustomerEntity> customer =
-        CustomerEntityCacheBinding.using(session).repository().findById(customerId);
-
-List<OrderSummaryReadModel> latestOrders = orderSummaryRepository.query(
-        QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                .orderBy(QuerySort.desc("order_date"))
-                .limitTo(10)
-);
-
-List<TicketSummary> tickets = ticketSummaryRepository.query(
-        QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                .orderBy(QuerySort.desc("opened_at"))
-                .limitTo(10)
-);
+HotLookup<CustomerEntity> customer = customers.detail(customerId, 3);
+List<OrderSummary> latestOrders = orders.customerTimeline(
+        customerId,
+        WindowRequest.first(10)
+).items();
+List<TicketSummary> tickets = supportTickets.forCustomer(
+        customerId,
+        WindowRequest.first(10)
+).items();
 ```
 
 ANTI-PATTERN: tek customer endpoint'inde customer, bütün address kayıtları,
@@ -454,7 +434,7 @@ Kullanıcı tek invoice açar.
 BEST route:
 
 - Invoice header için `InvoiceEntity.findById(invoiceId)`.
-- Son ödeme denemeleri için `withRelationLimit("payments", 5)`.
+- Son ödeme denemeleri için sınırlı `@CacheLookup`.
 - Kullanıcı audit sekmesini açarsa tam payment audit için kaynak veritabanı.
 
 Neden: son denemeler ilk ekran için değerlidir; tam payment geçmişi ilk ekran
@@ -512,7 +492,7 @@ customer.taxNumber = "1234567890";
 customer.customerType = "CORPORATE";
 customer.status = "ACTIVE";
 
-CustomerEntityCacheBinding.using(session).repository().save(customer);
+customers.save(customer);
 ```
 
 Çalışma zamanı davranışı:
@@ -538,7 +518,7 @@ order.currencyCode = "TRY";
 order.orderType = "ONLINE";
 order.status = "CREATED";
 
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 ```
 
 Çalışma zamanı davranışı:
@@ -549,43 +529,51 @@ OrderEntityCacheBinding.using(session).repository().save(order);
 
 BEST: siparişleri full entity olarak oluştur.
 
-### Insert 3: Generated Command Helper İle Oluşturma
+### Insert 3: Deklaratif Komut İle Oluşturma
 
-Entity içinde kararlı bir uygulama komutu varsa generated command helper kullan.
+Acknowledgement ve kalıcılık davranışı uygulama sözleşmesinin parçasıysa
+adlandırılmış bir repository komutu kullan.
 
 ```java
-UserEntity activated =
-        GeneratedCacheModule.using(session)
-                .users()
-                .commands()
-                .activateUser(84L, "alice");
+@CacheCommand(
+        operation = CacheCommand.Operation.SAVE,
+        acknowledgement = CacheCommand.Acknowledgement.SQL_DURABLE,
+        durabilityTimeoutMillis = 2_500
+)
+WriteReceipt<UserEntity, Long> activate(UserEntity fullUser);
+
+WriteReceipt<UserEntity, Long> receipt = users.activate(activatedUser);
 ```
 
 Çalışma zamanı davranışı:
 
-- Generated command geçerli bir entity üretir.
-- Generated helper repository `save(...)` çağırır.
-- Yazma yolu Redis öncelikli kalır.
+- Uygulama kodu eksiksiz ve geçerli entity'yi sağlar.
+- Üretilen implementasyon önce Redis'e yazar, ardından tanımlanan SQL acknowledgement'ını bekler.
+- Receipt kabul edilen sürümü ve kalıcılık durumunu gösterir.
 
-BEST: her zaman geçerli full entity üreten yaygın create/update işlemlerinde
-command helper kullan.
+BEST: Her zaman eksiksiz entity alan ve acknowledgement davranışı çağıran taraf
+için önemli olan iş komutlarını adlandır.
+
+HTTP komutu tekrar denenebiliyorsa çağıran tarafın ürettiği sabit entity ID'sini
+veya uygulamaya ait idempotency anahtarını taşı. `@CacheCommand` kendiliğinden
+deduplication kaydı oluşturmaz.
 
 ### Insert 4: Toplu Seed veya Warm
 
 Bu yolu kontrollü startup, staging ön ısıtma veya migration provası için kullan.
 
 ```java
-for (OrderEntity order : ordersToWarm) {
-    OrderEntityCacheBinding.using(session).repository().save(order);
-}
+CacheWarmResult result = cacheDatabase.warm(
+        orders.warmCustomerTimelineProjection(customerId, 1_000)
+);
 ```
 
 Çalışma zamanı davranışı:
 
-- Redis seçilen sık erişilen veri setiyle doldurulur.
-- SQL provider yazımları yine normal write-behind yolundan geçer.
-- Bu bir migration warm-up ise Redis veri kümesinin planlı route'a göre oluşması için
-  Migration Planner warm runner tercih edilmelidir.
+- Redis, kritik route'un sınırlı kaynak sorgusundan doldurulur.
+- SQL'de var olan satırlar yeniden SQL'e yazılmaz.
+- Yalnızca projection warm edildiğinde tam entity payload'ları yüklenmez.
+- Seçilen müşteri kapsamı için route coverage kaydedilir.
 
 BEST: yalnızca Redis'ten servis etmek istediğin route'ları warm et.
 
@@ -598,10 +586,12 @@ base entity yazılır, ardından CacheDB projection'ı yeniler.
 
 ```java
 OrderEntity order = createOrder(...);
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 
-ProjectionRepository<OrderSummaryReadModel, Long> summaries =
-        OrderEntityCacheBinding.using(session).projections().orderSummary();
+List<OrderSummary> summaries = orders.customerTimeline(
+        order.customerId,
+        WindowRequest.first(25)
+).items();
 ```
 
 Çalışma zamanı davranışı:
@@ -622,10 +612,7 @@ tutarsızlaşmasına izin vermek.
 Kök entity'nin Redis'te bulunması beklenen detay ekranlarında kullan.
 
 ```java
-Optional<CustomerEntity> customer =
-        CustomerEntityCacheBinding.using(session)
-                .repository()
-                .findById(42L);
+HotLookup<CustomerEntity> customer = customers.detail(42L, 0);
 ```
 
 Çalışma zamanı davranışı:
@@ -634,7 +621,7 @@ Optional<CustomerEntity> customer =
 - Payload varsa ve tombstone yoksa entity döner.
 - Payload yoksa bu repository çağrısı otomatik kaynak veritabanı scan yapmaz.
 
-BEST: hot detail kayıtları için `findById` kullan.
+BEST: Kritik detay kayıtları için `@CacheLookup` kullan ve her durumu açıkça işle.
 
 ACCEPTABLE: kayıt eskiyse ve Redis'te yoksa açık kaynak veritabanı soğuk veri yolu
 repository'si çağır.
@@ -645,14 +632,10 @@ Redis müşteri başına son 1.000 order summary tutarken ekran yalnızca 10 kay
 istiyorsa bu yolu kullan.
 
 ```java
-ProjectionRepository<OrderSummaryReadModel, Long> summaries =
-        OrderEntityCacheBinding.using(session).projections().orderSummary();
-
-List<OrderSummaryReadModel> latest10 = summaries.query(
-        QuerySpec.where(QueryFilter.eq("customer_id", 42L))
-                .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
-                .limitTo(10)
-);
+List<OrderSummary> latest10 = orders.customerTimeline(
+        42L,
+        WindowRequest.first(10)
+).items();
 ```
 
 Çalışma zamanı davranışı:
@@ -672,17 +655,14 @@ projection'ını kendiliğinden tahmin etmesini beklemek.
 Küçük ve sınırları net full entity listelerinde kullan.
 
 ```java
-List<CustomerEntity> customers =
-        CustomerEntityCacheBinding.using(session)
-                .repository()
-                .findPage(new PageWindow(0, 25));
+List<CustomerEntity> rows = customers.active(WindowRequest.first(25)).items();
 ```
 
 Çalışma zamanı davranışı:
 
 - Page isteği read-shape guardrail tarafından kontrol edilir.
 - Page güvenli limite sığıyorsa Redis page cache kullanılabilir.
-- Page loader tanımlıysa ve read-through açıksa page yüklenip cache'e alınabilir.
+- Bu Redis route'unun arkasında örtülü SQL fallback yoktur. Warm ve coverage açıktır.
 
 BEST: page size değerini entity hot window altında tut.
 
@@ -693,21 +673,11 @@ ANTI-PATTERN: 1.000+ satırlık iş ekranları için full entity page kullanmak.
 Kullanıcı Redis projection penceresi dışındaki eski veriyi istiyorsa bu yolu kullan.
 
 ```java
-List<OrderEntity> februaryOrders = jdbcTemplate.query(
-        """
-        SELECT *
-        FROM orders
-        WHERE customer_id = ?
-          AND order_date >= ?
-          AND order_date < ?
-        ORDER BY order_date DESC, order_id DESC
-        LIMIT ?
-        """,
-        orderRowMapper,
+SourceWindow<OrderSummary> februaryOrders = orders.archive(
         42L,
-        LocalDate.parse("2026-02-01"),
-        LocalDate.parse("2026-03-01"),
-        100
+        startOfMarchEpochSeconds,
+        Long.MAX_VALUE,
+        WindowRequest.first(100)
 );
 ```
 
@@ -726,12 +696,7 @@ ANTI-PATTERN: bir kez okunduğu için her eski arşiv verisini Redis'e yüklemek
 Detay ekranı yalnızca küçük bir ilişki önizlemesi istiyorsa kullan.
 
 ```java
-EntityRepository<CustomerEntity, Long> repository =
-        CustomerEntityCacheBinding.using(session)
-                .repository()
-                .withRelationLimit("orders", 8);
-
-Optional<CustomerEntity> customer = repository.findById(42L);
+HotLookup<CustomerEntity> customer = customers.detail(42L, 8);
 ```
 
 Çalışma zamanı davranışı:
@@ -744,25 +709,23 @@ BEST: önce summary, açık preview, ihtiyaç olunca detail.
 
 ANTI-PATTERN: ilk ekranda bütün child satırlarını eager-load etmek.
 
-### Query 6: Canlıya Geçmeden Önce Explain
+### Query 6: Canlıya Geçmeden Önce Coverage Kanıtı
 
-Route'un güvenli olup olmadığını görmek için `explain(...)` kullan.
+Route'un güvenli olup olmadığını görmek için generated route ve test kitini kullan.
 
 ```java
-QuerySpec query = QuerySpec.where(QueryFilter.eq("customer_id", 42L))
-        .orderBy(QuerySort.desc("order_date"))
-        .limitTo(100);
-
-QueryExplainPlan plan =
-        OrderEntityCacheBinding.using(session).repository().explain(query);
+cacheDb.warm(orders.warmCustomerTimelineProjection(42L, 1_000));
+CacheDbAssertions.requireComplete(
+        orders.customerTimeline(42L, WindowRequest.first(100))
+);
 ```
 
 Çalışma zamanı davranışı:
 
-- Plan route şeklini ve uyarıları gösterir.
-- Production cutover öncesinde riskli entity okumalarını yakalamaya yardım eder.
+- Derleme zamanı kontrolü route şeklini ve sınırlarını doğrular.
+- Entegrasyon assertion'ı gereken Redis kapsamının eksiksiz olduğunu kanıtlar.
 
-BEST: önemli route'ları staging ortamında explain et ve karşılaştır.
+BEST: Kritik route'larda staging ortamında coverage, veri eşitliği, gecikme ve bellek kanıtla.
 
 ## Update Örnekleri
 
@@ -775,7 +738,7 @@ OrderEntity order = existingOrder;
 order.status = "PAID";
 order.orderAmount = new BigDecimal("1250.00");
 
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 ```
 
 Çalışma zamanı davranışı:
@@ -800,7 +763,7 @@ order.currencyCode = "TRY";
 order.orderType = "ONLINE";
 order.status = "CANCELLED";
 
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 ```
 
 Çalışma zamanı davranışı:
@@ -842,14 +805,12 @@ BEST: kısmi update, partial entity save değil command işlemidir.
 Customer entity küçükse ve mevcut state biliniyorsa full state kullan.
 
 ```java
-CustomerEntity customer =
-        CustomerEntityCacheBinding.using(session).repository()
-                .findById(42L)
-                .orElseThrow();
+CustomerEntity customer = customers.detail(42L, 0)
+        .orElseThrow(status -> mapHotLookupFailure(42L, status));
 
 customer.customerType = "VIP";
 
-CustomerEntityCacheBinding.using(session).repository().save(customer);
+customers.save(customer);
 ```
 
 Çalışma zamanı davranışı:
@@ -892,7 +853,7 @@ ANTI-PATTERN: geniş tarihsel update için Redis üzerinden N+1 update döngüs�
 Tek bilinen entity silinecekse `deleteById` kullan.
 
 ```java
-OrderEntityCacheBinding.using(session).repository().deleteById(9001L);
+orders.deleteById(9001L);
 ```
 
 Çalışma zamanı davranışı:
@@ -909,7 +870,7 @@ BEST: primary key ile idempotent delete.
 Aynı delete çağrısını kullan.
 
 ```java
-OrderEntityCacheBinding.using(session).repository().deleteById(500L);
+orders.deleteById(500L);
 ```
 
 Çalışma zamanı davranışı:
@@ -952,7 +913,7 @@ Satır kaynak veritabanında kalacaksa full entity update veya command route kul
 OrderEntity order = loadFullOrderForSoftDelete(9001L);
 order.status = "DELETED";
 
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 ```
 
 Çalışma zamanı davranışı:
@@ -1002,14 +963,10 @@ Neden:
 Müşteri timeline ekranlarında kullan.
 
 ```java
-ProjectionRepository<OrderSummaryReadModel, Long> summaries =
-        OrderEntityCacheBinding.using(session).projections().orderSummary();
-
-List<OrderSummaryReadModel> rows = summaries.query(
-        QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
-                .limitTo(100)
-);
+List<OrderSummary> rows = orders.customerTimeline(
+        customerId,
+        WindowRequest.first(100)
+).items();
 ```
 
 BEST:
@@ -1023,11 +980,7 @@ BEST:
 Summary/detail ayrımını kullan.
 
 ```java
-Optional<OrderEntity> order =
-        OrderEntityCacheBinding.using(session)
-                .repository()
-                .withRelationLimit("orderLines", 8)
-                .findById(orderId);
+HotLookup<OrderEntity> order = orders.detail(orderId, 8);
 ```
 
 BEST:
@@ -1042,15 +995,9 @@ ANTI-PATTERN: liste ekranındaki her order için tüm line kayıtlarını yükle
 Ekran global sıralıysa ranked projection kullan.
 
 ```java
-ProjectionRepository<HighValueOrderReadModel, Long> highValueOrders =
-        OrderEntityCacheBinding.using(session).projections().highValueOrders();
-
-List<HighValueOrderReadModel> top50 = highValueOrders.query(
-        QuerySpec.builder()
-                .sort(QuerySort.desc("rank_score"))
-                .limit(50)
-                .build()
-);
+List<HighValueOrderReadModel> top50 = dashboards.highValueOrders(
+        WindowRequest.first(50)
+).items();
 ```
 
 BEST:
@@ -1066,14 +1013,10 @@ ANTI-PATTERN: full order entity'lerini tarayıp uygulama belleğinde sıralamak.
 Sık açılan rapor için read-model kullan.
 
 ```java
-ProjectionRepository<CustomerRevenueSummary, Long> revenue =
-        CustomerEntityCacheBinding.using(session).projections().customerRevenueSummary();
-
-List<CustomerRevenueSummary> rows = revenue.query(
-        QuerySpec.where(QueryFilter.eq("period", "2026-05"))
-                .orderBy(QuerySort.desc("total_revenue"))
-                .limitTo(100)
-);
+List<CustomerRevenueSummary> rows = reports.customerRevenue(
+        "2026-05",
+        WindowRequest.first(100)
+).items();
 ```
 
 BEST:
@@ -1108,12 +1051,9 @@ varsaymak.
 Küçük limitli projection kullan.
 
 ```java
-List<OrderSummaryReadModel> latest = orderSummaryRepository.query(
-        QuerySpec.builder()
-                .sort(QuerySort.desc("order_date"))
-                .limit(25)
-                .build()
-);
+List<OrderSummary> latest = dashboards.latestOrders(
+        WindowRequest.first(25)
+).items();
 ```
 
 BEST: sık yenilenen dashboard widget'ı için Redis projection.
@@ -1123,12 +1063,9 @@ BEST: sık yenilenen dashboard widget'ı için Redis projection.
 Ranked projection kullan.
 
 ```java
-List<CustomerRiskReadModel> riskyCustomers = riskRepository.query(
-        QuerySpec.builder()
-                .sort(QuerySort.desc("risk_score"))
-                .limit(50)
-                .build()
-);
+List<CustomerRiskReadModel> riskyCustomers = dashboards.customerRisk(
+        WindowRequest.first(50)
+).items();
 ```
 
 BEST: önceden hesaplanmış skor, sınırlı top-N okuma.

@@ -37,6 +37,7 @@ import com.reactor.cachedb.core.query.QueryExplainPlan;
 import com.reactor.cachedb.core.query.PartitionedQuerySpec;
 import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySpec;
+import com.reactor.cachedb.core.repository.HotLookup;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.queue.PerformanceObservationContext;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
@@ -457,6 +458,35 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     }
 
     @Override
+    public HotLookup<T> findHotById(ID id) {
+        long startedAt = System.nanoTime();
+        try {
+            String entityKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
+            String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
+            List<String> values = jedis.mget(entityKey, tombstoneKey);
+            if (values.get(1) != null) {
+                return HotLookup.tombstoned();
+            }
+            String encoded = values.get(0);
+            if (encoded == null) {
+                return HotLookup.notCached();
+            }
+            T entity = codec.fromRedisValue(encoded);
+            if (!pageCacheManager.shouldServeCachedEntity(entity)) {
+                if (effectiveCachePolicy().hotPolicy().evictWhenRejected()) {
+                    pageCacheManager.removeEntity(id);
+                }
+                return HotLookup.outsidePolicy();
+            }
+            pageCacheManager.recordEntityAccess(id);
+            applyFetchPlan(List.of(entity));
+            return HotLookup.hit(entity);
+        } finally {
+            recordRedisRead(startedAt);
+        }
+    }
+
+    @Override
     public <K> Map<K, List<T>> queryPartitions(PartitionedQuerySpec<K> partitionedQuery) {
         long startedAt = System.nanoTime();
         try {
@@ -830,6 +860,16 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         hydrateWarmBatchInternal(entities, versions, forceImmediateProjectionRefresh, reindexQueryIndexes);
     }
 
+    /** Returns only rows accepted by the entity hot policy and Redis version fence. */
+    public List<T> hydrateWarmBatchAccepted(
+            List<T> entities,
+            List<Long> versions,
+            boolean forceImmediateProjectionRefresh,
+            boolean reindexQueryIndexes
+    ) {
+        return hydrateWarmBatchInternal(entities, versions, forceImmediateProjectionRefresh, reindexQueryIndexes);
+    }
+
     /**
      * Incrementally removes cached rows that no longer satisfy the current hot policy.
      * This is cache-only maintenance: it never creates a tombstone or write-behind command.
@@ -1039,6 +1079,37 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
         }
     }
 
+    /**
+     * Warms exactly one registered projection and returns the number of source rows that were processed.
+     * A missing projection is a configuration error; silently warming a different surface would make
+     * route-coverage evidence untrustworthy.
+     */
+    public int hydrateProjectionWarmBatchAccepted(List<T> entities, String projectionName) {
+        if (entities == null || entities.isEmpty()) {
+            return 0;
+        }
+        if (projectionName == null || projectionName.isBlank()) {
+            throw new IllegalArgumentException("projectionName must not be blank");
+        }
+        if (entityRegistry == null) {
+            throw new IllegalStateException("Projection warm requires an EntityRegistry");
+        }
+        EntityProjectionBinding<?, ?, ?> selected = entityRegistry.projections(metadata.entityName()).stream()
+                .filter(binding -> binding.projection().name().equals(projectionName.trim()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "No registered CacheDB projection named " + projectionName
+                                + " for entity " + metadata.entityName()
+                ));
+        long startedAt = System.nanoTime();
+        try {
+            warmProjectionPayloadBatch(selected, entities);
+            return entities.size();
+        } finally {
+            recordRedisWrite(startedAt);
+        }
+    }
+
     private void warmProjectionPayloadsBatch(List<T> entities) {
         if (entities == null || entities.isEmpty() || entityRegistry == null) {
             return;
@@ -1132,6 +1203,11 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
 
     @Override
     public void deleteById(ID id) {
+        deleteWithReceipt(id);
+    }
+
+    @Override
+    public WriteReceipt<T, ID> deleteWithReceipt(ID id) {
         long startedAt = System.nanoTime();
         try {
             producerGuard.applyBackpressure();
@@ -1157,8 +1233,9 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                     Instant.now()
             );
 
+            long version;
             if (functionExecutor != null && functionExecutor.enabled()) {
-                functionExecutor.delete(
+                version = functionExecutor.delete(
                         redisKey,
                         versionKey,
                         tombstoneKey,
@@ -1171,7 +1248,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 );
                 pageCacheManager.removeEntity(id);
             } else {
-                long version = jedis.incr(versionKey);
+                version = jedis.incr(versionKey);
                 writeTombstoneKey(tombstoneKey, version);
                 pageCacheManager.removeEntity(id);
                 writeBehindQueue.enqueue(new WriteOperation<>(
@@ -1185,6 +1262,7 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
                 ));
             }
             deleteProjectionPayloads(id, false);
+            return new WriteReceipt<>(null, id, metadata.redisNamespace(), OperationType.DELETE, version, operation.createdAt());
         } finally {
             recordRedisWrite(startedAt);
         }
@@ -1453,6 +1531,11 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     }
 
     private List<T> loadQueryFromSource(QuerySpec querySpec) {
+        RouteCacheContract contract = RouteCacheContext.currentContract();
+        if (contract != null && !contract.sourceFallbackAllowed()) {
+            recordReadThroughEvent("query-route-hot-only", false);
+            return List.of();
+        }
         if (!readThroughConfig.mode().queryEnabled()) {
             recordReadThroughEvent("query-disabled", false);
             return List.of();

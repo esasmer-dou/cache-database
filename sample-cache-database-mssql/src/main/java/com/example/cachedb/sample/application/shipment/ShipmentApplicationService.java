@@ -1,15 +1,15 @@
 package com.example.cachedb.sample.application.shipment;
 
-import com.example.cachedb.sample.application.SampleEntityNotFoundException;
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
+import com.example.cachedb.sample.application.SampleHotLookups;
 import com.example.cachedb.sample.domain.ShipmentEntity;
 import com.example.cachedb.sample.domain.ShipmentEventEntity;
 import com.example.cachedb.sample.readmodel.ShipmentSummary;
-import com.example.cachedb.sample.readmodel.ShipmentSummaryProjection;
+import com.example.cachedb.sample.repository.ShipmentEventRepository;
+import com.example.cachedb.sample.repository.ShipmentRepository;
 import com.example.cachedb.sample.service.DurableReferenceGuard;
 import com.example.cachedb.sample.service.SampleDomainPolicies;
 import com.reactor.cachedb.core.model.WriteReceipt;
-import com.reactor.cachedb.core.page.VersionedEntity;
+import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -19,45 +19,45 @@ import java.util.List;
 @Service
 public final class ShipmentApplicationService {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final ShipmentRepository shipments;
+    private final ShipmentEventRepository shipmentEvents;
     private final DurableReferenceGuard references;
     private final Clock clock;
 
     public ShipmentApplicationService(
-            GeneratedCacheModule.Scope domain,
+            ShipmentRepository shipments,
+            ShipmentEventRepository shipmentEvents,
             DurableReferenceGuard references,
             Clock clock
     ) {
-        this.domain = domain;
+        this.shipments = shipments;
+        this.shipmentEvents = shipmentEvents;
         this.references = references;
         this.clock = clock;
     }
 
     public List<ShipmentSummary> active(int limit) {
-        return domain.shipments().queries().activeShipmentsProjection(limit);
+        return shipments.active(limit).completeItems();
     }
 
     public List<ShipmentSummary> exceptions(int limit) {
-        return domain.shipments().queries().shipmentExceptionsProjection(limit);
+        return shipments.exceptions(limit).completeItems();
     }
 
     public List<ShipmentSummary> forCustomer(long customerId, int limit) {
-        return domain.shipments().queries().customerShipmentsProjection(customerId, limit);
+        return shipments.forCustomer(customerId, WindowRequest.first(limit)).completeItems();
     }
 
     public ShipmentEntity detail(long shipmentId, int eventPreview) {
-        return domain.shipments().fetches().eventPreview(eventPreview).findById(shipmentId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Shipment", shipmentId));
+        return SampleHotLookups.require("Shipment", shipmentId, shipments.detail(shipmentId, eventPreview));
     }
 
     public List<ShipmentEventEntity> events(long shipmentId, int limit) {
-        return domain.shipmentEvents().queries().eventsForShipment(shipmentId, limit);
+        return shipmentEvents.forShipment(shipmentId, WindowRequest.first(limit)).completeItems();
     }
 
     public List<ShipmentSummary> deliveredArchive(long customerId, int limit) {
-        return domain.shipments().queries().deliveredShipmentArchiveSource(customerId, limit).stream()
-                .map(ShipmentSummaryProjection::fromEntity)
-                .toList();
+        return shipments.deliveredArchive(customerId, WindowRequest.first(limit)).items();
     }
 
     public WriteReceipt<ShipmentEntity, Long> create(CreateShipment command) {
@@ -73,7 +73,7 @@ public final class ShipmentApplicationService {
         entity.promisedAt = command.promisedAt() == null ? now + 86_400L : command.promisedAt();
         entity.updatedAt = now;
         entity.riskScore = SampleDomainPolicies.shipmentRisk(entity.shipmentStatus);
-        return customer.save(domain.shipments().repository(), entity);
+        return customer.save(shipments, entity);
     }
 
     public WriteReceipt<ShipmentEventEntity, Long> addEvent(long shipmentId, CreateShipmentEvent command) {
@@ -86,18 +86,17 @@ public final class ShipmentApplicationService {
         entity.eventTime = command.eventTime() == null ? Instant.now(clock).getEpochSecond() : command.eventTime();
         entity.severity = defaultText(command.severity(), "INFO");
         entity.description = defaultText(command.description(), "Manual shipment event");
-        return shipment.save(domain.shipmentEvents().repository(), entity);
+        return shipment.save(shipmentEvents, entity);
     }
 
     public WriteReceipt<ShipmentEntity, Long> updateStatus(long shipmentId, UpdateShipmentStatus command) {
-        VersionedEntity<ShipmentEntity> current = domain.shipments().findVersionedById(shipmentId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Shipment", shipmentId));
-        ShipmentEntity entity = current.entity();
-        entity.shipmentStatus = command.shipmentStatus();
-        entity.currentCity = command.currentCity() == null ? entity.currentCity : command.currentCity();
-        entity.updatedAt = Instant.now(clock).getEpochSecond();
-        entity.riskScore = SampleDomainPolicies.shipmentRisk(entity.shipmentStatus);
-        return domain.shipments().save(entity, current.version());
+        return shipments.updateHot(shipmentId, entity -> {
+            entity.shipmentStatus = command.shipmentStatus();
+            entity.currentCity = command.currentCity() == null ? entity.currentCity : command.currentCity();
+            entity.updatedAt = Instant.now(clock).getEpochSecond();
+            entity.riskScore = SampleDomainPolicies.shipmentRisk(entity.shipmentStatus);
+            return entity;
+        });
     }
 
     private String defaultText(String value, String fallback) {

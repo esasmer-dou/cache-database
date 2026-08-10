@@ -25,16 +25,17 @@ Release hazırlığı ve production sınırları için ayrıca [Production GA Cr
 
 1. `CacheDatabase` bean'ini Spring Boot otomatik oluştursun.
 2. Üretilmiş registrar'lar entity'leri otomatik kaydetsin.
-3. Uygulama kodunda `GeneratedCacheModule.using(session)...` ile başla.
-4. Yalnızca ölçümle kanıtlanmış darboğazları `*CacheBinding.using(session)...` veya doğrudan repository seviyesine indir.
+3. Uygulama route'larını `@CacheRepository` arayüzlerinde tanımla.
+4. Bu arayüzleri uygulama servislerine enjekte et.
+5. Düşük seviyeli binding veya provider repository'lerini yalnızca framework ve operasyon altyapısında kullan.
 
 Bu yol, başlangıç maliyetini düşük tutar ve CacheDB'nin birinci önceliği olan
 düşük çalışma zamanı ek yükü hedefinden ödün vermez.
 
 ### Deklaratif Uygulama Yüzeyi
 
-Entity bazlı policy değerlerini yapılandırmada tut; uygulama koduna ise paket
-için üretilen tek domain scope bean’ini aç:
+Entity bazlı policy değerlerini yapılandırmada, uygulama davranışını ise
+deklaratif repository arayüzlerinde tut:
 
 ```yaml
 cachedb:
@@ -56,12 +57,33 @@ cachedb:
 Entity paketindeki `package-info.java` dosyasına şunu ekle:
 
 ```java
-@com.reactor.cachedb.annotations.CacheDomain(spring = true)
+@com.reactor.cachedb.annotations.CacheDomain
 package com.acme.orders.domain;
 ```
 
-Processor Spring yapılandırmasını üretir ve tek bir
-`GeneratedCacheModule.Scope` bean'i açar.
+Entity processor paket registrar'ını üretir. Repository processor ise her
+`@CacheRepository(springBean = true)` arayüzü için reflection kullanmayan bir
+implementasyon ve Spring yapılandırması üretir. `springBean` varsayılan olarak
+açıktır.
+
+```java
+@CacheRepository(entity = OrderEntity.class)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
+
+    @CacheLookup(idParameter = "orderId", relation = "lines",
+            relationLimitParameter = "linePreview", maxRelationRows = 50)
+    HotLookup<OrderEntity> detail(Long orderId, int linePreview);
+}
+
+@Service
+public final class OrderService {
+    private final OrderRepository orders;
+
+    public OrderService(OrderRepository orders) {
+        this.orders = orders;
+    }
+}
+```
 
 Spring kaydı bilinçli olarak iki aşamalıdır. Önce tüm generated entity’ler kendi
 policy değerleri ve JDBC kaynaklarıyla kaydedilir; ilişki ve sayfa yükleyicileri
@@ -72,7 +94,7 @@ varsayılan değere düşürmek yerine uygulama başlangıcında reddeder.
 
 ## En Hızlı Giriş Yolları
 
-### Düz Java, en az seremoni
+### Düz Java, düşük seviyeli başlangıç
 
 ```java
 JedisPooled jedis = new JedisPooled("redis://127.0.0.1:6379");
@@ -83,9 +105,13 @@ try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .keyPrefix("app-cache")
         .register(com.reactor.cachedb.examples.entity.GeneratedCacheModule::registerJdbcBacked)
         .start()) {
-    // repository kullanımı burada
+    OrderRepository orders = new OrderRepositoryCacheDbImplementation(cacheDatabase);
 }
 ```
+
+Implementasyon adı derleme zamanında üretilir. Spring Boot kullanıcıları sınıfı
+elle oluşturmak yerine arayüzü enjekte etmelidir. Bu düz Java örneğindeki paket
+registrar'ı düşük seviyeli kayıt köprüsüdür.
 
 Üretilen binding sınıfları artık daha düşük ceremony ile kullanılabilir:
 
@@ -454,73 +480,55 @@ Aşağıdaki durumlarda tam `CacheDatabaseConfig.builder()` yoluna inmek mantık
 - guardrail ayarlarını özel yapacaksan
 - page cache veya projection refresh davranışını ince ayarlayacaksan
 
-## ORM Benzeri Query ve Fetch Ergonomisi
+## Deklaratif Sorgu ve Lookup Kullanımı
 
-Public read API artık `QuerySpec.builder()` zorunluluğunu azaltan daha doğal bir akış sunuyor:
-
-```java
-List<OrderEntity> orders = OrderEntityCacheBinding.repository(cacheDatabase)
-        .withRelationLimit("orderLines", 8)
-        .query(
-                QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                        .orderBy(QuerySort.desc("total_amount"), QuerySort.desc("line_item_count"))
-                        .limitTo(24)
-        );
-```
-
-Bu türdeki temel kolaylıklar:
-
-- üretilmiş `*CacheBinding` sınıfları varsayılan olarak kaydedilebiliyor
-- üretilmiş `*CacheBinding.repository(session)` artık açık bir cache policy istemiyor
-- `EntityRepository` ve `ProjectionRepository` için kısa `query(...)` overload'ları var
-- `QuerySpec.where(...).orderBy(...).limitTo(...).fetching(...)` immutable fluent akış sunuyor
-- entity içindeki `@CacheNamedQuery` işaretli statik metodlar `UserEntityCacheBinding.activeUsers(...)` gibi helper'lar üretir
-- entity içindeki `@CacheFetchPreset` işaretli statik metodlar `DemoOrderEntityCacheBinding.orderLinesPreviewRepository(...)` gibi helper'lar üretir
-- entity içindeki `@CachePagePreset` işaretli statik metodlar `UserEntityCacheBinding.usersPage(...)` gibi helper'lar üretir
-- entity içindeki `@CacheSaveCommand` ve `@CacheDeleteCommand` işaretli statik metodlar `UserEntityCacheBinding.activateUser(...)` ve `UserEntityCacheBinding.deleteUser(...)` gibi helper'lar üretir
-
-Örnek:
+Sorgu şeklini servis koduna dağıtma. Filtre, sıralama, limit, Redis coverage ve
+kaynak veritabanı sınırını repository arayüzünde tut:
 
 ```java
-@CacheEntity(table = "cachedb_example_users", redisNamespace = "users")
-public class UserEntity {
+@CacheRepository(entity = OrderEntity.class)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
-    @CacheNamedQuery("activeUsers")
-    public static QuerySpec activeUsersQuery(int limit) {
-        return QuerySpec.where(QueryFilter.eq("status", "ACTIVE"))
-                .orderBy(QuerySort.asc("username"))
-                .limitTo(limit);
-    }
+    @HotRoute(value = "customer-order-timeline", projection = OrderSummary.class,
+            pageSize = 100, hotWindow = 1_000,
+            memoryBudgetBytes = 16_777_216L,
+            coverageScopeParameter = "customerId")
+    @CacheRouteQuery(
+            predicates = @CachePredicate(field = "customerId", parameter = "customerId"),
+            orderBy = {
+                    @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
+                    @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
+            },
+            windowParameter = "window"
+    )
+    HotWindow<OrderSummary> timeline(long customerId, WindowRequest window);
 
-    @CacheFetchPreset("ordersPreview")
-    public static FetchPlan ordersPreviewFetchPlan(int relationLimit) {
-        return FetchPlan.of("orders").withRelationLimit("orders", relationLimit);
-    }
+    @CacheLookup(idParameter = "orderId", relation = "lines",
+            relationLimitParameter = "linePreview", maxRelationRows = 50)
+    HotLookup<OrderEntity> detail(Long orderId, int linePreview);
+
+    @WarmRoute(value = "warm-customer-order-timeline", from = "timeline",
+            maxRows = 1_000, maxRowsParameter = "maxRows",
+            coverageScopeParameter = "customerId", projectionsOnly = true)
+    CacheWarmPlan warmTimeline(long customerId, int maxRows);
 }
-
-List<UserEntity> activeUsers = UserEntityCacheBinding.activeUsers(session, 25);
-EntityRepository<UserEntity, Long> previewRepository =
-        UserEntityCacheBinding.ordersPreviewRepository(session, 8);
-List<UserEntity> users = UserEntityCacheBinding.usersPage(session, 0, 25);
-UserEntity activated = UserEntityCacheBinding.activateUser(session, 41L, "alice");
-UserEntityCacheBinding.deleteUser(session, 41L);
-
-var userOps = UserEntityCacheBinding.using(session);
-List<UserEntity> groupedUsers = userOps.queries().activeUsers(25);
-EntityRepository<UserEntity, Long> groupedPreviewRepository = userOps.fetches().ordersPreview(8);
-List<UserEntity> groupedPage = userOps.pages().usersPage(0, 25);
-UserEntity groupedActivated = userOps.commands().activateUser(41L, "alice");
-userOps.deletes().deleteUser(41L);
-
-var domain = com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session);
-List<UserEntity> domainUsers = domain.users().queries().activeUsers(25);
 ```
 
-İlişki yükü ağır ekranlarda önerilen desen:
+```java
+List<OrderSummary> firstPage = orders.timeline(
+        customerId,
+        WindowRequest.first(24)
+).items();
 
-- önce özet sorgu
-- sonra açık detay okuması
-- tam nesne grafiği yerine gerekirse `withRelationLimit(...)` ile ön izleme
+OrderEntity detail = orders.detail(orderId, 8)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
+```
+
+Processor; hatalı alan adlarını, uyumsuz parametreleri, kullanılmayan
+argümanları, güvensiz pencereleri, yinelenen route adlarını ve geçersiz warm
+sözleşmelerini derleme sırasında reddeder. İlişki yükü ağır ekranlarda önce
+summary projection, ardından sınırlı ve açık detay lookup kullan. Redis'te veri
+olmaması kalıcı 404 anlamına gelmez ve örtülü SQL fallback başlatmamalıdır.
 
 ## Minimal Overhead Modu
 
@@ -827,38 +835,30 @@ Doğru desen:
 1. siparişleri `orderLines` yüklemeden özet olarak sorgula
 2. listeyi özet alanlarla render et
 3. detay gerekince ayrıca yükle
-4. preload istiyorsan bile `FetchPlan.withRelationLimit(...)` ile ilişkiyi sınırla
+4. önizleme ilişkisini repository'deki `@CacheLookup` sözleşmesiyle sınırla
 
 Örnek:
 
 ```java
-ProjectionRepository<DemoOrderReadModelPatterns.OrderSummaryReadModel, Long> summaryRepository =
-        DemoOrderEntityCacheBinding.orderSummary(orderRepository);
+List<OrderSummary> summaries = orders.customerTimeline(
+        customerId,
+        WindowRequest.first(24)
+).items();
 
-List<DemoOrderReadModelPatterns.OrderSummaryReadModel> summaries =
-        readPatterns.findCustomerOrderSummaries(customerId, 24);
+OrderEntity detail = orders.detail(orderId, 12)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
 
-DemoOrderReadModelPatterns.OrderDetailReadModel detail =
-        readPatterns.loadOrderDetail(orderId, 12);
-
-List<DemoOrderReadModelPatterns.OrderLinePreviewReadModel> nextPage =
-        readPatterns.loadRemainingOrderLines(orderId, 12, 50);
+SourceWindow<OrderLineSummary> nextPage = orderLines.archive(
+        orderId,
+        WindowRequest.after(cursor, 50)
+);
 ```
 
 Sınırlı preload örneği:
 
 ```java
-DemoOrderEntity order = orderRepository
-        .withFetchPlan(FetchPlan.of("orderLines").withRelationLimit("orderLines", 8))
-        .findById(orderId)
-        .orElseThrow();
-```
-
-Projection repository örneği:
-
-```java
-ProjectionRepository<DemoOrderReadModelPatterns.OrderLinePreviewReadModel, Long> linePreviewRepository =
-        DemoOrderLineEntityCacheBinding.orderLinePreview(orderLineRepository);
+OrderEntity order = orders.detail(orderId, 8)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
 ```
 
 Projection'a özel index ve refresh:
@@ -870,11 +870,12 @@ Projection'a özel index ve refresh:
 - refresh event'leri process restart sonrasında kaybolmaz; Redis consumer group üzerinden birden fazla uygulama node'u tarafından işlenebilir
 - model tasarım gereği hala eventual consistency tabanlıdır
 - ama henüz poison queue, replay tooling veya ayrık admin telemetrisi olan tam bir projection platformu değildir
-- entity içindeki statik bir metoda `@CacheProjectionDefinition` koyarsan generated binding tarafında `DemoOrderEntityCacheBinding.orderSummary(...)` gibi projection helper'ları oluşur
-- entity içindeki statik bir metoda `@CacheNamedQuery` koyarsan aynı generated binding hem entity repository hem projection repository için query helper üretir
-- entity içindeki statik bir metoda `@CacheFetchPreset` koyarsan generated binding `withFetchPlan(...)` glue kodu yazmadan preview/detail repository helper'ları üretir
-- entity içindeki statik bir metoda `@CachePagePreset` koyarsan generated binding `new PageWindow(...)` glue kodu yazmadan tekrar kullanılabilir page/window helper'ları üretir
-- entity içindeki statik bir metoda `@CacheSaveCommand` veya `@CacheDeleteCommand` koyarsan generated binding derleme zamanında write command helper'ları üretir
+- `@CacheProjectionRecord`, generated projection eşlemesini tanımlar; `factoryMethod` reflection olmadan hesaplanan alanları destekler
+- `@HotRoute`, projection ile sayfa, Redis penceresi, coverage ve bellek sınırını aynı uygulama metodunda birleştirir
+- `@WarmRoute`, sorguyu tekrar yazmak yerine aynı route sözleşmesini kullanır
+- `@CacheLookup`, sınırlı önizleme ve detay ilişkilerini tanımlar
+- `@CacheCommand`; acknowledgement, durability timeout, batch sınırı ve idempotency davranışını açık hale getirir
+- eski statik entity query/fetch helper'ları uyumluluk için korunur; yeni uygulamalar için önerilen yüzey değildir
 
 Örnek:
 

@@ -2,11 +2,12 @@
 
 Turkish version: [tr/README.md](tr/README.md)
 
-CacheDB is a Redis-first Java data-layer library that keeps a durable SQL
-database as the source of truth. PostgreSQL is the default provider today;
-MSSQL is available as an explicit provider with its own SQL Server evidence
-lane. CacheDB is built for teams that want ORM-like developer ergonomics
-without hiding the hot read/write path behind runtime magic.
+CacheDB is a Redis-first Java data-layer framework that keeps the selected SQL
+database as the durable source of truth. PostgreSQL and SQL Server are explicit,
+first-class providers with separate starters and provider-specific evidence
+lanes. CacheDB is built for teams that want ORM-like developer ergonomics
+without hiding operational read, write, warm, or archive behavior behind
+runtime magic.
 
 The core design rule is simple:
 
@@ -17,13 +18,20 @@ The core design rule is simple:
 - generate metadata at compile time instead of discovering it with runtime
   reflection
 
-Short status: CacheDB core and the default PostgreSQL provider are ready for a
-stable framework release with explicit production boundaries. Teams should
-still prove every hot route with staging warm-up, side-by-side comparison,
-route contracts, Redis memory limits, and rollback planning before cutover.
-MSSQL has provider-specific CI coverage for write-behind, outbox, migration
-planner, concurrency, lock handling, and restart/reconnect behavior; SQL Server
-HA or Always On remains an application-environment certification item.
+Both providers cover the same CacheDB application model: generated
+repositories, bounded active routes, projections, warm/backfill, write-behind,
+outbox integration, and explicit source routes. Database-specific connection,
+locking, timeout, indexing, and HA behavior still has to be proven in the
+application's own staging topology.
+
+| Current line | Value |
+| --- | --- |
+| Latest published release | `v0.7.0` |
+| Repository version | `0.7.0` |
+| Library bytecode | Java 17 |
+| Runnable samples | Java 21 |
+| Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
+| Application API | Compile-time generated `@CacheRepository` interfaces |
 
 ## Product Positioning: What CacheDB Is And Is Not
 
@@ -89,7 +97,7 @@ happens when the requested data is outside the active set.
 | Situation | Recommended path | Why |
 | --- | --- | --- |
 | I want to run a complete sample first | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) | REST API, Docker Compose, schema, seed data, Postman collection |
-| New Spring Boot service | `cachedb-spring-boot-starter` | Minimal setup, same-port admin UI, Spring `DataSource` integration |
+| New Spring Boot service | `cachedb-spring-boot-starter-postgres` or `cachedb-spring-boot-starter-mssql` | Explicit provider selection and Spring `DataSource` integration |
 | Existing Spring Boot app with JPA | Starter plus existing `DataSource` | JPA usually already creates the `DataSource`; do not duplicate JDBC setup |
 | Plain Java service | `cachedb-starter` | You own bootstrap, shutdown, and connection lifecycle |
 | Existing SQL database + ORM system | Migration Planner | Discover schema, warm Redis, compare the source database vs CacheDB, generate a cutover report |
@@ -103,25 +111,57 @@ and latency are proven.
 ANTI-PATTERN: mark every table as an entity and expect Redis to automatically
 make every dynamic query fast.
 
+## Ten-Minute Learning Path
+
+1. Run either the [PostgreSQL sample](sample-cache-database-postgresql/README.md)
+   or the [SQL Server sample](sample-cache-database-mssql/README.md) with its
+   `demo` profile.
+2. Seed durable rows and wait for the distributed seed job to complete.
+3. Call an archive endpoint to prove the SQL source route.
+4. Run a projection-only warm job and wait for route coverage.
+5. Call the matching Redis active route and compare membership and ordering.
+6. Inspect `/api/tuning`, readiness, and the admin UI before changing any
+   limits.
+
+That sequence teaches the product contract more accurately than beginning with
+unbounded CRUD methods.
+
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use.
+Keep `cachedb.version` aligned with the release you use. Version `0.7.0` is an
+immutable release distributed through GitHub Packages and the GitHub Release
+bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.6.0</cachedb.version>
+    <cachedb.version>0.7.0</cachedb.version>
 </properties>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-bom</artifactId>
+            <version>${cachedb.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
 
 <dependencies>
     <dependency>
         <groupId>com.reactor.cachedb</groupId>
-        <artifactId>cachedb-spring-boot-starter</artifactId>
-        <version>${cachedb.version}</version>
+        <artifactId>cachedb-spring-boot-starter-postgres</artifactId>
     </dependency>
     <dependency>
         <groupId>com.reactor.cachedb</groupId>
         <artifactId>cachedb-annotations</artifactId>
-        <version>${cachedb.version}</version>
+    </dependency>
+    <!-- Optional: operations UI and migration planner -->
+    <dependency>
+        <groupId>com.reactor.cachedb</groupId>
+        <artifactId>cachedb-spring-boot-starter-admin</artifactId>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
@@ -152,7 +192,41 @@ Keep `cachedb.version` aligned with the release you use.
 </build>
 ```
 
+Published artifacts are served through GitHub Packages. Add the repository to
+the consumer POM when it is not inherited from a company parent:
+
+```xml
+<repositories>
+    <repository>
+        <id>cache-database-github-packages</id>
+        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+    </repository>
+</repositories>
+```
+
+The repository ID must match the Maven server ID:
+
+```xml
+<settings>
+    <servers>
+        <server>
+            <id>cache-database-github-packages</id>
+            <username>${env.GITHUB_ACTOR}</username>
+            <password>${env.GITHUB_TOKEN}</password>
+        </server>
+    </servers>
+</settings>
+```
+
+Use a token with `read:packages`. Version `0.7.0` is published as an immutable
+package; a consumer build does not need the CacheDB source repository.
+
 JDBC rule:
+
+| SQL provider | Provider starter | JDBC driver | Runnable sample |
+| --- | --- | --- | --- |
+| PostgreSQL | `cachedb-spring-boot-starter-postgres` | `org.postgresql:postgresql` | [PostgreSQL sample](sample-cache-database-postgresql/README.md) |
+| SQL Server | `cachedb-spring-boot-starter-mssql` | `com.microsoft.sqlserver:mssql-jdbc` | [SQL Server sample](sample-cache-database-mssql/README.md) |
 
 - Add `spring-boot-starter-jdbc` if your application does not already create a
   Spring `DataSource`.
@@ -161,11 +235,16 @@ JDBC rule:
 - CacheDB needs a working Spring `DataSource` bean.
 - `cachedb-annotations` and the `cachedb-processor` annotation processor are
   still required.
-- The example below uses PostgreSQL because it is the default provider. For
-  MSSQL, add `cachedb-storage-mssql`, the Microsoft JDBC driver, and wire the
-  provider explicitly with `cachedb.sql.provider=mssql` or
-  `MssqlWriteBehindFlusher.factory(...)` as described in
-  [Database Provider SPI](docs/database-provider-spi.md).
+- Choose exactly one provider starter. Use
+  `cachedb-spring-boot-starter-postgres` for PostgreSQL or
+  `cachedb-spring-boot-starter-mssql` for SQL Server.
+- With one provider on the classpath, `cachedb.sql.provider=AUTO` selects it.
+  Multiple providers fail startup instead of being resolved silently.
+- Add `cachedb-spring-boot-starter-admin` only when the operations console is
+  required. It is not part of the core runtime starter.
+- See [Declarative Repositories](docs/declarative-repositories.md) for the
+  preferred application API and [Database Provider SPI](docs/database-provider-spi.md)
+  for provider-specific tuning.
 
 Minimal `application.yml`:
 
@@ -236,15 +315,19 @@ does not rely on runtime reflection to discover persisted fields.
 
 ## First Read And Write
 
-Enable the generated Spring domain surface once in the entity package:
+Declare the repository contract. The processor validates route fields,
+parameters, limits, and return types, then generates the Spring bean and
+reflection-free implementation:
 
 ```java
-@com.reactor.cachedb.annotations.CacheDomain(spring = true)
-package com.acme.orders.domain;
+@CacheRepository(entity = CustomerEntity.class)
+public interface CustomerRepository extends CacheDbRepository<CustomerEntity, Long> {
+    @CacheLookup(idParameter = "customerId")
+    HotLookup<CustomerEntity> detail(Long customerId);
+}
 ```
 
-The processor generates the Spring configuration and one
-`GeneratedCacheModule.Scope` bean. Inject that scope into application services:
+Inject the generated repository into the application service:
 
 ```java
 CustomerEntity customer = new CustomerEntity();
@@ -253,20 +336,27 @@ customer.taxNumber = "1234567890";
 customer.customerType = "RETAIL";
 customer.status = "ACTIVE";
 
-domain.customers().save(customer);
+WriteReceipt<CustomerEntity, Long> receipt = customers.save(customer);
 
-CustomerEntity loaded = domain.customers()
-        .findById(42L)
-        .orElseThrow();
+CustomerEntity loaded = customers.detail(42L).orElseThrow(status ->
+        new IllegalStateException("Customer is not available in Redis: " + status)
+);
 ```
 
 Behavior:
 
 - `save` writes the entity to Redis when its policy admits it.
 - Durable persistence is sent to the selected SQL write-behind path.
-- `findById` reads the active entity from Redis.
+- `detail` is Redis-only; `NOT_CACHED` does not mean the SQL row is absent.
 - If the entity does not satisfy the hot policy, it may be rejected or evicted
   from Redis.
+- Archive or out-of-window reads must use an explicit bounded `@SourceRoute`.
+- Routes that require preloaded Redis coverage should declare a `@WarmRoute`
+  and use `HotWindow.completeItems()` at application endpoints after cutover.
+
+`GeneratedCacheModule` remains supported for compatibility and low-level jobs.
+New service code should normally use generated repositories. Continue with
+[Declarative Repositories](docs/declarative-repositories.md).
 
 ## Relation Model
 
@@ -279,7 +369,7 @@ Think about relation in three separate layers:
 | --- | --- | --- |
 | Source database primary/foreign key | Protects durable data integrity and prevents orphan rows | Recommended, but not enough by itself |
 | `@CacheRelation` metadata | Tells CacheDB that a parent field represents a relation and which target field joins it | Yes |
-| Generated or custom loader + `FetchPlan` | Executes the bounded batch load when the caller asks for the relation | Yes |
+| Generated/custom loader + `@CacheLookup` | Executes the bounded batch load when the caller asks for the relation | Yes |
 
 So the rule is precise:
 
@@ -289,8 +379,8 @@ So the rule is precise:
 - `mappedBy` points to the target entity field that carries the parent id.
 - A typed target plus bounded ordering lets the processor generate the standard
   partitioned loader. Use `@CacheEntity.relationLoader` only for custom loading.
-- The caller must still request the relation through `FetchPlan` or
-  `withRelationLimit(...)`.
+- The repository contract must request the relation through a bounded
+  `@CacheLookup`.
 
 ```java
 @CacheEntity(table = "customers", redisNamespace = "customers")
@@ -315,10 +405,12 @@ public class CustomerEntity {
 Read with a bounded preview:
 
 ```java
-CustomerEntity customer = customerRepository
-        .withRelationLimit("orders", 20)
-        .findById(customerId)
-        .orElseThrow();
+@CacheLookup(idParameter = "customerId", relation = "orders",
+        relationLimitParameter = "orderPreview", maxRelationRows = 25)
+HotLookup<CustomerEntity> detail(Long customerId, int orderPreview);
+
+CustomerEntity customer = customers.detail(customerId, 20)
+        .orElseThrow(status -> mapHotLookupFailure(customerId, status));
 ```
 
 What happens in common cases:
@@ -330,7 +422,7 @@ What happens in common cases:
 | Yes | Yes | No | A batch-only relation without generated or custom loading information is rejected at compile time. |
 | Yes | Yes | Yes | BEST: durable integrity, explicit metadata, and bounded batch preload. |
 
-BEST: use `withRelationLimit(...)` for a small detail-page preview.
+BEST: use a bounded `@CacheLookup` for a small detail-page preview.
 
 ANTI-PATTERN: load a customer's full order history as a relation on a list
 screen.
@@ -355,7 +447,7 @@ Example decision:
 | Customer card | `CustomerEntity` |
 | Latest customer orders | `CustomerOrderSummaryProjection` |
 | Order detail | `OrderEntity` |
-| Order-line preview | `withRelationLimit("orderLines", 8)` |
+| Order-line preview | `@CacheLookup` with `linePreview=8` |
 | Global highest-risk orders | Ranked projection |
 
 ## Redis Memory Discipline
@@ -427,7 +519,7 @@ table.
 
 | Topic | CacheDB | Traditional ORM |
 | --- | --- | --- |
-| Primary hot read path | Redis | Database |
+| Primary active-data read path | Redis | Database |
 | Durable source | SQL database | Database |
 | Metadata | Compile-time generated | Usually runtime metadata/reflection |
 | Relation behavior | Explicit `FetchPlan`, loaders, projections | Often lazy/eager object graph behavior |

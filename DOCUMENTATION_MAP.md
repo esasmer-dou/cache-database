@@ -12,11 +12,12 @@ Read in this order:
 1. [README](README.md)
 2. [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md)
 3. [Getting Started](docs/getting-started.md)
-4. [Concepts and Assumptions](docs/concepts-and-assumptions.md)
-5. [Use Case Examples](docs/use-case-examples.md)
-6. [Production Tuning Guide](docs/production-tuning-guide.md)
+4. [Declarative Repositories](docs/declarative-repositories.md)
+5. [Concepts and Assumptions](docs/concepts-and-assumptions.md)
+6. [Use Case Examples](docs/use-case-examples.md)
+7. [Production Tuning Guide](docs/production-tuning-guide.md)
 
-These five documents should be enough for a new team to understand what CacheDB
+These seven documents should be enough for a new team to understand what CacheDB
 is, how it is installed, how relation/projection decisions are made, and how
 production tuning should be approached.
 
@@ -27,6 +28,8 @@ production tuning should be approached.
 | What is CacheDB, and what is it not? | [README](README.md) |
 | How do I run a complete REST API sample? | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
+| How do I declare hot, source, warm, and command routes? | [Declarative Repositories](docs/declarative-repositories.md) |
+| What changed during the ten framework UX hardening iterations? | [Framework UX Engineering Report](docs/framework-ux-10-iteration-report.md) |
 | Do I need the Spring Boot JDBC starter? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | What are entity, relation, projection, and route contract? | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | How do insert, read, update, and delete work? | [Use Case Examples](docs/use-case-examples.md) |
@@ -101,6 +104,8 @@ with evidence.
 | --- | --- |
 | [README](README.md) | Product positioning and first decision gate |
 | [Getting Started](docs/getting-started.md) | First working setup |
+| [Declarative Repositories](docs/declarative-repositories.md) | Preferred repository-first API, route contracts, warm, commands, tests, and migration |
+| [Framework UX Engineering Report](docs/framework-ux-10-iteration-report.md) | Ten review, implementation, safety, performance, and verification iterations |
 | [Concepts and Assumptions](docs/concepts-and-assumptions.md) | Definitions, assumptions, and design boundaries |
 | [Use Case Examples](docs/use-case-examples.md) | Real entity, query, update, delete, projection, and dashboard examples |
 | [Production Tuning Guide](docs/production-tuning-guide.md) | Redis memory, hot policy, route contract, write-behind, Kubernetes tuning |
@@ -114,6 +119,7 @@ with evidence.
 | [Production Test Report](docs/production-test-report.md) | Test evidence, smoke results, benchmark, certification lane |
 | [Production Readiness Report](docs/production-readiness-report.md) | Current production maturity assessment |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
+| [v0.7.0 Release Notes](docs/releases/v0.7.0.md) | Declarative repositories, explicit route coverage, safe updates, compile-time scheduled warm, test tooling, and provider-equivalent samples |
 | [v0.6.0 Release Notes](docs/releases/v0.6.0.md) | Declarative domain, generated relations/projections/routes, durable jobs, and upgrade notes |
 | [v0.5.0 Release Notes](docs/releases/v0.5.0.md) | Scheduled warm, reconciliation, validation evidence, and production boundaries |
 | [Stable Release Launch Kit](docs/stable-release-launch-kit.md) | GitHub description, release message, stable release positioning |

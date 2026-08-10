@@ -12,6 +12,7 @@ import com.reactor.cachedb.core.query.QueryNode;
 import com.reactor.cachedb.core.query.QueryExplainPlan;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySpec;
+import com.reactor.cachedb.core.repository.HotLookup;
 
 import java.util.Collection;
 import java.util.List;
@@ -20,6 +21,9 @@ import java.util.Optional;
 
 public interface EntityRepository<T, ID> {
     Optional<T> findById(ID id);
+    default HotLookup<T> findHotById(ID id) {
+        return findById(id).map(HotLookup::hit).orElseGet(HotLookup::notCached);
+    }
     default Optional<VersionedEntity<T>> findVersionedById(ID id) {
         throw new UnsupportedOperationException("Versioned reads are not supported by this EntityRepository implementation");
     }
@@ -44,6 +48,9 @@ public interface EntityRepository<T, ID> {
         throw new UnsupportedOperationException("Partitioned queries are not supported by this EntityRepository implementation");
     }
     void deleteById(ID id);
+    default WriteReceipt<T, ID> deleteWithReceipt(ID id) {
+        throw new UnsupportedOperationException("Delete receipts are not supported by this EntityRepository implementation");
+    }
     EntityRepository<T, ID> withFetchPlan(FetchPlan fetchPlan);
 
     default EntityRepository<T, ID> withRelations(String... relations) {

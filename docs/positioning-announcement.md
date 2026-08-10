@@ -7,8 +7,9 @@ The short story:
 - Redis-first reads and writes
 - durable SQL write-behind through the selected provider
 - compile-time generated metadata instead of runtime reflection
-- generated domain and binding surfaces for easy onboarding
-- measured escape hatches for real hotspots
+- declarative repository interfaces with compile-time generated implementations
+- explicit hot, source, warm, projection, and command contracts
+- measured low-level escape hatches for framework and operational infrastructure
 
 What makes the positioning credible:
 

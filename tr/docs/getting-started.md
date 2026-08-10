@@ -33,23 +33,34 @@ ANTI-PATTERN: Tüm tabloları modelleyip tüm trafiği bir anda CacheDB'ye almak
 
 ## 2. Spring Boot Dependency'leri
 
-Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur.
+Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur. `0.7.0`, GitHub
+Packages üzerinden değişmez paket olarak yayımlanmıştır.
 
 ```xml
 <properties>
-    <cachedb.version>0.6.0</cachedb.version>
+    <cachedb.version>0.7.0</cachedb.version>
 </properties>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-bom</artifactId>
+            <version>${cachedb.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
 
 <dependencies>
     <dependency>
         <groupId>com.reactor.cachedb</groupId>
-        <artifactId>cachedb-spring-boot-starter</artifactId>
-        <version>${cachedb.version}</version>
+        <artifactId>cachedb-spring-boot-starter-postgres</artifactId>
     </dependency>
     <dependency>
         <groupId>com.reactor.cachedb</groupId>
         <artifactId>cachedb-annotations</artifactId>
-        <version>${cachedb.version}</version>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
@@ -87,12 +98,12 @@ JDBC kuralı:
   vardır; sadece CacheDB için JDBC starter'ı tekrar ekleme.
 - Seçtiğin SQL provider'a ait JDBC driver runtime dependency olarak kalmalıdır.
 - `cachedb-processor` annotation processor olarak tanımlanmalıdır.
-- Örneklerde PostgreSQL driver'ı gösterilir; çünkü varsayılan provider
-  PostgreSQL'dir. MSSQL için `cachedb-storage-mssql`, Microsoft SQL Server JDBC
-  driver'ı gerekir. Provider seçimini Spring Boot'ta `cachedb.sql.provider=mssql`
-  ile, plain Java'da ise `MssqlWriteBehindFlusher.factory(...)` ile açıkça
-  yaparsın. Detaylar için [Veritabanı Sağlayıcı SPI](veritabani-provider-spi.md)
-  sayfasına bak.
+- Örnek PostgreSQL provider starter'ını kullanır. SQL Server için bunu
+  `cachedb-spring-boot-starter-mssql` ile değiştir.
+- Yalnızca bir provider starter ekle. `AUTO`, tek provider'ı bulur; classpath
+  belirsizse başlangıcı durdurur.
+- Yönetim ekranı gerekiyorsa `cachedb-spring-boot-starter-admin` paketini ayrıca
+  ekle.
 
 ## 3. Plain Java Dependency'leri
 
@@ -100,7 +111,7 @@ Spring Boot kullanmıyorsan:
 
 ```xml
 <properties>
-    <cachedb.version>0.6.0</cachedb.version>
+    <cachedb.version>0.7.0</cachedb.version>
 </properties>
 
 <dependencies>
@@ -162,7 +173,8 @@ cachedb:
     http-enabled: true
 ```
 
-Plain Java:
+Düz Java düşük seviyeli kayıt örneği (Spring Boot kullanıcıları generated
+repository'yi enjekte etmelidir):
 
 ```java
 JedisPooled jedis = new JedisPooled("redis://127.0.0.1:6379");
@@ -223,17 +235,27 @@ public class CustomerEntity {
 - Entity küçük tutulmalıdır.
 - İlişki alanları ancak ihtiyaç varsa eklenmelidir.
 
-Paket için üretilen tek domain scope'u etkinleştir. Her entity repository ve
-projection için ayrı Spring bean'i oluşturma. Entity paketindeki
-`package-info.java` dosyasına şu annotation'ı ekle:
+Uygulamanın kullanacağı repository sözleşmesini tanımla. Application service
+içinde binding veya projection repository'si elle oluşturma:
 
 ```java
-@com.reactor.cachedb.annotations.CacheDomain(spring = true)
-package com.acme.orders.domain;
+@CacheRepository(entity = CustomerEntity.class)
+public interface CustomerRepository extends CacheDbRepository<CustomerEntity, Long> {
+    @CacheLookup(idParameter = "customerId")
+    HotLookup<CustomerEntity> detail(Long customerId);
+
+    @HotRoute(value = "active-customers", pageSize = 100, hotWindow = 50_000)
+    @CacheRouteQuery(
+            predicates = @CachePredicate(field = "status", constants = "ACTIVE"),
+            orderBy = @CacheOrder(field = "customerId"),
+            windowParameter = "window"
+    )
+    HotWindow<CustomerEntity> active(WindowRequest window);
+}
 ```
 
-Processor Spring yapılandırmasını üretir ve uygulama servislerine enjekte
-edilebilen tek bir `GeneratedCacheModule.Scope` bean'i açar.
+Processor sözleşmeyi kontrol eder ve Spring bean'ini üretir.
+`CustomerRepository` interface'ini doğrudan enjekte et.
 
 ## 6. İlk Save ve Read
 
@@ -244,22 +266,25 @@ customer.taxNumber = "1234567890";
 customer.customerType = "RETAIL";
 customer.status = "ACTIVE";
 
-domain.customers().save(customer);
+WriteReceipt<CustomerEntity, Long> receipt = customers.save(customer);
 
-CustomerEntity loaded = domain.customers().findById(1001L).orElseThrow();
+CustomerEntity loaded = customers.detail(1001L).orElseThrow(status ->
+        new IllegalStateException("Müşteri Redis'te kullanıma hazır değil: " + status)
+);
 ```
 
 Beklenen davranış:
 
 - `save`, policy tarafından kabul edilen entity’yi Redis’e yazar.
 - Kalıcı yazım seçilen SQL write-behind hattına alınır.
-- `findById` Redis'teki entity'yi okur.
+- `detail` yalnızca Redis'ten okur. `NOT_CACHED`, SQL'de kayıt olmadığı
+  anlamına gelmez.
 - Entity etkin veri politikasına uymuyorsa Redis’e kabul edilmeyebilir.
 
 ## 7. İlk Delete
 
 ```java
-domain.customers().deleteById(1001L);
+WriteReceipt<CustomerEntity, Long> receipt = customers.deleteById(1001L);
 ```
 
 Davranış:
@@ -274,18 +299,19 @@ Davranış:
 Küçük ve kontrollü query:
 
 ```java
-List<CustomerEntity> activeCustomers = domain.customers().query(
-        QuerySpec.where(QueryFilter.eq("status", "ACTIVE"))
-                .orderBy(QuerySort.asc("customer_id"))
-                .limitTo(100)
-);
+HotWindow<CustomerEntity> activeCustomers = customers.active(WindowRequest.first(100));
 ```
 
 Kural:
 
-- Query limitli olmalıdır.
+- Route sınırlı olmalı ve cursor penceresi kullanmalıdır.
 - Büyük liste ekranlarında full entity query yerine projection düşünülmelidir.
-- Sıralama ve filtre alanları index/metadata tarafında bilinçli tasarlanmalıdır.
+- `activeCustomers.coverage()` production sözleşmesinin bir parçasıdır.
+
+Arşiv veya etkin veri kümesinin dışındaki okumalar için sınırlı bir
+`@SourceRoute` tanımla. Önceden doldurulması gereken route için aynı sorgudan
+bir `@WarmRoute` üret. Tam örnek
+[Deklaratif Repository Kullanımı](deklaratif-repositoryler.md) sayfasındadır.
 
 ## 9. Relation'ı Doğru Başlat
 
@@ -308,7 +334,7 @@ public class OrderEntity {
 }
 ```
 
-Ana entity üzerinde tip güvenli, sınırlı relation ve fetch preset tanımla.
+Ana entity üzerinde tip güvenli ve sınırlı ilişki metadata'sını tanımla.
 Processor standart partitioned loader'ı üretir:
 
 ```java
@@ -325,11 +351,6 @@ public class CustomerEntity {
             orderBy = {"orderDate DESC", "orderId DESC"}
     )
     public List<OrderEntity> orders;
-
-    @CacheFetchPreset("ordersPreview")
-    public static FetchPlan ordersPreviewFetchPlan(int limit) {
-        return FetchPlan.of("orders").withRelationLimit("orders", Math.max(1, limit));
-    }
 }
 ```
 
@@ -340,13 +361,15 @@ var ama DB foreign key yoksa CacheDB `mappedBy` üzerinden relation'ı
 yükleyebilir; fakat kalıcı veri bütünlüğü artık senin sorumluluğundadır. Özel
 yükleme mantığı gerekiyorsa `@CacheEntity.relationLoader` kullan.
 
-Okuma:
+Önizleme sınırını repository sözleşmesine koy ve enjekte edilen arayüzü kullan:
 
 ```java
-CustomerEntity customer = domain.customers().fetches()
-        .ordersPreview(10)
-        .findById(customerId)
-        .orElseThrow();
+@CacheLookup(idParameter = "customerId", relation = "orders",
+        relationLimitParameter = "orderPreview", maxRelationRows = 25)
+HotLookup<CustomerEntity> detail(Long customerId, int orderPreview);
+
+CustomerEntity customer = customers.detail(customerId, 10)
+        .orElseThrow(status -> mapHotLookupFailure(customerId, status));
 ```
 
 Bu, yalnızca küçük preview için kabul edilebilir. Müşteri başına yüzlerce veya

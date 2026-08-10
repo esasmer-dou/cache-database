@@ -5,7 +5,7 @@ import com.reactor.cachedb.core.config.CacheDatabaseConfigOverrides;
 import com.reactor.cachedb.core.config.PersistenceSemantics;
 import com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator;
 import com.reactor.cachedb.core.cache.EntityHotPolicyMode;
-import com.reactor.cachedb.starter.PostgresConnectionConfig;
+import com.reactor.cachedb.postgres.PostgresConnectionConfig;
 import com.reactor.cachedb.starter.RedisConnectionConfig;
 import org.junit.jupiter.api.Test;
 

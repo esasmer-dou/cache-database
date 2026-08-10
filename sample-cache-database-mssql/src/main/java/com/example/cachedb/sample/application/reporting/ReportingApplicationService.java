@@ -1,11 +1,11 @@
 package com.example.cachedb.sample.application.reporting;
 
-import com.example.cachedb.sample.application.SampleEntityNotFoundException;
 import com.example.cachedb.sample.domain.AuditEventEntity;
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.domain.ReportJobEntity;
+import com.example.cachedb.sample.repository.AuditEventRepository;
+import com.example.cachedb.sample.repository.ReportJobRepository;
 import com.reactor.cachedb.core.model.WriteReceipt;
-import com.reactor.cachedb.core.page.VersionedEntity;
+import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -15,20 +15,26 @@ import java.util.List;
 @Service
 public final class ReportingApplicationService {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final ReportJobRepository reportJobs;
+    private final AuditEventRepository auditEvents;
     private final Clock clock;
 
-    public ReportingApplicationService(GeneratedCacheModule.Scope domain, Clock clock) {
-        this.domain = domain;
+    public ReportingApplicationService(
+            ReportJobRepository reportJobs,
+            AuditEventRepository auditEvents,
+            Clock clock
+    ) {
+        this.reportJobs = reportJobs;
+        this.auditEvents = auditEvents;
         this.clock = clock;
     }
 
     public List<ReportJobEntity> liveJobs(int limit) {
-        return domain.reportJobs().queries().liveReportJobs(limit);
+        return reportJobs.live(limit).completeItems();
     }
 
     public List<ReportJobEntity> jobsByType(String reportType, int limit) {
-        return domain.reportJobs().queries().reportJobsByType(reportType, limit);
+        return reportJobs.byType(reportType, WindowRequest.first(limit)).completeItems();
     }
 
     public WriteReceipt<ReportJobEntity, Long> createJob(CreateReportJob command) {
@@ -41,26 +47,25 @@ public final class ReportingApplicationService {
         entity.createdAt = now;
         entity.updatedAt = now;
         entity.rowCount = 0;
-        return domain.reportJobs().saveWithReceipt(entity);
+        return reportJobs.save(entity);
     }
 
     public WriteReceipt<ReportJobEntity, Long> updateJobStatus(long reportJobId, UpdateReportJobStatus command) {
-        VersionedEntity<ReportJobEntity> current = domain.reportJobs().findVersionedById(reportJobId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Report job", reportJobId));
-        ReportJobEntity entity = current.entity();
-        entity.status = command.status();
-        entity.rowCount = command.rowCount() == null ? entity.rowCount : command.rowCount();
-        entity.failureReason = command.failureReason();
-        entity.updatedAt = Instant.now(clock).getEpochSecond();
-        return domain.reportJobs().save(entity, current.version());
+        return reportJobs.updateHot(reportJobId, entity -> {
+            entity.status = command.status();
+            entity.rowCount = command.rowCount() == null ? entity.rowCount : command.rowCount();
+            entity.failureReason = command.failureReason();
+            entity.updatedAt = Instant.now(clock).getEpochSecond();
+            return entity;
+        });
     }
 
     public List<AuditEventEntity> securityAuditEvents(int limit) {
-        return domain.auditEvents().queries().securityAuditEvents(limit);
+        return auditEvents.security(limit).completeItems();
     }
 
     public List<AuditEventEntity> auditArchive(String entityName, long entityId, int limit) {
-        return domain.auditEvents().queries().eventsForEntitySource(entityName, entityId, limit);
+        return auditEvents.archive(entityName, entityId, WindowRequest.first(limit)).items();
     }
 
     private String defaultText(String value, String fallback) {

@@ -1,10 +1,12 @@
 package com.example.cachedb.sample.application.customer;
 
-import com.example.cachedb.sample.application.SampleEntityNotFoundException;
+import com.example.cachedb.sample.application.SampleHotLookups;
 import com.example.cachedb.sample.domain.CustomerEntity;
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.readmodel.OrderSummary;
+import com.example.cachedb.sample.repository.CustomerRepository;
+import com.example.cachedb.sample.repository.OrderRepository;
 import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -14,11 +16,13 @@ import java.util.List;
 @Service
 public final class CustomerApplicationService {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final CustomerRepository customers;
+    private final OrderRepository orders;
     private final Clock clock;
 
-    public CustomerApplicationService(GeneratedCacheModule.Scope domain, Clock clock) {
-        this.domain = domain;
+    public CustomerApplicationService(CustomerRepository customers, OrderRepository orders, Clock clock) {
+        this.customers = customers;
+        this.orders = orders;
         this.clock = clock;
     }
 
@@ -32,20 +36,19 @@ public final class CustomerApplicationService {
         entity.status = defaultText(command.status(), "ACTIVE");
         entity.createdAt = now;
         entity.updatedAt = now;
-        return domain.customers().saveWithReceipt(entity);
+        return customers.save(entity);
     }
 
     public CustomerEntity detail(long customerId, int orderPreview) {
-        return domain.customers().fetches().ordersPreview(orderPreview).findById(customerId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Customer", customerId));
+        return SampleHotLookups.require("Customer", customerId, customers.detail(customerId, orderPreview));
     }
 
     public List<OrderSummary> orderTimeline(long customerId, int limit) {
-        return domain.orders().queries().customerTimelineProjection(customerId, limit);
+        return orders.customerTimeline(customerId, WindowRequest.first(limit)).completeItems();
     }
 
     public List<CustomerEntity> active(int limit) {
-        return domain.customers().queries().activeCustomers(limit);
+        return customers.active(limit).completeItems();
     }
 
     private String defaultText(String value, String fallback) {

@@ -19,26 +19,27 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Resmi Dağıtım Kanalı
 
-`v0.6.0` için seçilen resmi dağıtım kanalı GitHub Release asset'idir:
+`v0.7.0` için resmi dağıtım kanalları GitHub Packages ve GitHub Release
+paketidir:
 
 ```text
-cache-database-0.6.0-github-release.zip
+cache-database-0.7.0-github-release.zip
 ```
 
-Paket; Maven modül jar'larını, source jar'larını, javadoc dosyalarını, README'yi,
-güvenlik/topluluk dosyalarını, İngilizce dokümanları ve Türkçe dokümanları
-içerir. Bu release için Maven Central zorunlu değildir; çünkü seçilen resmi
-paket dağıtım kanalı GitHub Release'tir.
+Paket; 16 public modül ile CacheDB BOM için binary, source, javadoc ve POM
+artefact'larını, README'yi, güvenlik/topluluk dosyalarını, İngilizce ve Türkçe
+dokümanları içerir. Maven Central zorunlu değildir; resmi dağıtım kanalları
+GitHub Packages ve GitHub Release paketidir.
 
 ## Release Konumlandırması
 
-`cache-database v0.6.0`
+`cache-database v0.7.0`
 
-CacheDB `v0.6.0`; kararlı generated API yüzeyini paket düzeyinde domain kaydı,
-sınırlı relation loader'lar, tip güvenli projection record'ları, route
-sözleşmeleri, iyimser yazma receipt'leri, kalıcı yazma bağımlılıkları ve çok podlu
-Redis Stream işleriyle genişletir. PostgreSQL ve MSSQL örnekleri, generated okuma
-modelleri ve application service katmanıyla aynı sözleşmeyi uygular.
+CacheDB `v0.7.0`; deklaratif repository yüzeyini açık aktif-route kapsamı,
+sınırlı source ve warm route'ları, güvenli iyimser güncelleme, derleme zamanında
+üretilen periyodik warm adapter'ları, fail-fast provider/ayar doğrulaması, test
+kiti, Maven doctor eklentisi, migration recipe'leri ve eşdeğer PostgreSQL/MSSQL
+örnekleriyle tamamlar.
 
 Bu release, her uygulamanın kendi production trafiğini ek doğrulama olmadan
 CacheDB'ye kesebileceği anlamına gelmez. Cutover öncesinde her uygulama için
@@ -55,18 +56,18 @@ kanıtlanmalıdır.
 ## Release Note Şablonu
 
 ```markdown
-## cache-database v0.6.0
+## cache-database v0.7.0
 
 Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uygulanabilir hale getirir.
 
 ### Stable olan alanlar
 
 - Sınırlı hot-set policy'leriyle Redis-first entity repository'leri.
-- Tip güvenli CRUD, query, relation, projection ve warm işlemleri için tek compile-time generated domain scope.
+- Tip güvenli komut, kritik/kaynak route'u, ilişki, projection ve warm planı için derleme zamanında üretilen `@CacheRepository` implementasyonları.
 - Entity bazlı deklaratif policy yapılandırması ve açık JDBC registration seçimi.
-- PostgreSQL ve açıkça seçilen MSSQL kalıcı SQL provider yolları.
+- Tam olarak bir provider starter ile seçilen PostgreSQL ve SQL Server kalıcı provider yolları.
 - İki aşamalı generated JDBC source ve relation-loader registration.
-- Route'a göre şekillenen query loader'lar üzerinden kontrollü read-through ve warm/backfill.
+- Açık ve sınırlı kaynak route'ları ile route'tan türeyen warm/backfill; Redis miss arkasında gizli SQL fallback yoktur.
 - İlişki yoğun ve global sıralı route'lar için projection/read-model reçeteleri.
 - Şema keşfi, warm-up, comparison ve rapor üretimi için Migration Planner akışı.
 - Çok pod coordination, leader lease ve lokal Docker HA preflight evidence.
@@ -96,12 +97,12 @@ comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
 ## Yayın Kontrol Listesi
 
 - `pom.xml` ve tüm modül parent versiyonları stable sürümü kullanıyor.
-- Release note `docs/releases/v0.6.0.md` altında var.
+- Release note `docs/releases/v0.7.0.md` altında var.
 - `mvn -DskipTests package` geçiyor.
 - Public API compatibility kontrolü geçiyor.
 - Türkçe dokümantasyon kalite kontrolü geçiyor.
 - Lokal Docker HA preflight geçiyor veya son CI evidence yeşil.
 - `Public Beta Readiness` ve `Production Evidence` release commit'i için yeşil.
-- `Production GA Release Readiness`, `v0.6.0` için yeşil.
+- `Production GA Release Readiness`, `v0.7.0` için yeşil.
 - GitHub Release prerelease olarak işaretli değil.
-- GitHub Release asset'i `cache-database-0.6.0-github-release.zip` olarak eklendi.
+- GitHub Release asset'i `cache-database-0.7.0-github-release.zip` olarak eklendi.

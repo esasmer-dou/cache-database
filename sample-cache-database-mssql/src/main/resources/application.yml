@@ -27,7 +27,6 @@ cachedb:
     background:
       enabled: true
   sql:
-    provider: mssql
     mssql:
       lock-timeout-millis: 5000
       query-timeout-seconds: 10
@@ -208,7 +207,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,cachedb
   endpoint:
     health:
       probes:

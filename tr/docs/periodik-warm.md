@@ -27,21 +27,35 @@ kalmalıdır.
 
 ## Kopyala-Çalıştır Örneği: Son Dönem veya Aktif Siparişler
 
-Named query ile entity aktif veri politikası aynı iş kuralını anlatmalıdır.
-Sorgunun filter ve sort kolonlarını karşılayan bir SQL indeksi de bulunmalıdır.
+Kritik route ile entity'nin aktif veri politikası aynı iş kuralını anlatmalıdır.
+Filtre ve sıralama kolonlarını karşılayan bir kaynak veritabanı indeksi de
+bulunmalıdır. Okuma ve warm planını repository arayüzünde tek kez tanımla:
 
 ```java
-@CacheNamedQuery("activeOrderWindow")
-public static QuerySpec activeOrderWindowQuery(long cutoffEpochSeconds, int limit) {
-    return QuerySpec.anyOf(
-                    QueryFilter.gte("order_date", cutoffEpochSeconds),
-                    QueryFilter.in(
-                            "status",
-                            List.<Object>of("NEW", "PAID", "PICKING", "OPEN", "PENDING")
-                    )
-            )
-            .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
-            .limitTo(limit);
+@CacheRepository(entity = OrderEntity.class)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
+
+    @HotRoute(value = "active-order-window", projection = OrderSummary.class,
+            pageSize = 100, hotWindow = 1_000,
+            memoryBudgetBytes = 16_777_216L)
+    @CacheRouteQuery(
+            predicates = {
+                    @CachePredicate(field = "orderDate", operator = CachePredicate.Operator.GTE,
+                            parameter = "cutoffEpochSeconds", group = 0),
+                    @CachePredicate(field = "status", operator = CachePredicate.Operator.IN,
+                            constants = {"NEW", "PAID", "PICKING", "OPEN", "PENDING"}, group = 1)
+            },
+            orderBy = {
+                    @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
+                    @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
+            },
+            windowParameter = "window"
+    )
+    HotWindow<OrderSummary> activeWindow(long cutoffEpochSeconds, WindowRequest window);
+
+    @WarmRoute(value = "warm-active-order-window", from = "activeWindow",
+            maxRows = 1_000, maxRowsParameter = "maxRows")
+    CacheWarmPlan warmActiveWindow(long cutoffEpochSeconds, int maxRows);
 }
 ```
 
@@ -49,19 +63,24 @@ Zamanlanan metot deklaratiftir. Parametre almaz ve `CacheWarmPlan` döndürür.
 Zamanlama, Redis kilidi, heartbeat, tekrar çalıştırmayı önleyen tamamlanma kaydı
 ve artımlı temizlik CacheDB tarafından yönetilir.
 
+CacheDB annotation processor bu imzayı derleme sırasında doğrular ve metodu
+doğrudan çağıran tipli bir Spring adapter üretir. Runtime bean taraması,
+`Method.invoke` veya dinamik scheduling proxy'si kullanılmaz. `cachedb-processor`
+ile starter sürümünü aynı tut ve processor'ı annotation-processor path'ine ekle.
+
 ```java
 @Component
 public final class ScheduledWarmPlans {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final OrderRepository orders;
     private final int maxRows;
 
     public ScheduledWarmPlans(
-            GeneratedCacheModule.Scope domain,
+            OrderRepository orders,
             @Value("${app.warm.orders.max-rows:1000}") int maxRows
     ) {
-        this.domain = domain;
-        this.maxRows = maxRows;
+        this.orders = orders;
+        this.maxRows = Math.max(1, maxRows);
     }
 
     @CacheScheduledWarm(
@@ -78,11 +97,7 @@ public final class ScheduledWarmPlans {
     )
     public CacheWarmPlan activeOrderWindow() {
         long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
-        return domain.orders().warmPlan(
-                "active-order-window",
-                domain.orders().queries().activeOrderWindowQuery(cutoff, maxRows),
-                maxRows
-        );
+        return orders.warmActiveWindow(cutoff, maxRows);
     }
 }
 ```
@@ -133,6 +148,13 @@ bağlantısı koparsa veya JVM lease süresinden uzun duraklarsa çalışma
 `LEASE_LOST` olarak işaretlenir ve tamamlanma kaydı yazılmaz. Sonraki çevrim aynı
 sınırlı planı yeniden çalıştırabilir. Bu nedenle warm hydration idempotent ve
 sürüm kontrollü kalmalıdır.
+
+İlk geçiş sırasında JDBC loader, eski tablodaki `entity_version` değeri `NULL`
+veya `0` ise değeri başlangıç sürümü olan `1` olarak ele alır. Sürüm kolonu yoksa
+ya da değer negatif veya sayısal değilse işlem yine reddedilir. Bu kolaylık
+yalnızca ilk sınırlı hazırlamayı mümkün kılar; sonraki doğrudan SQL yazılarını
+görünür hâle getirmez. Dış yazıcılar artan sürüm bilgisini outbox/CDC üzerinden
+yayımlamalı veya ekip periyodik uzlaştırma gecikmesini açıkça kabul etmelidir.
 
 ## Annotation Parametreleri
 

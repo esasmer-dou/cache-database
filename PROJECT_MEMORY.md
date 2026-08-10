@@ -1,496 +1,172 @@
 # CacheDB Project Memory
 
-Last updated: 2026-06-14
-
-Purpose: this file is an internal handoff note for future Codex/chat sessions.
-It summarizes the product direction, completed work, validation evidence, and
-remaining production gates. It is not release marketing copy.
-
-## Repository State
-
-- Repository path: `E:\ReactorRepository\cache-database`
-- Remote: `ssh://git@ssh.github.com:443/esasmer-dou/cache-database.git`
-- Main branch status at the time of this note: clean and aligned with `origin/main`
-- Latest release prepared: `v0.1.0`
-- Latest release asset target: `cache-database-0.1.0-github-release.zip`
-- Public positioning: non-beta framework release for CacheDB core and the
-  default PostgreSQL provider path; MSSQL remains an explicit beta provider
-
-## Product Direction
-
-CacheDB is a Java/Spring Boot data-layer framework that uses Redis as the hot
-read/write coordination layer and a selected SQL provider as the durable source
-of truth. PostgreSQL is the default provider path; MSSQL is an explicit beta
-provider and must be wired deliberately.
-
-The design direction is:
-
-- compile-time generated mapping, not reflection-heavy runtime magic
-- Redis-first hot reads and writes, durable SQL write-behind behind it
-- projection/read-model first for relation-heavy and global sorted screens
-- explicit route contracts for expensive read shapes
-- bounded hot-set memory, not "put the whole database in Redis"
-- production evidence before topology or provider GA claims
-
-The product should not be described as a drop-in ORM that makes every query fast
-automatically. The honest message is: CacheDB works best when hot entities,
-route contracts, projections, warm plans, and cutover evidence are designed
-explicitly.
-
-## Architecture Rules Already Established
-
-- The selected SQL provider remains the durable source of truth.
-- Redis holds bounded hot entities, projection windows, route indexes, stream
-  state, leader leases, and operational telemetry.
-- Relation-heavy first-paint screens must use summary/projection models.
-- Full aggregate loading is for detail screens or controlled cold paths, not
-  hot list screens.
-- Global sorted/range screens need ranked projection/read-model paths.
-- Multi-pod Kubernetes deployments rely on Redis for coordination.
-- Consumer names must be pod/instance unique.
-- Singleton operational loops should use Redis leader lease behavior.
-- External source-database writes require outbox/CDC input, otherwise Redis can
-  go stale.
-- Database-originated outbox/CDC events must apply in cache-only mode by
-  default; they must not be sent back into write-behind as if they were new
-  CacheDB commands.
-- Production strict mode should fail fast if a projection-required route falls
-  back to broad entity scanning.
-
-## Major Work Completed
-
-### Public Release Hygiene and Release
-
-- Added public repo hygiene files: license, contributing, security, code of
-  conduct, support, issue templates, PR templates, and release checklist.
-- Added release packaging scripts for public beta and stable GitHub Release
-  package generation.
-- Published `v0.1.0-beta.1`, `v0.1.0-beta.2`, `v0.1.0-beta.3`, and
-  `v0.1.0-beta.4` release
-  notes over the project lifecycle.
-- Prepared `v0.1.0` as the first non-beta framework release.
-
-### Documentation
-
-- Reworked English and Turkish README/onboarding docs.
-- Clarified Spring Boot JDBC dependency behavior.
-- Added production recipes for projection-first and route-contract usage.
-- Added use-case examples for insert, read, update, delete, query, dashboard,
-  reporting, projection, hot-set, and anti-pattern scenarios.
-- Added Turkish documentation cleanup passes for correct Turkish semantics and
-  Turkish characters.
-- Added production GA criteria and go/no-go gates.
-
-### Admin UI and Migration Planner
-
-- Improved admin dashboard URL shape and navigation.
-- Reworked admin category map into clearer operational sections.
-- Refactored Migration Planner CSS/JS out of large inline Java strings.
-- Split Migration Planner resource structure into more maintainable assets and
-  partial-like helpers.
-- Made Migration Planner more user friendly:
-  - source-database schema discovery
-  - table/view selection
-  - route candidate suggestions
-  - form auto-fill from discovered candidates
-  - dry-run execution
-  - warm execution
-  - side-by-side comparison
-  - migration report download
-  - cutover action plan
-  - coverage guidance
-- Fixed several UX/runtime issues:
-  - buttons using full page reload instead of async behavior
-  - plan result shown too narrow
-  - warm running too long without useful progress/error visibility
-  - route candidate list showing too few choices
-  - overflowing text in cards and left navigation
-
-### Migration Planner Capabilities
-
-- Discovery can inspect a supported source-database schema and present route
-  candidates.
-- Planner can generate route decisions for relation-heavy shapes.
-- Planner can generate CacheDB entity skeletons, relation loader skeletons, and
-  projection support skeletons from discovered schema.
-- Planner can run dry-run warm analysis without mutating Redis.
-- Planner can warm Redis for selected hot windows.
-- Planner can compare source-database baseline SQL against CacheDB route
-  output.
-- Planner can generate downloadable migration reports with readiness state,
-  blockers, next steps, rollback notes, and cutover action plan.
-- Latest product requirement: full conversion needs route coverage, not only one
-  selected route. GA must require coverage for every screen/API/batch/report.
-
-### Projection and Read-Model Performance
-
-- Added stronger projection-first guidance for relation-heavy and global sorted
-  reads.
-- Added ranked/global-sorted read-model direction.
-- Added route-specific fast-path expectations:
-  - top-N windows
-  - per-parent hot windows
-  - projection-required routes
-  - summary first, detail later
-- Improved comparison flow so projection-required demo routes can use projection
-  labels instead of falling back to entity routes.
-
-### Multi-Pod/Kubernetes Coordination
-
-- Added automatic instance identity behavior for safer consumer naming.
-- Added Redis leader lease direction for singleton operational loops.
-- Added multi-instance coordination smoke path.
-- Added CI evidence lane for multi-pod/coordination regressions.
-- Clarified that Redis is the real coordination center and therefore Redis HA is
-  a production dependency, not an optional optimization.
-
-### Hot-Set Policy and Memory Discipline
-
-- Extended entity cache policy beyond simple TTL/row-count thinking.
-- Added explicit hot policy concepts:
-  - count window
-  - time window
-  - state window
-  - custom predicate
-  - composite hot policy
-- Added route-level cache contracts:
-  - page size
-  - hot window
-  - projection required
-  - max cold read size
-  - memory budget
-  - tenant quota
-  - strict mode
-- Added read-shape guardrails so huge reads do not silently blow past the hot
-  entity budget.
-- Added tenant quota support with hot-row and payload-level memory accounting.
-- Added Redis memory estimator and calibration output for migration warm plans.
-- Added cache admission telemetry so accepted/rejected/evicted hot-set behavior
-  is visible.
-
-### Outbox/CDC
-
-- Added core contracts:
-  - `ExternalChangeEvent`
-  - `ExternalChangeType`
-  - `ExternalChangeSink`
-  - `ExternalChangeFeedAdapter`
-  - `ExternalChangeApplyMode`
-  - `ExternalChangeApplyResult`
-  - `ExternalChangeHydrationRepository`
-- Added concrete PostgreSQL outbox adapter:
-  - `PostgresOutboxExternalChangeFeedAdapter`
-  - checkpoint table support
-  - polling API
-  - background daemon loop
-  - safe identifier validation
-  - basic JSON payload parsing
-- Added `ExternalChangeApplyRunner`:
-  - default `CACHE_ONLY` mode for database-originated events
-  - optional `CACHE_AND_WRITE_BEHIND` mode for trusted command-originated events
-  - generated `EntityCodec.fromColumns(...)` support for default UPSERT and
-    DELETE id resolution
-  - custom handler hook for partial payload semantics
-  - fail-fast sink behavior so outbox checkpoint does not advance on failed
-    apply
-- Added Redis repository external hydration:
-  - cache-only UPSERT hydration
-  - cache-only DELETE tombstone/index/projection cleanup
-  - stale external event guard based on Redis version/tombstone version
-- Public API compatibility decision:
-  - the new `ExternalChangeApply*` and `ExternalChangeHydrationRepository`
-    types were introduced during the prerelease line and are now part of the
-    `0.1.0` public API baseline
-  - the baseline in `tools/ci/public-api-baseline.txt` must include these
-    signatures
-  - this is not a breaking change for existing users
-
-### Production Evidence and CI
-
-- Added production evidence workflow.
-- Added production scenario certification lane.
-- Added Redis failover evidence lane.
-- Added staging Redis HA workflow skeleton.
-- Added migration coverage validation workflow support.
-- Added benchmark threshold checks.
-- Added public API compatibility checks.
-- Added Turkish docs quality check.
-- Added production evidence summaries.
-- Hardened benchmark gates so structural materialization checks are authoritative
-  and flaky "fastest microbenchmark" noise does not block incorrectly.
-
-## Latest Release Target: 0.1.0
-
-Key additions:
-
-- first non-beta framework release for CacheDB core and the default PostgreSQL
-  provider path
-- stable release notes at `docs/releases/v0.1.0.md`
-- stable release launch kit in English and Turkish
-- official GitHub Release artifact target:
-  `cache-database-0.1.0-github-release.zip`
-- explicit storage-provider SPI with shared JDBC support
-- `cachedb-storage-mssql` beta provider with write-behind, outbox, dialect, and
-  failure-classifier support
-- live MSSQL provider evidence lane for write-behind, outbox checkpointing,
-  migration SQL smoke, multi-pod apply-runner locking, and SQL Server
-  restart/reconnect behavior
-- provider-aware English and Turkish documentation across README, onboarding,
-  recipes, use cases, tuning, and provider SPI docs
-- release package now includes exact-version `0.1.0` artifacts for
-  `cachedb-storage-jdbc` and `cachedb-storage-mssql`
-- GitHub Actions now use Node 24-compatible action versions:
-  `actions/checkout@v6.0.3`, `actions/setup-java@v5.2.0`, and
-  `actions/upload-artifact@v7.0.1`
-
-Key fixes:
-
-- root Maven metadata no longer describes the project as PostgreSQL-backed only
-- stable package no longer includes stale beta jars when the release version is
-  a prefix of an older prerelease version
-- public beta package no longer omits JDBC/MSSQL storage modules
-- Javadoc generation now uses source-file includes so jars contain real API
-  documentation even though source folders do not mirror package names
-- release publishing defaults to `main` instead of a `codex/*` branch
-
-Upgrade note:
-
-- Maven coordinates remain under `com.reactor.cachedb`
-- Use version `0.1.0`
-- If the source database can be changed outside CacheDB, configure outbox/CDC
-  before relying on Redis hot-set freshness
-- Use `ExternalChangeApplyRunner` in `CACHE_ONLY` mode for database-originated
-  outbox/CDC events
-- For relation-heavy/global sorted screens, use route contracts and
-  projection-required strict mode
-- MSSQL users must add `cachedb-storage-mssql`, own the Microsoft SQL Server
-  JDBC driver, and wire `MssqlWriteBehindFlusher` explicitly.
-
-## Current Release Confidence State
-
-- Local validation for `0.1.0` passed: Maven package, release package,
-  Turkish docs quality, public beta readiness validation, public API
-  compatibility, `git diff --check`, and local Docker HA preflight.
-- MSSQL provider evidence now includes live SQL Server load/replay,
-  checkpoint-locking, multi-pod apply-runner, and container restart/reconnect
-  checks. Remote CI must be rechecked after every related commit.
-- GitHub Release is the selected official distribution channel for `v0.1.0`.
-- Maven Central publishing is optional for this release. It remains the BEST
-  future Java ecosystem distribution channel, but it is not a GA blocker while
-  GitHub Release is the selected official package distribution.
-- Managed staging Redis HA evidence is a consuming-application cutover or
-  topology-certification gate, not a generic framework release gate.
-- Managed staging MSSQL HA or Always On evidence is still required before
-  promoting MSSQL beyond explicit beta provider status.
-
-## Provider SPI / MSSQL State
-
-- Current non-beta framework release keeps PostgreSQL as the default stable
-  provider path, with MSSQL as an explicit beta provider.
-- MSSQL must not be added by changing only the JDBC URL.
-- The first provider SPI layer now exists:
-  - `cachedb-storage-jdbc` contains shared JDBC dialect and write-behind helpers.
-  - `cachedb-storage-postgres` uses `PostgresDatabaseDialect` behind the existing
-    PostgreSQL flusher.
-  - `cachedb-storage-mssql` contains `MssqlDatabaseDialect`,
-    `MssqlWriteBehindFlusher`, `MssqlOutboxExternalChangeFeedAdapter`, and
-    `MssqlFailureClassifier`.
-  - `CacheDatabaseConfig` and `CacheDatabaseBootstrap` expose an explicit
-    `WriteBehindFlusherFactory`.
-- MSSQL support is explicit beta only:
-  - applications must add `cachedb-storage-mssql`
-  - applications must own the Microsoft SQL Server JDBC driver and `DataSource`
-  - applications must call `writeBehindFlusherFactory(MssqlWriteBehindFlusher::new)`
-- MSSQL now has a live provider evidence lane:
-  - SQL Server write-behind idempotency smoke
-  - high-volume SQL Server write-behind load with stale version and delete
-    checks
-  - SQL Server outbox checkpoint smoke
-  - SQL Server migration discovery, dry-run warm, and side-by-side comparison
-    SQL smoke
-  - two-pod outbox/apply-runner checkpoint smoke
-  - lock-guarded checkpoint table bootstrap for concurrent pod startup
-  - duplicate-key safe checkpoint row bootstrap during concurrent polling
-  - concurrent same-`adapterName` outbox polling guarded by checkpoint row locks
-  - single-node SQL Server container restart/reconnect regression
-- Same `adapterName` means one serialized logical outbox consumer across pods.
-  This prevents duplicate apply; it is not a throughput scaling model.
-- Active-active MSSQL outbox throughput still requires explicit stream
-  partitioning with separate adapter names and checkpoints.
-- MSSQL is still not GA until larger concurrency, longer soak/retry, real SQL
-  Server HA or Always On failover, realistic table-volume migration, and
-  MSSQL-specific dashboard/reporting evidence exist.
-- See `docs/database-provider-spi.md` and
-  `tr/docs/veritabani-provider-spi.md`.
-
-## Validation Already Run
-
-The following validations were run successfully during the latest work cycle:
-
-```powershell
-mvn.cmd -q -DskipTests -pl cachedb-starter,cachedb-storage-redis,cachedb-production-tests,cachedb-integration-tests -am test-compile
-```
-
-```powershell
-mvn.cmd -q -pl cachedb-integration-tests -Dtest=CacheDatabaseIntegrationTest#routeTenantQuotaShouldRejectPayloadsOverMemoryBudget+routeTenantQuotaShouldTrackPayloadBytesWithoutDoubleCountingUpdates+routeTenantQuotaShouldEvictOldestTenantHotEntity test
-```
-
-```powershell
-mvn.cmd -q -pl cachedb-integration-tests -Dtest=PostgresOutboxExternalChangeFeedAdapterTest test
-```
-
-```powershell
-pwsh tools\ci\run-production-scenario-certification.ps1 -MavenExecutable mvn.cmd -RedisUri redis://default:welcome1@127.0.0.1:56379 -PostgresUrl jdbc:postgresql://127.0.0.1:5432/postgres
-```
-
-```powershell
-pwsh tools\ci\run-production-evidence.ps1 -MavenExecutable mvn.cmd -RedisUri redis://default:welcome1@127.0.0.1:56379 -PostgresUrl jdbc:postgresql://127.0.0.1:5432/postgres
-```
-
-```powershell
-pwsh tools\ci\run-mssql-provider-evidence.ps1 -MavenExecutable mvn.cmd -MssqlUrl 'jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true' -MssqlUser sa -MssqlPassword 'YourStrong!Passw0rd'
-```
-
-```powershell
-pwsh tools\ci\run-mssql-provider-evidence.ps1 -MavenExecutable mvn.cmd -MssqlUrl 'jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true' -MssqlUser sa -MssqlPassword 'YourStrong!Passw0rd' -RestartSqlServerContainer
-```
-
-```powershell
-pwsh tools\ci\check-benchmark-thresholds.ps1
-pwsh tools\ci\check-public-api-compatibility.ps1
-pwsh tools\ci\check-tr-docs.ps1
-git diff --check
-mvn.cmd -q -DskipTests package
-pwsh tools\release\build-release-package.ps1 -Version 0.1.0 -PackageLabel github-release
-```
-
-Known caveat:
-
-- One broad Maven test command timed out at five minutes. Completed Surefire
-  reports did not show failures, but it should not be counted as a full green
-  gate. Prefer targeted tests plus CI evidence until a full local run is
-  repeated with enough timeout.
-
-## Local Test Environment Used Recently
-
-- Redis container: `cachedb-it-redis`
-- Redis URI: `redis://default:welcome1@127.0.0.1:56379`
-- PostgreSQL container: `postgresql-test`
-- PostgreSQL URL: `jdbc:postgresql://127.0.0.1:5432/postgres`
-- PostgreSQL user: `postgres`
-- PostgreSQL password: `postgresql`
-- SQL Server container: `cachedb-it-mssql`
-- SQL Server URL: `jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true`
-- SQL Server user: `sa`
-- SQL Server password: `YourStrong!Passw0rd`
-
-These details are local development defaults only. Do not treat them as
-production secrets.
-
-## Current Product Classification
-
-BEST:
-
-- Stable framework release for CacheDB core and the default PostgreSQL provider
-  path.
-- Production cutover only when route coverage, Redis HA/topology evidence,
-  admin exposure, rollback, and side-by-side comparison are validated for that
-  application.
-
-ACCEPTABLE:
-
-- Use CacheDB for selected hot routes where the selected SQL provider remains
-  durable and Redis hot windows are bounded.
-- Use migration planner to evaluate a subset of routes before a wider rollout.
-
-ANTI-PATTERN:
-
-- Claim MSSQL GA or managed topology certification without real staging
-  failover evidence.
-- Treat Maven Central as mandatory when GitHub Release is the selected official
-  package distribution channel.
-- Treat CacheDB as a magical ORM replacement that automatically optimizes every
-  existing dynamic query.
-- Let projection-required routes fall back to full entity scans in production.
-- Expose admin HTTP directly to the public internet.
-- Depend on Redis freshness while the source database is mutated by external
-  systems without outbox/CDC.
-
-## Gates Still Open After v0.1.0
-
-The main remaining gates are:
-
-- verify remote GitHub Actions for the `v0.1.0` release commit and tag
-- publish the non-prerelease GitHub Release with
-  `cache-database-0.1.0-github-release.zip`
-- signed Maven Central publish pipeline if Maven Central is later selected as
-  an official distribution channel
-- real staging Redis HA/failover validation for applications that claim managed
-  Redis topology readiness
-- real staging SQL Server HA or Always On failover validation before MSSQL GA
-- full migration route coverage report for every screen/API/batch/report in a
-  consuming application cutover
-- outbox apply runner retry and dead-letter visibility hardening
-- stricter production fail-fast behavior for projection-required routes
-- broader side-by-side comparison evidence across real schemas
-- final admin exposure defaults verified behind gateway/auth
-
-TLS note:
-
-- Application-level TLS is not required if the service is behind a managed
-  gateway or reverse proxy. The gateway must own TLS termination,
-  authentication, and network exposure policy.
-
-## Recommended Next Step
-
-Do not start another feature before closing the release confidence loop.
-
-Recommended order:
-
-1. Check remote GitHub Actions for `main` and `v0.1.0`.
-2. Fix any CI failures until production evidence is green remotely.
-3. Publish the non-prerelease GitHub Release and attach the official artifact.
-4. Complete signed Maven Central publishing only if Central becomes the selected
-   official distribution channel.
-5. Run staging Redis HA/failover evidence against real infrastructure for
-   consuming-application cutover claims.
-6. Run staging SQL Server HA or Always On evidence before promoting MSSQL beyond
-   explicit beta.
-7. Add Migration Planner full coverage report enforcement for a real migration
-   inventory.
-8. Harden outbox apply runner retry and dead-letter visibility.
-
-## Files Future Sessions Should Inspect First
+Last updated: 2026-08-10
+
+Purpose: durable engineering handoff for future work in
+`E:\ReactorRepository\cache-database`. Revalidate Git, CI, package, release,
+Docker, and runtime state before treating historical evidence as current.
+
+## Repository Family
+
+- Framework: `E:\ReactorRepository\cache-database`
+- PostgreSQL sample: `E:\ReactorRepository\sample-cache-database-postgresql`
+- MSSQL sample: `E:\ReactorRepository\sample-cache-database-mssql`
+- Branch: `main` in all three repositories
+- Framework Maven coordinates: `com.reactor.cachedb:*`
+- Current source release: `0.7.0`
+- Intended stable tag: `v0.7.0`
+- Official distribution: GitHub Packages plus the GitHub Release bundle
+  `cache-database-0.7.0-github-release.zip`
+
+Do not mix this repository family with
+`E:\ReactorRepository\rust-spring-performance` or NMC repositories.
+
+## Product Contract
+
+CacheDB is a Redis-first active-data and read-model framework. The selected SQL
+provider remains the durable source of truth.
+
+- Redis serves explicitly bounded operational entity and projection routes.
+- Redis misses do not trigger arbitrary hidden SQL scans.
+- SQL archive, reporting, audit, export, and full-history reads use explicit
+  bounded source routes.
+- Existing SQL data enters Redis through explicit warm/backfill plans.
+- External SQL writes require outbox/CDC or an explicit reconciliation plan.
+- Relation-heavy and global sorted screens use compact projections/read models.
+- Hot-set size, page size, source-read limit, relation fan-out, payload budget,
+  tenant quota, and queue capacity remain bounded.
+- Redis acceptance and durable SQL completion are separate observable events.
+- Multi-pod singleton work uses Redis leases; handlers remain idempotent because
+  distributed execution is at least once.
+
+## Non-Negotiable Engineering Principles
+
+- No runtime entity discovery through reflection.
+- No `Method.invoke` for scheduled warm or repository dispatch.
+- Generate codecs, repositories, route contracts, metadata, and Spring adapters
+  at compile time.
+- Do not introduce N+1 relation loading or unbounded source/cache scans.
+- Do not hide SQL fallback behind an entity/projection Redis miss.
+- Do not automatically merge partial updates when the current entity is absent
+  from Redis.
+- Prefer explicit backpressure, retry limits, timeouts, failure classification,
+  health, metrics, and operator-visible state.
+- Preserve PostgreSQL and MSSQL provider parity at the application contract;
+  keep dialect, locking, retry, and topology behavior provider specific.
+
+## 0.7.0 Functional Surface
+
+- Compile-time `@CacheRepository` implementations for hot lookup/window,
+  bounded source query, warm route, command, delete, generated ID, projection,
+  keyset pagination, and optimistic writes.
+- `HotWindow.completeItems()` exposes data only when requested route coverage is
+  complete.
+- Required but unavailable hot coverage is represented by
+  `HotRouteUnavailableException`; samples map it to HTTP 503.
+- `CacheDbRepository.updateHot` refuses unsafe partial merge through
+  `HotUpdateUnavailableException` when Redis lacks the current row.
+- `@CacheScheduledWarm` has source retention and a compile-time processor that
+  generates typed direct-call Spring tasks.
+- Generic repository fragments are supported without forcing application code
+  to depend on generated implementation classes.
+- Spring properties fail fast for invalid pool, timeout, lease, retry, queue,
+  admin-security, input, and MSSQL timeout settings.
+- `cachedb-spring-boot-test` provides assertions, typed durability waiting,
+  fault injection, and warm-plus-coverage probes.
+- Explicit PostgreSQL and MSSQL provider starters, optional admin starter,
+  CacheDB BOM, Maven doctor plugin, and OpenRewrite migration recipes are public
+  release artifacts.
+- Legacy SQL rows with null or zero entity version normalize to initial version
+  1 during first warm; negative or malformed versions fail.
+
+## Sample Contract
+
+Both standalone samples use Java 21 and the published `0.7.0` Maven artifacts.
+Their provider-neutral Java surfaces are kept equivalent by CI.
+
+- Application code depends on repository interfaces, not generated internals.
+- Every `HotWindow` route has a matching bounded `@WarmRoute`.
+- Seed creates durable SQL data but does not claim hot-route coverage.
+- Before exact warm coverage, required active routes return HTTP 503.
+- Warm jobs are polled to `COMPLETED`; the matching active route then succeeds.
+- Postman collections contain ordered seed, archive, warm, status, active-read,
+  tuning, and health journeys.
+- PostgreSQL and MSSQL sample executable JARs are release assets, not framework
+  dependencies.
+
+## 0.7.0 Local Release Evidence
+
+- Semeru OpenJ9 JDK: `D:\Dropbox\java64\Semeru\jdk-21.0.2.13-openj9`
+- Clean 20-project reactor: 283 tests, 0 failures, 0 errors, 3 explicit
+  topology-gated skips.
+- `cachedb-integration-tests`: 90 tests passed.
+- `cachedb-production-tests`: 27 tests passed.
+- PostgreSQL standalone sample: 8 unit tests plus 1 live provider integration
+  test passed.
+- MSSQL standalone sample: 8 unit tests plus 1 live provider integration test
+  passed.
+- OSS packaging produced binary, source, and Javadoc JARs for 16 public modules
+  plus the BOM.
+- Release ZIP inspection: 276 entries, 48 JARs, 18 POMs, and 16 public artifact
+  module directories.
+- Public API compatibility, benchmark thresholds, provider parity, Postman,
+  English/Turkish documentation, release metadata, framework-principle, sample
+  boundary, and whitespace checks passed.
+
+Remote CI, package workflow, tag, release assets, and sample consumer workflows
+must still be revalidated live for every release operation.
+
+## Release Order
+
+1. Verify the framework release commit locally.
+2. Push framework `main` and wait for Public Beta Readiness and Production
+   Evidence on the exact commit.
+3. Publish `0.7.0` through GitHub Packages from the exact release ref.
+4. Create and push annotated `v0.7.0`.
+5. Create the non-prerelease GitHub Release and attach ZIP, public binary JARs,
+   BOM POM, and SHA-256 checksums.
+6. Build standalone samples against the published remote package.
+7. Commit, push, tag, and release both sample repositories with their executable
+   JAR and checksum assets.
+8. Verify final tag, release, package, workflow, and clean-worktree state.
+
+## Production Boundary
+
+Framework release evidence is not an application cutover certificate. Every
+consumer must still prove:
+
+- complete route inventory and coverage
+- representative warm/reconciliation behavior
+- source-vs-CacheDB membership and ordering parity
+- Redis memory and payload budget
+- SQL/Redis timeout and pool tuning under its Kubernetes limits
+- external-write freshness through outbox/CDC when applicable
+- canary, rollback, failure recovery, and application-specific HA topology
+- admin UI/API exposure behind gateway authentication or CacheDB token auth
+
+Do not claim generic certification for every managed Redis, PostgreSQL HA, SQL
+Server Always On, network, or Kubernetes topology.
+
+## First Files For Future Work
 
 - `README.md`
 - `tr/README.md`
 - `CHANGELOG.md`
+- `docs/releases/v0.7.0.md`
+- `tr/docs/releases/v0.7.0.md`
+- `docs/framework-ux-10-iteration-report.md`
+- `tr/docs/framework-ux-10-iterasyon-raporu.md`
 - `PRODUCTION_GA_CRITERIA.md`
-- `docs/releases/v0.1.0.md`
-- `docs/stable-release-launch-kit.md`
-- `docs/production-recipes.md`
-- `docs/use-case-examples.md`
-- `docs/production-test-report.md`
-- `.github/workflows/production-evidence.yml`
-- `.github/workflows/production-ga-staging-evidence.yml`
-- `tools/ci/run-production-evidence.ps1`
-- `tools/ci/run-production-scenario-certification.ps1`
-- `tools/ci/validate-migration-coverage-report.ps1`
-- `cachedb-core/src/main/java/com/cachedb/core/cache`
-- `cachedb-core/src/main/java/com/cachedb/core/route`
-- `cachedb-core/src/main/java/com/cachedb/core/change`
-- `cachedb-starter/src/main/java/com/cachedb/starter/PostgresOutboxExternalChangeFeedAdapter.java`
-- `cachedb-production-tests/src/main/java/com/cachedb/prodtest/scenario`
+- `tools/ci/check-framework-principles.ps1`
+- `tools/ci/check-sample-framework-usage.ps1`
+- `tools/ci/check-sample-provider-parity.ps1`
+- `tools/ci/check-public-api-compatibility.ps1`
+- `tools/release/build-release-package.ps1`
 
-## Communication Notes for Future Chats
+## Communication Rules
 
-- The user wants direct, production-grade analysis.
-- Do not blindly agree; classify options as BEST, ACCEPTABLE, or ANTI-PATTERN.
-- Analyze bottlenecks, single points of failure, memory behavior, Kubernetes
-  scaling, and failure handling before coding.
-- Prefer explicit mechanisms over hidden magic.
-- For CPU-heavy or serialization-heavy paths, consider Rust/JNI only when the
-  Java path is proven to be the bottleneck.
-- For frontend/admin UI work, use AJAX/async behavior and avoid full page
-  reloads.
-- For Turkish docs, write natural Turkish, not literal English translation.
+- Lead with the direct production judgment, then evidence and boundaries.
+- Classify alternatives as BEST, ACCEPTABLE, or ANTI-PATTERN when useful.
+- Preserve natural Turkish and correct Turkish characters in Turkish docs.
+- Do not claim production readiness from compilation or unit tests alone.
+- Never overwrite user changes or mix repository families during release work.

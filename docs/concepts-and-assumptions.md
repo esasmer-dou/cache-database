@@ -180,7 +180,7 @@ Rules:
   business rules.
 - A source-database foreign key is strongly recommended for durable integrity,
   but it does not replace `@CacheRelation` or `RelationBatchLoader`.
-- Use `withRelationLimit(...)` for previews.
+- Use bounded `@CacheLookup` methods for previews.
 - Use projections for large lists.
 
 ### Constraint And Metadata Matrix
@@ -239,12 +239,14 @@ CREATE INDEX idx_orders_customer_date
 ON orders(customer_id, order_date DESC);
 ```
 
-At runtime, the caller must request the relation:
+The repository contract and caller must request the relation explicitly:
 
 ```java
-customerRepository
-        .withRelationLimit("orders", 10)
-        .findById(customerId);
+@CacheLookup(idParameter = "customerId", relation = "orders",
+        relationLimitParameter = "orderPreview", maxRelationRows = 25)
+HotLookup<CustomerEntity> detail(Long customerId, int orderPreview);
+
+customers.detail(customerId, 10);
 ```
 
 ### Generated Loader

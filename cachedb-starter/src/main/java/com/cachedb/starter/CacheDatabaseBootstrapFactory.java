@@ -23,13 +23,19 @@ public final class CacheDatabaseBootstrapFactory {
         return RedisConnectionConfig.fromSystemProperties(prefix, defaultUri).createClient();
     }
 
+    /** @deprecated Use the selected provider starter and inject its DataSource. */
+    @Deprecated(forRemoval = false)
     public static DataSource postgresDataSource(
             String prefix,
             String defaultJdbcUrl,
             String defaultUsername,
             String defaultPassword
     ) {
-        return PostgresConnectionConfig.fromSystemProperties(prefix, defaultJdbcUrl, defaultUsername, defaultPassword)
-                .createDataSource();
+        return PostgresConnectionConfig.fromSystemProperties(
+                prefix,
+                defaultJdbcUrl,
+                defaultUsername,
+                defaultPassword
+        ).createDataSource();
     }
 }

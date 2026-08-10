@@ -3,6 +3,7 @@ package com.reactor.cachedb.examples.admin;
 import com.reactor.cachedb.core.config.AdminHttpConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.starter.CacheDatabaseBootstrapFactory;
+import com.reactor.cachedb.postgres.PostgresConnectionConfig;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery;
@@ -35,7 +36,9 @@ public final class AdminHttpServerMain {
         );
         CacheDatabase cacheDatabase = new CacheDatabase(
                 jedis,
-                CacheDatabaseBootstrapFactory.postgresDataSource("cachedb.admin.postgres", jdbcUrl, jdbcUser, jdbcPassword),
+                PostgresConnectionConfig.fromSystemProperties(
+                        "cachedb.admin.postgres", jdbcUrl, jdbcUser, jdbcPassword
+                ).createDataSource(),
                 config
         );
         GeneratedCacheBindingsDiscovery.registerDiscovered(

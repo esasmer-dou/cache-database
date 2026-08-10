@@ -20,7 +20,7 @@ The goals are to:
 | --- | --- |
 | Redis memory is growing | Hot policy, tenant quota, Redis `maxmemory`, projection window |
 | Large list is slow | Projection, ranked projection, route contract |
-| Relation loading is expensive | `withRelationLimit(...)`, batch loader, summary-first model |
+| Relation loading is expensive | bounded `@CacheLookup`, batch loader, summary-first model |
 | Write queue is building up | Write-behind workers, batch size, flush policy, SQL provider pool |
 | Multi-pod loops run twice | Runtime coordination and leader lease |
 | Old reads pollute Redis | `admitOnRead=false`, `TIME_WINDOW`, cold path |
@@ -154,7 +154,7 @@ and object graph costs.
 
 BEST:
 
-- use `withRelationLimit(...)` for small detail-page previews
+- use bounded `@CacheLookup` methods for small detail-page previews
 - use projections for list screens
 - make loaders batch-oriented; do not run one query per parent
 - keep `maxFetchDepth` controlled
@@ -162,10 +162,8 @@ BEST:
 Example:
 
 ```java
-OrderEntity order = orderRepository
-        .withRelationLimit("orderLines", 8)
-        .findById(orderId)
-        .orElseThrow();
+OrderEntity order = orders.detail(orderId, 8)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
 ```
 
 ACCEPTABLE:

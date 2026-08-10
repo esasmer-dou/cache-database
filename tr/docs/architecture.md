@@ -1,312 +1,207 @@
-# Cache Database Mimarisi
+# CacheDB Mimarisi
 
-Bu dosya, teknik mimari dokümanının Türkçe sürümüdür.
+English version: [../../docs/architecture.md](../../docs/architecture.md)
 
-Kaynak doküman: [../../docs/architecture.md](../../docs/architecture.md)
+## 1. Sistem Sınırı
 
-## 1. Amaç
+CacheDB, Redis öncelikli bir persistence ve okuma modeli framework'üdür. Her SQL
+sorgusunun önüne şeffaf biçimde yerleşen genel amaçlı bir cache değildir.
 
-Bu proje klasik `DB-first ORM` yaklaşımını tersine çevirir:
+- Açıkça tanımlanan düşük gecikmeli entity ve projection route'larını Redis sunar.
+- PostgreSQL veya SQL Server kalıcı doğruluk kaynağı olarak kalır.
+- Yazmalar Redis tarafından kabul edilir ve sürüm kontrollü write-behind ile kalıcılaştırılır.
+- Arşiv ve geçmiş okumaları açık, sınırlı kaynak route'larıyla yapılır.
+- Processor; codec, metadata, repository implementasyonu, Spring bean'i,
+  ilişki loader'ı ve projection eşlemesini reflection kullanmadan üretir.
 
-- uygulama katmanı Redis ile konuşur
-- entity yaşam döngüsü Redis'te başlar
-- seçilen SQL provider arka planda kalıcı depo olarak kullanılır
-- flush işlemi kullanıcı isteğinden ayrılır
+Hangi route'un Redis'te bulunacağına uygulama ekibi karar verir. CacheDB bu kararı
+çalıştırılabilir, sınırlı, gözlemlenebilir ve test edilebilir hale getirir.
 
-Bu nedenle sistem teknik olarak bir `cache-first persistence engine`dir.
+## 2. Uygulama Programlama Modeli
 
-## 2. Çekirdek İlkeler
+Entity sınıfları veri yapısını tanımlar:
 
-### Minimum overhead
+- `@CacheEntity`, `@CacheId` ve `@CacheColumn` kalıcı satırı eşler.
+- `@CacheRelation`, CacheDB'nin yükleme metadata'sıdır; veritabanında foreign key oluşturmaz.
+- `@CacheProjectionRecord`, kompakt veya sıralanmış okuma modellerini tanımlar.
 
-- çalışma zamanında reflection yok
-- metadata lookup için dinamik introspection yok
-- compile-time generated metadata kullanılır
-- entity codec'leri explicit olur
+Repository arayüzleri uygulama davranışını tanımlar:
 
-### N+1 kontrolü
+- `@CacheLookup`, sonucu açık durumla dönen ve yalnızca Redis'ten çalışan tekil okumadır.
+- `@HotRoute`, sınırlı bir Redis entity veya projection penceresidir.
+- `@SourceRoute` ve `@SourceSql`, sınırlı kalıcı veri okumalarıdır.
+- `@WarmRoute`, var olan kritik route'tan ön yükleme planı üretir.
+- `@CacheCommand`, acknowledgement ve kalıcılık gereksinimini belirtir.
 
-N+1 problemini tamamen sihirli biçimde çözmek yerine API seviyesinde engellemek gerekir.
+`HotLookup.NOT_CACHED`, kalıcı kaydın bulunmadığı anlamına gelmez. Kritik route
+arkasında gizli SQL fallback özellikle bulunmaz.
 
-Kurallar:
+## 3. Yazma Akışı
 
-- relation getter'ları varsayılan olarak tekil lazy query atmamalıdır
-- relation yükleme `FetchPlan` ile açıkça istenmelidir
-- tekil relation erişimleri batch loader üzerinden gruplanmalıdır
+```mermaid
+flowchart LR
+    A["Uygulama komutu"] --> B["Generated repository"]
+    B --> C["Redis Function"]
+    C --> D["Entity, sürüm, indeksler, stream olayı"]
+    D --> E["Write-behind consumer group"]
+    E --> F["PostgreSQL veya SQL Server"]
+    E --> G["Retry ve dead-letter yönetimi"]
+```
 
-### Redis-first
+1. Repository, komut şeklini ve generated ID politikasını doğrular.
+2. Redis; payload, sürüm, indeks ve kalıcı stream olayını atomik olarak günceller.
+3. Çağıran taraf, tanımlanan acknowledgement moduna göre `WriteReceipt` alır.
+4. Worker'lar stream olaylarını toplu işler ve sürüm kontrollü SQL upsert/delete uygular.
+5. Retry idempotent kalır; eski sürüm daha yeni kalıcı verinin üzerine yazamaz.
 
-- `save`, `find`, `delete`, `query result materialization` önce Redis'e gider
-- kullanıcıya verilen başarı sinyali Redis seviyesinde oluşur
-- SQL provider sync işlemi daha sonra write-behind işçisi ile yapılır
-- Redis 8 üzerinde mutation akışına Redis Functions eklenebilir
+`REDIS_ACCEPTED`, SQL gecikmesini istek yolundan çıkarır. `SQL_DURABLE`, receipt
+kalıcı olana kadar sınırlı bir timeout ile bekler.
 
-### Version ordering
+## 4. Okuma Akışları
 
-- her entity için ayrı Redis version key tutulur
-- mutation sırasında version atomik artırılır
-- stream event'i bu version ile yazılır
-- worker Redis'te daha yeni version varsa stale event'i skip eder
-- SQL provider upsert sadece daha yeni version geldiğinde satırı günceller
+### Yalnızca Redis'ten detay
 
-### Redis veri bütçesi
+`@CacheLookup`; `HIT`, `NOT_CACHED`, `TOMBSTONED` veya `OUTSIDE_HOT_POLICY`
+döndürür. Uygulama bu durumları açıkça işler. Redis'te veri bulunmaması SQL
+sorgusu başlatmaz.
 
-Her entity türü için:
+### Redis veri penceresi
 
-- bir `hot set` limiti olur
-- overflow kayıtlar page mantığıyla geçici yüklenir
-- kullanım bittikten sonra LRU benzeri politika ile Redis'ten düşürülür
-- kalıcı veri seçilen SQL provider'da kalmaya devam eder
+`@HotRoute`; sınırlı `WindowRequest`, keyset cursor, route bellek sözleşmesi ve
+coverage kapsamı kullanır. Projection route'ları mümkün olduğunda pencereyi geniş
+entity yüklemesinden önce uygular.
 
-## 3. Veri Akışı
+### Kalıcı kaynak penceresi
 
-### Yazma akışı
+`@SourceRoute` ve gözden geçirilmiş `@SourceSql` metotları seçilen SQL provider'ı
+derleme zamanında belirlenen satır limiti ve query timeout ile sorgular. Sonuçlar
+Redis'i kendiliğinden doldurmaz.
 
-1. Kullanıcı entity üzerinde `save()` çağırır.
-2. Entity codec ile Redis payload ve kolon haritası üretilir.
-3. Redis Functions açıksa entity key ve stream append atomik biçimde çalışır.
-4. Fonksiyon kapalıysa entity Redis'e yazılır ve write-behind kuyruğuna event eklenir.
-5. Worker stream'i okuyup seçilen SQL provider'a `upsert/delete` uygular.
+### Warm ve coverage
 
-### Okuma akışı
+`@WarmRoute`, kritik route'un filtre, sıralama, projection ve kapsamını aynen
+kullanır. Warm yalnızca projection'ı veya entity ile projection'ı birlikte
+yükleyebilir. Tamamlanan çalışma route coverage bilgisini kaydeder. Böylece boş
+sonuç ile eksik Redis kapsamı birbirinden ayrılır.
 
-1. İstek önce Redis hot set içinde aranır.
-2. Bulunmazsa ileride page loader kaynak veritabanından ilgili pencereyi getirecektir.
-3. `FetchPlan` boş değilse kayıtlı `RelationBatchLoader` preload yapar.
+## 5. İlişkiler ve N+1 Kontrolü
 
-## 4. Tutarlılık Modeli
+İlişkiler açık ve sınırlıdır:
 
-Sistem `eventual consistency` modelindedir.
+- veritabanı primary/foreign key'leri kalıcı veri bütünlüğünü korur
+- `@CacheRelation`, CacheDB'ye ilişkili satırları nasıl toplu yükleyeceğini söyler
+- `@CacheLookup(maxRelationRows=...)`, detay önizlemesini sınırlar
+- büyük child koleksiyonları tam aggregate yerine projection penceresi kullanır
+- generated loader parent ID'lerini gruplar ve parent başına SQL çağrısını önler
 
-Bu şu anlama gelir:
+Veritabanında foreign key bulunması, `@CacheRelation` yoksa CacheDB preload'u
+açmaz. Veritabanında foreign key olmadan `@CacheRelation` çalışabilir; ancak
+kalıcı referans bütünlüğü uygulamanın sorumluluğunda kalır.
 
-- kullanıcı Redis yazısını görür
-- SQL provider commit'i daha sonra gerçekleşir
-- Redis ve kaynak veritabanı kısa süreli farklı olabilir
-
-Bu nedenle üretimde kritik konular:
-
-- Redis AOF açılması
-- durable stream/list kullanımı
-- idempotent SQL provider yazımı
-- retry ve dead-letter stratejisi
-- version ordering
-
-## 5. Reflection'sız Mapping Stratejisi
-
-Reflection kullanılmayacağı için metadata üretimi annotation processor ile yapılmalıdır.
-
-Örnek çıktı:
-
-- `UserMeta`
-- `OrderMeta`
-- generated kolon listesi
-- relation tanımları
-- id alanı bilgisi
-
-Entity codec iki farklı amaç taşır:
-
-- Redis payload encode/decode
-- SQL provider kolon değerleri üretimi
-
-## 6. Modüller
-
-### `cachedb-annotations`
-
-- `@CacheEntity`
-- `@CacheId`
-- `@CacheColumn`
-- `@CacheRelation`
-
-### `cachedb-processor`
-
-- annotation scanning
-- generated `*Meta` sınıfları
-
-### `cachedb-core`
-
-- repository sözleşmeleri
-- metadata sözleşmeleri
-- fetch plan
-- write operation modeli
-- relation API
-- cache policy
-- runtime config
-
-### `cachedb-storage-redis`
-
-- Redis repository implementasyonu
-- key naming stratejisi
-- Redis Functions library/load/call katmanı
-- write-behind enqueue
-- stale event skip mantığı
-
-### `cachedb-storage-postgres`
-
-- JDBC tabanlı upsert/delete flusher
-- version-gated update kuralları
-
-### `cachedb-starter`
-
-- bootstrap
-- repository factory
-- ortak wiring
-
-## 7. Konfigürasyon Yaklaşımı
-
-Sabit kabul bırakmamak için ayarlar initialization aşamasında dışarıdan verilir.
-
-Başlıca runtime/init ayarları:
-
-- `WriteBehindConfig`
-  - worker thread sayısı
-  - batch size
-  - poll block süresi
-  - retry sayısı ve backoff
-  - consumer group ve stream key
-  - shutdown bekleme süresi
-  - daemon thread davranışı
-- `ResourceLimits`
-  - varsayılan entity cache policy
-  - kayıtlı entity üst sınırı
-  - operation başına kolon üst sınırı
-- `CachePolicy`
-  - hot entity limiti
-  - page size
-  - LRU etkinliği
-  - entity TTL
-  - page TTL
-- `KeyspaceConfig`
-  - Redis key prefix
-  - entity/page/version segmentleri
-- `RedisFunctionsConfig`
-  - functions etkin/pasif
-  - library auto-load davranışı
-  - replace/strict load kuralları
-  - library ve function isimleri
-  - template resource veya override source
-- `RelationConfig`
-  - relation batch size
-  - max fetch depth
-  - missing preloader davranışı
-- `PageCacheConfig`
-  - read-through page cache davranışı
-  - missing page loader davranışı
-  - eviction batch size
-- `AdminHttpConfig`
-  - admin HTTP host/port/backlog
-  - worker thread sayısı
-  - CORS ve dashboard davranışı
-- `IncidentEmailConfig`
-  - SMTP auth mekanizması
-  - implicit TLS / STARTTLS
-  - truststore ve certificate pinning ayarları
-
-## 8. Redis Functions Katmanı
-
-Redis 8 için yazma akışı `FCALL` üzerinden yürütülebilir.
-
-Önerilen akış:
-
-1. Java tarafı entity write operation üretir.
-2. `FCALL entity_upsert` ile entity key, version increment ve stream append tek atomik işlemde yapılır.
-3. Worker aynı stream'i okuyup seçilen SQL provider'a flush eder.
-
-Silme akışı:
-
-1. `FCALL entity_delete`
-2. version atomik artırılır
-3. entity key silinir
-4. delete olayı stream'e yazılır
-
-Bu yaklaşımın faydaları:
-
-- write + enqueue arasında ara durum kalmaz
-- tek round-trip ile mutation tamamlanır
-- concurrency ve retry davranışı daha deterministik hale gelir
-
-## 9. Relation Batch Loading
-
-`FetchPlan` preload isteğini taşır; gerçek batch relation yüklemesi entity bazlı `RelationBatchLoader` ile yapılır.
-
-Kurallar:
-
-- her entity için isteğe bağlı loader register edilebilir
-- repository `findById/findAll` sonrasında `FetchPlan` boş değilse loader çağrılır
-- preload relation başına değil entity batch'i üzerinden yapılır
-- `failOnMissingPreloader=true` ise preload istenip loader yoksa hata verilir
-
-## 10. Açık Tasarım Kararları
-
-Henüz netleşmesi gereken başlıklar:
-
-- entity API tam olarak Active Record mü olacak, yoksa repository + generated facade mı
-- relation tanımı hangi düzeyde preload zorunlu kılacak
-- query DSL ne kadar geniş olacak
-- page cache boyutu global mi, entity tipi bazlı mı yönetilecek
-- write-behind ordering key bazlı mı, entity tipi bazlı mı olacak
-- SQL provider tarafında tombstone / soft-delete standardı gerekli mi
-- version alanı son kullanıcı entity modeline yansıtılacak mı
-- page cache materialization sadece id listesi mi, yoksa tam payload mu tutmalı
-
-## 11. Admin ve Diagnostics Yüzeyi
-
-Sistem artık sadece stream bazlı recovery değil, aynı zamanda işletimsel bir admin/debug yüzeyi de sunar.
-
-- `CacheDatabaseAdmin`
-  - DLQ, reconciliation, archive, diagnostics ve incidents export
-  - manual replay/skip/close
-  - metrics ve health
-- `AdminIncidentWebhookNotifier`
-  - persisted incident kayıtlarını asenkron webhook çağrılarına çevirir
-  - retry/backoff ve queue kapasitesi config ile yönetilir
-- `AdminIncidentDeliveryManager`
-  - incident kaydını çoklu sink'e fan-out eder
-  - webhook, Redis queue ve SMTP kanallarını destekler
-  - channel bazlı delivery snapshot/last error bilgisi tutar
-  - her kanal kendi retry/backoff ayarlarıyla çalışabilir
-  - başarısız delivery denemelerini incident-delivery DLQ stream'ine yazar
-- `AdminIncidentDeliveryRecoveryWorker`
-  - incident delivery DLQ stream'ini ayrı consumer group ile tüketir
-  - `XAUTOCLAIM` ile abandoned/pending entry'leri devralabilir
-  - replay başarılıysa recovery stream'ine `REPLAYED`, değilse `FAILED` kaydı yazar
-  - webhook, Redis queue ve SMTP kanalları için ikinci şans replay hattını sağlar
-- `CacheDatabaseDebug`
-  - query explain planı
-  - explain export
-- `CacheDatabaseAdminHttpServer`
-  - `/api/health`
-  - `/api/metrics`
-  - `/api/diagnostics`
-  - `/api/incidents`
-  - `/api/incident-history`
-  - `/api/alert-rules`
-  - `/api/explain`
-  - `/dashboard`
-
-Bu katman JDK `HttpServer` ile çalışır; ek framework bağımlılığı olmadan lokal operasyon ve gözlemleme yüzeyi verir.
-
-## 12. Planner İstatistikleri
-
-Query planner artık sadece process içi cache'e değil, Redis key-space içinde TTL ile tutulan estimate/histogram verilerine de dayanabilir.
-
-- estimate anahtarları filter bazlı tutulur
-- histogram anahtarları kolon bazlı tutulur
-- range histogram hesaplaması eşit genişlik yerine rank/quantile benzeri bucket seçimiyle daha dengeli olur
-- entity reindex/remove akışı planner stats anahtarlarını invalidate eder
-- estimate modeli sample size ve selectivity ratio taşır
-- text contains için token selectivity çarpımı ile daha iyi intersection tahmini yapılır
-- learned statistics anahtarları query/group ifadesi bazlı tutulur
-- query execution sonrası gerçek sonuç cardinality'si observe edilip sonraki explain/query planlarına ağırlıklı yansıtılır
-- cache warming açıksa filtre/sort histogramları query execution öncesinde preload edilir
-- multi-hop relation filtrelerinde hedef relation index sonucu owner id setine geri map edilerek selectivity hesaplanır
-- admin metrics/dashboard planner estimate/histogram/learned key sayılarını görünür kılabilir
-
-Bu sayede restart sonrası explain planı tamamen sıfırdan başlamak zorunda kalmaz.
-
-## 13. Önerilen Sonraki Adımlar
-
-1. Admin HTTP rol modelini genişletmek; token/gateway auth sınırı artık üretim varsayımıdır
-2. Explain ve diagnostics için daha zengin dashboard/REST filtreleri eklemek
-3. Failure injection ve load testlerle Redis/kaynak veritabanı hattını zorlamak
-4. Planner istatistiklerini daha gelişmiş cardinality modeli ve domain heuristics ile zenginleştirmek
+## 6. Redis Veri Kümesi ve Bellek Modeli
+
+Redis kapasitesi birbirinden bağımsız sözleşmelerle yönetilir:
+
+- entity kabul politikası: sayı, zaman, durum, özel kural veya bileşik politika
+- route sayfa ve Redis penceresi sınırları
+- projection payload boyutu ve sıralama indeksleri
+- tenant kotası ve route bellek bütçesi
+- CacheDB'ye ayrılmış Redis için `maxmemory` ve `noeviction` disiplini
+- politika dışına çıkan kayıtlar için artımlı reconciliation
+
+Framework, güvensiz sorgu şekillerini mümkün olduğunca çalışmadan önce reddeder.
+Production strict mode, projection gereken bir route'u sessizce geniş entity
+taramasına çevirmemelidir.
+
+## 7. Tutarlılık Modeli
+
+Yazma yolu Redis ile kalıcı provider arasında eventual consistency kullanır.
+Doğruluk şu mekanizmalara dayanır:
+
+- Redis AOF ve stream kalıcılığı
+- artan entity sürümleri
+- sürüm kontrollü SQL yazımları
+- idempotent retry ve dead-letter recovery
+- başka uygulamalar SQL'i doğrudan değiştiriyorsa outbox/CDC apply
+- sınırlı onarım döngüsü olarak periyodik warm ve reconciliation
+
+Projection yenilemesi asenkron olabilir. Trafik yönlendirilmeden önce route
+bazında projection gecikmesi ve coverage gözlemlenmelidir.
+
+## 8. Çok Pod'lu Koordinasyon
+
+Uygulama pod'ları Redis consumer group'larını paylaşır. Consumer adına pod'a
+özel instance ID eklenir; pod kapandığında bekleyen iş başka pod tarafından
+devralınabilir.
+
+- write-behind ve projection worker'ları ortak consumer group ile yatay ölçeklenir
+- periyodik warm, aynı işi tek pod'un çalıştırması için Redis lease kullanır
+- cleanup, reporting ve history döngüleri gerektiğinde leader lease ile tekil çalışır
+- lease kaybı algılanır ve hatalı tamamlanma kaydı yazılmaz
+- worker ve SQL pool boyutu tek pod'a değil cluster toplamına göre hesaplanır
+
+Redis hem kritik okuma veri katmanı hem worker koordinasyon katmanıdır. Bu nedenle
+kalıcılık, failover, timeout ve kaynak sınırları bu role uygun işletilmelidir.
+
+## 9. SQL Provider Modeli
+
+`cachedb-storage-jdbc`, ortak kaynak sorgusu ve provider SPI sözleşmelerini taşır.
+`cachedb-storage-postgres` ve `cachedb-storage-mssql`; dialect, kilit,
+idempotency, retry sınıflandırması ve metadata davranışını sağlar.
+
+Spring Boot uygulaması tam olarak bir provider starter seçer. Classpath'te tek
+provider varsa `AUTO` bunu seçer; birden fazla provider varsa uygulama belirsiz
+bir seçim yapmak yerine başlangıçta hata verir.
+
+Provider'a özel tuning yine gereklidir:
+
+- bağlantı ve statement timeout zinciri
+- pool boyutu ile cluster toplam worker concurrency ilişkisi
+- transaction isolation ve lock timeout
+- batch ve parametre sınırları
+- JDBC driver ve pool'un failover davranışı
+
+## 10. Modül Haritası
+
+| Modül | Sorumluluk |
+| --- | --- |
+| `cachedb-annotations` | Entity, projection, repository, route, warm, komut ve ID sözleşmeleri |
+| `cachedb-processor` | Derleme zamanı kontrolü ve reflection kullanmayan kod üretimi |
+| `cachedb-core` | Repository sözleşmeleri, query modeli, coverage, policy ve guardrail'lar |
+| `cachedb-storage-redis` | Redis Functions, payload/indeks saklama, stream, coverage ve ID üretimi |
+| `cachedb-storage-jdbc` | Ortak JDBC kaynak katmanı ve provider SPI |
+| `cachedb-storage-postgres` | PostgreSQL kalıcı provider'ı |
+| `cachedb-storage-mssql` | SQL Server kalıcı provider'ı |
+| `cachedb-starter` | Runtime başlangıcı, warm runner, worker'lar ve operasyonel wiring |
+| `cachedb-spring-boot-starter-*` | Core, provider ve isteğe bağlı admin auto-configuration |
+| `cachedb-spring-boot-test` | Route coverage ve entegrasyon testi yardımcıları |
+| `cachedb-maven-plugin` | Build sırasında provider ve yapılandırma kontrolü |
+| `cachedb-migration-recipes` | Geçiş planı, warm, karşılaştırma ve canlı geçiş kanıtı |
+| `cachedb-bom` | Tutarlı bağımlılık sürümleri |
+
+## 11. Operasyon ve Gözlemlenebilirlik
+
+İç yönetim ve Actuator yüzeyleri şunları gösterir:
+
+- provider kimliği ve yapılandırma sağlığı
+- write-behind backlog, retry ve dead-letter durumu
+- projection gecikmesi ve route coverage
+- Redis baskısı, kabul, çıkarma ve tenant kotası sinyalleri
+- periyodik warm, reconciliation ve lease durumu
+- migration veri eşitliği, gecikme, bellek ve canlı geçiş kanıtı
+
+Yönetim endpoint'leri operasyon yüzeyidir. Uygulamanın gateway/auth sınırı
+arkasında ve genel istek yolunun dışında tutulmalıdır.
+
+## 12. Bilinçli Sınırlar
+
+- Deklaratif repository API'si bileşik primary key desteklemez; kararlı bir
+  surrogate ID ve indeksli iş anahtarı alanları kullanılır.
+- CacheDB, rastgele uygulama sorgularından kritik route tahmin etmez.
+- Her SQL tablosunu kendiliğinden Redis entity'sine dönüştürmez.
+- Büyük raporlama, export ve arşiv taramaları veritabanı/reporting işi olarak kalır.
+- Library testi, uygulamanın SQL Server Always On veya PostgreSQL HA topolojisini
+  sertifikalandıramaz; her deployment kendi failover kanıtını üretmelidir.
+
+Bu sınırlar davranışı açık tutar ve pahalı production işlerinin ORM benzeri
+kolaylıkların arkasında gizlenmesini önler.

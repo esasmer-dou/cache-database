@@ -4,7 +4,37 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
-## Unreleased
+## 0.7.0 - 2026-08-10
+
+### Added
+
+- compile-time generated `@CacheRepository` implementations with typed hot, source, warm, query, projection, command, keyset-window, generated-ID, and optimistic-write contracts
+- explicit PostgreSQL and MSSQL Spring Boot provider starters, a CacheDB BOM, test kit, Maven doctor plugin, migration recipes, and an optional admin starter
+- route coverage, bounded warm verification, source-SQL validation and timeouts, provider identity metrics, and Redis-backed ID and coverage services
+- complete hot-window extraction, safe optimistic hot updates, generic repository fragments, and reflection-free generated scheduled-warm adapters
+
+### Changed
+
+- application-facing samples now use repository interfaces instead of generated binding internals
+- PostgreSQL-specific runtime classes live in the PostgreSQL provider while deprecated forwarding APIs preserve the previous public signatures
+- the public API baseline now covers provider starters, the admin starter, test support, and build tooling
+- English and Turkish README surfaces now use a progressive onboarding flow with provider-explicit setup, runnable sample journeys, Redis-versus-SQL contracts, code walkthroughs, tuning decisions, production checklists, and troubleshooting
+- generated repositories reuse route metadata, avoid stream allocation in bulk writes, and expose simpler first-page route signatures while preserving keyset pagination
+
+### Compatibility
+
+- compared with the committed `0.6.0` API baseline, 507 signature lines were added and no published method or constructor was removed
+- `QueryFilter.in(String, List<Object>)`, the legacy PostgreSQL bootstrap helper, and the previous PostgreSQL class names remain available as deprecated forwarding APIs
+- OpenRewrite migration recipes move PostgreSQL users to the explicit provider starter and provider-owned package names
+
+### Validation
+
+- the clean full 20-project reactor produced 283 tests with no failures or errors and 3 explicitly topology-gated skips; dedicated Redis and MSSQL evidence lanes cover those infrastructure-specific contracts
+- live Redis 8 plus PostgreSQL, live Redis 8 plus SQL Server, MSSQL pre/post-restart, and listener backend-switch lanes passed
+- both standalone sample repositories passed 8 unit tests and 1 live provider integration test against the locally installed framework artifacts
+- public API, release artifact, benchmark threshold, documentation link, Turkish documentation, provider parity, 59-request Postman flow, and whitespace gates passed
+- README onboarding contracts are enforced in CI, including sample provider starter, demo profile, active/source route, warm, tuning, and production-safety coverage
+- framework-principle and sample-architecture gates reject runtime reflection, missing generated metadata reuse, internal API leakage, and checked-in generated sources
 
 ## 0.6.0 - 2026-08-01
 

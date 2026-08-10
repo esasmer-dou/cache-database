@@ -18,6 +18,12 @@ public @interface CacheProjectionRecord {
 
     String[] rankedBy() default {};
 
+    /**
+     * Optional static method on the projection record that maps the configured source entity.
+     * Use this for computed fields that cannot be copied one-to-one from the entity.
+     */
+    String factoryMethod() default "";
+
     Refresh refresh() default Refresh.SYNC;
 
     enum Refresh {

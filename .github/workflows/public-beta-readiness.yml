@@ -27,9 +27,19 @@ on:
       - "cachedb-storage-mssql/**"
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
+      - "cachedb-spring-boot-starter-postgres/**"
+      - "cachedb-spring-boot-starter-mssql/**"
+      - "cachedb-spring-boot-starter-admin/**"
+      - "cachedb-spring-boot-test/**"
+      - "cachedb-bom/**"
+      - "cachedb-maven-plugin/**"
+      - "cachedb-migration-recipes/**"
       - "cachedb-examples/**"
       - "sample-cache-database-postgresql/**"
       - "sample-cache-database-mssql/**"
+      - "DOCUMENTATION_MAP.md"
+      - "tr/DOKUMAN_HARITASI.md"
+      - "tr/cachedb-examples/**"
       - "pom.xml"
       - "tools/ci/**"
   push:
@@ -60,9 +70,19 @@ on:
       - "cachedb-storage-mssql/**"
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
+      - "cachedb-spring-boot-starter-postgres/**"
+      - "cachedb-spring-boot-starter-mssql/**"
+      - "cachedb-spring-boot-starter-admin/**"
+      - "cachedb-spring-boot-test/**"
+      - "cachedb-bom/**"
+      - "cachedb-maven-plugin/**"
+      - "cachedb-migration-recipes/**"
       - "cachedb-examples/**"
       - "sample-cache-database-postgresql/**"
       - "sample-cache-database-mssql/**"
+      - "DOCUMENTATION_MAP.md"
+      - "tr/DOKUMAN_HARITASI.md"
+      - "tr/cachedb-examples/**"
       - "pom.xml"
       - "tools/ci/**"
 
@@ -90,13 +110,37 @@ jobs:
         shell: pwsh
         run: ./tools/ci/check-tr-docs.ps1 -SummaryPath ./target/tr-docs-quality-summary.md
 
+      - name: Validate Markdown links
+        shell: pwsh
+        run: ./tools/ci/check-markdown-links.ps1 -SummaryPath ./target/markdown-link-summary.md
+
+      - name: Validate README onboarding contracts
+        shell: pwsh
+        run: ./tools/ci/check-readme-quality.ps1 -SummaryPath ./target/readme-quality-summary.md
+
+      - name: Validate Postman onboarding flows
+        shell: pwsh
+        run: ./tools/ci/check-postman-collections.ps1 -SummaryPath ./target/postman-collection-summary.md
+
       - name: Validate sample provider parity
         shell: pwsh
         run: ./tools/ci/check-sample-provider-parity.ps1
 
+      - name: Validate declarative sample framework usage
+        shell: pwsh
+        run: ./tools/ci/check-sample-framework-usage.ps1 -SummaryPath ./target/sample-framework-usage-summary.md
+
+      - name: Validate framework architecture principles
+        shell: pwsh
+        run: ./tools/ci/check-framework-principles.ps1 -SummaryPath ./target/framework-principles-summary.md
+
       - name: Verify OSS release packaging
         shell: pwsh
         run: mvn -B -P oss-release -DskipTests "-Dgpg.skip=true" package
+
+      - name: Validate release artifacts
+        shell: pwsh
+        run: ./tools/ci/check-release-artifacts.ps1
 
       - name: Check public API compatibility
         shell: pwsh
@@ -108,6 +152,16 @@ jobs:
           Get-Content ./target/public-beta-readiness-summary.md >> $env:GITHUB_STEP_SUMMARY
           "" >> $env:GITHUB_STEP_SUMMARY
           Get-Content ./target/tr-docs-quality-summary.md >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          Get-Content ./target/markdown-link-summary.md >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          Get-Content ./target/readme-quality-summary.md >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          Get-Content ./target/postman-collection-summary.md >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          Get-Content ./target/sample-framework-usage-summary.md >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          Get-Content ./target/framework-principles-summary.md >> $env:GITHUB_STEP_SUMMARY
 
       - name: Upload readiness artifacts
         uses: actions/upload-artifact@v7.0.1
@@ -116,6 +170,11 @@ jobs:
           path: |
             target/public-beta-readiness-summary.md
             target/tr-docs-quality-summary.md
+            target/markdown-link-summary.md
+            target/readme-quality-summary.md
+            target/postman-collection-summary.md
+            target/sample-framework-usage-summary.md
+            target/framework-principles-summary.md
           if-no-files-found: error
           retention-days: 14
 

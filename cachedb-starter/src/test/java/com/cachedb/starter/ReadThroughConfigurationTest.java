@@ -124,6 +124,12 @@ class ReadThroughConfigurationTest {
         assertEquals(25, plan.querySpec().limit());
         assertEquals(50, plan.maxRows());
         assertThrows(IllegalArgumentException.class, () -> CacheWarmPlan.builder(" ").build());
+        assertThrows(IllegalArgumentException.class, () -> CacheWarmPlan.builder("OrderEntity")
+                .projectionsOnly(true)
+                .build());
+        assertThrows(IllegalArgumentException.class, () -> CacheWarmPlan.builder("OrderEntity")
+                .maxRows(QuerySpec.MAX_LIMIT + 1)
+                .build());
     }
 
     private record TestEntity(long id, String status) {

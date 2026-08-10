@@ -38,10 +38,12 @@ CacheDB, Hibernate'in birebir kopyası olmaya çalışmaz.
 
 CacheDB şu modeli kullanır:
 
-- Uygulamanın düşük gecikmeli okuma/yazma katmanı Redis üzerinden ilerler.
+- Yazmalar önce Redis tarafından kabul edilir, ardından write-behind ile kalıcılaştırılır.
+- Kritik okumalar yalnızca Redis'ten çalışan route sözleşmeleriyle yapılır.
+- Arşiv ve geçmiş okumaları sınırlı SQL route'larında açıkça tanımlanır.
 - Seçilen SQL provider kalıcı veri deposu olarak kalır.
 - Entity metadata'sı derleme zamanında üretilir.
-- İlişki yükleme açık fetch plan ve loader'larla yapılır.
+- İlişki yükleme sınırlı lookup veya projection ile açıkça yapılır.
 - Write-behind, kalıcı yazımı foreground uygulama yolunun dışına taşır.
 
 Bu nedenle CacheDB şu şekilde değerlendirilmelidir:
@@ -56,8 +58,9 @@ Bu nedenle CacheDB şu şekilde değerlendirilmelidir:
 | --- | --- | --- |
 | Birincil okuma yolu | Redis öncelikli | Veritabanı öncelikli |
 | Metadata modeli | Derleme zamanında üretilir | Genelde runtime reflection ve ORM metadata |
-| İlişki yükleme | Açık `FetchPlan`, loader ve projection | Çoğu zaman implicit lazy/eager graph davranışı |
-| Darboğaz kaçış yolu | Binding veya doğrudan repository'ye inilebilir | Çoğu zaman ORM içinde kalınır veya custom SQL yazılır |
+| İlişki yükleme | Açık ve sınırlı lookup veya projection | Çoğu zaman örtülü lazy/eager graph davranışı |
+| Uygulama API'si | Derleme zamanında üretilen `@CacheRepository` implementasyonu | Runtime ORM repository/session |
+| Darboğaz kaçış yolu | Ölçülmüş altyapı işi için provider repository'si veya adaptörü | Çoğu zaman ORM içinde kalınır veya özel SQL yazılır |
 | En iyi uyum | Düşük gecikmeli servisler, read-heavy API'ler, Redis merkezli sistemler | İlişkisel alanlar, SQL merkezli sistemler, join-heavy uygulamalar |
 | Runtime ek yük hedefi | Çok düşük | Genelde kabul edilebilir, ama birincil tasarım hedefi değil |
 
@@ -86,11 +89,12 @@ Bu durumda Hibernate/JPA daha doğal ve daha az sürtünmeli araç olabilir.
 
 CacheDB doğru kullanıldığında production resmi genelde şöyle olur:
 
-- normal iş kodu generated domain veya binding yüzeyini kullanır
-- düşük gecikmeli okuma akışları projection ve açık fetch limitleriyle kurulur
+- normal iş kodu deklaratif repository arayüzlerini enjekte eder
+- düşük gecikmeli okuma akışları `@HotRoute`, projection, açık pencere ve coverage ile kurulur
+- arşiv ve geçmiş okumaları sınırlı `@SourceRoute` metotlarıyla yapılır
 - global sorted/range ekranları geniş entity sorgusu yerine projection'a özel ranked alan kullanır
 - ranked alanlar `rankedBy(...)` ile tanımlanır ve projection repository top-window yolunu kullanabilir
-- yalnızca kanıtlanmış darboğazlar doğrudan repository'ye iner
+- yalnızca ölçülmüş altyapı yolları provider repository'sine iner
 - foreground repository trafiği, background worker ve admin trafiğinden ayrılır
 
 CacheDB kötü kullanıldığında sorun genelde şöyle görünür:
@@ -99,7 +103,7 @@ CacheDB kötü kullanıldığında sorun genelde şöyle görünür:
 - Redis sihirli ve bedava cache gibi düşünülür
 - projection kullanılmaz
 - foreground ve background yolları aynı Redis pool'da toplanır
-- tüm kod ölçüm yapılmadan minimal repository stiline indirilir
+- uygulama kodunun tamamında route sözleşmeleri düşük seviyeli repository çağrılarıyla atlanır
 
 CacheDB açıklığı ödüllendirir. Object graph'ın bedelsiz olduğunu varsaymayı
 ödüllendirmez.
@@ -108,12 +112,13 @@ CacheDB açıklığı ödüllendirir. Object graph'ın bedelsiz olduğunu varsay
 
 JPA/Hibernate'ten gelen ekipler için önerilen geçiş:
 
-1. `GeneratedCacheModule.using(session)...` ile başla.
-2. CRUD ve normal servis endpoint'lerini generated yüzeyde bırak.
-3. Liste ekranlarını projection ve summary/detail modeline çek.
-4. Önizleme ilişkilerine `withRelationLimit(...)` ekle.
-5. Sadece ölçülmüş darboğazları `*CacheBinding.using(session)...` tarafına indir.
-6. Doğrudan repository'yi ancak profiling hâlâ gerekli diyorsa kullan.
+1. Tablo eşlemesini ve ilişki metadata'sını entity üzerinde tut.
+2. Her aggregate veya route grubu için bir `@CacheRepository` arayüzü ekle.
+3. Detay okumalarını `@CacheLookup`, Redis liste okumalarını `@HotRoute` olarak tanımla.
+4. Liste ekranlarını projection ve özet/detay modeline taşı.
+5. Arşiv ve geçmiş okumalarını sınırlı `@SourceRoute` veya gözden geçirilmiş `@SourceSql` metotlarıyla tanımla.
+6. Kritik route'lardan `@WarmRoute` türet ve canlı geçişten önce coverage kanıtla.
+7. Veri eşitliği, gecikme, bellek ve rollback kontrolleri geçene kadar eski ORM route'unu açık tut.
 
 Bu yol onboarding'i kolay tutarken düşük ek yük hedefini de korur.
 
@@ -121,10 +126,11 @@ Bu yol onboarding'i kolay tutarken düşük ek yük hedefini de korur.
 
 | Ekip veya yük tipi | Önerilen yüzey |
 | --- | --- |
-| Normal ürün servis kodu | `GeneratedCacheModule.using(session)...` |
-| Açıkça kritik olduğu ölçülmüş endpoint'ler | `*CacheBinding.using(session)...` |
-| Worker, replay, recovery, altyapı kodu | doğrudan `EntityRepository` / `ProjectionRepository` |
-| Çok ilişkili liste veya yönetim paneli okumaları | projection + `withRelationLimit(...)` |
+| Normal ürün servis kodu | enjekte edilen `@CacheRepository` |
+| Yalnızca Redis'ten çalışan detay ve liste endpoint'leri | `@CacheLookup` / `@HotRoute` |
+| Kalıcı arşiv ve geçmiş | sınırlı `@SourceRoute` / gözden geçirilmiş `@SourceSql` |
+| Worker, replay, recovery ve altyapı kodu | düşük seviyeli repository veya provider adaptörü |
+| Çok ilişkili liste veya yönetim paneli okumaları | projection döndüren `@HotRoute` ve eşleşen `@WarmRoute` |
 | Global sıralı veya ranked ekranlar | ranked projection |
 
 ## Benchmark Nasıl Okunmalı?

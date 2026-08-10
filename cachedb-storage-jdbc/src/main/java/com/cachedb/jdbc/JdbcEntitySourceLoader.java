@@ -130,14 +130,25 @@ public final class JdbcEntitySourceLoader<T, ID>
                 + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
         parameters.add(Math.max(0, normalized.offset()));
         parameters.add(limit);
-        return executeVersioned(sql, parameters, limit);
+        return executeVersioned(sql, parameters, limit, normalized.queryTimeoutSeconds());
     }
 
     private List<VersionedEntity<T>> executeVersioned(String sql, List<Object> parameters, int expectedLimit) {
+        return executeVersioned(sql, parameters, expectedLimit, 0);
+    }
+
+    private List<VersionedEntity<T>> executeVersioned(
+            String sql,
+            List<Object> parameters,
+            int expectedLimit,
+            int queryTimeoutOverrideSeconds
+    ) {
         int boundedExpectedLimit = boundedLimit(expectedLimit);
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setQueryTimeout(queryTimeoutSeconds);
+            statement.setQueryTimeout(queryTimeoutOverrideSeconds > 0
+                    ? queryTimeoutOverrideSeconds
+                    : queryTimeoutSeconds);
             statement.setFetchSize(Math.min(boundedExpectedLimit, maxRows));
             statement.setMaxRows(boundedExpectedLimit);
             for (int index = 0; index < parameters.size(); index++) {
@@ -166,24 +177,46 @@ public final class JdbcEntitySourceLoader<T, ID>
         if (versionColumn == null || versionColumn.isBlank()) {
             throw new IllegalStateException("JDBC source loader requires a version column for " + metadata.entityName());
         }
-        Object value = columns.entrySet().stream()
-                .filter(entry -> entry.getKey().equalsIgnoreCase(versionColumn))
-                .map(Map.Entry::getValue)
-                .findFirst()
-                .orElse(null);
-        if (value instanceof Number number) {
-            return number.longValue();
-        }
-        if (value != null) {
-            try {
-                return Long.parseLong(String.valueOf(value));
-            } catch (NumberFormatException ignored) {
-                // Report a single domain-specific error below.
+        boolean columnPresent = false;
+        Object value = null;
+        for (Map.Entry<String, Object> entry : columns.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(versionColumn)) {
+                columnPresent = true;
+                value = entry.getValue();
+                break;
             }
         }
-        throw new IllegalStateException(
-                "JDBC source row has no positive numeric version in column " + versionColumn
+        if (!columnPresent) {
+            throw new IllegalStateException(
+                    "JDBC source row does not contain version column " + versionColumn
+                            + " for " + metadata.entityName()
+            );
+        }
+        if (value == null) {
+            return 1L;
+        }
+        long version;
+        if (value instanceof Number number) {
+            version = number.longValue();
+        } else {
+            try {
+                version = Long.parseLong(String.valueOf(value));
+            } catch (NumberFormatException ignored) {
+                throw invalidVersion(versionColumn, value);
+            }
+        }
+        if (version < 0L) {
+            throw invalidVersion(versionColumn, value);
+        }
+        // Existing SQL rows commonly have NULL/0 before CacheDB owns versioning.
+        return Math.max(1L, version);
+    }
+
+    private IllegalStateException invalidVersion(String versionColumn, Object value) {
+        return new IllegalStateException(
+                "JDBC source row has invalid version '" + value + "' in column " + versionColumn
                         + " for " + metadata.entityName()
+                        + "; expected NULL, zero, or a positive integer"
         );
     }
 

@@ -11,6 +11,8 @@ import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
 
 import javax.sql.DataSource;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -18,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -46,6 +49,32 @@ class JdbcEntitySourceLoaderTest {
 
         assertEquals(2L, loaded.entity().id());
         assertEquals(20L, loaded.version());
+    }
+
+    @Test
+    void shouldNormalizeLegacyNullAndZeroVersionsForInitialWarm() throws SQLException {
+        JdbcDataSource dataSource = new JdbcDataSource();
+        dataSource.setURL("jdbc:h2:mem:jdbc-loader-legacy-" + UUID.randomUUID()
+                + ";MODE=PostgreSQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1");
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE test_entities (
+                        id BIGINT PRIMARY KEY,
+                        status VARCHAR(32),
+                        created_at BIGINT,
+                        entity_version BIGINT,
+                        deleted_flag VARCHAR(8)
+                    )
+                    """);
+            statement.execute("INSERT INTO test_entities VALUES (1, 'LEGACY', 100, 0, NULL)");
+            statement.execute("INSERT INTO test_entities VALUES (2, 'LEGACY', 200, NULL, NULL)");
+        }
+
+        JdbcEntitySourceLoader<TestEntity, Long> loader = newLoader(dataSource);
+
+        assertEquals(1L, loader.loadVersionedById(1L).orElseThrow().version());
+        assertEquals(1L, loader.loadVersionedById(2L).orElseThrow().version());
     }
 
     @Test
@@ -106,6 +135,23 @@ class JdbcEntitySourceLoaderTest {
         assertThrows(IllegalArgumentException.class, () -> loader.load(QuerySpec.builder().limit(3).build()));
     }
 
+    @Test
+    void shouldApplyPerQueryTimeoutOverrideToJdbcStatement() throws SQLException {
+        AtomicInteger observedTimeout = new AtomicInteger();
+        DataSource dataSource = trackingDataSource(seedDataSource(), observedTimeout);
+        JdbcEntitySourceLoader<TestEntity, Long> loader = new JdbcEntitySourceLoader<>(
+                dataSource,
+                new TestMetadata(),
+                new TestCodec(),
+                10,
+                30
+        );
+
+        loader.load(QuerySpec.builder().limit(1).queryTimeoutSeconds(7).build());
+
+        assertEquals(7, observedTimeout.get());
+    }
+
     private JdbcEntitySourceLoader<TestEntity, Long> newLoader(DataSource dataSource) {
         return new JdbcEntitySourceLoader<>(
                 dataSource,
@@ -137,6 +183,52 @@ class JdbcEntitySourceLoaderTest {
             statement.execute("INSERT INTO test_entities(id, status, created_at, entity_version, deleted_flag) VALUES (5, 'CLOSED', 500, 50, NULL)");
         }
         return dataSource;
+    }
+
+    private DataSource trackingDataSource(DataSource delegate, AtomicInteger observedTimeout) {
+        return (DataSource) Proxy.newProxyInstance(
+                DataSource.class.getClassLoader(),
+                new Class<?>[]{DataSource.class},
+                (proxy, method, args) -> {
+                    Object result = invoke(method, delegate, args);
+                    if (result instanceof Connection connection && method.getName().equals("getConnection")) {
+                        return trackingConnection(connection, observedTimeout);
+                    }
+                    return result;
+                }
+        );
+    }
+
+    private Connection trackingConnection(Connection delegate, AtomicInteger observedTimeout) {
+        return (Connection) Proxy.newProxyInstance(
+                Connection.class.getClassLoader(),
+                new Class<?>[]{Connection.class},
+                (proxy, method, args) -> {
+                    Object result = invoke(method, delegate, args);
+                    if (result instanceof java.sql.PreparedStatement statement
+                            && method.getName().equals("prepareStatement")) {
+                        return Proxy.newProxyInstance(
+                                java.sql.PreparedStatement.class.getClassLoader(),
+                                new Class<?>[]{java.sql.PreparedStatement.class},
+                                (preparedProxy, preparedMethod, preparedArgs) -> {
+                                    if (preparedMethod.getName().equals("setQueryTimeout")) {
+                                        observedTimeout.set((Integer) preparedArgs[0]);
+                                    }
+                                    return invoke(preparedMethod, statement, preparedArgs);
+                                }
+                        );
+                    }
+                    return result;
+                }
+        );
+    }
+
+    private Object invoke(java.lang.reflect.Method method, Object target, Object[] args) throws Throwable {
+        try {
+            return method.invoke(target, args);
+        } catch (InvocationTargetException exception) {
+            throw exception.getCause();
+        }
     }
 
     private record TestEntity(long id, String status, long createdAt) {

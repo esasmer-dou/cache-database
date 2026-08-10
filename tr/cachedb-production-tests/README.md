@@ -1,6 +1,25 @@
-# cachedb-production-tests
+# CacheDB Production Kanıtları
 
-Bu modül, `cache-database` için production-benzeri e-ticaret DAO yük ve kırma testlerini içerir.
+[English](../../cachedb-production-tests/README.md)
+
+Bu modül CacheDB için production odaklı yük, kapasite, recovery, chaos ve
+go/no-go kanıtları üretir. Framework yeterlilik paketidir; burada alınan bir
+sonuç uygulamanın kapasite planına doğrudan kopyalanamaz.
+
+## Buradan Başla
+
+| Karar | Çalıştırılacak bölüm |
+| --- | --- |
+| Modül küçük veriyle çalışıyor mu? | [Smoke Test](#smoke-test) |
+| Birden fazla uygulama instance'ı doğru koordine oluyor mu? | [Çoklu Instance Koordinasyonu](#çoklu-instance-koordinasyonu) |
+| Hangi repository/okuma şekli daha az iş üretiyor? | [API ve Okuma Şekli Benchmark'ları](#api-ve-okuma-şekli-benchmarkları) |
+| Throughput hangi noktada ölçeklenmeyi bırakıyor? | [Kapasite Benchmark'ları](#kapasite-benchmarkları) |
+| Sistem restart, outage ve replay sonrasında toparlanıyor mu? | [Hata ve Toparlanma](#hata-ve-toparlanma) |
+| Bu framework revizyonu birleşik kapıyı geçiyor mu? | [Production Kapısı](#production-kapısı) |
+
+Önerilen sıra: smoke, temsilî kapasite, çoklu instance koordinasyonu,
+hata/toparlanma ve son olarak birleşik production kapısı. En büyük profille
+başlamak güven değil, gürültü üretir.
 
 ## Bu Testler Neyi Kanıtlar?
 
@@ -14,6 +33,13 @@ sözleşmelerini yük altında kanıtlamaktır:
 - Redis bellek davranışı policy ve guardrail ile sınırlandırılır
 - SQL kalıcı geçmiş ve repair kaynağı olarak kalır
 
+Bu testler şunları **kanıtlamaz**:
+
+- her rastgele ORM sorgusunun Redis için uygun olduğunu
+- dizüstü bilgisayardaki sonucun Kubernetes kapasitesini gösterdiğini
+- PostgreSQL veya SQL Server HA topolojisinin uygulama ortamında doğru olduğunu
+- tek başarılı koşunun soak, failover ve rollback kanıtının yerine geçtiğini
+
 Bir senaryo arşiv, export, audit veya tam geçmiş verisi istiyorsa bunu normal
 Redis entity sorgusu gibi değil, açık SQL yolu olarak modelle.
 
@@ -24,6 +50,8 @@ Kapsam:
 - sıcak SKU üzerinde inventory contention
 - write-behind backlog birikimi ve cache thrash kırma senaryoları
 - tam ölçek `50k TPS` benchmark paketleri ve özet raporlar
+
+## Başlangıç Senaryosu
 
 Çalıştırılabilir giriş noktası:
 
@@ -36,7 +64,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.postgres.password=postgresql"
 ```
 
-Smoke test:
+### Smoke Test
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am -Dtest=EcommerceProductionScenarioSmokeTest "-Dsurefire.failIfNoSpecifiedTests=false" test `
@@ -46,6 +74,22 @@ mvn -q -pl cachedb-production-tests -am -Dtest=EcommerceProductionScenarioSmokeT
   "-Dcachedb.prod.postgres.password=postgresql"
 ```
 
+### Çoklu Instance Koordinasyonu
+
+```powershell
+.\tools\ops\cluster\run-multi-instance-coordination-smoke.ps1 `
+  -RedisUri "redis://default:welcome1@127.0.0.1:56379" `
+  -PostgresUrl "jdbc:postgresql://127.0.0.1:55432/postgres" `
+  -PostgresUser "postgres" `
+  -PostgresPassword "postgresql"
+```
+
+Bu koşu instance'a özgü consumer adlarını, ortak consumer group davranışını,
+Redis leader lease failover'ını ve yarım kalan write-behind işinin başka bir
+instance tarafından alınmasını doğrular.
+
+## Koşu Sözleşmesi
+
 Notlar:
 
 - iş yükleri 50k TPS sınıfı spike senaryoları için modellenmiştir; lokal ortamda `scaleFactor` ile küçültülür
@@ -54,7 +98,9 @@ Notlar:
 - tablolar `cachedb_prodtest_*` ön eki ile her koşuda yeniden oluşturulur
 - ortak runtime/config tuning kataloğu: [../docs/tuning-parameters.md](../docs/tuning-parameters.md)
 
-Tam ölçek suite:
+## Kapasite Benchmark'ları
+
+### Tam Ölçek Suite
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -77,7 +123,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 Bu suite `full-scale-50k-suite.json` ve `full-scale-50k-suite.md` dosyalarını üretir.
 
-Kademeli ölçek benchmark:
+### Kademeli Ölçek
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -89,7 +135,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 Bu koşu `full-scale-50k-scale-ladder.json` ve `full-scale-50k-scale-ladder.md` dosyalarını üretir.
 
-Temsilci container-capacity benchmark:
+### Temsilî Container Kapasitesi
 
 ```powershell
 mvn -q -f cachedb-production-tests/pom.xml exec:java `
@@ -104,7 +150,37 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
 
 Bu koşu `representative-container-capacity-benchmark.*` dosyalarını üretir.
 
-Guardrail-aware profil karşılaştırması:
+## API ve Okuma Şekli Benchmark'ları
+
+### Repository Recipe Karşılaştırması
+
+```powershell
+mvn -q -f cachedb-production-tests/pom.xml exec:java `
+  "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.RepositoryRecipeBenchmarkMain" `
+  "-Dcachedb.prod.recipeBenchmark.warmupIterations=10000" `
+  "-Dcachedb.prod.recipeBenchmark.measuredIterations=50000"
+```
+
+Bu benchmark aynı CacheDB işlevini generated domain module, generated entity
+binding ve minimal repository kullanımıyla karşılaştırır. Harici Hibernate/JPA
+maliyetini ölçmez.
+
+### İlişki Yoğun Okuma Şekilleri
+
+```powershell
+mvn -q -f cachedb-production-tests/pom.xml exec:java `
+  "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.ReadShapeBenchmarkMain" `
+  "-Dcachedb.prod.readShapeBenchmark.ordersPerRead=24" `
+  "-Dcachedb.prod.readShapeBenchmark.fullLinesPerOrder=48" `
+  "-Dcachedb.prod.readShapeBenchmark.previewLinesPerOrder=8"
+```
+
+Bu koşu summary listesi, tek preview detayı, preview listesi ve tam aggregate
+listesinin uygulama tarafındaki maliyetini görünür kılar.
+
+## Guardrail ve Certification
+
+### Guardrail Profil Karşılaştırması
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -116,7 +192,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 Bu koşu `guardrail-profile-comparison.*` dosyalarını üretir ve throughput, backlog, Redis memory, compaction pending ve balance score dengesini karşılaştırır.
 
-Production certification:
+### Production Certification
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -132,6 +208,8 @@ Bu koşu `production-certification-report.json` ve `production-certification-rep
 - crash/replay chaos doğrulaması
 - fault injection doğrulaması
 - TPS, backlog, hata, hard rejection, rebuild başarısı ve restart recovery için açık go/no-go gate'leri
+
+## Operasyon Yüzeyi
 
 Admin gözlemlenebilirlik:
 
@@ -155,6 +233,8 @@ Admin gözlemlenebilirlik:
 - `/dashboard` artık Triage, Service Status, Alert Routing, Runbooks, Deployment, Schema Status, Schema History, Starter Profiles, API Registry, Schema DDL ve Certification bölümlerini admin UI üzerinde gösterir
 - `/dashboard` ayrıca AJAX auto-refresh kontrolü, manuel refresh, sayfayı tam yenilemeden backlog, Redis memory, dead-letter, kanal bazlı alert route trend/geçmişi, incident severity trendleri ve top failing signal kartları sunar
 
+## Hata ve Toparlanma
+
 Yüksek sinyalli çekirdek test matrisi:
 - kampanya tetikli browse ve checkout burst'leri
 - write-behind backlog ve backpressure büyümesi
@@ -162,7 +242,7 @@ Yüksek sinyalli çekirdek test matrisi:
 - restart/crash/replay correctness
 - 1h ve 4h soak boundedness
 
-Soak runner:
+### Soak Runner
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -180,7 +260,7 @@ Bu koşu `*-soak.json` ve `*-soak.md` dosyaları üretir. Rapor şunları içeri
 - runtime profile switch toplamları
 - iterasyon bazlı health özeti
 
-Uzun soak planları:
+### Uzun Soak Planları
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -190,7 +270,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 Bu koşu `production-soak-plan-report.json` ve `production-soak-plan-report.md` dosyalarını üretir.
 
-Restart recovery suite:
+### Restart Recovery
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -200,7 +280,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 Bu koşu `restart-recovery-suite.json` ve `restart-recovery-suite.md` dosyalarını üretir.
 
-Crash/replay chaos suite:
+### Crash ve Replay Chaos
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -213,7 +293,7 @@ Bu koşu `crash-replay-chaos-suite.json` ve `crash-replay-chaos-suite.md` dosyal
 - exact-sequence order durumu restart sonrası son duruma converge eder
 - manual dead-letter replay restart sonrası da erişilebilir kalır
 
-Fault injection suite:
+### Fault Injection
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -227,7 +307,7 @@ Bu koşu `fault-injection-suite.json` ve `fault-injection-suite.md` dosyaların�
 - restart sonrası stale replay ordering kurallarıyla reddedilir
 - tekrarlı outage/replay döngüleri bounded recovery-soak olarak doğrulanır
 
-Production gate:
+## Production Kapısı
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -250,7 +330,7 @@ Son temiz koşu durumu:
 - `drain completion`: `PASS`
 - `hard rejections`: `PASS`
 
-Production gate ladder:
+### Production Kapısı Basamakları
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -259,6 +339,8 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 ```
 
 Bu koşu `production-gate-ladder-report.json` ve `production-gate-ladder-report.md` dosyalarını üretir.
+
+## İleri Seviye Override'lar
 
 Yararlı override'lar:
 
@@ -338,6 +420,8 @@ Flush notu:
 - `customer`, `inventory` ve `cart` upsert akışları daha agresif compaction ve copy yollarına itilir
 - `order` yazmaları daha tutucu tutulur ve daha doğrudan persist edilir
 
+## Veri Semantiği
+
 Entity semantics matrisi:
 
 | Entity | UPSERT semantiği | DELETE semantiği | Production niyeti |
@@ -346,6 +430,8 @@ Entity semantics matrisi:
 | `EcomInventoryEntity` | `LATEST_STATE` | `LATEST_STATE` | sıcak SKU stok güncellemelerinde tüm ara adımlar yerine son stok doğrusu öncelenir |
 | `EcomCartEntity` | `LATEST_STATE` | `LATEST_STATE` | sepet durumu değişebilir session state olarak ele alınır |
 | `EcomOrderEntity` | `EXACT_SEQUENCE` | `EXACT_SEQUENCE` | order yazmaları sıra önemli olduğu için daha tutucu tutulur |
+
+## Kontrollü Degradasyon ve Toparlanma
 
 Hard-limit shedding notu:
 

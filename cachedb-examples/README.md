@@ -1,6 +1,21 @@
-# cachedb-examples
+# CacheDB Examples and Operations Demo
 
-This module contains runnable examples for `cache-database`.
+[Türkçe](../tr/cachedb-examples/README.md)
+
+This module is the framework-maintainer demo: it exercises load profiles,
+operations screens, migration planning, and low-level compatibility surfaces.
+Application teams should begin with one of the standalone REST API samples.
+
+## Choose the Right Sample
+
+| You want to... | Start here |
+| --- | --- |
+| Build a PostgreSQL application | [PostgreSQL REST API sample](../sample-cache-database-postgresql/README.md) |
+| Build a SQL Server application | [SQL Server REST API sample](../sample-cache-database-mssql/README.md) |
+| Learn generated repositories | [Declarative repository guide](../docs/declarative-repositories.md) |
+| Operate the admin UI and load profiles | Continue with this module |
+| Rehearse an existing-system migration | [Migration Planner Demo Flow](#migration-planner-demo-flow) |
+| Inspect legacy/generated binding compatibility | [Low-Level Compatibility Examples](#low-level-compatibility-examples) |
 
 Use it for two purposes:
 
@@ -28,6 +43,11 @@ Start the recommended demo with:
 ```powershell
 ./tools/ops/demo/run-spring-boot-load-demo.ps1
 ```
+
+The script is the supported local entrypoint because it prepares the expected
+Redis/PostgreSQL topology and starts the correct Spring Boot profile. Do not
+reconstruct the topology from individual Maven commands unless you are testing
+the standalone mode deliberately.
 
 Open:
 
@@ -65,7 +85,7 @@ Default seeded volume:
 The volume is intentionally large enough to show relation-heavy behavior, but
 small enough to keep repeated local demo runs practical.
 
-## Which Button Should I Press?
+## First Successful Run
 
 For a normal load demo:
 
@@ -75,6 +95,8 @@ For a normal load demo:
 4. Move to `MEDIUM`.
 5. Move to `HIGH` only after the previous profile is stable.
 6. Watch write-behind backlog, Redis memory, incidents, and runtime profile.
+7. Stop when backlog grows continuously, readiness degrades, or Redis reaches
+   its warning threshold; a higher profile is not useful evidence in that state.
 
 If `LOW / MEDIUM / HIGH` fails because data is missing, seed first. The demo no
 longer silently starts seed work behind a load button.
@@ -88,7 +110,7 @@ Load profiles:
 ## Migration Planner Demo Flow
 
 Use this flow when you want to test the existing SQL-database migration behavior
-with the default PostgreSQL demo dataset:
+with the bundled PostgreSQL demo dataset:
 
 1. Open `http://127.0.0.1:8090/cachedb-admin/migration-planner?lang=tr`.
 2. Click `Create and seed the demo schema`.
@@ -133,7 +155,19 @@ Default standalone URLs:
 - demo load UI: `http://127.0.0.1:8090`
 - admin dashboard: `http://127.0.0.1:8080/dashboard`
 
-## Read-Model Example
+## Preferred Application API
+
+For new application code, follow the repository-first sample projects:
+
+- [PostgreSQL sample](../sample-cache-database-postgresql/README.md)
+- [SQL Server sample](../sample-cache-database-mssql/README.md)
+- [Declarative repository guide](../docs/declarative-repositories.md)
+
+Those applications put mapping on entities, route contracts on
+`@CacheRepository` interfaces, and inject the generated repositories into
+services.
+
+## Low-Level Compatibility Examples
 
 For production-style relation-heavy screens, see:
 
@@ -147,7 +181,9 @@ This example represents the common "customer has many orders" problem:
 - use projection-specific Redis indexes instead of decoding wide base entities
 - move read-model maintenance out of the foreground write path with `EntityProjection.asyncRefresh()`
 
-Generated helpers shown by the example:
+This module also keeps the lower-level generated-binding examples below. They
+exist to test compatibility, benchmark wrapper surfaces, and demonstrate
+framework internals; they are not the preferred application API:
 
 - `DemoOrderEntityCacheBinding.orderSummary(orderRepository)`
 - `DemoOrderEntityCacheBinding.topCustomerOrders(orderSummaryRepository, customerId, 24)`
@@ -163,6 +199,14 @@ Important consistency note:
 - refresh events survive process restarts
 - projection reads are eventually consistent by design
 - cutover decisions still need side-by-side parity checks for migrated routes
+
+## Evidence Boundaries
+
+This demo can prove that a route shape, guardrail, migration plan, or operations
+screen behaves correctly in the local topology. It does not establish a
+production capacity number. Production evidence needs the real network path,
+container limits, Redis topology, database connection budget, dataset shape,
+and expected concurrency.
 
 ## Runtime Tuning
 
@@ -189,3 +233,13 @@ Examples:
 Full tuning catalog:
 
 - [../docs/tuning-parameters.md](../docs/tuning-parameters.md)
+
+## Troubleshooting
+
+| Symptom | Action |
+| --- | --- |
+| A load profile says data is missing | Run `Seed Demo Data` and wait for completion before starting load |
+| The migration planner returns no route candidates | Create/seed the demo schema, then run discovery again |
+| CacheDB is fast but comparison is not ready | Fix membership/order parity; latency alone is not a cutover signal |
+| Backlog keeps growing | Stop increasing load and inspect SQL latency, worker capacity, retries, and Redis pressure |
+| The application port is unavailable | Stop the previous demo process or change the configured demo port |

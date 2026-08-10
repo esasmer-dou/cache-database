@@ -9,6 +9,8 @@ import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.RecordComponentElement;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
@@ -145,34 +147,54 @@ public final class CacheProjectionRecordProcessor extends AbstractProcessor {
 
         Map<String, SourceField> byName = new HashMap<>();
         Map<String, SourceField> byColumn = new HashMap<>();
-        for (Element enclosed : source.getEnclosedElements()) {
-            if (!(enclosed instanceof VariableElement field) || enclosed.getKind() != ElementKind.FIELD) {
-                continue;
+        if (source.getKind() == ElementKind.RECORD) {
+            for (RecordComponentElement component : source.getRecordComponents()) {
+                String fieldName = component.getSimpleName().toString();
+                CacheColumn column = component.getAnnotation(CacheColumn.class);
+                com.reactor.cachedb.annotations.CacheId sourceId = component.getAnnotation(com.reactor.cachedb.annotations.CacheId.class);
+                String columnName = sourceId != null ? sourceId.column()
+                        : column == null ? toSnakeCase(fieldName) : column.value().trim();
+                SourceField sourceField = new SourceField(fieldName, columnName, component.asType().toString(), true);
+                byName.put(fieldName, sourceField);
+                byColumn.put(columnName, sourceField);
             }
-            String fieldName = field.getSimpleName().toString();
-            CacheColumn column = field.getAnnotation(CacheColumn.class);
-            String columnName = column == null ? toSnakeCase(fieldName) : column.value().trim();
-            SourceField sourceField = new SourceField(fieldName, columnName, field.asType().toString());
-            byName.put(fieldName, sourceField);
-            byColumn.put(columnName, sourceField);
+        } else {
+            for (Element enclosed : source.getEnclosedElements()) {
+                if (!(enclosed instanceof VariableElement field) || enclosed.getKind() != ElementKind.FIELD) {
+                    continue;
+                }
+                String fieldName = field.getSimpleName().toString();
+                CacheColumn column = field.getAnnotation(CacheColumn.class);
+                com.reactor.cachedb.annotations.CacheId sourceId = field.getAnnotation(com.reactor.cachedb.annotations.CacheId.class);
+                String columnName = sourceId != null ? sourceId.column()
+                        : column == null ? toSnakeCase(fieldName) : column.value().trim();
+                SourceField sourceField = new SourceField(fieldName, columnName, field.asType().toString(), false);
+                byName.put(fieldName, sourceField);
+                byColumn.put(columnName, sourceField);
+            }
         }
 
+        String factoryMethod = annotation.factoryMethod().trim();
         ArrayList<SourceField> mapping = new ArrayList<>(components.size());
-        for (Component component : components) {
-            SourceField field = byName.get(component.name());
-            if (field == null) {
-                field = byColumn.get(component.column());
+        if (factoryMethod.isEmpty()) {
+            for (Component component : components) {
+                SourceField field = byName.get(component.name());
+                if (field == null) {
+                    field = byColumn.get(component.column());
+                }
+                if (field == null) {
+                    error(record, "Projection component has no matching source field: " + component.name());
+                    return null;
+                }
+                if (!compatibleTypes(field.type(), component.type())) {
+                    error(record, "Projection component type does not match source field "
+                            + field.name() + ": " + field.type() + " -> " + component.type());
+                    return null;
+                }
+                mapping.add(field);
             }
-            if (field == null) {
-                error(record, "Projection component has no matching source field: " + component.name());
-                return null;
-            }
-            if (!compatibleTypes(field.type(), component.type())) {
-                error(record, "Projection component type does not match source field "
-                        + field.name() + ": " + field.type() + " -> " + component.type());
-                return null;
-            }
-            mapping.add(field);
+        } else if (!validateFactoryMethod(record, source, factoryMethod)) {
+            return null;
         }
 
         ArrayList<String> rankedBy = new ArrayList<>();
@@ -197,8 +219,31 @@ public final class CacheProjectionRecordProcessor extends AbstractProcessor {
                 List.copyOf(mapping),
                 projectionName,
                 List.copyOf(rankedBy),
+                factoryMethod,
                 annotation.refresh()
         );
+    }
+
+    private boolean validateFactoryMethod(TypeElement record, TypeElement source, String factoryMethod) {
+        if (!factoryMethod.matches("[A-Za-z_$][A-Za-z0-9_$]*")) {
+            error(record, "Projection factoryMethod is not a safe Java method name: " + factoryMethod);
+            return false;
+        }
+        boolean found = record.getEnclosedElements().stream()
+                .filter(element -> element.getKind() == ElementKind.METHOD)
+                .map(ExecutableElement.class::cast)
+                .anyMatch(method -> method.getSimpleName().contentEquals(factoryMethod)
+                        && method.getModifiers().contains(Modifier.STATIC)
+                        && method.getModifiers().contains(Modifier.PUBLIC)
+                        && method.getParameters().size() == 1
+                        && processingEnv.getTypeUtils().isSameType(
+                                method.getParameters().get(0).asType(), source.asType())
+                        && processingEnv.getTypeUtils().isSameType(method.getReturnType(), record.asType()));
+        if (!found) {
+            error(record, "Projection factoryMethod must be public static " + record.getSimpleName()
+                    + " " + factoryMethod + "(" + source.getSimpleName() + ")");
+        }
+        return found;
     }
 
     private void writeSchema(TypeElement record, List<Component> components) {
@@ -286,13 +331,18 @@ public final class CacheProjectionRecordProcessor extends AbstractProcessor {
         source.append(";\n\n");
         source.append("    public static ").append(recordName).append(" fromEntity(")
                 .append(projection.sourceType()).append(" entity) {\n");
-        source.append("        return new ").append(recordName).append("(\n");
-        for (int index = 0; index < projection.mapping().size(); index++) {
-            SourceField field = projection.mapping().get(index);
-            source.append("                entity.").append(field.name())
-                    .append(index == projection.mapping().size() - 1 ? "\n" : ",\n");
+        if (!projection.factoryMethod().isEmpty()) {
+            source.append("        return ").append(recordName).append('.').append(projection.factoryMethod())
+                    .append("(entity);\n");
+        } else {
+            source.append("        return new ").append(recordName).append("(\n");
+            for (int index = 0; index < projection.mapping().size(); index++) {
+                SourceField field = projection.mapping().get(index);
+                source.append("                entity.").append(field.name()).append(field.accessorMethod() ? "()" : "")
+                        .append(index == projection.mapping().size() - 1 ? "\n" : ",\n");
+            }
+            source.append("        );\n");
         }
-        source.append("        );\n");
         source.append("    }\n\n");
         source.append("    private ").append(generatedName).append("() {\n");
         source.append("    }\n");
@@ -356,7 +406,7 @@ public final class CacheProjectionRecordProcessor extends AbstractProcessor {
     private record Component(String name, String column, String type, ColumnCodec codec) {
     }
 
-    private record SourceField(String name, String column, String type) {
+    private record SourceField(String name, String column, String type, boolean accessorMethod) {
     }
 
     private record ProjectionSource(
@@ -365,6 +415,7 @@ public final class CacheProjectionRecordProcessor extends AbstractProcessor {
             List<SourceField> mapping,
             String name,
             List<String> rankedBy,
+            String factoryMethod,
             CacheProjectionRecord.Refresh refresh
     ) {
     }

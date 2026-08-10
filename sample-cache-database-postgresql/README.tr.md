@@ -1,491 +1,337 @@
-# CacheDB PostgreSQL REST API Örneği
+# CacheDB PostgreSQL Örneği
 
 [English](README.md) | Türkçe
 
-Bu proje, CacheDB’nin Redis ve PostgreSQL ile nasıl kullanılacağını gösteren bağımsız bir Spring Boot REST API örneğidir. Kullanıcının ana CacheDB reposunu indirip yerelde build etmesi gerekmez; proje CacheDB’yi Maven paketi olarak tüketir.
+Bu proje, CacheDB'nin Redis 8 ve PostgreSQL ile nasıl kullanılacağını gösteren,
+canlı ortam yaklaşımına yakın bir Spring Boot REST API örneğidir. Tasarım
+bilinçli olarak açıktır: operasyonel yollar Redis'teki sınırlı aktif veri setini
+kullanır, kalıcı geçmiş PostgreSQL'de tutulur, büyüyen listeler ise tam
+aggregate yerine projection üzerinden okunur.
 
-Örnek senaryo bir e-ticaret destek sistemidir:
+> Bu örnek, CacheDB `0.7.0` değişmez sürümünü GitHub Packages üzerinden kullanır;
+> sample build'i CacheDB kaynak reposunu kendi içinde derlemez.
 
-- Müşteriler sürekli sipariş verir.
-- Siparişlerin birden fazla satırı vardır.
-- Ürünler kategoriye göre sık okunur.
-- Destek talepleri operasyon paneline veri sağlar.
-- Müşteri sipariş zaman çizelgesi, tüm aggregate yüklenmeden özet okuma modeli üzerinden döner.
+## Buradan Başla
 
-## Bu Örnekte Ürün Konumlandırması
+| Hedefin | İlgili bölüm |
+| --- | --- |
+| Örneği çalıştırmak | [Hızlı Başlangıç](#hızlı-başlangıç) |
+| Redis ve PostgreSQL davranışını anlamak | [Çalışma Zamanı Sözleşmesi](#çalışma-zamanı-sözleşmesi) |
+| Deklaratif Java API'sini görmek | [Kod Üzerinden Akış](#kod-üzerinden-akış) |
+| PostgreSQL'deki mevcut veriyi Redis'e hazırlamak | [Mevcut Veriyi Hazırlama](#mevcut-veriyi-hazırlama) |
+| Cache sınırlarını belirlemek | [Kullanım Senaryosuna Göre Ayar](#kullanım-senaryosuna-göre-ayar) |
+| Tüm yolları denemek | [API Kataloğu](#api-kataloğu) veya [Postman](#postman) |
+| Canlı ortam geçişini hazırlamak | [Canlı Ortam Kontrol Listesi](#canlı-ortam-kontrol-listesi) |
+| Başlangıç veya veri yolu sorununu çözmek | [Sorun Giderme](#sorun-giderme) |
 
-Bu örnek, CacheDB'yi PostgreSQL'in önüne konan şeffaf bir cache gibi
-konumlandırmaz. API bilinçli olarak ikiye ayrılır: Redis'teki aktif veri setini
-okuyan operasyonel yollar ve PostgreSQL'i açıkça kullanan arşiv/geçmiş yolları.
+## Bu Örnek Ne Öğretiyor?
 
-| Yol tipi | Örnek | Veri yolu | Sözleşme |
-|---|---|---|---|
-| Operasyonel entity yazma | `POST /api/orders` | Önce Redis, sonra PostgreSQL'e write-behind | Yazı CacheDB üzerinden kabul edilir ve arka planda kalıcılaştırılır. Kaydın Redis'te kalıp kalmayacağını hot policy belirler. |
-| Operasyonel liste | `GET /api/customers/{id}/orders` | Redis projection: `OrderSummary` | Liste tam sipariş aggregate verisi yerine sınırlı bir read-model okur. |
-| Seçilmiş detay | `GET /api/orders/{id}` | Redis entity + sınırlı ilişki önizlemesi | Aktif veri setindeki kayıtlar için çalışır. Sipariş aktif veri setinin dışındaysa açık bir detay SQL yolu tasarlanmalıdır. |
-| Arşiv/geçmiş | `GET /api/orders/archive` | Doğrudan PostgreSQL sorgusu | Eski geçmiş, export ve audit okumaları varsayılan olarak Redis'i büyütmemelidir. |
-| Panel | `GET /api/dashboard/commerce` | Redis projection ve sınırlı entity sorgusu | Panel satırları ekran ihtiyacına göre önceden şekillendirilmiş veriden okunur. |
+Örnek, basit bir CRUD uygulamasından daha geniş bir alanı kapsar:
 
-BEST: önce aktif okuma/yazma yolunu tasarla, hot policy kararını ver,
-listeleri projection repository üzerinden oku ve arşiv/geçmiş okumalarını açık
-PostgreSQL sorgusu olarak tut.
+- müşteriler sipariş verir; siparişlerin çok sayıda satırı olabilir
+- ürün uygunluğu katalog ve düşük stok ekranlarını besler
+- gönderiler aktif, istisna, hareket ve arşiv yollarına ayrılır
+- destek talepleri operasyon paneline veri sağlar
+- rapor işleri ve denetim olaylarında anlık iş yükü ile kalıcı geçmiş ayrılır
 
-ANTI-PATTERN: geniş ve dinamik bir entity sorgusunun veriyi Redis'te
-bulamamasını, PostgreSQL'i taramasını, Redis'i doldurmasını ve production bellek
-sınırları altında yine de öngörülebilir kalmasını beklemek.
+Ürünün sınırı da aynı açıklıkla gösterilir:
+
+| Sınıflandırma | Anlamı |
+| --- | --- |
+| **BEST** | Sınırlı bir operasyonel yol tanımla, entity veya projection verisini hazırla, ölç ve arşiv/geçmiş okumalarını PostgreSQL'de tut. |
+| **ACCEPTABLE** | Redis'teki aktif veri setinin dışında kalan ve seyrek okunan veri için sınırlı bir PostgreSQL yolu kullan. |
+| **ANTI-PATTERN** | CacheDB'yi şeffaf bir cache gibi görüp Redis'te bulunmayan her sorgunun otomatik SQL çalıştırmasını ve Redis'i doldurmasını bekleme. |
+
+CacheDB, hangi ekran ve komutların öngörülebilir düşük gecikmeye ihtiyaç
+duyduğunu bilen ekipler için güçlü bir çözümdür. Temel iş yükü bütün veritabanı
+üzerinde sınırsız ve anlık sorgular çalıştırmak olan uygulamalar için uygun
+değildir.
+
+## Mimari
+
+```mermaid
+flowchart LR
+    Client["REST istemcisi"] --> API["Controller"]
+    API --> Service["Uygulama servisi"]
+    Service --> Repo["Üretilen CacheDB repository"]
+    Repo -->|"HotRoute / CacheLookup"| Redis[(Redis 8 aktif veri seti)]
+    Repo -->|"SourceRoute"| PostgreSQL[(PostgreSQL kalıcı geçmiş)]
+    Repo -->|"Komut"| Stream["Redis Stream write-behind"]
+    Stream --> Worker["Sınırlı kalıcılık işçisi"]
+    Worker --> PostgreSQL
+    PostgreSQL -->|"WarmRoute"| Warm["Ön yükleme / backfill işi"]
+    Warm --> Redis
+```
+
+Uygulama kodu repository interface'lerine bağımlıdır. Annotation processor;
+implementasyonları, codec'leri, indeksleri, projection binding'lerini ve Spring
+bean'lerini derleme sırasında üretir. Entity keşfi için çalışma zamanı
+reflection'ı kullanılmaz.
+
+## Kısa Sözlük
+
+| Terim | Bu örnekteki anlamı |
+| --- | --- |
+| Entity | SQL kolonlarına ve Redis namespace'ine eşlenen komut/detay modeli |
+| Projection | `OrderSummary` gibi küçük ve ekrana özel okuma modeli |
+| Aktif veri seti | Redis'te bilinçli olarak tutulan sınırlı veri kümesi |
+| Aktif yol (`HotRoute`) | Redis'teki aktif veri setini okuyan repository metodu |
+| Kaynak yolu (`SourceRoute`) | PostgreSQL'i açıkça ve sınırlı biçimde okuyan repository metodu |
+| Ön yükleme (`warm/backfill`) | PostgreSQL'den Redis'e kontrollü veri hazırlama işi |
+| Route coverage | Gerekli kapsamın ve pencerenin Redis'te hazır olduğunu gösteren kanıt |
+| Write-behind | Redis'in kabul ettiği komutun PostgreSQL'e asenkron yazılması |
+| Write receipt | Kimlik, sürüm ve kalıcılık durumunu izlemek için kullanılan komut sonucu |
+
+## Gereksinimler
+
+- JDK 21
+- Maven 3.9+
+- Docker Desktop veya uyumlu bir Docker Engine
+- Hazır yük testi için PowerShell 7+
+- Yalnızca GitHub Packages'tan yayımlanmış paket çekerken `read:packages`
+  yetkili GitHub token'ı
+
+Yerel araçları kontrol et:
+
+```powershell
+java -version
+mvn -version
+docker version
+docker compose version
+```
 
 ## Bağımlılık Modeli
 
-Bu proje CacheDB’yi dış Maven paketi olarak kullanır:
+Örnek proje CacheDB'yi Maven artifact'leri üzerinden kullanır. Sample build'i
+framework kaynak kodunu kendi içinde derlemez.
 
 ```xml
 <properties>
-  <java.version>21</java.version>
-  <cachedb.version>0.6.0</cachedb.version>
+    <java.version>21</java.version>
+    <cachedb.version>0.7.0</cachedb.version>
 </properties>
 
-<repositories>
-  <repository>
-    <id>cache-database-github-packages</id>
-    <name>CacheDB GitHub Packages</name>
-    <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
-  </repository>
-</repositories>
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-bom</artifactId>
+            <version>${cachedb.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
 
 <dependencies>
-  <dependency>
-    <groupId>com.reactor.cachedb</groupId>
-    <artifactId>cachedb-spring-boot-starter</artifactId>
-    <version>${cachedb.version}</version>
-  </dependency>
-  <dependency>
-    <groupId>com.reactor.cachedb</groupId>
-    <artifactId>cachedb-annotations</artifactId>
-    <version>${cachedb.version}</version>
-  </dependency>
-
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-jdbc</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>org.postgresql</groupId>
-    <artifactId>postgresql</artifactId>
-    <scope>runtime</scope>
-  </dependency>
+    <dependency>
+        <groupId>com.reactor.cachedb</groupId>
+        <artifactId>cachedb-spring-boot-starter-postgres</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>com.reactor.cachedb</groupId>
+        <artifactId>cachedb-annotations</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+        <scope>runtime</scope>
+    </dependency>
 </dependencies>
 
 <build>
-  <plugins>
-    <plugin>
-      <groupId>org.apache.maven.plugins</groupId>
-      <artifactId>maven-compiler-plugin</artifactId>
-      <configuration>
-        <release>${java.version}</release>
-        <annotationProcessorPaths>
-          <path>
-            <groupId>com.reactor.cachedb</groupId>
-            <artifactId>cachedb-processor</artifactId>
-            <version>${cachedb.version}</version>
-          </path>
-        </annotationProcessorPaths>
-      </configuration>
-    </plugin>
-  </plugins>
+    <plugins>
+        <plugin>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <configuration>
+                <release>${java.version}</release>
+                <annotationProcessorPaths>
+                    <path>
+                        <groupId>com.reactor.cachedb</groupId>
+                        <artifactId>cachedb-processor</artifactId>
+                        <version>${cachedb.version}</version>
+                    </path>
+                </annotationProcessorPaths>
+            </configuration>
+        </plugin>
+    </plugins>
 </build>
 ```
 
-Yani kullanıcı ana projeyi önce derlemek zorunda değildir. CacheDB `0.6.0`, ana repodan GitHub Packages'a yayımlanır ve bu örnek proje paketi oradan çeker.
-`cachedb-annotations` ve `cachedb-processor`, `OrderEntityCacheBinding` gibi generated binding sınıflarının üretilmesi için gereklidir.
+Yönetim ekranı gerekiyorsa `cachedb-spring-boot-starter-admin` ekle. JPA veya
+başka bir starter uygulama için zaten `DataSource` oluşturuyorsa
+`spring-boot-starter-jdbc` bağımlılığını tekrar eklemen gerekmez. CacheDB'nin
+ihtiyacı; çalışan bir `DataSource`, tek bir veritabanı starter'ı, annotations
+artifact'i ve annotation processor'dır.
 
-Çalıştırma ve build gereksinimi: JDK 21 kullan. Örnek `pom.xml` içinde
-`<java.version>21</java.version>` tanımlıdır ve proje Java release 21 ile derlenir.
-
-GitHub Packages Maven erişimi için kimlik bilgisi gerekir. `pom.xml` içindeki `<repository><id>` değeri ile Maven `settings.xml` içindeki `<server><id>` değeri aynı olmalıdır:
+GitHub Packages için `pom.xml` içindeki repository kimliği ile Maven
+`settings.xml` içindeki server kimliği aynı olmalıdır:
 
 ```xml
 <settings>
-  <servers>
-    <server>
-      <id>cache-database-github-packages</id>
-      <username>${env.GITHUB_ACTOR}</username>
-      <password>${env.GITHUB_TOKEN}</password>
-    </server>
-  </servers>
+    <servers>
+        <server>
+            <id>cache-database-github-packages</id>
+            <username>${env.GITHUB_ACTOR}</username>
+            <password>${env.GITHUB_TOKEN}</password>
+        </server>
+    </servers>
 </settings>
 ```
 
-`read:packages` yetkisi olan bir GitHub personal access token tanımladıktan sonra proje doğrudan build edilir:
+## Hızlı Başlangıç
 
-```bash
-export GITHUB_ACTOR=github-kullanici-adin
-export GITHUB_TOKEN=read-packages-token
-mvn clean package
-```
+### 1. Geliştirme snapshot'ını kur
 
-Bu ayar yapılmazsa repository URL doğru olsa bile Maven genellikle `401 Unauthorized` hatası verir.
+Değişmez `0.7.0` paketleri yayımlandıktan sonra bu adımı atlayabilirsin.
 
-## 0.6.0 İçin Doğrulanmış Deklaratif Akış
-
-Bu örnek CacheDB `0.6.0` ile çalışacak şekilde hazırlanmıştır. Buradaki temel
-sözleşme şudur:
-
-1. Yazılar CacheDB üzerinden alınır ve PostgreSQL’e write-behind ile aktarılır.
-2. PostgreSQL’de önceden duran kayıtlar uygulama açılır açılmaz Redis’e kendiliğinden yüklenmez.
-3. Hızlı çalışması gereken yollar için sınırlı bir aktif entity seti veya projection gerekir.
-4. Warm/backfill akışı, kayıtlı JDBC loader üzerinden PostgreSQL’den okur ve sonra Redis/projection satırlarını doldurur.
-5. Yük testi, seed verisi PostgreSQL’e kalıcı olarak indikten ve warm adımı bittikten sonra koşulmalıdır.
-
-Bu sözleşme örnek kodda açıkça görünür.
-
-### 0.6.0 Sürümünde Doğrulanan Production Sözleşmeleri
-
-- Komut endpoint’leri `202 Accepted` döner. Bu yanıt, komutun Redis tarafından kabul edildiğini söyler; SQL’e kalıcı yazımın tamamlandığını söylemez.
-- Alt kayıt yazılırken mümkünse bekleyen kalıcılık makbuzu kullanılır; bu bilgi yoksa indeksli tek bir SQL varlık sorgusu çalışır. Ana kayıt henüz kalıcı değilse istek thread’i bekletilmez; `Retry-After` ile birlikte `409 Conflict` döner.
-- `DELETE /api/orders/{id}`, durumu `DELETED` yapan açık bir mantıksal silme işlemidir. Aggregate’in fiziksel olarak silinmesi asenkron write-behind üzerinden sunulmaz.
-- Her entity, kullanıldığı okuma yoluna uygun bir admission policy kullanır. Sipariş, katalog, destek, lojistik, raporlama ve audit verileri tek bir yanıltıcı varsayılan policy’yi paylaşmaz.
-- Parasal alanlarda `BigDecimal` ve `NUMERIC(19,4)` kullanılır. Redis sıralama puanları parasal değer olmadığı için `double` kalır.
-- Relation loader’lar tip güvenli `@CacheRelation` tanımından üretilir ve her ana kayıt için ayrı sorgu çalıştırmak yerine sınırlı `IN (...)` grupları kullanır.
-- Warm/backfill işlemi Redis Stream üzerinde kalıcı ve sınırlı bir job olarak çalışır: `1` worker ve `8` elemanlık kuyruk. Bir pod kapanırsa başka bir pod işi devralıp checkpoint’ten sürdürebilir.
-- `/actuator/health/liveness` uygulama sürecinin çalıştığını, `/actuator/health/readiness` ise Redis, SQL ve write-behind durumunu gösterir.
-- Sınırı aşan route limitleri sessizce küçültülmez; `400 Bad Request` ile reddedilir.
-- Uygulama servisleri yalnızca üretilmiş bir `GeneratedCacheModule.Scope` kullanır; repository veya binding nesnelerini elle oluşturmaz.
-- Her entity için admission policy `application.yml` üzerinden tanımlanır. `cachedb.registration.source: jdbc` ayarı, veritabanı kayıt kaynağını açıkça belirtir.
-- Named query, fetch planı, projection ve tip güvenli warm planları derleme sırasında üretilir. `ProjectionSchema`, projection alan sırasını ve serileştirme sözleşmesini açık tutar.
-
-`0.6.0` sürümünde JDBC işlemleri de sınırlıdır: warm için kayıtlı JDBC sorguları 15
-saniyede, write-behind SQL işlemleri 20 saniyede zaman aşımına uğrar. Admin
-istek ve arka plan kuyruklarının kapasitesi `application.yml` içinde açıkça
-tanımlanmıştır. Sürüm kontrollü hydration, eski bir warm sonucunun
-Redis'teki daha yeni kaydı ezmesini engeller.
-
-```java
-@Bean
-CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
-    return (builder, properties) -> builder
-            .readThrough(ReadThroughConfig.builder()
-                    .mode(ReadThroughMode.REDIS_ONLY)
-                    .failOnMissingLoader(false)
-                    .hydrateLoadedEntities(false)
-                    .maxQueryLoadRows(1_000)
-                    .queryTimeoutSeconds(15)
-                    .build())
-            .writeBehind(WriteBehindConfig.builder()
-                    .workerThreads(2)
-                    .batchSize(128)
-                    .statementTimeoutSeconds(20)
-                    .build());
-}
-```
-
-Spring Boot, generated registrar ve `application.yml` içindeki entity bazlı policy kataloğunu kullanarak JDBC kaydını otomatik yapar. Uygulama kodu `registerJdbcBacked(...)` çağırmamalı ve her entity için ayrı repository bean’i oluşturmamalıdır.
-
-```yaml
-cachedb:
-  registration:
-    source: jdbc
-    fail-on-unknown-entity: true
-```
-
-Ön yükleme yolu, tam tablo taraması yerine generated domain scope ve sorgu şekline uygun tip güvenli plan kullanır:
-
-```java
-CacheWarmPlan plan = domain.orders().queries()
-        .customerTimelineWarmPlan(customerId, limit);
-CacheWarmResult result = cacheDatabase.warmProjections(plan);
-```
-Uygulama hazır olduktan sonra yerel yük kapısını şu komutla çalıştır:
+Framework ve örnek repolar aynı dizinde yan yana duruyorsa:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-load-test.ps1 `
-  -RouteProfile hot-timeline `
-  -Concurrency 4 `
-  -DurationSeconds 10 `
-  -SeedCustomers 10 `
-  -OrdersPerCustomer 20 `
-  -LinesPerOrder 4 `
-  -WarmCustomers 10 `
-  -WarmLimit 100 `
-  -MaxP95Millis 500
+mvn -f ..\cache-database\pom.xml -DskipTests install
 ```
 
-`0.2.0` sürümünden korunan tarihsel yerel yük testi başlangıç değeri:
-
-| Provider | Versiyon | Yol profili | Sonuç |
-|---|---:|---|---|
-| PostgreSQL | `0.2.0` | `hot-timeline` | `ok=605`, `fail=0`, `p95=184 ms` |
-
-Bu sonuç production benchmark değildir; örnek proje için smoke gate kanıtıdır.
-Staging ortamında veri hacmini büyüt, testi daha uzun çalıştır ve Redis bellek
-kullanımı, projection gecikmesi, write-behind backlog, PostgreSQL gecikmesi ve
-JVM GC metriklerini birlikte izle.
-
-## Deklaratif Periyodik Warm ve Reconciliation
-
-[`SampleScheduledWarmPlans.java`](src/main/java/com/example/cachedb/sample/config/SampleScheduledWarmPlans.java),
-uygulama servislerine `@Scheduled`, Redis kilit kodu veya repository wiring
-eklemeden aktif sipariş yolunu düzenli olarak yeniler.
-
-```java
-@CacheScheduledWarm(
-        name = "sample-active-order-window",
-        enabledString = "${sample.scheduled-warm.enabled:true}",
-        fixedDelayString = "${sample.scheduled-warm.orders.fixed-delay:PT15M}",
-        initialDelayString = "${sample.scheduled-warm.orders.initial-delay:PT30S}",
-        lockAtMostForString = "${sample.scheduled-warm.orders.lock-at-most-for:PT2M}",
-        lockWaitTimeoutString = "${sample.scheduled-warm.orders.lock-wait-timeout:PT20S}",
-        minimumIntervalString = "${sample.scheduled-warm.orders.minimum-interval:PT15M}",
-        reconcileHotSet = true,
-        reconcileMaxRowsPerRunString = "${sample.scheduled-warm.orders.reconcile-max-rows:10000}",
-        reconcileScanCountString = "${sample.scheduled-warm.orders.reconcile-scan-count:500}"
-)
-public CacheWarmPlan activeOrderWindow() {
-    long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
-    return domain.orders().queries()
-            .activeOrderWindowWarmPlan(cutoff, orderWarmMaxRows);
-}
-```
-
-Örnekteki policy yalnızca son 90 gün değildir; **son 90 gün VEYA aktif sipariş
-durumu** anlamına gelir. Eski olmasına rağmen `OPEN` veya `PENDING` durumundaki
-bir sipariş aktif iş kümesinde kalır. İhtiyaç kesin olarak yalnızca son 90 günse
-tek bir `TIME_WINDOW` policy ve onunla aynı koşulu kullanan sorgu tanımlanmalıdır.
-
-Çalışma sırası şöyledir:
-
-1. Her uygulama pod'u aynı annotation'ı tetikler.
-2. Bir pod Redis lease'i alır ve heartbeat ile yeniler; diğer pod'lar en fazla 20 saniye bekler.
-3. Lease sahibi, kayıtlı ve sınırlı PostgreSQL JDBC loader üzerinden en fazla `warm-max-rows` kadar kayıt okur.
-4. Sürüm kontrollü hydration, policy'nin kabul ettiği kayıtları Redis'e alır ve projection'ları yeniler.
-5. Reconciliation, policy dışına çıkan kayıtları Redis'ten kaldırır; PostgreSQL'i değiştirmez.
-6. Lease sahibi tamamlanma kaydını yazar; bekleyen pod'lar aynı çevrimi ikinci kez çalıştırmaz.
-
-Pod'a özel çalışma durumunu görmek için:
+Bu örneği ana CacheDB reposunun içinden çalıştırıyorsan:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8091/api/warm/schedules"
+mvn -f ..\pom.xml -DskipTests install
 ```
 
-`COMPLETED`; yüklenen/gönderilen kayıt sayılarını, reconciliation cursor'unu,
-tam tarama durumunu ve incelenen/silinen/eksik/bozuk payload sayılarını gösterir.
-`SKIPPED_LOCK_TIMEOUT`, sınırlı bekleme bittiğinde lease'in hâlâ başka pod'da
-olduğunu gösterir. `LEASE_LOST` durumunda tamamlanma kaydı yazılmaz; sonraki
-çevrim işi yeniden dener.
+### 2. Redis ve PostgreSQL'i başlat
 
-- `warm-max-rows`, `cachedb.config.readThrough.maxQueryLoadRows` değerini aşmamalıdır.
-- 100.000 aktif kayıt, çevrim başına 10.000 reconciliation kaydı ve 15 dakikalık aralık yaklaşık 150 dakikalık tam tarama süresi oluşturur.
-- Doğrudan PostgreSQL'e yazılan kayıt bir sonraki başarılı çevrimde görünür. Bu gecikme kabul edilmiyorsa outbox/CDC kullanılmalıdır.
-- CacheDB üzerinden yazılan kayıt Redis'e hemen girer; scheduler'ı beklemez.
-
-Tüm parametreler, hata davranışı ve kapasite hesabı [Periyodik Warm ve Aktif Veri
-Seti Uzlaştırması](../tr/docs/periodik-warm.md) belgesinde açıklanır.
-
-## Yerelde Çalıştırma
-
-1. Redis ve PostgreSQL’i başlat:
-
-```bash
+```powershell
 docker compose up -d
+docker compose ps
 ```
 
-2. API’yi başlat:
+Compose dosyası şu servisleri açar:
 
-```bash
+| Servis | Adres | Yerel kullanım amacı |
+| --- | --- | --- |
+| Redis 8.2.1 | `127.0.0.1:56379` | Aktif entity, projection, indeks, stream, lease ve telemetry verileri |
+| PostgreSQL 16 | `127.0.0.1:55432` | Kalıcı doğruluk kaynağı |
+
+### 3. API'yi demo profiliyle başlat
+
+Yerel şema kurulumu, seed ve ön yükleme endpoint'leri, periyodik warm ve yönetim
+ekranı için `demo` profili zorunludur.
+
+```powershell
+$env:SPRING_PROFILES_ACTIVE = "demo"
 mvn spring-boot:run
 ```
 
-3. Hazırlık durumunu kontrol et:
+Bash karşılığı:
 
 ```bash
-curl http://127.0.0.1:8091/actuator/health/readiness
+SPRING_PROFILES_ACTIVE=demo mvn spring-boot:run
 ```
 
-4. Demo verisini üret:
-
-```bash
-curl -X POST "http://127.0.0.1:8091/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
-```
-
-Endpoint, uzun süren yazma boyunca HTTP bağlantısını açık tutmaz; `202 Accepted`
-ile bir `jobId` döndürür. Redis’te ortak tutulan iş durumunu sorgula ve yalnızca
-`COMPLETED` sonucundan sonra devam et:
-
-```bash
-curl "http://127.0.0.1:8091/api/warm/jobs/<jobId>"
-```
-
-5. CacheDB yönetim ekranını aç:
-
-```text
-http://127.0.0.1:8091/cachedb-admin
-```
-
-## Ana API Akışı
-
-| Adım | Endpoint | Ana veri yolu | Ne gösterir? |
-|---|---|---|---|
-| Sağlık | `GET /actuator/health/readiness` | Çalışma zamanı kontrolü | Redis, SQL ve write-behind hazırlık özeti |
-| Veri üretme | `POST /api/demo/seed` | Sınırlı arka plan işi, toplu Redis yazma, PostgreSQL’e write-behind | Geri basınç, SQL kalıcılığı, projection yenileme ve pod’lar arası iş durumu |
-| Müşteri detay | `GET /api/customers/1?orderPreview=5` | Redis entity + sınırlı ilişki önizlemesi | Sınırlı sipariş önizlemesiyle entity detayı |
-| Sipariş listesi | `GET /api/customers/1/orders?limit=20` | Redis projection: `OrderSummary` | Tüm aggregate yüklenmeden müşteri sipariş listesi |
-| Sipariş warm/backfill | `POST /api/warm/orders/customer/1?limit=100` | PostgreSQL okuma -> Redis’e yerleştirme | Aktif veri seti ve projection yolu için açık warm/backfill |
-| Sipariş detay | `GET /api/orders/10001?linePreview=5` | Redis entity + sınırlı sipariş satırı | Sınırlı satır önizlemesiyle detay okuma |
-| Yüksek değerli sipariş | `GET /api/orders/high-value?minimumAmount=500&limit=25` | Redis ranked projection: `OrderSummary` | Global sıralı projection sorgusu |
-| Arşiv siparişleri | `GET /api/orders/archive?customerId=1&limit=20` | Doğrudan PostgreSQL sorgusu | Aynı `OrderSummary` yanıt şekliyle arşiv okuması |
-| Panel | `GET /api/dashboard/commerce?limit=25` | Redis projection + Redis entity sorgusu | Projection ve destek talebi sorgularıyla küçük panel |
-| Ayarlar | `GET /api/tuning` | Çalışma zamanı ayarları | Aktif CacheDB politikaları ve koruma eşikleri |
-
-Bu örnek “her şeyi Redis’ten oku” demek değildir. Production’da kural şudur:
-
-| İhtiyaç | BEST yol | Neden? |
-|---|---|---|
-| Operasyonel entity oluşturma veya güncelleme | CacheDB entity repository | Yazı Redis üzerinden kabul edilir, PostgreSQL’e write-behind ile kalıcılaştırılır |
-| Büyüyen listenin ilk sayfasını gösterme | `OrderSummary` kullanan projection repository | Ekran tam `OrderEntity` yerine küçük, sıralanmış özet satır okur |
-| Seçilmiş detay ekranını gösterme | Sınırlı fetch preset kullanan entity repository | Sadece seçilen aggregate ve sınırlı alt kayıt önizlemesi yüklenir |
-| Eski geçmişi veya export verisini okuma | Açık SQL yolu | Arşiv ve raporlama okumaları Redis’i şişirmemeli, SQL sorgu planı üzerinden çalışmalıdır |
-
-## Kopyala-Çalıştır Aktif Veri Seti Akışı
-
-Bu bölüm, doğru modeli baştan sona denemen için hazırlandı. Komutlar,
-uygulamanın `8091` portunda çalıştığını ve terminalde
-`sample-cache-database-postgresql` dizininde olduğunu varsayar.
-
-### Senaryo 1: SQL’deki Mevcut Kayıt Redis’e Kendiliğinden Gelmez
-
-Önce CacheDB üzerinden veri üret; böylece PostgreSQL’de kalıcı satırlar oluşsun:
-
-```bash
-curl.exe -X POST "http://127.0.0.1:8091/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
-```
-
-Dönen `jobId` değerini al, `GET /api/warm/jobs/{jobId}` endpoint’ini sorgula ve
-Redis’i temizlemeden önce `"status":"COMPLETED"` sonucunu bekle. Aksi hâlde
-seed işi ile `FLUSHDB` aynı anda çalışır.
-
-Şimdi Redis’i temizle. Bu adım, PostgreSQL’de veri olan ama Redis aktif veri
-seti boş olan mevcut sistem durumunu simüle eder:
-
-```bash
-docker compose exec redis redis-cli FLUSHDB
-```
-
-Bu Redis projection yolu artık boş liste dönebilir; çünkü aktif projection seti
-boştur:
-
-```bash
-curl.exe "http://127.0.0.1:8091/api/customers/1/orders?limit=5"
-```
-
-Açık SQL arşiv yolu ise kalıcı satırları görmeye devam eder:
-
-```bash
-curl.exe "http://127.0.0.1:8091/api/orders/archive?customerId=1&limit=5"
-```
-
-Production anlamı: entity/projection okumaları aktif veri seti okumasıdır.
-Mevcut SQL kayıtları, Redis okuma yolları çalışmadan önce açık warm/backfill
-yoluyla Redis’e alınmalıdır.
-
-### Senaryo 2: Bir Route İçin Redis Projection Warm Et
-
-Önce dry-run çalıştır. Bu çağrı PostgreSQL’den kaç satır okunacağını gösterir,
-ama Redis’i değiştirmez:
-
-```bash
-curl.exe -X POST "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&dryRun=true"
-```
-
-Her warm `POST` çağrısı `202` ve bir `jobId` döner. Job `COMPLETED` durumuna
-gelmeden hedef okuma yolunu çalıştırma:
+### 4. Hazırlık durumunu kontrol et
 
 ```powershell
-$job = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&projectionOnly=true"
+Invoke-RestMethod http://127.0.0.1:8091/actuator/health/readiness
+```
+
+Durum `UP` olmadan ilerleme. Readiness; Redis, PostgreSQL ve write-behind
+durumunu birlikte değerlendirir. Liveness ise yalnızca uygulama sürecinin
+çalıştığını gösterir.
+
+### 5. Kalıcı demo verisini oluştur
+
+Seed işlemi sınırlı ve dağıtık bir iş olarak çalışır; `202 Accepted` döner. Tek
+HTTP isteğini açık tutmak yerine işi durum endpoint'inden izle:
+
+```powershell
+$seed = Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8091/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
+
 do {
     Start-Sleep -Milliseconds 250
-    $state = Invoke-RestMethod "http://127.0.0.1:8091/api/warm/jobs/$($job.jobId)"
-} while ($state.status -in @("QUEUED", "RUNNING"))
-if ($state.status -ne "COMPLETED") { throw ($state.error | ConvertTo-Json -Compress) }
+    $seedState = Invoke-RestMethod "http://127.0.0.1:8091/api/warm/jobs/$($seed.jobId)"
+} while ($seedState.status -in @("QUEUED", "RUNNING"))
+
+if ($seedState.status -ne "COMPLETED") {
+    throw ($seedState | ConvertTo-Json -Depth 8)
+}
 ```
 
-Başlatılan job, müşteri sipariş listesi için yalnızca `OrderSummary` projection’ını warm eder:
+`COMPLETED`, seed işinin tamamlandığını gösterir. Production geçişinde SQL
+kalıcılığının sağlıklı olduğunu doğrulamak için ayrıca readiness durumunu ve
+write-behind kuyruğunu izlemelisin.
 
-```bash
-curl.exe -X POST "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&projectionOnly=true"
+Seed işlemi kalıcı demo kayıtlarını oluşturur; ancak bütün Redis route'larını
+hazır kabul etmez. İlgili warm işi tamamlanıp coverage kaydı oluşmadan hızlı
+erişim listesi bilinçli olarak `503 Service Unavailable` döner. Böylece boş ya
+da eksik bir Redis penceresi, tam iş sonucu sanılmaz.
+
+### 6. Müşteri sipariş projection'ını hazırla
+
+```powershell
+$warm = Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&projectionOnly=true"
+
+do {
+    Start-Sleep -Milliseconds 250
+    $warmState = Invoke-RestMethod "http://127.0.0.1:8091/api/warm/jobs/$($warm.jobId)"
+} while ($warmState.status -in @("QUEUED", "RUNNING"))
+
+if ($warmState.status -ne "COMPLETED") {
+    throw ($warmState | ConvertTo-Json -Depth 8)
+}
 ```
 
-Artık sipariş listesi Redis projection satırlarını okur:
+### 7. Aktif yol ile arşiv yolunu karşılaştır
 
-```bash
-curl.exe "http://127.0.0.1:8091/api/customers/1/orders?limit=5"
+```powershell
+# Redis projection yolu
+Invoke-RestMethod "http://127.0.0.1:8091/api/customers/1/orders?limit=10"
+
+# Sınırlı PostgreSQL yolu
+Invoke-RestMethod "http://127.0.0.1:8091/api/orders/archive?customerId=1&limit=10"
 ```
 
-Projection-only warm, liste ve panel ekranları için doğru modeldir. Bu ekranda
-tam `OrderEntity` veri gövdesine ihtiyaç yoktur.
+### 8. Operasyon araçlarını aç
 
-### Senaryo 3: Detay Ekranı İçin Full Entity Warm Et
+- Yönetim ekranı: `http://127.0.0.1:8091/cachedb-admin`
+- Güncel ayarlar: `http://127.0.0.1:8091/api/tuning`
+- Periyodik warm durumu: `http://127.0.0.1:8091/api/warm/schedules`
 
-Seçilmiş sipariş detayı da Redis’ten okunacaksa full entity penceresini ayrıca
-warm et:
+PostgreSQL verisini silmeden yerel servisleri durdur:
 
-```bash
-curl.exe -X POST "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&projectionOnly=false"
+```powershell
+docker compose down
 ```
 
-Sonra seçilmiş detay yolu Redis entity verisini okuyabilir:
+`docker compose down -v` komutunu yalnızca yerel PostgreSQL volume'unu bilinçli
+olarak silmek istediğinde kullan.
 
-```bash
-curl.exe "http://127.0.0.1:8091/api/orders/10001?linePreview=5"
-```
+## Çalışma Zamanı Sözleşmesi
 
-Production kuralı: sadece liste var diye full entity warm etme. Full entity,
-seçilmiş detay veya command route gerçekten ihtiyaç duyuyorsa Redis’te tutulmalıdır.
+| İşlem | Ana veri yolu | Veri Redis'in dışındaysa | Kalıcılık ve güvenlik kuralı |
+| --- | --- | --- | --- |
+| `save`, update, soft delete | Önce Redis, sonra PostgreSQL write-behind | Veri kabul politikası izin veriyorsa komut Redis'e girer | `202 Accepted`, SQL commit anlamına gelmez; işlem makbuzunu ve readiness ölçümlerini izle |
+| Entity detayı | Redis entity sorgusu | Açık bir `unavailable/not-found` sonucu döner; kendiliğinden sınırsız SQL çalıştırmaz | Entity yolunu hazırla veya sınırlı source-detail yolu oluştur |
+| Büyüyen liste veya panel | Redis projection | Tam route kapsamı hazır değilse `completeItems()` çağrısı `503 Service Unavailable` döner | Aynı kapsamı hazırlayan warm işini çalıştır, `COMPLETED` durumunu bekle ve geçişten önce coverage doğrula |
+| Arşiv, dışa aktarma, denetim geçmişi | Sınırlı PostgreSQL source route | PostgreSQL'i doğrudan okur | Satır sınırı, deterministik sıralama, indeks ve timeout kullan |
+| PostgreSQL'deki mevcut kayıt | Warm/backfill PostgreSQL'den okur ve Redis'i doldurur | Uygulama açılırken otomatik içe aktarma yapılmaz | Önce dry-run, ardından sınırlı warm ve coverage kontrolü yap |
+| CacheDB dışından PostgreSQL yazısı | Önce PostgreSQL değişir | Bir değişiklik akışı yoksa Redis eski kalabilir | Outbox/CDC kullan; periyodik warm olay aktarımının yerine geçmez |
 
-### Senaryo 4: Yeni Yazılar Redis’e Hemen Girer
+Aktif veri seti, veritabanının ikinci ve tam kopyası değildir. Redis belleğini;
+entity veri yükleri, projection'lar, indeksler, stream durumu, lease kayıtları ve
+operasyon metadata'sıyla birlikte hesaplamalısın.
 
-CacheDB üzerinden müşteri oluştur:
+## Kod Üzerinden Akış
 
-```bash
-curl.exe -X POST "http://127.0.0.1:8091/api/customers" -H "Content-Type: application/json" -d '{"customerId":9001,"taxNumber":"TAX-9001","customerType":"RETAIL","segment":"VIP","status":"ACTIVE"}'
-```
+### 1. Entity: kalıcı veri şekli
 
-CacheDB üzerinden sipariş oluştur:
-
-```bash
-curl.exe -X POST "http://127.0.0.1:8091/api/orders" -H "Content-Type: application/json" -d '{"orderId":90010001,"customerId":9001,"orderAmount":725.50,"currencyCode":"USD","orderType":"EXPRESS","status":"PAID","lineCount":0}'
-```
-
-Redis projection yolunu oku:
-
-```bash
-curl.exe "http://127.0.0.1:8091/api/customers/9001/orders?limit=5"
-```
-
-Seçilmiş Redis entity detayını oku:
-
-```bash
-curl.exe "http://127.0.0.1:8091/api/orders/90010001?linePreview=5"
-```
-
-Production anlamı: CacheDB yazma yolları Redis’i önce doldurur, kalıcı satırı
-PostgreSQL’e write-behind ile taşır. Mevcut SQL kayıtları warm ister; yeni
-CacheDB yazıları ayrıca warm gerektirmez.
-
-### Senaryo 5: Arşiv ve Export SQL’de Kalır
-
-Eski geçmiş, export, audit ve tek seferlik arama için açık SQL yolunu kullan:
-
-```bash
-curl.exe "http://127.0.0.1:8091/api/orders/archive?customerId=1&beforeOrderDate=9999999999999&beforeOrderId=9999999999999&limit=20"
-```
-
-Arşiv ihtiyacını Redis aktif veri setini tüm tabloyu kapsayacak kadar büyüterek
-çözmeye çalışma. Bu yaklaşım Redis’i ikinci bir arşiv veritabanına çevirir.
-
-### Kopyala-Çalıştır Deklaratif Uygulama
-
-Uygulama yalnızca modeli ve sorgu yollarının sınırlarını tanımlar. CacheDB tip güvenli erişim katmanını üretir; Spring Boot da JDBC yükleyicilerini otomatik kaydeder.
-
-#### 1. Entity ve sınırlı sorguyu tanımla
+[`OrderEntity`](src/main/java/com/example/cachedb/sample/domain/OrderEntity.java),
+SQL kolonlarını, Redis namespace'ini, bölümlenmiş indeksi ve sınırlı ilişkiyi
+tanımlar:
 
 ```java
 @CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
@@ -500,229 +346,6 @@ public class OrderEntity {
     @CacheColumn("order_date")
     public Long orderDate;
 
-    @CacheColumn("order_amount")
-    public BigDecimal orderAmount;
-
-    @CacheColumn("status")
-    public String status;
-
-    @CacheProjectionDefinition("orderSummary")
-    public static EntityProjection<OrderEntity, OrderSummary, Long> orderSummaryProjection() {
-        return OrderSummaryProjection.PROJECTION;
-    }
-
-    @CacheNamedQuery("customerTimeline")
-    @CacheRoute(
-            value = "customer-order-timeline",
-            projection = "orderSummary",
-            pageSize = 100,
-            hotWindow = 1_000,
-            maxColdReadSize = 500,
-            memoryBudgetBytes = 16_777_216
-    )
-    public static QuerySpec customerTimelineQuery(long customerId, int limit) {
-        return QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
-                .limitTo(limit);
-    }
-}
-```
-
-Sorgunun adı, üst sınırı, partition indeksi ve route sözleşmesi bellidir.
-Controller çalışma anında sınırsız sorgu üretmez; projection zorunlu bir yolu
-tam entity sorgusuna düşüremez.
-
-#### 2. Projection serileştirmesini record üzerinden üret
-
-```java
-@CacheProjectionRecord(
-        source = OrderEntity.class,
-        id = "orderId",
-        name = "order-summary",
-        rankedBy = {"order_date", "priority_score"},
-        refresh = CacheProjectionRecord.Refresh.ASYNC
-)
-public record OrderSummary(
-        Long orderId,
-        Long customerId,
-        Long orderDate,
-        BigDecimal orderAmount,
-        String currencyCode,
-        String orderType,
-        String status,
-        Integer lineCount,
-        Double priorityScore
-) {
-}
-```
-
-Processor, `OrderSummaryProjectionSchema` ve `OrderSummaryProjection` sınıflarını
-reflection kullanmadan üretir. Entity dönüşümü, sıralama alanları ve yenileme modu
-da annotation’dan gelir. Record tanımı Redis serileştirmesi ve sorgu indeks
-kolonları için tek doğruluk kaynağıdır.
-
-#### 3. Her entity için policy değerlerini yapılandırmaya koy
-
-```yaml
-cachedb:
-  registration:
-    source: jdbc
-    fail-on-unknown-entity: true
-    entities:
-      OrderEntity:
-        hot-entity-limit: 100000
-        page-size: 100
-        entity-ttl-seconds: 0
-        page-ttl-seconds: 60
-        hot-policy:
-          mode: COMPOSITE
-          composite-operator: ANY
-          children:
-            - mode: TIME_WINDOW
-              time-column: order_date
-              hot-for-seconds: 7776000
-            - mode: STATE_WINDOW
-              state-column: status
-              state-values: [NEW, PAID, PICKING, OPEN, PENDING]
-```
-
-CacheDB başlangıçta iki aşama çalıştırır. Önce her entity kendi policy değeri ve JDBC kaynağıyla kaydedilir; sonra ilişki ve sayfa yükleyicileri bağlanır. Böylece ana entity’nin policy değeri yanlışlıkla alt entity’ye taşınmaz. Entity adı hatalıysa uygulama başlangıçta durur.
-
-#### 4. Tek bir Spring domain bean’i üret
-
-```java
-@CacheDomain(spring = true)
-package com.example.cachedb.sample.domain;
-```
-
-Bu tanımı `domain/package-info.java` dosyasına koy. Processor, Spring
-configuration sınıfını ve değişmez `GeneratedCacheModule.Scope` bean’ini üretir;
-repository veya projection bean’lerini elle bağlamak gerekmez.
-
-#### 5. Uygulama kodunda generated DSL’i kullan
-
-```java
-@Service
-public final class CustomerApplicationService {
-    private final GeneratedCacheModule.Scope domain;
-
-    public CustomerApplicationService(GeneratedCacheModule.Scope domain) {
-        this.domain = domain;
-    }
-
-    public List<OrderSummary> orderTimeline(long customerId, int limit) {
-        return domain.orders().queries().customerTimelineProjection(customerId, limit);
-    }
-}
-```
-
-Controller HTTP girdisini doğrular ve bu servise yönlendirir. İki katman da
-`EntityRegistry`, Redis anahtarları, codec, JDBC loader veya projection
-implementasyon ayrıntılarını bilmez.
-
-#### 6. Tip güvenli planla ön yükleme yap
-
-```java
-@Service
-public class CustomerOrderWarmService {
-    private final CacheDatabase cacheDatabase;
-    private final GeneratedCacheModule.Scope domain;
-
-    public CustomerOrderWarmService(CacheDatabase cacheDatabase, GeneratedCacheModule.Scope domain) {
-        this.cacheDatabase = cacheDatabase;
-        this.domain = domain;
-    }
-
-    public CacheWarmResult dryRun(long customerId, int limit) {
-        return cacheDatabase.dryRun(plan(customerId, limit));
-    }
-
-    public CacheWarmResult warmProjection(long customerId, int limit) {
-        return cacheDatabase.warmProjections(plan(customerId, limit));
-    }
-
-    public CacheWarmResult warmEntityAndProjection(long customerId, int limit) {
-        return cacheDatabase.warm(plan(customerId, limit));
-    }
-
-    private CacheWarmPlan plan(long customerId, int limit) {
-        return domain.orders().queries().customerTimelineWarmPlan(customerId, limit);
-    }
-}
-```
-
-Değişiklik yapmadan önce `dryRun`, liste ve dashboard yolları için `warmProjections`, aynı aralıkta tam entity detayı da gerekiyorsa `warm` kullan. HTTP üzerinden başlatılan ön yükleme işi asenkron ve sınırlı kalmalıdır.
-
-#### 7. Arşiv ve geçmiş sorgularını açık SQL yolu olarak bırak
-
-CacheDB, Redis’te bulunamayan her kayıt için sınırsız veritabanı sorgusu çalıştırmaz. Eski geçmiş, dışa aktarım ve denetim sorguları indeksli ve açık SQL yollarında kalır. Keyset pagination ve kesin bir sayfa üst sınırı kullan.
-
-| Sorgu yolu | Redis entity | Redis projection | PostgreSQL |
-|---|---:|---:|---:|
-| Müşteri sipariş listesi | Hayır | Evet | Yalnızca ön yükleme sırasında |
-| Seçilmiş güncel sipariş detayı | Evet | İsteğe bağlı | Yalnızca açık eski-detay yolunda |
-| Sipariş oluşturma/güncelleme | Policy sonucuna bağlı | Tanımlıysa yenilenir | Write-behind ile kalıcılaştırılır |
-| Arşiv/dışa aktarım | Hayır | Hayır | Evet |
-
-## Bu README’de Geçen Temel Terimler
-
-| Terim | Bu örnekteki anlamı | Somut karşılığı |
-|---|---|---|
-| Entity | Bir SQL tablosuna ve Redis namespace’ine bağlanan tam komut/detay modeli | `OrderEntity` |
-| Generated binding | Derleme sırasında üretilen metadata, sorgu, fetch preset, komut ve projection kodu | `OrderEntityCacheBinding` |
-| Generated domain module | Uygulama servislerinin kullandığı, paket düzeyindeki tek tip güvenli giriş noktası | `GeneratedCacheModule.Scope` |
-| Projection | Tam aggregate yerine liste veya dashboard için kullanılan küçük okuma modeli | `OrderSummary` |
-| Projection şeması | Üretilen, reflection kullanmayan payload ve indeks kolonu sözleşmesi | `OrderSummaryProjectionSchema.SCHEMA` |
-| Adlandırılmış route | Sorgu, projection ve kaynak sınırlarını birlikte taşıyan sözleşme | `customerTimelineProjection(...)` |
-| Fetch preset | Detay ekranında hangi ilişkinin kaç satır yükleneceğini belirleyen tanım | `linePreview(...)` |
-| Policy kataloğu | Her entity’ye ayrı etkin veri ve boyut kuralı atayan YAML haritası | `cachedb.registration.entities` |
-| Warm plan | `@CacheRoute` tanımından üretilen sınırlı JDBC-Redis ön yükleme sözleşmesi | `customerTimelineWarmPlan(...)` |
-| Write-behind | Komutun önce Redis tarafından kabul edilmesi, SQL kalıcılığının asenkron tamamlanması | `202 Accepted`, worker metrikleri |
-| Guardrail | Aşırı sonuç boyutunu veya bellek baskısını reddeden kesin sınır | API, sorgu şekli ve Redis sınırları |
-
-## Katman Katman Mimari
-
-| Katman | Ana dosyalar | Sorumluluk | Kural |
-|---|---|---|---|
-| API | `web/*Controller.java` | HTTP girdisini doğrular ve uygulama servisine yönlendirir | Sınırsız liste açma |
-| Uygulama | `application/*Service.java` | Use case akışını, veri kaynağı seçimini ve yazma makbuzunu yönetir | Redis/SQL kararlarını controller’a taşıma |
-| Domain tanımı | `domain/*Entity.java` | SQL mapping, sorgu, ilişki, fetch preset ve komutlar | Sözleşmeleri açık ve derleme zamanında üretilebilir tut |
-| Okuma modeli | `readmodel/*.java` | Küçük projection record’ları ve üretilmiş entity dönüşümü | Büyüyen veya genel sıralı listelerde projection kullan |
-| Domain erişimi | `domain/package-info.java` | Paket için tek Spring scope bean’ini üretir | `@CacheDomain(spring = true)` kullan |
-| Ön yükleme servisi | `SampleWarmBackfillService.java` | Üretilmiş route planını ve dry-run/projection/full modunu seçer | İşi sınırla, HTTP çalıştırmasını asenkron tut |
-| Kalıcı veri sorgusu | Üretilen `...Source(...)` route metotları | Eski geçmişi ve dışa aktarımı indeksli SQL’den okur | Keyset pagination ve kesin üst sınır kullan |
-| Runtime policy | `application.yml` | Entity bazlı etkin veri kuralı ve JDBC kaydı | Bilinmeyen entity adında başlangıcı durdur |
-| Platform ayarı | `SampleCacheDbTuningConfig.java` | Thread, kuyruk, timeout, bellek ve write-behind sınırları | Ölçülmüş yüke göre ayarla |
-
-### API Katmanı: ORM’e Gitmeden Önce İsteği Sınırla
-
-```java
-int safeLimit = ApiLimits.requireInRange("limit", limit, 1, 1_000);
-return customers.orderTimeline(customerId, safeLimit);
-```
-
-### Deklaratif Domain Erişimi: Tek Bean, Repository Wiring Yok
-
-```java
-@CacheDomain(spring = true)
-package com.example.cachedb.sample.domain;
-```
-
-Spring Boot generated registrar sınıflarını bulur ve uygulama bean’i oluşturulmadan önce YAML policy değerlerini uygular. Uygulama kodu binding’leri elle kaydetmez.
-
-### Entity Katmanı: SQL Mapping ve Cache Mapping Açık Tanımlıdır
-
-`OrderEntity`; tabloyu, Redis namespace’ini, primary key’i, kolonları, ilişkiyi, named query’leri ve projection’ı tanımlar:
-
-```java
-@CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
-public class OrderEntity {
-    @CacheId(column = "order_id")
-    public Long orderId;
-
-    @CacheColumn("customer_id")
-    public Long customerId;
-
     @CacheRelation(
             target = OrderLineEntity.class,
             mappedBy = "orderId",
@@ -736,67 +359,15 @@ public class OrderEntity {
 }
 ```
 
-Bu gizli bir mekanizma değildir. Tablo ve kolon tanımı CacheDB’ye entity’nin nasıl yazılıp okunacağını söyler. Relation metadata’sı ise fetch plan istendiğinde Java nesne grafiğinin nasıl bağlanacağını söyler.
+Veritabanındaki foreign key kalıcı ilişki bütünlüğünü korur.
+`@CacheRelation` ise CacheDB'ye ilişkinin nasıl ve hangi sınırla yükleneceğini
+söyler. Biri olmadan diğeri teknik olarak bulunabilir; canlı ortam modelinde
+çoğunlukla ikisine de ihtiyaç vardır.
 
-### Relation Modeli: Foreign Key ve `@CacheRelation` Farklı İşleri Çözer
+### 2. Projection: ekranın ihtiyacı olan şekil
 
-Veritabanındaki foreign key veri bütünlüğünü korur:
-
-```sql
-customer_id BIGINT NOT NULL REFERENCES sample_customers(customer_id)
-```
-
-`@CacheRelation` uygulamanın okuma şeklini tanımlar:
-
-```java
-@CacheRelation(
-        target = OrderEntity.class,
-        mappedBy = "customerId",
-        kind = CacheRelation.RelationKind.ONE_TO_MANY,
-        batchLoadOnly = true,
-        maxRowsPerParent = 25,
-        parentBatchSize = 16,
-        orderBy = "orderDate DESC, orderId DESC"
-)
-public List<OrderEntity> orders;
-```
-
-Doğru yorum şu şekildedir:
-
-| Durum | Davranış |
-|---|---|
-| Foreign key var ve `@CacheRelation` var | SQL bütünlüğü korur, CacheDB istenirse object graph yükler |
-| Foreign key var ama `@CacheRelation` yok | SQL doğru kalır, fakat CacheDB Java child koleksiyonunu otomatik doldurmaz |
-| `@CacheRelation` var ama foreign key yok | CacheDB eşleşen kolonla sorgu yapabilir, fakat SQL orphan kayıtları engellemez |
-| İkisi de yok | Sadece açık child sorguları kullanılmalı; ORM tarzı relation beklenmemeli |
-
-Production önerisi: ikisini birlikte kullan. Foreign key doğruluk içindir; `@CacheRelation` ve fetch preset kontrollü nesne grafiği yüklemek içindir.
-
-### Fetch Preset: Detay Ekranı Tam Aggregate Değil, Önizleme Alır
-
-`CustomerEntity` küçük bir sipariş önizlemesi sunar:
-
-```java
-@CacheFetchPreset("ordersPreview")
-public static FetchPlan ordersPreviewFetchPlan(int orderLimit) {
-    return FetchPlan.of("orders").withRelationLimit("orders", Math.max(1, orderLimit));
-}
-```
-
-`CustomerController.detail`, üretilen fetch yüzeyini kullanır:
-
-```java
-return domain.customers().fetches()
-        .ordersPreview(ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25))
-        .findById(customerId)
-        .orElseThrow(...);
-```
-
-Yani detay ekranı “son 5 siparişi” gösterebilir; ama müşterinin tüm tarihsel siparişlerini ve tüm satırlarını tek yanıtta yüklemez.
-
-### Projection Katmanı: Büyüyen Listeler `OrderSummary` Kullanır
-
-Sipariş listesi ve yüksek değerli sipariş ekranı tam `OrderEntity` yerine `OrderSummary` kullanır:
+[`OrderSummary`](src/main/java/com/example/cachedb/sample/readmodel/OrderSummary.java),
+`OrderEntity`'den küçüktür ve sipariş satırı veri yüklerini içermez:
 
 ```java
 @CacheProjectionRecord(
@@ -820,412 +391,297 @@ public record OrderSummary(
 }
 ```
 
-Böylece Redis içinde liste satırları küçük kalır. Tam entity hâlâ detay ekranı için vardır; fakat liste ekranı tam aggregate yükleme maliyetini ödemez.
+Komut ve seçilmiş detay için entity; liste, zaman çizelgesi, panel, top-N ve
+global sıralı yol için projection kullan.
 
-## Uçtan Uca OrderSummary Örneği
+### 3. Repository: yol sözleşmesi
 
-`OrderSummary`, müşteri sipariş listesi ve sıralı sipariş ekranları için kullanılan okuma modelidir. Sipariş satırlarını, müşteri detayını ve denetim geçmişini bilerek içermez.
-
-1. `OrderEntity`, `@CacheProjectionDefinition("orderSummary")` tanımını yapar.
-2. `@CacheProjectionRecord`, derleme sırasında `OrderSummaryProjectionSchema` ve `OrderSummaryProjection` sınıflarını üretir.
-3. Annotation; kaynak entity’yi, kimlik alanını, sıralama alanlarını ve yenileme modunu tanımlar.
-4. Ön yükleme kodu üretilmiş `customerTimelineWarmPlan(...)` metodunu kullanır.
-5. Processor, sorguyu doğru projection’a bağlayan katı route metodunu üretir.
+[`OrderRepository`](src/main/java/com/example/cachedb/sample/repository/OrderRepository.java)
+yolu tanımlar; implementasyonu processor üretir:
 
 ```java
-return domain.orders().queries().recentHighValueOrdersProjection(minimumAmount, safeLimit);
-```
+@CacheRepository(entity = OrderEntity.class)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
-Yanıt doğrudan ekranın ihtiyacı olan şekildedir. Arka planda tam entity yüklenmez; aynı şema Redis serileştirmesini ve indeks kolonlarını yönetir.
+    @HotRoute(
+            value = "customer-order-timeline",
+            projection = OrderSummary.class,
+            pageSize = 100,
+            hotWindow = 1_000,
+            memoryBudgetBytes = 16_777_216L,
+            coverageScopeParameter = "customerId"
+    )
+    @CacheRouteQuery(
+            predicates = @CachePredicate(field = "customerId", parameter = "customerId"),
+            orderBy = {
+                    @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
+                    @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
+            },
+            windowParameter = "window"
+    )
+    HotWindow<OrderSummary> customerTimeline(long customerId, WindowRequest window);
 
-## Sorgu Akışı: Redis mi PostgreSQL mi?
-
-Bu örnek artık iki yolu da açık gösterir. Sık kullanılan operasyonel okumalar CacheDB/Redis üzerinden gider. Arşiv okumaları doğrudan PostgreSQL üzerinden yapılır.
-
-| Çağrı | İlk çalışma yolu | PostgreSQL ne zaman kullanılır? | Redis davranışı | Neden? |
-|---|---|---|---|---|
-| `POST /api/customers` | `domain.customers().saveWithReceipt(...)` | Write-behind satırı arka planda kalıcılaştırır | Policy kabul ederse entity Redis’e girer; receipt kabul edilen sürümü taşır | Açık kalıcılık takibi olan normal komut yolu |
-| `POST /api/orders` | Uygulama servisi kalıcı müşteri referansını alır ve `saveAfter(...)` çağırır | Bekleyen makbuz kullanılır veya indeksli tek kaynak sorgusuyla ana kayıt doğrulanır; worker bağımlılık sırasını korur | Policy kabul ederse sipariş Redis’e girer ve bağımlılık bilgisi yazma komutuyla taşınır | İstek thread’ini bekletmeden foreign key sırasını korur |
-| `PATCH /api/orders/{id}/status` | `findVersionedById`, ardından `save(entity, expectedVersion)` | Kazanan sürüm arka planda kalıcılaştırılır | Redis compare-and-set, eski sürümle gelen eş zamanlı güncellemeyi reddeder | Kayıp güncellemeyi önler |
-| `GET /api/customers/{id}/orders` | `customerTimelineProjection(...)` | Aktif liste yolunda kullanılmaz | Partition edilmiş Redis projection indeksini okur | Entity fallback olmadan hızlı müşteri sipariş listesi |
-| `GET /api/orders/high-value` | `recentHighValueOrdersProjection(...)` | Aktif liste yolunda kullanılmaz | Sıralı Redis projection verisini okur | Hızlı genel sıralı iş listesi |
-| `GET /api/orders/{id}` | `linePreview` fetch preset ile `domain.<entity>().findById(...)` | Bu örnek endpoint’i Redis’te bulunamama durumunda SQL’e gitmez | Redis entity verisini okur, relation loader sınırlı satır sorgusunu Redis üzerinden yapar | Sık kullanılan sipariş detay ekranı |
-| `GET /api/orders/archive` | `customerOrderArchiveSource(...)` | Üretilen sınırlı kaynak sorgusu PostgreSQL’i doğrudan okur | Redis’i değiştirmez | Controller içinde SQL yazmadan arşiv/geçmiş okuması |
-| `GET /api/products/active` | `domain.products().projections().productAvailability()` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis projection sorgusu | Küçük katalog listesi |
-| `GET /api/tickets/open` | `domain.<entity>().queries()` | Bu örnek endpoint’inde kullanılmaz | Sınırlı Redis entity sorgusu | Operasyon kuyruğu |
-| `GET /api/dashboard/commerce` | Projection sorgusu + destek talebi entity sorgusu | Bu örnek endpoint’inde kullanılmaz | Redis projection ve Redis entity sorgusunu birleştirir | Panel ilk ekranı |
-
-Önemli kural: CacheDB repository okumaları, Redis’te bulunamayan her kayıt için otomatik veritabanı taraması yapacak anlamına gelmez. Bu örnekte `domain.<entity>().findById(...)` ve normal `query(...)` yolları Redis/aktif veri seti yollarıdır. Arşiv veya tam geçmiş okuması gerekiyorsa bunu açık SQL yolu olarak tasarla. Bu örnekteki arşiv yolu:
-
-```java
-@GetMapping("/archive")
-public List<OrderSummary> archiveFromSql(
-        @RequestParam long customerId,
-        @RequestParam(required = false) Long beforeOrderDate,
-        @RequestParam(required = false) Long beforeOrderId,
-        @RequestParam(defaultValue = "100") int limit
-) {
-    return domain.orders().queries()
-            .customerOrderArchiveSource(customerId, upperBound, upperId, safeLimit)
-            .stream()
-            .map(OrderSummaryProjection::fromEntity)
-            .toList();
+    @WarmRoute(
+            value = "warm-customer-order-timeline-projection",
+            from = "customerTimeline",
+            maxRows = 1_000,
+            maxRowsParameter = "maxRows",
+            coverageScopeParameter = "customerId",
+            projectionsOnly = true
+    )
+    CacheWarmPlan warmCustomerTimelineProjection(long customerId, int maxRows);
 }
 ```
 
-Üretilen kaynak route’u aynı sınırlı `QuerySpec` tanımını PostgreSQL dialect’i
-üzerinden çalıştırır. Controller aynı yanıt modelini korur; SQL metni, row mapper
-veya Redis hydration yan etkisi taşımaz.
+Yol sözleşmesi; sayfa boyutunu, aktif pencereyi, bellek bütçesini, sıralamayı,
+coverage kapsamını ve warm sınırını tek yerde görünür kılar.
 
-Production’da karar şu şekilde verilmelidir:
+### 4. Uygulama servisi: iş akışının yönetimi
 
-| Ekran tipi | Redis/CacheDB kullan | PostgreSQL kullan |
-|---|---|---|
-| İlk sayfa zaman çizelgesi | Evet, projection | Hayır |
-| Yüksek değerli global liste | Evet, ranked projection | Hayır |
-| Seçilmiş aktif sipariş detayı | Evet, sınırlı ilişki önizlemeli entity detayı | Sadece açık eski-kayıt detay yolu tasarlarsan |
-| Eski arşiv/geçmiş sayfası | Bilinçli ısıtılmadıysa hayır | Evet, sınırlandırılmış SQL sorgusu |
-| Export/raporlama işi | Genelde hayır | Evet, batch/raporlama yolu |
-| Geçiş ısıtma/backfill | Seçilen aktif veri seti Redis’e yazılır | Kaynak satırlar PostgreSQL’den okunur |
-
-## Bu Örnekteki Gerçek Hayat Senaryoları
-
-| Senaryo | Endpoint | CacheDB şekli | Neden bu şekil? |
-|---|---|---|---|
-| Müşteri sipariş geçmişini açar | `GET /api/customers/{id}/orders?limit=20` | `OrderSummary` projection sorgusu | Büyüyen liste, küçük veri gövdesi, sabit sıralama |
-| Kullanıcı tek sipariş açar | `GET /api/orders/{id}?linePreview=5` | Entity detay ve sınırlı relation önizlemesi | Detay daha fazla veri ister, fakat yine de tüm satırları zorla yüklemez |
-| Operasyon yüksek değerli siparişlere bakar | `GET /api/orders/high-value?minimumAmount=500&limit=25` | Ranked projection sorgusu | Global sıralı ekran tam entity taramamalı |
-| Kullanıcı eski geçmişi açar | `GET /api/orders/archive?customerId=1&limit=20` | `OrderSummary` dönen doğrudan PostgreSQL sorgusu | Arşiv okuması özellikle istenmedikçe Redis’i kirletmemeli |
-| Kategoriye göre ürün listesi | `GET /api/products/active?category=electronics&limit=20` | Named entity query | Küçük ve sınırlı katalog yolu entity query için uygundur |
-| Destek kuyruğu | `GET /api/tickets/open?limit=25` | Durum indeksli named entity query | Operasyon kuyruğu sınırlı ve filtrelidir |
-| Ticaret paneli | `GET /api/dashboard/commerce?limit=25` | Projection ve destek talebi entity sorgusu | Panel küçük, önceden şekillenmiş okuma modellerini birleştirir |
-| Müşteri oluşturma | `POST /api/customers` | Entity save | Redis-first yazma, SQL’e arka plan yazma |
-| Sipariş oluşturma | `POST /api/orders` | FK hazırlık kontrolüyle entity save | Child kayıt, parent SQL’de kalıcı olana kadar bekler |
-| Sipariş durum güncelleme | `PATCH /api/orders/{id}/status` | Entity oku, nesneyi değiştir, kaydet | Partial update açık tam entity kaydı olarak uygulanır |
-| Sipariş silme | `DELETE /api/orders/{id}` | Repository delete | Aktif cache kaydını kaldırır ve kalıcı delete işini sıraya alır |
-
-## İlk Gün Kullanımı ve Yük Büyüdükçe Yapılacaklar
-
-| Aşama | Veri şekli | Yapılacak iş |
-|---|---|---|
-| İlk gün yerel demo | 20 müşteri, müşteri başına 40 sipariş, sipariş başına 4 satır | Veri üretmeyi çalıştır, API cevaplarını incele, yönetim ekranını aç, generated binding mantığını öğren |
-| İlk staging denemesi | Binlerce müşteri, gerçeğe yakın sipariş dağılımı | API limitlerini projection penceresinin altında tut, SQL indekslerini doğrula, projection gecikmesini izle |
-| Trafik artışı | Çok sayıda müşteri sürekli sipariş listesi açar | Redis `maxmemory` değerini artır, `hotEntityLimit` değerini bellek bütçesine göre ayarla, listeyi projection’da tut |
-| Büyük müşteri yayılımı | Bazı müşterilerde binlerce sipariş oluşur | `Customer -> tüm Orders` yükleme; `OrderSummary` zaman çizelgesi ve açık sipariş detayı kullan |
-| Panel büyümesi | Global sıralı ve KPI ekranları artar | Tam entity tekrar kullanmak yerine okuma yoluna özel projection ekle |
-| Çok podlu çalışma | Birden fazla uygulama container’ı çalışır | Pod’a özel consumer name ve leader lease ayarlarını açık tut |
-
-## Tuning Rehberi
-
-Önce örnekteki ayarlarla başla, sonra ölçüme göre değiştir:
-
-| Sinyal | Nereden bakılır? | Aksiyon |
-|---|---|---|
-| Redis belleği hızlı büyüyor | Yönetim ekranı, Redis `INFO memory`, `/api/tuning` | Aktif pencereyi daralt, aktif veri politikasını sıkılaştır, projection veri gövdesini küçült |
-| Sipariş listesi yavaş | API gecikmesi ve okuma yolu etiketi | Yolun entity fallback değil `projection:order-summary` kullandığını doğrula |
-| SQL okuma yükü artıyor | SQL metrikleri, yavaş sorgu kayıtları | Tekrarlanan liste ekranlarını projection’a taşı, okuma yolu indekslerini ekle |
-| Write-behind backlog büyüyor | Yönetim ekranındaki write-behind bölümü | Worker/batch ayarını dikkatli artır, SQL lock durumunu incele, backpressure uygula |
-| Projection gecikmesi büyüyor | Yönetim ekranındaki projection telemetrisi | Yenileme baskısını azalt veya projection’ları okuma yolu bazında ayır |
-| Yanıt veri gövdesi büyüyor | API yanıt boyutu | Controller limitini düşür, detay için ayrı takip çağrısı kullan |
-
-Örneğin temel tuning kodu:
+[`CustomerApplicationService`](src/main/java/com/example/cachedb/sample/application/customer/CustomerApplicationService.java),
+Redis client'ı veya generated binding sınıfı yerine interface kullanır:
 
 ```java
-CachePolicy.builder()
-        .hotEntityLimit(5_000)
-        .pageSize(100)
-        .entityTtlSeconds(0)
-        .pageTtlSeconds(120)
-        .compositeHotPolicy(EntityHotPolicyCompositeOperator.ANY, List.of(
-                EntityHotPolicy.timeWindow("order_date", 90L * 24L * 60L * 60L),
-                EntityHotPolicy.stateWindow("status", List.of("ACTIVE", "NEW", "PAID", "PICKING", "OPEN", "PENDING")),
-                EntityHotPolicy.stateWindow("active_status", List.of("ACTIVE"))
-        ))
-        .build()
+@Service
+public final class CustomerApplicationService {
+    private final CustomerRepository customers;
+    private final OrderRepository orders;
+
+    public CustomerEntity detail(long customerId, int orderPreview) {
+        return SampleHotLookups.require(
+                "Customer",
+                customerId,
+                customers.detail(customerId, orderPreview)
+        );
+    }
+
+    public List<OrderSummary> orderTimeline(long customerId, int limit) {
+        return orders.customerTimeline(customerId, WindowRequest.first(limit)).completeItems();
+    }
+}
 ```
 
-Bu politika şunu söyler: kayıt son 90 günlük iş penceresindeyse veya operasyonel olarak aktifse aktif veri setinde kalabilir. Bu yaklaşım “en son okunan neyse onu cache’le” davranışından daha gerçekçidir.
+Controller HTTP girdisini doğrular. Uygulama servisi kullanım senaryosunu
+yönetir. Repository interface'i veri yolu sözleşmesini taşır. Generated kod;
+serileştirme, indeks ve veritabanı sağlayıcısı bağlantısını üstlenir.
 
-## SampleCacheDbTuningConfig Referansı
+## Mevcut Veriyi Hazırlama
 
-`SampleCacheDbTuningConfig`, bu örneğin tüm CacheDB tuning ayarlarını topladığı sınıftır. Küçük görünür, fakat her satırı Redis belleği, SQL yazma baskısı, okuma limiti veya production güvenliği üzerinde etkilidir.
+PostgreSQL'deki mevcut satırlar uygulama açılırken otomatik olarak Redis'e
+aktarılmaz. Mevcut sistemden geçerken şu sırayı izle:
 
-### ResourceLimits
+1. Sınırlı bir `@HotRoute` veya `@CacheLookup` tanımla.
+2. Aynı yol için `@WarmRoute` ekle.
+3. `dryRun=true` çalıştır ve aday satır sayısını incele.
+4. Gerçek warm işini gönder ve `COMPLETED` durumuna kadar izle.
+5. Route coverage ile PostgreSQL üyelik/sıralama karşılaştırmasını doğrula.
+6. Trafiği kademeli aç ve PostgreSQL geri dönüş yolunu koru.
 
-| Parametre | Örnek değer | Anlamı | Ne zaman değiştirilir? |
-|---|---:|---|---|
-| `defaultCachePolicy` | özel `CachePolicy` | Entity özelinde başka policy verilmemişse Redis kabul, Redis’te kalma, TTL ve sayfa davranışını belirleyen varsayılan politikadır. | Önce okuma yolu sözleşmelerini ve Redis bellek bütçesini netleştir; sonra değiştir. |
-| `maxRegisteredEntities` | `64` | Bu CacheDB runtime içinde izin verilen maksimum entity metadata kayıt sayısıdır. Yanlış package scan veya beklenenden büyük model yüzeyini erken yakalar. | Uygulamada gerçekten daha fazla CacheDB entity varsa artır. Kontrolsüz taramayı saklamak için artırma. |
-| `maxColumnsPerOperation` | `64` | Tek generated operasyonun işleyebileceği maksimum kolon sayısıdır. Çok geniş entity ve beklenmeyen veri gövdesi büyümesine karşı koruma sağlar. | Sadece ölçülmüş, bilinçli geniş entity için artır. Şişen tabloları mümkünse projection veya ayrı okuma modeliyle sadeleştir. |
+Dry-run örneği:
 
-### Varsayılan CachePolicy
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8091/api/warm/orders/customer/1?limit=100&projectionOnly=true&dryRun=true"
+```
 
-| Parametre | Örnek değer | Anlamı | Production önerisi |
-|---|---:|---|---|
-| `hotEntityLimit` | `5_000` | Varsayılan policy için Redis’te tutulabilecek aktif tam entity penceresinin kaba sınırıdır. | Ortalama entity boyutu + indeks maliyeti x beklenen aktif satır hesabıyla belirle. Büyük liste ekranları için bunu büyütme; projection kullan. |
-| `pageSize` | `100` | Çağıran taraf daha küçük limit vermediyse kullanılan varsayılan sayfa/sorgu boyutudur. | Gerçek UI sayfa boyutuna yakın tut. Bir ekran sürekli daha fazlasını istiyorsa projection yolu tasarla. |
-| `entityTtlSeconds` | `0` | Tam entity key’leri TTL ile düşmez. Redis’te kalma davranışı süre dolmasına değil policy’ye bağlıdır. | Kalıcı iş entity’leri için doğru başlangıçtır. Pozitif TTL’i sadece yeniden üretilebilir geçici veride kullan. |
-| `pageTtlSeconds` | `120` | Cache’lenen sayfa/sorgu sonucunun TTL değeridir; bu örnekte iki dakikadır. | Kısa tut. Sayfa sıralaması bayatlayabilir; projection satırı sayfa cache’inden daha uzun yaşayabilir. |
-| `compositeHotPolicy(ANY, ...)` | `ANY` | Alt policy’lerden biri eşleşirse kayıt Redis’e kabul edilebilir. Bu örnekte yakın tarihli sipariş OR operasyonel durum OR aktif ürün/durum alanı kullanılır. | Operasyonel sistemlerde pratik bir başlangıçtır ama fazla veri kabul edebilir. `ALL` gibi daha sıkı seçimleri staging bellek ölçümüyle doğrula. |
-| `timeWindow("order_date", 90 gün)` | `90 gün` | `order_date` son 90 gün içindeyse kayıt Redis’te kalabilir. | İş penceresine göre ayarla. Örneğin faturalama 13 ay isteyebilir; destek kuyruğu birkaç gün isteyebilir. |
-| `stateWindow("status", ACTIVE/NEW/PAID/PICKING/OPEN/PENDING)` | aktif operasyon durumları | Kayıt operasyonel olarak aktif durumdaysa zaman penceresi dışında olsa bile Redis’e girebilir. | Durum listesini küçük tut. Geniş durum kümeleri eski veriyi gereğinden fazla Redis’e alabilir. |
-| `stateWindow("active_status", ACTIVE)` | `ACTIVE` | Ürün/katalog tarzı kayıtlarda aktif kayıtların Redis’te kalmasına izin verir. | Küçük aktif kataloglarda kullan. Arşiv durumlarını bu alana koyma. |
+Liste ve panel için yalnızca projection hazırlamak en doğru seçimdir. Tam entity
+hazırlama, yalnızca seçilmiş detay veya komut yolu bütün aktif veri yüküne ihtiyaç
+duyuyorsa kullanılmalıdır.
 
-### ReadShapeGuardrailConfig
+Eski tablolarda `entity_version` değeri `NULL` veya `0` ise ilk hazırlama
+sırasında başlangıç Redis sürümü kullanılır. Bu davranış yalnızca geçişi
+kolaylaştırır; değişiklik akışının yerini tutmaz. Geçişten sonra PostgreSQL'e
+dışarıdan yazan her uygulama sürümü düzenli artırmalı ve değişikliği outbox/CDC
+ile yayımlamalıdır. Aksi durumda bir sonraki sınırlı uzlaştırma çevrimine kadar
+oluşacak gecikme bilinçli olarak kabul edilmelidir.
 
-| Parametre | Örnek değer | Anlamı | Production önerisi |
-|---|---:|---|---|
-| `enabled` | `true` | Okuma şekli korumasını açar. Büyük ve riskli sorgular sessizce pahalı çalışmak yerine reddedilir. | Production’da açık kalmalı. Kapatmak, yanlış liste çağrılarını runtime riskine çevirir. |
-| `maxEntityQueryLimit` | `250` | Tam entity sorgu yüzeyleri için maksimum satır limitidir. | Düşük tut. Entity satırları büyüktür ve relation yükünü tetikleyebilir. |
-| `maxProjectionQueryLimit` | `1_000` | Projection sorgu yüzeyleri için maksimum satır limitidir. | Entity limitinden yüksek olabilir; yine de sınırsız bırakılmamalıdır. |
-| `hotSetHeadroom` | `10` | İstenen pencereyle aktif veri seti sınırı arasında güvenlik payı bırakır. | Sorgular sık sık aktif veri seti sınırına dayanıyorsa artır. |
+### Periyodik warm ve uzlaştırma
 
-### RedisGuardrailConfig
+[`SampleScheduledWarmPlans`](src/main/java/com/example/cachedb/sample/config/SampleScheduledWarmPlans.java),
+90 günlük sipariş penceresini deklaratif olarak tanımlar. Redis lease sayesinde
+bir döngüyü yalnızca bir pod çalıştırır; diğer pod'lar güvenli biçimde bekler
+veya döngüyü atlar. Uzlaştırma, policy kapsamından çıkan kayıtları temizler.
 
-| Parametre | Örnek değer | Anlamı | Production önerisi |
-|---|---:|---|---|
-| `enabled` | `true` | Redis bellek baskısı ve runtime güvenlik kontrollerini açar. | Açık kalmalı. Redis sınırsız heap değildir. |
-| `producerBackpressureEnabled` | `true` | Redis veya write-behind baskısı arttığında producer tarafını yavaşlatır. | Ani yazma yüklerinde sistemi büyüyen kuyrukla boğmamak için açık tut. |
-| `usedMemoryWarnMaxmemoryPercent` | `75` | Redis `used_memory / maxmemory` oranı için uyarı eşiğidir. | Kritik seviyeye gelmeden kabul politikasını ve aktif pencereyi gözden geçirmek için kullan. |
-| `usedMemoryCriticalMaxmemoryPercent` | `88` | Kritik Redis bellek baskısı eşiğidir. | Bu seviyede aktif pencereyi büyütme; büyük key prefix’lerini, projection/index maliyetini ve yazma kuyruğunu incele. |
-| `expectedMaxmemoryPolicy` | `noeviction` | Beklenen Redis eviction policy değeridir. CacheDB hangi verinin tutulacağına kendisi karar vermek ister. | `noeviction` kullan. Redis’in rastgele key düşürmesi projection/index tutarlılığını bozabilir. |
-| `warnOnMissingMaxmemory` | `true` | Redis’te `maxmemory` yoksa uyarı üretir. | Açık kalmalı. Limitsiz Redis local demo için kolaydır ama production davranışı için güvenli değildir. |
-| `writeBehindBacklogWarnThreshold` | `500` | Kalıcı yazma kuyruğu için uyarı eşiğidir. | Daha sıkı durability penceresi istiyorsan düşür; ancak önce SQL throughput ölç. |
-| `writeBehindBacklogCriticalThreshold` | `2_000` | Kalıcı yazma kuyruğu için kritik eşiktir. | Bu seviyede SQL lock, pool saturation, batch size ve Redis belleği birlikte incelenmelidir. |
-| `automaticRuntimeProfileSwitchingEnabled` | `true` | Guardrail baskı gördüğünde CacheDB’nin runtime davranışını daha korumacı profile alabilmesine izin verir. | Ayrı bir operasyon kontrol katmanın yoksa açık tut. |
+```java
+@CacheScheduledWarm(
+        name = "sample-active-order-window",
+        fixedDelayString = "${sample.scheduled-warm.orders.fixed-delay:PT15M}",
+        lockAtMostForString = "${sample.scheduled-warm.orders.lock-at-most-for:PT2M}",
+        lockWaitTimeoutString = "${sample.scheduled-warm.orders.lock-wait-timeout:PT20S}",
+        minimumIntervalString = "${sample.scheduled-warm.orders.minimum-interval:PT15M}",
+        reconcileHotSet = true
+)
+public CacheWarmPlan activeOrderWindow() {
+    long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
+    return orders.warmActiveWindow(cutoff, orderWarmMaxRows);
+}
+```
 
-### WriteBehindConfig
+Periyodik warm seçilen aktif pencereyi korur. CacheDB üzerinden gelen yeni
+yazılar normal komut yoluyla hemen işlenir; bir sonraki zamanlanmış döngüyü
+beklemez.
 
-| Parametre | Örnek değer | Anlamı | Production önerisi |
-|---|---:|---|---|
-| `workerThreads` | `2` | Redis üzerinden kabul edilen yazıları SQL’e taşıyan arka plan worker sayısıdır. | Sadece SQL tarafında boş connection/CPU varsa ve backlog büyüyorsa artır. |
-| `batchSize` | `128` | Bir flush döngüsünde gruplanması hedeflenen yazı sayısıdır. | Throughput için artırmadan önce SQL lock süresi ve flush latency ölç. |
-| `maxFlushBatchSize` | `128` | Tek flush batch’i için üst sınırdır. | Load test daha büyük batch’in faydalı olduğunu göstermedikçe `batchSize` ile hizalı tut. |
-| `tableAwareBatchingEnabled` | `true` | Yazıları tabloya göre gruplayarak SQL batch davranışını iyileştirir. | Çoğu production workload’unda açık kalmalı. |
-| `batchFlushEnabled` | `true` | Tek tek yazmak yerine batch flush davranışını açar. | Provider’a özel bir problem debug etmiyorsan açık tut. |
-| `coalescingEnabled` | `true` | Aynı entity üzerindeki tekrar eden update’leri güvenli olduğunda birleştirir. | Update ağırlıklı workload için açık tut. Her ara durumun kalıcı görünmesi gerekiyorsa kapat. |
-| `maxFlushRetries` | `5` | Geçici SQL flush hataları için retry sayısıdır. | Sınırlı retry iyidir; kalıcı hatalar sonsuz retry ile saklanmamalıdır. |
-| `retryBackoffMillis` | `500` | Flush retry denemeleri arasındaki bekleme süresidir. | Çok düşük değer retry fırtınası yaratır; çok yüksek değer durability lag üretir. SQL failover davranışına göre ayarla. |
+Annotation processor metot imzasını derleme sırasında doğrular ve tipli bir
+Spring task adapter'ı üretir. Runtime, annotation eklenen metotları taramaz ve
+reflection ile çağırmaz.
 
-### Bu README’de Geçen Ama Bu Sınıfta Açık Set Edilmeyen Ayarlar
+## Kullanım Senaryosuna Göre Ayar
 
-| Parametre | Neden yine anlatılıyor? |
-|---|---|
-| `lruEvictionEnabled` | `CachePolicy` tarafından desteklenir; bu sınıfta açık set edilmediği için framework varsayılanı geçerlidir. Production ekipleri count-window davranışını sık tune ettiği için dokümanda tutulur. |
-| `admitOnWrite`, `admitOnRead`, `admitOnWarm`, `evictWhenRejected` | `EntityHotPolicy` tarafından desteklenir; bu örnek helper constructor’ların varsayılan kabul davranışını kullanır. Migration, arşiv ve warm-up akışlarında sık ihtiyaç duyulduğu için dokümanda yer alır. |
-| `rejectEntityQueryOverLimit`, `rejectProjectionQueryOverLimit` | Read guardrail tarafında desteklenir; bu örnek limitleri set eder ve varsayılan reddetme davranışına güvenir. |
+Ayar kararına tablo boyutundan değil, ölçülmüş yol ihtiyacından başla.
 
-## Gerçek Hayat Ayar Senaryoları
+| Senaryo | Aktif veri politikası | Okuma modeli | Başlangıç sınırı | Aktif setin dışında |
+| --- | --- | --- | --- | --- |
+| Müşteri sipariş zaman çizelgesi | Son 90 gün **veya** aktif sipariş durumları | Müşteri başına `OrderSummary` | Sayfa `100`, pencere `1.000`, yol bütçesi `16 MiB` | Sınırlı `archive` source route |
+| Ürün kataloğu | Aktif ürünler **veya** stokta/düşük stokta olanlar | `ProductAvailability` | Entity sınırı `25.000`, sayfa `100` | Pasif ürün source route'u |
+| Destek operasyonu | Son 30 günde güncellenen **veya** `OPEN/PENDING/ESCALATED` kayıtlar | Küçük satırlar için entity | Entity sınırı `50.000`, sayfa `50` | Gerektiğinde açık ticket-history SQL yolu |
+| Lojistik kontrol paneli | Son 14 günde güncellenen **veya** aktif/istisna durumları | `ShipmentSummary` | Entity sınırı `150.000`, yol penceresi `2.000-10.000` | Teslim edilmiş gönderi source route'u |
+| Rapor çalıştırma | `QUEUED/RUNNING/FAILED` veya son 24 saat | Küçük rapor işi entity'si | Entity sınırı `5.000`, sayfa `50` | Tamamlanan rapor geçmişi PostgreSQL'de |
+| Güvenlik denetimi | Son 24 saatteki önemli olaylar | Küçük ve sınırlı entity listesi | Entity sınırı `2.000`, read admission kapalı | Tam denetim arşivi PostgreSQL'de |
 
-Bu senaryolar evrensel default değildir; ilk staging denemesi için başlangıç profilleridir. En yakın senaryodan başla, sonra staging verisiyle Redis bellek kullanımı, SQL gecikmesi, projection gecikmesi ve write-behind backlog değerlerini ölç.
+Örnek, çözümlenmiş çalışma zamanı ayarlarını API üzerinden gösterir:
 
-| Senaryo | Entity ve okuma modeli | Önerilen değerler | Neden bu değerler? |
-|---|---|---|---|
-| E-ticaret müşteri sipariş zaman çizelgesi | `CustomerEntity`, `OrderEntity`, `OrderLineEntity`, `OrderSummary` projection | `hotEntityLimit=100_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=60`, `compositeHotPolicy=ANY`, `timeWindow("order_date", 90 gün)`, `stateWindow("status", NEW/PAID/PICKING/OPEN/PENDING)`, `maxEntityQueryLimit=250`, `maxProjectionQueryLimit=1_000`, Redis uyarı/kritik `75/88`, `workerThreads=4`, `batchSize=256`, `maxFlushBatchSize=256` | Liste ekranı Redis projection üzerinden `OrderSummary` okumalıdır; seçilen sipariş detayı ise sınırlı satır önizlemesiyle tam entity okuyabilir. 90 günlük pencere güncel ticaret trafiğini aktif veri setinde tutar; aktif durumlar daha eski ama operasyonel siparişleri de Redis’te tutar. |
-| Lojistik gönderi takibi | `ShipmentEntity`, `ShipmentEventEntity`, `RouteStopEntity`, `ShipmentTimelineSummary` projection | `hotEntityLimit=150_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=30`, `compositeHotPolicy=ANY`, `timeWindow("updated_at", 14 gün)`, `stateWindow("shipment_status", IN_TRANSIT/OUT_FOR_DELIVERY/DELAYED/EXCEPTION)`, `maxEntityQueryLimit=200`, `maxProjectionQueryLimit=1_000`, Redis uyarı/kritik `70/85`, `workerThreads=4`, `batchSize=256`, `maxFlushRetries=8`, `retryBackoffMillis=1_000` | Lojistik verisi sık değişir ve kullanıcılar aynı aktif gönderileri tekrar tekrar açar. Aktif ve problemli gönderiler Redis’te kalır, olay zaman çizelgesi projection olur, retry/backoff ise geçici veritabanı veya ağ baskısını daha güvenli karşılar. |
-| Raporlama ve denetim arşivi | `ReportJobEntity`, `AuditEventEntity`, `LedgerEntryEntity`, `ReportRunSummary` projection | `hotEntityLimit=5_000`, `pageSize=50`, `entityTtlSeconds=0`, `pageTtlSeconds=30`, `compositeHotPolicy=ANY`, `timeWindow("created_at", 1 gün)`, `stateWindow("status", QUEUED/RUNNING/FAILED)`, `maxEntityQueryLimit=100`, `maxProjectionQueryLimit=500`, Redis uyarı/kritik `70/80`, `workerThreads=2`, `batchSize=64`, arşiv policy özelleştirilecekse `admitOnRead=false` | Büyük rapor ve export okumaları SQL öncelikli olmalıdır. Redis sadece canlı rapor işleri ve küçük özetleri tutmalı; eski audit ve ledger geçmişi PostgreSQL’de kalmalı ve açık SQL/raporlama yolu üzerinden okunmalıdır. |
-| Destek operasyon kuyruğu | `SupportTicketEntity`, `TicketMessageEntity`, `CustomerEntity`, `OpenTicketSummary` projection | `hotEntityLimit=50_000`, `pageSize=50`, `entityTtlSeconds=0`, `pageTtlSeconds=20`, `compositeHotPolicy=ANY`, `timeWindow("updated_at", 30 gün)`, `stateWindow("status", OPEN/PENDING/ESCALATED/SLA_BREACH)`, `maxEntityQueryLimit=200`, `maxProjectionQueryLimit=1_000`, Redis uyarı/kritik `75/88`, `workerThreads=3`, `batchSize=128`, `coalescingEnabled=true` | Operasyon ekipleri aynı açık destek taleplerini ve kuyrukları defalarca açar. Açık ve eskale destek talepleri Redis’te kalır, kuyruk satırları küçük projection olur, tüm mesaj geçmişi sadece detay ekranında yüklenir. |
-| Ürün katalog ve stok uygunluğu | `ProductEntity`, `WarehouseStockEntity`, `InventoryReservationEntity`, `ProductAvailabilitySummary` projection | `hotEntityLimit=25_000`, `pageSize=100`, `entityTtlSeconds=0`, `pageTtlSeconds=15`, `compositeHotPolicy=ANY`, `stateWindow("active_status", ACTIVE)`, `stateWindow("stock_status", IN_STOCK/LOW_STOCK)`, `timeWindow("updated_at", 7 gün)`, `maxEntityQueryLimit=250`, `maxProjectionQueryLimit=1_000`, Redis uyarı/kritik `70/85`, `workerThreads=3`, `batchSize=256`, `coalescingEnabled=true` | Kategori ve ürün liste ekranları hızlı uygunluk bilgisi ister, fakat stok güncellemeleri gürültülü olabilir. Aktif ürünler ve düşük stoklu ürünler Redis’te kalır, liste ekranları projection okur, coalescing aynı ürün için tekrarlanan stok update’lerini azaltır. |
+```powershell
+Invoke-RestMethod http://127.0.0.1:8091/api/tuning
+Invoke-RestMethod http://127.0.0.1:8091/api/tuning/profiles
+```
 
-BEST: en yakın senaryodan başla, staging warm-up çalıştır, sonra tahmini Redis belleğini gerçek `MEMORY USAGE` değerleriyle key prefix bazında karşılaştır. ANTI-PATTERN: en büyük `hotEntityLimit` değerini her servise kopyalayıp Redis’in modeli taşımasını beklemek.
+[`SampleCacheDbTuningConfig`](src/main/java/com/example/cachedb/sample/config/SampleCacheDbTuningConfig.java)
+içindeki temel kontroller:
 
-## Aktif Veri Setinin Dışında Ne Olur?
+| Kontrol | Örnek değer | Neden var? |
+| --- | ---: | --- |
+| `maxEntityQueryLimit` | `250` | Geniş entity materialization işlemini durdurur |
+| `maxProjectionQueryLimit` | `1.000` | Küçük projection satırları için daha geniş pencereye izin verir |
+| `maxQueryLoadRows` | `1.000` | Kayıtlı source yüklemeyi sınırlar |
+| `queryTimeoutSeconds` | `15` | Source okumaya zaman sınırı koyar |
+| `workerThreads` | `2` | Eş zamanlı SQL flush baskısını sınırlar |
+| `batchSize` / `maxFlushBatchSize` | `128` | Sınırsız batch oluşturmadan SQL round-trip sayısını azaltır |
+| Redis uyarı / kritik eşikleri | `%75` / `%88` | Redis maxmemory değerine ulaşmadan backpressure uygular |
+| Beklenen eviction policy | `noeviction` | Redis'in koordinasyon veya yazma durumunu sessizce atmasını engeller |
 
-CacheDB, Redis’te bulunmayan her entity için otomatik PostgreSQL taraması yapan dinamik ORM gibi davranmaz. Entity repository okumaları, sınırlandırılmış aktif veri seti okumalarıdır. PostgreSQL kalıcı veri kaynağı olmaya devam eder; ancak arşiv, export, eski geçmiş ve özellikle soğuk detay ekranları açık SQL yolları veya kontrollü warm/backfill akışıyla tasarlanmalıdır.
+Bu değerleri doğrudan canlı ortama kopyalama. Serileştirilmiş veri yükü boyutunu,
+projection/indeks maliyetini, en yüksek eş zamanlı yol trafiğini, SQL flush
+gecikmesini ve yeniden hazırlama/failover sırasında gereken Redis boşluğunu ölç.
 
-Önemli istisna `findPage(PageWindow)` davranışıdır: read-through açıksa ve `EntityPageLoader` kayıtlıysa sayfa cache'te yokken loader PostgreSQL okuyabilir. Bu davranış, her entity query için genel fallback varmış gibi yorumlanmamalıdır.
+## API Kataloğu
 
-| Operasyon | Kayıt aktif veri setindeyse | Kayıt aktif veri setinin dışındaysa | PostgreSQL davranışı | Redis/cache davranışı |
-|---|---|---|---|---|
-| `findById(id)` | Redis’teki entity döner ve istenen fetch preset uygulanır. | Boş döner; örnek controller’lar bunu çoğunlukla `404` olarak gösterir. | Repository okuması PostgreSQL’e gitmez. | Eksik, tombstone yazılmış veya policy tarafından reddedilmiş entity servis edilmez. `evictWhenRejected=true` ise eski aktif-set kaydı temizlenebilir. |
-| `query(QuerySpec)` | Redis indekslerini ve Redis veri gövdelerini kullanır; yalnızca policy tarafından kabul edilmiş eşleşen kayıtları döner. | Daha az satır veya boş liste döner. | Eksik satırı tamamlamak için PostgreSQL taraması yapılmaz. | Sadece Redis’te indekslenmiş ve policy tarafından kabul edilmiş satırlar görünebilir. |
-| `findPage(PageWindow)` | Sayfa cache’te varsa doğrudan döner. | Read-through ve `EntityPageLoader` tanımlıysa loader PostgreSQL okuyabilir; yoksa page-cache ayarına göre boş döner veya hata verir. | Sadece açık tanımlanmış page loader PostgreSQL’e gidebilir. | Yüklenen sayfa, guardrail izin verirse cache’e alınır. |
-| Projection sorgusu | Redis projection indekslerinden küçük özet satırları döner. | Sadece projection penceresinde bulunan satırlar döner. | Projection sorgusu PostgreSQL taraması yapmaz. | Zaman çizelgesi, panel ve top-N ekranları için doğru okuma şeklidir. |
-| Açık arşiv/raporlama yolu | Normal ilk ekran yüklemesi için genelde gerekmez. | Eski geçmiş, export, audit ve soğuk detay ekranlarında kullanılmalıdır. | PostgreSQL indeksli ve sınırlı SQL ile okunur. | Bu yol özellikle warm etmiyorsa Redis’i değiştirmemelidir. |
-| `save(entity)` | Kalıcı yazı kuyruğa alınır; Redis state ve indeksler güncellenir. | Kalıcı yazı yine kuyruğa alınır, fakat tam entity Redis tarafından reddedilebilir veya Redis’ten düşürülebilir. | Write-behind değişikliği PostgreSQL’e yazar. | Entity’nin Redis’te kalıp kalmayacağına hot policy karar verir. Yeni yazılmış soğuk kayıt Redis entity okumasında görünmeyebilir. |
-| `deleteById(id)` | Redis state temizlenir veya tombstone yazılır; kalıcı delete kuyruğa alınır. | Uygulama delete verdiyse kalıcı delete yine write-behind akışına girer. | PostgreSQL delete write-behind ile flush edilir. | Sonraki Redis okumaları boş döner ve projection payload’ları temizlenir. |
-| Warm/backfill | Policy tarafından kabul edilen satırlar Redis’e hydrate edilir. | Reddedilen satırlar yalnızca PostgreSQL’de kalır. | Kaynak satırlar PostgreSQL’den okunur. | `admitOnWarm` ve `hotPolicy`, Redis’e kabul kararını verir. |
+| Alan | Örnek endpoint'ler | Veri yolu |
+| --- | --- | --- |
+| Sağlık ve operasyon | `GET /actuator/health/readiness`, `GET /api/tuning`, `GET /api/warm/schedules` | Çalışma zamanı telemetry'si |
+| Demo hazırlığı | `POST /api/demo/seed`, `GET /api/warm/jobs/{jobId}` | Dağıtık arka plan işleri |
+| Müşteri | `POST /api/customers`, `GET /api/customers/{id}`, `GET /api/customers/{id}/orders` | Komut, entity detayı, projection listesi |
+| Sipariş komutları | `POST /api/orders`, `PATCH /api/orders/{id}/status`, `DELETE /api/orders/{id}` | Redis öncelikli write-behind komutları |
+| Sipariş okumaları | `GET /api/orders/{id}`, `GET /api/orders/high-value`, `GET /api/orders/archive` | Entity, ranked projection, PostgreSQL source route |
+| Ürün | `GET /api/products/active`, `GET /api/products/low-stock`, `PATCH /api/products/{id}/stock` | Projection okumaları ve komut |
+| Gönderi | `GET /api/shipments/active`, `GET /api/shipments/exceptions`, `GET /api/shipments/archive` | Projection ve PostgreSQL source route'ları |
+| Destek | `GET /api/tickets/open`, `POST /api/tickets`, `PATCH /api/tickets/{id}/status` | Sınırlı entity okuması ve komutlar |
+| Raporlama | `GET /api/reports/jobs/live`, `GET /api/reports/audit/security`, `GET /api/reports/audit/archive` | Aktif kayıtlar ve kalıcı arşiv |
+| Paneller | `GET /api/dashboard/commerce`, `GET /api/dashboard/operations` | Ekrana göre şekillendirilmiş Redis verisi |
+| Redis'e hazırlama | `POST /api/warm/customers/active`, `/orders/customer/{id}`, `/orders/{id}/lines`, `/orders/high-value`, `/orders/highlighted`, `/products/active`, `/products/low-stock`, `/tickets/open`, `/shipments/active`, `/shipments/customer/{id}`, `/shipments/exceptions`, `/shipments/{id}/events`, `/reports/live`, `/reports/type/{type}`, `/audit/security` | Sınırlı PostgreSQL-Redis işleri; her gönderimden sonra `/api/warm/jobs/{jobId}` durumunu izle |
 
-| Senaryo | Ayar şekli | Aktif veri seti dışından okuma | Aktif veri seti dışından yazma | Doğru okuma yolu tasarımı |
-|---|---|---|---|---|
-| E-ticaret müşteri sipariş zaman çizelgesi | Son 90 gün OR `NEW/PAID/PICKING/OPEN/PENDING`, `OrderSummary` projection, `maxProjectionQueryLimit=1_000`. | 2 yıl önce tamamlanmış sipariş Redis zaman çizelgesi sorgusunda beklenmez. Sipariş Redis’e kabul edilmemişse `findById` boş dönebilir. | Eski tamamlanmış siparişe düzeltme yazılırsa kayıt PostgreSQL’e kalıcı yazılır; Redis tam entity’yi reddedebilir veya düşürebilir. | Zaman çizelgesi `OrderSummary` projection okur; arşiv/detay geçmişi `WHERE customer_id=? ORDER BY order_date DESC LIMIT ?` gibi indeksli PostgreSQL yolundan okunur. |
-| Lojistik gönderi takibi | Son 14 gün OR `IN_TRANSIT/OUT_FOR_DELIVERY/DELAYED/EXCEPTION`, gönderi zaman çizelgesi projection. | Geçen ay teslim edilmiş gönderinin Redis takip listesinde olması beklenmez. | Geç durum düzeltmesi PostgreSQL’e kalıcı yazılır; Redis yalnızca yeni durum/zaman policy’ye uyuyorsa kabul eder. | Aktif takip ekranı projection okur; teslim edilmiş gönderi geçmişi PostgreSQL arşiv yolundan okunur. |
-| Raporlama ve denetim arşivi | Sadece canlı rapor işleri, küçük `ReportRunSummary`, arşivlerde çoğunlukla `admitOnRead=false`. | Eski audit ve ledger satırları tek seferlik okuma yüzünden Redis’e taşınmaz. | Yeni audit satırları kalıcıdır; eski arşiv satırları Redis’i kirletmemelidir. | Panel canlı özetleri Redis’ten okur; audit/export işleri rapora özel indekslerle PostgreSQL’den okunur. |
-| Destek operasyon kuyruğu | Son 30 gün OR `OPEN/PENDING/ESCALATED/SLA_BREACH`, `OpenTicketSummary` projection. | 30 günden eski kapalı destek talebi entity repository okumasında dönmeyebilir. | Talep yeniden açılırsa durum değişir; write sonrası policy bu kaydı Redis’e tekrar kabul edebilir. | Kuyruk ekranı projection okur; kapalı talep araması PostgreSQL geçmiş yolundan, aktif detay ise kabul edilmişse Redis’ten okunur. |
-| Ürün katalog ve stok uygunluğu | `ACTIVE` ürünler OR `IN_STOCK/LOW_STOCK` OR son 7 gün içinde güncellenenler, availability projection. | Yayından kalkmış SKU public katalog projection’ında görünmez. | Yayından kalkmış ürünlerde admin değişiklikleri kalıcıdır; Redis yalnızca policy kabul ederse tutar. | Public kategori sayfaları projection okur; admin soğuk detay ve toplu katalog export PostgreSQL’den okunur. |
-
-BEST: aktif kullanıcı deneyimi için bir okuma yolu, soğuk geçmiş için ayrı ve açık bir okuma yolu tasarla. ANTI-PATTERN: geniş entity query Redis’te bulamayınca PostgreSQL’i tarasın, Redis’i doldursun ve buna rağmen bellek sınırı korunsun diye beklemek.
-
-## CachePolicy Parametreleri Nasıl Ayarlanır?
-
-Cache ayarını şu sırayla yap. İlk refleks Redis belleğini büyütmek olmamalıdır.
-
-1. Okuma yolu sözleşmesini belirle: çağrı limiti, sıralama, detay/önizleme ayrımı ve projection gerekip gerekmediği.
-2. Redis bütçesini belirle: `maxmemory`, `maxmemory-policy=noeviction`, uyarı eşiği ve kritik eşik.
-3. Redis’e kabul kuralını belirle: hangi kayıtlar aktif veri setine girebilir?
-4. Redis’te kalma kuralını belirle: kayıt sayısı, zaman penceresi, durum penceresi ve TTL davranışı.
-5. Yazma baskısını belirle: write-behind worker sayısı, batch boyutu, retry ve backlog eşikleri.
-
-### CachePolicy Parametreleri
-
-| Parametre | Neyi kontrol eder? | Ne zaman artırılır? | Ne zaman azaltılır? | Production önerisi |
-|---|---|---|---|---|
-| `hotEntityLimit` | Varsayılan `CachePolicy` için aktif entity penceresini sınırlar. Redis büyümesine karşı ilk kaba sınırdır. | Redis’te boşluk varsa ve sınırlı aktif okuma yollarında Redis’te bulunamama oranı yüksekse. | Redis belleği hızlı büyüyorsa veya tek okuma yolu belleği domine ediyorsa. | Bellek bütçesinden hesapla: ortalama entity veri gövdesi + indeks maliyeti x beklenen aktif satır. Projection penceresi yerine kullanılmamalıdır. |
-| `pageSize` | Çağıran taraf daha sıkı limit vermediğinde kullanılan varsayılan sayfa boyutudur. | Normal ekranlar daha büyük ilk sayfa istiyorsa ve veri gövdesi küçükse. | API yanıtı büyüyorsa veya UI küçük bir ilk sayfa gösteriyorsa. | Gerçek UI sayfa boyutuna yakın tut; çoğu ekranda `50-100` yeterlidir. Büyük export işleri entity page cache kullanmamalıdır. |
-| `lruEvictionEnabled` | Count window aşıldığında eski aktif kayıtların dışarı itilmesine izin verir. | Geniş bir çalışma seti varsa ve normal cache yenilenmesi kabul edilebiliyorsa. | Katı aktif veri politikası istiyorsan ve sessiz veri değişimi istemiyorsan. | Çoğu online iş yükünde açık kalabilir; yine de Redis `maxmemory` ve okuma yolu limitleri zorunludur. |
-| `entityTtlSeconds` | Tam entity kayıtları için opsiyonel TTL’dir. `0`, entity’nin TTL ile düşmeyeceği anlamına gelir. | Veri geçiciyse, yeniden üretilebiliyorsa veya eski-kayıt yükleme güvenliyse. | İş detayı stabil kalmalıysa ve aktif veri seti davranışı policy ile yönetilecekse. | Kalıcı iş entity’lerinde genelde `0` kullan; TTL’i geçici view, session veya kısa ömürlü operasyon kayıtlarında kullan. |
-| `pageTtlSeconds` | Cache’lenen sayfa/sorgu sonuçlarının TTL değeridir. | Liste sonuçları tekrar kullanılıyorsa ve kısa süreli bayatlık kabul edilebiliyorsa. | Liste çok sık değişiyorsa veya eski sıralama kullanıcıya görünüyorsa. | Kısa tut; genelde `30-120s`. Projection satırları sayfa cache’inden daha uzun yaşayabilir. |
-| `hotPolicy` | Bir satırın Redis’e girip giremeyeceğini belirleyen kabul kuralıdır. | Basit LRU yerine iş kuralına göre cache istiyorsan. | Kural çok fazla kayıt kabul ediyorsa veya önemli okumaları kaçırıyorsa. | Composite policy tercih et: yakın zaman OR aktif durum OR özel iş kuralı. |
-
-### Aktif Veri Politikası Modları
-
-| Mod | Ne zaman kullanılır? | Örnek | Risk |
-|---|---|---|---|
-| `COUNT_WINDOW` | Basit ve sayıyla sınırlı aktif veri seti yeterliyse. | Son `N` ürün veya kategori kaydını tutmak. | İş önemini bilmez; gürültülü okuma yolları faydalı kayıtları dışarı itebilir. |
-| `TIME_WINDOW` | Gerçek iş kuralı yakın zamansa. | `order_date` ile son 90 gün siparişlerini tutmak. | Eski ama operasyonel olarak aktif kayıtlar state policy ile birleşmezse dışarıda kalabilir. |
-| `STATE_WINDOW` | Kaydın durumu aktif veri setine girip girmeyeceğini belirliyorsa. | `OPEN`, `PENDING`, `PAID`, `ACTIVE` kayıtlarını tutmak. | Büyük durum kümeleri çok fazla veri kabul edebilir. Count veya time sınırıyla birlikte düşünülmelidir. |
-| `CUSTOM_PREDICATE` | Aktif veri setine girme kararı domain mantığına bağlıysa. | VIP müşteri siparişlerini veya tenant’a özel premium yolları kabul etmek. | Okuması ve işletmesi daha zordur; gerçek veri dağılımıyla test edilmelidir. |
-| `COMPOSITE` | Gerçek sistemde birden fazla kural gerekiyorsa. | Son 90 gün OR aktif durum OR aktif ürün. | `ANY` fazla veri kabul edebilir; `ALL` fazla veri reddedebilir. Staging bellek ölçümüyle doğrulanmalıdır. |
-
-Örnek projede `ANY` kullanılır; çünkü bir sipariş ya yakın tarihli olduğu için ya da operasyonel olarak aktif olduğu için önemli olabilir. Daha sıkı bellek profilinde `ALL` ancak kayıt tüm child kuralları sağlamalıysa seçilmelidir.
-
-### Admission Source Bayrakları
-
-`EntityHotPolicy` kaydın hangi kaynaktan Redis’e kabul edilebileceğini de yönetir:
-
-| Bayrak | Anlamı | Ne zaman değiştirilir? |
-|---|---|---|
-| `admitOnWrite` | Yeni yazılan kayıt Redis’e alınabilir. | Sadece yazma ağırlıklı ama nadir okunan verinin Redis’i kirletmesini istemiyorsan kapat. |
-| `admitOnRead` | Eski-kayıt okuması sonucu Redis’e alınabilir. | Arşiv yollarında tek seferlik okumaların aktif veri setine girmesini istemiyorsan kapat. |
-| `admitOnWarm` | Isıtma/backfill işleri Redis’i doldurabilir. | Isıtma işi sadece SQL doğrulaması yapacaksa ve Redis’i değiştirmemeliyse kapat. |
-| `evictWhenRejected` | Kayıt artık policy’ye uymuyorsa aktif setten düşürülebilir. | Policy geçişinde daha yumuşak davranış istiyorsan geçici olarak kapat. |
-
-### Read Guardrail Parametreleri
-
-Cache policy Redis’te neyin kalabileceğini belirler. Okuma koruma eşiği ise çağıranın ne isteyebileceğini sınırlar.
-
-| Parametre | Production kullanımı |
-|---|---|
-| `maxEntityQueryLimit` | Düşük tutulmalıdır. Entity query tam nesne yükler ve relation işini tetikleyebilir. Normal ekranlarda `100-250` bandı uygundur. |
-| `maxProjectionQueryLimit` | Projection veri gövdesi küçük olduğu için daha yüksek olabilir. Zaman çizelgesi ve panel pencerelerinde kullanılır. |
-| `hotSetHeadroom` | İstenen pencereyle aktif veri seti sınırı arasında boşluk bırakır. Sorgular sık sık aktif pencere sınırına geliyorsa artırılır. |
-| `rejectEntityQueryOverLimit` | Açık kalmalıdır. Okuma yolu daha çok satır istiyorsa global limiti artırmak yerine projection yolu tasarlanmalıdır. |
-| `rejectProjectionQueryOverLimit` | Açık kalmalıdır. Sadece veri gövdesi boyutu ölçülmüş belirli projection yollarında artırılmalıdır. |
-
-### Redis Guardrail Parametreleri
-
-Redis sınırsız heap değildir; sınırlandırılmış çalışma zamanı bağımlılığıdır.
-
-| Parametre | Production kullanımı |
-|---|---|
-| `usedMemoryWarnMaxmemoryPercent` | Cache büyümesini yavaşlatmak için ilk sinyaldir. Başlangıç için `%70-80` uygundur. |
-| `usedMemoryCriticalMaxmemoryPercent` | Kritik baskı seviyesidir. Başlangıç için `%85-90` uygundur; üstünde read/write shedding alanına yaklaşılır. |
-| `expectedMaxmemoryPolicy` | Bu modelde `noeviction` kullanılmalıdır. Neyin tutulacağına CacheDB karar vermeli; Redis rastgele gerekli key düşürmemelidir. |
-| `producerBackpressureEnabled` | Açık kalmalıdır; Redis baskı altındayken producer tarafı yavaşlar. |
-| `writeBehindBacklogWarnThreshold` | SQL flush gecikmesi kullanıcıya görünmeden önce alarm üretir. Daha sıkı consistency beklentisinde düşürülür. |
-| `writeBehindBacklogCriticalThreshold` | Kritik backlog seviyesidir. Bu noktada SQL lock, pool saturation ve batch size incelenmelidir. |
-
-### Write-Behind Parametreleri
-
-Write-behind tuning, cache admission’dan ayrı düşünülmelidir. SQL yavaşlığını Redis’e daha az veri alarak çözmeye çalışma; Redis belleği de problemse ayrıca ele al.
-
-| Parametre | Ne zaman artırılır? | Ne zaman azaltılır? |
-|---|---|---|
-| `workerThreads` | Backlog büyüyor ve SQL tarafında boş connection/CPU varsa. | SQL pool doluyorsa veya lock beklemeleri artıyorsa. |
-| `batchSize` / `maxFlushBatchSize` | Backlog büyüyor ve SQL batch yazmayı iyi kaldırıyorsa. | Latency zıplıyorsa, lock artıyorsa veya transaction çok büyüyorsa. |
-| `tableAwareBatchingEnabled` | Genelde açık kalır; yazıları tabloya göre gruplayarak flush davranışını iyileştirir. | Nadiren, sadece debugging veya provider’a özel problem varsa kapatılır. |
-| `coalescingEnabled` | Genelde açık kalır; aynı entity üzerindeki tekrar eden update’leri birleştirebilir. | Her ara durumun kalıcı olarak görünmesi gerekiyorsa kapatılır. |
-| `maxFlushRetries` / `retryBackoffMillis` | Deploy veya failover sırasında transient SQL hataları varsa. | Retry kalıcı hataları saklıyorsa ve DLQ büyüyorsa. |
-
-### Pratik Profiller
-
-| Profil | Ne zaman kullanılır? | Ayar yönü |
-|---|---|---|
-| Küçük admin uygulaması | Trafik düşük, listeler sınırlı | `hotEntityLimit=1_000`, `pageSize=50`, kısa page TTL, düşük sorgu limiti |
-| Ticaret zaman çizelgesi ekranı | Müşteri sipariş geçmişi sürekli büyür | Projection zorunlu, `maxProjectionQueryLimit=1_000`, entity detay limiti `100-250`, 90 gün veya aktif durum politikası |
-| Panel/KPI | Tekrarlanan global sıralı okumalar vardır | Ekrana özel projection, kısa page TTL, sıkı entity sorgu limiti, ranked projection alanları |
-| Arşiv okuma | Eski kayıtlar nadiren okunur | `admitOnRead` kapatılabilir, entity TTL kısa veya `0`, okuma SQL eski-kayıt yolundan yapılır |
-| Yüksek yazma trafiği | Yazılar ani yük dalgaları halinde gelir | Write-behind worker ve batch ayarlanır, Redis koruma eşikleri sıkı tutulur, backlog izlenir |
-
-## Neden Projection Kullanılıyor?
-
-Bir müşterinin sipariş sayısı zamanla binleri bulabilir. Liste ekranında `Customer -> tüm Orders -> tüm Lines` yüklemek production için doğru değildir. Bu örnekte liste ekranı `OrderSummary` üzerinden döner; kullanıcı tek bir siparişi seçtiğinde detay ayrıca yüklenir.
-
-BEST:
-
-- Müşteri sipariş listesi ve yüksek değerli sipariş listesi için `OrderSummary` kullan.
-- API `limit` değerini projection penceresinin içinde tut.
-- `OrderEntity` ve satır ilişkisini sadece detay ekranında yükle.
-- PostgreSQL’i tam geçmiş için kalıcı kaynak olarak bırak.
-
-ANTI-PATTERN:
-
-- Tek yanıtta müşterinin tüm siparişlerini ve tüm satırlarını döndürmek.
-- Sınırsız `findAll` benzeri çağrı açmak.
-- Redis belleğini sınırsız kabul etmek.
-
-## Ayar Noktaları
-
-Örnek başlangıç ayarları `SampleCacheDbTuningConfig` içinde yer alır:
-
-| Alan | Örnek ayar | Neden? |
-|---|---|---|
-| Aktif veri penceresi | Varsayılan `hotEntityLimit=25_000`, route profillerinde `150_000` seviyesine kadar | Redis büyümesini sınırlarken farklı gerçek hayat okuma sözleşmelerini gösterir |
-| Entity TTL | `0` | Bu örnekte entity kayıtları TTL ile silinmez |
-| Sayfa TTL | Varsayılan `90s`; katalog ve destek profillerinde daha kısa | Sayfa cache’i kısa süreli tutulur |
-| Aktif veri politikası | yola göre değişen zaman/durum politikaları | Ticaret, katalog, destek, lojistik, raporlama ve audit için farklı kabul profilleri gösterir |
-| Entity sorgu limiti | `250` | Büyük entity taramalarını engeller |
-| Projection sorgu limiti | `1000` | Zaman çizelgesi penceresine izin verir, sınırsız okumayı engeller |
-| Redis koruma eşikleri | uyarı %75, kritik %88 | Bellek baskısını erken görünür yapar |
-
-Production’da Redis `maxmemory` mutlaka verilmelidir, `maxmemory-policy=noeviction` korunmalıdır, bağlantı havuzları hedef trafiğe göre ayarlanmalıdır ve yönetim ekranı gateway/auth arkasında tutulmalıdır.
-
-## Genişletilmiş API Senaryoları
-
-Örnek proje artık birden fazla production tarzı okuma/yazma şeklini gösterir. Postman’ı açmadan önce bu tabloya bakarsan hangi çağrının neyi kanıtladığı daha net olur.
-
-| Senaryo grubu | Ana endpoint’ler | Ne gösterir? |
-|---|---|---|
-| Ticaret zaman çizelgesi | `/api/customers/{id}/orders`, `/api/orders/high-value`, `/api/orders/archive` | Projection-first sipariş listesi, açık detay yükleme ve tam geçmiş için SQL arşiv yolu |
-| Katalog ve stok | `/api/products/active`, `/api/products/low-stock`, `/api/products/{id}/stock` | Ürün uygunluk projection’ı, durum bazlı aktif veri seti ve stok update kabul davranışı |
-| Destek operasyonu | `/api/tickets/open`, `/api/tickets/{id}`, `/api/tickets/{id}/status` | Açık kuyruk Redis’ten okunur; yeniden açılan veya eskale edilen kayıt aktif sete döner |
-| Lojistik takip | `/api/shipments/active`, `/api/shipments/exceptions`, `/api/shipments/{id}` | Gönderi özet projection’ı ve sınırlı olay önizlemesi |
-| Raporlama ve audit | `/api/reports/jobs/live`, `/api/reports/audit/security`, `/api/reports/audit/archive` | Canlı rapor işleri Redis’te, audit/arşiv okumaları açık SQL yolunda kalır |
-| Paneller ve tuning | `/api/dashboard/commerce`, `/api/dashboard/operations`, `/api/tuning/profiles` | Birden fazla projection’dan panel okuması ve route bazlı tuning profilleri |
+İstek sınırları doğrulanır. Sınırı aşan değerler sessizce küçültülmek yerine
+`400 Bad Request` döner. Kuyruk doluluğu `429 Too Many Requests`; optimistic
+conflict ve henüz kalıcılaşmamış ana kayıt ise `409 Conflict` üretir.
 
 ## Postman
 
-İçe aktarılacak dosya:
+Şu koleksiyonu içe aktar:
 
 ```text
 postman/cache-database-postgresql-sample.postman_collection.json
 ```
 
-Koleksiyon senaryoya göre gruplanmıştır: platform hazırlığı, ticaret, katalog/stok, destek, lojistik, raporlama/audit, paneller ve tuning profilleri.
+Klasörleri şu sırayla çalıştır:
 
-## PostgreSQL Notları
+1. Readiness kontrolünü çalıştır, demo seed işini gönder ve `Latest Background
+   Job Status` isteği `COMPLETED` gösterene kadar tekrarla.
+2. Her iş alanı klasöründe hızlı erişim listesinden önce ilgili `Warm ...`
+   isteğini çalıştır.
+3. Her `202 Accepted` yanıtından sonra son iş `COMPLETED` olana kadar durum
+   isteğini tekrarla.
+4. Hızlı erişim route'unu çağır; klasörde karşılığı varsa sınırlı source/arşiv
+   route'u ile sonucu karşılaştır.
+5. Dashboard klasörünü, kullandığı bütün alt route'lar hazırlandıktan sonra çalıştır.
+6. Pencere veya pool değerini değiştirmeden önce tuning ve periyodik warm
+   durumunu incele.
 
-Şema `src/main/resources/schema.sql` ile kurulur. Primary key, foreign key ve aktif okuma yolları için indeksler vardır:
+## Yük Testi
 
-- `sample_orders(customer_id, order_date DESC, order_id DESC)`
-- `sample_orders(priority_score DESC, order_date DESC)`
-- `sample_order_lines(order_id, line_number)`
-- `sample_products(category, active_status, stock_status, updated_at DESC)`
-- `sample_support_tickets(status, priority, updated_at DESC)`
-- `sample_shipments(shipment_status, risk_score DESC, updated_at DESC)`
-- `sample_shipments(customer_id, updated_at DESC, shipment_id DESC)`
-- `sample_shipment_events(shipment_id, event_time DESC, event_id DESC)`
-- `sample_report_jobs(status, updated_at DESC, report_job_id DESC)`
-- `sample_audit_events(entity_name, entity_id, created_at DESC)`
+Seed ve warm tamamlandıktan sonra:
 
-Seed endpoint’i veriyi CacheDB üzerinden yazar ve alt kayıtları yazmadan önce üst kayıtların SQL tarafına düşmesini bekler. Bunun nedeni şemada foreign key bulunmasıdır.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-load-test.ps1 `
+  -RouteProfile hot-timeline `
+  -Concurrency 8 `
+  -DurationSeconds 20 `
+  -SeedCustomers 20 `
+  -OrdersPerCustomer 40 `
+  -WarmCustomers 20 `
+  -WarmLimit 100 `
+  -MaxP95Millis 250
+```
 
-`POST /api/orders`, indeksli tek bir SQL varlık kontrolü yapar. Ana müşteri henüz kalıcı değilse request thread’ini bekletmeden `Retry-After: 1` ile birlikte `409` döner; istemci kısa bir süre sonra tekrar denemelidir.
+Bu komut yerel bir regresyon kapısıdır; production kapasite sonucu değildir.
+Production ölçümü gerçek Redis/PostgreSQL gecikmesi, Kubernetes kaynak
+sınırları, gerçek payload ve beklenen eş zamanlılıkla yapılmalıdır.
+
+## PostgreSQL Canlı Ortam Notları
+
+- Her source route predicate'i ve deterministik sıralama son eki için uygun
+  indeks oluştur.
+- Tüm pod'ların toplamını düşünerek HikariCP bağlantı sayısını PostgreSQL
+  bütçesinin altında tut.
+- Write-behind batch boyutunu WAL baskısı ve lock süresine göre ayarla.
+- Warm, arşiv ve geçiş sorgularında statement timeout kullan.
+- Aynı tablolara başka uygulamalar da yazıyorsa outbox/CDC ekle.
+- Yedekleme, geri yükleme, Redis kaybı/yeniden hazırlama ve uygulamanın geri dönüş yollarını
+  kanıtla.
+- Operasyonel yol Redis'ten çalışsa bile kalıcı doğruluk kaynağının PostgreSQL
+  olduğunu koru.
+
+## Canlı Ortam Kontrol Listesi
+
+- [ ] Her operasyonel endpoint; komut, aktif entity, projection veya source
+  route olarak sınıflandırıldı.
+- [ ] Her aktif yolun sayfa sınırı, aktif penceresi, bellek bütçesi, sıralaması
+  ve coverage kapsamı tanımlandı.
+- [ ] İlişki yoğun ve global sıralı ekranlar projection kullanıyor.
+- [ ] Warm/backfill sınırlı, kaldığı yerden devam edebilir, izlenebilir ve Redis
+  kaybından sonra test edilmiş durumda.
+- [ ] Source route'ların uygun indeksleri, timeout ve maksimum satır sınırı var.
+- [ ] Çağıran servisler `202 Accepted` kalıcılık anlamını biliyor.
+- [ ] Redis için açık `maxmemory`, `noeviction`, alarm ve kapasite boşluğu var.
+- [ ] PostgreSQL ve HikariCP bağlantı bütçesi pod başına ve toplam replica sayısı
+  için hesaplandı.
+- [ ] Çok pod'lu periyodik warm ve yarım kalan işin başka pod tarafından alınması
+  test edildi.
+- [ ] CacheDB dışındaki veritabanı yazıları outbox/CDC veya açık bir uzlaştırma
+  kararıyla kapsandı.
+- [ ] Yönetim endpoint'leri kapalı veya iç gateway arkasında korunuyor.
+- [ ] Geçiş öncesi veri eşitliği, gecikme, canary, geri dönüş ve recovery kanıtı
+  kaydedildi.
 
 ## Sorun Giderme
 
-CacheDB dependency’leri çözülemiyorsa `pom.xml` içindeki paket repository erişimini kontrol et.
+| Belirti | Olası neden | Çözüm |
+| --- | --- | --- |
+| `/api/demo/seed` veya `/api/warm/**` için `404` | Uygulama `demo` profili olmadan açıldı | `SPRING_PROFILES_ACTIVE=demo` tanımlayıp yeniden başlat |
+| Maven `401 Unauthorized` döndürüyor | GitHub Packages kimlik bilgisi yok veya server kimlikleri farklı | `GITHUB_ACTOR`, `read:packages` token'ı ve aynı server kimliğini tanımla |
+| `0.7.0` çözümlenemiyor | Paket kimlik bilgisi yok, server kimlikleri farklı veya yayın tamamlanmadı | `v0.7.0` paketini doğrula, `read:packages` token'ı tanımla ve aynı Maven server kimliğini kullan |
+| Aktif route `503` döndürüyor, arşiv route'u satır getiriyor | Redis route'u hazırlanmadı, coverage süresi doldu veya kapsam farklı | Dry-run yap, aynı route/scope'u hazırla, `COMPLETED` durumunu bekle ve coverage kaydını incele |
+| Detay yolu verinin hazır olmadığını söylüyor | Entity payload'ı aktif setin dışında | O detay kapsamı için entity warm et veya sınırlı source-detail yolu ekle |
+| Ana kaydı yazdıktan sonra `409 Conflict` | Ana kayıt henüz kalıcı değil veya optimistic version değişti | `Retry-After` değerine uy, write-behind durumunu kontrol et, idempotent retry yap |
+| `429 Too Many Requests` | Sınırlı iş kuyruğu veya backpressure koruması devrede | Üretim hızını düşür, Redis ve write-behind telemetry'sini incele |
+| Readiness `DOWN` | Redis, PostgreSQL, dead-letter, recovery veya backlog koşulu başarısız | Readiness ayrıntısını ve logları incele; trafiği henüz yönlendirme |
+| Redis bellek uyarısı veriyor | Aktif set, projection/indeks maliyeti veya backlog bütçeyi aştı | Yeni admission'ı yavaşlat, keyspace'i ölç, pencereleri küçült veya kapasite ekle |
 
-Seed endpoint’i yavaş görünüyorsa `GET /actuator/health/readiness` ve yönetim ekranındaki arka plan yazma bölümünü kontrol et. Seed akışı foreign key hatası üretmemek için SQL satırlarının oluşmasını bekler.
+## İlgili Dokümanlar
 
-Seed sonrası liste hemen boş dönerse birkaç saniye bekleyip tekrar dene. Projection yenileme arka planda çalışır.
+- [Ana CacheDB README](https://github.com/esasmer-dou/cache-database/blob/main/tr/README.md)
+- [Deklaratif repository kullanımı](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/deklaratif-repositoryler.md)
+- [Başlangıç rehberi](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/getting-started.md)
+- [Periyodik warm ve uzlaştırma](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/periodik-warm.md)
+- [Production tuning](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/production-tuning-rehberi.md)
+- [Kullanım senaryosu örnekleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/use-case-examples.md)
+- [Veritabanı provider SPI](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/veritabani-provider-spi.md)
+- [Production reçeteleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/production-recipes.md)

@@ -22,15 +22,16 @@ For most teams, the recommended default is:
 
 1. let Spring Boot auto-create `CacheDatabase`
 2. let generated registrars auto-register entities
-3. use `GeneratedCacheModule.using(session)...` in application code
-4. drop only measured hotspots to `*CacheBinding.using(session)...` or direct repositories
+3. declare application routes on `@CacheRepository` interfaces
+4. inject those interfaces into application services
+5. use low-level bindings or provider repositories only for framework and operational infrastructure
 
 That gives you the easiest startup path without giving up the project's first priority of keeping runtime overhead low.
 
 ### Declarative Application Surface
 
-Use configuration for per-entity policy and one generated package scope for
-application code:
+Use configuration for per-entity policy and declarative repository interfaces
+for application behavior:
 
 ```yaml
 cachedb:
@@ -52,12 +53,33 @@ cachedb:
 Add this to the entity package's `package-info.java`:
 
 ```java
-@com.reactor.cachedb.annotations.CacheDomain(spring = true)
+@com.reactor.cachedb.annotations.CacheDomain
 package com.acme.orders.domain;
 ```
 
-The processor generates the Spring configuration and exposes one
-`GeneratedCacheModule.Scope` bean.
+The entity processor generates the package registrar. The repository processor
+generates a reflection-free implementation and Spring configuration for every
+`@CacheRepository(springBean = true)` interface; `springBean` is enabled by
+default.
+
+```java
+@CacheRepository(entity = OrderEntity.class)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
+
+    @CacheLookup(idParameter = "orderId", relation = "lines",
+            relationLimitParameter = "linePreview", maxRelationRows = 50)
+    HotLookup<OrderEntity> detail(Long orderId, int linePreview);
+}
+
+@Service
+public final class OrderService {
+    private final OrderRepository orders;
+
+    public OrderService(OrderRepository orders) {
+        this.orders = orders;
+    }
+}
+```
 
 Spring registration is deliberately two-phase. All generated entities receive
 their own policy and JDBC source first; relation/page loaders are wired only
@@ -68,7 +90,7 @@ default policy.
 
 ## Fastest Paths
 
-### Plain Java, lowest ceremony
+### Plain Java, low-level bootstrap
 
 ```java
 JedisPooled jedis = new JedisPooled("redis://127.0.0.1:6379");
@@ -79,9 +101,13 @@ try (CacheDatabase cacheDatabase = CacheDatabase.bootstrap(jedis, dataSource)
         .keyPrefix("app-cache")
         .register(com.reactor.cachedb.examples.entity.GeneratedCacheModule::registerJdbcBacked)
         .start()) {
-    // use repositories here
+    OrderRepository orders = new OrderRepositoryCacheDbImplementation(cacheDatabase);
 }
 ```
+
+The implementation name is generated at compile time. Spring Boot users should
+inject the interface instead of constructing it. The package registrar in this
+plain Java example remains the low-level registration bridge.
 
 Generated binding classes now support a lower-ceremony path too:
 
@@ -445,73 +471,55 @@ Drop to `CacheDatabaseConfig.builder()` only when you really need full control o
 - page cache
 - projection refresh
 
-## ORM-Style Query And Fetch Ergonomics
+## Declarative Query And Lookup Ergonomics
 
-The public read API now supports a more natural flow without forcing `QuerySpec.builder()` everywhere:
-
-```java
-List<OrderEntity> orders = OrderEntityCacheBinding.repository(cacheDatabase)
-        .withRelationLimit("orderLines", 8)
-        .query(
-                QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                        .orderBy(QuerySort.desc("total_amount"), QuerySort.desc("line_item_count"))
-                        .limitTo(24)
-        );
-```
-
-Key ergonomics upgrades:
-
-- generated `*CacheBinding` classes can register with defaults
-- generated `*CacheBinding.repository(session)` no longer forces an explicit cache policy
-- `EntityRepository` and `ProjectionRepository` expose shorter `query(...)` overloads
-- `QuerySpec.where(...).orderBy(...).limitTo(...).fetching(...)` gives an immutable fluent path
-- static entity methods annotated with `@CacheNamedQuery` generate helpers such as `UserEntityCacheBinding.activeUsers(...)`
-- static entity methods annotated with `@CacheFetchPreset` generate helpers such as `DemoOrderEntityCacheBinding.orderLinesPreviewRepository(...)`
-- static entity methods annotated with `@CachePagePreset` generate helpers such as `UserEntityCacheBinding.usersPage(...)`
-- static entity methods annotated with `@CacheSaveCommand` / `@CacheDeleteCommand` generate helpers such as `UserEntityCacheBinding.activateUser(...)` and `UserEntityCacheBinding.deleteUser(...)`
-
-Example:
+Keep query shape out of service code. The repository interface owns filtering,
+sorting, limits, Redis coverage, and the source-database boundary:
 
 ```java
-@CacheEntity(table = "cachedb_example_users", redisNamespace = "users")
-public class UserEntity {
+@CacheRepository(entity = OrderEntity.class)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
-    @CacheNamedQuery("activeUsers")
-    public static QuerySpec activeUsersQuery(int limit) {
-        return QuerySpec.where(QueryFilter.eq("status", "ACTIVE"))
-                .orderBy(QuerySort.asc("username"))
-                .limitTo(limit);
-    }
+    @HotRoute(value = "customer-order-timeline", projection = OrderSummary.class,
+            pageSize = 100, hotWindow = 1_000,
+            memoryBudgetBytes = 16_777_216L,
+            coverageScopeParameter = "customerId")
+    @CacheRouteQuery(
+            predicates = @CachePredicate(field = "customerId", parameter = "customerId"),
+            orderBy = {
+                    @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
+                    @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
+            },
+            windowParameter = "window"
+    )
+    HotWindow<OrderSummary> timeline(long customerId, WindowRequest window);
 
-    @CacheFetchPreset("ordersPreview")
-    public static FetchPlan ordersPreviewFetchPlan(int relationLimit) {
-        return FetchPlan.of("orders").withRelationLimit("orders", relationLimit);
-    }
+    @CacheLookup(idParameter = "orderId", relation = "lines",
+            relationLimitParameter = "linePreview", maxRelationRows = 50)
+    HotLookup<OrderEntity> detail(Long orderId, int linePreview);
+
+    @WarmRoute(value = "warm-customer-order-timeline", from = "timeline",
+            maxRows = 1_000, maxRowsParameter = "maxRows",
+            coverageScopeParameter = "customerId", projectionsOnly = true)
+    CacheWarmPlan warmTimeline(long customerId, int maxRows);
 }
-
-List<UserEntity> activeUsers = UserEntityCacheBinding.activeUsers(session, 25);
-EntityRepository<UserEntity, Long> previewRepository =
-        UserEntityCacheBinding.ordersPreviewRepository(session, 8);
-List<UserEntity> users = UserEntityCacheBinding.usersPage(session, 0, 25);
-UserEntity activated = UserEntityCacheBinding.activateUser(session, 41L, "alice");
-UserEntityCacheBinding.deleteUser(session, 41L);
-
-var userOps = UserEntityCacheBinding.using(session);
-List<UserEntity> groupedUsers = userOps.queries().activeUsers(25);
-EntityRepository<UserEntity, Long> groupedPreviewRepository = userOps.fetches().ordersPreview(8);
-List<UserEntity> groupedPage = userOps.pages().usersPage(0, 25);
-UserEntity groupedActivated = userOps.commands().activateUser(41L, "alice");
-userOps.deletes().deleteUser(41L);
-
-var domain = com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session);
-List<UserEntity> domainUsers = domain.users().queries().activeUsers(25);
 ```
 
-For relation-heavy screens, prefer:
+```java
+List<OrderSummary> firstPage = orders.timeline(
+        customerId,
+        WindowRequest.first(24)
+).items();
 
-- summary query first
-- explicit detail fetch second
-- `withRelationLimit(...)` when you want a preview instead of the full object graph
+OrderEntity detail = orders.detail(orderId, 8)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
+```
+
+The processor rejects misspelled fields, incompatible parameters, unused
+arguments, unsafe windows, duplicate route names, and invalid warm contracts at
+compile time. For relation-heavy screens, use a summary projection first and a
+bounded explicit detail lookup second. `HotLookup.NOT_CACHED` is not a durable
+404 and must not trigger hidden SQL fallback.
 
 ## Minimal Overhead Mode
 
@@ -807,38 +815,30 @@ Good pattern:
 1. query orders without loading `orderLines`
 2. render the list from summary fields
 3. load order detail on demand
-4. if you still want preload, cap the relation with `FetchPlan.withRelationLimit(...)`
+4. cap preview relations with the repository's `@CacheLookup` contract
 
 Example:
 
 ```java
-ProjectionRepository<DemoOrderReadModelPatterns.OrderSummaryReadModel, Long> summaryRepository =
-        DemoOrderEntityCacheBinding.orderSummary(orderRepository);
+List<OrderSummary> summaries = orders.customerTimeline(
+        customerId,
+        WindowRequest.first(24)
+).items();
 
-List<DemoOrderReadModelPatterns.OrderSummaryReadModel> summaries =
-        readPatterns.findCustomerOrderSummaries(customerId, 24);
+OrderEntity detail = orders.detail(orderId, 12)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
 
-DemoOrderReadModelPatterns.OrderDetailReadModel detail =
-        readPatterns.loadOrderDetail(orderId, 12);
-
-List<DemoOrderReadModelPatterns.OrderLinePreviewReadModel> nextPage =
-        readPatterns.loadRemainingOrderLines(orderId, 12, 50);
+SourceWindow<OrderLineSummary> nextPage = orderLines.archive(
+        orderId,
+        WindowRequest.after(cursor, 50)
+);
 ```
 
 Limited preload example:
 
 ```java
-DemoOrderEntity order = orderRepository
-        .withFetchPlan(FetchPlan.of("orderLines").withRelationLimit("orderLines", 8))
-        .findById(orderId)
-        .orElseThrow();
-```
-
-Projection repository example:
-
-```java
-ProjectionRepository<DemoOrderReadModelPatterns.OrderLinePreviewReadModel, Long> linePreviewRepository =
-        DemoOrderLineEntityCacheBinding.orderLinePreview(orderLineRepository);
+OrderEntity order = orders.detail(orderId, 8)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
 ```
 
 Projection-specific indexes and refresh:
@@ -850,11 +850,12 @@ Projection-specific indexes and refresh:
 - refresh events survive process restarts and can be consumed by multiple application nodes through the Redis consumer group
 - the model is still eventually consistent by design
 - this is not yet a full projection platform with poison-queue management, replay tooling, or dedicated admin telemetry
-- `@CacheProjectionDefinition` on a static entity method lets generated bindings expose projection helpers such as `DemoOrderEntityCacheBinding.orderSummary(...)`
-- `@CacheNamedQuery` on a static entity method lets the same generated binding expose query helpers for both entity repositories and projection repositories
-- `@CacheFetchPreset` on a static entity method lets generated bindings expose preview/detail repository helpers without hand-written `withFetchPlan(...)` glue
-- `@CachePagePreset` on a static entity method lets generated bindings expose reusable page/window helpers without hand-written `new PageWindow(...)` glue
-- `@CacheSaveCommand` and `@CacheDeleteCommand` on static entity methods let generated bindings expose declarative write helpers while keeping command construction compile-time and explicit
+- `@CacheProjectionRecord` declares the generated projection mapping; `factoryMethod` supports computed fields without reflection
+- `@HotRoute` selects the projection and binds page, hot-window, coverage, and memory limits to one application method
+- `@WarmRoute` reuses that exact route contract instead of duplicating query code
+- `@CacheLookup` owns bounded preview/detail relations
+- `@CacheCommand` makes acknowledgement, durability timeout, batch limits, and idempotency explicit
+- legacy static entity query/fetch helpers remain compatibility APIs, not the preferred application surface
 
 Example:
 

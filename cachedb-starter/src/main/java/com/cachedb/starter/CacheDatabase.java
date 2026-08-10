@@ -41,7 +41,8 @@ import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import com.reactor.cachedb.core.relation.RelationBatchLoader;
 import com.reactor.cachedb.jdbc.JdbcEntitySourceLoader;
-import com.reactor.cachedb.postgres.PostgresWriteBehindFlusher;
+import com.reactor.cachedb.jdbc.JdbcStorageProviders;
+import com.reactor.cachedb.jdbc.JdbcSourceSqlRepository;
 import com.reactor.cachedb.redis.RedisFunctionArgsMapper;
 import com.reactor.cachedb.redis.RedisFunctionExecutor;
 import com.reactor.cachedb.redis.RedisFunctionLibrarySource;
@@ -50,9 +51,11 @@ import com.reactor.cachedb.redis.RedisDeadLetterManagement;
 import com.reactor.cachedb.redis.RedisDurabilityTracker;
 import com.reactor.cachedb.redis.RedisDeadLetterRecoveryWorker;
 import com.reactor.cachedb.redis.RedisRecoveryCleanupWorker;
+import com.reactor.cachedb.redis.RedisRouteCoverageStore;
 import com.reactor.cachedb.redis.RedisHotSetManager;
 import com.reactor.cachedb.redis.RedisHotSetReconciliationResult;
 import com.reactor.cachedb.redis.RedisIndexMaintenance;
+import com.reactor.cachedb.redis.RedisCacheIdGenerator;
 import com.reactor.cachedb.redis.RedisKeyStrategy;
 import com.reactor.cachedb.redis.RedisLeaderLease;
 import com.reactor.cachedb.redis.RedisProjectionRefreshQueue;
@@ -107,6 +110,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     private final ProductionReportCatalog productionReportCatalog;
     private final CacheDatabaseAdmin admin;
     private final RedisDurabilityTracker durabilityTracker;
+    private final com.reactor.cachedb.core.route.RouteCoverageStore routeCoverageStore;
+    private final com.reactor.cachedb.core.repository.CacheIdGenerator idGenerator;
 
     public static CacheDatabaseBootstrap bootstrap(DataSource dataSource) {
         return CacheDatabaseBootstrap.using(dataSource);
@@ -199,6 +204,11 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 config.keyspace().hotSetSegment(),
                 config.keyspace().indexSegment(),
                 config.keyspace().compactionSegment()
+        );
+        this.routeCoverageStore = new RedisRouteCoverageStore(backgroundJedis, config.keyspace().keyPrefix());
+        this.idGenerator = new RedisCacheIdGenerator(
+                backgroundJedis,
+                config.keyspace().keyPrefix() + ":sequence"
         );
         this.durabilityTracker = new RedisDurabilityTracker(backgroundJedis, keyStrategy);
         RedisFunctionExecutor functionExecutor = new RedisFunctionExecutor(
@@ -686,12 +696,9 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         if (flusherFactory != null) {
             return flusherFactory.create(dataSource, entityRegistry, writeBehindConfig, performanceCollector);
         }
-        return new PostgresWriteBehindFlusher(
-                dataSource,
-                entityRegistry,
-                writeBehindConfig,
-                performanceCollector
-        );
+        return JdbcStorageProviders.require("postgres")
+                .writeBehindFlusherFactory(Map.of())
+                .create(dataSource, entityRegistry, writeBehindConfig, performanceCollector);
     }
 
     public <T, ID, P> EntityProjectionBinding<T, P, ID> registerProjection(
@@ -737,6 +744,12 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         );
     }
 
+    public <T> com.reactor.cachedb.core.repository.SourceSqlRepository<T> sourceSqlRepository(
+            EntityCodec<T> codec
+    ) {
+        return new JdbcSourceSqlRepository<>(dataSource, codec);
+    }
+
     public boolean isDurable(WriteReceipt<?, ?> receipt) {
         return durabilityTracker.isDurable(receipt);
     }
@@ -750,6 +763,22 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             Duration timeout
     ) {
         return durabilityTracker.awaitAll(receipts, timeout, Duration.ofMillis(25));
+    }
+
+    public com.reactor.cachedb.core.route.RouteCoverage routeCoverage(
+            String routeName,
+            String scope,
+            Duration maxAge
+    ) {
+        return routeCoverageStore.get(routeName, scope, maxAge);
+    }
+
+    public com.reactor.cachedb.core.route.RouteCoverageStore routeCoverageStore() {
+        return routeCoverageStore;
+    }
+
+    public com.reactor.cachedb.core.repository.CacheIdGenerator idGenerator() {
+        return idGenerator;
     }
 
     public EntityRegistry entityRegistry() {

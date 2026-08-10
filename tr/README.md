@@ -2,13 +2,12 @@
 
 English version: [../README.md](../README.md)
 
-CacheDB, Redis'i düşük gecikmeli okuma/yazma katmanı olarak kullanan ve kalıcı
-doğruluk kaynağını seçilen SQL veritabanında tutan bir Java data-layer
-kütüphanesidir.
-Bugün PostgreSQL varsayılan provider'dır; MSSQL ise kendi SQL Server evidence
-hattı olan açık bir provider olarak desteklenir. Amaç, ORM'e benzeyen
-geliştirme ergonomisini korurken sık erişilen veri yolunu açık, sınırlı,
-ölçülebilir ve production ortamında yönetilebilir hale getirmektir.
+CacheDB, Redis'i düşük gecikmeli operasyonel veri katmanı olarak kullanan ve
+kalıcı doğruluk kaynağını seçilen SQL veritabanında tutan bir Java data-layer
+framework'üdür. PostgreSQL ve SQL Server, ayrı starter'ları ve provider'a özel
+kanıt hatları olan eşit seviyedeki açık sağlayıcılardır. Amaç, ORM'e benzeyen
+geliştirme ergonomisini korurken okuma, yazma, ön yükleme ve arşiv davranışını
+çalışma zamanı sihrinin arkasına saklamamaktır.
 
 CacheDB şu iddiayla konumlanır:
 
@@ -20,14 +19,20 @@ CacheDB şu iddiayla konumlanır:
 - çalışma zamanı reflection'ı yerine derleme zamanında üretilen metadata
   kullanılmalıdır
 
-Kısa karar: CacheDB core ve varsayılan PostgreSQL provider yolu, açık production
-sınırlarıyla stable framework release seviyesine taşınmıştır. Buna rağmen her
-kritik route için staging warm-up, side-by-side comparison, route contract, Redis
-bellek limiti ve rollback planı kanıtlanmadan production cutover yapılmamalıdır.
-MSSQL tarafında write-behind, outbox, migration planner, concurrency, lock
-davranışı ve restart/reconnect akışları için provider'a özel CI kanıtı vardır;
-SQL Server HA veya Always On ise uygulamanın kendi ortamında ayrıca
-sertifikalanması gereken bir topoloji konusudur.
+İki provider da aynı CacheDB uygulama modelini destekler: generated repository,
+sınırlı aktif yollar, projection, warm/backfill, write-behind, outbox
+entegrasyonu ve açık source route'lar. Bağlantı, lock, timeout, indeks ve HA
+davranışı veritabanına özgüdür; uygulamanın kendi staging topolojisinde ayrıca
+kanıtlanmalıdır.
+
+| Güncel hat | Değer |
+| --- | --- |
+| Yayımlanmış son sürüm | `v0.7.0` |
+| Repo sürümü | `0.7.0` |
+| Kütüphane bytecode seviyesi | Java 17 |
+| Çalıştırılabilir örnekler | Java 21 |
+| Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
+| Uygulama API'si | Derleme sırasında üretilen `@CacheRepository` interface'leri |
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -81,7 +86,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "Tüm doküman haritası nerede?" | [Doküman Haritası](DOKUMAN_HARITASI.md) |
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
-| "Çalışan REST API örneği nerede?" | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md) |
+| "Çalışan REST API örneği nerede?" | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [SQL Server Örneği](../sample-cache-database-mssql/README.tr.md) |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Birden fazla pod aktif veri setini düzenli olarak nasıl yeniler ve temizler?" | [Periyodik Warm ve Aktif Veri Seti Uzlaştırması](docs/periodik-warm.md) |
 | "Entity, relation, projection ve route contract ne demek?" | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
@@ -97,8 +102,8 @@ CacheDB özellikle şu problemlere odaklanır:
 
 | Durum | Önerilen yol | Neden |
 | --- | --- | --- |
-| Önce çalışan bir örnek görmek istiyorsun | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md) | REST API, Docker Compose, şema, seed verisi ve Postman koleksiyonu hazırdır |
-| Yeni Spring Boot servisi | `cachedb-spring-boot-starter` | En az kurulum, aynı porttan admin UI, Spring `DataSource` entegrasyonu |
+| Önce çalışan bir örnek görmek istiyorsun | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [SQL Server Örneği](../sample-cache-database-mssql/README.tr.md) | REST API, Docker Compose, şema, seed verisi ve Postman koleksiyonu hazırdır |
+| Yeni Spring Boot servisi | `cachedb-spring-boot-starter-postgres` veya `cachedb-spring-boot-starter-mssql` | Açık provider seçimi ve Spring `DataSource` entegrasyonu |
 | Zaten JPA kullanan Spring Boot uygulaması | Starter + mevcut `DataSource` | JPA zaten `DataSource` oluşturuyorsa JDBC starter tekrar eklenmez |
 | Plain Java servisi | `cachedb-starter` | Başlatma, kapatma ve bağlantı yaşam döngüsü sende kalır |
 | Mevcut SQL veritabanı + ORM sistemi | Migration Planner | Şema keşfi, warm planı, compare ve cutover raporu üretir |
@@ -111,25 +116,56 @@ warm ve compare çalıştır, sonra production cutover kararı al.
 ANTI-PATTERN: Tüm veritabanını entity olarak işaretleyip Redis'in her şeyi
 otomatik hızlandırmasını beklemek.
 
+## On Dakikalık Öğrenme Akışı
+
+1. [PostgreSQL örneğini](../sample-cache-database-postgresql/README.tr.md) veya
+   [SQL Server örneğini](../sample-cache-database-mssql/README.tr.md) `demo`
+   profiliyle çalıştır.
+2. Kalıcı demo verisini oluştur ve dağıtık seed işinin tamamlanmasını bekle.
+3. SQL source route'u doğrulamak için arşiv endpoint'ini çağır.
+4. Yalnızca projection hazırlayan warm işini çalıştır ve route coverage'ı bekle.
+5. Aynı Redis aktif yolunu çağır; üyelik ve sıralamayı SQL sonucuyla karşılaştır.
+6. Herhangi bir limiti değiştirmeden önce `/api/tuning`, readiness ve yönetim
+   ekranını incele.
+
+Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha doğru
+öğretir.
+
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut.
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.7.0`, GitHub
+Packages ve GitHub Release paketi üzerinden dağıtılan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.6.0</cachedb.version>
+    <cachedb.version>0.7.0</cachedb.version>
 </properties>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-bom</artifactId>
+            <version>${cachedb.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
 
 <dependencies>
     <dependency>
         <groupId>com.reactor.cachedb</groupId>
-        <artifactId>cachedb-spring-boot-starter</artifactId>
-        <version>${cachedb.version}</version>
+        <artifactId>cachedb-spring-boot-starter-postgres</artifactId>
     </dependency>
     <dependency>
         <groupId>com.reactor.cachedb</groupId>
         <artifactId>cachedb-annotations</artifactId>
-        <version>${cachedb.version}</version>
+    </dependency>
+    <!-- İsteğe bağlı: yönetim ekranı ve geçiş planlayıcı -->
+    <dependency>
+        <groupId>com.reactor.cachedb</groupId>
+        <artifactId>cachedb-spring-boot-starter-admin</artifactId>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
@@ -160,7 +196,41 @@ otomatik hızlandırmasını beklemek.
 </build>
 ```
 
+Yayımlanmış artifact'ler GitHub Packages üzerinden sunulur. Şirket parent POM'u
+bu repository'yi sağlamıyorsa consumer POM'a şu tanımı ekle:
+
+```xml
+<repositories>
+    <repository>
+        <id>cache-database-github-packages</id>
+        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+    </repository>
+</repositories>
+```
+
+Repository kimliği Maven server kimliğiyle aynı olmalıdır:
+
+```xml
+<settings>
+    <servers>
+        <server>
+            <id>cache-database-github-packages</id>
+            <username>${env.GITHUB_ACTOR}</username>
+            <password>${env.GITHUB_TOKEN}</password>
+        </server>
+    </servers>
+</settings>
+```
+
+`read:packages` yetkili token kullan. `0.7.0` değişmez paket olarak
+yayımlanmıştır; consumer build'i için CacheDB kaynak reposuna ihtiyaç yoktur.
+
 JDBC kuralı:
+
+| SQL sağlayıcısı | Provider starter | JDBC driver | Çalışan örnek |
+| --- | --- | --- | --- |
+| PostgreSQL | `cachedb-spring-boot-starter-postgres` | `org.postgresql:postgresql` | [PostgreSQL örneği](../sample-cache-database-postgresql/README.tr.md) |
+| SQL Server | `cachedb-spring-boot-starter-mssql` | `com.microsoft.sqlserver:mssql-jdbc` | [SQL Server örneği](../sample-cache-database-mssql/README.tr.md) |
 
 - Uygulamada henüz `DataSource` yoksa `spring-boot-starter-jdbc` ekle.
 - Uygulamada `spring-boot-starter-data-jpa` veya başka bir starter zaten
@@ -168,11 +238,17 @@ JDBC kuralı:
 - CacheDB için gereken şey çalışan bir Spring `DataSource` bean'idir.
 - `cachedb-annotations` ve annotation processor olarak `cachedb-processor`
   her durumda gereklidir.
-- Aşağıdaki örnek PostgreSQL'i gösterir; çünkü varsayılan provider PostgreSQL'dir.
-  MSSQL için `cachedb-storage-mssql`, Microsoft JDBC driver'ı ve provider
-  seçimini `cachedb.sql.provider=mssql` veya `MssqlWriteBehindFlusher.factory(...)`
-  ile açık yapman gerekir. Detaylar için
-  [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md) sayfasına bak.
+- Yalnızca bir provider starter seç. PostgreSQL için
+  `cachedb-spring-boot-starter-postgres`, SQL Server için
+  `cachedb-spring-boot-starter-mssql` kullan.
+- Classpath'te tek provider varsa `cachedb.sql.provider=AUTO` onu seçer. Birden
+  fazla provider bulunursa sistem sessizce seçim yapmak yerine başlangıcı
+  durdurur.
+- Yönetim ekranına ihtiyacın varsa `cachedb-spring-boot-starter-admin` ekle.
+  Bu modül çekirdek runtime starter'ın parçası değildir.
+- Önerilen uygulama API'si için [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md),
+  provider ayarları için [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md)
+  sayfasına bak.
 
 Minimal `application.yml`:
 
@@ -243,15 +319,19 @@ runtime'da entity field'larını reflection ile keşfetme maliyeti hedeflenmez.
 
 ## İlk Okuma ve Yazma
 
-Entity paketinde Spring domain yüzeyini bir kez etkinleştir:
+Repository sözleşmesini tanımla. Processor; route alanlarını, parametreleri,
+limitleri ve dönüş tiplerini derleme sırasında kontrol eder. Ardından Spring
+bean'ini ve reflection kullanmayan implementasyonu üretir:
 
 ```java
-@com.reactor.cachedb.annotations.CacheDomain(spring = true)
-package com.acme.orders.domain;
+@CacheRepository(entity = CustomerEntity.class)
+public interface CustomerRepository extends CacheDbRepository<CustomerEntity, Long> {
+    @CacheLookup(idParameter = "customerId")
+    HotLookup<CustomerEntity> detail(Long customerId);
+}
 ```
 
-Processor, Spring yapılandırmasını ve tek bir `GeneratedCacheModule.Scope`
-bean'ini üretir. Uygulama servislerine yalnızca bu scope'u enjekte et:
+Üretilen repository'yi uygulama servisine enjekte et:
 
 ```java
 CustomerEntity customer = new CustomerEntity();
@@ -260,20 +340,31 @@ customer.taxNumber = "1234567890";
 customer.customerType = "RETAIL";
 customer.status = "ACTIVE";
 
-domain.customers().save(customer);
+WriteReceipt<CustomerEntity, Long> receipt = customers.save(customer);
 
-CustomerEntity loaded = domain.customers()
-        .findById(42L)
-        .orElseThrow();
+CustomerEntity loaded = customers.detail(42L).orElseThrow(status ->
+        new IllegalStateException("Müşteri Redis'te kullanıma hazır değil: " + status)
+);
 ```
 
 Davranış:
 
 - `save` entity'yi Redis'e yazar.
 - Kalıcı yazım seçilen SQL write-behind hattına girer.
-- `findById`, Redis’teki etkin entity’yi okur.
+- `detail` yalnızca Redis'ten okur; `NOT_CACHED`, SQL satırının olmadığı
+  anlamına gelmez.
 - Entity etkin veri politikasına uymuyorsa Redis’e kabul edilmeyebilir veya Redis’ten
   düşürülebilir.
+- Arşiv veya etkin veri kümesinin dışındaki okumalar açık ve sınırlı bir
+  `@SourceRoute` üzerinden yapılmalıdır.
+- Redis'te önceden hazırlanmış kapsama ihtiyaç duyan route'lar `@WarmRoute`
+  tanımlamalı; cutover sonrasında uygulama endpoint'lerinde
+  `HotWindow.completeItems()` kullanılmalıdır.
+
+`GeneratedCacheModule`, geriye dönük uyumluluk ve düşük seviyeli işler için
+korunur. Yeni servis kodunda generated repository kullanılması önerilir. Devamı
+için [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md)
+sayfasına bak.
 
 ## Relation Nasıl Düşünülmeli?
 
@@ -286,7 +377,7 @@ Relation'ı üç ayrı katman olarak düşün:
 | --- | --- | --- |
 | Kaynak veritabanındaki primary/foreign key | Kalıcı veri bütünlüğünü korur, orphan satır oluşmasını engeller | Önerilir, ama tek başına yeterli değildir |
 | `@CacheRelation` metadata'sı | Parent entity alanının hangi hedef entity ile ilişkili olduğunu CacheDB'ye anlatır | Evet |
-| Üretilen veya özel loader + `FetchPlan` | İstenen relation'ı sınırlı ve toplu biçimde yükler | Evet |
+| Üretilen/özel loader + `@CacheLookup` | İstenen ilişkiyi sınırlı ve toplu biçimde yükler | Evet |
 
 Kural net:
 
@@ -297,8 +388,7 @@ Kural net:
 - Tip güvenli hedef ve sınırlı sıralama bilgisi verildiğinde processor standart
   partitioned loader'ı üretir. `@CacheEntity.relationLoader` yalnızca özel yükleme
   mantığı gerektiğinde kullanılmalıdır.
-- Okuma tarafı relation'ı yine `FetchPlan` veya `withRelationLimit(...)` ile
-  açıkça istemelidir.
+- Repository sözleşmesi ilişkiyi sınırlı bir `@CacheLookup` ile açıkça istemelidir.
 
 ```java
 @CacheEntity(table = "customers", redisNamespace = "customers")
@@ -323,10 +413,12 @@ public class CustomerEntity {
 Okuma:
 
 ```java
-CustomerEntity customer = customerRepository
-        .withRelationLimit("orders", 20)
-        .findById(customerId)
-        .orElseThrow();
+@CacheLookup(idParameter = "customerId", relation = "orders",
+        relationLimitParameter = "orderPreview", maxRelationRows = 25)
+HotLookup<CustomerEntity> detail(Long customerId, int orderPreview);
+
+CustomerEntity customer = customers.detail(customerId, 20)
+        .orElseThrow(status -> mapHotLookupFailure(customerId, status));
 ```
 
 Sık görülen durumlar:
@@ -338,7 +430,7 @@ Sık görülen durumlar:
 | Var | Var | Yok | Batch-only relation için üretilebilir veya özel yükleme bilgisi yoksa derleme hatası alınır. |
 | Var | Var | Var | BEST: kalıcı veri bütünlüğü, açık metadata ve limitli batch preload birlikte vardır. |
 
-BEST: Detay ekranında küçük önizleme gerekiyorsa `withRelationLimit(...)` kullan.
+BEST: Detay ekranındaki küçük önizleme için sınırlı `@CacheLookup` kullan.
 
 ANTI-PATTERN: Liste ekranında her müşteri için bütün sipariş geçmişini relation
 olarak yüklemek.
@@ -363,7 +455,7 @@ Projection kullanman gereken durumlar:
 | Müşteri kartı | `CustomerEntity` |
 | Müşteri son 10 sipariş listesi | `CustomerOrderSummaryProjection` |
 | Sipariş detay | `OrderEntity` |
-| Sipariş satırı önizleme | `withRelationLimit("orderLines", 8)` |
+| Sipariş satırı önizleme | `linePreview=8` kullanan `@CacheLookup` |
 | Global en yüksek riskli siparişler | Ranked projection |
 
 ## Redis Belleği Nasıl Kontrol Edilir?

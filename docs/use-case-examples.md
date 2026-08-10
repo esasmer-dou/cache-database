@@ -3,8 +3,8 @@
 Turkish version: [../tr/docs/use-case-examples.md](../tr/docs/use-case-examples.md)
 
 This page explains CacheDB behavior through practical use cases. It is written
-for application developers who need to decide when to use an entity repository,
-a projection repository, a command route, or a source-database cold path.
+for application developers who need to decide when to use a Redis-only lookup,
+a projection hot route, a command, or a bounded source-database route.
 
 The examples use a common customer/order domain:
 
@@ -107,8 +107,8 @@ Screen:
 BEST design:
 
 - Invoice detail uses `InvoiceEntity`.
-- Latest payment attempts use `withRelationLimit("payments", 5)` or a payment
-  preview projection.
+- Latest payment attempts use a bounded `@CacheLookup` preview or a payment
+  projection.
 - Monthly reconciliation stays on the source-database/reporting path.
 
 ANTI-PATTERN:
@@ -139,14 +139,20 @@ ANTI-PATTERN:
 
 | Need | BEST route | Why |
 | --- | --- | --- |
-| Create or replace one full entity | `EntityRepository.save(fullEntity)` | Redis-first write, durable SQL write-behind |
-| Read one hot entity by id | `EntityRepository.findById(id)` | Fast Redis lookup |
-| Read a small full-entity page | `EntityRepository.findPage(PageWindow)` | Bounded full payload read |
-| Read a large customer order list | `ProjectionRepository<OrderSummary>` | Summary payload, bounded hot window |
+| Create or replace one full entity | `CacheDbRepository.save(fullEntity)` | Redis-first write, durable SQL write-behind |
+| Read one hot entity by id | `@CacheLookup` returning `HotLookup<T>` | Fast Redis lookup without a false durable 404 |
+| Read a small full-entity page | `@HotRoute` returning `HotWindow<T>` | Bounded payload plus coverage evidence |
+| Read a large customer order list | Projection-returning `@HotRoute` | Summary payload, bounded hot window |
 | Read global top-N dashboard rows | Ranked projection | Single ranked index path |
-| Read old history or archive data | Source-database cold path | Do not pollute Redis with cold history |
-| Change one field on an entity that may not be in Redis | Explicit command route | Avoid writing partial/invalid Redis entities |
+| Read old history or archive data | Bounded `@SourceRoute` | Do not pollute Redis with cold history |
+| Change one field on an entity that may not be in Redis | Explicit source command/adapter | Avoid writing partial/invalid Redis entities |
 | Delete one entity | `deleteById(id)` | Idempotent delete, tombstone, SQL provider delete through write-behind |
+
+The code below assumes Spring injected domain repositories such as `orders`,
+`customers`, `products`, `shipments`, and `supportTickets`. Their methods are
+declared with the annotations shown in
+[Declarative Repositories](./declarative-repositories.md); service code does not
+build `QuerySpec` or generated binding chains.
 
 ## Minimal Entity Shape
 
@@ -229,11 +235,7 @@ BEST:
 - The full line list is loaded only when the user opens the line detail tab.
 
 ```java
-Optional<OrderEntity> order =
-        OrderEntityCacheBinding.using(session)
-                .repository()
-                .withRelationLimit("orderLines", 8)
-                .findById(orderId);
+HotLookup<OrderEntity> order = orders.detail(orderId, 8);
 ```
 
 ANTI-PATTERN: load every order line for every order row in an order list page.
@@ -264,14 +266,10 @@ BEST:
 - Dashboard widgets read a compact `ProductStockSummary` projection.
 
 ```java
-ProjectionRepository<ProductStockSummary, Long> stockSummary =
-        ProductEntityCacheBinding.using(session).projections().stockSummary();
-
-List<ProductStockSummary> lowStock = stockSummary.query(
-        QuerySpec.where(QueryFilter.lt("available_quantity", 10))
-                .orderBy(QuerySort.asc("available_quantity"))
-                .limitTo(50)
-);
+List<ProductStockSummary> lowStock = products.lowStock(
+        10,
+        WindowRequest.first(50)
+).items();
 ```
 
 ANTI-PATTERN: read thousands of inventory movement rows into Redis to calculate
@@ -304,12 +302,7 @@ BEST:
 - Accounting reports should use the source database or a dedicated reporting projection.
 
 ```java
-EntityRepository<InvoiceEntity, Long> invoices =
-        InvoiceEntityCacheBinding.using(session)
-                .repository()
-                .withRelationLimit("payments", 5);
-
-Optional<InvoiceEntity> invoice = invoices.findById(invoiceId);
+HotLookup<InvoiceEntity> invoice = invoices.detail(invoiceId, 5);
 ```
 
 ANTI-PATTERN: use CacheDB entity reads for large end-of-month accounting
@@ -340,14 +333,10 @@ BEST:
   extremely hot.
 
 ```java
-ProjectionRepository<ShipmentTimelinePreview, Long> timeline =
-        ShipmentEntityCacheBinding.using(session).projections().timelinePreview();
-
-List<ShipmentTimelinePreview> latestEvents = timeline.query(
-        QuerySpec.where(QueryFilter.eq("shipment_id", shipmentId))
-                .orderBy(QuerySort.desc("event_time"))
-                .limitTo(10)
-);
+List<ShipmentTimelinePreview> latestEvents = shipments.timeline(
+        shipmentId,
+        WindowRequest.first(10)
+).items();
 ```
 
 ANTI-PATTERN: keep every tracking event for every shipment in Redis forever.
@@ -377,14 +366,9 @@ BEST:
 - Full message history can be paged from the source database if it is old or rarely read.
 
 ```java
-ProjectionRepository<TicketSummary, Long> ticketSummaries =
-        SupportTicketEntityCacheBinding.using(session).projections().ticketSummary();
-
-List<TicketSummary> urgentOpenTickets = ticketSummaries.query(
-        QuerySpec.where(QueryFilter.eq("status", "OPEN"))
-                .orderBy(QuerySort.desc("priority_score"), QuerySort.asc("opened_at"))
-                .limitTo(25)
-);
+List<TicketSummary> urgentOpenTickets = supportTickets.urgentOpen(
+        WindowRequest.first(25)
+).items();
 ```
 
 ANTI-PATTERN: decode every ticket message body just to show an inbox row.
@@ -408,20 +392,15 @@ BEST:
 - Support tickets use ticket-summary projection.
 
 ```java
-Optional<CustomerEntity> customer =
-        CustomerEntityCacheBinding.using(session).repository().findById(customerId);
-
-List<OrderSummaryReadModel> latestOrders = orderSummaryRepository.query(
-        QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                .orderBy(QuerySort.desc("order_date"))
-                .limitTo(10)
-);
-
-List<TicketSummary> tickets = ticketSummaryRepository.query(
-        QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                .orderBy(QuerySort.desc("opened_at"))
-                .limitTo(10)
-);
+HotLookup<CustomerEntity> customer = customers.detail(customerId, 3);
+List<OrderSummary> latestOrders = orders.customerTimeline(
+        customerId,
+        WindowRequest.first(10)
+).items();
+List<TicketSummary> tickets = supportTickets.forCustomer(
+        customerId,
+        WindowRequest.first(10)
+).items();
 ```
 
 ANTI-PATTERN: one customer endpoint that hydrates customer, all addresses, all
@@ -449,7 +428,7 @@ User opens one invoice.
 BEST route:
 
 - `InvoiceEntity.findById(invoiceId)` for invoice header.
-- `withRelationLimit("payments", 5)` for recent payment attempts.
+- bounded `@CacheLookup` for recent payment attempts.
 - Source database for full payment audit if the user opens the audit tab.
 
 Why: recent attempts are useful on first paint; full payment history is not.
@@ -506,7 +485,7 @@ customer.taxNumber = "1234567890";
 customer.customerType = "CORPORATE";
 customer.status = "ACTIVE";
 
-CustomerEntityCacheBinding.using(session).repository().save(customer);
+customers.save(customer);
 ```
 
 Runtime behavior:
@@ -532,7 +511,7 @@ order.currencyCode = "TRY";
 order.orderType = "ONLINE";
 order.status = "CREATED";
 
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 ```
 
 Runtime behavior:
@@ -543,43 +522,51 @@ Runtime behavior:
 
 BEST: create orders as full entities, not as partial payloads.
 
-### Insert 3: Create Through A Generated Command Helper
+### Insert 3: Create Through A Declarative Command
 
-Use generated command helpers when your entity has a stable application command.
+Use a named repository command when acknowledgement and durability are part of
+the application contract.
 
 ```java
-UserEntity activated =
-        GeneratedCacheModule.using(session)
-                .users()
-                .commands()
-                .activateUser(84L, "alice");
+@CacheCommand(
+        operation = CacheCommand.Operation.SAVE,
+        acknowledgement = CacheCommand.Acknowledgement.SQL_DURABLE,
+        durabilityTimeoutMillis = 2_500
+)
+WriteReceipt<UserEntity, Long> activate(UserEntity fullUser);
+
+WriteReceipt<UserEntity, Long> receipt = users.activate(activatedUser);
 ```
 
 Runtime behavior:
 
-- The generated command builds a valid entity.
-- The generated helper calls the repository `save(...)`.
-- The write path stays Redis-first.
+- Application code supplies a complete valid entity.
+- The generated implementation writes Redis first and waits for the declared SQL acknowledgement.
+- The receipt exposes the accepted version and durability state.
 
-BEST: use command helpers for common create/update operations that always
-produce a complete valid entity.
+BEST: use named commands when they always receive a complete entity and the
+acknowledgement contract matters to the caller.
+
+If the HTTP command can be retried, carry a stable caller-generated entity ID or
+an application idempotency key. `@CacheCommand` does not create a deduplication
+record implicitly.
 
 ### Insert 4: Bulk Seed Or Warm Data
 
 Use this for controlled startup, staging warm-up, or migration rehearsal.
 
 ```java
-for (OrderEntity order : ordersToWarm) {
-    OrderEntityCacheBinding.using(session).repository().save(order);
-}
+CacheWarmResult result = cacheDatabase.warm(
+        orders.warmCustomerTimelineProjection(customerId, 1_000)
+);
 ```
 
 Runtime behavior:
 
-- Redis is filled with the selected hot set.
-- SQL provider writes still go through the normal write-behind path.
-- If this is a migration warm-up, prefer the Migration Planner warm runner so
-  the hot set is based on a planned route.
+- Redis is filled from the bounded source query declared by the hot route.
+- Existing SQL rows are not written back to SQL.
+- Projection-only warm does not hydrate full entity payloads.
+- Route coverage is recorded for the selected customer scope.
 
 BEST: warm only the routes you plan to serve from Redis.
 
@@ -592,10 +579,12 @@ base entity, then CacheDB refreshes the projection.
 
 ```java
 OrderEntity order = createOrder(...);
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 
-ProjectionRepository<OrderSummaryReadModel, Long> summaries =
-        OrderEntityCacheBinding.using(session).projections().orderSummary();
+List<OrderSummary> summaries = orders.customerTimeline(
+        order.customerId,
+        WindowRequest.first(25)
+).items();
 ```
 
 Runtime behavior:
@@ -616,10 +605,7 @@ base entity.
 Use this for detail screens where the root entity is expected to be hot.
 
 ```java
-Optional<CustomerEntity> customer =
-        CustomerEntityCacheBinding.using(session)
-                .repository()
-                .findById(42L);
+HotLookup<CustomerEntity> customer = customers.detail(42L, 0);
 ```
 
 Runtime behavior:
@@ -628,7 +614,7 @@ Runtime behavior:
 - If the payload is present and not tombstoned, it returns the entity.
 - If it is absent, this repository call does not magically scan the source database.
 
-BEST: use `findById` for hot detail records.
+BEST: use `@CacheLookup` for hot detail records and handle every status.
 
 ACCEPTABLE: if the record is old and missing from Redis, call an explicit
 Source-database cold-path repository.
@@ -639,14 +625,10 @@ Use this when Redis keeps the latest 1,000 order summaries per customer, but the
 screen only asks for 10.
 
 ```java
-ProjectionRepository<OrderSummaryReadModel, Long> summaries =
-        OrderEntityCacheBinding.using(session).projections().orderSummary();
-
-List<OrderSummaryReadModel> latest10 = summaries.query(
-        QuerySpec.where(QueryFilter.eq("customer_id", 42L))
-                .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
-                .limitTo(10)
-);
+List<OrderSummary> latest10 = orders.customerTimeline(
+        42L,
+        WindowRequest.first(10)
+).items();
 ```
 
 Runtime behavior:
@@ -666,18 +648,15 @@ an order-summary projection should be used.
 Use this for small, bounded full entity lists.
 
 ```java
-List<CustomerEntity> customers =
-        CustomerEntityCacheBinding.using(session)
-                .repository()
-                .findPage(new PageWindow(0, 25));
+List<CustomerEntity> rows = customers.active(WindowRequest.first(25)).items();
 ```
 
 Runtime behavior:
 
 - The page request is checked by read-shape guardrails.
 - If the page fits the configured safe limit, Redis page cache can be used.
-- If a page loader is configured and read-through is enabled, the page can be
-  loaded and cached.
+- CacheDB never hides a SQL fallback behind this Redis route. Warm and coverage
+  are explicit.
 
 BEST: keep page size below the entity hot window.
 
@@ -688,21 +667,11 @@ ANTI-PATTERN: use full entity pages for 1,000+ row business screens.
 Use this when the user asks for old data outside the hot projection window.
 
 ```java
-List<OrderEntity> februaryOrders = jdbcTemplate.query(
-        """
-        SELECT *
-        FROM orders
-        WHERE customer_id = ?
-          AND order_date >= ?
-          AND order_date < ?
-        ORDER BY order_date DESC, order_id DESC
-        LIMIT ?
-        """,
-        orderRowMapper,
+SourceWindow<OrderSummary> februaryOrders = orders.archive(
         42L,
-        LocalDate.parse("2026-02-01"),
-        LocalDate.parse("2026-03-01"),
-        100
+        startOfMarchEpochSeconds,
+        Long.MAX_VALUE,
+        WindowRequest.first(100)
 );
 ```
 
@@ -723,12 +692,7 @@ once.
 Use this when a detail page needs only a small preview relation.
 
 ```java
-EntityRepository<CustomerEntity, Long> repository =
-        CustomerEntityCacheBinding.using(session)
-                .repository()
-                .withRelationLimit("orders", 8);
-
-Optional<CustomerEntity> customer = repository.findById(42L);
+HotLookup<CustomerEntity> customer = customers.detail(42L, 8);
 ```
 
 Runtime behavior:
@@ -741,25 +705,23 @@ BEST: summary first, explicit preview, detail on demand.
 
 ANTI-PATTERN: eager-load every child row for the first screen.
 
-### Query 6: Explain Before You Cut Over
+### Query 6: Prove Coverage Before You Cut Over
 
-Use `explain(...)` when deciding whether a route is safe.
+Use the generated route and test kit when deciding whether a route is safe.
 
 ```java
-QuerySpec query = QuerySpec.where(QueryFilter.eq("customer_id", 42L))
-        .orderBy(QuerySort.desc("order_date"))
-        .limitTo(100);
-
-QueryExplainPlan plan =
-        OrderEntityCacheBinding.using(session).repository().explain(query);
+cacheDb.warm(orders.warmCustomerTimelineProjection(42L, 1_000));
+CacheDbAssertions.requireComplete(
+        orders.customerTimeline(42L, WindowRequest.first(100))
+);
 ```
 
 Runtime behavior:
 
-- The plan shows the route shape and warnings.
-- Use it to catch risky entity reads before production cutover.
+- Compile-time validation checks the route shape and bounds.
+- The integration assertion proves that the required Redis scope is covered.
 
-BEST: explain and compare important routes in staging.
+BEST: prove coverage, parity, latency, and memory for important routes in staging.
 
 ## Update Examples
 
@@ -772,7 +734,7 @@ OrderEntity order = existingOrder;
 order.status = "PAID";
 order.orderAmount = new BigDecimal("1250.00");
 
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 ```
 
 Runtime behavior:
@@ -797,7 +759,7 @@ order.currencyCode = "TRY";
 order.orderType = "ONLINE";
 order.status = "CANCELLED";
 
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 ```
 
 Runtime behavior:
@@ -840,14 +802,12 @@ BEST: partial updates are commands, not partial entity saves.
 Use full state if the customer entity is small and known.
 
 ```java
-CustomerEntity customer =
-        CustomerEntityCacheBinding.using(session).repository()
-                .findById(42L)
-                .orElseThrow();
+CustomerEntity customer = customers.detail(42L, 0)
+        .orElseThrow(status -> mapHotLookupFailure(42L, status));
 
 customer.customerType = "VIP";
 
-CustomerEntityCacheBinding.using(session).repository().save(customer);
+customers.save(customer);
 ```
 
 Runtime behavior:
@@ -890,7 +850,7 @@ ANTI-PATTERN: N+1 update loop through Redis for a broad historical update.
 Use `deleteById` when deleting one known entity.
 
 ```java
-OrderEntityCacheBinding.using(session).repository().deleteById(9001L);
+orders.deleteById(9001L);
 ```
 
 Runtime behavior:
@@ -907,7 +867,7 @@ BEST: idempotent delete by primary key.
 Use the same delete call.
 
 ```java
-OrderEntityCacheBinding.using(session).repository().deleteById(500L);
+orders.deleteById(500L);
 ```
 
 Runtime behavior:
@@ -951,7 +911,7 @@ source database.
 OrderEntity order = loadFullOrderForSoftDelete(9001L);
 order.status = "DELETED";
 
-OrderEntityCacheBinding.using(session).repository().save(order);
+orders.save(order);
 ```
 
 Runtime behavior:
@@ -1001,14 +961,10 @@ Why:
 Use this for customer timeline screens.
 
 ```java
-ProjectionRepository<OrderSummaryReadModel, Long> summaries =
-        OrderEntityCacheBinding.using(session).projections().orderSummary();
-
-List<OrderSummaryReadModel> rows = summaries.query(
-        QuerySpec.where(QueryFilter.eq("customer_id", customerId))
-                .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
-                .limitTo(100)
-);
+List<OrderSummary> rows = orders.customerTimeline(
+        customerId,
+        WindowRequest.first(100)
+).items();
 ```
 
 BEST:
@@ -1022,11 +978,7 @@ BEST:
 Use summary/detail split.
 
 ```java
-Optional<OrderEntity> order =
-        OrderEntityCacheBinding.using(session)
-                .repository()
-                .withRelationLimit("orderLines", 8)
-                .findById(orderId);
+HotLookup<OrderEntity> order = orders.detail(orderId, 8);
 ```
 
 BEST:
@@ -1041,15 +993,9 @@ ANTI-PATTERN: load every line for every order in the list screen.
 Use ranked projection when the screen is globally sorted.
 
 ```java
-ProjectionRepository<HighValueOrderReadModel, Long> highValueOrders =
-        OrderEntityCacheBinding.using(session).projections().highValueOrders();
-
-List<HighValueOrderReadModel> top50 = highValueOrders.query(
-        QuerySpec.builder()
-                .sort(QuerySort.desc("rank_score"))
-                .limit(50)
-                .build()
-);
+List<HighValueOrderReadModel> top50 = dashboards.highValueOrders(
+        WindowRequest.first(50)
+).items();
 ```
 
 BEST:
@@ -1065,14 +1011,10 @@ ANTI-PATTERN: scan full order entities and sort in application memory.
 Use a read model for a frequently opened report.
 
 ```java
-ProjectionRepository<CustomerRevenueSummary, Long> revenue =
-        CustomerEntityCacheBinding.using(session).projections().customerRevenueSummary();
-
-List<CustomerRevenueSummary> rows = revenue.query(
-        QuerySpec.where(QueryFilter.eq("period", "2026-05"))
-                .orderBy(QuerySort.desc("total_revenue"))
-                .limitTo(100)
-);
+List<CustomerRevenueSummary> rows = reports.customerRevenue(
+        "2026-05",
+        WindowRequest.first(100)
+).items();
 ```
 
 BEST:
@@ -1107,12 +1049,9 @@ application is ready.
 Use a projection with a small limit.
 
 ```java
-List<OrderSummaryReadModel> latest = orderSummaryRepository.query(
-        QuerySpec.builder()
-                .sort(QuerySort.desc("order_date"))
-                .limit(25)
-                .build()
-);
+List<OrderSummary> latest = dashboards.latestOrders(
+        WindowRequest.first(25)
+).items();
 ```
 
 BEST: Redis projection for a frequently refreshed dashboard widget.
@@ -1122,12 +1061,9 @@ BEST: Redis projection for a frequently refreshed dashboard widget.
 Use ranked projection.
 
 ```java
-List<CustomerRiskReadModel> riskyCustomers = riskRepository.query(
-        QuerySpec.builder()
-                .sort(QuerySort.desc("risk_score"))
-                .limit(50)
-                .build()
-);
+List<CustomerRiskReadModel> riskyCustomers = dashboards.customerRisk(
+        WindowRequest.first(50)
+).items();
 ```
 
 BEST: precomputed score, bounded top-N read.

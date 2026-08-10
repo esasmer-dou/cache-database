@@ -4,12 +4,6 @@ import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheEntity;
 import com.reactor.cachedb.annotations.CacheId;
 import com.reactor.cachedb.annotations.CachePartitionedIndex;
-import com.reactor.cachedb.annotations.CacheNamedQuery;
-import com.reactor.cachedb.core.query.QueryFilter;
-import com.reactor.cachedb.core.query.QuerySort;
-import com.reactor.cachedb.core.query.QuerySpec;
-
-import java.util.List;
 
 @CacheEntity(table = "sample_shipment_events", redisNamespace = "sample-shipment-events")
 @CachePartitionedIndex(partitionBy = "shipment_id", sortBy = "event_time")
@@ -37,22 +31,5 @@ public class ShipmentEventEntity {
     public String description;
 
     public ShipmentEventEntity() {
-    }
-
-    @CacheNamedQuery("eventsForShipment")
-    public static QuerySpec eventsForShipmentQuery(long shipmentId, int limit) {
-        return QuerySpec.where(QueryFilter.eq("shipment_id", shipmentId))
-                .orderBy(QuerySort.desc("event_time"), QuerySort.desc("event_id"))
-                .limitTo(limit);
-    }
-
-    @CacheNamedQuery("eventsForShipments")
-    public static QuerySpec eventsForShipmentsQuery(List<Long> shipmentIds, int totalLimit) {
-        List<Object> ids = shipmentIds == null
-                ? List.of()
-                : shipmentIds.stream().filter(id -> id != null).map(id -> (Object) id).toList();
-        return QuerySpec.where(QueryFilter.in("shipment_id", ids))
-                .orderBy(QuerySort.asc("shipment_id"), QuerySort.desc("event_time"))
-                .limitTo(totalLimit);
     }
 }

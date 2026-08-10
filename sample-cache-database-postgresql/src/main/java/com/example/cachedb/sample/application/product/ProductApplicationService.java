@@ -1,13 +1,12 @@
 package com.example.cachedb.sample.application.product;
 
-import com.example.cachedb.sample.application.SampleEntityNotFoundException;
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
+import com.example.cachedb.sample.application.SampleHotLookups;
 import com.example.cachedb.sample.domain.ProductEntity;
 import com.example.cachedb.sample.readmodel.ProductAvailability;
-import com.example.cachedb.sample.readmodel.ProductReadModels;
+import com.example.cachedb.sample.repository.ProductRepository;
 import com.example.cachedb.sample.service.SampleDomainPolicies;
 import com.reactor.cachedb.core.model.WriteReceipt;
-import com.reactor.cachedb.core.page.VersionedEntity;
+import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -17,44 +16,42 @@ import java.util.List;
 @Service
 public final class ProductApplicationService {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final ProductRepository products;
     private final Clock clock;
 
-    public ProductApplicationService(GeneratedCacheModule.Scope domain, Clock clock) {
-        this.domain = domain;
+    public ProductApplicationService(ProductRepository products, Clock clock) {
+        this.products = products;
         this.clock = clock;
     }
 
     public List<ProductAvailability> activeByCategory(String category, int limit) {
-        return domain.products().queries().activeProductsByCategoryProjection(category, limit);
+        return products.activeByCategory(category, WindowRequest.first(limit)).completeItems();
     }
 
     public List<ProductAvailability> lowStock(int limit) {
-        return domain.products().queries().lowStockProductsProjection(limit);
+        return products.lowStock(limit).completeItems();
     }
 
     public ProductEntity detail(long productId) {
-        return domain.products().findById(productId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Product", productId));
+        return SampleHotLookups.require("Product", productId, products.detail(productId));
     }
 
     public List<ProductAvailability> inactiveArchive(int limit) {
-        return domain.products().queries().inactiveProductArchiveSource(limit).stream()
-                .map(ProductReadModels::fromEntity)
-                .toList();
+        return products.inactiveArchive(WindowRequest.first(limit)).items();
     }
 
     public WriteReceipt<ProductEntity, Long> updateStock(long productId, UpdateStock command) {
-        VersionedEntity<ProductEntity> current = domain.products().findVersionedById(productId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Product", productId));
-        ProductEntity entity = current.entity();
-        entity.stockQuantity = command.stockQuantity() == null ? entity.stockQuantity : command.stockQuantity();
-        entity.reservedQuantity = command.reservedQuantity() == null ? entity.reservedQuantity : command.reservedQuantity();
-        entity.stockStatus = command.stockStatus() == null
-                ? SampleDomainPolicies.stockStatus(entity)
-                : command.stockStatus();
-        entity.updatedAt = Instant.now(clock).getEpochSecond();
-        return domain.products().save(entity, current.version());
+        return products.updateHot(productId, entity -> {
+            entity.stockQuantity = command.stockQuantity() == null ? entity.stockQuantity : command.stockQuantity();
+            entity.reservedQuantity = command.reservedQuantity() == null
+                    ? entity.reservedQuantity
+                    : command.reservedQuantity();
+            entity.stockStatus = command.stockStatus() == null
+                    ? SampleDomainPolicies.stockStatus(entity)
+                    : command.stockStatus();
+            entity.updatedAt = Instant.now(clock).getEpochSecond();
+            return entity;
+        });
     }
 
     public record UpdateStock(Integer stockQuantity, Integer reservedQuantity, String stockStatus) {

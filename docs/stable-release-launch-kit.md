@@ -19,26 +19,27 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Official Distribution Channel
 
-For `v0.6.0`, the official distribution channel is the GitHub Release asset:
+For `v0.7.0`, the official distribution channels are GitHub Packages and the
+GitHub Release asset:
 
 ```text
-cache-database-0.6.0-github-release.zip
+cache-database-0.7.0-github-release.zip
 ```
 
-The bundle contains the Maven module jars, source jars, javadocs, README,
-security/community files, English docs, and Turkish docs. Maven Central is not
-required for this release because GitHub Release is the selected official
-package distribution channel.
+The bundle contains binary, source, javadoc, and POM artifacts for 16 public
+modules plus the CacheDB BOM, README, security/community files, English docs,
+and Turkish docs. Maven Central is not required because GitHub Packages and the
+GitHub Release bundle are the selected official distribution channels.
 
 ## Release Positioning
 
-`cache-database v0.6.0`
+`cache-database v0.7.0`
 
-CacheDB `v0.6.0` expands the stable generated API into a declarative application
-surface: package-level domain wiring, bounded relation loaders, typed projection
-records, route contracts, optimistic write receipts, durable write dependencies,
-and typed multi-pod Redis Stream jobs. The PostgreSQL and MSSQL samples expose
-the same layered contract with generated read models and application services.
+CacheDB `v0.7.0` completes the declarative repository surface with explicit
+hot-route coverage, bounded source and warm routes, safe optimistic hot
+updates, compile-time scheduled-warm adapters, fail-fast provider/configuration
+validation, a test kit, Maven doctor plugin, migration recipes, and provider
+equivalent PostgreSQL and MSSQL samples.
 
 This release does not claim that every consuming application can cut production
 traffic over without its own validation. Before cutover, each application still
@@ -54,18 +55,18 @@ topologies must be proven in the consuming application's staging environment.
 ## Release Notes Template
 
 ```markdown
-## cache-database v0.6.0
+## cache-database v0.7.0
 
 This stable release improves the practical migration path for existing SQL-backed applications.
 
 ### What is stable
 
 - Redis-first entity repositories with bounded hot-set policies.
-- One compile-time generated domain scope for typed CRUD, query, relation, projection, and warm operations.
+- Compile-time generated `@CacheRepository` implementations for typed commands, hot/source routes, relations, projections, and warm plans.
 - Declarative per-entity policy configuration with explicit JDBC registration.
-- PostgreSQL and explicitly selected MSSQL durable SQL provider paths.
+- PostgreSQL and SQL Server durable provider paths selected through exactly one provider starter.
 - Two-phase generated JDBC source and relation-loader registration.
-- Controlled read-through and warm/backfill through route-shaped query loaders.
+- Explicit bounded source routes plus route-derived warm/backfill; no hidden SQL fallback behind Redis misses.
 - Projection/read-model recipes for relation-heavy and globally ranked routes.
 - Migration Planner flow for schema discovery, warm-up, comparison, and report generation.
 - Multi-pod coordination, leader lease, and local Docker HA preflight evidence.
@@ -95,13 +96,13 @@ comparison, Redis memory budget, and rollback plan.
 ## Publication Checklist
 
 - `pom.xml` and all module parent versions use the stable version.
-- Release notes exist at `docs/releases/v0.6.0.md`.
+- Release notes exist at `docs/releases/v0.7.0.md`.
 - `mvn -DskipTests package` passes.
 - Public API compatibility check passes.
 - Turkish documentation quality check passes.
 - Local Docker HA preflight passes or the latest CI evidence is green.
 - `Public Beta Readiness` and `Production Evidence` are green for the release
   commit.
-- `Production GA Release Readiness` is green for `v0.6.0`.
+- `Production GA Release Readiness` is green for `v0.7.0`.
 - GitHub Release is not marked as prerelease.
-- GitHub Release asset `cache-database-0.6.0-github-release.zip` is attached.
+- GitHub Release asset `cache-database-0.7.0-github-release.zip` is attached.

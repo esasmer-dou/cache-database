@@ -29,9 +29,10 @@ Stay with Hibernate/JPA when:
 
 CacheDB is not trying to be a drop-in clone of Hibernate.
 
-It is a Redis-first persistence library where:
+It is an explicit Redis-first persistence library where:
 
-- application reads and writes go to Redis first
+- writes are accepted by Redis first and persisted through write-behind
+- hot reads use Redis-only route contracts; archive/history reads use bounded SQL routes
 - the selected SQL provider remains the durable persistence layer
 - metadata is compile-time generated
 - relation loading is explicit
@@ -50,8 +51,9 @@ That means CacheDB should be evaluated as:
 | Primary read path | Redis-first | Database-first |
 | Metadata model | Compile-time generated | Usually runtime reflection and ORM metadata |
 | Default philosophy | Explicit control | Transparent abstraction |
-| Relation loading | Explicit `FetchPlan`, loaders, projections | Often implicit lazy/eager graph behavior |
-| Hotspot escape hatch | Drop to binding or direct repository | Usually stays inside ORM abstractions or custom SQL |
+| Relation loading | Explicit bounded lookup or projection | Often implicit lazy/eager graph behavior |
+| Application API | Compile-time generated `@CacheRepository` implementation | Runtime ORM repository/session |
+| Hotspot escape hatch | Provider repository or adapter for measured infrastructure work | Usually stays inside ORM abstractions or custom SQL |
 | Best fit | Low-latency services, read-heavy APIs, Redis-centric systems | Relational domains, SQL-centric systems, join-heavy apps |
 | Runtime overhead goal | Very low | Often acceptable, but not the primary design goal |
 
@@ -82,11 +84,12 @@ That is not a weakness in the message. It makes the positioning more credible.
 
 If a team adopts CacheDB well, production should usually look like this:
 
-- default business code uses generated domain or binding surfaces
-- hot paths use projections and explicit fetch limits
+- default business code injects declarative repositories
+- hot paths use `@HotRoute`, projections, explicit windows, and coverage
+- durable archive/history reads use bounded `@SourceRoute` methods
 - global sorted/range read screens use projection-specific ranked fields instead of wide multi-sort entity queries
 - those ranked projection fields are declared with `rankedBy(...)` so the projection repository can use a top-window fast path
-- only proven hotspots drop to direct repositories
+- only measured infrastructure paths drop to provider repositories
 - foreground repository traffic is isolated from background worker/admin traffic
 
 If a team adopts CacheDB badly, the failure pattern is usually this:
@@ -95,7 +98,7 @@ If a team adopts CacheDB badly, the failure pattern is usually this:
 - it treats Redis as magically free
 - it avoids projections
 - it shares Redis pools between foreground and background paths
-- it drops all code to minimal repositories before measuring anything
+- it bypasses route contracts with low-level repositories throughout application code
 
 CacheDB rewards explicitness. It does not reward pretending object graphs are free.
 
@@ -103,12 +106,13 @@ CacheDB rewards explicitness. It does not reward pretending object graphs are fr
 
 Use this migration path if a team is coming from JPA/Hibernate:
 
-1. Start with `GeneratedCacheModule.using(session)...`
-2. Keep CRUD and normal service endpoints on the generated surface
-3. Move list screens to projections and summary/detail patterns
-4. Add `withRelationLimit(...)` to preview relations
-5. Move only measured hotspots to `*CacheBinding.using(session)...`
-6. Use direct repositories only where profiling says wrapper reduction still matters
+1. Keep table mapping and relation metadata on the entity.
+2. Add an `@CacheRepository` interface for each aggregate or route group.
+3. Declare detail reads as `@CacheLookup` and Redis list reads as `@HotRoute`.
+4. Move list screens to projections and summary/detail patterns.
+5. Declare archive/history reads as bounded `@SourceRoute` or reviewed `@SourceSql` methods.
+6. Derive `@WarmRoute` methods from hot routes and prove route coverage before cutover.
+7. Keep the old ORM route until parity, latency, memory, and rollback checks pass.
 
 This path keeps onboarding smooth while preserving the low-overhead goal.
 
@@ -118,10 +122,11 @@ Use this as the default team rule:
 
 | Team or workload | Recommended surface |
 | --- | --- |
-| Normal product service code | `GeneratedCacheModule.using(session)...` |
-| Explicit hot endpoints | `*CacheBinding.using(session)...` |
-| Worker, replay, recovery, infra code | direct `EntityRepository` / `ProjectionRepository` |
-| Relation-heavy list or dashboard reads | projections + `withRelationLimit(...)` |
+| Normal product service code | injected `@CacheRepository` |
+| Redis-only detail and list endpoints | `@CacheLookup` / `@HotRoute` |
+| Durable archive/history | bounded `@SourceRoute` / reviewed `@SourceSql` |
+| Worker, replay, recovery, infrastructure code | low-level repository or provider adapter |
+| Relation-heavy list or dashboard reads | projection-returning `@HotRoute` plus `@WarmRoute` |
 
 ## Benchmark Honesty
 

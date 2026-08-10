@@ -2,7 +2,6 @@ package com.example.cachedb.sample.service;
 
 import com.example.cachedb.sample.domain.AuditEventEntity;
 import com.example.cachedb.sample.domain.CustomerEntity;
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.domain.OrderEntity;
 import com.example.cachedb.sample.domain.OrderLineEntity;
 import com.example.cachedb.sample.domain.ProductEntity;
@@ -10,6 +9,7 @@ import com.example.cachedb.sample.domain.ReportJobEntity;
 import com.example.cachedb.sample.domain.ShipmentEntity;
 import com.example.cachedb.sample.domain.ShipmentEventEntity;
 import com.example.cachedb.sample.domain.SupportTicketEntity;
+import com.example.cachedb.sample.repository.SampleRepositories;
 import com.reactor.cachedb.core.model.WriteReceipt;
 import com.reactor.cachedb.starter.CacheDatabase;
 import org.springframework.stereotype.Service;
@@ -29,14 +29,14 @@ public class SampleSeedService {
     private static final int MAX_PENDING_RECEIPTS = 1_024;
     private static final Duration DURABILITY_TIMEOUT = Duration.ofSeconds(30);
 
-    private final GeneratedCacheModule.Scope domain;
+    private final SampleRepositories repositories;
     private final CacheDatabase cacheDatabase;
 
     public SampleSeedService(
-            GeneratedCacheModule.Scope domain,
+            SampleRepositories repositories,
             CacheDatabase cacheDatabase
     ) {
-        this.domain = domain;
+        this.repositories = repositories;
         this.cacheDatabase = cacheDatabase;
     }
 
@@ -46,8 +46,8 @@ public class SampleSeedService {
         int linesEach = requireInRange("linesPerOrder", linesPerOrder, 1, 12);
         long now = Instant.now().getEpochSecond();
 
-        DurableBatch<ProductEntity, Long> products = batch("products", domain.products()::saveAll);
-        DurableBatch<CustomerEntity, Long> customerBatch = batch("customers", domain.customers()::saveAll);
+        DurableBatch<ProductEntity, Long> products = batch("products", repositories.products()::saveAll);
+        DurableBatch<CustomerEntity, Long> customerBatch = batch("customers", repositories.customers()::saveAll);
         for (long productId = 1; productId <= 50; productId++) {
             products.add(product(productId));
         }
@@ -63,8 +63,8 @@ public class SampleSeedService {
         long shipmentEventCount = 0;
         long reportJobCount = 0;
         long auditEventCount = 0;
-        DurableBatch<OrderEntity, Long> orders = batch("orders", domain.orders()::saveAll);
-        DurableBatch<ShipmentEntity, Long> shipments = batch("shipments", domain.shipments()::saveAll);
+        DurableBatch<OrderEntity, Long> orders = batch("orders", repositories.orders()::saveAll);
+        DurableBatch<ShipmentEntity, Long> shipments = batch("shipments", repositories.shipments()::saveAll);
         for (long customerId = 1; customerId <= customers; customerId++) {
             for (int index = 1; index <= ordersEach; index++) {
                 long orderId = (customerId * 10_000L) + index;
@@ -79,7 +79,7 @@ public class SampleSeedService {
             }
         }
 
-        DurableBatch<ReportJobEntity, Long> reportJobs = batch("report jobs", domain.reportJobs()::saveAll);
+        DurableBatch<ReportJobEntity, Long> reportJobs = batch("report jobs", repositories.reportJobs()::saveAll);
         for (long reportJobId = 1; reportJobId <= 20; reportJobId++) {
             reportJobs.add(reportJob(reportJobId, now));
             reportJobCount++;
@@ -88,14 +88,14 @@ public class SampleSeedService {
         shipments.finish();
         reportJobs.finish();
 
-        DurableBatch<OrderLineEntity, Long> lines = batch("order lines", domain.orderLines()::saveAll);
+        DurableBatch<OrderLineEntity, Long> lines = batch("order lines", repositories.orderLines()::saveAll);
         DurableBatch<ShipmentEventEntity, Long> shipmentEvents = batch(
-                "shipment events", domain.shipmentEvents()::saveAll
+                "shipment events", repositories.shipmentEvents()::saveAll
         );
         DurableBatch<SupportTicketEntity, Long> tickets = batch(
-                "support tickets", domain.supportTickets()::saveAll
+                "support tickets", repositories.supportTickets()::saveAll
         );
-        DurableBatch<AuditEventEntity, Long> auditEvents = batch("audit events", domain.auditEvents()::saveAll);
+        DurableBatch<AuditEventEntity, Long> auditEvents = batch("audit events", repositories.auditEvents()::saveAll);
         for (long customerId = 1; customerId <= customers; customerId++) {
             for (int orderIndex = 1; orderIndex <= ordersEach; orderIndex++) {
                 long orderId = (customerId * 10_000L) + orderIndex;

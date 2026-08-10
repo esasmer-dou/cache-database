@@ -23,10 +23,11 @@ CacheDB'nin temel önceliği değişmez:
 
 Kısa kural:
 
-- Yeni production servislerinde `GeneratedCacheModule.using(session)...` ile başla.
-- Kanıtlanmış kritik endpoint'i `*CacheBinding.using(session)...` tarafına indir.
-- Worker, replay ve altyapı kodlarında doğrudan repository kullan.
-- Çok ilişkili liste ve yönetim paneli ekranlarında projection + `withRelationLimit(...)` kullan.
+- Yeni production servislerinde her aggregate veya route grubu için bir `@CacheRepository` arayüzü tanımla.
+- Yalnızca Redis'ten çalışacak okumaları `@CacheLookup` veya `@HotRoute` ile belirt; kalıcı geçmişi `@SourceRoute` ile ayır.
+- Çok ilişkili listelerde, yönetim panellerinde ve global sıralamada projection döndür.
+- Önceden yüklenmesi gereken her route için aynı sorgudan türeyen bir `@WarmRoute` tanımla.
+- Generated binding ve düşük seviyeli repository'leri yalnızca ölçülmüş altyapı veya uyumluluk işlerinde kullan.
 - Global sıralı ekranlarda ranked projection kullan.
 
 ## Kullanım Senaryosu Rehberi
@@ -36,8 +37,8 @@ Kısa kural:
 | Müşteri detayında 1.000+ sipariş | Customer root entity, order summary projection, root başına sınırlı Redis penceresi | İlk ekranda tam müşteri veri grafiğini ve tüm order line'ları yüklemek |
 | Çok satırlı sipariş detayı | Order detail'i açıkça yükle, yalnızca küçük `orderLines` önizlemesi preload et | Kullanıcı istemeden yüzlerce/binlerce satırı yüklemek |
 | Global "en yüksek değerli siparişler" yönetim paneli | Önceden hesaplanmış iş skoru olan ranked projection | Geniş entity scan yapıp bellek içinde sıralamak |
-| Admin CRUD ekranı | Generated module veya binding | Kritik olmayan admin path için erken direct repository kodu yazmak |
-| Write-behind repair veya replay worker | Açık limit ve retry içeren direct repository | Operasyonel işi yüksek seviye domain helper arkasına saklamak |
+| Admin CRUD ekranı | Açık detay ve komut metotları olan deklaratif repository | Redis'te bulunmayan kaydı kalıcı 404 gibi yorumlamak |
+| Write-behind repair veya replay worker | Açık limit, retry ve checkpoint içeren düşük seviyeli repository | Operasyonel işi normal istek route'u arkasına saklamak |
 | Mevcut ORM akışının geçişi | Geçiş Planlayıcı, dry-run ön ısıtma, staging ön ısıtma, yan yana karşılaştırma | Sadece Redis hızlı diye kör canlı geçiş yapmak |
 
 En yaygın hata Redis'i sihirli bir tam veri grafiği cache'i gibi kullanmaktır.
@@ -75,33 +76,35 @@ top-window yolunu kullanabilir.
 
 ```mermaid
 flowchart TD
-    A["Normal servis endpoint'i mi?"] -->|Evet| B["GeneratedCacheModule.using(session) ile başla"]
-    A -->|Hayır| C["Kanıtlanmış kritik endpoint veya operasyon akışı mı?"]
-    C -->|Evet| D["*CacheBinding veya direct repository kullan"]
-    C -->|Hayır| E["Ekran çok ilişkili veya liste ağırlıklı mı?"]
-    E -->|Evet| F["Projection ve withRelationLimit(...) kullan"]
-    E -->|Hayır| G["Profiling aksini göstermedikçe generated yüzeyde kal"]
+    A["Route kalıcı geçmişe ihtiyaç duyuyor mu?"] -->|Evet| B["Sınırlı bir SourceRoute tanımla"]
+    A -->|Hayır| C["Route yalnızca Redis'ten mi çalışmalı?"]
+    C -->|Evet| D["CacheLookup veya HotRoute tanımla"]
+    C -->|Hayır| B
+    D --> E["Sonuç liste, yönetim paneli veya global sıralama mı?"]
+    E -->|Evet| F["Projection döndür ve eşleşen WarmRoute ekle"]
+    E -->|Hayır| G["Sınırlı entity lookup veya pencere döndür"]
 ```
 
 ## Karar Tablosu
 
 | Durum | Önerilen yüzey | Neden | Ne zaman aşağı inilir? |
 | --- | --- | --- | --- |
-| Tipik iş CRUD'u ve normal servis kodu | `GeneratedCacheModule.using(session)...` | En az glue kodu, en kolay başlangıç | Gerçek darboğaz ölçülürse |
-| Package-level grouping istemeyen ama generated helper isteyen ekip | `*CacheBinding.using(session)...` | Daha açık entity sahipliği, hâlâ düşük ceremony | Tekil endpoint gecikme hassas hale gelirse |
-| Bilinen kritik read/write endpoint'i | doğrudan `EntityRepository` / `ProjectionRepository` | En küçük wrapper yüzeyi, en net kontrol | Sadece ölçülmüş kritik yollarda kal |
-| Çok ilişkili okuma ekranı | generated binding + projection + relation limit | Büyük nesne grafiği maliyetini düşürür | Özet/detay hâlâ hedefi tutmuyorsa |
-| İç admin veya reporting akışı | generated module veya binding | Geliştirici hızı çoğu zaman nanosaniye kazancından değerlidir | Nadiren gerekir |
-| Replay, recovery, worker kodu | direct repository | Operasyonel kod açık ve tahmin edilebilir kalır | Genelde daha üst soyutlama gerekmez |
+| Tipik iş CRUD'u ve servis katmanı | `@CacheRepository`, inherited komutlar ve açık lookup metotları | Tek enjekte edilen sözleşme, derleme zamanı kontrolü, reflection yok | Altyapı kodu daha düşük seviye kontrol istemedikçe bu yüzeyde kal |
+| Kritik liste veya yönetim paneli | Projection döndüren `@HotRoute` | Route kendi sayfa, pencere, coverage ve bellek sözleşmesini taşır | Sözleşmeyi atlamak yerine projection'ı yeniden tasarla |
+| Kalıcı arşiv veya denetim geçmişi | Sınırlı `@SourceRoute` ya da gözden geçirilmiş `@SourceSql` | SQL erişimi görünür kalır ve Redis'i kendiliğinden doldurmaz | Okumayı saklamak yerine index, timeout ve satır limitini ayarla |
+| Çok ilişkili detay | Derleme zamanında sınırlı ilişki önizlemesi olan `@CacheLookup` | Tam veri grafiği yüklemesini ve N+1 davranışını önler | Ek detayı ayrı bir route ile getir |
+| Replay, recovery ve iç worker'lar | Düşük seviyeli repository veya provider adaptörü | Retry, checkpoint ve operasyonel durum açık kalır | Bu yüzeyi normal istek koduna açma |
 
 ## Resmi Öneri Merdiveni
 
-1. `GeneratedCacheModule.using(session)...` ile başla.
-2. Kritik endpoint'leri gerekirse `*CacheBinding.using(session)...` tarafına çek.
-3. Yalnızca kanıtlanmış darboğazları doğrudan repository/projection kullanımına indir.
+1. Entity üzerinde tablo eşlemesini ve ilişki metadata'sını tanımla.
+2. Uygulama davranışını enjekte edilebilir bir `@CacheRepository` arayüzüne taşı.
+3. Redis, kalıcı kaynak, warm ve komut metotlarını açıkça ayır.
+4. Tam entity penceresini büyütmeden önce projection kullan.
+5. Generated binding veya provider repository'sine yalnızca ölçülmüş altyapı işlerinde in.
 
-Bu yaklaşım uygulama kodunun büyük bölümünü okunabilir tutar. Gerçekten gereken
-az sayıdaki yol için de net bir kaçış hattı bırakır.
+Bu yaklaşım uygulama API'sini sade tutarken sorgu şeklini ve çalışma politikasını
+derleme zamanında görünür kılar.
 
 ## Çok Pod Koordinasyon Smoke'u
 
@@ -177,29 +180,31 @@ Son yerel ölçümün özeti:
 
 ### Ürün Servis Ekipleri
 
-`GeneratedCacheModule.using(session)...` ile başla.
+Enjekte edilen bir `@CacheRepository` ile başla.
 
 Bu yol şunları birlikte verir:
 
-- rahat başlangıç
-- Spring Boot tarafında az glue kodu
-- derleme zamanında üretilen API ergonomisi
-- normal production API'leri için düşük wrapper maliyeti
+- küçük ve iş alanına özel bir arayüz
+- otomatik Spring bean kaydı
+- derleme zamanında route ve parametre kontrolü
+- Redis, kaynak veritabanı, warm ve komut davranışlarının açık ayrımı
 
 ### Birkaç Kritik Endpoint'i Olan Ekipler
 
-Kodun büyük bölümünü generated domain module üzerinde bırak. Yalnızca ölçülmüş
-darboğazı `*CacheBinding.using(session)...` tarafına çek.
+Tek repository sözleşmesinde kal. Ölçülen kritik route'u `@HotRoute`, projection,
+sınırlı `WindowRequest` ve eşleşen `@WarmRoute` ile açık hale getir.
 
 Bu genelde en iyi orta noktadır:
 
-- kodun geri kalanı okunabilir kalır
-- kritik endpoint daha küçük wrapper yüzeyi kullanır
-- tüm kod gereksiz yere düşük seviye repository stiline indirilmez
+- servis kodunun geri kalanı okunabilir kalır
+- kritik endpoint ölçülebilir bellek ve coverage sözleşmesi kazanır
+- route sessizce pahalı entity taramasına düşmez
 
 ### Platform, Worker ve Operasyon Ekipleri
 
-Doğrudan `EntityRepository` / `ProjectionRepository` kullan.
+Ürün route'larında generated repository kullan. Düşük seviyeli
+`EntityRepository` / `ProjectionRepository` yüzeyine yalnızca framework,
+repair, replay veya migration altyapısı geliştirirken in.
 
 Bu yol şu durumlarda daha doğrudur:
 
@@ -209,16 +214,17 @@ Bu yol şu durumlarda daha doğrudur:
 
 ## JPA/Hibernate'ten Geçiş Yolu
 
-JPA/Hibernate alışkanlığından gelen ekipleri bir anda minimal repository stiline
-zorlama.
+JPA/Hibernate alışkanlığındaki lazy-loading ve örtülü SQL davranışını CacheDB
+içinde yeniden üretme.
 
 Şu geçiş yolunu kullan:
 
-1. `GeneratedCacheModule.using(session)...` ile başla.
-2. Geniş eager read'leri projection + açık detay okuması modeline çek.
-3. Önizleme ekranlarında `withRelationLimit(...)` ekle.
-4. Sadece kanıtlanmış darboğazları `*CacheBinding.using(session)...` tarafına indir.
-5. Doğrudan repository stilini ancak profiling hâlâ gerekli diyorsa kullan.
+1. Kalıcı tablo eşlemesini ve ilişkileri entity üzerinde tanımla.
+2. Her uygulama route'u için bir repository metodu tanımla.
+3. Geniş eager okumaları projection ve açık detay lookup modeline çevir.
+4. Arşiv ve geçmiş okumalarını sınırlı kaynak route'larına taşı.
+5. Trafiği değiştirmeden önce warm route ekle ve coverage kanıtla.
+6. Veri eşitliği, gecikme, bellek ve rollback kontrolleri geçene kadar eski ORM route'unu açık tut.
 
 Bu yol ekiplerin zihinsel modelini tamamen bozmaz, ama onları daha düşük ek
 yüklü sorgu şekillerine yönlendirir.
@@ -234,8 +240,20 @@ yüklü sorgu şekillerine yönlendirir.
 Önerilen yüzey:
 
 ```java
-var domain = com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session);
-List<UserEntity> activeUsers = domain.users().queries().activeUsers(25);
+@CacheRepository(entity = UserEntity.class)
+public interface UserRepository extends CacheDbRepository<UserEntity, Long> {
+
+    @HotRoute(value = "active-users", pageSize = 25, hotWindow = 10_000,
+            memoryBudgetBytes = 16_777_216L)
+    @CacheRouteQuery(
+            predicates = @CachePredicate(field = "status", constants = "ACTIVE"),
+            orderBy = @CacheOrder(field = "username"),
+            windowParameter = "window"
+    )
+    HotWindow<UserEntity> active(WindowRequest window);
+}
+
+List<UserEntity> activeUsers = users.active(WindowRequest.first(25)).completeItems();
 ```
 
 Neden varsayılan:
@@ -278,7 +296,7 @@ Neden:
 
 1. Summary listesini projection repository ile sorgula.
 2. Detayı kullanıcı istediğinde açıkça yükle.
-3. Relation önizlemelerini `withRelationLimit(...)` ile sınırla.
+3. İlişki önizlemelerini `@CacheLookup(maxRelationRows=...)` ile sınırla.
 4. Global top-N veya threshold odaklı ekranlarda geniş entity query yerine projection'a özel ranked alan kullan.
 5. Bu ranked alanı `rankedBy(...)` ile işaretle.
 6. Full entity page/result boyutunu `hotEntityLimit` altında tut; pencere büyük olmak zorundaysa bunu projection penceresi olarak tasarla.
@@ -286,14 +304,13 @@ Neden:
 Örnek:
 
 ```java
-ProjectionRepository<OrderSummaryReadModel, Long> summaries =
-        DemoOrderEntityCacheBinding.using(session).projections().orderSummary();
+List<OrderSummary> topOrders = orders.customerTimeline(
+        customerId,
+        WindowRequest.first(24)
+).completeItems();
 
-List<OrderSummaryReadModel> topOrders =
-        DemoOrderEntityCacheBinding.topCustomerOrders(summaries, customerId, 24);
-
-EntityRepository<DemoOrderEntity, Long> previewRepository =
-        DemoOrderEntityCacheBinding.using(session).fetches().orderLinesPreview(8);
+OrderEntity order = orders.detail(orderId, 8)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
 ```
 
 Müşteri timeline ekranı için production'a uygun şekil şudur:
@@ -499,7 +516,7 @@ Hangi reçeteyi seçersen seç, production için şu kurallar geçerlidir:
 - foreground repository Redis trafiğini background worker/admin Redis trafiğinden ayır
 - liste ekranları ve yönetim panellerinde projection kullan
 - eager geniş relation yerine özet sorgu + açık detay okuması kullan
-- önizleme ekranlarında `withRelationLimit(...)` kullan
+- önizleme ilişkilerini `@CacheLookup` ile sınırla
 - global sorted/range liste ekranlarını projection-first ele al
 - iş sırası önemliyse pre-ranked projection alanı tercih et
 - page/result boyutunu entity hot window altında tut; varsayılan read-shape guardrail bunu `hotSetHeadroom` ile zorlar
@@ -511,8 +528,8 @@ Hangi reçeteyi seçersen seç, production için şu kurallar geçerlidir:
 - kaynak veritabanı CacheDB dışında da güncelleniyorsa CDC, Debezium, Kafka veya outbox adaptörü kullan
 - "müşteri başına son 1.000 order" gibi sınırlı projection pencereleri için `readShapeGuardrail.maxProjectionQueryLimit` kullan
 - CacheDB'ye ayrılmış Redis'te `maxmemory` ayarla ve `maxmemory-policy=noeviction` kullan; page-cache, read-through, hot-set ve query-index yazımlarını Redis'in rastgele eviction davranışına değil CacheDB guardrail'larına bırak
-- üretilmiş API ergonomisini normal kod için koru
-- minimal repository stilini yalnızca ölçülmüş darboğazlara sakla
+- normal uygulama kodunda deklaratif repository API'sini koru
+- düşük seviyeli provider API'lerini yalnızca ölçülmüş altyapı işlerinde kullan
 - yönetim arayüzünü ana runtime path'i şekillendiren yer değil, gözlem ve kontrol yüzeyi olarak düşün
 
 ## Kaçınılacak Pattern'ler
@@ -525,7 +542,7 @@ Hangi reçeteyi seçersen seç, production için şu kurallar geçerlidir:
 - `entityTtlSeconds` değerini "son 90 iş günü" gibi yorumlamak; bunun için `TIME_WINDOW` kullan
 - CacheDB belleğini kontrol etmek için Redis random veya all-keys eviction davranışına güvenmek
 - foreground repository trafiği ile background worker'ları aynı Redis pool'da toplamak
-- ölçmeden tüm kodu minimal repository stiline indirmek
+- uygulama kodunun tamamında route sözleşmelerini düşük seviyeli repository çağrılarıyla atlamak
 - Redis gecikmesini yalnızca Redis'in kendisiyle açıklamak
 
 Çoğu zaman asıl maliyet sorgu şekli ve ne kadar büyük veri grafiği
@@ -545,8 +562,9 @@ cachedb:
       enabled: true
 ```
 
-Sonra generated registrar'lar entity'leri otomatik register etsin ve servis
-kodunda generated module veya binding yüzeyini kullan.
+Ardından generated registrar'lar entity'leri kaydetsin, repository processor ise
+her `@CacheRepository` implementasyonunu Spring bean olarak oluştursun. Uygulama
+servisleri yalnızca kendi domain repository arayüzünü enjekte etsin.
 
 ## Çok Pod'lu Kubernetes Reçetesi
 
@@ -591,12 +609,14 @@ Değişmeyen gerçekler:
 
 Bir engineering playbook'a kopyalanacak kısa kural seti:
 
-- varsayılan uygulama kodu: `GeneratedCacheModule.using(session)...`
-- kritik endpoint kaçış hattı: `*CacheBinding.using(session)...`
-- worker ve replay kodu: doğrudan repository
+- varsayılan uygulama kodu: enjekte edilen `@CacheRepository`
+- kritik listeler: `@HotRoute`, projection, sınırlı pencere ve coverage
+- arşiv/geçmiş: sınırlı `@SourceRoute`; cache miss sonrası örtülü SQL fallback yok
+- ön yükleme: aynı kritik route'tan türeyen `@WarmRoute`
+- worker ve replay kodu: düşük seviyeli repository veya provider adaptörü
 - liste ve yönetim paneli okumaları: önce projection, sonra gerekirse tam veri grafiği
-- relation önizleme ekranları: `withRelationLimit(...)`
-- daha alt seviyeye iniş: yalnızca profiling sonrası
+- ilişki önizlemeleri: sınırlı `@CacheLookup`
+- düşük seviyeli API: yalnızca profiling sonrası veya altyapı işinde
 
 İlgili dokümanlar:
 

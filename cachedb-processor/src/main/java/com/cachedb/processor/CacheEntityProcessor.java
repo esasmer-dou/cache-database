@@ -6,6 +6,7 @@ import com.reactor.cachedb.annotations.CacheDeleteCommand;
 import com.reactor.cachedb.annotations.CacheDomain;
 import com.reactor.cachedb.annotations.CacheEntity;
 import com.reactor.cachedb.annotations.CacheFetchPreset;
+import com.reactor.cachedb.annotations.CacheGeneratedId;
 import com.reactor.cachedb.annotations.CacheId;
 import com.reactor.cachedb.annotations.CacheNamedQuery;
 import com.reactor.cachedb.annotations.CachePagePreset;
@@ -14,6 +15,8 @@ import com.reactor.cachedb.annotations.CacheProjectionDefinition;
 import com.reactor.cachedb.annotations.CacheRelation;
 import com.reactor.cachedb.annotations.CacheRoute;
 import com.reactor.cachedb.annotations.CacheSaveCommand;
+import com.reactor.cachedb.annotations.CacheSoftDelete;
+import com.reactor.cachedb.annotations.CacheVersion;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
@@ -26,6 +29,7 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.RecordComponentElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
@@ -100,8 +104,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         }
         Map<String, List<EntityModel>> roundPackageEntityModels = new LinkedHashMap<>();
         for (Element element : roundEnv.getElementsAnnotatedWith(CacheEntity.class)) {
-            if (element.getKind() != ElementKind.CLASS) {
-                messager.printMessage(Diagnostic.Kind.ERROR, "@CacheEntity can only be used on classes", element);
+            if (element.getKind() != ElementKind.CLASS && element.getKind() != ElementKind.RECORD) {
+                messager.printMessage(Diagnostic.Kind.ERROR, "@CacheEntity can only be used on classes or records", element);
                 continue;
             }
 
@@ -112,6 +116,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             }
 
             writeBindingClass(entityModel);
+            writeMetamodelClass(entityModel);
             roundPackageEntityModels.computeIfAbsent(entityModel.packageName(), ignored -> new ArrayList<>()).add(entityModel);
         }
         for (Map.Entry<String, List<EntityModel>> entry : roundPackageEntityModels.entrySet()) {
@@ -148,8 +153,9 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         }
         String relationLoaderTypeName = extractLoaderTypeName(cacheEntity, true);
         String pageLoaderTypeName = extractLoaderTypeName(cacheEntity, false);
+        boolean recordType = typeElement.getKind() == ElementKind.RECORD;
 
-        if (!hasAccessibleNoArgConstructor(typeElement)) {
+        if (!recordType && !hasAccessibleNoArgConstructor(typeElement)) {
             messager.printMessage(Diagnostic.Kind.ERROR, "@CacheEntity class must declare a non-private no-arg constructor", typeElement);
             return null;
         }
@@ -163,6 +169,12 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         List<PagePresetModel> pagePresets = new ArrayList<>();
         List<SaveCommandModel> saveCommands = new ArrayList<>();
         List<DeleteCommandModel> deleteCommands = new ArrayList<>();
+        String versionColumn = "entity_version";
+        String deletedColumn = null;
+        String activeMarkerValue = "false";
+        String deletedMarkerValue = "true";
+        boolean versionDeclared = false;
+        boolean softDeleteDeclared = false;
 
         for (Element enclosed : typeElement.getEnclosedElements()) {
             if (enclosed.getKind() == ElementKind.METHOD) {
@@ -242,7 +254,72 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 }
                 continue;
             }
-            if (enclosed.getKind() != ElementKind.FIELD) {
+            if (recordType && enclosed.getKind() == ElementKind.RECORD_COMPONENT) {
+                RecordComponentElement component = (RecordComponentElement) enclosed;
+                CacheId cacheId = component.getAnnotation(CacheId.class);
+                CacheColumn cacheColumn = component.getAnnotation(CacheColumn.class);
+                CacheVersion cacheVersion = component.getAnnotation(CacheVersion.class);
+                CacheSoftDelete cacheSoftDelete = component.getAnnotation(CacheSoftDelete.class);
+                CacheCodec cacheCodec = component.getAnnotation(CacheCodec.class);
+                CacheGeneratedId generatedId = component.getAnnotation(CacheGeneratedId.class);
+                if (!validateGeneratedId(component, component.asType().toString(), cacheId, generatedId)) {
+                    return null;
+                }
+                if (cacheId == null && cacheColumn == null && cacheVersion == null && cacheSoftDelete == null) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                            "Every @CacheEntity record component must be persisted; use a projection for non-persisted values",
+                            component);
+                    return null;
+                }
+                String columnName = requireSqlIdentifier(
+                        component,
+                        cacheId != null ? cacheId.column()
+                                : cacheColumn != null ? cacheColumn.value()
+                                : cacheVersion != null ? cacheVersion.column() : cacheSoftDelete.column(),
+                        cacheId != null ? "@CacheId.column"
+                                : cacheColumn != null ? "@CacheColumn.value"
+                                : cacheVersion != null ? "@CacheVersion.column" : "@CacheSoftDelete.column",
+                        false
+                );
+                if (columnName == null) return null;
+                FieldModel fieldModel = new FieldModel(
+                        component.getSimpleName().toString(), component.asType().toString(), columnName,
+                        cacheId != null, isEnumType(component), extractCodecTypeName(cacheCodec)
+                );
+                if (!isSupportedType(fieldModel.typeName(), fieldModel.enumType(), fieldModel.codecTypeName() != null)) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                            "Unsupported persisted record component type: " + fieldModel.typeName(), component);
+                    return null;
+                }
+                if (fieldModel.idField()) {
+                    if (idField != null) {
+                        messager.printMessage(Diagnostic.Kind.ERROR, "Only one @CacheId component is allowed", component);
+                        return null;
+                    }
+                    idField = fieldModel;
+                }
+                if (cacheVersion != null) {
+                    if (versionDeclared) {
+                        messager.printMessage(Diagnostic.Kind.ERROR, "Only one @CacheVersion component is allowed", component);
+                        return null;
+                    }
+                    versionDeclared = true;
+                    versionColumn = columnName;
+                }
+                if (cacheSoftDelete != null) {
+                    if (softDeleteDeclared) {
+                        messager.printMessage(Diagnostic.Kind.ERROR, "Only one @CacheSoftDelete component is allowed", component);
+                        return null;
+                    }
+                    softDeleteDeclared = true;
+                    deletedColumn = columnName;
+                    activeMarkerValue = cacheSoftDelete.activeValue();
+                    deletedMarkerValue = cacheSoftDelete.deletedValue();
+                }
+                persistedFields.add(fieldModel);
+                continue;
+            }
+            if (enclosed.getKind() != ElementKind.FIELD || recordType) {
                 continue;
             }
 
@@ -251,12 +328,18 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             CacheColumn cacheColumn = field.getAnnotation(CacheColumn.class);
             CacheRelation cacheRelation = field.getAnnotation(CacheRelation.class);
             CacheCodec cacheCodec = field.getAnnotation(CacheCodec.class);
+            CacheVersion cacheVersion = field.getAnnotation(CacheVersion.class);
+            CacheSoftDelete cacheSoftDelete = field.getAnnotation(CacheSoftDelete.class);
+            CacheGeneratedId generatedId = field.getAnnotation(CacheGeneratedId.class);
+            if (!validateGeneratedId(field, field.asType().toString(), cacheId, generatedId)) {
+                return null;
+            }
 
             if (cacheRelation != null) {
                 relationDeclarations.add(new RelationDeclaration(field, cacheRelation));
             }
 
-            if (cacheId == null && cacheColumn == null) {
+            if (cacheId == null && cacheColumn == null && cacheVersion == null && cacheSoftDelete == null) {
                 continue;
             }
 
@@ -267,8 +350,12 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
             String columnName = requireSqlIdentifier(
                     field,
-                    cacheId != null ? cacheId.column() : cacheColumn.value(),
-                    cacheId != null ? "@CacheId.column" : "@CacheColumn.value",
+                    cacheId != null ? cacheId.column()
+                            : cacheColumn != null ? cacheColumn.value()
+                            : cacheVersion != null ? cacheVersion.column() : cacheSoftDelete.column(),
+                    cacheId != null ? "@CacheId.column"
+                            : cacheColumn != null ? "@CacheColumn.value"
+                            : cacheVersion != null ? "@CacheVersion.column" : "@CacheSoftDelete.column",
                     false
             );
             if (columnName == null) {
@@ -294,6 +381,25 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                     return null;
                 }
                 idField = fieldModel;
+            }
+
+            if (cacheVersion != null) {
+                if (versionDeclared) {
+                    messager.printMessage(Diagnostic.Kind.ERROR, "Only one @CacheVersion field is allowed", field);
+                    return null;
+                }
+                versionDeclared = true;
+                versionColumn = columnName;
+            }
+            if (cacheSoftDelete != null) {
+                if (softDeleteDeclared) {
+                    messager.printMessage(Diagnostic.Kind.ERROR, "Only one @CacheSoftDelete field is allowed", field);
+                    return null;
+                }
+                softDeleteDeclared = true;
+                deletedColumn = columnName;
+                activeMarkerValue = cacheSoftDelete.activeValue();
+                deletedMarkerValue = cacheSoftDelete.deletedValue();
             }
 
             persistedFields.add(fieldModel);
@@ -362,8 +468,13 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 packageName,
                 simpleName,
                 simpleName + "CacheBinding",
+                recordType,
                 tableName,
                 redisNamespace,
+                versionColumn,
+                deletedColumn,
+                activeMarkerValue,
+                deletedMarkerValue,
                 idField,
                 persistedFields,
                 partitionedSortIndexes,
@@ -377,6 +488,51 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 relationLoader,
                 pageLoader
         );
+    }
+
+    private boolean validateGeneratedId(
+            Element element,
+            String typeName,
+            CacheId cacheId,
+            CacheGeneratedId generatedId
+    ) {
+        if (generatedId == null) {
+            return true;
+        }
+        if (cacheId == null) {
+            messager.printMessage(Diagnostic.Kind.ERROR, "@CacheGeneratedId may only be declared on @CacheId", element);
+            return false;
+        }
+        return switch (generatedId.value()) {
+            case UUID -> requireGeneratedIdType(element, typeName, "java.util.UUID", "UUID");
+            case ULID -> requireGeneratedIdType(element, typeName, "java.lang.String", "ULID");
+            case SEQUENCE -> {
+                if (!requireGeneratedIdType(element, typeName, "java.lang.Long", "SEQUENCE")) {
+                    yield false;
+                }
+                if (generatedId.allocationSize() <= 0 || generatedId.allocationSize() > 10_000) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                            "@CacheGeneratedId allocationSize must be between 1 and 10000", element);
+                    yield false;
+                }
+                if (!generatedId.sequence().isBlank()
+                        && !generatedId.sequence().matches("[A-Za-z0-9_.:-]+")) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                            "@CacheGeneratedId sequence contains unsafe characters", element);
+                    yield false;
+                }
+                yield true;
+            }
+        };
+    }
+
+    private boolean requireGeneratedIdType(Element element, String actual, String expected, String strategy) {
+        if (expected.equals(actual)) {
+            return true;
+        }
+        messager.printMessage(Diagnostic.Kind.ERROR,
+                "@CacheGeneratedId(" + strategy + ") requires " + expected, element);
+        return false;
     }
 
     private boolean generateSpringConfiguration(EntityModel model) {
@@ -400,6 +556,14 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         for (RelationDeclaration declaration : declarations) {
             VariableElement relationField = declaration.field();
             CacheRelation relation = declaration.annotation();
+            if (relation.kind() != CacheRelation.RelationKind.ONE_TO_MANY) {
+                messager.printMessage(
+                        Diagnostic.Kind.ERROR,
+                        "Only ONE_TO_MANY has a generated, bounded batch loader. Model MANY_TO_ONE/ONE_TO_ONE as an explicit repository lookup and MANY_TO_MANY as a join entity or projection.",
+                        relationField
+                );
+                return null;
+            }
             if (relationField.getModifiers().contains(Modifier.PRIVATE)
                     || relationField.getModifiers().contains(Modifier.FINAL)) {
                 messager.printMessage(
@@ -464,14 +628,22 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             if (sorts == null) {
                 return null;
             }
-            boolean generatedLoader = relation.kind() == CacheRelation.RelationKind.ONE_TO_MANY && !sorts.isEmpty();
-            if (!generatedLoader && !customLoaderDeclared && relation.batchLoadOnly()) {
-                messager.printMessage(
-                        Diagnostic.Kind.WARNING,
-                        "Batch-only relation has no generated loader. Declare orderBy or provide @CacheEntity.relationLoader.",
-                        relationField
-                );
+            if (sorts.isEmpty()) {
+                String targetIdColumn = targetType.getEnclosedElements().stream()
+                        .filter(candidate -> candidate.getKind() == ElementKind.FIELD)
+                        .map(candidate -> (VariableElement) candidate)
+                        .filter(candidate -> candidate.getAnnotation(CacheId.class) != null)
+                        .map(candidate -> candidate.getAnnotation(CacheId.class).column())
+                        .findFirst()
+                        .orElse(null);
+                if (targetIdColumn == null) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                            "Generated ONE_TO_MANY relation requires a target @CacheId for stable ordering", relationField);
+                    return null;
+                }
+                sorts = List.of(new RelationSortModel(targetIdColumn, false));
             }
+            boolean generatedLoader = true;
             relations.add(new RelationModel(
                     relationField.getSimpleName().toString(),
                     targetType.getSimpleName().toString(),
@@ -1321,7 +1493,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         };
     }
 
-    private boolean isEnumType(VariableElement field) {
+    private boolean isEnumType(Element field) {
         Element element = processingEnv.getTypeUtils().asElement(field.asType());
         return element != null && element.getKind() == ElementKind.ENUM;
     }
@@ -1471,6 +1643,9 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    private ").append(model.bindingName()).append("() {\n");
         builder.append("    }\n\n");
 
+        renderWithIdHelper(builder, model);
+        builder.append('\n');
+
         renderMetadata(builder, model);
         builder.append('\n');
         renderCodec(builder, model);
@@ -1547,6 +1722,76 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    }\n");
         builder.append("}\n");
         return builder.toString();
+    }
+
+    private void renderWithIdHelper(StringBuilder builder, EntityModel model) {
+        builder.append("    public static ").append(model.simpleName()).append(" withId(")
+                .append(model.simpleName()).append(" entity, ").append(model.idField().typeName())
+                .append(" id) {\n")
+                .append("        java.util.Objects.requireNonNull(entity, \"entity\");\n")
+                .append("        java.util.Objects.requireNonNull(id, \"id\");\n");
+        if (model.recordType()) {
+            builder.append("        return new ").append(model.simpleName()).append("(");
+            for (int index = 0; index < model.persistedFields().size(); index++) {
+                if (index > 0) {
+                    builder.append(", ");
+                }
+                FieldModel field = model.persistedFields().get(index);
+                builder.append(field.idField() ? "id" : "entity." + field.fieldName() + "()");
+            }
+            builder.append(");\n");
+        } else {
+            builder.append("        entity.").append(model.idField().fieldName()).append(" = id;\n")
+                    .append("        return entity;\n");
+        }
+        builder.append("    }\n");
+    }
+
+    private void writeMetamodelClass(EntityModel model) {
+        String qualifiedName = model.packageName() + "." + model.simpleName() + "Fields";
+        try {
+            JavaFileObject fileObject = filer.createSourceFile(qualifiedName);
+            try (Writer writer = fileObject.openWriter()) {
+                writer.write(renderMetamodel(model));
+            }
+        } catch (IOException exception) {
+            messager.printMessage(Diagnostic.Kind.ERROR, "Could not generate entity metamodel: " + exception.getMessage());
+        }
+    }
+
+    private String renderMetamodel(EntityModel model) {
+        String generatedName = model.simpleName() + "Fields";
+        StringBuilder builder = new StringBuilder();
+        builder.append("package ").append(model.packageName()).append(";\n\n");
+        builder.append("/** Compile-time generated field metamodel. */\n");
+        builder.append("public final class ").append(generatedName).append(" {\n");
+        for (FieldModel field : model.persistedFields()) {
+            builder.append("    public static final com.reactor.cachedb.core.query.CacheField<")
+                    .append(model.simpleName()).append(", ").append(boxedTypeName(field.typeName())).append("> ")
+                    .append(field.fieldName()).append(" = new com.reactor.cachedb.core.query.CacheField<>(")
+                    .append(javaStringLiteral(field.fieldName())).append(", ")
+                    .append(javaStringLiteral(field.columnName())).append(", ")
+                    .append(classLiteral(field)).append(");\n");
+        }
+        builder.append("\n    private ").append(generatedName).append("() {\n    }\n");
+        builder.append("}\n");
+        return builder.toString();
+    }
+
+    private String classLiteral(FieldModel field) {
+        if (field.enumType() || field.codecTypeName() != null) {
+            return field.typeName() + ".class";
+        }
+        return switch (field.typeName()) {
+            case "int" -> "java.lang.Integer.class";
+            case "long" -> "java.lang.Long.class";
+            case "boolean" -> "java.lang.Boolean.class";
+            case "double" -> "java.lang.Double.class";
+            case "float" -> "java.lang.Float.class";
+            case "short" -> "java.lang.Short.class";
+            case "byte" -> "java.lang.Byte.class";
+            default -> field.typeName() + ".class";
+        };
     }
 
     private void writePackageSpringConfigurationClass(String packageName) {
@@ -1759,12 +2004,28 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("            return ").append(javaStringLiteral(model.idField().columnName())).append(";\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
+        builder.append("        public String versionColumn() {\n");
+        builder.append("            return ").append(javaStringLiteral(model.versionColumn())).append(";\n");
+        builder.append("        }\n\n");
+        builder.append("        @Override\n");
+        builder.append("        public String deletedColumn() {\n");
+        builder.append("            return ").append(model.deletedColumn() == null ? "null" : javaStringLiteral(model.deletedColumn())).append(";\n");
+        builder.append("        }\n\n");
+        builder.append("        @Override\n");
+        builder.append("        public String activeMarkerValue() {\n");
+        builder.append("            return ").append(javaStringLiteral(model.activeMarkerValue())).append(";\n");
+        builder.append("        }\n\n");
+        builder.append("        @Override\n");
+        builder.append("        public String deletedMarkerValue() {\n");
+        builder.append("            return ").append(javaStringLiteral(model.deletedMarkerValue())).append(";\n");
+        builder.append("        }\n\n");
+        builder.append("        @Override\n");
         builder.append("        public Class<").append(model.simpleName()).append("> entityType() {\n");
         builder.append("            return ").append(model.simpleName()).append(".class;\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public Function<").append(model.simpleName()).append(", ").append(model.idField().typeName()).append("> idAccessor() {\n");
-        builder.append("            return entity -> entity.").append(model.idField().fieldName()).append(";\n");
+        builder.append("            return entity -> ").append(accessExpression(model, model.idField())).append(";\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public List<String> columns() {\n");
@@ -1824,35 +2085,57 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("            LinkedHashMap<String, String> values = new LinkedHashMap<>();\n");
         for (FieldModel field : model.persistedFields()) {
             builder.append("            values.put(").append(javaStringLiteral(field.columnName())).append(", ")
-                    .append(toStringExpression("entity." + field.fieldName(), field)).append(");\n");
+                    .append(toStringExpression(accessExpression(model, field), field)).append(");\n");
         }
         builder.append("            return LengthPrefixedPayloadCodec.encode(values);\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public ").append(model.simpleName()).append(" fromRedisValue(String encoded) {\n");
         builder.append("            Map<String, String> values = LengthPrefixedPayloadCodec.decode(encoded);\n");
-        builder.append("            ").append(model.simpleName()).append(" entity = new ").append(model.simpleName()).append("();\n");
-        for (FieldModel field : model.persistedFields()) {
-            builder.append("            entity.").append(field.fieldName()).append(" = ")
-                    .append(fromStringExpression("values.get(\"" + field.columnName() + "\")", field)).append(";\n");
+        if (model.recordType()) {
+            builder.append("            return new ").append(model.simpleName()).append("(\n");
+            for (int index = 0; index < model.persistedFields().size(); index++) {
+                FieldModel field = model.persistedFields().get(index);
+                builder.append("                    ")
+                        .append(fromStringExpression("values.get(\"" + field.columnName() + "\")", field))
+                        .append(index == model.persistedFields().size() - 1 ? "\n" : ",\n");
+            }
+            builder.append("            );\n");
+        } else {
+            builder.append("            ").append(model.simpleName()).append(" entity = new ").append(model.simpleName()).append("();\n");
+            for (FieldModel field : model.persistedFields()) {
+                builder.append("            entity.").append(field.fieldName()).append(" = ")
+                        .append(fromStringExpression("values.get(\"" + field.columnName() + "\")", field)).append(";\n");
+            }
+            builder.append("            return entity;\n");
         }
-        builder.append("            return entity;\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public ").append(model.simpleName()).append(" fromColumns(Map<String, Object> columns) {\n");
-        builder.append("            ").append(model.simpleName()).append(" entity = new ").append(model.simpleName()).append("();\n");
-        for (FieldModel field : model.persistedFields()) {
-            builder.append("            entity.").append(field.fieldName()).append(" = ")
-                    .append(fromColumnExpression("columnValue(columns, \"" + field.columnName() + "\")", field)).append(";\n");
+        if (model.recordType()) {
+            builder.append("            return new ").append(model.simpleName()).append("(\n");
+            for (int index = 0; index < model.persistedFields().size(); index++) {
+                FieldModel field = model.persistedFields().get(index);
+                builder.append("                    ")
+                        .append(fromColumnExpression("columnValue(columns, \"" + field.columnName() + "\")", field))
+                        .append(index == model.persistedFields().size() - 1 ? "\n" : ",\n");
+            }
+            builder.append("            );\n");
+        } else {
+            builder.append("            ").append(model.simpleName()).append(" entity = new ").append(model.simpleName()).append("();\n");
+            for (FieldModel field : model.persistedFields()) {
+                builder.append("            entity.").append(field.fieldName()).append(" = ")
+                        .append(fromColumnExpression("columnValue(columns, \"" + field.columnName() + "\")", field)).append(";\n");
+            }
+            builder.append("            return entity;\n");
         }
-        builder.append("            return entity;\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public Map<String, Object> toColumns(").append(model.simpleName()).append(" entity) {\n");
         builder.append("            LinkedHashMap<String, Object> columns = new LinkedHashMap<>();\n");
         for (FieldModel field : model.persistedFields()) {
             builder.append("            columns.put(").append(javaStringLiteral(field.columnName())).append(", ")
-                    .append(toColumnValueExpression(field)).append(");\n");
+                    .append(toColumnValueExpression(model, field)).append(");\n");
         }
         builder.append("            return columns;\n");
         builder.append("        }\n");
@@ -3046,14 +3329,21 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         };
     }
 
-    private String toColumnValueExpression(FieldModel field) {
+    private String toColumnValueExpression(EntityModel model, FieldModel field) {
+        String access = accessExpression(model, field);
         if (field.codecTypeName() != null) {
-            return field.fieldName().toUpperCase() + "_CODEC.toColumnValue(entity." + field.fieldName() + ")";
+            return field.fieldName().toUpperCase() + "_CODEC.toColumnValue(" + access + ")";
         }
         if (field.enumType()) {
-            return "entity." + field.fieldName() + " == null ? null : entity." + field.fieldName() + ".name()";
+            return access + " == null ? null : " + access + ".name()";
         }
-        return "entity." + field.fieldName();
+        return access;
+    }
+
+    private String accessExpression(EntityModel model, FieldModel field) {
+        return model.recordType()
+                ? "entity." + field.fieldName() + "()"
+                : "entity." + field.fieldName();
     }
 
     private String columnTypeName(FieldModel field) {
@@ -3067,8 +3357,13 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             String packageName,
             String simpleName,
             String bindingName,
+            boolean recordType,
             String tableName,
             String redisNamespace,
+            String versionColumn,
+            String deletedColumn,
+            String activeMarkerValue,
+            String deletedMarkerValue,
             FieldModel idField,
             List<FieldModel> persistedFields,
             Map<String, List<String>> partitionedSortIndexes,

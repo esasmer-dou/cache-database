@@ -1,18 +1,12 @@
 package com.reactor.cachedb.spring.boot;
 
 import com.reactor.cachedb.starter.CacheWarmPlan;
-import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
-import org.springframework.core.MethodIntrospector;
-import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
-import org.springframework.util.ReflectionUtils;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -20,7 +14,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
 import java.util.function.Supplier;
@@ -34,62 +27,46 @@ final class CacheScheduledWarmRegistrar implements SmartInitializingSingleton, D
     private final ConfigurableListableBeanFactory beanFactory;
     private final ThreadPoolTaskScheduler taskScheduler;
     private final CacheScheduledWarmCoordinator coordinator;
+    private final List<CacheScheduledWarmTask> tasks;
     private final List<ScheduledFuture<?>> scheduledTasks = new ArrayList<>();
 
     CacheScheduledWarmRegistrar(
             ConfigurableListableBeanFactory beanFactory,
             ThreadPoolTaskScheduler taskScheduler,
-            CacheScheduledWarmCoordinator coordinator
+            CacheScheduledWarmCoordinator coordinator,
+            List<CacheScheduledWarmTask> tasks
     ) {
         this.beanFactory = beanFactory;
         this.taskScheduler = taskScheduler;
         this.coordinator = coordinator;
+        this.tasks = tasks == null ? List.of() : List.copyOf(tasks);
     }
 
     @Override
     public void afterSingletonsInstantiated() {
         Set<String> registeredNames = new LinkedHashSet<>();
-        for (String beanName : beanFactory.getBeanNamesForType(Object.class, false, false)) {
-            Class<?> beanType = beanFactory.getType(beanName, false);
-            if (beanType == null) {
-                continue;
-            }
-            Map<Method, CacheScheduledWarm> methods = MethodIntrospector.selectMethods(
-                    beanType,
-                    (MethodIntrospector.MetadataLookup<CacheScheduledWarm>) method ->
-                            AnnotatedElementUtils.findMergedAnnotation(method, CacheScheduledWarm.class)
-            );
-            if (methods.isEmpty()) {
-                continue;
-            }
-            Object bean = beanFactory.getBean(beanName);
-            for (Map.Entry<Method, CacheScheduledWarm> entry : methods.entrySet()) {
-                register(bean, beanType, entry.getKey(), entry.getValue(), registeredNames);
-            }
+        for (CacheScheduledWarmTask task : tasks) {
+            register(task, registeredNames);
         }
     }
 
-    private void register(
-            Object bean,
-            Class<?> beanType,
-            Method method,
-            CacheScheduledWarm annotation,
-            Set<String> registeredNames
-    ) {
-        validateMethod(method);
-        if (!resolveBoolean(annotation.enabledString(), method, "enabledString")) {
+    private void register(CacheScheduledWarmTask task, Set<String> registeredNames) {
+        CacheScheduledWarmDescriptor descriptor = java.util.Objects.requireNonNull(
+                task.descriptor(),
+                "CacheScheduledWarmTask.descriptor()"
+        );
+        String taskId = descriptor.defaultJobName();
+        if (!resolveBoolean(descriptor.enabledString(), taskId, "enabledString")) {
             return;
         }
-        if ("-".equals(resolve(annotation.cron()))) {
+        if ("-".equals(resolve(descriptor.cron()))) {
             return;
         }
-        CacheScheduledWarmDefinition definition = definition(beanType, method, annotation);
+        CacheScheduledWarmDefinition definition = definition(descriptor);
         if (!registeredNames.add(definition.jobName())) {
             throw new IllegalStateException("Duplicate @CacheScheduledWarm job name: " + definition.jobName());
         }
-        Method invocable = AopUtils.selectInvocableMethod(method, bean.getClass());
-        ReflectionUtils.makeAccessible(invocable);
-        Supplier<CacheWarmPlan> supplier = () -> invokePlan(bean, invocable, definition.jobName());
+        Supplier<CacheWarmPlan> supplier = task::createPlan;
         coordinator.register(definition.jobName());
         ScheduledFuture<?> future = schedule(definition, () -> coordinator.execute(definition, supplier));
         if (future != null) {
@@ -121,18 +98,14 @@ final class CacheScheduledWarmRegistrar implements SmartInitializingSingleton, D
         };
     }
 
-    private CacheScheduledWarmDefinition definition(
-            Class<?> beanType,
-            Method method,
-            CacheScheduledWarm annotation
-    ) {
-        String configuredName = resolve(annotation.name());
+    private CacheScheduledWarmDefinition definition(CacheScheduledWarmDescriptor descriptor) {
+        String configuredName = resolve(descriptor.name());
         String jobName = configuredName.isBlank()
-                ? beanType.getName() + "#" + method.getName()
+                ? descriptor.defaultJobName()
                 : configuredName;
-        String cron = resolve(annotation.cron());
-        String fixedDelay = resolve(annotation.fixedDelayString());
-        String fixedRate = resolve(annotation.fixedRateString());
+        String cron = resolve(descriptor.cron());
+        String fixedDelay = resolve(descriptor.fixedDelayString());
+        String fixedRate = resolve(descriptor.fixedRateString());
         int scheduleCount = present(cron) + present(fixedDelay) + present(fixedRate);
         if (scheduleCount != 1) {
             throw new IllegalStateException(
@@ -154,12 +127,12 @@ final class CacheScheduledWarmRegistrar implements SmartInitializingSingleton, D
         }
 
         Duration initialDelay = nonNegativeDuration(
-                resolve(annotation.initialDelayString()),
+                resolve(descriptor.initialDelayString()),
                 jobName,
                 "initialDelayString"
         );
         Duration lockAtMostFor = positiveDuration(
-                resolve(annotation.lockAtMostForString()),
+                resolve(descriptor.lockAtMostForString()),
                 jobName,
                 "lockAtMostForString"
         );
@@ -170,34 +143,34 @@ final class CacheScheduledWarmRegistrar implements SmartInitializingSingleton, D
             );
         }
         Duration lockWaitTimeout = nonNegativeDuration(
-                resolve(annotation.lockWaitTimeoutString()),
+                resolve(descriptor.lockWaitTimeoutString()),
                 jobName,
                 "lockWaitTimeoutString"
         );
         Duration lockRetryInterval = positiveDuration(
-                resolve(annotation.lockRetryIntervalString()),
+                resolve(descriptor.lockRetryIntervalString()),
                 jobName,
                 "lockRetryIntervalString"
         );
-        String configuredMinimumInterval = resolve(annotation.minimumIntervalString());
+        String configuredMinimumInterval = resolve(descriptor.minimumIntervalString());
         Duration minimumInterval = configuredMinimumInterval.isBlank()
                 ? scheduleKind == CacheScheduledWarmDefinition.ScheduleKind.CRON ? Duration.ofSeconds(1) : interval
                 : nonNegativeDuration(configuredMinimumInterval, jobName, "minimumIntervalString");
 
-        if (annotation.reconcileHotSet() && annotation.mode() != CacheScheduledWarmMode.ENTITY_AND_PROJECTIONS) {
+        if (descriptor.reconcileHotSet() && descriptor.mode() != CacheScheduledWarmMode.ENTITY_AND_PROJECTIONS) {
             throw new IllegalStateException(
                     "@CacheScheduledWarm " + jobName
                             + " can reconcile the hot set only in ENTITY_AND_PROJECTIONS mode"
             );
         }
         int reconcileMaxRowsPerRun = positiveInt(
-                resolve(annotation.reconcileMaxRowsPerRunString()),
+                resolve(descriptor.reconcileMaxRowsPerRunString()),
                 jobName,
                 "reconcileMaxRowsPerRunString",
                 1_000_000
         );
         int reconcileScanCount = positiveInt(
-                resolve(annotation.reconcileScanCountString()),
+                resolve(descriptor.reconcileScanCountString()),
                 jobName,
                 "reconcileScanCountString",
                 10_000
@@ -207,44 +180,21 @@ final class CacheScheduledWarmRegistrar implements SmartInitializingSingleton, D
                 jobName,
                 scheduleKind,
                 cron,
-                resolve(annotation.zone()),
+                resolve(descriptor.zone()),
                 interval,
                 initialDelay,
-                annotation.mode(),
+                descriptor.mode(),
                 lockAtMostFor,
                 lockWaitTimeout,
                 lockRetryInterval,
                 minimumInterval,
-                annotation.reconcileHotSet(),
+                descriptor.reconcileHotSet(),
                 reconcileMaxRowsPerRun,
                 reconcileScanCount
         );
     }
 
-    private void validateMethod(Method method) {
-        if (method.getParameterCount() != 0) {
-            throw new IllegalStateException("@CacheScheduledWarm method must not declare parameters: " + method);
-        }
-        if (!CacheWarmPlan.class.isAssignableFrom(method.getReturnType())) {
-            throw new IllegalStateException("@CacheScheduledWarm method must return CacheWarmPlan: " + method);
-        }
-    }
-
-    private CacheWarmPlan invokePlan(Object bean, Method method, String jobName) {
-        try {
-            return (CacheWarmPlan) method.invoke(bean);
-        } catch (IllegalAccessException failure) {
-            throw new IllegalStateException("Could not access @CacheScheduledWarm method for " + jobName, failure);
-        } catch (InvocationTargetException failure) {
-            Throwable target = failure.getTargetException();
-            if (target instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            throw new IllegalStateException("@CacheScheduledWarm plan method failed for " + jobName, target);
-        }
-    }
-
-    private boolean resolveBoolean(String value, Method method, String fieldName) {
+    private boolean resolveBoolean(String value, String taskId, String fieldName) {
         String resolved = resolve(value);
         if ("true".equalsIgnoreCase(resolved)) {
             return true;
@@ -253,7 +203,7 @@ final class CacheScheduledWarmRegistrar implements SmartInitializingSingleton, D
             return false;
         }
         throw new IllegalStateException(
-                "@CacheScheduledWarm " + fieldName + " must resolve to true or false for " + method
+                "@CacheScheduledWarm " + fieldName + " must resolve to true or false for " + taskId
         );
     }
 

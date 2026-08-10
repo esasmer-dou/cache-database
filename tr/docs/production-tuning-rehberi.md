@@ -21,7 +21,7 @@ Amaç:
 | --- | --- |
 | Redis memory büyüyor | Hot policy, tenant quota, Redis `maxmemory`, projection window |
 | Büyük liste yavaş | Projection, ranked projection, route contract |
-| Relation yükleme pahalı | `withRelationLimit(...)`, batch loader, summary-first model |
+| İlişki yükleme pahalı | sınırlı `@CacheLookup`, batch loader, önce özet modeli |
 | Yazma kuyruğu birikiyor | Write-behind worker, batch size, flush policy, SQL provider pool |
 | Çok pod'da aynı iş iki kez çalışıyor | Runtime coordination ve leader lease |
 | Eski veri Redis'i kirletiyor | `admitOnRead=false`, `TIME_WINDOW`, cold path |
@@ -156,7 +156,7 @@ oluşturma maliyeti üretir.
 
 BEST:
 
-- Detail ekranında küçük preview için `withRelationLimit(...)` kullan.
+- Detay ekranındaki küçük önizleme için sınırlı `@CacheLookup` kullan.
 - Liste ekranında relation yerine projection kullan.
 - Loader batch çalışmalı; parent başına tekil query atmamalı.
 - `maxFetchDepth` değeri kontrollü tutulmalı.
@@ -164,10 +164,8 @@ BEST:
 Örnek:
 
 ```java
-OrderEntity order = orderRepository
-        .withRelationLimit("orderLines", 8)
-        .findById(orderId)
-        .orElseThrow();
+OrderEntity order = orders.detail(orderId, 8)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
 ```
 
 ACCEPTABLE:

@@ -10,8 +10,24 @@ public record RouteCacheContract(
         int maxColdReadSize,
         long memoryBudgetBytes,
         RouteCacheStrictMode strictMode,
-        TenantCacheQuota tenantQuota
+        TenantCacheQuota tenantQuota,
+        boolean sourceFallbackAllowed
 ) {
+    public RouteCacheContract(
+            String routeName,
+            String entityName,
+            String projectionName,
+            int pageSize,
+            int hotWindow,
+            boolean projectionRequired,
+            int maxColdReadSize,
+            long memoryBudgetBytes,
+            RouteCacheStrictMode strictMode,
+            TenantCacheQuota tenantQuota
+    ) {
+        this(routeName, entityName, projectionName, pageSize, hotWindow, projectionRequired,
+                maxColdReadSize, memoryBudgetBytes, strictMode, tenantQuota, true);
+    }
     public RouteCacheContract {
         routeName = defaultString(routeName, "unnamed-route");
         entityName = defaultString(entityName, "");
@@ -78,6 +94,7 @@ public record RouteCacheContract(
         private long memoryBudgetBytes;
         private RouteCacheStrictMode strictMode = RouteCacheStrictMode.WARN;
         private TenantCacheQuota tenantQuota = TenantCacheQuota.unbounded();
+        private boolean sourceFallbackAllowed = true;
 
         public Builder routeName(String routeName) {
             this.routeName = routeName;
@@ -129,6 +146,11 @@ public record RouteCacheContract(
             return this;
         }
 
+        public Builder sourceFallbackAllowed(boolean sourceFallbackAllowed) {
+            this.sourceFallbackAllowed = sourceFallbackAllowed;
+            return this;
+        }
+
         public RouteCacheContract build() {
             return new RouteCacheContract(
                     routeName,
@@ -140,7 +162,8 @@ public record RouteCacheContract(
                     maxColdReadSize,
                     memoryBudgetBytes,
                     strictMode,
-                    tenantQuota
+                    tenantQuota,
+                    sourceFallbackAllowed
             );
         }
     }

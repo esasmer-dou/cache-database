@@ -76,11 +76,12 @@ public final class ReadShapeGuardrails {
             return;
         }
         Limit limit = entityQueryLimit(cachePolicy, config);
-        if (limit.active() && querySpec.limit() > limit.rows()) {
+        int requestedRows = logicalQueryLimit(querySpec);
+        if (limit.active() && requestedRows > limit.rows()) {
             throw oversized(
                     "Entity query",
                     surfaceName,
-                    querySpec.limit(),
+                    requestedRows,
                     limit.rows(),
                     "Large full-entity lists must use summary projections/read-models instead of broad entity hydration."
             );
@@ -96,11 +97,12 @@ public final class ReadShapeGuardrails {
             return;
         }
         Limit limit = projectionQueryLimit(config);
-        if (limit.active() && querySpec.limit() > limit.rows()) {
+        int requestedRows = logicalQueryLimit(querySpec);
+        if (limit.active() && requestedRows > limit.rows()) {
             throw oversized(
                     "Projection query",
                     surfaceName,
-                    querySpec.limit(),
+                    requestedRows,
                     limit.rows(),
                     "Use an explicit bounded projection window or split the result into smaller windows."
             );
@@ -155,6 +157,14 @@ public final class ReadShapeGuardrails {
 
     private static boolean enabled(ReadShapeGuardrailConfig config) {
         return config != null && config.enabled();
+    }
+
+    private static int logicalQueryLimit(QuerySpec querySpec) {
+        RouteCacheContract contract = com.reactor.cachedb.core.route.RouteCacheContext.currentContract();
+        if (contract != null && querySpec.limit() == contract.pageSize() + 1) {
+            return contract.pageSize();
+        }
+        return querySpec.limit();
     }
 
     private static int configuredPageSize(CachePolicy cachePolicy) {

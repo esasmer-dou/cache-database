@@ -71,6 +71,27 @@
           }
         },
         {
+          "name": "Latest Background Job Status (repeat until COMPLETED)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Job status is available', function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test('Job completed before a hot read', function () { pm.expect(body.status).to.eql('COMPLETED'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "Run this request after every 202 Accepted response. Repeat it until status is COMPLETED before calling the related hot route.",
+            "url": "{{baseUrl}}/api/warm/jobs/{{warmJobId}}"
+          }
+        },
+        {
           "name": "Current Tuning Summary",
           "request": {
             "method": "GET",
@@ -83,12 +104,27 @@
             "method": "GET",
             "url": "{{baseUrl}}/api/tuning/profiles"
           }
+        },
+        {
+          "name": "Scheduled Warm Status (local pod)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/warm/schedules"
+          }
         }
       ]
     },
     {
       "name": "01 Commerce: Customer Orders",
       "item": [
+        {
+          "name": "Warm Active Customers",
+          "request": {
+            "method": "POST",
+            "description": "Submit this job, then use Latest Background Job Status until it is COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/customers/active?limit=100"
+          }
+        },
         {
           "name": "Active Customers",
           "request": {
@@ -104,13 +140,6 @@
           }
         },
         {
-          "name": "Customer Order Timeline Projection",
-          "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/api/customers/{{customerId}}/orders?limit=20"
-          }
-        },
-        {
           "name": "Warm Customer Orders Dry Run",
           "request": {
             "method": "POST",
@@ -121,7 +150,15 @@
           "name": "Warm Customer Orders Projection",
           "request": {
             "method": "POST",
+            "description": "Submit this job, then use Latest Background Job Status until it is COMPLETED.",
             "url": "{{baseUrl}}/api/warm/orders/customer/{{customerId}}?limit=100&projectionOnly=true"
+          }
+        },
+        {
+          "name": "Customer Order Timeline Projection",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/customers/{{customerId}}/orders?limit=20"
           }
         },
         {
@@ -132,17 +169,11 @@
           }
         },
         {
-          "name": "Warm Job Status (run until COMPLETED)",
+          "name": "Warm Order Lines",
           "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/api/warm/jobs/{{warmJobId}}"
-          }
-        },
-        {
-          "name": "Scheduled Warm Status (local pod)",
-          "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/api/warm/schedules"
+            "method": "POST",
+            "description": "Submit this job, then use Latest Background Job Status until it is COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/orders/{{orderId}}/lines?limit=100"
           }
         },
         {
@@ -153,10 +184,26 @@
           }
         },
         {
+          "name": "Warm High Value Orders",
+          "request": {
+            "method": "POST",
+            "description": "Submit this job, then use Latest Background Job Status until it is COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/orders/high-value?minimumAmount=500&limit=100"
+          }
+        },
+        {
           "name": "High Value Orders Projection",
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/api/orders/high-value?minimumAmount=500&limit=25"
+          }
+        },
+        {
+          "name": "Warm Highlighted Orders For Commerce Dashboard",
+          "request": {
+            "method": "POST",
+            "description": "Prepares the ranked order component used by the commerce dashboard. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/orders/highlighted?minimumPriorityScore=60&limit=100"
           }
         },
         {
@@ -230,10 +277,26 @@
       "name": "02 Catalog And Inventory",
       "item": [
         {
+          "name": "Warm Active Products Projection",
+          "request": {
+            "method": "POST",
+            "description": "Prepares the category-scoped active product projection. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/products/active?category=electronics&limit=100&projectionOnly=true"
+          }
+        },
+        {
           "name": "Active Products Projection",
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/api/products/active?category=electronics&limit=20"
+          }
+        },
+        {
+          "name": "Warm Low Stock Products",
+          "request": {
+            "method": "POST",
+            "description": "Prepares the low-stock route used by operations reads and dashboards. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/products/low-stock?limit=100"
           }
         },
         {
@@ -279,6 +342,14 @@
     {
       "name": "03 Support Operations",
       "item": [
+        {
+          "name": "Warm Open Tickets",
+          "request": {
+            "method": "POST",
+            "description": "Prepares the open-ticket route used by support and the commerce dashboard. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/tickets/open?limit=50"
+          }
+        },
         {
           "name": "Open Tickets",
           "request": {
@@ -333,10 +404,26 @@
       "name": "04 Logistics Tracking",
       "item": [
         {
+          "name": "Warm Active Shipments Projection",
+          "request": {
+            "method": "POST",
+            "description": "Prepares the active shipment projection. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/shipments/active?limit=100&projectionOnly=true"
+          }
+        },
+        {
           "name": "Active Shipments Projection",
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/api/shipments/active?limit=25"
+          }
+        },
+        {
+          "name": "Warm Shipment Exceptions",
+          "request": {
+            "method": "POST",
+            "description": "Prepares delayed and exception shipments for the list and operations dashboard. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/shipments/exceptions?limit=100"
           }
         },
         {
@@ -347,10 +434,26 @@
           }
         },
         {
+          "name": "Warm Customer Shipments",
+          "request": {
+            "method": "POST",
+            "description": "Prepares the customer-scoped shipment window. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/shipments/customer/{{customerId}}?limit=100"
+          }
+        },
+        {
           "name": "Customer Shipments Projection",
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/api/shipments/customer/{{customerId}}?limit=25"
+          }
+        },
+        {
+          "name": "Warm Shipment Events",
+          "request": {
+            "method": "POST",
+            "description": "Prepares the selected shipment event timeline. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/shipments/{{shipmentId}}/events?limit=100"
           }
         },
         {
@@ -431,10 +534,26 @@
       "name": "05 Reporting And Audit",
       "item": [
         {
+          "name": "Warm Live Report Jobs",
+          "request": {
+            "method": "POST",
+            "description": "Prepares live report jobs for operations reads and dashboards. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/reports/live?limit=50"
+          }
+        },
+        {
           "name": "Live Report Jobs",
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/api/reports/jobs/live?limit=25"
+          }
+        },
+        {
+          "name": "Warm Report Jobs By Type",
+          "request": {
+            "method": "POST",
+            "description": "Prepares the report-type scoped window. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/reports/type/ORDER_SUMMARY?limit=50"
           }
         },
         {
@@ -476,6 +595,14 @@
               "raw": "{\n  \"status\": \"COMPLETED\",\n  \"rowCount\": 12500\n}"
             },
             "url": "{{baseUrl}}/api/reports/jobs/999/status"
+          }
+        },
+        {
+          "name": "Warm Security Audit Events",
+          "request": {
+            "method": "POST",
+            "description": "Prepares the bounded security audit active set. Poll the latest job to COMPLETED.",
+            "url": "{{baseUrl}}/api/warm/audit/security?limit=50"
           }
         },
         {

@@ -185,7 +185,7 @@ Kural:
 - Kaynak veritabanında foreign key olması production için güçlü şekilde
   önerilen bir veri bütünlüğü kuralıdır; fakat `@CacheRelation` veya
   `RelationBatchLoader` yerine geçmez.
-- Preview gerekiyorsa `withRelationLimit(...)` kullanılır.
+- Önizleme gerekiyorsa sınırlı bir `@CacheLookup` metodu kullanılır.
 - Büyük listelerde relation yerine projection tercih edilir.
 
 ### Constraint ve Metadata Matrisi
@@ -244,12 +244,14 @@ CREATE INDEX idx_orders_customer_date
 ON orders(customer_id, order_date DESC);
 ```
 
-Çalışma anında relation açıkça istenir:
+Repository sözleşmesi ve çağıran taraf ilişkiyi açıkça ister:
 
 ```java
-customerRepository
-        .withRelationLimit("orders", 10)
-        .findById(customerId);
+@CacheLookup(idParameter = "customerId", relation = "orders",
+        relationLimitParameter = "orderPreview", maxRelationRows = 25)
+HotLookup<CustomerEntity> detail(Long customerId, int orderPreview);
+
+customers.detail(customerId, 10);
 ```
 
 ### Üretilen Loader

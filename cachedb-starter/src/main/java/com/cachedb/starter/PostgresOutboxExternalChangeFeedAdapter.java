@@ -2,15 +2,17 @@ package com.reactor.cachedb.starter;
 
 import com.reactor.cachedb.core.change.ExternalChangeFeedAdapter;
 import com.reactor.cachedb.core.change.ExternalChangeSink;
-import com.reactor.cachedb.jdbc.JdbcOutboxExternalChangeFeedAdapter;
-import com.reactor.cachedb.postgres.PostgresOutboxDialect;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
 
+/**
+ * @deprecated Use {@link com.reactor.cachedb.postgres.PostgresOutboxExternalChangeFeedAdapter}
+ * from the explicit PostgreSQL provider.
+ */
+@Deprecated(forRemoval = false)
 public final class PostgresOutboxExternalChangeFeedAdapter implements ExternalChangeFeedAdapter {
-
-    private final JdbcOutboxExternalChangeFeedAdapter delegate;
+    private final com.reactor.cachedb.postgres.PostgresOutboxExternalChangeFeedAdapter delegate;
 
     private PostgresOutboxExternalChangeFeedAdapter(Builder builder) {
         this.delegate = builder.delegate.build();
@@ -43,10 +45,10 @@ public final class PostgresOutboxExternalChangeFeedAdapter implements ExternalCh
     }
 
     public static final class Builder {
-        private final JdbcOutboxExternalChangeFeedAdapter.Builder delegate;
+        private final com.reactor.cachedb.postgres.PostgresOutboxExternalChangeFeedAdapter.Builder delegate;
 
         private Builder(DataSource dataSource) {
-            this.delegate = JdbcOutboxExternalChangeFeedAdapter.builder(dataSource, new PostgresOutboxDialect());
+            this.delegate = com.reactor.cachedb.postgres.PostgresOutboxExternalChangeFeedAdapter.builder(dataSource);
         }
 
         public Builder adapterName(String adapterName) {

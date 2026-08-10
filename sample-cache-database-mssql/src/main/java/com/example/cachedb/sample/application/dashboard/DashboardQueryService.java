@@ -1,11 +1,15 @@
 package com.example.cachedb.sample.application.dashboard;
 
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
 import com.example.cachedb.sample.domain.ReportJobEntity;
 import com.example.cachedb.sample.domain.SupportTicketEntity;
 import com.example.cachedb.sample.readmodel.OrderSummary;
 import com.example.cachedb.sample.readmodel.ProductAvailability;
 import com.example.cachedb.sample.readmodel.ShipmentSummary;
+import com.example.cachedb.sample.repository.OrderRepository;
+import com.example.cachedb.sample.repository.ProductRepository;
+import com.example.cachedb.sample.repository.ReportJobRepository;
+import com.example.cachedb.sample.repository.ShipmentRepository;
+import com.example.cachedb.sample.repository.SupportTicketRepository;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -14,28 +18,45 @@ import java.util.List;
 @Service
 public final class DashboardQueryService {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final OrderRepository orders;
+    private final ProductRepository products;
+    private final ShipmentRepository shipments;
+    private final SupportTicketRepository tickets;
+    private final ReportJobRepository reports;
 
-    public DashboardQueryService(GeneratedCacheModule.Scope domain) {
-        this.domain = domain;
+    public DashboardQueryService(
+            OrderRepository orders,
+            ProductRepository products,
+            ShipmentRepository shipments,
+            SupportTicketRepository tickets,
+            ReportJobRepository reports
+    ) {
+        this.orders = orders;
+        this.products = products;
+        this.shipments = shipments;
+        this.tickets = tickets;
+        this.reports = reports;
     }
 
     public CommerceDashboard commerce(int limit) {
-        List<OrderSummary> orders = domain.orders().queries().highlightedOrdersProjection(60.0, limit);
-        List<SupportTicketEntity> tickets = domain.supportTickets().queries().openTickets(limit);
-        BigDecimal amount = orders.stream()
+        List<OrderSummary> highlightedOrders = orders.highlighted(60.0, limit).completeItems();
+        List<SupportTicketEntity> openTickets = tickets.open(limit).completeItems();
+        BigDecimal amount = highlightedOrders.stream()
                 .map(OrderSummary::orderAmount)
                 .filter(value -> value != null)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        return new CommerceDashboard(orders.size(), amount, tickets.size(), orders, tickets);
+        return new CommerceDashboard(
+                highlightedOrders.size(), amount, openTickets.size(), highlightedOrders, openTickets
+        );
     }
 
     public OperationsDashboard operations(int limit) {
-        List<ProductAvailability> products = domain.products().queries().lowStockProductsProjection(limit);
-        List<ShipmentSummary> shipments = domain.shipments().queries().shipmentExceptionsProjection(limit);
-        List<ReportJobEntity> reports = domain.reportJobs().queries().liveReportJobs(limit);
+        List<ProductAvailability> lowStockProducts = products.lowStock(limit).completeItems();
+        List<ShipmentSummary> shipmentExceptions = shipments.exceptions(limit).completeItems();
+        List<ReportJobEntity> liveReports = reports.live(limit).completeItems();
         return new OperationsDashboard(
-                products.size(), shipments.size(), reports.size(), products, shipments, reports
+                lowStockProducts.size(), shipmentExceptions.size(), liveReports.size(),
+                lowStockProducts, shipmentExceptions, liveReports
         );
     }
 

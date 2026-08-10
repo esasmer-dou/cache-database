@@ -25,21 +25,35 @@ and keep scheduled warm as a reconciliation safety net.
 
 ## Copy-Paste Example: Recent Or Active Orders
 
-The named query must use the same business window as the entity hot policy. It
-must also have an index that starts with its filter/sort columns.
+The hot route must use the same business window as the entity hot policy. Its
+filter and sort columns must also be covered by a source-database index. Define
+the read and warm plan once on the repository interface:
 
 ```java
-@CacheNamedQuery("activeOrderWindow")
-public static QuerySpec activeOrderWindowQuery(long cutoffEpochSeconds, int limit) {
-    return QuerySpec.anyOf(
-                    QueryFilter.gte("order_date", cutoffEpochSeconds),
-                    QueryFilter.in(
-                            "status",
-                            List.<Object>of("NEW", "PAID", "PICKING", "OPEN", "PENDING")
-                    )
-            )
-            .orderBy(QuerySort.desc("order_date"), QuerySort.desc("order_id"))
-            .limitTo(limit);
+@CacheRepository(entity = OrderEntity.class)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
+
+    @HotRoute(value = "active-order-window", projection = OrderSummary.class,
+            pageSize = 100, hotWindow = 1_000,
+            memoryBudgetBytes = 16_777_216L)
+    @CacheRouteQuery(
+            predicates = {
+                    @CachePredicate(field = "orderDate", operator = CachePredicate.Operator.GTE,
+                            parameter = "cutoffEpochSeconds", group = 0),
+                    @CachePredicate(field = "status", operator = CachePredicate.Operator.IN,
+                            constants = {"NEW", "PAID", "PICKING", "OPEN", "PENDING"}, group = 1)
+            },
+            orderBy = {
+                    @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
+                    @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
+            },
+            windowParameter = "window"
+    )
+    HotWindow<OrderSummary> activeWindow(long cutoffEpochSeconds, WindowRequest window);
+
+    @WarmRoute(value = "warm-active-order-window", from = "activeWindow",
+            maxRows = 1_000, maxRowsParameter = "maxRows")
+    CacheWarmPlan warmActiveWindow(long cutoffEpochSeconds, int maxRows);
 }
 ```
 
@@ -47,19 +61,25 @@ The scheduled method is declarative. It takes no arguments and returns a
 `CacheWarmPlan`; CacheDB owns scheduling, locking, heartbeat, completion
 deduplication, and incremental cleanup.
 
+The CacheDB annotation processor validates this signature and generates a typed
+Spring adapter that calls the method directly. Runtime bean scanning,
+`Method.invoke`, and dynamic scheduling proxies are not used. Keep
+`cachedb-processor` on the annotation-processor path with the same version as
+the starter.
+
 ```java
 @Component
 public final class ScheduledWarmPlans {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final OrderRepository orders;
     private final int maxRows;
 
     public ScheduledWarmPlans(
-            GeneratedCacheModule.Scope domain,
+            OrderRepository orders,
             @Value("${app.warm.orders.max-rows:1000}") int maxRows
     ) {
-        this.domain = domain;
-        this.maxRows = maxRows;
+        this.orders = orders;
+        this.maxRows = Math.max(1, maxRows);
     }
 
     @CacheScheduledWarm(
@@ -76,11 +96,7 @@ public final class ScheduledWarmPlans {
     )
     public CacheWarmPlan activeOrderWindow() {
         long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
-        return domain.orders().warmPlan(
-                "active-order-window",
-                domain.orders().queries().activeOrderWindowQuery(cutoff, maxRows),
-                maxRows
-        );
+        return orders.warmActiveWindow(cutoff, maxRows);
     }
 }
 ```
@@ -131,6 +147,13 @@ partitioned or the JVM pauses longer than the lease TTL, the current run is
 marked `LEASE_LOST` and no completion marker is written. A later run may replay
 the same bounded plan. Warm hydration is version-fenced and must remain
 idempotent.
+
+During an initial migration, the JDBC loader normalizes a legacy
+`entity_version` value of `NULL` or `0` to version `1`. A missing version column,
+a negative value, or a non-numeric value is still rejected. This normalization
+only makes the first bounded warm possible; it does not make later direct SQL
+writes observable. External writers must publish a monotonic version through
+outbox/CDC, or the team must explicitly accept scheduled-reconciliation lag.
 
 ## Annotation Parameters
 

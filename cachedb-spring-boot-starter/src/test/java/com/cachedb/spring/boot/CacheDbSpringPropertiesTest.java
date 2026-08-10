@@ -8,6 +8,8 @@ import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.mssql.MssqlWriteBehindFlusher;
+import com.reactor.cachedb.jdbc.CacheDbProviderAmbiguousException;
+import com.reactor.cachedb.jdbc.JdbcStorageProviders;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 
@@ -65,7 +67,7 @@ class CacheDbSpringPropertiesTest {
         assertTrue(properties.getRegistration().isEnabled());
         assertEquals(CacheDbSpringProperties.RegistrationSource.METADATA_ONLY, properties.getRegistration().getSource());
         assertTrue(properties.getRegistration().isFailOnUnknownEntity());
-        assertEquals(CacheDbSpringProperties.SqlProvider.POSTGRES, properties.getSql().getProvider());
+        assertEquals(CacheDbSpringProperties.SqlProvider.AUTO, properties.getSql().getProvider());
         assertEquals(5_000, properties.getSql().getMssql().getLockTimeoutMillis());
         assertEquals(10, properties.getSql().getMssql().getQueryTimeoutSeconds());
         assertEquals(
@@ -82,6 +84,12 @@ class CacheDbSpringPropertiesTest {
         assertEquals(32, properties.getAdmin().getBackgroundQueueCapacity());
         assertEquals(1_048_576, properties.getAdmin().getMaxRequestBodyBytes());
         assertEquals(86_400, properties.getAdmin().getJobStatusTtlSeconds());
+    }
+
+    @Test
+    void autoProviderRejectsAnAmbiguousClasspath() {
+        assertThrows(CacheDbProviderAmbiguousException.class,
+                () -> JdbcStorageProviders.requireSingle(getClass().getClassLoader()));
     }
 
     @Test
@@ -155,6 +163,38 @@ class CacheDbSpringPropertiesTest {
         properties.setProfile(CacheDbSpringProperties.Profile.PRODUCTION);
 
         assertEquals(CacheDbSpringProperties.Profile.PRODUCTION, properties.getProfile());
+    }
+
+    @Test
+    void shouldFailFastOnInconsistentRedisPoolBounds() {
+        CacheDbSpringProperties properties = new CacheDbSpringProperties();
+        properties.getRedis().getPool().setMaxTotal(4);
+        properties.getRedis().getPool().setMaxIdle(8);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class, properties::afterPropertiesSet);
+
+        assertTrue(failure.getMessage().contains("cachedb.redis.pool.max-idle"));
+    }
+
+    @Test
+    void shouldFailFastWhenLeaderLeaseCannotRenewBeforeExpiry() {
+        CacheDbSpringProperties properties = new CacheDbSpringProperties();
+        properties.getRuntime().setLeaderLeaseTtlMillis(5_000L);
+        properties.getRuntime().setLeaderLeaseRenewIntervalMillis(5_000L);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class, properties::afterPropertiesSet);
+
+        assertTrue(failure.getMessage().contains("leader-lease-renew-interval-millis"));
+    }
+
+    @Test
+    void shouldRequireAnAdminTokenWhenBuiltInAuthenticationIsEnabled() {
+        CacheDbSpringProperties properties = new CacheDbSpringProperties();
+        properties.getAdmin().setAuthEnabled(true);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class, properties::afterPropertiesSet);
+
+        assertTrue(failure.getMessage().contains("cachedb.admin.auth-token"));
     }
 
     @Test

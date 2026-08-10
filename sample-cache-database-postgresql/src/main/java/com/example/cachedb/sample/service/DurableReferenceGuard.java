@@ -1,7 +1,9 @@
 package com.example.cachedb.sample.service;
 
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
-import com.reactor.cachedb.core.api.EntityRepository;
+import com.example.cachedb.sample.repository.CustomerRepository;
+import com.example.cachedb.sample.repository.OrderRepository;
+import com.example.cachedb.sample.repository.ShipmentRepository;
+import com.reactor.cachedb.core.repository.CacheDbRepository;
 import com.reactor.cachedb.core.model.WriteDependency;
 import com.reactor.cachedb.core.model.WriteReceipt;
 import org.springframework.stereotype.Service;
@@ -12,10 +14,18 @@ import java.util.function.BooleanSupplier;
 @Service
 public final class DurableReferenceGuard {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final CustomerRepository customers;
+    private final OrderRepository orders;
+    private final ShipmentRepository shipments;
 
-    public DurableReferenceGuard(GeneratedCacheModule.Scope domain) {
-        this.domain = domain;
+    public DurableReferenceGuard(
+            CustomerRepository customers,
+            OrderRepository orders,
+            ShipmentRepository shipments
+    ) {
+        this.customers = customers;
+        this.orders = orders;
+        this.shipments = shipments;
     }
 
     public DurableReference requireCustomer(long customerId) {
@@ -23,8 +33,8 @@ public final class DurableReferenceGuard {
                 "Customer",
                 "customerId",
                 customerId,
-                domain.customers().dependency(customerId),
-                () -> domain.customers().source().findById(customerId).isPresent()
+                customers.dependency(customerId),
+                () -> customers.findSourceById(customerId).isPresent()
         );
     }
 
@@ -33,8 +43,8 @@ public final class DurableReferenceGuard {
                 "Order",
                 "orderId",
                 orderId,
-                domain.orders().dependency(orderId),
-                () -> domain.orders().source().findById(orderId).isPresent()
+                orders.dependency(orderId),
+                () -> orders.findSourceById(orderId).isPresent()
         );
     }
 
@@ -43,8 +53,8 @@ public final class DurableReferenceGuard {
                 "Shipment",
                 "shipmentId",
                 shipmentId,
-                domain.shipments().dependency(shipmentId),
-                () -> domain.shipments().source().findById(shipmentId).isPresent()
+                shipments.dependency(shipmentId),
+                () -> shipments.findSourceById(shipmentId).isPresent()
         );
     }
 
@@ -73,9 +83,9 @@ public final class DurableReferenceGuard {
      */
     public record DurableReference(WriteDependency pendingDependency) {
 
-        public <T, ID> WriteReceipt<T, ID> save(EntityRepository<T, ID> repository, T entity) {
+        public <T, ID> WriteReceipt<T, ID> save(CacheDbRepository<T, ID> repository, T entity) {
             return pendingDependency == null
-                    ? repository.saveWithReceipt(entity)
+                    ? repository.save(entity)
                     : repository.saveAfter(entity, pendingDependency);
         }
     }

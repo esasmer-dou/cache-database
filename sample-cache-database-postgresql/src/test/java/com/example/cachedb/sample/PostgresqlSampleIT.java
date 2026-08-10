@@ -1,5 +1,10 @@
 package com.example.cachedb.sample;
 
+import com.example.cachedb.sample.repository.OrderRepository;
+import com.reactor.cachedb.core.repository.WindowRequest;
+import com.reactor.cachedb.spring.boot.test.CacheDbAssertions;
+import com.reactor.cachedb.spring.boot.test.CacheDbTestConfiguration;
+import com.reactor.cachedb.spring.boot.test.CacheDbTestProbe;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -16,6 +21,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -38,7 +44,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("demo")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@Import(CacheDbTestConfiguration.class)
 class PostgresqlSampleIT {
+    private static final String EXPECTED_PROVIDER = "postgres";
 
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(DockerImageName.parse(
@@ -74,6 +82,12 @@ class PostgresqlSampleIT {
     @Autowired
     JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    OrderRepository orderRepository;
+
+    @Autowired
+    CacheDbTestProbe cacheDbTestProbe;
+
     @Test
     void productionContractsWorkAgainstRealPostgresqlAndRedis() {
         jdbcTemplate.update(
@@ -82,7 +96,8 @@ class PostgresqlSampleIT {
                 777L, "SQL-ONLY-777", "RETAIL", "STANDARD", "ACTIVE", 1L, 1L
         );
         ResponseEntity<Map> coldSqlCustomer = rest.getForEntity(url("/api/customers/777?orderPreview=1"), Map.class);
-        assertEquals(HttpStatus.NOT_FOUND, coldSqlCustomer.getStatusCode());
+        assertEquals(HttpStatus.CONFLICT, coldSqlCustomer.getStatusCode());
+        assertEquals("NOT_CACHED", coldSqlCustomer.getBody().get("cacheStatus"));
 
         ResponseEntity<Map> seed = rest.postForEntity(
                 url("/api/demo/seed?customers=2&ordersPerCustomer=2&linesPerOrder=2"),
@@ -91,14 +106,28 @@ class PostgresqlSampleIT {
         );
         assertEquals(HttpStatus.ACCEPTED, seed.getStatusCode());
         String seedJobId = String.valueOf(seed.getBody().get("jobId"));
-        await(Duration.ofSeconds(30), () -> {
-            ResponseEntity<Map> job = rest.getForEntity(url("/api/warm/jobs/" + seedJobId), Map.class);
-            return job.getStatusCode().is2xxSuccessful() && "COMPLETED".equals(job.getBody().get("status"));
-        });
+        assertEquals("COMPLETED", awaitJob(seedJobId, Duration.ofSeconds(30)).getBody().get("status"));
+
+        ResponseEntity<Map> incompleteCustomers = rest.getForEntity(
+                url("/api/customers/active?limit=10"),
+                Map.class
+        );
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, incompleteCustomers.getStatusCode());
+
+        ResponseEntity<Map> activeCustomersWarm = rest.postForEntity(
+                url("/api/warm/customers/active?limit=100"),
+                null,
+                Map.class
+        );
+        assertEquals(HttpStatus.ACCEPTED, activeCustomersWarm.getStatusCode());
+        String activeCustomersJobId = String.valueOf(activeCustomersWarm.getBody().get("jobId"));
+        assertEquals("COMPLETED", awaitJob(activeCustomersJobId, Duration.ofSeconds(15)).getBody().get("status"));
 
         ResponseEntity<List> activeCustomers = rest.getForEntity(url("/api/customers/active?limit=10"), List.class);
         assertEquals(HttpStatus.OK, activeCustomers.getStatusCode());
-        assertEquals(2, activeCustomers.getBody().size());
+        assertEquals(3, activeCustomers.getBody().size());
+        assertTrue(activeCustomers.getBody().stream().anyMatch(row -> row instanceof Map<?, ?> values
+                && Long.valueOf(777L).equals(((Number) values.get("customerId")).longValue())));
 
         ResponseEntity<Map> customerDetail = rest.getForEntity(
                 url("/api/customers/1?orderPreview=2"),
@@ -203,6 +232,10 @@ class PostgresqlSampleIT {
         assertNotNull(healthComponents);
         assertNotNull(healthComponents.get("cacheDatabase"));
 
+        ResponseEntity<Map> cacheDbSnapshot = rest.getForEntity(url("/actuator/cachedb"), Map.class);
+        assertEquals(HttpStatus.OK, cacheDbSnapshot.getStatusCode());
+        assertEquals(EXPECTED_PROVIDER, ((Map<?, ?>) cacheDbSnapshot.getBody().get("provider")).get("id"));
+
         ResponseEntity<Map> warmAccepted = rest.postForEntity(
                 url("/api/warm/orders/customer/1?limit=2&projectionOnly=true"),
                 null,
@@ -210,13 +243,12 @@ class PostgresqlSampleIT {
         );
         assertEquals(HttpStatus.ACCEPTED, warmAccepted.getStatusCode());
         String jobId = String.valueOf(warmAccepted.getBody().get("jobId"));
-        await(Duration.ofSeconds(15), () -> {
-            ResponseEntity<Map> job = rest.getForEntity(url("/api/warm/jobs/" + jobId), Map.class);
-            return job.getStatusCode().is2xxSuccessful()
-                    && List.of("COMPLETED", "FAILED").contains(job.getBody().get("status"));
-        });
-        ResponseEntity<Map> warmJob = rest.getForEntity(url("/api/warm/jobs/" + jobId), Map.class);
+        ResponseEntity<Map> warmJob = awaitJob(jobId, Duration.ofSeconds(15));
         assertEquals("COMPLETED", warmJob.getBody().get("status"));
+        CacheDbAssertions.requireComplete(orderRepository.customerTimeline(1L, WindowRequest.first(2)));
+        assertTrue(cacheDbTestProbe.coverage(
+                "customer-order-timeline", "1", Duration.ofMinutes(5)
+        ).complete());
 
         ResponseEntity<List> scheduledWarm = rest.getForEntity(url("/api/warm/schedules"), List.class);
         assertEquals(HttpStatus.OK, scheduledWarm.getStatusCode());
@@ -230,6 +262,15 @@ class PostgresqlSampleIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body);
         return rest.exchange(request, Map.class);
+    }
+
+    private ResponseEntity<Map> awaitJob(String jobId, Duration timeout) {
+        await(timeout, () -> {
+            ResponseEntity<Map> job = rest.getForEntity(url("/api/warm/jobs/" + jobId), Map.class);
+            return job.getStatusCode().is2xxSuccessful()
+                    && List.of("COMPLETED", "FAILED").contains(job.getBody().get("status"));
+        });
+        return rest.getForEntity(url("/api/warm/jobs/" + jobId), Map.class);
     }
 
     private int rowCount(String table, String idColumn, long id) {

@@ -1,8 +1,11 @@
 package com.example.cachedb.sample.web;
 
 import com.example.cachedb.sample.application.SampleEntityNotFoundException;
+import com.example.cachedb.sample.application.SampleHotDataUnavailableException;
 import com.example.cachedb.sample.service.DurableReferenceUnavailableException;
 import com.reactor.cachedb.core.model.OptimisticWriteConflictException;
+import com.reactor.cachedb.core.repository.HotRouteUnavailableException;
+import com.reactor.cachedb.core.repository.HotUpdateUnavailableException;
 import com.reactor.cachedb.spring.boot.CacheDistributedJobQueueFullException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpHeaders;
@@ -56,6 +59,36 @@ public class ApiExceptionHandler {
     ResponseEntity<ProblemDetail> entityNotFound(SampleEntityNotFoundException exception) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(problem(HttpStatus.NOT_FOUND, exception.getMessage()));
+    }
+
+    @ExceptionHandler(SampleHotDataUnavailableException.class)
+    ResponseEntity<ProblemDetail> hotDataUnavailable(SampleHotDataUnavailableException exception) {
+        ProblemDetail detail = problem(HttpStatus.CONFLICT, exception.getMessage());
+        detail.setProperty("cacheStatus", exception.lookupStatus().name());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(detail);
+    }
+
+    @ExceptionHandler(HotRouteUnavailableException.class)
+    ResponseEntity<ProblemDetail> hotRouteUnavailable(HotRouteUnavailableException exception) {
+        ProblemDetail detail = problem(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
+        detail.setProperty("route", exception.coverage().routeName());
+        detail.setProperty("scope", exception.coverage().scope());
+        detail.setProperty("coverageStatus", exception.coverage().status().name());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "5")
+                .body(detail);
+    }
+
+    @ExceptionHandler(HotUpdateUnavailableException.class)
+    ResponseEntity<ProblemDetail> hotUpdateUnavailable(HotUpdateUnavailableException exception) {
+        ProblemDetail detail = problem(HttpStatus.CONFLICT, exception.getMessage());
+        detail.setProperty("entityId", exception.id());
+        detail.setProperty("requiredAction", "warm-or-explicit-source-command");
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(detail);
     }
 
     @ExceptionHandler(OptimisticWriteConflictException.class)

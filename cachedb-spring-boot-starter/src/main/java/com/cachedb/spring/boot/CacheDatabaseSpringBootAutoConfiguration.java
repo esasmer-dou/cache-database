@@ -7,37 +7,36 @@ import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.RuntimeCoordinationConfig;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.cache.CachePolicyCatalog;
+import com.reactor.cachedb.jdbc.JdbcStorageProvider;
+import com.reactor.cachedb.jdbc.JdbcStorageProviders;
+import io.micrometer.core.instrument.MeterRegistry;
 import com.reactor.cachedb.starter.CacheDatabase;
-import com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer;
 import com.reactor.cachedb.starter.CacheDatabaseProfiles;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery;
-import com.reactor.cachedb.starter.MigrationPlannerDemoSupport;
 import com.reactor.cachedb.starter.RedisConnectionConfig;
-import jakarta.servlet.Servlet;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.actuate.endpoint.annotation.Endpoint;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.annotation.Bean;
-import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
-import java.lang.reflect.InvocationTargetException;
 import java.sql.Connection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @AutoConfiguration
-@ConditionalOnClass({CacheDatabase.class, DataSource.class, JedisPooled.class, Servlet.class})
+@ConditionalOnClass({CacheDatabase.class, DataSource.class, JedisPooled.class})
 @EnableConfigurationProperties(CacheDbSpringProperties.class)
 @ConditionalOnProperty(prefix = "cachedb", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class CacheDatabaseSpringBootAutoConfiguration {
@@ -124,6 +123,28 @@ public class CacheDatabaseSpringBootAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public CacheDbProviderInfo cacheDbProviderInfo(CacheDbSpringProperties properties) {
+        CacheDbSpringProperties.SqlProvider configured = properties.getSql().getProvider();
+        if (configured == CacheDbSpringProperties.SqlProvider.CUSTOM) {
+            return new CacheDbProviderInfo("custom", "application-supplied", availableProviderIds());
+        }
+        JdbcStorageProvider provider = resolveProvider(configured);
+        return new CacheDbProviderInfo(provider.id(), provider.dialect().getClass().getName(), availableProviderIds());
+    }
+
+    @Bean
+    @ConditionalOnBean(CacheDatabase.class)
+    @ConditionalOnMissingBean
+    public CacheDbStartupReporter cacheDbStartupReporter(
+            CacheDatabase cacheDatabase,
+            CacheDbProviderInfo providerInfo,
+            CacheDbSpringProperties properties
+    ) {
+        return new CacheDbStartupReporter(cacheDatabase, providerInfo, properties);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public CachePolicyCatalog cachePolicyCatalog(
             CacheDbSpringProperties properties,
             CacheDatabaseConfig config,
@@ -185,6 +206,25 @@ public class CacheDatabaseSpringBootAutoConfiguration {
             DataSource dataSource
     ) {
         return new CacheDatabaseHealthIndicator(cacheDatabase, jedis, dataSource);
+    }
+
+    @Bean
+    @ConditionalOnClass(MeterRegistry.class)
+    @ConditionalOnBean({CacheDatabase.class, MeterRegistry.class})
+    @ConditionalOnMissingBean
+    public CacheDatabaseMetrics cacheDatabaseMetrics(CacheDatabase cacheDatabase) {
+        return new CacheDatabaseMetrics(cacheDatabase);
+    }
+
+    @Bean
+    @ConditionalOnClass(Endpoint.class)
+    @ConditionalOnBean(CacheDatabase.class)
+    @ConditionalOnMissingBean
+    public CacheDatabaseEndpoint cacheDatabaseEndpoint(
+            CacheDatabase cacheDatabase,
+            CacheDbProviderInfo providerInfo
+    ) {
+        return new CacheDatabaseEndpoint(cacheDatabase, providerInfo);
     }
 
     @Bean(destroyMethod = "close")
@@ -270,9 +310,15 @@ public class CacheDatabaseSpringBootAutoConfiguration {
     CacheScheduledWarmRegistrar cacheScheduledWarmRegistrar(
             ConfigurableListableBeanFactory beanFactory,
             @Qualifier("cacheDbScheduledWarmTaskScheduler") ThreadPoolTaskScheduler taskScheduler,
-            CacheScheduledWarmCoordinator coordinator
+            CacheScheduledWarmCoordinator coordinator,
+            ObjectProvider<CacheScheduledWarmTask> taskProvider
     ) {
-        return new CacheScheduledWarmRegistrar(beanFactory, taskScheduler, coordinator);
+        return new CacheScheduledWarmRegistrar(
+                beanFactory,
+                taskScheduler,
+                coordinator,
+                taskProvider.orderedStream().toList()
+        );
     }
 
     /**
@@ -303,91 +349,6 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                 policies.build(),
                 properties
         );
-    }
-
-    @Bean
-    @ConditionalOnBean(MigrationPlannerDemoSupport.class)
-    public SmartInitializingSingleton cacheDatabaseMigrationPlannerDemoConfigurer(
-            CacheDatabase cacheDatabase,
-            ObjectProvider<MigrationPlannerDemoSupport> migrationPlannerDemoSupportProvider
-    ) {
-        return () -> {
-            MigrationPlannerDemoSupport support = migrationPlannerDemoSupportProvider.getIfAvailable();
-            if (support != null) {
-                cacheDatabase.admin().configureMigrationPlannerDemo(support);
-            }
-        };
-    }
-
-    @Bean(destroyMethod = "close")
-    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    @ConditionalOnProperty(prefix = "cachedb.admin", name = "http-enabled", havingValue = "true")
-    public CacheDatabaseAdminHttpServer cacheDatabaseSpringBootAdminHandler(
-            CacheDatabase cacheDatabase,
-            CacheDbSpringProperties properties
-    ) {
-        CacheDbSpringProperties.AdminUiProperties adminProperties = properties.getAdmin();
-        AdminHttpConfig adminHttpConfig = AdminHttpConfig.builder()
-                .enabled(false)
-                .host("127.0.0.1")
-                .port(0)
-                .backlog(0)
-                .workerThreads(1)
-                .dashboardEnabled(adminProperties.isDashboardEnabled())
-                .dashboardTitle(adminProperties.getTitle())
-                .authEnabled(adminProperties.isAuthEnabled())
-                .authToken(adminProperties.getAuthToken())
-                .authHeaderName(adminProperties.getAuthHeaderName())
-                .requestQueueCapacity(adminProperties.getRequestQueueCapacity())
-                .backgroundWorkerThreads(adminProperties.getBackgroundWorkerThreads())
-                .backgroundQueueCapacity(adminProperties.getBackgroundQueueCapacity())
-                .maxRequestBodyBytes(adminProperties.getMaxRequestBodyBytes())
-                .jobStatusTtlSeconds(adminProperties.getJobStatusTtlSeconds())
-                .build();
-        return cacheDatabase.adminHttpServer(adminHttpConfig);
-    }
-
-    @Bean
-    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    @ConditionalOnProperty(prefix = "cachedb.admin", name = "http-enabled", havingValue = "true")
-    @ConditionalOnMissingBean
-    public CacheDatabaseAdminPageController cacheDatabaseAdminPageController(
-            CacheDatabaseAdminHttpServer adminHandler,
-            CacheDbSpringProperties properties
-    ) {
-        return new CacheDatabaseAdminPageController(adminHandler, properties);
-    }
-
-    @Bean
-    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    @ConditionalOnProperty(prefix = "cachedb.admin", name = "http-enabled", havingValue = "true")
-    public ServletRegistrationBean<CacheDatabaseAdminServlet> cacheDatabaseAdminServlet(
-            CacheDatabaseAdminHttpServer adminHandler,
-            CacheDbSpringProperties properties
-    ) {
-        String basePath = normalizeBasePath(properties.getAdmin().getBasePath());
-        CacheDatabaseAdminServlet servlet = new CacheDatabaseAdminServlet(adminHandler, basePath);
-        ServletRegistrationBean<CacheDatabaseAdminServlet> bean = new ServletRegistrationBean<>(
-                servlet,
-                basePath.isBlank() ? "/api/*" : basePath + "/api/*"
-        );
-        bean.setName("cacheDbAdminServlet");
-        bean.setLoadOnStartup(1);
-        return bean;
-    }
-
-    private String normalizeBasePath(String basePath) {
-        if (basePath == null || basePath.isBlank()) {
-            return "/cachedb-admin";
-        }
-        String normalized = basePath.trim();
-        if (!normalized.startsWith("/")) {
-            normalized = "/" + normalized;
-        }
-        while (normalized.endsWith("/") && normalized.length() > 1) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        return normalized;
     }
 
     private RedisConnectionConfig toConnectionConfig(String uri, CacheDbSpringProperties.PoolProperties poolProperties) {
@@ -428,10 +389,17 @@ public class CacheDatabaseSpringBootAutoConfiguration {
             return;
         }
         switch (sqlProperties.getProvider()) {
-            case POSTGRES -> {
-                // PostgreSQL remains the starter default through CacheDatabase.
+            case AUTO -> {
+                JdbcStorageProvider provider = resolveProvider(CacheDbSpringProperties.SqlProvider.AUTO);
+                Map<String, String> options = provider.id().equals("mssql")
+                        ? mssqlOptions(sqlProperties.getMssql())
+                        : Map.of();
+                builder.writeBehindFlusherFactory(provider.writeBehindFlusherFactory(options));
             }
-            case MSSQL -> builder.writeBehindFlusherFactory(mssqlWriteBehindFlusherFactory(sqlProperties.getMssql()));
+            case POSTGRES -> builder.writeBehindFlusherFactory(providerFactory("postgres", Map.of()));
+            case MSSQL -> builder.writeBehindFlusherFactory(providerFactory(
+                    "mssql", mssqlOptions(sqlProperties.getMssql())
+            ));
             case CUSTOM -> builder.writeBehindFlusherFactory((dataSource, entityRegistry, writeBehindConfig, collector) -> {
                 throw new IllegalStateException(
                         "cachedb.sql.provider=custom requires a CacheDatabaseConfigCustomizer "
@@ -441,43 +409,26 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         }
     }
 
-    private WriteBehindFlusherFactory mssqlWriteBehindFlusherFactory(CacheDbSpringProperties.MssqlProperties properties) {
-        try {
-            Class<?> optionsClass = Class.forName("com.reactor.cachedb.mssql.MssqlWriteBehindOptions");
-            Object optionsBuilder = optionsClass.getMethod("builder").invoke(null);
-            invokeBuilder(optionsBuilder, "lockTimeoutMillis", int.class, properties.getLockTimeoutMillis());
-            invokeBuilder(optionsBuilder, "queryTimeoutSeconds", int.class, properties.getQueryTimeoutSeconds());
-            invokeBuilder(optionsBuilder, "transactionIsolation", int.class, jdbcIsolation(properties.getTransactionIsolation()));
-            invokeBuilder(
-                    optionsBuilder,
-                    "restoreLockTimeoutAfterTransaction",
-                    boolean.class,
-                    properties.isRestoreLockTimeoutAfterTransaction()
-            );
-            Object options = optionsBuilder.getClass().getMethod("build").invoke(optionsBuilder);
-
-            Class<?> flusherClass = Class.forName("com.reactor.cachedb.mssql.MssqlWriteBehindFlusher");
-            Object factory = flusherClass.getMethod("factory", optionsClass).invoke(null, options);
-            return (WriteBehindFlusherFactory) factory;
-        } catch (ClassNotFoundException exception) {
-            throw new IllegalStateException(
-                    "cachedb.sql.provider=mssql requires com.reactor.cachedb:cachedb-storage-mssql on the application classpath",
-                    exception
-            );
-        } catch (InvocationTargetException exception) {
-            Throwable target = exception.getTargetException();
-            if (target instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            throw new IllegalStateException("Could not create MSSQL write-behind flusher factory", target);
-        } catch (ReflectiveOperationException exception) {
-            throw new IllegalStateException("Could not create MSSQL write-behind flusher factory", exception);
-        }
+    private WriteBehindFlusherFactory providerFactory(String providerId, Map<String, String> options) {
+        JdbcStorageProvider provider = JdbcStorageProviders.require(providerId, resolveRegistrationClassLoader());
+        return provider.writeBehindFlusherFactory(options);
     }
 
-    private void invokeBuilder(Object builder, String methodName, Class<?> valueType, Object value)
-            throws ReflectiveOperationException {
-        builder.getClass().getMethod(methodName, valueType).invoke(builder, value);
+    private JdbcStorageProvider resolveProvider(CacheDbSpringProperties.SqlProvider configured) {
+        if (configured == null || configured == CacheDbSpringProperties.SqlProvider.AUTO) {
+            return JdbcStorageProviders.requireSingle(resolveRegistrationClassLoader());
+        }
+        String id = configured == CacheDbSpringProperties.SqlProvider.MSSQL ? "mssql" : "postgres";
+        return JdbcStorageProviders.require(id, resolveRegistrationClassLoader());
+    }
+
+    private Map<String, String> mssqlOptions(CacheDbSpringProperties.MssqlProperties properties) {
+        LinkedHashMap<String, String> options = new LinkedHashMap<>();
+        options.put("lockTimeoutMillis", String.valueOf(properties.getLockTimeoutMillis()));
+        options.put("queryTimeoutSeconds", String.valueOf(properties.getQueryTimeoutSeconds()));
+        options.put("transactionIsolation", String.valueOf(jdbcIsolation(properties.getTransactionIsolation())));
+        options.put("restoreLockTimeoutAfterTransaction", String.valueOf(properties.isRestoreLockTimeoutAfterTransaction()));
+        return Map.copyOf(options);
     }
 
     private int jdbcIsolation(CacheDbSpringProperties.TransactionIsolation isolation) {
@@ -494,5 +445,11 @@ public class CacheDatabaseSpringBootAutoConfiguration {
     private ClassLoader resolveRegistrationClassLoader() {
         ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
         return contextClassLoader != null ? contextClassLoader : CacheDatabaseSpringBootAutoConfiguration.class.getClassLoader();
+    }
+
+    private List<String> availableProviderIds() {
+        return JdbcStorageProviders.discover(resolveRegistrationClassLoader()).stream()
+                .map(JdbcStorageProvider::id)
+                .toList();
     }
 }

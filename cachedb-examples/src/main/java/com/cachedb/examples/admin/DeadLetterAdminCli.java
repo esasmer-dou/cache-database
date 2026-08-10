@@ -8,6 +8,7 @@ import com.reactor.cachedb.core.queue.AdminExportFormat;
 import com.reactor.cachedb.core.queue.DeadLetterQuery;
 import com.reactor.cachedb.core.queue.ReconciliationQuery;
 import com.reactor.cachedb.starter.CacheDatabaseBootstrapFactory;
+import com.reactor.cachedb.postgres.PostgresConnectionConfig;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery;
 import redis.clients.jedis.JedisPooled;
@@ -48,7 +49,9 @@ public final class DeadLetterAdminCli {
         try (JedisPooled jedis = CacheDatabaseBootstrapFactory.redisClient("cachedb.admin.redis", redisUri);
              CacheDatabase cacheDatabase = new CacheDatabase(
                      jedis,
-                     CacheDatabaseBootstrapFactory.postgresDataSource("cachedb.admin.postgres", jdbcUrl, jdbcUser, jdbcPassword),
+                     PostgresConnectionConfig.fromSystemProperties(
+                             "cachedb.admin.postgres", jdbcUrl, jdbcUser, jdbcPassword
+                     ).createDataSource(),
                      config
              )) {
             GeneratedCacheBindingsDiscovery.registerDiscovered(

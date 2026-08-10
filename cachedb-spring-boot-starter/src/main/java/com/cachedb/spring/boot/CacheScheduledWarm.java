@@ -7,12 +7,12 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Schedules a no-argument method that returns a bounded CacheWarmPlan.
- * Every job name is coordinated through Redis so only one application instance
- * executes a cluster-wide warm cycle at a time.
+ * Generates a typed scheduling adapter for a no-argument method that returns a bounded CacheWarmPlan.
+ * Every job name is coordinated through Redis so only one application instance executes a
+ * cluster-wide warm cycle at a time. The annotation processor must be enabled for this annotation.
  */
 @Target(ElementType.METHOD)
-@Retention(RetentionPolicy.RUNTIME)
+@Retention(RetentionPolicy.SOURCE)
 @Documented
 public @interface CacheScheduledWarm {
 

@@ -10,6 +10,7 @@ import com.reactor.cachedb.core.config.SchemaBootstrapConfig;
 import com.reactor.cachedb.core.config.SchemaBootstrapMode;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.starter.CacheDatabaseBootstrapFactory;
+import com.reactor.cachedb.postgres.PostgresConnectionConfig;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery;
@@ -120,7 +121,9 @@ public final class DemoLoadMain {
         );
         CacheDatabase cacheDatabase = new CacheDatabase(
                 jedis,
-                CacheDatabaseBootstrapFactory.postgresDataSource("cachedb.demo.postgres", jdbcUrl, jdbcUser, jdbcPassword),
+                PostgresConnectionConfig.fromSystemProperties(
+                        "cachedb.demo.postgres", jdbcUrl, jdbcUser, jdbcPassword
+                ).createDataSource(),
                 config
         );
         GeneratedCacheBindingsDiscovery.registerDiscovered(

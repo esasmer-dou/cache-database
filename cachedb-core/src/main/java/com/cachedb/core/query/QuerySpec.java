@@ -6,19 +6,31 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class QuerySpec {
+    public static final int MAX_LIMIT = 100_000;
 
     private final List<QueryFilter> filters;
     private final List<QuerySort> sorts;
     private final int offset;
     private final int limit;
+    private final int queryTimeoutSeconds;
     private final FetchPlan fetchPlan;
     private final QueryGroup rootGroup;
 
     private QuerySpec(Builder builder) {
+        if (builder.offset < 0) {
+            throw new IllegalArgumentException("offset must not be negative");
+        }
+        if (builder.limit <= 0 || builder.limit > MAX_LIMIT) {
+            throw new IllegalArgumentException("limit must be between 1 and " + MAX_LIMIT);
+        }
+        if (builder.queryTimeoutSeconds < 0 || builder.queryTimeoutSeconds > 300) {
+            throw new IllegalArgumentException("queryTimeoutSeconds must be between 0 and 300");
+        }
         this.filters = List.copyOf(builder.filters);
         this.sorts = List.copyOf(builder.sorts);
         this.offset = builder.offset;
         this.limit = builder.limit;
+        this.queryTimeoutSeconds = builder.queryTimeoutSeconds;
         this.fetchPlan = builder.fetchPlan;
         this.rootGroup = new QueryGroup(QueryGroupOperator.AND, builder.rootNodes);
     }
@@ -62,6 +74,11 @@ public final class QuerySpec {
         return limit;
     }
 
+    /** Zero keeps the repository/provider default. Positive values override it for this query. */
+    public int queryTimeoutSeconds() {
+        return queryTimeoutSeconds;
+    }
+
     public FetchPlan fetchPlan() {
         return fetchPlan;
     }
@@ -98,6 +115,10 @@ public final class QuerySpec {
         return toBuilder().offset(offset).build();
     }
 
+    public QuerySpec withQueryTimeoutSeconds(int queryTimeoutSeconds) {
+        return toBuilder().queryTimeoutSeconds(queryTimeoutSeconds).build();
+    }
+
     public QuerySpec fetching(FetchPlan fetchPlan) {
         return toBuilder().fetchPlan(fetchPlan).build();
     }
@@ -116,6 +137,7 @@ public final class QuerySpec {
         }
         builder.offset(offset);
         builder.limit(limit);
+        builder.queryTimeoutSeconds(queryTimeoutSeconds);
         builder.fetchPlan(fetchPlan);
         return builder;
     }
@@ -126,6 +148,7 @@ public final class QuerySpec {
         private final List<QueryNode> rootNodes = new ArrayList<>();
         private int offset;
         private int limit = 100;
+        private int queryTimeoutSeconds;
         private FetchPlan fetchPlan = FetchPlan.empty();
 
         public Builder filter(QueryFilter filter) {
@@ -173,6 +196,11 @@ public final class QuerySpec {
 
         public Builder limit(int limit) {
             this.limit = limit;
+            return this;
+        }
+
+        public Builder queryTimeoutSeconds(int queryTimeoutSeconds) {
+            this.queryTimeoutSeconds = queryTimeoutSeconds;
             return this;
         }
 

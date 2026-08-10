@@ -10,6 +10,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @Service
@@ -27,6 +28,10 @@ public final class WarmBackfillApplicationService {
         this.schedules = schedules;
     }
 
+    public CacheDistributedJobSnapshot activeCustomers(int limit, boolean dryRun) {
+        return submit(SampleWarmJobHandler.Arguments.activeCustomers(limit, dryRun));
+    }
+
     public CacheDistributedJobSnapshot customerOrders(
             long customerId,
             int limit,
@@ -34,6 +39,26 @@ public final class WarmBackfillApplicationService {
             boolean dryRun
     ) {
         return submit(SampleWarmJobHandler.Arguments.customerOrders(customerId, limit, projectionOnly, dryRun));
+    }
+
+    public CacheDistributedJobSnapshot orderLines(long orderId, int limit, boolean dryRun) {
+        return submit(SampleWarmJobHandler.Arguments.orderLines(orderId, limit, dryRun));
+    }
+
+    public CacheDistributedJobSnapshot recentHighValueOrders(
+            BigDecimal minimumAmount,
+            int limit,
+            boolean dryRun
+    ) {
+        return submit(SampleWarmJobHandler.Arguments.recentHighValueOrders(minimumAmount, limit, dryRun));
+    }
+
+    public CacheDistributedJobSnapshot highlightedOrders(
+            double minimumPriorityScore,
+            int limit,
+            boolean dryRun
+    ) {
+        return submit(SampleWarmJobHandler.Arguments.highlightedOrders(minimumPriorityScore, limit, dryRun));
     }
 
     public CacheDistributedJobSnapshot activeProducts(
@@ -45,6 +70,10 @@ public final class WarmBackfillApplicationService {
         return submit(SampleWarmJobHandler.Arguments.activeProducts(category, limit, projectionOnly, dryRun));
     }
 
+    public CacheDistributedJobSnapshot lowStockProducts(int limit, boolean dryRun) {
+        return route(SampleWarmJobHandler.Route.LOW_STOCK_PRODUCTS, limit, true, dryRun);
+    }
+
     public CacheDistributedJobSnapshot openTickets(int limit, boolean dryRun) {
         return route(SampleWarmJobHandler.Route.OPEN_TICKETS, limit, false, dryRun);
     }
@@ -53,8 +82,24 @@ public final class WarmBackfillApplicationService {
         return route(SampleWarmJobHandler.Route.ACTIVE_SHIPMENTS, limit, projectionOnly, dryRun);
     }
 
+    public CacheDistributedJobSnapshot customerShipments(long customerId, int limit, boolean dryRun) {
+        return submit(SampleWarmJobHandler.Arguments.customerShipments(customerId, limit, dryRun));
+    }
+
+    public CacheDistributedJobSnapshot shipmentExceptions(int limit, boolean dryRun) {
+        return route(SampleWarmJobHandler.Route.SHIPMENT_EXCEPTIONS, limit, true, dryRun);
+    }
+
+    public CacheDistributedJobSnapshot shipmentEvents(long shipmentId, int limit, boolean dryRun) {
+        return submit(SampleWarmJobHandler.Arguments.shipmentEvents(shipmentId, limit, dryRun));
+    }
+
     public CacheDistributedJobSnapshot liveReports(int limit, boolean dryRun) {
         return route(SampleWarmJobHandler.Route.LIVE_REPORTS, limit, false, dryRun);
+    }
+
+    public CacheDistributedJobSnapshot reportsByType(String reportType, int limit, boolean dryRun) {
+        return submit(SampleWarmJobHandler.Arguments.reportsByType(reportType, limit, dryRun));
     }
 
     public CacheDistributedJobSnapshot securityAudit(int limit, boolean dryRun) {

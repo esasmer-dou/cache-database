@@ -95,10 +95,11 @@ CacheDB is ready for public beta use, not a no-caveats GA announcement.
 
 The key design rule is explicit read-model shape:
 
-- use generated module/binding surfaces first
-- use projections and relation limits for relation-heavy list screens
+- use injected `@CacheRepository` interfaces for application code
+- separate Redis-only, durable-source, and warm routes explicitly
+- use projections and bounded `@CacheLookup` methods for relation-heavy screens
 - use ranked projections for global sorted/range-driven views
-- move only measured hotspots down to direct repository usage
+- move only measured infrastructure paths down to provider repositories
 
 ### Before production rollout
 

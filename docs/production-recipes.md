@@ -24,10 +24,11 @@ The answer is intentionally tied to the project's first priority:
 
 If you want the shortest possible recommendation:
 
-- start new production services with `GeneratedCacheModule.using(session)...`
-- move a proven hot endpoint down to `*CacheBinding.using(session)...`
-- drop only measured hotspots, workers, or infra flows to direct repository usage
-- use projections plus `withRelationLimit(...)` for relation-heavy list and dashboard screens
+- start new production services with one `@CacheRepository` interface per aggregate or route group
+- declare Redis-only reads with `@CacheLookup` or `@HotRoute`; declare durable history with `@SourceRoute`
+- use projection return types for relation-heavy lists, dashboards, and global ranking
+- derive every required preload from the same query contract with `@WarmRoute`
+- use generated bindings or low-level repositories only in measured infrastructure and compatibility paths
 
 ## Use-Case Cookbook
 
@@ -36,8 +37,8 @@ If you want the shortest possible recommendation:
 | Customer detail page with 1,000+ orders | Customer root entity, order summary projection, bounded per-customer hot window | Loading the full customer aggregate and every order line for first paint |
 | Order detail page with many lines | Load order detail explicitly, preload only a small `orderLines` preview | Fetching hundreds or thousands of lines before the user asks for them |
 | Global "highest value orders" dashboard | Ranked projection with a precomputed business rank field | Wide entity scan followed by in-memory sort |
-| Admin CRUD screen | Generated module or binding | Premature direct repository code for non-hot admin paths |
-| Write-behind repair or replay worker | Direct repository with explicit limits and retries | Hiding operational work behind high-level domain helpers |
+| Admin CRUD screen | Declarative repository with explicit detail and command methods | Making cache misses look like durable 404 responses |
+| Write-behind repair or replay worker | Low-level repository with explicit limits, retries, and checkpoints | Hiding operational work behind a normal request route |
 | Existing ORM route migration | Migration Planner, dry-run warm, staging warm, side-by-side compare | Blind cutover based only on Redis latency |
 
 The most common mistake is treating Redis as a magic full-aggregate cache.
@@ -71,34 +72,36 @@ That tells CacheDB the projection owns a pre-ranked business field and lets the 
 
 ```mermaid
 flowchart TD
-    A["Are you building normal service endpoints?"] -->|Yes| B["Start with GeneratedCacheModule.using(session)"]
-    A -->|No| C["Is this a proven hot endpoint or batch/infra flow?"]
-    C -->|Yes| D["Use *CacheBinding.using(session) or direct repository"]
-    C -->|No| E["Is the screen relation-heavy or list-heavy?"]
-    E -->|Yes| F["Use projections plus withRelationLimit(...)"]
-    E -->|No| G["Stay on GeneratedCacheModule until profiling says otherwise"]
+    A["Does the route require durable history?"] -->|Yes| B["Declare a bounded SourceRoute"]
+    A -->|No| C["Must the route be served from Redis?"]
+    C -->|Yes| D["Declare CacheLookup or HotRoute"]
+    C -->|No| B
+    D --> E["Is the result a list, dashboard, or global ranking?"]
+    E -->|Yes| F["Return a projection and add a matching WarmRoute"]
+    E -->|No| G["Return a bounded entity lookup/window"]
 ```
 
 ## Decision Table
 
 | Situation | Recommended surface | Why | Runtime overhead profile | When to move lower |
 | --- | --- | --- | --- | --- |
-| Typical business CRUD, service-layer apps, fast onboarding | `GeneratedCacheModule.using(session)...` | Lowest glue, most ORM-like, safest onboarding path | Low | Move lower only after a real hotspot is proven |
-| Teams that want compile-time helpers without package-level grouping | `*CacheBinding.using(session)...` | Slightly more explicit, still generated, still low ceremony | Very low | Move lower when a single endpoint becomes latency-sensitive |
-| Known hot read/write endpoints, batch jobs, infra services | direct `EntityRepository` / `ProjectionRepository` | Smallest wrapper surface and full control | Lowest | Stay here only for measured hotspots |
-| Relation-heavy read screens | generated binding or minimal repository + projections + relation limits | Lets you keep ergonomics while avoiding wide object graphs | Low to very low | Move to minimal repository only if summary/detail still misses latency targets |
-| Internal admin/reporting flows | generated module or binding | Developer speed usually matters more than shaving nanoseconds | Low | Usually not worth dropping lower |
-| Replay/recovery/workers | minimal repository | Operational code should stay explicit and unsurprising | Lowest | Rarely needs more abstraction |
+| Typical business CRUD and service-layer apps | `@CacheRepository` plus inherited commands and explicit lookups | One injectable contract, compile-time validation, no reflection | Low | Keep this surface unless infrastructure code needs lower-level control |
+| Known hot list or dashboard | `@HotRoute` returning a projection | The route owns its page, window, coverage, and memory contract | Low | Redesign the projection before bypassing the contract |
+| Durable archive or audit history | bounded `@SourceRoute` or reviewed `@SourceSql` | SQL access is visible and cannot silently pollute Redis | Source-dependent | Tune indexes, timeout, and row limit rather than hiding the read |
+| Relation-heavy detail | `@CacheLookup` with a compile-time bounded relation preview | Avoids full aggregate hydration and N+1 behavior | Low | Load additional detail through a separate route |
+| Replay, recovery, and internal workers | low-level repository or provider adapter | Operational state, retry, and checkpoint handling remain explicit | Lowest wrapper cost | Do not expose this surface to normal request code |
 
 ## Official Recommendation Ladder
 
 Use these surfaces in this order:
 
-1. Start with `GeneratedCacheModule.using(session)...`
-2. Move hot endpoints to `*CacheBinding.using(session)...` if you need more explicit control
-3. Drop only the proven hotspots to direct repository/projection usage
+1. Put entity mapping and relation metadata on the entity.
+2. Put application behavior on an injectable `@CacheRepository` interface.
+3. Split Redis-only, durable-source, warm, and command methods explicitly.
+4. Use projections before increasing full-entity windows.
+5. Drop to generated bindings or provider repositories only for measured infrastructure work.
 
-That keeps most application code ergonomic while preserving a clear escape hatch for the few paths that truly need it.
+This keeps the application API stable while query shape and execution policy remain visible at compile time.
 
 ## Multi-Pod Coordination Smoke
 
@@ -172,28 +175,32 @@ This is the key takeaway:
 
 ### Product service teams
 
-Start with `GeneratedCacheModule.using(session)...`.
+Start with an injected `@CacheRepository`.
 
 This gives you:
 
-- the easiest onboarding path
-- zero-glue startup in Spring Boot
-- compile-time generated ergonomics
-- low enough wrapper cost for normal production APIs
+- a small domain-specific interface
+- automatic Spring registration
+- compile-time route and parameter validation
+- explicit Redis, source-database, warm, and command semantics
 
 ### Teams with a few hot endpoints
 
-Keep most code on the generated domain module, but move the measured hotspot to `*CacheBinding.using(session)...`.
+Keep one repository contract and make the measured route explicit with
+`@HotRoute`, a projection, a bounded `WindowRequest`, and a matching
+`@WarmRoute`.
 
 This is usually the best middle ground because:
 
-- the rest of the code stays readable
-- the hot endpoint gets a smaller wrapper surface
-- you avoid prematurely dropping the whole codebase to low-level repository style
+- the rest of the service stays readable
+- the hot endpoint receives a measurable memory and coverage contract
+- the route does not silently fall back to an expensive entity scan
 
 ### Platform, worker, and operational teams
 
-Use direct `EntityRepository` / `ProjectionRepository`.
+Use the generated repository for product routes. Use low-level
+`EntityRepository` / `ProjectionRepository` only when building framework,
+repair, replay, or migration infrastructure.
 
 This is the right tradeoff when:
 
@@ -203,15 +210,17 @@ This is the right tradeoff when:
 
 ## Migration Path From JPA/Hibernate
 
-If a team is coming from JPA/Hibernate habits, do not force them to jump straight to minimal repositories.
+If a team is coming from JPA/Hibernate habits, do not reproduce lazy-loading
+and implicit SQL behavior inside CacheDB.
 
 Use this migration path instead:
 
-1. Start on `GeneratedCacheModule.using(session)...`
-2. Replace wide eager reads with projections and explicit detail fetch
-3. Add `withRelationLimit(...)` to preview screens
-4. Move only proven hotspots to `*CacheBinding.using(session)...`
-5. Use direct repository style only for the few places where profiling says it still matters
+1. Define the durable table mapping and relations on the entity.
+2. Define one repository method for each application route.
+3. Replace wide eager reads with projections and explicit detail lookups.
+4. Put archive/history reads on bounded source routes.
+5. Add a warm route and prove coverage before switching traffic.
+6. Keep the old ORM route available until parity, latency, memory, and rollback checks pass.
 
 This path keeps the mental model familiar while steering teams toward lower-overhead query shapes.
 
@@ -228,8 +237,20 @@ Use this when:
 Recommended surface:
 
 ```java
-var domain = com.reactor.cachedb.examples.entity.GeneratedCacheModule.using(session);
-List<UserEntity> activeUsers = domain.users().queries().activeUsers(25);
+@CacheRepository(entity = UserEntity.class)
+public interface UserRepository extends CacheDbRepository<UserEntity, Long> {
+
+    @HotRoute(value = "active-users", pageSize = 25, hotWindow = 10_000,
+            memoryBudgetBytes = 16_777_216L)
+    @CacheRouteQuery(
+            predicates = @CachePredicate(field = "status", constants = "ACTIVE"),
+            orderBy = @CacheOrder(field = "username"),
+            windowParameter = "window"
+    )
+    HotWindow<UserEntity> active(WindowRequest window);
+}
+
+List<UserEntity> activeUsers = users.active(WindowRequest.first(25)).completeItems();
 ```
 
 Why this is the default:
@@ -272,7 +293,7 @@ Recommended pattern:
 
 1. Query summaries through a projection repository
 2. Load detail explicitly only when needed
-3. Keep relation previews bounded with `withRelationLimit(...)`
+3. Keep relation previews bounded with `@CacheLookup(maxRelationRows=...)`
 4. For global top-N or threshold-driven screens, prefer a projection-specific ranked field over a wide multi-sort entity query
 5. Mark that ranked field with `rankedBy(...)` so the projection repository can use the projection-specific top-window path
 6. Keep full-entity page/result sizes below `hotEntityLimit`; if the window must be large, make it a projection window instead
@@ -280,14 +301,13 @@ Recommended pattern:
 Example:
 
 ```java
-ProjectionRepository<OrderSummaryReadModel, Long> summaries =
-        DemoOrderEntityCacheBinding.using(session).projections().orderSummary();
+List<OrderSummary> topOrders = orders.customerTimeline(
+        customerId,
+        WindowRequest.first(24)
+).completeItems();
 
-List<OrderSummaryReadModel> topOrders =
-        DemoOrderEntityCacheBinding.topCustomerOrders(summaries, customerId, 24);
-
-EntityRepository<DemoOrderEntity, Long> previewRepository =
-        DemoOrderEntityCacheBinding.using(session).fetches().orderLinesPreview(8);
+OrderEntity order = orders.detail(orderId, 8)
+        .orElseThrow(status -> mapHotLookupFailure(orderId, status));
 ```
 
 If the screen is something like "top orders by line count, then revenue" across the whole dataset, do not keep pushing the full entity query harder. Add a projection-specific rank field and query that projection through a single sorted index.
@@ -494,7 +514,7 @@ No matter which recipe you choose, these remain the production defaults we recom
 - keep foreground repository Redis traffic separate from background worker/admin Redis traffic
 - prefer projections for list pages and dashboards
 - prefer summary query + explicit detail fetch over eager wide relations
-- use `withRelationLimit(...)` on preview screens
+- declare bounded preview relations with `@CacheLookup`
 - treat global sorted/range list screens as projection-first, and prefer pre-ranked projection fields when exact business ranking matters
 - keep page/result size below the entity hot window; the default read-shape guardrail enforces this with `hotSetHeadroom`
 - use `hotPolicy.mode=TIME_WINDOW` or `STATE_WINDOW` when hotness is driven by business time or state, not just by recent access count
@@ -505,7 +525,7 @@ No matter which recipe you choose, these remain the production defaults we recom
 - use a CDC, Debezium, Kafka, or outbox adapter when the source database can be mutated outside CacheDB
 - use `readShapeGuardrail.maxProjectionQueryLimit` for bounded projection windows such as "latest 1,000 orders per customer"
 - set Redis `maxmemory` and keep `maxmemory-policy=noeviction` for a CacheDB-owned Redis; let CacheDB guardrails shed page-cache, read-through, hot-set, and query-index writes intentionally
-- keep generated ergonomics for normal code, and reserve minimal repository style for measured hotspots
+- keep the declarative repository API in normal code, and reserve low-level provider APIs for measured infrastructure work
 - treat admin UI as secondary; it should observe the system, not shape the primary runtime path
 
 ## What To Avoid
@@ -518,7 +538,7 @@ Avoid these patterns in production:
 - treating `entityTtlSeconds` as "last 90 business days"; use `TIME_WINDOW` for that rule
 - relying on Redis random or all-keys eviction to control CacheDB memory
 - sharing one Redis pool between foreground repository traffic and background workers
-- dropping directly to minimal repository style everywhere before measuring
+- bypassing route contracts with low-level repository calls throughout application code
 - assuming Redis latency is only about Redis itself; query shape and hydration cost usually dominate
 
 ## Spring Boot Recipe
@@ -535,7 +555,9 @@ cachedb:
       enabled: true
 ```
 
-Then let generated registrars auto-register entities, and use generated module or binding surfaces in service code.
+Then let generated registrars register entities and let the repository processor
+register each `@CacheRepository` implementation as a Spring bean. Application
+services inject only their domain repository interface.
 
 ## Multi-Pod Kubernetes Recipe
 
@@ -580,12 +602,14 @@ What does not change:
 
 If you want a short production rule set to copy into an engineering playbook, use this:
 
-- default application code: `GeneratedCacheModule.using(session)...`
-- hot endpoint escape hatch: `*CacheBinding.using(session)...`
-- worker and replay code: direct repositories
+- default application code: injected `@CacheRepository`
+- hot lists: `@HotRoute` plus projection, bounded window, and coverage
+- archive/history: bounded `@SourceRoute`; never a hidden cache-miss fallback
+- preload: `@WarmRoute` derived from the same hot route
+- worker and replay code: low-level repositories or provider adapters
 - list and dashboard reads: projections first, full aggregate second
-- relation previews: always consider `withRelationLimit(...)`
-- only move lower after profiling, not by habit
+- relation previews: bounded `@CacheLookup`
+- low-level APIs: only after profiling or for infrastructure work
 
 Related docs:
 

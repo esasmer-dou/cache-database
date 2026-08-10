@@ -1,11 +1,10 @@
 package com.example.cachedb.sample.application.support;
 
-import com.example.cachedb.sample.application.SampleEntityNotFoundException;
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
+import com.example.cachedb.sample.application.SampleHotLookups;
 import com.example.cachedb.sample.domain.SupportTicketEntity;
+import com.example.cachedb.sample.repository.SupportTicketRepository;
 import com.example.cachedb.sample.service.DurableReferenceGuard;
 import com.reactor.cachedb.core.model.WriteReceipt;
-import com.reactor.cachedb.core.page.VersionedEntity;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -15,27 +14,26 @@ import java.util.List;
 @Service
 public final class SupportTicketApplicationService {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final SupportTicketRepository tickets;
     private final DurableReferenceGuard references;
     private final Clock clock;
 
     public SupportTicketApplicationService(
-            GeneratedCacheModule.Scope domain,
+            SupportTicketRepository tickets,
             DurableReferenceGuard references,
             Clock clock
     ) {
-        this.domain = domain;
+        this.tickets = tickets;
         this.references = references;
         this.clock = clock;
     }
 
     public List<SupportTicketEntity> open(int limit) {
-        return domain.supportTickets().queries().openTickets(limit);
+        return tickets.open(limit).completeItems();
     }
 
     public SupportTicketEntity detail(long ticketId) {
-        return domain.supportTickets().findById(ticketId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Ticket", ticketId));
+        return SampleHotLookups.require("Ticket", ticketId, tickets.detail(ticketId));
     }
 
     public WriteReceipt<SupportTicketEntity, Long> create(CreateTicket command) {
@@ -49,17 +47,16 @@ public final class SupportTicketApplicationService {
         entity.subject = defaultText(command.subject(), "Sample support case");
         entity.openedAt = now;
         entity.updatedAt = now;
-        return customer.save(domain.supportTickets().repository(), entity);
+        return customer.save(tickets, entity);
     }
 
     public WriteReceipt<SupportTicketEntity, Long> updateStatus(long ticketId, UpdateTicketStatus command) {
-        VersionedEntity<SupportTicketEntity> current = domain.supportTickets().findVersionedById(ticketId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Ticket", ticketId));
-        SupportTicketEntity entity = current.entity();
-        entity.status = command.status();
-        entity.priority = command.priority() == null ? entity.priority : command.priority();
-        entity.updatedAt = Instant.now(clock).getEpochSecond();
-        return domain.supportTickets().save(entity, current.version());
+        return tickets.updateHot(ticketId, entity -> {
+            entity.status = command.status();
+            entity.priority = command.priority() == null ? entity.priority : command.priority();
+            entity.updatedAt = Instant.now(clock).getEpochSecond();
+            return entity;
+        });
     }
 
     private String defaultText(String value, String fallback) {

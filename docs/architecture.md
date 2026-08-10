@@ -1,313 +1,209 @@
-# Cache Database Architecture
+# CacheDB Architecture
 
-Turkce surum: [../tr/docs/architecture.md](../tr/docs/architecture.md)
+Turkish version: [../tr/docs/architecture.md](../tr/docs/architecture.md)
 
-## 1. Amac
+## 1. System Boundary
 
-Bu proje klasik `DB-first ORM` yaklasimini tersine cevirir:
+CacheDB is a Redis-first persistence and read-model framework. It is not a
+transparent cache in front of every SQL query.
 
-- uygulama katmani Redis ile konusur
-- entity yasam dongusu Redis'te baslar
-- secilen SQL provider arka planda kalici depo olarak kullanilir
-- flush islemi kullanici isteginden ayrilir
+- Redis serves explicitly declared low-latency entity and projection routes.
+- PostgreSQL or SQL Server remains the durable source of truth.
+- Writes are accepted in Redis and persisted by versioned write-behind.
+- Archive and history reads use explicit, bounded source routes.
+- Compile-time processors generate codecs, metadata, repository implementations,
+  Spring beans, relation loaders, and projection mappings without reflection.
 
-Bu nedenle sistem teknik olarak bir `cache-first persistence engine`dir.
+The application must decide which routes belong in Redis. CacheDB makes that
+decision executable, bounded, observable, and testable.
 
-## 2. Cekirdek Ilkeler
+## 2. Application Programming Model
 
-### Minimum overhead
+Entity classes describe storage shape:
 
-- runtime reflection yok
-- metadata lookup icin dinamik introspection yok
-- compile-time generated metadata kullanilir
-- entity codec'leri explicit olur
+- `@CacheEntity`, `@CacheId`, and `@CacheColumn` map durable rows.
+- `@CacheRelation` describes CacheDB loading metadata. It does not create a
+  database foreign key.
+- `@CacheProjectionRecord` defines compact or ranked read models.
 
-### N+1 kontrolu
+Repository interfaces describe application behavior:
 
-N+1 problemini tamamen sihirli bicimde cozmek yerine API seviyesinde engellemek gerekir.
+- `@CacheLookup` is a Redis-only point lookup with explicit miss status.
+- `@HotRoute` is a bounded Redis entity or projection window.
+- `@SourceRoute` and `@SourceSql` are bounded durable reads.
+- `@WarmRoute` derives a preload plan from an existing hot route.
+- `@CacheCommand` declares acknowledgement and durability requirements.
 
-Kurallar:
+`HotLookup.NOT_CACHED` never means the durable row is absent. Hidden SQL
+fallback is intentionally not part of a hot route.
 
-- relation getter'lari varsayilan olarak tekil lazy query atmamalidir
-- relation yukleme `FetchPlan` ile acikca istenmelidir
-- tekil relation erisimleri batch loader uzerinden gruplanmalidir
+## 3. Write Flow
 
-### Redis-first
+```mermaid
+flowchart LR
+    A["Application command"] --> B["Generated repository"]
+    B --> C["Redis Function"]
+    C --> D["Entity, version, indexes, stream event"]
+    D --> E["Write-behind consumer group"]
+    E --> F["PostgreSQL or SQL Server"]
+    E --> G["Retry and dead-letter handling"]
+```
 
-- `save`, `find`, `delete`, `query result materialization` once Redis'e gider
-- kullaniciya verilen basari sinyali Redis seviyesinde olusur
-- SQL provider sync islemi daha sonra write-behind iscisi ile yapilir
-- Redis 8 uzerinde mutation akisina Redis Functions eklenebilir
+1. The repository validates the command shape and generated ID policy.
+2. Redis atomically updates payload, version, indexes, and the durable stream.
+3. The caller receives a `WriteReceipt` according to the declared
+   acknowledgement mode.
+4. Workers batch stream events and apply version-guarded SQL upsert or delete.
+5. Retries are idempotent; stale versions cannot overwrite newer durable state.
 
-### Version ordering
+`REDIS_ACCEPTED` keeps SQL latency off the request path. `SQL_DURABLE` waits for
+the receipt to become durable and must have a bounded timeout.
 
-- her entity icin ayri Redis version key tutulur
-- mutation sirasinda version atomik artirilir
-- stream event'i bu version ile yazilir
-- worker Redis'te daha yeni version varsa stale event'i skip eder
-- SQL provider upsert sadece daha yeni version geldiginde satiri gunceller
+## 4. Read Flows
 
-### Sicak veri butcesi
+### Redis-only detail
 
-Her entity turu icin:
+`@CacheLookup` returns `HIT`, `NOT_CACHED`, `TOMBSTONED`, or
+`OUTSIDE_HOT_POLICY`. The application maps these states explicitly. A miss does
+not start SQL work.
 
-- bir `hot set` limiti olur
-- overflow kayitlar page mantigiyla gecici yuklenir
-- kullanim bittiginde LRU benzeri politika ile Redis'ten dusurulur
-- kalici veri secilen SQL provider'da kalmaya devam eder
+### Redis hot window
 
-## 3. Veri Akisi
+`@HotRoute` uses a bounded `WindowRequest`, keyset cursor, route-level memory
+contract, and coverage scope. Projection routes apply the window before wide
+entity hydration whenever possible.
 
-### Yazma akisi
+### Durable source window
 
-1. Kullanici entity uzerinde `save()` cagirir.
-2. Entity codec ile Redis payload ve kolon haritasi uretilir.
-3. Redis Functions aciksa entity key ve stream append atomik bicimde calisir.
-4. Fonksiyon kapaliysa entity Redis'e yazilir ve write-behind kuyruguna event eklenir.
-5. Worker stream'i okuyup secilen SQL provider'a `upsert/delete` uygular.
+`@SourceRoute` and reviewed `@SourceSql` methods query the selected SQL provider
+with a compile-time row cap and query timeout. Results do not populate Redis
+implicitly.
 
-### Okuma akisi
+### Warm and coverage
 
-1. Istek once Redis hot set icinde aranir.
-2. Bulunmazsa ileride page loader kaynak veritabanindan ilgili pencereyi getirecektir.
-3. `FetchPlan` bos degilse kayitli `RelationBatchLoader` preload yapar.
+`@WarmRoute` reuses the exact hot-route predicate, sort, projection, and scope.
+Warm can hydrate projections only or entities plus projections. A completed run
+records route coverage so tests and operations can distinguish an empty result
+from an incomplete Redis scope.
 
-## 4. Tutarlilik Modeli
+## 5. Relations And N+1 Control
 
-Sistem `eventual consistency` modelindedir.
+Relations are explicit and bounded:
 
-Bu su anlama gelir:
+- database primary/foreign keys protect durable integrity
+- `@CacheRelation` tells CacheDB how to batch-load related rows
+- `@CacheLookup(maxRelationRows=...)` limits detail previews
+- large child collections use projection windows instead of aggregate hydration
+- generated loaders partition parent IDs and avoid one SQL call per parent
 
-- kullanici Redis yazisini gorur
-- SQL provider commit'i daha sonra gerceklesir
-- Redis ve kaynak veritabani kisa sureli farkli olabilir
-
-Bu nedenle uretimde kritik konular:
-
-- Redis AOF acilmasi
-- durable stream/list kullanimi
-- idempotent SQL provider yazimi
-- retry ve dead-letter stratejisi
-- version ordering
-
-## 5. Reflection'siz Mapping Stratejisi
-
-Reflection olmayacagi icin metadata uretimi annotation processor ile yapilmalidir.
-
-Ornek cikti:
-
-- `UserMeta`
-- `OrderMeta`
-- generated kolon listesi
-- relation tanimlari
-- id alani bilgisi
-
-Entity codec iki farkli amac tasir:
-
-- Redis payload encode/decode
-- SQL provider kolon degerleri uretimi
-
-## 6. Moduller
-
-### `cachedb-annotations`
-
-- `@CacheEntity`
-- `@CacheId`
-- `@CacheColumn`
-- `@CacheRelation`
-
-### `cachedb-processor`
-
-- annotation scanning
-- generated `*Meta` siniflari
-
-### `cachedb-core`
-
-- repository sozlesmeleri
-- metadata sozlesmeleri
-- fetch plan
-- write operation modeli
-- relation API
-- cache policy
-- runtime config
-
-### `cachedb-storage-redis`
-
-- Redis repository implementasyonu
-- key naming stratejisi
-- Redis Functions library/load/call katmani
-- write-behind enqueue
-- stale event skip mantigi
-
-### `cachedb-storage-postgres`
-
-- JDBC tabanli upsert/delete flusher
-- version-gated update kurallari
-
-### `cachedb-starter`
-
-- bootstrap
-- repository factory
-- ortak wiring
-
-## 7. Konfigurasyon Yaklasimi
-
-Sabit kabul birakmamak icin ayarlar initialization asamasinda disaridan verilir.
-
-Baslica runtime/init ayarlari:
-
-- `WriteBehindConfig`
-- worker thread sayisi
-- batch size
-- poll block suresi
-- retry sayisi ve backoff
-- consumer group ve stream key
-- shutdown bekleme suresi
-- daemon thread davranisi
-
-- `ResourceLimits`
-- varsayilan entity cache policy
-- kayitli entity ust siniri
-- operation basina kolon ust siniri
-
-- `CachePolicy`
-- hot entity limiti
-- page size
-- LRU etkinligi
-- entity TTL
-- page TTL
-
-- `KeyspaceConfig`
-- Redis key prefix
-- entity/page/version segmentleri
-
-- `RedisFunctionsConfig`
-- functions etkin/pasif
-- library auto-load davranisi
-- replace/strict load kurallari
-- library ve function isimleri
-- template resource veya override source
-
-- `RelationConfig`
-- relation batch size
-- max fetch depth
-- missing preloader davranisi
-
-- `PageCacheConfig`
-- read-through page cache davranisi
-- missing page loader davranisi
-- eviction batch size
-
-- `AdminHttpConfig`
-- admin HTTP host/port/backlog
-- worker thread sayisi
-- CORS ve dashboard davranisi
-
-## 8. Redis Functions Katmani
-
-Redis 8 icin yazma akisi `FCALL` uzerinden yurutulebilir.
-
-Onerilen akis:
-
-1. Java tarafi entity write operation uretir.
-2. `FCALL entity_upsert` ile entity key, version increment ve stream append tek atomik islemde yapilir.
-3. Worker ayni stream'i okuyup secilen SQL provider'a flush eder.
-
-Silme akisi:
-
-1. `FCALL entity_delete`
-2. version atomik artirilir
-3. entity key silinir
-4. delete olayi stream'e yazilir
-
-Bu yaklasimin faydalari:
-
-- write + enqueue arasinda ara durum kalmaz
-- tek round-trip ile mutation tamamlanir
-- concurrency ve retry davranisi daha deterministik hale gelir
-
-## 9. Relation Batch Loading
-
-`FetchPlan` preload istegini tasir; gercek batch relation yuklemesi entity bazli `RelationBatchLoader` ile yapilir.
-
-Kurallar:
-
-- her entity icin istege bagli loader register edilebilir
-- repository `findById/findAll` sonrasinda `FetchPlan` bos degilse loader cagrilir
-- preload relation basina degil entity batch'i uzerinden yapilir
-- `failOnMissingPreloader=true` ise preload istenip loader yoksa hata verilir
-
-## 10. Acik Tasarim Kararlari
-
-Henuz netlesmesi gereken basliklar:
-
-- entity API tam olarak Active Record mi olacak, yoksa repository + generated facade mi
-- relation tanimi hangi duzeyde preload zorunlu kilacak
-- query DSL ne kadar genis olacak
-- page cache boyutu global mi, entity tipi bazli mi yonetilecek
-- write-behind ordering key bazli mi, entity tipi bazli mi olacak
-- SQL provider tarafinda tombstone / soft-delete standardi gerekli mi
-- version alani son kullanici entity modeline yansitilacak mi
-- page cache materialization sadece id listesi mi, yoksa tam payload mu tutmali
-
-## 11. Admin ve Diagnostics Yuzeyi
-
-Sistem artik sadece stream bazli recovery degil, ayni zamanda isletimsel bir admin/debug yuzeyi de sunar.
-
-- `CacheDatabaseAdmin`
-  - DLQ, reconciliation, archive, diagnostics ve incidents export
-  - manual replay/skip/close
-  - metrics ve health
-- `AdminIncidentWebhookNotifier`
-  - persisted incident kayitlarini asenkron webhook cagrilarina cevirir
-  - retry/backoff ve queue kapasitesi config ile yonetilir
-- `AdminIncidentDeliveryManager`
-  - incident kaydini coklu sink'e fan-out eder
-  - webhook, Redis queue ve SMTP kanallarini destekler
-  - channel bazli delivery snapshot/last error bilgisi tutar
-  - her kanal kendi retry/backoff ayarlariyla calisabilir
-  - basarisiz delivery denemelerini incident-delivery DLQ stream'ine yazar
-- `AdminIncidentDeliveryRecoveryWorker`
-  - incident delivery DLQ stream'ini ayri consumer group ile tuketir
-  - `XAUTOCLAIM` ile abandoned/pending entry'leri devralabilir
-  - replay basariliysa recovery stream'ine `REPLAYED`, degilse `FAILED` kaydi yazar
-  - webhook, Redis queue ve SMTP kanallari icin ikinci sans replay hattini saglar
-- `CacheDatabaseDebug`
-  - query explain plani
-  - explain export
-- `CacheDatabaseAdminHttpServer`
-  - `/api/health`
-  - `/api/metrics`
-  - `/api/diagnostics`
-  - `/api/incidents`
-  - `/api/incident-history`
-  - `/api/alert-rules`
-  - `/api/explain`
-  - `/dashboard`
-
-Bu katman JDK `HttpServer` ile calisir; ek framework bagimliligi olmadan lokal operasyon ve gozlemleme yuzeyi verir.
-
-## 12. Planner Istatistikleri
-
-Query planner artik sadece process ici cache'e degil, Redis key-space icinde TTL ile tutulan estimate/histogram verilerine de dayanabilir.
-
-- estimate anahtarlari filter bazli tutulur
-- histogram anahtarlari kolon bazli tutulur
-- range histogram hesaplamasi esit-genislik yerine rank/quantile benzeri bucket secimiyle daha dengeli olur
-- entity reindex/remove akisi planner stats anahtarlarini invalidate eder
-- estimate modeli sample size ve selectivity ratio tasir
-- text contains icin token selectivity carpimi ile daha iyi intersection tahmini yapilir
-- learned statistics anahtarlari query/group ifadesi bazli tutulur
-- query execution sonrasi gercek sonuc cardinality'si observe edilip sonraki explain/query planlarina agirlikli yansitilir
-- cache warming aciksa filtre/sort histogramlari query execution oncesinde preload edilir
-- multi-hop relation filtrelerinde hedef relation index sonucu owner id setine geri map edilerek selectivity hesaplanir
-- admin metrics/dashboard planner estimate/histogram/learned key sayilarini gorunur kilabilir
-
-Bu sayede restart sonrasi explain plani tamamen sifirdan baslamak zorunda kalmaz.
-
-## 13. Onerilen Sonraki Adimlar
-
-1. Admin HTTP role modelini genişletmek; token/gateway auth sınırı artık üretim varsayımıdır
-2. Explain ve diagnostics icin daha zengin dashboard/REST filtreleri eklemek
-3. Failure injection ve load testlerle Redis/kaynak veritabani hattini zorlamak
-4. Planner istatistiklerini daha gelismis cardinality modeli ve domain heuristics ile zenginlestirmek
+A database foreign key without `@CacheRelation` does not enable CacheDB
+preloading. `@CacheRelation` without a database foreign key can load rows, but
+durable referential integrity becomes the application's responsibility.
+
+## 6. Hot-Set And Memory Model
+
+Redis capacity is controlled by several independent contracts:
+
+- entity admission policy: count, time, state, custom, or composite
+- route page and hot-window limits
+- projection payload size and ranked indexes
+- per-tenant quota and route memory budget
+- Redis `maxmemory` with CacheDB-owned `noeviction` discipline
+- incremental reconciliation for rows that leave the policy
+
+The framework rejects unsafe query shapes before execution where possible.
+Production strict mode must not silently replace a required projection with a
+wide entity scan.
+
+## 7. Consistency Model
+
+The write path is eventually consistent between Redis and the durable provider.
+Correctness depends on:
+
+- Redis AOF and stream durability
+- monotonic entity versions
+- version-gated SQL writes
+- idempotent retries and dead-letter recovery
+- outbox/CDC apply when another application changes SQL directly
+- scheduled warm and reconciliation as a bounded repair loop
+
+Projection refresh may be asynchronous. Route-specific projection lag and
+coverage must be observable before traffic is cut over.
+
+## 8. Multi-Pod Coordination
+
+All application pods share Redis consumer groups. Consumer names include a
+pod-unique instance ID so pending work can be claimed after a crash.
+
+- write-behind and projection workers scale through shared consumer groups
+- scheduled warm uses a Redis lease so one pod executes a job at a time
+- cleanup, reporting, and history loops use leader leases where singleton work
+  is required
+- lease loss is detected and does not write a false completion marker
+- worker and SQL pool sizing is calculated for the cluster total, not one pod
+
+Redis is both the data plane for critical reads and the coordination plane for
+workers. It must be operated with persistence, failover, timeouts, and resource
+limits appropriate to that role.
+
+## 9. SQL Provider Model
+
+`cachedb-storage-jdbc` owns shared source-query and provider contracts.
+`cachedb-storage-postgres` and `cachedb-storage-mssql` provide vendor dialects,
+locking, idempotency, retry classification, and metadata behavior.
+
+Spring Boot applications select exactly one provider starter. `AUTO` succeeds
+only when one provider is present and fails startup on an ambiguous classpath.
+
+Provider-specific tuning remains necessary:
+
+- connection and statement timeout chain
+- pool size versus total worker concurrency
+- transaction isolation and lock timeout
+- batch and parameter limits
+- failover behavior of the JDBC driver and pool
+
+## 10. Module Map
+
+| Module | Responsibility |
+| --- | --- |
+| `cachedb-annotations` | Entity, projection, repository, route, warm, command, and ID contracts |
+| `cachedb-processor` | Compile-time validation and reflection-free code generation |
+| `cachedb-core` | Repository contracts, query model, coverage, policies, and guardrails |
+| `cachedb-storage-redis` | Redis Functions, payload/index storage, streams, coverage, and ID generation |
+| `cachedb-storage-jdbc` | Shared JDBC source and provider SPI |
+| `cachedb-storage-postgres` | PostgreSQL durable provider |
+| `cachedb-storage-mssql` | SQL Server durable provider |
+| `cachedb-starter` | Runtime bootstrap, warm runner, workers, and operational wiring |
+| `cachedb-spring-boot-starter-*` | Core, provider, and optional admin auto-configuration |
+| `cachedb-spring-boot-test` | Route coverage and integration-test helpers |
+| `cachedb-maven-plugin` | Build-time provider and configuration doctor |
+| `cachedb-migration-recipes` | Migration planning, warm, compare, and cutover evidence |
+| `cachedb-bom` | Consistent dependency versions |
+
+## 11. Operations And Observability
+
+The internal admin and Actuator surfaces expose:
+
+- provider identity and configuration health
+- write-behind backlog, retry, and dead-letter state
+- projection lag and route coverage
+- Redis pressure, admission, eviction, and tenant quota signals
+- scheduled warm, reconciliation, and lease state
+- migration parity, latency, memory, and cutover evidence
+
+Admin endpoints are operational surfaces. Keep them behind the application's
+gateway/authentication boundary and outside the public request path.
+
+## 12. Deliberate Limits
+
+- Composite primary keys are not supported by the declarative repository API;
+  use a stable surrogate ID and indexed business key fields.
+- CacheDB does not infer hot routes from arbitrary application queries.
+- CacheDB does not turn every SQL table into a Redis entity automatically.
+- Large reporting, export, and archive scans remain database/reporting jobs.
+- A library test cannot certify an application's SQL Server Always On or
+  PostgreSQL HA topology; each deployment must run its own failover proof.
+
+These limits keep behavior explicit and prevent expensive production work from
+being hidden behind ORM-like convenience.

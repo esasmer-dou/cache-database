@@ -3,6 +3,7 @@ package com.reactor.cachedb.spring.boot;
 import com.reactor.cachedb.core.cache.EntityHotPolicyCompositeOperator;
 import com.reactor.cachedb.core.cache.EntityHotPolicyMode;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.beans.factory.InitializingBean;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -10,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 @ConfigurationProperties(prefix = "cachedb")
-public class CacheDbSpringProperties {
+public class CacheDbSpringProperties implements InitializingBean {
 
     private boolean enabled = true;
     private Profile profile = Profile.DEFAULT;
@@ -80,6 +81,116 @@ public class CacheDbSpringProperties {
         return jobs;
     }
 
+    @Override
+    public void afterPropertiesSet() {
+        validatePool("cachedb.redis.pool", redis.getPool());
+        if (redis.getUri() == null || redis.getUri().isBlank()) {
+            throw invalid("cachedb.redis.uri", "must not be blank");
+        }
+        if (redis.getBackground().isEnabled()) {
+            validatePool("cachedb.redis.background.pool", redis.getBackground().getPool());
+        }
+        if (runtime.isLeaderLeaseEnabled()) {
+            requireText("cachedb.runtime.leader-lease-segment", runtime.getLeaderLeaseSegment());
+            requirePositive("cachedb.runtime.leader-lease-ttl-millis", runtime.getLeaderLeaseTtlMillis());
+            requirePositive(
+                    "cachedb.runtime.leader-lease-renew-interval-millis",
+                    runtime.getLeaderLeaseRenewIntervalMillis()
+            );
+            if (runtime.getLeaderLeaseRenewIntervalMillis() >= runtime.getLeaderLeaseTtlMillis()) {
+                throw invalid(
+                        "cachedb.runtime.leader-lease-renew-interval-millis",
+                        "must be smaller than leader-lease-ttl-millis"
+                );
+            }
+        }
+        if (scheduledWarm.isEnabled()) {
+            requirePositive("cachedb.scheduled-warm.scheduler-pool-size", scheduledWarm.getSchedulerPoolSize());
+            requirePositive("cachedb.scheduled-warm.heartbeat-threads", scheduledWarm.getHeartbeatThreads());
+            requireText("cachedb.scheduled-warm.thread-name-prefix", scheduledWarm.getThreadNamePrefix());
+            requireText("cachedb.scheduled-warm.lock-key-segment", scheduledWarm.getLockKeySegment());
+            requireNonNegative("cachedb.scheduled-warm.shutdown-await-millis", scheduledWarm.getShutdownAwaitMillis());
+        }
+        if (jobs.isEnabled()) {
+            requirePositive("cachedb.jobs.worker-threads", jobs.getWorkerThreads());
+            requirePositive("cachedb.jobs.queue-capacity", jobs.getQueueCapacity());
+            requirePositive("cachedb.jobs.status-ttl-seconds", jobs.getStatusTtlSeconds());
+            requirePositive("cachedb.jobs.max-result-bytes", jobs.getMaxResultBytes());
+            requireText("cachedb.jobs.key-prefix", jobs.getKeyPrefix());
+            requireText("cachedb.jobs.consumer-group", jobs.getConsumerGroup());
+            requirePositive("cachedb.jobs.claim-idle-millis", jobs.getClaimIdleMillis());
+            requirePositive("cachedb.jobs.poll-block-millis", jobs.getPollBlockMillis());
+            requirePositive("cachedb.jobs.max-attempts", jobs.getMaxAttempts());
+            requireNonNegative("cachedb.jobs.retry-backoff-millis", jobs.getRetryBackoffMillis());
+            requireNonNegative("cachedb.jobs.shutdown-await-millis", jobs.getShutdownAwaitMillis());
+        }
+        validateAdmin();
+        validateMssql();
+    }
+
+    private void validatePool(String prefix, PoolProperties pool) {
+        requirePositive(prefix + ".max-total", pool.getMaxTotal());
+        requireNonNegative(prefix + ".max-idle", pool.getMaxIdle());
+        requireNonNegative(prefix + ".min-idle", pool.getMinIdle());
+        if (pool.getMaxIdle() > pool.getMaxTotal()) {
+            throw invalid(prefix + ".max-idle", "must not exceed max-total");
+        }
+        if (pool.getMinIdle() > pool.getMaxIdle()) {
+            throw invalid(prefix + ".min-idle", "must not exceed max-idle");
+        }
+        requireNonNegative(prefix + ".max-wait-millis", pool.getMaxWaitMillis());
+        requirePositive(prefix + ".connection-timeout-millis", pool.getConnectionTimeoutMillis());
+        requirePositive(prefix + ".read-timeout-millis", pool.getReadTimeoutMillis());
+        requirePositive(prefix + ".blocking-read-timeout-millis", pool.getBlockingReadTimeoutMillis());
+    }
+
+    private void validateAdmin() {
+        requireText("cachedb.admin.base-path", admin.getBasePath());
+        if (!admin.getBasePath().startsWith("/")) {
+            throw invalid("cachedb.admin.base-path", "must start with '/'");
+        }
+        requireText("cachedb.admin.title", admin.getTitle());
+        requireText("cachedb.admin.auth-header-name", admin.getAuthHeaderName());
+        if (admin.isAuthEnabled()) {
+            requireText("cachedb.admin.auth-token", admin.getAuthToken());
+        }
+        requirePositive("cachedb.admin.request-queue-capacity", admin.getRequestQueueCapacity());
+        requirePositive("cachedb.admin.background-worker-threads", admin.getBackgroundWorkerThreads());
+        requirePositive("cachedb.admin.background-queue-capacity", admin.getBackgroundQueueCapacity());
+        requirePositive("cachedb.admin.max-request-body-bytes", admin.getMaxRequestBodyBytes());
+        requirePositive("cachedb.admin.job-status-ttl-seconds", admin.getJobStatusTtlSeconds());
+    }
+
+    private void validateMssql() {
+        requireNonNegative("cachedb.sql.mssql.lock-timeout-millis", sql.getMssql().getLockTimeoutMillis());
+        int timeout = sql.getMssql().getQueryTimeoutSeconds();
+        if (timeout <= 0 || timeout > 300) {
+            throw invalid("cachedb.sql.mssql.query-timeout-seconds", "must be between 1 and 300");
+        }
+    }
+
+    private void requireText(String property, String value) {
+        if (value == null || value.isBlank()) {
+            throw invalid(property, "must not be blank");
+        }
+    }
+
+    private void requirePositive(String property, long value) {
+        if (value <= 0L) {
+            throw invalid(property, "must be greater than zero");
+        }
+    }
+
+    private void requireNonNegative(String property, long value) {
+        if (value < 0L) {
+            throw invalid(property, "must not be negative");
+        }
+    }
+
+    private IllegalArgumentException invalid(String property, String message) {
+        return new IllegalArgumentException("Invalid CacheDB property " + property + ": " + message);
+    }
+
     public enum Profile {
         DEFAULT,
         DEVELOPMENT,
@@ -90,6 +201,7 @@ public class CacheDbSpringProperties {
     }
 
     public enum SqlProvider {
+        AUTO,
         POSTGRES,
         MSSQL,
         CUSTOM
@@ -293,7 +405,7 @@ public class CacheDbSpringProperties {
     }
 
     public static final class SqlProperties {
-        private SqlProvider provider = SqlProvider.POSTGRES;
+        private SqlProvider provider = SqlProvider.AUTO;
         private final MssqlProperties mssql = new MssqlProperties();
 
         public SqlProvider getProvider() {
@@ -301,7 +413,7 @@ public class CacheDbSpringProperties {
         }
 
         public void setProvider(SqlProvider provider) {
-            this.provider = provider == null ? SqlProvider.POSTGRES : provider;
+            this.provider = provider == null ? SqlProvider.AUTO : provider;
         }
 
         public MssqlProperties getMssql() {

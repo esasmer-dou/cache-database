@@ -1,9 +1,29 @@
-# cachedb-production-tests
+# CacheDB Production Evidence
 
-This module contains production-like ecommerce DAO load and breaker tests for `cache-database`.
+[Türkçe](../tr/cachedb-production-tests/README.md)
+
+This module contains production-oriented load, capacity, recovery, chaos, and
+go/no-go evidence for CacheDB. It is a framework qualification suite, not an
+application benchmark result that can be copied into a capacity plan.
+
+## Start Here
+
+| Decision | Run |
+| --- | --- |
+| Does the module work with a small dataset? | [Smoke Test](#smoke-test) |
+| Do multiple application instances coordinate correctly? | [Multi-Instance Coordination](#multi-instance-coordination) |
+| Which repository/read shape allocates less work? | [API and Read-Shape Benchmarks](#api-and-read-shape-benchmarks) |
+| Where does throughput stop scaling? | [Capacity Benchmarks](#capacity-benchmarks) |
+| Does the system recover from restart/outage/replay? | [Failure and Recovery](#failure-and-recovery) |
+| Can this framework revision pass the composed gate? | [Production Gate](#production-gate) |
+
+Recommended order: smoke, representative capacity, multi-instance
+coordination, failure/recovery, then the composed production gate. Running the
+largest profile first produces noise, not confidence.
 
 If you are deciding which application surface to use before running these scenarios, start with the decision guide in [../docs/production-recipes.md](../docs/production-recipes.md).
-If you are preparing a public-beta release, also review [../docs/public-beta-readiness.md](../docs/public-beta-readiness.md) and [../docs/release-checklist.md](../docs/release-checklist.md).
+If you are preparing a release, also review the [GA criteria](../PRODUCTION_GA_CRITERIA.md)
+and [release checklist](../docs/release-checklist.md).
 
 ## What These Tests Prove
 
@@ -15,6 +35,13 @@ They prove specific active-set and projection contracts under load:
 - write-behind remains observable under pressure
 - Redis memory behavior is bounded by policy and guardrails
 - SQL remains the durable history and repair source
+
+They do **not** prove that:
+
+- every arbitrary ORM query is suitable for Redis
+- a laptop result predicts Kubernetes capacity
+- PostgreSQL or SQL Server HA is correct in an application's own topology
+- passing once replaces soak, failover, and rollback evidence
 
 If a scenario needs archive, export, audit, or full-history data, model it as an
 explicit SQL route instead of treating it as a normal Redis entity query.
@@ -39,6 +66,8 @@ Coverage:
 - write-behind backlog and cache-thrash breaker scenarios
 - full-scale `50k TPS` benchmark suites and summary reports
 
+## Baseline Scenario
+
 Runnable entrypoint:
 
 ```powershell
@@ -50,7 +79,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
   "-Dcachedb.prod.postgres.password=postgresql"
 ```
 
-Smoke test:
+### Smoke Test
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am -Dtest=EcommerceProductionScenarioSmokeTest "-Dsurefire.failIfNoSpecifiedTests=false" test `
@@ -60,7 +89,7 @@ mvn -q -pl cachedb-production-tests -am -Dtest=EcommerceProductionScenarioSmokeT
   "-Dcachedb.prod.postgres.password=postgresql"
 ```
 
-Multi-instance coordination smoke:
+### Multi-Instance Coordination
 
 ```powershell
 .\tools\ops\cluster\run-multi-instance-coordination-smoke.ps1 `
@@ -81,6 +110,8 @@ It writes:
 - `target/cachedb-prodtest-reports/multi-instance-coordination-smoke.json`
 - `target/cachedb-prodtest-reports/multi-instance-coordination-smoke.md`
 
+## Run Contract
+
 Notes:
 
 - workloads are modeled for 50k TPS class spikes and scaled down locally with `scaleFactor`
@@ -90,7 +121,9 @@ Notes:
 - shared runtime/config tuning catalog: [../docs/tuning-parameters.md](../docs/tuning-parameters.md)
 - on one workstation, `HOSTNAME` is shared across local processes; use explicit `cachedb.runtime.instance-id` values or the coordination smoke runner when you want to simulate multiple app instances
 
-Full-scale suite:
+## Capacity Benchmarks
+
+### Full-Scale Suite
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -113,7 +146,7 @@ Included `50k TPS` scenarios:
 
 This suite writes `full-scale-50k-suite.json` and `full-scale-50k-suite.md`.
 
-Scale ladder benchmark:
+### Scale Ladder
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -125,7 +158,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 This run writes `full-scale-50k-scale-ladder.json` and `full-scale-50k-scale-ladder.md`.
 
-Representative container-capacity benchmark:
+### Representative Container Capacity
 
 ```powershell
 mvn -q -f cachedb-production-tests/pom.xml exec:java `
@@ -140,7 +173,9 @@ mvn -q -f cachedb-production-tests/pom.xml exec:java `
 
 This run writes `representative-container-capacity-benchmark.*`.
 
-Repository recipe comparison:
+## API and Read-Shape Benchmarks
+
+### Repository Recipe Comparison
 
 ```powershell
 mvn -q -f cachedb-production-tests/pom.xml exec:java `
@@ -162,7 +197,7 @@ Important note:
 - this benchmark is intentionally about CacheDB API-surface overhead, not external Hibernate/JPA runtime cost
 - use the existing production scenario runners for end-to-end Redis/PostgreSQL latency and throughput
 
-Relation-heavy read-shape comparison:
+### Relation-Heavy Read Shapes
 
 ```powershell
 mvn -q -f cachedb-production-tests/pom.xml exec:java `
@@ -183,7 +218,9 @@ It is intentionally focused on application-side read-shape cost, not Redis I/O. 
 
 Use it to make object-graph and relation-hydration tradeoffs visible before widening list endpoints in production.
 
-Guardrail-aware profile comparison:
+## Guardrails and Certification
+
+### Guardrail Profile Comparison
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -195,7 +232,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 This run writes `guardrail-profile-comparison.*` and compares throughput, backlog, Redis memory, compaction pending, and balance score across profiles.
 
-Production certification:
+### Production Certification
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -211,6 +248,8 @@ This run writes `production-certification-report.json` and `production-certifica
 - crash/replay chaos verification
 - fault injection verification
 - explicit go/no-go gates for TPS, backlog, failures, hard rejections, rebuild success, and restart recovery
+
+## Operations Surface
 
 Admin observability:
 
@@ -234,6 +273,8 @@ Admin observability:
 - `/dashboard` now renders Triage, Service Status, Alert Routing, Runbooks, Deployment, Schema Status, Schema History, Starter Profiles, API Registry, Schema DDL, and Certification sections on the admin UI
 - `/dashboard` also supports AJAX auto-refresh controls, manual refresh, server-side trend charts for backlog, Redis memory, dead-letter growth, channel-level alert route trends/history, incident severity trends, and top failing signal summary cards without a full page reload
 
+## Failure and Recovery
+
 High-signal core test matrix:
 - campaign-triggered browse and checkout bursts
 - write-behind backlog and backpressure growth
@@ -241,7 +282,7 @@ High-signal core test matrix:
 - restart/crash/replay correctness
 - 1h and 4h soak boundedness
 
-Soak runner:
+### Soak Runner
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -259,7 +300,7 @@ This run writes `*-soak.json` and `*-soak.md` files with:
 - runtime profile switch totals
 - per-iteration health summary
 
-Long soak plans:
+### Long Soak Plans
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -269,7 +310,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 This run writes `production-soak-plan-report.json` and `production-soak-plan-report.md`.
 
-Restart recovery suite:
+### Restart Recovery
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -279,7 +320,7 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 
 This run writes `restart-recovery-suite.json` and `restart-recovery-suite.md`.
 
-Crash/replay chaos suite:
+### Crash and Replay Chaos
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -292,7 +333,7 @@ This run writes `crash-replay-chaos-suite.json` and `crash-replay-chaos-suite.md
 - exact-sequence order state converging after restart
 - manual dead-letter replay remaining available after restart
 
-Fault injection suite:
+### Fault Injection
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -306,7 +347,7 @@ This run writes `fault-injection-suite.json` and `fault-injection-suite.md`. It 
 - replay ordering after restart with stale replay rejection
 - repeated outage/replay cycles as a bounded recovery-soak check
 
-Production gate:
+## Production Gate
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -329,7 +370,7 @@ Latest clean-run status:
 - `drain completion`: `PASS`
 - `hard rejections`: `PASS`
 
-Production gate ladder:
+### Production Gate Ladder
 
 ```powershell
 mvn -q -pl cachedb-production-tests -am exec:java `
@@ -338,6 +379,8 @@ mvn -q -pl cachedb-production-tests -am exec:java `
 ```
 
 This run writes `production-gate-ladder-report.json` and `production-gate-ladder-report.md`.
+
+## Advanced Overrides
 
 Useful overrides:
 
@@ -417,6 +460,8 @@ Flush note:
 - `customer`, `inventory`, and `cart` upserts are pushed toward more aggressive compaction and copy paths
 - `order` writes stay more conservative and closer to direct persistence
 
+## Data Semantics
+
 Entity semantics matrix:
 
 | Entity | UPSERT semantics | DELETE semantics | Production intent |
@@ -425,6 +470,8 @@ Entity semantics matrix:
 | `EcomInventoryEntity` | `LATEST_STATE` | `LATEST_STATE` | hot SKU stock updates prefer final stock truth over replaying every intermediate mutation |
 | `EcomCartEntity` | `LATEST_STATE` | `LATEST_STATE` | cart state is treated as mutable session state |
 | `EcomOrderEntity` | `EXACT_SEQUENCE` | `EXACT_SEQUENCE` | order writes stay conservative because ordering matters |
+
+## Degradation and Recovery
 
 Hard-limit shedding note:
 

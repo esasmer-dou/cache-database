@@ -1889,7 +1889,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 producerGuard
         );
         return new LinkedHashSet<>(targetManager.resolveCandidateIds(
-                QuerySpec.builder().filter(delegatedFilter).limit(Integer.MAX_VALUE).build()
+                QuerySpec.builder().filter(delegatedFilter).build()
         ));
     }
 

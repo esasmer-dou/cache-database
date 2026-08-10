@@ -1,0 +1,3 @@
+org.springframework.boot.diagnostics.FailureAnalyzer=\
+com.reactor.cachedb.spring.boot.CacheDbProviderFailureAnalyzer,\
+com.reactor.cachedb.spring.boot.CacheDbProviderAmbiguousFailureAnalyzer

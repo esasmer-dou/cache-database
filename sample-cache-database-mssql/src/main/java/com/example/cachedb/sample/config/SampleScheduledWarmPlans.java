@@ -1,6 +1,6 @@
 package com.example.cachedb.sample.config;
 
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
+import com.example.cachedb.sample.repository.OrderRepository;
 import com.reactor.cachedb.spring.boot.CacheScheduledWarm;
 import com.reactor.cachedb.starter.CacheWarmPlan;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,14 +12,14 @@ import java.time.Instant;
 @Component
 public class SampleScheduledWarmPlans {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final OrderRepository orders;
     private final int orderWarmMaxRows;
 
     public SampleScheduledWarmPlans(
-            GeneratedCacheModule.Scope domain,
+            OrderRepository orders,
             @Value("${sample.scheduled-warm.orders.warm-max-rows:1000}") int orderWarmMaxRows
     ) {
-        this.domain = domain;
+        this.orders = orders;
         this.orderWarmMaxRows = Math.max(1, orderWarmMaxRows);
     }
 
@@ -37,6 +37,6 @@ public class SampleScheduledWarmPlans {
     )
     public CacheWarmPlan activeOrderWindow() {
         long cutoffEpochSeconds = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
-        return domain.orders().queries().activeOrderWindowWarmPlan(cutoffEpochSeconds, orderWarmMaxRows);
+        return orders.warmActiveWindow(cutoffEpochSeconds, orderWarmMaxRows);
     }
 }

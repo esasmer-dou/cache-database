@@ -32,8 +32,14 @@ public record QueryFilter(
         return new QueryFilter(column, QueryOperator.LTE, value, List.of());
     }
 
+    /** @deprecated Use the collection overload; retained for binary compatibility. */
+    @Deprecated(forRemoval = false)
     public static QueryFilter in(String column, List<Object> values) {
-        return new QueryFilter(column, QueryOperator.IN, null, List.copyOf(values));
+        return in(column, (java.util.Collection<?>) values);
+    }
+
+    public static QueryFilter in(String column, java.util.Collection<?> values) {
+        return new QueryFilter(column, QueryOperator.IN, null, values == null ? List.of() : List.copyOf(values));
     }
 
     public static QueryFilter contains(String column, Object value) {

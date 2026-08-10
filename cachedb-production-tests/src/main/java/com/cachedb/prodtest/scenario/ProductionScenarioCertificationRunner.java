@@ -17,7 +17,7 @@ import com.reactor.cachedb.prodtest.entity.EcomOrderEntity;
 import com.reactor.cachedb.prodtest.entity.EcomOrderEntityCacheBinding;
 import com.reactor.cachedb.redis.RedisKeyStrategy;
 import com.reactor.cachedb.starter.CacheDatabase;
-import com.reactor.cachedb.starter.PostgresOutboxExternalChangeFeedAdapter;
+import com.reactor.cachedb.postgres.PostgresOutboxExternalChangeFeedAdapter;
 import org.postgresql.ds.PGSimpleDataSource;
 import redis.clients.jedis.JedisPooled;
 

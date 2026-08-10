@@ -1,14 +1,13 @@
 package com.example.cachedb.sample.application.order;
 
-import com.example.cachedb.sample.application.SampleEntityNotFoundException;
-import com.example.cachedb.sample.domain.GeneratedCacheModule;
+import com.example.cachedb.sample.application.SampleHotLookups;
 import com.example.cachedb.sample.domain.OrderEntity;
 import com.example.cachedb.sample.readmodel.OrderSummary;
-import com.example.cachedb.sample.readmodel.OrderSummaryProjection;
+import com.example.cachedb.sample.repository.OrderRepository;
 import com.example.cachedb.sample.service.DurableReferenceGuard;
 import com.example.cachedb.sample.service.SampleDomainPolicies;
 import com.reactor.cachedb.core.model.WriteReceipt;
-import com.reactor.cachedb.core.page.VersionedEntity;
+import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -19,16 +18,16 @@ import java.util.List;
 @Service
 public final class OrderApplicationService {
 
-    private final GeneratedCacheModule.Scope domain;
+    private final OrderRepository orders;
     private final DurableReferenceGuard references;
     private final Clock clock;
 
     public OrderApplicationService(
-            GeneratedCacheModule.Scope domain,
+            OrderRepository orders,
             DurableReferenceGuard references,
             Clock clock
     ) {
-        this.domain = domain;
+        this.orders = orders;
         this.references = references;
         this.clock = clock;
     }
@@ -45,32 +44,32 @@ public final class OrderApplicationService {
         entity.status = defaultText(command.status(), "NEW");
         entity.lineCount = command.lineCount() == null ? 0 : command.lineCount();
         entity.priorityScore = SampleDomainPolicies.orderPriority(entity);
-        return customer.save(domain.orders().repository(), entity);
+        return customer.save(orders, entity);
     }
 
     public OrderEntity detail(long orderId, int linePreview) {
-        return domain.orders().fetches().linePreview(linePreview).findById(orderId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Order", orderId));
+        return SampleHotLookups.require("Order", orderId, orders.detail(orderId, linePreview));
     }
 
     public List<OrderSummary> highValue(BigDecimal minimumAmount, int limit) {
-        return domain.orders().queries().recentHighValueOrdersProjection(minimumAmount, limit);
+        return orders.recentHighValue(minimumAmount, WindowRequest.first(limit)).completeItems();
     }
 
     public List<OrderSummary> archive(long customerId, long beforeOrderDate, long beforeOrderId, int limit) {
-        return domain.orders().queries()
-                .customerOrderArchiveSource(customerId, beforeOrderDate, beforeOrderId, limit)
-                .stream()
-                .map(OrderSummaryProjection::fromEntity)
-                .toList();
+        return orders.archive(
+                customerId,
+                beforeOrderDate,
+                beforeOrderId,
+                WindowRequest.first(limit)
+        ).items();
     }
 
     public WriteReceipt<OrderEntity, Long> updateStatus(long orderId, String status) {
-        VersionedEntity<OrderEntity> current = requireCurrent(orderId);
-        OrderEntity entity = current.entity();
-        entity.status = status;
-        entity.priorityScore = SampleDomainPolicies.orderPriority(entity);
-        return domain.orders().save(entity, current.version());
+        return orders.updateHot(orderId, entity -> {
+            entity.status = status;
+            entity.priorityScore = SampleDomainPolicies.orderPriority(entity);
+            return entity;
+        });
     }
 
     /**
@@ -79,11 +78,6 @@ public final class OrderApplicationService {
      */
     public WriteReceipt<OrderEntity, Long> deactivate(long orderId) {
         return updateStatus(orderId, "DELETED");
-    }
-
-    private VersionedEntity<OrderEntity> requireCurrent(long orderId) {
-        return domain.orders().findVersionedById(orderId)
-                .orElseThrow(() -> new SampleEntityNotFoundException("Order", orderId));
     }
 
     private String defaultText(String value, String fallback) {

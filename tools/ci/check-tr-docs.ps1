@@ -54,7 +54,14 @@ $rules = @(
 )
 
 $findings = New-Object System.Collections.Generic.List[object]
-$markdownFiles = Get-ChildItem -Path $docsFullPath -Recurse -Filter *.md | Sort-Object FullName
+$markdownFiles = @(
+    Get-ChildItem -Path $docsFullPath -Recurse -Filter *.md
+    Get-ChildItem -Path $repoRoot -Recurse -Filter README.tr.md |
+        Where-Object {
+            $_.FullName -notmatch '[\\/]target[\\/]' -and
+            $_.FullName -notmatch '[\\/]tools[\\/]tmp[\\/]'
+        }
+) | Sort-Object FullName -Unique
 
 foreach ($file in $markdownFiles) {
     $lines = Get-Content -LiteralPath $file.FullName

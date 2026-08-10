@@ -981,14 +981,14 @@ public final class CacheDatabaseIntegrationTest {
         Assertions.assertTrue(unresolvedPlan.relationStates().stream().anyMatch(state ->
                 "brokenOrders".equals(state.relationName())
                         && "FILTER".equals(state.usage())
-                        && "TARGET_BINDING_MISSING".equals(state.status())
+                        && "MAPPED_BY_UNRESOLVED".equals(state.status())
         ));
         Assertions.assertTrue(unresolvedPlan.relationStates().stream().anyMatch(state ->
                 "brokenOrders".equals(state.relationName())
                         && "FETCH".equals(state.usage())
                         && "FETCH_PATH_UNVERIFIED".equals(state.status())
         ));
-        Assertions.assertTrue(unresolvedPlan.warnings().contains("FILTER:brokenOrders:TARGET_BINDING_MISSING"));
+        Assertions.assertTrue(unresolvedPlan.warnings().contains("FILTER:brokenOrders:MAPPED_BY_UNRESOLVED"));
         Assertions.assertTrue(unresolvedPlan.warnings().contains("FETCH:brokenOrders:FETCH_PATH_UNVERIFIED"));
     }
 

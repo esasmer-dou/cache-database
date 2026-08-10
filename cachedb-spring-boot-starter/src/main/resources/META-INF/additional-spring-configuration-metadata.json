@@ -1,0 +1,39 @@
+{
+  "properties": [
+    {
+      "name": "cachedb.sql.provider",
+      "type": "com.reactor.cachedb.spring.boot.CacheDbSpringProperties$SqlProvider",
+      "defaultValue": "AUTO",
+      "description": "Selects the SQL provider. AUTO accepts exactly one provider starter; multiple providers require an explicit choice."
+    },
+    {
+      "name": "cachedb.admin.http-enabled",
+      "type": "java.lang.Boolean",
+      "defaultValue": false,
+      "description": "Publishes the same-port operations console only when cachedb-spring-boot-starter-admin is also present."
+    },
+    {
+      "name": "cachedb.registration.source",
+      "type": "com.reactor.cachedb.spring.boot.CacheDbSpringProperties$RegistrationSource",
+      "defaultValue": "METADATA_ONLY",
+      "description": "JDBC registers generated bindings with durable-source loaders; METADATA_ONLY registers Redis-only bindings."
+    },
+    {
+      "name": "cachedb.scheduled-warm.enabled",
+      "type": "java.lang.Boolean",
+      "defaultValue": true,
+      "description": "Enables declarative scheduled warm registration. Redis leases prevent the same warm definition from running concurrently in multiple pods."
+    }
+  ],
+  "hints": [
+    {
+      "name": "cachedb.sql.provider",
+      "values": [
+        { "value": "AUTO", "description": "Use the only provider starter found on the classpath." },
+        { "value": "POSTGRES", "description": "Use cachedb-spring-boot-starter-postgres." },
+        { "value": "MSSQL", "description": "Use cachedb-spring-boot-starter-mssql." },
+        { "value": "CUSTOM", "description": "Supply WriteBehindFlusherFactory through CacheDatabaseConfigCustomizer." }
+      ]
+    }
+  ]
+}

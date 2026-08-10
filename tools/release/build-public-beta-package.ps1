@@ -155,21 +155,45 @@ $artifactModules = @(
     "cachedb-storage-postgres",
     "cachedb-storage-mssql",
     "cachedb-starter",
-    "cachedb-spring-boot-starter"
+    "cachedb-spring-boot-starter",
+    "cachedb-spring-boot-starter-postgres",
+    "cachedb-spring-boot-starter-mssql",
+    "cachedb-spring-boot-starter-admin",
+    "cachedb-spring-boot-test",
+    "cachedb-maven-plugin",
+    "cachedb-migration-recipes",
+    "cachedb-examples"
 )
 
 $artifactsDest = Join-Path $stagingRoot "artifacts"
 New-Item -ItemType Directory -Path $artifactsDest -Force | Out-Null
 
+Copy-Item `
+    -Path (Join-Path $repoRoot "pom.xml") `
+    -Destination (Join-Path $artifactsDest "cache-database-$Version.pom")
+
 foreach ($module in $artifactModules) {
     $moduleTarget = Join-Path $repoRoot "$module\target"
     $moduleDest = Join-Path $artifactsDest $module
     New-Item -ItemType Directory -Path $moduleDest -Force | Out-Null
-    $versionPattern = "^$([regex]::Escape($module))-$([regex]::Escape($Version))(-sources|-javadoc)?\.jar$"
-    Get-ChildItem -Path $moduleTarget -File -Filter "*.jar" |
-        Where-Object { $_.Name -match $versionPattern } |
-        Copy-Item -Destination $moduleDest
+    foreach ($suffix in @(".jar", "-sources.jar", "-javadoc.jar")) {
+        $artifact = Join-Path $moduleTarget "$module-$Version$suffix"
+        if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+            throw "Required release artifact is missing: $artifact"
+        }
+        Copy-Item -LiteralPath $artifact -Destination $moduleDest
+    }
+
+    Copy-Item `
+        -Path (Join-Path $repoRoot "$module\pom.xml") `
+        -Destination (Join-Path $moduleDest "$module-$Version.pom")
 }
+
+$bomDest = Join-Path $artifactsDest "cachedb-bom"
+New-Item -ItemType Directory -Path $bomDest -Force | Out-Null
+Copy-Item `
+    -Path (Join-Path $repoRoot "cachedb-bom\pom.xml") `
+    -Destination (Join-Path $bomDest "cachedb-bom-$Version.pom")
 
 Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $zipPath -Force
 
