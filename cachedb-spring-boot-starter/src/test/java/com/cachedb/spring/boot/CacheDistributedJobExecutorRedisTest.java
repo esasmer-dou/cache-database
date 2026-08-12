@@ -25,6 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Testcontainers(disabledWithoutDocker = true)
 class CacheDistributedJobExecutorRedisTest {
+    private static final CacheDistributedJobDefinition<JobArguments> RESUMABLE_WARM =
+            CacheDistributedJobDefinition.of("resumable-warm", JobArguments.class);
 
     private static final String REDIS_IMAGE =
             "redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232";
@@ -48,7 +50,7 @@ class CacheDistributedJobExecutorRedisTest {
         String jobId;
         try (JedisPooled jedis = jedis();
              CacheDistributedJobExecutor podA = executor(jedis, "pod-a", properties, failingHandler)) {
-            jobId = podA.submit("resumable-warm", new JobArguments(100)).jobId();
+            jobId = podA.submit(RESUMABLE_WARM, new JobArguments(100)).jobId();
             assertTrue(firstAttemptFinished.await(5, TimeUnit.SECONDS));
             awaitSnapshot(podA, jobId, snapshot -> snapshot.status() == CacheDistributedJobState.QUEUED);
         }
@@ -99,7 +101,7 @@ class CacheDistributedJobExecutorRedisTest {
                 int rows = index + 1;
                 submissions.add(submitters.submit(() -> {
                     try {
-                        executor.submit("resumable-warm", new JobArguments(rows));
+                        executor.submit(RESUMABLE_WARM, new JobArguments(rows));
                         return true;
                     } catch (CacheDistributedJobQueueFullException expected) {
                         return false;
@@ -125,27 +127,14 @@ class CacheDistributedJobExecutorRedisTest {
     }
 
     private CacheDistributedJobHandler<JobArguments> handler(JobOperation operation) {
-        return new CacheDistributedJobHandler<>() {
-            @Override
-            public String route() {
-                return "resumable-warm";
+        return CacheDistributedJobHandler.of(RESUMABLE_WARM, (arguments, context) -> {
+            try {
+                return operation.execute(arguments, context);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Job handler was interrupted", exception);
             }
-
-            @Override
-            public Class<JobArguments> argumentType() {
-                return JobArguments.class;
-            }
-
-            @Override
-            public Object execute(JobArguments arguments, CacheDistributedJobContext context) {
-                try {
-                    return operation.execute(arguments, context);
-                } catch (InterruptedException exception) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("Job handler was interrupted", exception);
-                }
-            }
-        };
+        });
     }
 
     private CacheDistributedJobExecutor executor(

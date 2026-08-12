@@ -5,14 +5,17 @@ public record WindowRequest(int limit, String after) {
     public static final int MAX_LIMIT = 1_000;
 
     public WindowRequest {
-        if (limit <= 0 || limit > MAX_LIMIT) {
-            throw new IllegalArgumentException("limit must be between 1 and " + MAX_LIMIT);
-        }
+        requireValidLimit(limit);
         after = after == null || after.isBlank() ? null : after.trim();
     }
 
     public static WindowRequest first(int limit) {
         return new WindowRequest(limit, null);
+    }
+
+    /** Creates either the first window or a continuation without branching in HTTP adapters. */
+    public static WindowRequest of(int limit, String after) {
+        return new WindowRequest(limit, after);
     }
 
     public static WindowRequest after(String cursor, int limit) {
@@ -24,5 +27,11 @@ public record WindowRequest(int limit, String after) {
 
     public int queryLimit() {
         return limit + 1;
+    }
+
+    static void requireValidLimit(int limit) {
+        if (limit <= 0 || limit > MAX_LIMIT) {
+            throw new IllegalArgumentException("limit must be between 1 and " + MAX_LIMIT);
+        }
     }
 }

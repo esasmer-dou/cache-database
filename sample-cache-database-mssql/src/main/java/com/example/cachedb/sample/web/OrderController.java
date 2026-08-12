@@ -3,14 +3,18 @@ package com.example.cachedb.sample.web;
 import com.example.cachedb.sample.application.order.OrderApplicationService;
 import com.example.cachedb.sample.domain.OrderEntity;
 import com.example.cachedb.sample.readmodel.OrderSummary;
+import com.reactor.cachedb.core.repository.CursorPage;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -22,10 +26,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
-import java.util.List;
-
 @RestController
 @RequestMapping("/api/orders")
+@Validated
 public class OrderController {
 
     private final OrderApplicationService orders;
@@ -51,33 +54,35 @@ public class OrderController {
 
     @GetMapping("/{orderId}")
     public OrderEntity detail(
-            @PathVariable long orderId,
-            @RequestParam(defaultValue = "5") int linePreview
+            @PathVariable @Positive long orderId,
+            @RequestParam(defaultValue = "5") @Min(1) @Max(50) int linePreview
     ) {
-        int safePreview = ApiLimits.requireInRange("linePreview", linePreview, 1, 50);
-        return orders.detail(orderId, safePreview);
+        return orders.detail(orderId, linePreview);
     }
 
     @GetMapping("/high-value")
-    public List<OrderSummary> highValue(
-            @RequestParam(defaultValue = "500.00") BigDecimal minimumAmount,
-            @RequestParam(defaultValue = "25") int limit
+    public CursorPage<OrderSummary> highValue(
+            @RequestParam(defaultValue = "500.00") @DecimalMin("0.00") BigDecimal minimumAmount,
+            @RequestParam(defaultValue = "25") @Min(1) @Max(1_000) int limit,
+            @RequestParam(required = false) @Size(max = 8_192) String after
     ) {
-        return orders.highValue(minimumAmount, ApiLimits.requireInRange("limit", limit, 1, 1_000));
+        return orders.highValue(minimumAmount, limit, after);
     }
 
     @GetMapping("/archive")
-    public List<OrderSummary> archiveFromSql(
-            @RequestParam long customerId,
-            @RequestParam(required = false) Long beforeOrderDate,
-            @RequestParam(required = false) Long beforeOrderId,
-            @RequestParam(defaultValue = "100") int limit
+    public CursorPage<OrderSummary> archiveFromSql(
+            @RequestParam @Positive long customerId,
+            @RequestParam(required = false) @PositiveOrZero Long beforeOrderDate,
+            @RequestParam(required = false) @PositiveOrZero Long beforeOrderId,
+            @RequestParam(defaultValue = "100") @Min(1) @Max(500) int limit,
+            @RequestParam(required = false) @Size(max = 8_192) String after
     ) {
         return orders.archive(
                 customerId,
                 beforeOrderDate == null ? Long.MAX_VALUE : beforeOrderDate,
                 beforeOrderId == null ? Long.MAX_VALUE : beforeOrderId,
-                ApiLimits.requireInRange("limit", limit, 1, 500)
+                limit,
+                after
         );
     }
 

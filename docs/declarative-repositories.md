@@ -12,11 +12,11 @@ New application code should normally start with `@CacheRepository`.
 ## 1. Install The Provider Starter
 
 Import the BOM once and choose exactly one SQL provider starter. The current
-release uses the immutable `0.7.1` package published through GitHub Packages.
+release uses the immutable `0.8.0` package published through GitHub Packages.
 
 ```xml
 <properties>
-    <cachedb.version>0.7.1</cachedb.version>
+    <cachedb.version>0.8.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -66,6 +66,7 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
     @HotRoute(
             value = "customer-order-timeline",
+            population = HotRoute.Population.DECLARED_WARM,
             projection = OrderSummary.class,
             pageSize = 100,
             hotWindow = 1_000,
@@ -100,8 +101,8 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
     @WarmRoute(value = "warm-customer-order-timeline", from = "timeline",
             maxRows = 1_000, maxRowsParameter = "maxRows",
-            coverageScopeParameter = "customerId", projectionsOnly = true)
-    CacheWarmPlan warmTimeline(long customerId, int maxRows);
+            coverageScopeParameter = "customerId", targetParameter = "target")
+    CacheWarmPlan warmTimeline(long customerId, int maxRows, CacheWarmTarget target);
 }
 ```
 
@@ -135,7 +136,7 @@ OrderEntity order = orders.detail(id, 20).orElseThrow(status -> switch (status) 
 
 ```java
 CacheWarmResult result = cacheDatabase.warm(
-        orders.warmTimeline(customerId, 1_000)
+        orders.warmTimeline(customerId, 1_000, CacheWarmTarget.PROJECTIONS_ONLY)
 );
 
 HotWindow<OrderSummary> firstPage = orders.timeline(
@@ -310,3 +311,228 @@ build so missing provider artifacts and ambiguous classpaths fail before deploy.
 Composite primary keys are intentionally not supported by the repository API.
 Use a stable surrogate ID and model the business key as validated, indexed
 fields. Do not concatenate key parts into an undocumented string at call sites.
+
+## 10. Make Every OR Predicate Explicit
+
+Predicates in the same group are ANDed. Different groups are ORed. Because a
+new group widens route membership, the processor requires an explicit opt-in:
+
+```java
+@CacheRouteQuery(
+        predicates = {
+                @CachePredicate(field = "orderDate", operator = CachePredicate.Operator.GTE,
+                        parameter = "cutoff", group = 0),
+                @CachePredicate(field = "status", operator = CachePredicate.Operator.IN,
+                        constants = {"NEW", "PAID", "PICKING"}, group = 1)
+        },
+        explicitDisjunction = true,
+        orderBy = @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
+        windowParameter = "window"
+)
+HotWindow<OrderSummary> recentOrActive(long cutoff, WindowRequest window);
+```
+
+Without `explicitDisjunction = true`, a multi-group repository does not compile.
+Do not add a second group merely to format annotations. Keep predicates in the
+same group when the business rule is AND.
+
+## 11. Let The Plan Decide What Warm Loads
+
+Select the entity or projection payload through the generated method's typed
+target. The resulting plan owns that decision; execution selects only dry-run
+or apply:
+
+```java
+CacheWarmTarget target = projectionOnly
+        ? CacheWarmTarget.PROJECTIONS_ONLY
+        : CacheWarmTarget.ENTITY_AND_PROJECTIONS;
+CacheWarmPlan plan = orders.warmTimeline(customerId, 1_000, target);
+
+CacheWarmExecution execution = cacheDatabase.executeWarm(
+        plan,
+        dryRun ? CacheWarmExecutionMode.DRY_RUN : CacheWarmExecutionMode.APPLY
+);
+CacheWarmSummary summary = execution.summary("customer-orders");
+
+log.info("route={} scope={} read={} submitted={} target={}",
+        summary.routeName(), summary.scope(), summary.rowsReadFromSource(),
+        summary.rowsSubmittedToRedis(), summary.target());
+```
+
+Do not define separate projection/entity warm methods for the same route and do
+not call `warmProjections(plan)` through a second branch. A typed target creates
+one generated plan contract without string flags. Dry-run does not mutate Redis.
+
+For a command that must prove SQL durability, preserve receipt evidence instead
+of reducing the result to a boolean:
+
+```java
+List<WriteReceipt<OrderEntity, Long>> receipts = orders.saveAll(batch);
+cacheDatabase.awaitDurableOrThrow(
+        receipts,
+        Duration.ofSeconds(5),
+        "order import/batch-42"
+);
+```
+
+On timeout, `WriteBatchDurabilityTimeoutException` contains the receipt list,
+timeout, and operation label. The rows may already be accepted in Redis; handle
+the exception as an unknown SQL durability outcome, not as permission to issue
+blind duplicate writes.
+
+## 12. Reuse Window And Lookup Semantics Without Hiding The Store
+
+`HotWindow` and `SourceWindow` implement `WindowSlice`. Shared cursor code can
+therefore use `hasNext()` and `nextRequest(limit)` while hot coverage remains
+available only on `HotWindow`:
+
+```java
+HotWindow<OrderSummary> page = orders.timeline(customerId, WindowRequest.first(100))
+        .requireComplete();
+
+HotWindow<OrderRow> response = page.map(OrderRow::from);
+Optional<WindowRequest> next = response.nextRequest(100);
+```
+
+`HotLookup.map` also preserves `NOT_CACHED`, `TOMBSTONED`, and
+`OUTSIDE_HOT_POLICY`. Mapping a payload must never erase availability state.
+
+## 13. Inspect The Generated Route Inventory
+
+Every generated repository publishes a reflection-free route catalog. In a
+Spring Boot application the starter aggregates these catalogs automatically.
+Expose the `cachedb` Actuator endpoint only on the internal operations network:
+
+Repository beans keep their existing decapitalized default name. If two
+packages use the same repository interface name, set a distinct
+`@CacheRepository.springBeanName`; the processor rejects unresolved collisions.
+Route-catalog bean names are package-qualified automatically.
+
+```properties
+management.endpoints.web.exposure.include=health,info,metrics,cachedb
+```
+
+The endpoint includes declared repository/route counts, route kinds, bounded
+route details, HOT-route population strategies, scheduled-warm summaries, and
+truncation flags. Route details are capped at 250 and scheduled-warm details at
+100. Duplicate global HOT route names and a `DECLARED_WARM` route without a
+generated warm route fail startup.
+
+Aggregate Micrometer meters avoid route-name and tenant cardinality:
+
+- `cachedb.repositories.declared`
+- `cachedb.routes.declared`
+- `cachedb.routes.hot.population{strategy=...}`
+- `cachedb.scheduled.warm.running`
+- `cachedb.scheduled.warm.failures`
+- `cachedb.scheduled.warm.skipped`
+
+The catalog proves what was compiled into the application. It does not prove
+that Redis coverage is complete. Keep route coverage, parity, latency, memory,
+and durability checks as separate production gates.
+
+In integration tests, require the operational declaration explicitly:
+
+```java
+cacheDb.requireDeclaredWarmRoute("customer-order-timeline");
+cacheDb.warmAndRequireCoverage(
+        orders.warmTimeline(42L, 1_000, CacheWarmTarget.PROJECTIONS_ONLY),
+        Duration.ofMinutes(5)
+);
+```
+
+## 14. Put Repeated Route Policy At Repository Level
+
+`@CacheRepositoryDefaults` removes repeated policy values without hiding route
+behavior. The annotation processor resolves every value at compile time. An
+explicit method-level value always wins.
+
+```java
+@CacheRepository(entity = OrderEntity.class)
+@CacheRepositoryDefaults(
+        hotPopulation = HotRoute.Population.DECLARED_WARM,
+        sourceMaxRows = 500,
+        sourceTimeoutSeconds = 15
+)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
+
+    @HotRoute(
+            value = "customer-order-timeline",
+            projection = OrderSummary.class,
+            hotWindow = 1_000,
+            memoryBudgetBytes = CacheMemoryBudget.MIB_16,
+            coverageScopeParameter = "customerId"
+    )
+    // @CacheRouteQuery omitted here for brevity
+    HotWindow<OrderSummary> timeline(long customerId, WindowRequest window);
+}
+```
+
+Use named `CacheMemoryBudget.MIB_*` constants instead of raw byte literals.
+They remain Java compile-time constants and therefore work in annotations.
+Repository defaults are not global configuration and do not weaken method-level
+review: route shape, projection, hot window, scope, and exceptional overrides
+remain visible on the method.
+
+## 15. Preserve The Cursor At The HTTP Boundary
+
+Do not convert a pageable window to a bare list. `CursorPage<T>` keeps the
+opaque continuation token and is transport-friendly:
+
+```java
+public CursorPage<OrderSummary> timeline(long customerId, int limit, String after) {
+    return orders.timeline(customerId, WindowRequest.of(limit, after)).completePage();
+}
+```
+
+```json
+{
+  "items": [{ "orderId": 10042, "status": "PAID" }],
+  "nextCursor": "opaque-token"
+}
+```
+
+New cursors are bound to the generated route name, coverage scope, and ordered
+sort contract. Reusing a customer-42 cursor for customer 43 or another route
+throws `CursorContractMismatchException`. Legacy cursors remain readable for
+compatibility, but newly emitted tokens carry the stronger contract.
+
+## 16. Use The Framework Batch Writer For Durable Imports
+
+`CacheDurableBatchWriter` owns batch size, pending-receipt backpressure, and SQL
+durability waiting. It does not change Redis-first writes; `finish()` only
+returns after every pending receipt is durable in the selected SQL provider.
+
+```java
+try (var batch = cacheDatabase.durableBatchWriter(
+        "catalog import",
+        128,
+        1_024,
+        Duration.ofSeconds(30),
+        productRepository::saveAll
+)) {
+    sourceRows.forEach(batch::add);
+}
+```
+
+Keep the operation idempotent. A durability timeout is an unknown SQL outcome,
+not permission for an unguarded duplicate replay.
+
+## 17. Prove The Complete Warm Journey In Integration Tests
+
+The test starter can execute dry-run, apply, and coverage validation as one
+production-shaped journey:
+
+```java
+CacheDbWarmRouteEvidence evidence = cacheDb.dryRunApplyAndRequireCoverage(
+        orders.warmTimeline(42L, 1_000, CacheWarmTarget.PROJECTIONS_ONLY),
+        Duration.ofMinutes(5)
+);
+
+assertThat(evidence.dryRun().result().submittedRows()).isZero();
+assertThat(evidence.coverage().complete()).isTrue();
+```
+
+This proves that dry-run did not mutate Redis, apply used the same plan, and
+the exact route/scope has fresh complete coverage. It does not replace parity,
+latency, memory, or failover tests.

@@ -18,7 +18,7 @@ public final class DemoDataApplicationService {
 
     public CacheDistributedJobSnapshot seed(int customers, int ordersPerCustomer, int linesPerOrder) {
         return jobs.submit(
-                SampleSeedJobHandler.ROUTE,
+                SampleSeedJobHandler.DEFINITION,
                 new SampleSeedJobHandler.Arguments(customers, ordersPerCustomer, linesPerOrder)
         );
     }

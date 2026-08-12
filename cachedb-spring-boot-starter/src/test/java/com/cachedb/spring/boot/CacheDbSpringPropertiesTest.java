@@ -12,6 +12,7 @@ import com.reactor.cachedb.jdbc.CacheDbProviderAmbiguousException;
 import com.reactor.cachedb.jdbc.JdbcStorageProviders;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.context.annotation.Primary;
 
 import java.util.List;
 
@@ -23,6 +24,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CacheDbSpringPropertiesTest {
+
+    @Test
+    void cacheDbRedisClientDoesNotOverrideTheApplicationsPrimaryRedisClient() throws Exception {
+        assertFalse(CacheDatabaseSpringBootAutoConfiguration.class
+                .getMethod("cacheDbJedisPooled", CacheDbSpringProperties.class)
+                .isAnnotationPresent(Primary.class));
+    }
 
     @Test
     void shouldExposeSplitRedisPoolsAsStarterDefaults() {

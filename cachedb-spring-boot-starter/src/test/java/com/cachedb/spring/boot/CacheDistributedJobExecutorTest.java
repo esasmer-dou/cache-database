@@ -23,6 +23,19 @@ import static org.mockito.Mockito.when;
 class CacheDistributedJobExecutorTest {
 
     @Test
+    void typedDefinitionRejectsTheWrongPayloadBeforeQueueing() {
+        CacheDistributedJobDefinition<JobArguments> definition =
+                CacheDistributedJobDefinition.of("typed-job", JobArguments.class);
+
+        IllegalArgumentException failure = assertThrows(
+                IllegalArgumentException.class,
+                () -> definition.requireArguments(Map.of("rows", 10))
+        );
+
+        assertTrue(failure.getMessage().contains(JobArguments.class.getName()));
+    }
+
+    @Test
     void aSecondPodCanReadTheJobResultFromRedis() throws InterruptedException {
         JedisPooled jedis = sharedRedisMock();
         CacheDbSpringProperties.JobExecutorProperties properties = properties();
@@ -128,5 +141,8 @@ class CacheDistributedJobExecutorTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted", exception);
         }
+    }
+
+    private record JobArguments(int rows) {
     }
 }

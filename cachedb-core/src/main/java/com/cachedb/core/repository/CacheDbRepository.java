@@ -39,6 +39,20 @@ public interface CacheDbRepository<T, ID> {
 
     boolean awaitDurable(WriteReceipt<?, ?> receipt, Duration timeout);
 
+    /** Waits explicitly for SQL durability and returns the original typed receipt. */
+    default <R extends WriteReceipt<?, ?>> R awaitDurableOrThrow(R receipt, Duration timeout) {
+        if (receipt == null) {
+            throw new IllegalArgumentException("receipt must not be null");
+        }
+        if (timeout == null || timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("timeout must be greater than zero");
+        }
+        if (!awaitDurable(receipt, timeout)) {
+            throw new WriteDurabilityTimeoutException(receipt, timeout);
+        }
+        return receipt;
+    }
+
     default WriteReceipt<T, ID> updateHot(ID id, UnaryOperator<T> update) {
         if (update == null) {
             throw new IllegalArgumentException("update must not be null");

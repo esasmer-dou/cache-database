@@ -2,6 +2,7 @@ package com.example.cachedb.sample.web;
 
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.repository.WindowRequest;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -12,13 +13,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ApiContractTest {
 
     @Test
-    void routeLimitRejectsOversizedRequestsInsteadOfSilentlyClamping() {
+    void cursorWindowRejectsOversizedRequestsInsteadOfSilentlyClamping() {
         IllegalArgumentException exception = assertThrows(
                 IllegalArgumentException.class,
-                () -> ApiLimits.requireInRange("limit", 1_001, 1, 1_000)
+                () -> WindowRequest.first(1_001)
         );
 
-        assertEquals("limit must be between 1 and 1000; received 1001", exception.getMessage());
+        assertEquals("limit must be between 1 and 1000", exception.getMessage());
     }
 
     @Test

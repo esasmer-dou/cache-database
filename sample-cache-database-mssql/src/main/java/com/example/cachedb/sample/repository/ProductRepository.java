@@ -3,9 +3,11 @@ package com.example.cachedb.sample.repository;
 import com.example.cachedb.sample.domain.ProductEntity;
 import com.example.cachedb.sample.readmodel.ProductAvailability;
 import com.reactor.cachedb.annotations.CacheLookup;
+import com.reactor.cachedb.annotations.CacheMemoryBudget;
 import com.reactor.cachedb.annotations.CacheOrder;
 import com.reactor.cachedb.annotations.CachePredicate;
 import com.reactor.cachedb.annotations.CacheRepository;
+import com.reactor.cachedb.annotations.CacheRepositoryDefaults;
 import com.reactor.cachedb.annotations.CacheRouteQuery;
 import com.reactor.cachedb.annotations.HotRoute;
 import com.reactor.cachedb.annotations.SourceRoute;
@@ -16,15 +18,19 @@ import com.reactor.cachedb.core.repository.HotWindow;
 import com.reactor.cachedb.core.repository.SourceWindow;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.starter.CacheWarmPlan;
+import com.reactor.cachedb.starter.CacheWarmTarget;
 
 @CacheRepository(entity = ProductEntity.class)
+@CacheRepositoryDefaults(hotPopulation = HotRoute.Population.DECLARED_WARM,
+        sourceMaxRows = 500, sourceTimeoutSeconds = 15)
 public interface ProductRepository extends CacheDbRepository<ProductEntity, Long> {
 
     @CacheLookup(idParameter = "productId")
     HotLookup<ProductEntity> detail(Long productId);
 
-    @HotRoute(value = "active-products-by-category", projection = ProductAvailability.class,
-            pageSize = 100, hotWindow = 5_000, memoryBudgetBytes = 16_777_216L,
+    @HotRoute(value = "active-products-by-category",
+            projection = ProductAvailability.class,
+            pageSize = 100, hotWindow = 5_000, memoryBudgetBytes = CacheMemoryBudget.MIB_16,
             coverageScopeParameter = "category")
     @CacheRouteQuery(
             predicates = {
@@ -39,8 +45,9 @@ public interface ProductRepository extends CacheDbRepository<ProductEntity, Long
     )
     HotWindow<ProductAvailability> activeByCategory(String category, WindowRequest window);
 
-    @HotRoute(value = "active-products", projection = ProductAvailability.class,
-            pageSize = 100, hotWindow = 10_000, memoryBudgetBytes = 33_554_432L)
+    @HotRoute(value = "active-products",
+            projection = ProductAvailability.class,
+            pageSize = 100, hotWindow = 10_000, memoryBudgetBytes = CacheMemoryBudget.MIB_32)
     @CacheRouteQuery(
             predicates = @CachePredicate(field = "activeStatus", constants = "ACTIVE"),
             orderBy = {
@@ -51,8 +58,9 @@ public interface ProductRepository extends CacheDbRepository<ProductEntity, Long
     )
     HotWindow<ProductAvailability> active(WindowRequest window);
 
-    @HotRoute(value = "low-stock-products", projection = ProductAvailability.class,
-            pageSize = 100, hotWindow = 2_000, memoryBudgetBytes = 8_388_608L)
+    @HotRoute(value = "low-stock-products",
+            projection = ProductAvailability.class,
+            pageSize = 100, hotWindow = 2_000, memoryBudgetBytes = CacheMemoryBudget.MIB_8)
     @CacheRouteQuery(
             predicates = {
                     @CachePredicate(field = "stockStatus", constants = "LOW_STOCK"),
@@ -75,6 +83,7 @@ public interface ProductRepository extends CacheDbRepository<ProductEntity, Long
                             constants = "ACTIVE", group = 0),
                     @CachePredicate(field = "stockStatus", constants = "OUT_OF_STOCK", group = 1)
             },
+            explicitDisjunction = true,
             orderBy = {
                     @CacheOrder(field = "updatedAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "productId", direction = CacheOrder.Direction.DESC)
@@ -83,21 +92,13 @@ public interface ProductRepository extends CacheDbRepository<ProductEntity, Long
     )
     SourceWindow<ProductAvailability> inactiveArchive(WindowRequest window);
 
-    @WarmRoute(value = "warm-active-products-projection", from = "active", maxRows = 1_000,
-            maxRowsParameter = "maxRows", projectionsOnly = true)
-    CacheWarmPlan warmActiveProjection(int maxRows);
+    @WarmRoute(value = "warm-active-products", from = "active", maxRows = 1_000,
+            maxRowsParameter = "maxRows", targetParameter = "target")
+    CacheWarmPlan warmActive(int maxRows, CacheWarmTarget target);
 
-    @WarmRoute(value = "warm-active-products-entities", from = "active", maxRows = 1_000,
-            maxRowsParameter = "maxRows")
-    CacheWarmPlan warmActiveEntities(int maxRows);
-
-    @WarmRoute(value = "warm-category-products-projection", from = "activeByCategory", maxRows = 1_000,
-            maxRowsParameter = "maxRows", coverageScopeParameter = "category", projectionsOnly = true)
-    CacheWarmPlan warmCategoryProjection(String category, int maxRows);
-
-    @WarmRoute(value = "warm-category-products-entities", from = "activeByCategory", maxRows = 1_000,
-            maxRowsParameter = "maxRows", coverageScopeParameter = "category")
-    CacheWarmPlan warmCategoryEntities(String category, int maxRows);
+    @WarmRoute(value = "warm-category-products", from = "activeByCategory", maxRows = 1_000,
+            maxRowsParameter = "maxRows", coverageScopeParameter = "category", targetParameter = "target")
+    CacheWarmPlan warmCategory(String category, int maxRows, CacheWarmTarget target);
 
     @WarmRoute(value = "warm-low-stock-products", from = "lowStock", maxRows = 1_000,
             maxRowsParameter = "maxRows", projectionsOnly = true)

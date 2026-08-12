@@ -3,12 +3,16 @@ package com.example.cachedb.sample.web;
 import com.example.cachedb.sample.application.customer.CustomerApplicationService;
 import com.example.cachedb.sample.domain.CustomerEntity;
 import com.example.cachedb.sample.readmodel.OrderSummary;
+import com.reactor.cachedb.core.repository.CursorPage;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,6 +25,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/customers")
+@Validated
 public class CustomerController {
 
     private final CustomerApplicationService customers;
@@ -40,26 +45,24 @@ public class CustomerController {
 
     @GetMapping("/{customerId}")
     public CustomerEntity detail(
-            @PathVariable long customerId,
-            @RequestParam(defaultValue = "5") int orderPreview
+            @PathVariable @Positive long customerId,
+            @RequestParam(defaultValue = "5") @Min(1) @Max(25) int orderPreview
     ) {
-        return customers.detail(
-                customerId,
-                ApiLimits.requireInRange("orderPreview", orderPreview, 1, 25)
-        );
+        return customers.detail(customerId, orderPreview);
     }
 
     @GetMapping("/{customerId}/orders")
-    public List<OrderSummary> orderTimeline(
-            @PathVariable long customerId,
-            @RequestParam(defaultValue = "20") int limit
+    public CursorPage<OrderSummary> orderTimeline(
+            @PathVariable @Positive long customerId,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(1_000) int limit,
+            @RequestParam(required = false) @Size(max = 8_192) String after
     ) {
-        return customers.orderTimeline(customerId, ApiLimits.requireInRange("limit", limit, 1, 1_000));
+        return customers.orderTimeline(customerId, limit, after);
     }
 
     @GetMapping("/active")
-    public List<CustomerEntity> active(@RequestParam(defaultValue = "25") int limit) {
-        return customers.active(ApiLimits.requireInRange("limit", limit, 1, 100));
+    public List<CustomerEntity> active(@RequestParam(defaultValue = "25") @Min(1) @Max(100) int limit) {
+        return customers.active(limit);
     }
 
     public record CreateCustomerRequest(

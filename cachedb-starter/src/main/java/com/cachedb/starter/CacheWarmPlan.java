@@ -50,6 +50,12 @@ public record CacheWarmPlan(
         return new Builder(entityName);
     }
 
+    public CacheWarmTarget target() {
+        return projectionsOnly
+                ? CacheWarmTarget.PROJECTIONS_ONLY
+                : CacheWarmTarget.ENTITY_AND_PROJECTIONS;
+    }
+
     private static String normalizeName(String name, String entityName) {
         if (name == null || name.isBlank()) {
             return "warm-" + entityName;
@@ -115,6 +121,12 @@ public record CacheWarmPlan(
 
         public Builder projectionsOnly(boolean projectionsOnly) {
             this.projectionsOnly = projectionsOnly;
+            return this;
+        }
+
+        public Builder target(CacheWarmTarget target) {
+            CacheWarmTarget resolved = Objects.requireNonNull(target, "target");
+            this.projectionsOnly = resolved == CacheWarmTarget.PROJECTIONS_ONLY;
             return this;
         }
 

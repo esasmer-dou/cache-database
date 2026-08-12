@@ -13,12 +13,12 @@ korunur. Yeni uygulama kodunda başlangıç noktası çoğunlukla
 
 ## 1. Provider Starter'ı Ekle
 
-BOM'u bir kez ekle ve yalnızca bir SQL provider starter seç. `0.7.1`, GitHub
+BOM'u bir kez ekle ve yalnızca bir SQL provider starter seç. `0.8.0`, GitHub
 Packages üzerinden değişmez paket olarak yayımlanmıştır.
 
 ```xml
 <properties>
-    <cachedb.version>0.7.1</cachedb.version>
+    <cachedb.version>0.8.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -71,6 +71,7 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
     @HotRoute(
             value = "customer-order-timeline",
+            population = HotRoute.Population.DECLARED_WARM,
             projection = OrderSummary.class,
             pageSize = 100,
             hotWindow = 1_000,
@@ -105,8 +106,8 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
     @WarmRoute(value = "warm-customer-order-timeline", from = "timeline",
             maxRows = 1_000, maxRowsParameter = "maxRows",
-            coverageScopeParameter = "customerId", projectionsOnly = true)
-    CacheWarmPlan warmTimeline(long customerId, int maxRows);
+            coverageScopeParameter = "customerId", targetParameter = "target")
+    CacheWarmPlan warmTimeline(long customerId, int maxRows, CacheWarmTarget target);
 }
 ```
 
@@ -142,7 +143,7 @@ OrderEntity order = orders.detail(id, 20).orElseThrow(status -> switch (status) 
 
 ```java
 CacheWarmResult result = cacheDatabase.warm(
-        orders.warmTimeline(customerId, 1_000)
+        orders.warmTimeline(customerId, 1_000, CacheWarmTarget.PROJECTIONS_ONLY)
 );
 
 HotWindow<OrderSummary> firstPage = orders.timeline(
@@ -328,3 +329,229 @@ Repository API'sinde composite primary key bilinçli olarak desteklenmez. Sabit
 bir surrogate ID kullan; iş anahtarını doğrulanan ve indexlenen alanlar olarak
 modelle. Anahtar parçalarını çağrı noktalarında belirsiz bir string içinde
 birleştirme.
+
+## 10. OR Kullanımını Açıkça Belirt
+
+Aynı gruptaki predicate'ler AND ile, farklı gruplar ise OR ile birleştirilir.
+Yeni grup sorgu kapsamını genişlettiği için processor açık onay ister:
+
+```java
+@CacheRouteQuery(
+        predicates = {
+                @CachePredicate(field = "orderDate", operator = CachePredicate.Operator.GTE,
+                        parameter = "cutoff", group = 0),
+                @CachePredicate(field = "status", operator = CachePredicate.Operator.IN,
+                        constants = {"NEW", "PAID", "PICKING"}, group = 1)
+        },
+        explicitDisjunction = true,
+        orderBy = @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
+        windowParameter = "window"
+)
+HotWindow<OrderSummary> recentOrActive(long cutoff, WindowRequest window);
+```
+
+`explicitDisjunction = true` olmadan birden fazla grup içeren repository
+derlenmez. Annotation'ı görsel olarak bölmek için yeni grup açma. İş kuralı AND
+ise koşulları aynı grupta tut.
+
+## 11. Warm Sırasında Veri Şeklini Plan Belirlesin
+
+Entity veya projection hedefini generated metodun tipli parametresiyle seç.
+Oluşan plan bu kararı taşır; çalıştırma aşamasında yalnızca deneme veya uygulama
+modunu belirt:
+
+```java
+CacheWarmTarget target = projectionOnly
+        ? CacheWarmTarget.PROJECTIONS_ONLY
+        : CacheWarmTarget.ENTITY_AND_PROJECTIONS;
+CacheWarmPlan plan = orders.warmTimeline(customerId, 1_000, target);
+
+CacheWarmExecution execution = cacheDatabase.executeWarm(
+        plan,
+        dryRun ? CacheWarmExecutionMode.DRY_RUN : CacheWarmExecutionMode.APPLY
+);
+CacheWarmSummary summary = execution.summary("customer-orders");
+
+log.info("route={} scope={} read={} submitted={} target={}",
+        summary.routeName(), summary.scope(), summary.rowsReadFromSource(),
+        summary.rowsSubmittedToRedis(), summary.target());
+```
+
+Aynı yol için ayrı projection/entity warm metotları tanımlama ve ikinci bir
+koşuldan `warmProjections(plan)` çağırma. Tipli hedef, string veya gizli boolean
+bayrağı olmadan tek generated plan sözleşmesi üretir. Deneme modu Redis'i değiştirmez.
+
+SQL kalıcılığını kanıtlaması gereken komutta sonucu boolean değere indirgeme;
+receipt bilgisini koru:
+
+```java
+List<WriteReceipt<OrderEntity, Long>> receipts = orders.saveAll(batch);
+cacheDatabase.awaitDurableOrThrow(
+        receipts,
+        Duration.ofSeconds(5),
+        "order import/batch-42"
+);
+```
+
+Timeout oluşursa `WriteBatchDurabilityTimeoutException`; receipt listesini,
+timeout değerini ve işlem adını taşır. Satırlar Redis tarafından kabul edilmiş
+olabilir. Bu hatayı körlemesine aynı yazıyı tekrar gönderme izni olarak değil,
+SQL kalıcılığı henüz kanıtlanamamış bir sonuç olarak ele al.
+
+## 12. Veri Kaynağını Gizlemeden Ortak Pencere Kodunu Kullan
+
+`HotWindow` ve `SourceWindow`, `WindowSlice` interface'ini uygular. Ortak cursor
+kodu `hasNext()` ve `nextRequest(limit)` kullanabilir. Redis coverage bilgisi ise
+yalnızca `HotWindow` üzerinde kalır:
+
+```java
+HotWindow<OrderSummary> page = orders.timeline(customerId, WindowRequest.first(100))
+        .requireComplete();
+
+HotWindow<OrderRow> response = page.map(OrderRow::from);
+Optional<WindowRequest> next = response.nextRequest(100);
+```
+
+`HotLookup.map`; `NOT_CACHED`, `TOMBSTONED` ve `OUTSIDE_HOT_POLICY` durumlarını
+da aynen korur. Payload dönüşümü, verinin erişilebilirlik durumunu silemez.
+
+## 13. Generated Route Envanterini İncele
+
+Her generated repository, reflection kullanmayan bir route kataloğu yayımlar.
+Spring Boot starter bu katalogları kendiliğinden birleştirir. `cachedb` Actuator
+endpoint'ini yalnızca iç operasyon ağında aç:
+
+Repository bean'leri geriye uyum için küçük harfle başlayan mevcut varsayılan
+adını korur. İki paket aynı repository interface adını kullanıyorsa farklı bir
+`@CacheRepository.springBeanName` belirt; processor çözülmemiş çakışmayı reddeder.
+Route kataloğu bean adları ise paket adıyla birlikte kendiliğinden benzersizdir.
+
+```properties
+management.endpoints.web.exposure.include=health,info,metrics,cachedb
+```
+
+Endpoint; tanımlı repository ve route sayılarını, route türlerini, sınırlı route
+ayrıntılarını, hızlı erişim route'larının nasıl doldurulduğunu, periyodik warm
+özetlerini ve sonuç kesilmişse truncation bilgisini döndürür. Route ayrıntısı en
+fazla 250, warm işi ayrıntısı en fazla 100 kayıttır. Global hızlı erişim route
+adları çakışırsa veya `DECLARED_WARM` seçilip generated warm yolu eklenmezse
+uygulama başlangıçta durur.
+
+Toplu Micrometer metrikleri route adı veya tenant tag'i üretmez:
+
+- `cachedb.repositories.declared`
+- `cachedb.routes.declared`
+- `cachedb.routes.hot.population{strategy=...}`
+- `cachedb.scheduled.warm.running`
+- `cachedb.scheduled.warm.failures`
+- `cachedb.scheduled.warm.skipped`
+
+Katalog, uygulamanın hangi route'larla derlendiğini kanıtlar. Redis coverage'ın
+tam olduğunu kanıtlamaz. Coverage, veri eşitliği, gecikme, bellek ve kalıcılık
+kontrollerini ayrı production kapıları olarak koru.
+
+Entegrasyon testinde operasyon sözleşmesini açıkça doğrula:
+
+```java
+cacheDb.requireDeclaredWarmRoute("customer-order-timeline");
+cacheDb.warmAndRequireCoverage(
+        orders.warmTimeline(42L, 1_000, CacheWarmTarget.PROJECTIONS_ONLY),
+        Duration.ofMinutes(5)
+);
+```
+
+## 14. Tekrarlanan Route Kurallarını Repository Düzeyinde Tanımla
+
+`@CacheRepositoryDefaults`, route davranışını gizlemeden tekrar eden değerleri
+tek yerde toplar. Annotation processor bütün değerleri derleme sırasında çözer.
+Metot üzerinde açıkça yazılan değer her zaman repository varsayılanından önce gelir.
+
+```java
+@CacheRepository(entity = OrderEntity.class)
+@CacheRepositoryDefaults(
+        hotPopulation = HotRoute.Population.DECLARED_WARM,
+        sourceMaxRows = 500,
+        sourceTimeoutSeconds = 15
+)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
+
+    @HotRoute(
+            value = "customer-order-timeline",
+            projection = OrderSummary.class,
+            hotWindow = 1_000,
+            memoryBudgetBytes = CacheMemoryBudget.MIB_16,
+            coverageScopeParameter = "customerId"
+    )
+    // Örneği kısa tutmak için @CacheRouteQuery burada gösterilmedi.
+    HotWindow<OrderSummary> timeline(long customerId, WindowRequest window);
+}
+```
+
+Ham byte sayıları yerine `CacheMemoryBudget.MIB_*` sabitlerini kullan. Bunlar
+Java derleme zamanı sabitidir ve annotation içinde kullanılabilir. Repository
+varsayılanı global ayar değildir. Projection, aktif veri penceresi, kapsam ve
+özel route kararları metot üzerinde görünür kalır.
+
+## 15. Cursor Bilgisini HTTP Sınırında Kaybetme
+
+Sayfalanan sonucu yalın listeye çevirme. `CursorPage<T>`, sonraki sayfa için
+gereken kapalı cursor bilgisini yanıtla birlikte taşır:
+
+```java
+public CursorPage<OrderSummary> timeline(long customerId, int limit, String after) {
+    return orders.timeline(customerId, WindowRequest.of(limit, after)).completePage();
+}
+```
+
+```json
+{
+  "items": [{ "orderId": 10042, "status": "PAID" }],
+  "nextCursor": "opaque-token"
+}
+```
+
+Yeni cursor; generated route adına, route kapsamına ve sıralama sözleşmesine
+bağlıdır. Müşteri 42 için üretilen cursor müşteri 43 veya başka bir route için
+kullanılırsa `CursorContractMismatchException` oluşur. Eski cursor'lar geriye
+uyumluluk için okunur; yeni üretilen token'lar daha güçlü sözleşmeyi taşır.
+
+## 16. Kalıcı Toplu Aktarım İçin Framework Batch Writer Kullan
+
+`CacheDurableBatchWriter`; batch boyutunu, bekleyen receipt sınırını ve SQL
+kalıcılık beklemesini yönetir. Redis-first yazma davranışını değiştirmez.
+`finish()`, bekleyen bütün receipt'ler seçilen SQL provider'da kalıcı olmadan
+dönmez.
+
+```java
+try (var batch = cacheDatabase.durableBatchWriter(
+        "catalog import",
+        128,
+        1_024,
+        Duration.ofSeconds(30),
+        productRepository::saveAll
+)) {
+    sourceRows.forEach(batch::add);
+}
+```
+
+İşlemi idempotent tasarla. Kalıcılık zaman aşımı, SQL sonucunun henüz
+kanıtlanamadığını gösterir; korumasız biçimde aynı yazıyı tekrar gönderme izni vermez.
+
+## 17. Entegrasyon Testinde Warm Yolculuğunun Tamamını Kanıtla
+
+Test starter; deneme, uygulama ve coverage kontrolünü production akışına benzer
+tek bir yolculuk olarak çalıştırabilir:
+
+```java
+CacheDbWarmRouteEvidence evidence = cacheDb.dryRunApplyAndRequireCoverage(
+        orders.warmTimeline(42L, 1_000, CacheWarmTarget.PROJECTIONS_ONLY),
+        Duration.ofMinutes(5)
+);
+
+assertThat(evidence.dryRun().result().submittedRows()).isZero();
+assertThat(evidence.coverage().complete()).isTrue();
+```
+
+Bu kanıt; deneme çalışmasının Redis'i değiştirmediğini, uygulamanın aynı planı
+kullandığını ve doğru route/kapsam için güncel coverage bulunduğunu gösterir.
+Veri eşitliği, gecikme, bellek ve failover testlerinin yerini almaz.

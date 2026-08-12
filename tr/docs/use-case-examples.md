@@ -564,7 +564,11 @@ Bu yolu kontrollü startup, staging ön ısıtma veya migration provası için k
 
 ```java
 CacheWarmResult result = cacheDatabase.warm(
-        orders.warmCustomerTimelineProjection(customerId, 1_000)
+        orders.warmCustomerTimeline(
+                customerId,
+                1_000,
+                CacheWarmTarget.PROJECTIONS_ONLY
+        )
 );
 ```
 
@@ -714,7 +718,12 @@ ANTI-PATTERN: ilk ekranda bütün child satırlarını eager-load etmek.
 Route'un güvenli olup olmadığını görmek için generated route ve test kitini kullan.
 
 ```java
-cacheDb.warm(orders.warmCustomerTimelineProjection(42L, 1_000));
+cacheDb.requireDeclaredWarmRoute("customer-order-timeline");
+cacheDb.warm(orders.warmCustomerTimeline(
+        42L,
+        1_000,
+        CacheWarmTarget.PROJECTIONS_ONLY
+));
 CacheDbAssertions.requireComplete(
         orders.customerTimeline(42L, WindowRequest.first(100))
 );

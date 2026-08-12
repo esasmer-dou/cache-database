@@ -1,255 +1,78 @@
 package com.example.cachedb.sample.service;
 
-import com.example.cachedb.sample.repository.AuditEventRepository;
-import com.example.cachedb.sample.repository.CustomerRepository;
-import com.example.cachedb.sample.repository.OrderLineRepository;
-import com.example.cachedb.sample.repository.OrderRepository;
-import com.example.cachedb.sample.repository.ProductRepository;
-import com.example.cachedb.sample.repository.ReportJobRepository;
-import com.example.cachedb.sample.repository.ShipmentRepository;
-import com.example.cachedb.sample.repository.ShipmentEventRepository;
-import com.example.cachedb.sample.repository.SupportTicketRepository;
+import com.example.cachedb.sample.application.warm.SampleWarmCommand;
+import com.example.cachedb.sample.repository.SampleRepositories;
 import com.reactor.cachedb.starter.CacheDatabase;
+import com.reactor.cachedb.starter.CacheWarmExecutionMode;
 import com.reactor.cachedb.starter.CacheWarmPlan;
-import com.reactor.cachedb.starter.CacheWarmResult;
+import com.reactor.cachedb.starter.CacheWarmSummary;
+import com.reactor.cachedb.starter.CacheWarmTarget;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
-import java.util.List;
+import java.util.Objects;
 
+/**
+ * Converts one typed sample command into one generated repository warm plan.
+ * The service never builds ad-hoc SQL and never hides a durable-source fallback.
+ */
 @Service
-public class SampleWarmBackfillService {
+public final class SampleWarmBackfillService {
 
     private final CacheDatabase cacheDatabase;
-    private final CustomerRepository customers;
-    private final OrderRepository orders;
-    private final OrderLineRepository orderLines;
-    private final ProductRepository products;
-    private final SupportTicketRepository tickets;
-    private final ShipmentRepository shipments;
-    private final ShipmentEventRepository shipmentEvents;
-    private final ReportJobRepository reportJobs;
-    private final AuditEventRepository auditEvents;
+    private final SampleRepositories repositories;
 
-    public SampleWarmBackfillService(
-            CacheDatabase cacheDatabase,
-            CustomerRepository customers,
-            OrderRepository orders,
-            OrderLineRepository orderLines,
-            ProductRepository products,
-            SupportTicketRepository tickets,
-            ShipmentRepository shipments,
-            ShipmentEventRepository shipmentEvents,
-            ReportJobRepository reportJobs,
-            AuditEventRepository auditEvents
-    ) {
+    public SampleWarmBackfillService(CacheDatabase cacheDatabase, SampleRepositories repositories) {
         this.cacheDatabase = cacheDatabase;
-        this.customers = customers;
-        this.orders = orders;
-        this.orderLines = orderLines;
-        this.products = products;
-        this.tickets = tickets;
-        this.shipments = shipments;
-        this.shipmentEvents = shipmentEvents;
-        this.reportJobs = reportJobs;
-        this.auditEvents = auditEvents;
+        this.repositories = repositories;
     }
 
-    public WarmResult warmActiveCustomers(int limit, boolean dryRun) {
-        return execute(
-                "active-customers",
-                "status=ACTIVE",
-                customers.warmActive(limit),
-                false,
-                dryRun
-        );
-    }
-
-    public WarmResult warmCustomerOrders(long customerId, int limit, boolean projectionOnly, boolean dryRun) {
-        return execute(
-                "customer-orders",
-                "customerId=" + customerId,
-                projectionOnly
-                        ? orders.warmCustomerTimelineProjection(customerId, limit)
-                        : orders.warmCustomerTimelineEntities(customerId, limit),
-                projectionOnly,
-                dryRun
-        );
-    }
-
-    public WarmResult warmOrderLines(long orderId, int limit, boolean dryRun) {
-        return execute(
-                "order-lines",
-                "orderId=" + orderId,
-                orderLines.warmForOrder(orderId, limit),
-                false,
-                dryRun
-        );
-    }
-
-    public WarmResult warmRecentHighValueOrders(BigDecimal minimumAmount, int limit, boolean dryRun) {
-        return execute(
-                "recent-high-value-orders",
-                "minimumAmount=" + minimumAmount,
-                orders.warmRecentHighValue(minimumAmount, limit),
-                true,
-                dryRun
-        );
-    }
-
-    public WarmResult warmHighlightedOrders(double minimumPriorityScore, int limit, boolean dryRun) {
-        return execute(
-                "dashboard-highlighted-orders",
-                "minimumPriorityScore=" + minimumPriorityScore,
-                orders.warmHighlighted(minimumPriorityScore, limit),
-                true,
-                dryRun
-        );
-    }
-
-    public WarmResult warmActiveProducts(String category, int limit, boolean projectionOnly, boolean dryRun) {
-        String normalizedCategory = category == null ? "" : category.trim();
-        CacheWarmPlan plan = normalizedCategory.isEmpty()
-                ? projectionOnly ? products.warmActiveProjection(limit) : products.warmActiveEntities(limit)
-                : projectionOnly
-                ? products.warmCategoryProjection(normalizedCategory, limit)
-                : products.warmCategoryEntities(normalizedCategory, limit);
-        return execute(
-                "active-products",
-                normalizedCategory.isEmpty() ? "all-categories" : "category=" + normalizedCategory,
+    public CacheWarmSummary execute(SampleWarmCommand arguments) {
+        SampleWarmCommand command = Objects.requireNonNull(arguments, "arguments");
+        CacheWarmPlan plan = plan(command);
+        return cacheDatabase.executeWarm(
                 plan,
-                projectionOnly,
-                dryRun
-        );
+                command.dryRun() ? CacheWarmExecutionMode.DRY_RUN : CacheWarmExecutionMode.APPLY
+        ).summary(command.route().operation());
     }
 
-    public WarmResult warmLowStockProducts(int limit, boolean dryRun) {
-        return execute(
-                "low-stock-products",
-                "status=LOW_STOCK",
-                products.warmLowStock(limit),
-                true,
-                dryRun
-        );
+    private CacheWarmPlan plan(SampleWarmCommand command) {
+        return switch (command.route()) {
+            case ACTIVE_CUSTOMERS -> repositories.customers().warmActive(command.limit());
+            case CUSTOMER_ORDERS -> repositories.orders().warmCustomerTimeline(
+                    command.customerId(), command.limit(), target(command.projectionOnly()));
+            case ORDER_LINES -> repositories.orderLines().warmForOrder(command.orderId(), command.limit());
+            case RECENT_HIGH_VALUE_ORDERS -> repositories.orders().warmRecentHighValue(
+                    command.minimumAmount(), command.limit());
+            case HIGHLIGHTED_ORDERS -> repositories.orders().warmHighlighted(
+                    command.minimumPriorityScore(), command.limit());
+            case ACTIVE_PRODUCTS -> activeProducts(command);
+            case LOW_STOCK_PRODUCTS -> repositories.products().warmLowStock(command.limit());
+            case OPEN_TICKETS -> repositories.supportTickets().warmOpen(command.limit());
+            case ACTIVE_SHIPMENTS -> repositories.shipments().warmActive(
+                    command.limit(), target(command.projectionOnly()));
+            case CUSTOMER_SHIPMENTS -> repositories.shipments().warmForCustomer(
+                    command.customerId(), command.limit());
+            case SHIPMENT_EXCEPTIONS -> repositories.shipments().warmExceptions(command.limit());
+            case SHIPMENT_EVENTS -> repositories.shipmentEvents().warmForShipment(
+                    command.shipmentId(), command.limit());
+            case LIVE_REPORTS -> repositories.reportJobs().warmLive(command.limit());
+            case REPORTS_BY_TYPE -> repositories.reportJobs().warmByType(
+                    command.reportType(), command.limit());
+            case SECURITY_AUDIT -> repositories.auditEvents().warmSecurity(command.limit());
+        };
     }
 
-    public WarmResult warmOpenTickets(int limit, boolean dryRun) {
-        return execute(
-                "open-tickets",
-                "status=OPEN",
-                tickets.warmOpen(limit),
-                false,
-                dryRun
-        );
+    private CacheWarmPlan activeProducts(SampleWarmCommand command) {
+        String category = command.category() == null ? "" : command.category().trim();
+        CacheWarmTarget target = target(command.projectionOnly());
+        return category.isEmpty()
+                ? repositories.products().warmActive(command.limit(), target)
+                : repositories.products().warmCategory(category, command.limit(), target);
     }
 
-    public WarmResult warmActiveShipments(int limit, boolean projectionOnly, boolean dryRun) {
-        return execute(
-                "active-shipments",
-                "operational-statuses",
-                projectionOnly ? shipments.warmActiveProjection(limit) : shipments.warmActiveEntities(limit),
-                projectionOnly,
-                dryRun
-        );
-    }
-
-    public WarmResult warmCustomerShipments(long customerId, int limit, boolean dryRun) {
-        return execute(
-                "customer-shipments",
-                "customerId=" + customerId,
-                shipments.warmForCustomer(customerId, limit),
-                true,
-                dryRun
-        );
-    }
-
-    public WarmResult warmShipmentExceptions(int limit, boolean dryRun) {
-        return execute(
-                "shipment-exceptions",
-                "status=DELAYED|EXCEPTION",
-                shipments.warmExceptions(limit),
-                true,
-                dryRun
-        );
-    }
-
-    public WarmResult warmShipmentEvents(long shipmentId, int limit, boolean dryRun) {
-        return execute(
-                "shipment-events",
-                "shipmentId=" + shipmentId,
-                shipmentEvents.warmForShipment(shipmentId, limit),
-                false,
-                dryRun
-        );
-    }
-
-    public WarmResult warmLiveReportJobs(int limit, boolean dryRun) {
-        return execute(
-                "live-report-jobs",
-                "status=QUEUED|RUNNING|FAILED",
-                reportJobs.warmLive(limit),
-                false,
-                dryRun
-        );
-    }
-
-    public WarmResult warmReportJobsByType(String reportType, int limit, boolean dryRun) {
-        return execute(
-                "report-jobs-by-type",
-                "reportType=" + reportType,
-                reportJobs.warmByType(reportType, limit),
-                false,
-                dryRun
-        );
-    }
-
-    public WarmResult warmSecurityAudit(int limit, boolean dryRun) {
-        return execute(
-                "security-audit",
-                "severity=WARN|ERROR|SECURITY",
-                auditEvents.warmSecurity(limit),
-                false,
-                dryRun
-        );
-    }
-
-    private WarmResult execute(
-            String route,
-            String scope,
-            CacheWarmPlan plan,
-            boolean projectionOnly,
-            boolean dryRun
-    ) {
-        CacheWarmResult result = dryRun
-                ? cacheDatabase.dryRun(plan)
-                : projectionOnly
-                ? cacheDatabase.warmProjections(plan)
-                : cacheDatabase.warm(plan);
-        return new WarmResult(
-                route,
-                scope,
-                plan.maxRows(),
-                result.loadedRows(),
-                result.submittedRows(),
-                result.durationMillis(),
-                projectionOnly,
-                dryRun,
-                dryRun ? "cache-warm-dry-run" : projectionOnly ? "cache-warm-projections" : "cache-warm-plan",
-                result.notes()
-        );
-    }
-
-    public record WarmResult(
-            String route,
-            String scope,
-            int requestedWindow,
-            int rowsReadFromSql,
-            int rowsSubmittedToRedis,
-            long durationMillis,
-            boolean projectionOnly,
-            boolean dryRun,
-            String source,
-            List<String> notes
-    ) {
+    private CacheWarmTarget target(boolean projectionOnly) {
+        return projectionOnly
+                ? CacheWarmTarget.PROJECTIONS_ONLY
+                : CacheWarmTarget.ENTITY_AND_PROJECTIONS;
     }
 }

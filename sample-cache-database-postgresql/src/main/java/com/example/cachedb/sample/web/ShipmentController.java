@@ -4,12 +4,16 @@ import com.example.cachedb.sample.application.shipment.ShipmentApplicationServic
 import com.example.cachedb.sample.domain.ShipmentEntity;
 import com.example.cachedb.sample.domain.ShipmentEventEntity;
 import com.example.cachedb.sample.readmodel.ShipmentSummary;
+import com.reactor.cachedb.core.repository.CursorPage;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,6 +27,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/shipments")
+@Validated
 public class ShipmentController {
 
     private final ShipmentApplicationService shipments;
@@ -32,48 +37,48 @@ public class ShipmentController {
     }
 
     @GetMapping("/active")
-    public List<ShipmentSummary> active(@RequestParam(defaultValue = "50") int limit) {
-        return shipments.active(ApiLimits.requireInRange("limit", limit, 1, 1_000));
+    public List<ShipmentSummary> active(@RequestParam(defaultValue = "50") @Min(1) @Max(1_000) int limit) {
+        return shipments.active(limit);
     }
 
     @GetMapping("/exceptions")
-    public List<ShipmentSummary> exceptions(@RequestParam(defaultValue = "25") int limit) {
-        return shipments.exceptions(ApiLimits.requireInRange("limit", limit, 1, 1_000));
+    public List<ShipmentSummary> exceptions(@RequestParam(defaultValue = "25") @Min(1) @Max(1_000) int limit) {
+        return shipments.exceptions(limit);
     }
 
     @GetMapping("/customer/{customerId}")
-    public List<ShipmentSummary> customerShipments(
-            @PathVariable long customerId,
-            @RequestParam(defaultValue = "25") int limit
+    public CursorPage<ShipmentSummary> customerShipments(
+            @PathVariable @Positive long customerId,
+            @RequestParam(defaultValue = "25") @Min(1) @Max(1_000) int limit,
+            @RequestParam(required = false) @Size(max = 8_192) String after
     ) {
-        return shipments.forCustomer(customerId, ApiLimits.requireInRange("limit", limit, 1, 1_000));
+        return shipments.forCustomer(customerId, limit, after);
     }
 
     @GetMapping("/{shipmentId}")
     public ShipmentEntity detail(
-            @PathVariable long shipmentId,
-            @RequestParam(defaultValue = "5") int eventPreview
+            @PathVariable @Positive long shipmentId,
+            @RequestParam(defaultValue = "5") @Min(1) @Max(20) int eventPreview
     ) {
-        return shipments.detail(
-                shipmentId,
-                ApiLimits.requireInRange("eventPreview", eventPreview, 1, 20)
-        );
+        return shipments.detail(shipmentId, eventPreview);
     }
 
     @GetMapping("/{shipmentId}/events")
-    public List<ShipmentEventEntity> events(
-            @PathVariable long shipmentId,
-            @RequestParam(defaultValue = "20") int limit
+    public CursorPage<ShipmentEventEntity> events(
+            @PathVariable @Positive long shipmentId,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
+            @RequestParam(required = false) @Size(max = 8_192) String after
     ) {
-        return shipments.events(shipmentId, ApiLimits.requireInRange("limit", limit, 1, 100));
+        return shipments.events(shipmentId, limit, after);
     }
 
     @GetMapping("/archive")
-    public List<ShipmentSummary> deliveredArchive(
-            @RequestParam long customerId,
-            @RequestParam(defaultValue = "50") int limit
+    public CursorPage<ShipmentSummary> deliveredArchive(
+            @RequestParam @Positive long customerId,
+            @RequestParam(defaultValue = "50") @Min(1) @Max(500) int limit,
+            @RequestParam(required = false) @Size(max = 8_192) String after
     ) {
-        return shipments.deliveredArchive(customerId, ApiLimits.requireInRange("limit", limit, 1, 500));
+        return shipments.deliveredArchive(customerId, limit, after);
     }
 
     @PostMapping

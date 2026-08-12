@@ -52,7 +52,8 @@ class CacheRepositoryProcessorTest {
                         import com.reactor.cachedb.annotations.*;
                         import com.reactor.cachedb.core.repository.*;
                         import com.reactor.cachedb.starter.CacheWarmPlan;
-                        @CacheRepository(entity = OrderEntity.class, springBean = false)
+                        import com.reactor.cachedb.starter.CacheWarmTarget;
+                        @CacheRepository(entity = OrderEntity.class)
                         public interface Orders extends CacheDbRepository<OrderEntity, Long> {
                             @HotRoute(value = "customer-timeline", projection = OrderSummary.class,
                                       coverageScopeParameter = "customerId")
@@ -134,11 +135,24 @@ class CacheRepositoryProcessorTest {
         assertTrue(generated.contains(".projectionName(orderSummaryProjection.name())"));
         assertTrue(generated.contains(".coverage(\"customer-timeline\", java.lang.String.valueOf(customerId)"));
         assertTrue(generated.contains("hotRepository.saveWithReceipt(ensureGeneratedId(entity))"));
-        assertTrue(generated.contains("sourceSqlRepository.query(query)"));
+        assertTrue(generated.contains("sourceSqlRepository.query(cachedb$query)"));
         assertTrue(generated.contains(".withQueryTimeoutSeconds(7)"));
         assertTrue(generated.contains("new com.reactor.cachedb.core.repository.SourceSqlQuery"));
-        assertTrue(generated.contains("WriteDurabilityTimeoutException"));
+        assertTrue(generated.contains("cacheDatabase.awaitDurableOrThrow(cachedb$receipt, cachedb$timeout)"));
+        assertTrue(generated.contains("new java.util.ArrayList<>(cachedb$sourceRows.size())"));
+        assertFalse(generated.contains("sourceRepository.query(cachedb$query).stream()"));
         assertTrue(generated.contains("idGenerator().nextSequence(\"orders\", 64)"));
+        assertTrue(generated.contains("RepositoryRouteCatalog ROUTE_CATALOG"));
+        assertTrue(generated.contains("RepositoryRouteKind.HOT"));
+        assertTrue(generated.contains("RepositoryRouteKind.SOURCE_SQL"));
+        assertTrue(generated.contains("RepositoryRouteKind.WARM"));
+        assertTrue(generated.contains("operation=SAVE;acknowledgement=SQL_DURABLE"));
+        assertTrue(generated.contains("public static com.reactor.cachedb.core.route.RepositoryRouteCatalog routeCatalog()"));
+
+        String configuration = Files.readString(compilation.generated().resolve("sample/OrdersCacheDbConfiguration.java"));
+        assertTrue(configuration.contains("OrdersCacheDbImplementation.routeCatalog()"));
+        assertTrue(configuration.contains("@org.springframework.context.annotation.Bean(name = \"orders\")"));
+        assertTrue(configuration.contains("@org.springframework.context.annotation.Bean(name = \"sample.Orders.routeCatalog\")"));
 
         String binding = Files.readString(compilation.generated().resolve("sample/OrderEntityCacheBinding.java"));
         assertTrue(binding.contains("return new OrderEntity("));
@@ -381,6 +395,147 @@ class CacheRepositoryProcessorTest {
     }
 
     @Test
+    void requiresExplicitOptInForOrPredicateGroups() throws IOException {
+        Source entity = source("groups/OrderEntity.java", """
+                package groups;
+                import com.reactor.cachedb.annotations.*;
+                @CacheEntity(table = "orders")
+                public class OrderEntity {
+                    @CacheId(column = "order_id") public Long orderId;
+                    @CacheColumn("status") public String status;
+                    @CacheColumn("order_date") public Long orderDate;
+                    public OrderEntity() {}
+                }
+                """);
+        Compilation accidentalOr = compile(
+                entity,
+                source("groups/UnsafeOrders.java", """
+                        package groups;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.*;
+                        @CacheRepository(entity = OrderEntity.class, springBean = false)
+                        public interface UnsafeOrders extends CacheDbRepository<OrderEntity, Long> {
+                            @HotRoute("active-orders")
+                            @CacheRouteQuery(
+                                predicates = {
+                                    @CachePredicate(field = "orderDate", parameter = "cutoff", group = 0),
+                                    @CachePredicate(field = "status", constants = "OPEN", group = 1)
+                                },
+                                limitParameter = "limit"
+                            )
+                            HotWindow<OrderEntity> active(long cutoff, int limit);
+                        }
+                        """)
+        );
+
+        assertFalse(accidentalOr.success());
+        assertTrue(accidentalOr.diagnosticsText().contains("explicitDisjunction=true"),
+                accidentalOr.diagnosticsText());
+
+        Compilation explicitOr = compile(
+                entity,
+                source("groups/SafeOrders.java", """
+                        package groups;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.*;
+                        @CacheRepository(entity = OrderEntity.class, springBean = false)
+                        public interface SafeOrders extends CacheDbRepository<OrderEntity, Long> {
+                            @SourceRoute("open-or-recent")
+                            @CacheRouteQuery(
+                                predicates = {
+                                    @CachePredicate(field = "orderDate", parameter = "cutoff", group = 0),
+                                    @CachePredicate(field = "status", constants = "OPEN", group = 1)
+                                },
+                                explicitDisjunction = true,
+                                limitParameter = "limit"
+                            )
+                            SourceWindow<OrderEntity> openOrRecent(long cutoff, int limit);
+                        }
+                        """)
+        );
+
+        assertTrue(explicitOr.success(), explicitOr.diagnosticsText());
+        String generated = Files.readString(
+                explicitOr.generated().resolve("groups/SafeOrdersCacheDbImplementation.java")
+        );
+        assertTrue(generated.contains("QueryGroup.or("));
+    }
+
+    @Test
+    void requiresWarmRouteWhenHotPopulationIsDeclaredWarm() throws IOException {
+        Source entity = source("population/RouteEntity.java", """
+                package population;
+                import com.reactor.cachedb.annotations.*;
+                @CacheEntity(table = "routes", redisNamespace = "routes")
+                public record RouteEntity(
+                    @CacheId(column = "route_id") Long routeId,
+                    @CacheColumn("created_at") Long createdAt
+                ) {}
+                """);
+        Source projection = source("population/RouteSummary.java", """
+                package population;
+                import com.reactor.cachedb.annotations.*;
+                @CacheProjectionRecord(source = RouteEntity.class, id = "routeId", name = "route-summary")
+                public record RouteSummary(Long routeId, Long createdAt) {}
+                """);
+        Compilation missingWarm = compile(
+                entity,
+                projection,
+                source("population/MissingWarmRepository.java", """
+                        package population;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.*;
+                        @CacheRepository(entity = RouteEntity.class, springBean = false)
+                        public interface MissingWarmRepository extends CacheDbRepository<RouteEntity, Long> {
+                            @HotRoute(value = "declared-warm", projection = RouteSummary.class,
+                                      population = HotRoute.Population.DECLARED_WARM)
+                            @CacheRouteQuery(
+                                orderBy = @CacheOrder(field = "createdAt", direction = CacheOrder.Direction.DESC),
+                                limitParameter = "limit"
+                            )
+                            HotWindow<RouteSummary> recent(int limit);
+                        }
+                        """)
+        );
+
+        assertFalse(missingWarm.success());
+        assertTrue(missingWarm.diagnosticsText().contains("requires at least one @WarmRoute"),
+                missingWarm.diagnosticsText());
+
+        Compilation declaredWarm = compile(
+                entity,
+                projection,
+                source("population/DeclaredWarmRepository.java", """
+                        package population;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.*;
+                        import com.reactor.cachedb.starter.CacheWarmPlan;
+                        import com.reactor.cachedb.starter.CacheWarmTarget;
+                        @CacheRepository(entity = RouteEntity.class, springBean = false)
+                        public interface DeclaredWarmRepository extends CacheDbRepository<RouteEntity, Long> {
+                            @HotRoute(value = "declared-warm", projection = RouteSummary.class,
+                                      population = HotRoute.Population.DECLARED_WARM)
+                            @CacheRouteQuery(
+                                orderBy = @CacheOrder(field = "createdAt", direction = CacheOrder.Direction.DESC),
+                                limitParameter = "limit"
+                            )
+                            HotWindow<RouteSummary> recent(int limit);
+
+                            @WarmRoute(value = "warm-declared", from = "recent", maxRowsParameter = "limit",
+                                       targetParameter = "target")
+                            CacheWarmPlan warmRecent(int limit, CacheWarmTarget target);
+                        }
+                        """)
+        );
+
+        assertTrue(declaredWarm.success(), declaredWarm.diagnosticsText());
+        String generated = Files.readString(declaredWarm.generated()
+                .resolve("population/DeclaredWarmRepositoryCacheDbImplementation.java"));
+        assertTrue(generated.contains("HotRoutePopulation.DECLARED_WARM"));
+        assertTrue(generated.contains("cachedb$target == com.reactor.cachedb.starter.CacheWarmTarget.PROJECTIONS_ONLY"));
+    }
+
+    @Test
     void rejectsMutatingCteAndInvalidGeneratedIdAtCompileTime() throws IOException {
         Compilation compilation = compile(
                 source("broken/AuditEntity.java", """
@@ -409,6 +564,144 @@ class CacheRepositoryProcessorTest {
         assertTrue(compilation.diagnosticsText().contains("requires java.lang.Long")
                         || compilation.diagnosticsText().contains("read-only"),
                 compilation.diagnosticsText());
+    }
+
+    @Test
+    void rejectsCollidingSpringRepositoryBeanNamesAcrossPackages() throws IOException {
+        Compilation compilation = compile(
+                source("left/OrderEntity.java", """
+                        package left;
+                        import com.reactor.cachedb.annotations.*;
+                        @CacheEntity(table = "left_orders", redisNamespace = "left-orders")
+                        public record OrderEntity(@CacheId(column = "order_id") Long orderId) {}
+                        """),
+                source("left/Orders.java", """
+                        package left;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.CacheDbRepository;
+                        @CacheRepository(entity = OrderEntity.class)
+                        public interface Orders extends CacheDbRepository<OrderEntity, Long> {}
+                        """),
+                source("right/OrderEntity.java", """
+                        package right;
+                        import com.reactor.cachedb.annotations.*;
+                        @CacheEntity(table = "right_orders", redisNamespace = "right-orders")
+                        public record OrderEntity(@CacheId(column = "order_id") Long orderId) {}
+                        """),
+                source("right/Orders.java", """
+                        package right;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.CacheDbRepository;
+                        @CacheRepository(entity = OrderEntity.class)
+                        public interface Orders extends CacheDbRepository<OrderEntity, Long> {}
+                        """)
+        );
+
+        assertFalse(compilation.success());
+        assertTrue(compilation.diagnosticsText().contains("set a distinct @CacheRepository.springBeanName"),
+                compilation.diagnosticsText());
+    }
+
+    @Test
+    void generatesDistinctExplicitSpringRepositoryBeanNamesAcrossPackages() throws IOException {
+        Compilation compilation = compile(
+                source("left/OrderEntity.java", """
+                        package left;
+                        import com.reactor.cachedb.annotations.*;
+                        @CacheEntity(table = "left_orders", redisNamespace = "left-orders")
+                        public record OrderEntity(@CacheId(column = "order_id") Long orderId) {}
+                        """),
+                source("left/Orders.java", """
+                        package left;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.CacheDbRepository;
+                        @CacheRepository(entity = OrderEntity.class, springBeanName = "leftOrders")
+                        public interface Orders extends CacheDbRepository<OrderEntity, Long> {}
+                        """),
+                source("right/OrderEntity.java", """
+                        package right;
+                        import com.reactor.cachedb.annotations.*;
+                        @CacheEntity(table = "right_orders", redisNamespace = "right-orders")
+                        public record OrderEntity(@CacheId(column = "order_id") Long orderId) {}
+                        """),
+                source("right/Orders.java", """
+                        package right;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.CacheDbRepository;
+                        @CacheRepository(entity = OrderEntity.class, springBeanName = "rightOrders")
+                        public interface Orders extends CacheDbRepository<OrderEntity, Long> {}
+                        """)
+        );
+
+        assertTrue(compilation.success(), compilation.diagnosticsText());
+        String left = Files.readString(compilation.generated().resolve("left/OrdersCacheDbConfiguration.java"));
+        String right = Files.readString(compilation.generated().resolve("right/OrdersCacheDbConfiguration.java"));
+        assertTrue(left.contains("@org.springframework.context.annotation.Bean(name = \"leftOrders\")"));
+        assertTrue(right.contains("@org.springframework.context.annotation.Bean(name = \"rightOrders\")"));
+        assertTrue(left.contains("@org.springframework.context.annotation.Bean(name = \"left.Orders.routeCatalog\")"));
+        assertTrue(right.contains("@org.springframework.context.annotation.Bean(name = \"right.Orders.routeCatalog\")"));
+    }
+
+    @Test
+    void appliesRepositoryRouteDefaultsOnlyWhenMethodDoesNotOverrideThem() throws IOException {
+        Compilation compilation = compile(
+                source("defaults/OrderEntity.java", """
+                        package defaults;
+                        import com.reactor.cachedb.annotations.*;
+                        @CacheEntity(table = "orders", redisNamespace = "orders")
+                        public record OrderEntity(
+                            @CacheId(column = "order_id") Long orderId,
+                            @CacheColumn("created_at") Long createdAt
+                        ) {}
+                        """),
+                source("defaults/Orders.java", """
+                        package defaults;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.*;
+                        import com.reactor.cachedb.starter.CacheWarmPlan;
+                        @CacheRepository(entity = OrderEntity.class, springBean = false)
+                        @CacheRepositoryDefaults(
+                            hotPopulation = HotRoute.Population.DECLARED_WARM,
+                            hotPageSize = 25,
+                            hotWindow = 400,
+                            hotMemoryBudgetBytes = 8388608,
+                            hotMaxStalenessSeconds = 90,
+                            sourceMaxRows = 250,
+                            sourceTimeoutSeconds = 12,
+                            warmMaxRows = 400
+                        )
+                        public interface Orders extends CacheDbRepository<OrderEntity, Long> {
+                            @HotRoute("recent")
+                            @CacheRouteQuery(
+                                orderBy = @CacheOrder(field = "createdAt", direction = CacheOrder.Direction.DESC),
+                                windowParameter = "window"
+                            )
+                            HotWindow<OrderEntity> recent(WindowRequest window);
+
+                            @SourceRoute("archive")
+                            @CacheRouteQuery(
+                                orderBy = @CacheOrder(field = "createdAt", direction = CacheOrder.Direction.DESC),
+                                windowParameter = "window"
+                            )
+                            SourceWindow<OrderEntity> archive(WindowRequest window);
+
+                            @WarmRoute(value = "warm-recent", from = "recent")
+                            CacheWarmPlan warmRecent();
+                        }
+                        """)
+        );
+
+        assertTrue(compilation.success(), compilation.diagnosticsText());
+        String generated = Files.readString(compilation.generated()
+                .resolve("defaults/OrdersCacheDbImplementation.java"));
+        assertTrue(generated.contains("RouteCacheContract.builder()"));
+        assertTrue(generated.contains(".routeName(\"recent\")"));
+        assertTrue(generated.contains(".pageSize(25)"));
+        assertTrue(generated.contains(".hotWindow(400)"));
+        assertTrue(generated.contains("Duration.ofSeconds(90L)"));
+        assertTrue(generated.contains("HotRoutePopulation.DECLARED_WARM"));
+        assertTrue(generated.contains("resolvedMaxRows = 400"));
+        assertTrue(generated.contains(".withQueryTimeoutSeconds(12)"));
     }
 
     private Compilation compile(Source... sources) throws IOException {

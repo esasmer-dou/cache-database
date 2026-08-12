@@ -13,7 +13,9 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CacheDbRepositoryContractTest {
 
@@ -40,6 +42,37 @@ class CacheDbRepositoryContractTest {
         assertEquals(0, repository.sourceReads);
     }
 
+    @Test
+    void durabilityHelperReturnsTheTypedReceiptAndFailsLoudlyOnTimeout() {
+        TestRepository durable = new TestRepository(null, true);
+        TestRepository delayed = new TestRepository(null, false);
+        WriteReceipt<Counter, Long> receipt = durable.save(new Counter(1));
+
+        assertSame(receipt, durable.awaitDurableOrThrow(receipt, Duration.ofSeconds(1)));
+        WriteDurabilityTimeoutException failure = assertThrows(
+                WriteDurabilityTimeoutException.class,
+                () -> delayed.awaitDurableOrThrow(receipt, Duration.ofMillis(10))
+        );
+        assertSame(receipt, failure.receipt());
+        assertEquals(Duration.ofMillis(10), failure.timeout());
+    }
+
+    @Test
+    void batchDurabilityFailurePreservesReceiptsAndOperationContext() {
+        WriteReceipt<Counter, Long> receipt = new TestRepository(null).save(new Counter(1));
+
+        WriteBatchDurabilityTimeoutException failure = new WriteBatchDurabilityTimeoutException(
+                List.of(receipt),
+                Duration.ofSeconds(2),
+                "sample seed/orders"
+        );
+
+        assertEquals(List.of(receipt), failure.receipts());
+        assertEquals(Duration.ofSeconds(2), failure.timeout());
+        assertEquals("sample seed/orders", failure.operation());
+        assertTrue(failure.getMessage().contains("sample seed/orders"));
+    }
+
     private record Counter(int value) {
     }
 
@@ -47,9 +80,15 @@ class CacheDbRepositoryContractTest {
         private final VersionedEntity<Counter> current;
         private long expectedVersion;
         private int sourceReads;
+        private final boolean durable;
 
         private TestRepository(VersionedEntity<Counter> current) {
+            this(current, true);
+        }
+
+        private TestRepository(VersionedEntity<Counter> current, boolean durable) {
             this.current = current;
+            this.durable = durable;
         }
 
         @Override
@@ -96,12 +135,12 @@ class CacheDbRepositoryContractTest {
 
         @Override
         public boolean isDurable(WriteReceipt<?, ?> receipt) {
-            return true;
+            return durable;
         }
 
         @Override
         public boolean awaitDurable(WriteReceipt<?, ?> receipt, Duration timeout) {
-            return true;
+            return durable;
         }
 
         private WriteReceipt<Counter, Long> receipt(Counter entity, long version) {

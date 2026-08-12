@@ -9,6 +9,7 @@ import com.reactor.cachedb.annotations.CacheOrder;
 import com.reactor.cachedb.annotations.CachePredicate;
 import com.reactor.cachedb.annotations.CacheProjectionRecord;
 import com.reactor.cachedb.annotations.CacheRepository;
+import com.reactor.cachedb.annotations.CacheRepositoryDefaults;
 import com.reactor.cachedb.annotations.CacheRelation;
 import com.reactor.cachedb.annotations.CacheRouteQuery;
 import com.reactor.cachedb.annotations.HotRoute;
@@ -22,6 +23,7 @@ import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
+import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
@@ -54,8 +56,10 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
     private static final String SOURCE_WINDOW = "com.reactor.cachedb.core.repository.SourceWindow";
     private static final String WINDOW_REQUEST = "com.reactor.cachedb.core.repository.WindowRequest";
     private static final String WARM_PLAN = "com.reactor.cachedb.starter.CacheWarmPlan";
+    private static final String WARM_TARGET = "com.reactor.cachedb.starter.CacheWarmTarget";
 
     private final Set<String> generated = new LinkedHashSet<>();
+    private final Map<String, String> springBeanOwners = new HashMap<>();
 
     @Override
     public SourceVersion getSupportedSourceVersion() {
@@ -75,6 +79,15 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             }
             RepositoryModel model = buildModel(repository);
             if (model != null) {
+                if (model.springBean()) {
+                    String existingOwner = springBeanOwners.putIfAbsent(model.springBeanName(), qualifiedName);
+                    if (existingOwner != null && !existingOwner.equals(qualifiedName)) {
+                        error(repository, "Spring repository bean name '" + model.springBeanName()
+                                + "' is already used by " + existingOwner
+                                + "; set a distinct @CacheRepository.springBeanName");
+                        continue;
+                    }
+                }
                 writeSource(model.implementationQualifiedName(), renderImplementation(model), repository);
                 if (model.springBean()) {
                     writeSource(model.configurationQualifiedName(), renderSpringConfiguration(model), repository);
@@ -94,6 +107,10 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         }
 
         CacheRepository annotation = repository.getAnnotation(CacheRepository.class);
+        RepositoryDefaultsModel defaults = resolveRepositoryDefaults(repository);
+        if (defaults == null) {
+            return null;
+        }
         TypeMirror entityType = mirroredType(annotation);
         Element entityElement = processingEnv.getTypeUtils().asElement(entityType);
         if (!(entityElement instanceof TypeElement entity)
@@ -164,7 +181,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             }
             WarmRoute warmRoute = method.getAnnotation(WarmRoute.class);
             if (warmRoute != null) {
-                WarmMethod warmMethod = resolveWarmMethod(method, warmRoute);
+                WarmMethod warmMethod = resolveWarmMethod(method, warmRoute, defaults);
                 if (warmMethod == null) {
                     return null;
                 }
@@ -191,7 +208,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 error(method, "@HotRoute and @SourceRoute methods require @CacheRouteQuery");
                 return null;
             }
-            RouteMethod route = resolveRouteMethod(method, hotRoute, sourceRoute, query, entityModel);
+            RouteMethod route = resolveRouteMethod(method, hotRoute, sourceRoute, query, entityModel, defaults);
             if (route == null) {
                 return null;
             }
@@ -221,8 +238,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 error(warm.element(), "@WarmRoute.maxRows must not exceed the source @HotRoute.hotWindow");
                 return null;
             }
-            if (warm.projectionsOnly() && source.projection() == null) {
-                error(warm.element(), "projection-only warm requires a projection-backed @HotRoute");
+            if ((warm.projectionsOnly() || warm.targetParameter() != null) && source.projection() == null) {
+                error(warm.element(), "projection-selectable warm requires a projection-backed @HotRoute");
                 return null;
             }
             String sourceScope = source.coverageScopeParameter();
@@ -232,15 +249,36 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 return null;
             }
         }
+        Set<String> warmedRouteMethods = warmMethods.stream()
+                .map(WarmMethod::fromMethod)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        for (RouteMethod route : routeMethods.values()) {
+            if (route.kind() == RouteKind.HOT
+                    && route.population() == HotRoute.Population.DECLARED_WARM
+                    && !warmedRouteMethods.contains(route.name())) {
+                error(route.element(), "@HotRoute(population=DECLARED_WARM) requires at least one @WarmRoute "
+                        + "whose from value references this method");
+                return null;
+            }
+        }
 
         String packageName = processingEnv.getElementUtils().getPackageOf(repository).getQualifiedName().toString();
         String repositoryName = repository.getSimpleName().toString();
+        String configuredSpringBeanName = annotation.springBeanName().trim();
+        if (!configuredSpringBeanName.isEmpty() && !isSafeRouteName(configuredSpringBeanName)) {
+            error(repository, "@CacheRepository.springBeanName must be a safe non-blank Spring bean name");
+            return null;
+        }
+        String springBeanName = configuredSpringBeanName.isEmpty()
+                ? decapitalize(repositoryName)
+                : configuredSpringBeanName;
         return new RepositoryModel(
                 packageName,
                 repositoryName,
                 packageName + "." + repositoryName + "CacheDbImplementation",
                 packageName + "." + repositoryName + "CacheDbConfiguration",
                 annotation.springBean(),
+                springBeanName,
                 entityModel,
                 List.copyOf(routeMethods.values()),
                 List.copyOf(sourceSqlMethods),
@@ -249,6 +287,64 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 List.copyOf(lookupMethods),
                 List.copyOf(projections.values())
         );
+    }
+
+    private RepositoryDefaultsModel resolveRepositoryDefaults(TypeElement repository) {
+        CacheRepositoryDefaults annotation = repository.getAnnotation(CacheRepositoryDefaults.class);
+        RepositoryDefaultsModel defaults = annotation == null
+                ? RepositoryDefaultsModel.standard()
+                : new RepositoryDefaultsModel(
+                        annotation.hotPopulation(),
+                        annotation.hotPageSize(),
+                        annotation.hotWindow(),
+                        annotation.hotMemoryBudgetBytes(),
+                        annotation.hotMaxStalenessSeconds(),
+                        annotation.hotStrict(),
+                        annotation.sourceMaxRows(),
+                        annotation.sourceTimeoutSeconds(),
+                        annotation.warmMaxRows()
+                );
+        if (defaults.hotPageSize() <= 0 || defaults.hotPageSize() > 1_000
+                || defaults.hotWindow() < defaults.hotPageSize()
+                || defaults.hotWindow() > com.reactor.cachedb.core.query.QuerySpec.MAX_LIMIT) {
+            error(repository, "@CacheRepositoryDefaults requires hotPageSize between 1 and 1000 and "
+                    + "hotWindow between hotPageSize and " + com.reactor.cachedb.core.query.QuerySpec.MAX_LIMIT);
+            return null;
+        }
+        if (defaults.hotMemoryBudgetBytes() < 0L || defaults.hotMaxStalenessSeconds() <= 0L) {
+            error(repository, "@CacheRepositoryDefaults hot memory budget must not be negative and "
+                    + "hotMaxStalenessSeconds must be greater than zero");
+            return null;
+        }
+        if (defaults.sourceMaxRows() <= 0 || defaults.sourceMaxRows() > 1_000
+                || defaults.sourceTimeoutSeconds() <= 0 || defaults.sourceTimeoutSeconds() > 300
+                || defaults.warmMaxRows() <= 0 || defaults.warmMaxRows() > 1_000) {
+            error(repository, "@CacheRepositoryDefaults requires sourceMaxRows/warmMaxRows between 1 and 1000 "
+                    + "and sourceTimeoutSeconds between 1 and 300");
+            return null;
+        }
+        return defaults;
+    }
+
+    private <T> T explicitOrDefault(
+            Element element,
+            Class<?> annotationType,
+            String member,
+            T explicitValue,
+            T repositoryDefault
+    ) {
+        String annotationName = annotationType.getCanonicalName();
+        for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
+            Element annotationElement = mirror.getAnnotationType().asElement();
+            if (!(annotationElement instanceof TypeElement type)
+                    || !type.getQualifiedName().contentEquals(annotationName)) {
+                continue;
+            }
+            boolean explicitlyDeclared = mirror.getElementValues().keySet().stream()
+                    .anyMatch(method -> method.getSimpleName().contentEquals(member));
+            return explicitlyDeclared ? explicitValue : repositoryDefault;
+        }
+        return explicitValue;
     }
 
     private LookupMethod resolveLookupMethod(
@@ -634,7 +730,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             HotRoute hotRoute,
             SourceRoute sourceRoute,
             CacheRouteQuery query,
-            EntityModel entity
+            EntityModel entity,
+            RepositoryDefaultsModel defaults
     ) {
         RouteKind kind = hotRoute != null ? RouteKind.HOT : RouteKind.SOURCE;
         String routeName = hotRoute != null ? hotRoute.value() : sourceRoute.value();
@@ -670,31 +767,47 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             error(method, "coverageScopeParameter does not name a method parameter: " + coverageScopeParameter);
             return null;
         }
+        int hotPageSize = hotRoute == null ? 0 : explicitOrDefault(
+                method, HotRoute.class, "pageSize", hotRoute.pageSize(), defaults.hotPageSize());
+        int hotWindow = hotRoute == null ? 0 : explicitOrDefault(
+                method, HotRoute.class, "hotWindow", hotRoute.hotWindow(), defaults.hotWindow());
+        long hotMemoryBudgetBytes = hotRoute == null ? 0L : explicitOrDefault(
+                method, HotRoute.class, "memoryBudgetBytes", hotRoute.memoryBudgetBytes(), defaults.hotMemoryBudgetBytes());
+        long hotMaxStalenessSeconds = hotRoute == null ? 0L : explicitOrDefault(
+                method, HotRoute.class, "maxStalenessSeconds", hotRoute.maxStalenessSeconds(), defaults.hotMaxStalenessSeconds());
+        boolean hotStrict = hotRoute != null && explicitOrDefault(
+                method, HotRoute.class, "strict", hotRoute.strict(), defaults.hotStrict());
+        HotRoute.Population hotPopulation = hotRoute == null
+                ? HotRoute.Population.ON_DEMAND
+                : explicitOrDefault(method, HotRoute.class, "population", hotRoute.population(), defaults.hotPopulation());
         if (hotRoute != null) {
-            if (hotRoute.pageSize() <= 0 || hotRoute.pageSize() > 1_000
-                    || hotRoute.hotWindow() < hotRoute.pageSize()
-                    || hotRoute.hotWindow() > com.reactor.cachedb.core.query.QuerySpec.MAX_LIMIT) {
+            if (hotPageSize <= 0 || hotPageSize > 1_000
+                    || hotWindow < hotPageSize
+                    || hotWindow > com.reactor.cachedb.core.query.QuerySpec.MAX_LIMIT) {
                 error(method, "@HotRoute requires pageSize between 1 and 1000 and hotWindow between pageSize and "
                         + com.reactor.cachedb.core.query.QuerySpec.MAX_LIMIT);
                 return null;
             }
-            if (hotRoute.memoryBudgetBytes() < 0L) {
+            if (hotMemoryBudgetBytes < 0L) {
                 error(method, "@HotRoute.memoryBudgetBytes must not be negative");
                 return null;
             }
-            if (hotRoute.maxStalenessSeconds() <= 0L) {
+            if (hotMaxStalenessSeconds <= 0L) {
                 error(method, "@HotRoute.maxStalenessSeconds must be greater than zero");
                 return null;
             }
         }
-        int maxRows = sourceRoute == null ? hotRoute.hotWindow() : sourceRoute.maxRows();
+        int maxRows = sourceRoute == null
+                ? hotWindow
+                : explicitOrDefault(method, SourceRoute.class, "maxRows", sourceRoute.maxRows(), defaults.sourceMaxRows());
         if (maxRows <= 0 || (sourceRoute != null && maxRows > 1_000)) {
             error(method, sourceRoute == null
                     ? "Route max rows must be greater than zero"
                     : "@SourceRoute.maxRows must be between 1 and 1000");
             return null;
         }
-        int queryTimeoutSeconds = sourceRoute == null ? 0 : sourceRoute.timeoutSeconds();
+        int queryTimeoutSeconds = sourceRoute == null ? 0 : explicitOrDefault(
+                method, SourceRoute.class, "timeoutSeconds", sourceRoute.timeoutSeconds(), defaults.sourceTimeoutSeconds());
         if (sourceRoute != null && (queryTimeoutSeconds <= 0 || queryTimeoutSeconds > 300)) {
             error(method, "@SourceRoute.timeoutSeconds must be between 1 and 300");
             return null;
@@ -708,14 +821,15 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 List.copyOf(parameters.values()),
                 queryModel,
                 projection,
-                hotRoute == null ? 0 : hotRoute.pageSize(),
-                hotRoute == null ? 0 : hotRoute.hotWindow(),
+                hotPageSize,
+                hotWindow,
                 maxRows,
                 queryTimeoutSeconds,
-                hotRoute == null ? 0L : hotRoute.memoryBudgetBytes(),
+                hotMemoryBudgetBytes,
                 coverageScopeParameter,
-                hotRoute == null ? 0L : Math.max(1L, hotRoute.maxStalenessSeconds()),
-                hotRoute != null && hotRoute.strict()
+                hotRoute == null ? 0L : Math.max(1L, hotMaxStalenessSeconds),
+                hotStrict,
+                hotPopulation
         );
     }
 
@@ -772,6 +886,11 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                     constants,
                     predicate.constantType()
             ));
+        }
+        if (groups.size() > 1 && !annotation.explicitDisjunction()) {
+            error(method, "@CacheRouteQuery predicates use multiple groups, which are ORed. "
+                    + "Set explicitDisjunction=true to confirm this route widening explicitly");
+            return null;
         }
 
         ArrayList<SortModel> sorts = new ArrayList<>();
@@ -948,13 +1067,19 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         );
     }
 
-    private WarmMethod resolveWarmMethod(ExecutableElement method, WarmRoute annotation) {
+    private WarmMethod resolveWarmMethod(
+            ExecutableElement method,
+            WarmRoute annotation,
+            RepositoryDefaultsModel defaults
+    ) {
+        int maxRows = explicitOrDefault(
+                method, WarmRoute.class, "maxRows", annotation.maxRows(), defaults.warmMaxRows());
         if (!processingEnv.getTypeUtils().erasure(method.getReturnType()).toString().equals(WARM_PLAN)) {
             error(method, "@WarmRoute method must return CacheWarmPlan");
             return null;
         }
         if (!isSafeRouteName(annotation.value()) || annotation.from().isBlank()
-                || annotation.maxRows() <= 0 || annotation.maxRows() > 1_000) {
+                || maxRows <= 0 || maxRows > 1_000) {
             error(method, "@WarmRoute requires a safe non-blank value/from and maxRows between 1 and 1000");
             return null;
         }
@@ -978,6 +1103,19 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 return null;
             }
         }
+        String targetParameter = annotation.targetParameter().trim();
+        ParameterModel resolvedTargetParameter = null;
+        if (!targetParameter.isBlank()) {
+            if (annotation.projectionsOnly()) {
+                error(method, "@WarmRoute cannot combine projectionsOnly=true with targetParameter");
+                return null;
+            }
+            resolvedTargetParameter = parameters.get(targetParameter);
+            if (resolvedTargetParameter == null || !resolvedTargetParameter.typeName().equals(WARM_TARGET)) {
+                error(method, "@WarmRoute targetParameter must name a CacheWarmTarget parameter");
+                return null;
+            }
+        }
         return new WarmMethod(
                 method,
                 method.getSimpleName().toString(),
@@ -985,8 +1123,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 annotation.value().trim(),
                 annotation.from().trim(),
                 List.copyOf(parameters.values()),
-                annotation.maxRows(),
+                maxRows,
                 resolvedMaxRowsParameter,
+                resolvedTargetParameter,
                 scope,
                 Math.max(60L, annotation.coverageTtlSeconds()),
                 annotation.projectionsOnly()
@@ -1020,6 +1159,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         }
         LinkedHashSet<String> allowed = new LinkedHashSet<>(required);
         if (warm.maxRowsParameter() != null) allowed.add(warm.maxRowsParameter().name());
+        if (warm.targetParameter() != null) allowed.add(warm.targetParameter().name());
         if (!allowed.equals(available.keySet())) {
             LinkedHashSet<String> unused = new LinkedHashSet<>(available.keySet());
             unused.removeAll(allowed);
@@ -1038,6 +1178,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         out.append("public final class ").append(implementationName).append(" implements ")
                 .append(model.repositoryName()).append(" {\n");
         out.append("    private static final int MAX_BULK_SIZE = 1000;\n");
+        renderRepositoryRouteCatalog(out, model);
         renderRouteConstants(out, model);
         out.append("    private final com.reactor.cachedb.starter.CacheDatabase cacheDatabase;\n");
         out.append("    private final com.reactor.cachedb.core.api.EntityRepository<")
@@ -1128,17 +1269,16 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             renderResolvedEntities(out, model, command.primary().name(), "commandEntities", "        ");
             out.append("        java.util.List<com.reactor.cachedb.core.model.WriteReceipt<")
                     .append(model.entity().typeName()).append(", ")
-                    .append(model.entity().idField().typeName()).append(">> receipts = hotRepository.saveAll(")
+                    .append(model.entity().idField().typeName()).append(">> cachedb$receipts = hotRepository.saveAll(")
                     .append("commandEntities);\n");
             if (command.acknowledgement() == CacheCommand.Acknowledgement.SQL_DURABLE) {
-                out.append("        for (com.reactor.cachedb.core.model.WriteReceipt<?, ?> receipt : receipts) {\n")
-                        .append("            if (!cacheDatabase.awaitDurable(receipt, java.time.Duration.ofMillis(")
-                        .append(command.durabilityTimeoutMillis()).append("L))) {\n")
-                        .append("                throw new com.reactor.cachedb.core.repository.WriteDurabilityTimeoutException(")
-                        .append("receipt, java.time.Duration.ofMillis(").append(command.durabilityTimeoutMillis())
-                        .append("L));\n            }\n        }\n");
+                out.append("        cacheDatabase.awaitDurableOrThrow(cachedb$receipts, java.time.Duration.ofMillis(")
+                        .append(command.durabilityTimeoutMillis()).append("L), ")
+                        .append(quote("repository command/" + model.packageName() + "."
+                                + model.repositoryName() + "#" + command.name()))
+                        .append(");\n");
             }
-            out.append("        return receipts;\n");
+            out.append("        return cachedb$receipts;\n");
         } else {
             String invocation = command.operation() == CacheCommand.Operation.DELETE_BY_ID
                     ? "hotRepository.deleteWithReceipt(" + command.primary().name() + ")"
@@ -1146,15 +1286,13 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                             ? "hotRepository.saveWithReceipt(ensureGeneratedId(" + command.primary().name() + "))"
                             : "hotRepository.save(ensureGeneratedId(" + command.primary().name() + "), "
                                     + command.expectedVersion().name() + ")";
-            out.append("        ").append(command.returnType()).append(" receipt = ").append(invocation).append(";\n");
+            out.append("        ").append(command.returnType()).append(" cachedb$receipt = ").append(invocation).append(";\n");
             if (command.acknowledgement() == CacheCommand.Acknowledgement.SQL_DURABLE) {
-                out.append("        java.time.Duration timeout = java.time.Duration.ofMillis(")
+                out.append("        java.time.Duration cachedb$timeout = java.time.Duration.ofMillis(")
                         .append(command.durabilityTimeoutMillis()).append("L);\n")
-                        .append("        if (!cacheDatabase.awaitDurable(receipt, timeout)) {\n")
-                        .append("            throw new com.reactor.cachedb.core.repository.WriteDurabilityTimeoutException(receipt, timeout);\n")
-                        .append("        }\n");
+                        .append("        cacheDatabase.awaitDurableOrThrow(cachedb$receipt, cachedb$timeout);\n");
             }
-            out.append("        return receipt;\n");
+            out.append("        return cachedb$receipt;\n");
         }
         out.append("    }\n\n");
     }
@@ -1167,20 +1305,17 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 : "java.util.Arrays.asList(" + method.bindings().stream()
                         .map(ParameterModel::name)
                         .reduce((left, right) -> left + ", " + right).orElse("") + ")";
-        out.append("        com.reactor.cachedb.core.repository.SourceSqlQuery query = new ")
+        out.append("        com.reactor.cachedb.core.repository.SourceSqlQuery cachedb$query = new ")
                 .append("com.reactor.cachedb.core.repository.SourceSqlQuery(")
                 .append(quote(method.sql())).append(", ").append(bindings).append(", ")
                 .append(method.maxRows()).append(", ").append(method.queryTimeoutSeconds()).append(");\n")
                 .append("        java.util.List<").append(model.entity().typeName())
-                .append("> sourceRows = sourceSqlRepository.query(query);\n");
+                .append("> cachedb$sourceRows = sourceSqlRepository.query(cachedb$query);\n");
         if (method.projection() == null) {
-            out.append("        return new com.reactor.cachedb.core.repository.SourceWindow<>(sourceRows, null);\n");
+            out.append("        return new com.reactor.cachedb.core.repository.SourceWindow<>(cachedb$sourceRows, null);\n");
         } else {
-            out.append("        java.util.List<").append(method.projection().typeName()).append("> rows = sourceRows.stream()\n")
-                    .append("                .map(").append(method.projection().fieldName()).append(".projector())\n")
-                    .append("                .filter(java.util.Objects::nonNull)\n")
-                    .append("                .toList();\n")
-                    .append("        return new com.reactor.cachedb.core.repository.SourceWindow<>(rows, null);\n");
+            renderSourceProjectionMapping(out, model, method.projection(), "cachedb$sourceRows");
+            out.append("        return new com.reactor.cachedb.core.repository.SourceWindow<>(cachedb$rows, null);\n");
         }
         out.append("    }\n\n");
     }
@@ -1266,40 +1401,66 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         out.append("    @Override\n    public ").append(route.returnType()).append(' ').append(route.name()).append('(')
                 .append(renderParameters(route.parameters())).append(") {\n");
         String window = windowExpression(route.query());
-        out.append("        com.reactor.cachedb.core.repository.WindowRequest resolvedWindow = ").append(window).append(";\n");
+        out.append("        com.reactor.cachedb.core.repository.WindowRequest cachedb$window = ").append(window).append(";\n");
         int routeLimit = route.kind() == RouteKind.HOT ? route.pageSize() : route.maxRows();
-        out.append("        if (resolvedWindow.limit() > ").append(routeLimit).append(") {\n")
+        out.append("        if (cachedb$window.limit() > ").append(routeLimit).append(") {\n")
                 .append("            throw new IllegalArgumentException(\"Route ")
                 .append(escapeJava(route.routeName())).append(" accepts at most ").append(routeLimit)
                 .append(" rows per request\");\n        }\n");
-        out.append("        com.reactor.cachedb.core.query.QuerySpec query = build")
+        out.append("        com.reactor.cachedb.core.query.QuerySpec cachedb$query = build")
                 .append(capitalize(route.name())).append("Query(")
-                .append(renderQueryArguments(route, "resolvedWindow")).append(");\n");
+                .append(renderQueryArguments(route, "cachedb$window")).append(");\n");
         String rawType = route.projection() == null ? model.entity().typeName() : route.projection().typeName();
         String repository = route.kind() == RouteKind.HOT && route.projection() != null
                 ? route.projection().repositoryFieldName()
                 : (route.kind() == RouteKind.HOT ? "hotRepository" : "sourceRepository");
         if (route.kind() == RouteKind.HOT) {
-            out.append("        java.util.List<").append(rawType).append("> rows = ")
+            out.append("        java.util.List<").append(rawType).append("> cachedb$rows = ")
                     .append("com.reactor.cachedb.core.route.RouteCacheContext.supplyWithContract(")
-                    .append(contractConstant(route)).append(", () -> ").append(repository).append(".query(query));\n");
-            out.append("        com.reactor.cachedb.core.route.RouteCoverage coverage = cacheDatabase.routeCoverage(")
+                    .append(contractConstant(route)).append(", () -> ").append(repository).append(".query(cachedb$query));\n");
+            out.append("        com.reactor.cachedb.core.route.RouteCoverage cachedb$coverage = cacheDatabase.routeCoverage(")
                     .append(quote(route.routeName())).append(", ").append(scopeExpression(route.coverageScopeParameter()))
                     .append(", java.time.Duration.ofSeconds(").append(route.maxStalenessSeconds()).append("L));\n");
-            out.append("        return com.reactor.cachedb.core.query.KeysetPagination.hotWindow(rows, resolvedWindow, sorts")
-                    .append(capitalize(route.name())).append("(), ").append(extractor(model, route)).append(", coverage);\n");
+            out.append("        return com.reactor.cachedb.core.query.KeysetPagination.hotWindow(cachedb$rows, cachedb$window, sorts")
+                    .append(capitalize(route.name())).append("(), ").append(extractor(model, route))
+                    .append(", cachedb$coverage, ").append(quote(route.routeName())).append(", ")
+                    .append(scopeExpression(route.coverageScopeParameter())).append(");\n");
         } else {
             if (route.projection() == null) {
-                out.append("        java.util.List<").append(rawType).append("> rows = sourceRepository.query(query);\n");
+                out.append("        java.util.List<").append(rawType)
+                        .append("> cachedb$rows = sourceRepository.query(cachedb$query);\n");
             } else {
-                out.append("        java.util.List<").append(rawType).append("> rows = sourceRepository.query(query).stream()\n")
-                        .append("                .map(").append(route.projection().fieldName()).append(".projector())\n")
-                        .append("                .filter(java.util.Objects::nonNull)\n                .toList();\n");
+                out.append("        java.util.List<").append(model.entity().typeName())
+                        .append("> cachedb$sourceRows = sourceRepository.query(cachedb$query);\n");
+                renderSourceProjectionMapping(out, model, route.projection(), "cachedb$sourceRows");
             }
-            out.append("        return com.reactor.cachedb.core.query.KeysetPagination.sourceWindow(rows, resolvedWindow, sorts")
-                    .append(capitalize(route.name())).append("(), ").append(extractor(model, route)).append(");\n");
+            out.append("        return com.reactor.cachedb.core.query.KeysetPagination.sourceWindow(cachedb$rows, cachedb$window, sorts")
+                    .append(capitalize(route.name())).append("(), ").append(extractor(model, route)).append(", ")
+                    .append(quote(route.routeName())).append(", ")
+                    .append(scopeExpression(route.coverageScopeParameter())).append(");\n");
         }
         out.append("    }\n\n");
+    }
+
+    private void renderSourceProjectionMapping(
+            StringBuilder out,
+            RepositoryModel model,
+            ProjectionModel projection,
+            String sourceRows
+    ) {
+        out.append("        java.util.ArrayList<").append(projection.typeName())
+                .append("> cachedb$rows = new java.util.ArrayList<>(").append(sourceRows).append(".size());\n")
+                .append("        java.util.function.Function<").append(model.entity().typeName()).append(", ")
+                .append(projection.typeName()).append("> cachedb$projector = ")
+                .append(projection.fieldName()).append(".projector();\n")
+                .append("        for (").append(model.entity().typeName()).append(" cachedb$sourceRow : ")
+                .append(sourceRows).append(") {\n")
+                .append("            ").append(projection.typeName())
+                .append(" cachedb$projected = cachedb$projector.apply(cachedb$sourceRow);\n")
+                .append("            if (cachedb$projected != null) {\n")
+                .append("                cachedb$rows.add(cachedb$projected);\n")
+                .append("            }\n")
+                .append("        }\n");
     }
 
     private void renderQueryBuilder(StringBuilder out, RouteMethod route) {
@@ -1312,7 +1473,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         }
         out.append(";\n")
                 .append("        return com.reactor.cachedb.core.query.KeysetPagination.apply(base, window, sorts")
-                .append(suffix).append("());\n    }\n\n");
+                .append(suffix).append("(), ").append(quote(route.routeName())).append(", ")
+                .append(scopeExpression(route.coverageScopeParameter())).append(");\n    }\n\n");
         out.append("    private java.util.List<com.reactor.cachedb.core.query.QuerySort> sorts").append(suffix).append("() {\n")
                 .append("        return ").append(sortsConstant(route)).append(";\n    }\n\n");
     }
@@ -1396,6 +1558,14 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 .append(warm.maxRows()).append(" rows\");\n        }\n")
                 .append("        com.reactor.cachedb.core.repository.WindowRequest window = ")
                 .append("com.reactor.cachedb.core.repository.WindowRequest.first(Math.min(resolvedMaxRows, 1000));\n");
+        if (warm.targetParameter() != null) {
+            out.append("        com.reactor.cachedb.starter.CacheWarmTarget cachedb$target = java.util.Objects.requireNonNull(")
+                    .append(warm.targetParameter().name()).append(", \"target\");\n")
+                    .append("        boolean cachedb$projectionsOnly = cachedb$target == ")
+                    .append("com.reactor.cachedb.starter.CacheWarmTarget.PROJECTIONS_ONLY;\n");
+        } else {
+            out.append("        boolean cachedb$projectionsOnly = ").append(warm.projectionsOnly()).append(";\n");
+        }
         out.append("        com.reactor.cachedb.core.query.QuerySpec query = build").append(capitalize(source.name()))
                 .append("Query(").append(renderWarmQueryArguments(source, "window")).append(").limitTo(resolvedMaxRows);\n");
         out.append("        return com.reactor.cachedb.starter.CacheWarmPlan.builder(")
@@ -1403,9 +1573,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 .append("                .name(").append(quote(warm.routeName())).append(")\n")
                 .append("                .querySpec(query)\n")
                 .append("                .maxRows(resolvedMaxRows)\n")
-                .append("                .forceImmediateProjectionRefresh(").append(!warm.projectionsOnly()).append(")\n")
-                .append("                .reindexQueryIndexes(").append(!warm.projectionsOnly()).append(")\n")
-                .append("                .projectionsOnly(").append(warm.projectionsOnly()).append(")\n")
+                .append("                .forceImmediateProjectionRefresh(!cachedb$projectionsOnly)\n")
+                .append("                .reindexQueryIndexes(!cachedb$projectionsOnly)\n")
+                .append("                .projectionsOnly(cachedb$projectionsOnly)\n")
                 .append("                .projectionName(")
                 .append(source.projection() == null ? quote("") : source.projection().fieldName() + ".name()")
                 .append(")\n")
@@ -1543,12 +1713,123 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         return "package " + model.packageName() + ";\n\n"
                 + "@org.springframework.context.annotation.Configuration(proxyBeanMethods = false)\n"
                 + "public class " + configurationName + " {\n"
-                + "    @org.springframework.context.annotation.Bean\n"
+                + "    @org.springframework.context.annotation.Bean(name = " + quote(model.springBeanName()) + ")\n"
                 + "    public " + model.repositoryName() + " " + decapitalize(model.repositoryName())
                 + "(com.reactor.cachedb.starter.CacheDatabase cacheDatabase) {\n"
                 + "        return new " + implementationName + "(cacheDatabase);\n"
                 + "    }\n"
+                + "\n"
+                + "    @org.springframework.context.annotation.Bean(name = "
+                + quote(model.packageName() + "." + model.repositoryName() + ".routeCatalog") + ")\n"
+                + "    public com.reactor.cachedb.core.route.RepositoryRouteCatalog "
+                + decapitalize(model.repositoryName()) + "RouteCatalog() {\n"
+                + "        return " + implementationName + ".routeCatalog();\n"
+                + "    }\n"
                 + "}\n";
+    }
+
+    private void renderRepositoryRouteCatalog(StringBuilder out, RepositoryModel model) {
+        ArrayList<String> definitions = new ArrayList<>();
+        for (RouteMethod route : model.routes()) {
+            definitions.add(routeDefinition(
+                    route.name(),
+                    route.kind() == RouteKind.HOT ? "HOT" : "SOURCE",
+                    route.routeName(),
+                    projectionNameExpression(route.projection()),
+                    route.pageSize(),
+                    route.maxRows(),
+                    route.hotWindow(),
+                    route.queryTimeoutSeconds(),
+                    route.memoryBudgetBytes(),
+                    !route.coverageScopeParameter().isBlank(),
+                    false,
+                    route.kind() == RouteKind.HOT ? "strict=" + route.strict() : "bounded-source",
+                    route.kind() == RouteKind.HOT ? route.population().name() : "NOT_APPLICABLE"
+            ));
+        }
+        for (SourceSqlMethod sourceSql : model.sourceSqlMethods()) {
+            definitions.add(routeDefinition(
+                    sourceSql.name(), "SOURCE_SQL", sourceSql.name(),
+                    projectionNameExpression(sourceSql.projection()),
+                    0, sourceSql.maxRows(), 0, sourceSql.queryTimeoutSeconds(), 0L,
+                    false, false, "bounded-read-only", "NOT_APPLICABLE"
+            ));
+        }
+        for (WarmMethod warm : model.warmMethods()) {
+            RouteMethod source = model.routes().stream()
+                    .filter(route -> route.name().equals(warm.fromMethod()))
+                    .findFirst()
+                    .orElseThrow();
+            definitions.add(routeDefinition(
+                    warm.name(), "WARM", warm.routeName(), projectionNameExpression(source.projection()),
+                    0, warm.maxRows(), source.hotWindow(), 0, 0L,
+                    !effectiveWarmScope(warm, source).isBlank(), warm.projectionsOnly(),
+                    "from=" + warm.fromMethod(), "NOT_APPLICABLE"
+            ));
+        }
+        for (LookupMethod lookup : model.lookupMethods()) {
+            definitions.add(routeDefinition(
+                    lookup.name(), "LOOKUP", lookup.name(), quote(""),
+                    0, lookup.relation().isBlank() ? 1 : lookup.maxRelationRows(), 0, 0, 0L,
+                    false, false,
+                    lookup.relation().isBlank() ? "point" : "relation=" + lookup.relation(),
+                    "NOT_APPLICABLE"
+            ));
+        }
+        for (CommandMethod command : model.commandMethods()) {
+            definitions.add(routeDefinition(
+                    command.name(), "COMMAND", command.name(), quote(""),
+                    0, command.maxBatchSize(), 0, 0, 0L,
+                    false, false,
+                    "operation=" + command.operation() + ";acknowledgement=" + command.acknowledgement(),
+                    "NOT_APPLICABLE"
+            ));
+        }
+
+        out.append("    private static final com.reactor.cachedb.core.route.RepositoryRouteCatalog ROUTE_CATALOG = new ")
+                .append("com.reactor.cachedb.core.route.RepositoryRouteCatalog(\n")
+                .append("            ").append(quote(model.packageName() + "." + model.repositoryName())).append(",\n")
+                .append("            ").append(quote(model.entity().typeName())).append(",\n");
+        if (definitions.isEmpty()) {
+            out.append("            java.util.List.of()\n");
+        } else {
+            out.append("            java.util.List.of(\n                    ")
+                    .append(String.join(",\n                    ", definitions))
+                    .append("\n            )\n");
+        }
+        out.append("    );\n\n")
+                .append("    public static com.reactor.cachedb.core.route.RepositoryRouteCatalog routeCatalog() {\n")
+                .append("        return ROUTE_CATALOG;\n")
+                .append("    }\n\n");
+    }
+
+    private String routeDefinition(
+            String methodName,
+            String kind,
+            String routeName,
+            String projectionExpression,
+            int pageSize,
+            int maxRows,
+            int hotWindow,
+            int queryTimeoutSeconds,
+            long memoryBudgetBytes,
+            boolean coverageScoped,
+            boolean projectionsOnly,
+            String detail,
+            String population
+    ) {
+        return "new com.reactor.cachedb.core.route.RepositoryRouteDefinition("
+                + quote(methodName) + ", com.reactor.cachedb.core.route.RepositoryRouteKind." + kind + ", "
+                + quote(routeName) + ", " + projectionExpression + ", "
+                + pageSize + ", " + maxRows + ", " + hotWindow + ", " + queryTimeoutSeconds + ", "
+                + memoryBudgetBytes + "L, " + coverageScoped + ", " + projectionsOnly + ", " + quote(detail)
+                + ", com.reactor.cachedb.core.route.HotRoutePopulation." + population + ")";
+    }
+
+    private String projectionNameExpression(ProjectionModel projection) {
+        return projection == null
+                ? quote("")
+                : projection.generatedTypeName() + ".PROJECTION.name()";
     }
 
     private TypeMirror resolveWindowItem(ExecutableElement method, String expectedContainer) {
@@ -1734,7 +2015,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             long memoryBudgetBytes,
             String coverageScopeParameter,
             long maxStalenessSeconds,
-            boolean strict
+            boolean strict,
+            HotRoute.Population population
     ) {
     }
 
@@ -1747,6 +2029,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             List<ParameterModel> parameters,
             int maxRows,
             ParameterModel maxRowsParameter,
+            ParameterModel targetParameter,
             String coverageScopeParameter,
             long coverageTtlSeconds,
             boolean projectionsOnly
@@ -1790,12 +2073,39 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
     ) {
     }
 
+    private record RepositoryDefaultsModel(
+            HotRoute.Population hotPopulation,
+            int hotPageSize,
+            int hotWindow,
+            long hotMemoryBudgetBytes,
+            long hotMaxStalenessSeconds,
+            boolean hotStrict,
+            int sourceMaxRows,
+            int sourceTimeoutSeconds,
+            int warmMaxRows
+    ) {
+        private static RepositoryDefaultsModel standard() {
+            return new RepositoryDefaultsModel(
+                    HotRoute.Population.ON_DEMAND,
+                    100,
+                    1_000,
+                    0L,
+                    300L,
+                    true,
+                    500,
+                    30,
+                    1_000
+            );
+        }
+    }
+
     private record RepositoryModel(
             String packageName,
             String repositoryName,
             String implementationQualifiedName,
             String configurationQualifiedName,
             boolean springBean,
+            String springBeanName,
             EntityModel entity,
             List<RouteMethod> routes,
             List<SourceSqlMethod> sourceSqlMethods,

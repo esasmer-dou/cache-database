@@ -6,6 +6,7 @@ import com.example.cachedb.sample.readmodel.OrderSummary;
 import com.example.cachedb.sample.repository.CustomerRepository;
 import com.example.cachedb.sample.repository.OrderRepository;
 import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
@@ -43,8 +44,8 @@ public final class CustomerApplicationService {
         return SampleHotLookups.require("Customer", customerId, customers.detail(customerId, orderPreview));
     }
 
-    public List<OrderSummary> orderTimeline(long customerId, int limit) {
-        return orders.customerTimeline(customerId, WindowRequest.first(limit)).completeItems();
+    public CursorPage<OrderSummary> orderTimeline(long customerId, int limit, String after) {
+        return orders.customerTimeline(customerId, WindowRequest.of(limit, after)).completePage();
     }
 
     public List<CustomerEntity> active(int limit) {

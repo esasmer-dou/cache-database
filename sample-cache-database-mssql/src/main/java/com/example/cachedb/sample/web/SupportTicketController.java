@@ -3,11 +3,14 @@ package com.example.cachedb.sample.web;
 import com.example.cachedb.sample.application.support.SupportTicketApplicationService;
 import com.example.cachedb.sample.domain.SupportTicketEntity;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,6 +24,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/tickets")
+@Validated
 public class SupportTicketController {
 
     private final SupportTicketApplicationService tickets;
@@ -30,12 +34,12 @@ public class SupportTicketController {
     }
 
     @GetMapping("/open")
-    public List<SupportTicketEntity> open(@RequestParam(defaultValue = "25") int limit) {
-        return tickets.open(ApiLimits.requireInRange("limit", limit, 1, 50));
+    public List<SupportTicketEntity> open(@RequestParam(defaultValue = "25") @Min(1) @Max(50) int limit) {
+        return tickets.open(limit);
     }
 
     @GetMapping("/{ticketId}")
-    public SupportTicketEntity detail(@PathVariable long ticketId) {
+    public SupportTicketEntity detail(@PathVariable @Positive long ticketId) {
         return tickets.detail(ticketId);
     }
 
@@ -51,7 +55,7 @@ public class SupportTicketController {
 
     @PatchMapping("/{ticketId}/status")
     public ResponseEntity<WriteAccepted<SupportTicketEntity>> updateStatus(
-            @PathVariable long ticketId,
+            @PathVariable @Positive long ticketId,
             @Valid @RequestBody UpdateTicketStatusRequest request
     ) {
         var receipt = tickets.updateStatus(ticketId, new SupportTicketApplicationService.UpdateTicketStatus(

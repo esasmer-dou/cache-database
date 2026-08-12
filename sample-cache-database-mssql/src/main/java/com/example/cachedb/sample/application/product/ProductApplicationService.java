@@ -6,6 +6,7 @@ import com.example.cachedb.sample.readmodel.ProductAvailability;
 import com.example.cachedb.sample.repository.ProductRepository;
 import com.example.cachedb.sample.service.SampleDomainPolicies;
 import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
@@ -24,8 +25,8 @@ public final class ProductApplicationService {
         this.clock = clock;
     }
 
-    public List<ProductAvailability> activeByCategory(String category, int limit) {
-        return products.activeByCategory(category, WindowRequest.first(limit)).completeItems();
+    public CursorPage<ProductAvailability> activeByCategory(String category, int limit, String after) {
+        return products.activeByCategory(category, WindowRequest.of(limit, after)).completePage();
     }
 
     public List<ProductAvailability> lowStock(int limit) {
@@ -36,8 +37,8 @@ public final class ProductApplicationService {
         return SampleHotLookups.require("Product", productId, products.detail(productId));
     }
 
-    public List<ProductAvailability> inactiveArchive(int limit) {
-        return products.inactiveArchive(WindowRequest.first(limit)).items();
+    public CursorPage<ProductAvailability> inactiveArchive(int limit, String after) {
+        return products.inactiveArchive(WindowRequest.of(limit, after)).page();
     }
 
     public WriteReceipt<ProductEntity, Long> updateStock(long productId, UpdateStock command) {

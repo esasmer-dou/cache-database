@@ -2,9 +2,11 @@ package com.example.cachedb.sample;
 
 import com.example.cachedb.sample.repository.OrderRepository;
 import com.reactor.cachedb.core.repository.WindowRequest;
+import com.reactor.cachedb.core.route.HotRoutePopulation;
 import com.reactor.cachedb.spring.boot.test.CacheDbAssertions;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestConfiguration;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestProbe;
+import com.reactor.cachedb.starter.CacheWarmTarget;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -121,6 +123,8 @@ class PostgresqlSampleIT {
         );
         assertEquals(HttpStatus.ACCEPTED, activeCustomersWarm.getStatusCode());
         String activeCustomersJobId = String.valueOf(activeCustomersWarm.getBody().get("jobId"));
+        assertEquals("/api/warm/jobs/" + activeCustomersJobId,
+                activeCustomersWarm.getHeaders().getLocation().getPath());
         assertEquals("COMPLETED", awaitJob(activeCustomersJobId, Duration.ofSeconds(15)).getBody().get("status"));
 
         ResponseEntity<List> activeCustomers = rest.getForEntity(url("/api/customers/active?limit=10"), List.class);
@@ -191,19 +195,20 @@ class PostgresqlSampleIT {
         );
         assertEquals(0, new BigDecimal("125.4500").compareTo(durableAmount));
 
-        ResponseEntity<List> firstArchivePage = rest.getForEntity(
+        ResponseEntity<Map> firstArchivePage = rest.getForEntity(
                 url("/api/orders/archive?customerId=1&limit=1"),
-                List.class
+                Map.class
         );
         assertEquals(HttpStatus.OK, firstArchivePage.getStatusCode());
-        Map firstArchiveRow = (Map) firstArchivePage.getBody().getFirst();
-        ResponseEntity<List> secondArchivePage = rest.getForEntity(
-                url("/api/orders/archive?customerId=1&beforeOrderDate=" + firstArchiveRow.get("orderDate")
-                        + "&beforeOrderId=" + firstArchiveRow.get("orderId") + "&limit=1"),
-                List.class
+        Map firstArchiveRow = (Map) ((List<?>) firstArchivePage.getBody().get("items")).getFirst();
+        String nextCursor = String.valueOf(firstArchivePage.getBody().get("nextCursor"));
+        ResponseEntity<Map> secondArchivePage = rest.getForEntity(
+                url("/api/orders/archive?customerId=1&limit=1&after=" + nextCursor),
+                Map.class
         );
         assertEquals(HttpStatus.OK, secondArchivePage.getStatusCode());
-        assertNotEquals(firstArchiveRow.get("orderId"), ((Map) secondArchivePage.getBody().getFirst()).get("orderId"));
+        Map secondArchiveRow = (Map) ((List<?>) secondArchivePage.getBody().get("items")).getFirst();
+        assertNotEquals(firstArchiveRow.get("orderId"), secondArchiveRow.get("orderId"));
 
         ResponseEntity<Map> deactivateParentWithChildren = rest.exchange(
                 url("/api/orders/10001"),
@@ -235,6 +240,19 @@ class PostgresqlSampleIT {
         ResponseEntity<Map> cacheDbSnapshot = rest.getForEntity(url("/actuator/cachedb"), Map.class);
         assertEquals(HttpStatus.OK, cacheDbSnapshot.getStatusCode());
         assertEquals(EXPECTED_PROVIDER, ((Map<?, ?>) cacheDbSnapshot.getBody().get("provider")).get("id"));
+        assertTrue(((Number) cacheDbSnapshot.getBody().get("declaredRepositories")).intValue() > 0);
+        assertTrue(((Number) cacheDbSnapshot.getBody().get("declaredRoutes")).intValue() > 0);
+        assertTrue(((List<?>) cacheDbSnapshot.getBody().get("routeDetails")).size() > 0);
+        assertEquals(Boolean.FALSE, cacheDbSnapshot.getBody().get("routeDetailsTruncated"));
+        assertTrue(((Map<?, ?>) cacheDbSnapshot.getBody().get("hotRoutePopulation"))
+                .containsKey(HotRoutePopulation.DECLARED_WARM.name()));
+        cacheDbTestProbe.requireDeclaredWarmRoute("customer-order-timeline");
+        var journey = cacheDbTestProbe.dryRunApplyAndRequireCoverage(
+                orderRepository.warmCustomerTimeline(1L, 2, CacheWarmTarget.PROJECTIONS_ONLY),
+                Duration.ofMinutes(5)
+        );
+        assertEquals(0, journey.dryRun().result().submittedRows());
+        assertTrue(journey.coverage().complete());
 
         ResponseEntity<Map> warmAccepted = rest.postForEntity(
                 url("/api/warm/orders/customer/1?limit=2&projectionOnly=true"),
@@ -243,6 +261,7 @@ class PostgresqlSampleIT {
         );
         assertEquals(HttpStatus.ACCEPTED, warmAccepted.getStatusCode());
         String jobId = String.valueOf(warmAccepted.getBody().get("jobId"));
+        assertEquals("/api/warm/jobs/" + jobId, warmAccepted.getHeaders().getLocation().getPath());
         ResponseEntity<Map> warmJob = awaitJob(jobId, Duration.ofSeconds(15));
         assertEquals("COMPLETED", warmJob.getBody().get("status"));
         CacheDbAssertions.requireComplete(orderRepository.customerTimeline(1L, WindowRequest.first(2)));

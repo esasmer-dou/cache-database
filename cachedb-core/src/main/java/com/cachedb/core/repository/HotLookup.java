@@ -41,6 +41,33 @@ public record HotLookup<T>(HotLookupStatus status, T value) {
         return status == HotLookupStatus.HIT;
     }
 
+    public boolean isNotCached() {
+        return status == HotLookupStatus.NOT_CACHED;
+    }
+
+    public boolean isTombstoned() {
+        return status == HotLookupStatus.TOMBSTONED;
+    }
+
+    public boolean isOutsideHotPolicy() {
+        return status == HotLookupStatus.OUTSIDE_HOT_POLICY;
+    }
+
+    /** Maps a hit while preserving every non-hit status exactly. */
+    public <R> HotLookup<R> map(Function<? super T, ? extends R> mapper) {
+        if (mapper == null) {
+            throw new IllegalArgumentException("mapper must not be null");
+        }
+        if (!isHit()) {
+            return new HotLookup<>(status, null);
+        }
+        R mapped = mapper.apply(value);
+        if (mapped == null) {
+            throw new IllegalArgumentException("mapper must not return null for a hot hit");
+        }
+        return HotLookup.hit(mapped);
+    }
+
     public <X extends Throwable> T orElseThrow(
             Function<HotLookupStatus, ? extends X> exceptionFactory
     ) throws X {
@@ -50,6 +77,10 @@ public record HotLookup<T>(HotLookupStatus status, T value) {
         if (exceptionFactory == null) {
             throw new IllegalArgumentException("exceptionFactory must not be null");
         }
-        throw exceptionFactory.apply(status);
+        X failure = exceptionFactory.apply(status);
+        if (failure == null) {
+            throw new IllegalArgumentException("exceptionFactory must not return null");
+        }
+        throw failure;
     }
 }

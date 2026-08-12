@@ -1,17 +1,18 @@
 package com.example.cachedb.sample.service;
 
 import com.reactor.cachedb.spring.boot.CacheDistributedJobContext;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition;
 import com.reactor.cachedb.spring.boot.CacheDistributedJobHandler;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobProgress;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-import java.util.Map;
-
 @Component
 @ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
-public final class SampleSeedJobHandler implements CacheDistributedJobHandler<SampleSeedJobHandler.Arguments> {
+public final class SampleSeedJobHandler implements CacheDistributedJobHandler.Typed<SampleSeedJobHandler.Arguments> {
 
-    public static final String ROUTE = "sample.demo.seed";
+    public static final CacheDistributedJobDefinition<Arguments> DEFINITION =
+            CacheDistributedJobDefinition.of("sample.demo.seed", Arguments.class);
 
     private final SampleSeedService seedService;
 
@@ -20,24 +21,19 @@ public final class SampleSeedJobHandler implements CacheDistributedJobHandler<Sa
     }
 
     @Override
-    public String route() {
-        return ROUTE;
-    }
-
-    @Override
-    public Class<Arguments> argumentType() {
-        return Arguments.class;
+    public CacheDistributedJobDefinition<Arguments> definition() {
+        return DEFINITION;
     }
 
     @Override
     public Object execute(Arguments arguments, CacheDistributedJobContext context) {
-        context.checkpoint(Map.of("phase", "SEEDING", "attempt", context.attempt()));
+        context.checkpoint(CacheDistributedJobProgress.phase("SEEDING", context.attempt()));
         SampleSeedService.SeedResult result = seedService.seed(
                 arguments.customers(),
                 arguments.ordersPerCustomer(),
                 arguments.linesPerOrder()
         );
-        context.checkpoint(Map.of("phase", "COMPLETED", "attempt", context.attempt()));
+        context.checkpoint(CacheDistributedJobProgress.completed(context.attempt()));
         return result;
     }
 

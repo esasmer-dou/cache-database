@@ -8,7 +8,7 @@ bilinçli olarak açıktır: operasyonel yollar Redis'teki sınırlı aktif veri
 kullanır, kalıcı geçmiş PostgreSQL'de tutulur, büyüyen listeler ise tam
 aggregate yerine projection üzerinden okunur.
 
-> Bu örnek, CacheDB `0.7.1` değişmez sürümünü GitHub Packages üzerinden kullanır;
+> Bu örnek, CacheDB `0.8.0` değişmez sürümünü GitHub Packages üzerinden kullanır;
 > sample build'i CacheDB kaynak reposunu kendi içinde derlemez.
 
 ## Buradan Başla
@@ -108,7 +108,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.7.1</cachedb.version>
+    <cachedb.version>0.8.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -311,7 +311,13 @@ if ($warmState.status -ne "COMPLETED") {
 
 ```powershell
 # Redis projection yolu
-Invoke-RestMethod "http://127.0.0.1:8091/api/customers/1/orders?limit=10"
+$page = Invoke-RestMethod "http://127.0.0.1:8091/api/customers/1/orders?limit=10"
+$page.items
+
+# nextCursor varsa offset kullanmadan devam et
+if ($page.nextCursor) {
+    Invoke-RestMethod "http://127.0.0.1:8091/api/customers/1/orders?limit=10&after=$($page.nextCursor)"
+}
 
 # Sınırlı PostgreSQL yolu
 Invoke-RestMethod "http://127.0.0.1:8091/api/orders/archive?customerId=1&limit=10"
@@ -423,6 +429,11 @@ yolu tanımlar; implementasyonu processor üretir:
 
 ```java
 @CacheRepository(entity = OrderEntity.class)
+@CacheRepositoryDefaults(
+        hotPopulation = HotRoute.Population.DECLARED_WARM,
+        sourceMaxRows = 500,
+        sourceTimeoutSeconds = 15
+)
 public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
     @HotRoute(
@@ -430,7 +441,7 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             projection = OrderSummary.class,
             pageSize = 100,
             hotWindow = 1_000,
-            memoryBudgetBytes = 16_777_216L,
+            memoryBudgetBytes = CacheMemoryBudget.MIB_16,
             coverageScopeParameter = "customerId"
     )
     @CacheRouteQuery(
@@ -444,14 +455,18 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
     HotWindow<OrderSummary> customerTimeline(long customerId, WindowRequest window);
 
     @WarmRoute(
-            value = "warm-customer-order-timeline-projection",
+            value = "warm-customer-order-timeline",
             from = "customerTimeline",
             maxRows = 1_000,
             maxRowsParameter = "maxRows",
             coverageScopeParameter = "customerId",
-            projectionsOnly = true
+            targetParameter = "target"
     )
-    CacheWarmPlan warmCustomerTimelineProjection(long customerId, int maxRows);
+    CacheWarmPlan warmCustomerTimeline(
+            long customerId,
+            int maxRows,
+            CacheWarmTarget target
+    );
 }
 ```
 
@@ -477,8 +492,8 @@ public final class CustomerApplicationService {
         );
     }
 
-    public List<OrderSummary> orderTimeline(long customerId, int limit) {
-        return orders.customerTimeline(customerId, WindowRequest.first(limit)).completeItems();
+    public CursorPage<OrderSummary> orderTimeline(long customerId, int limit, String after) {
+        return orders.customerTimeline(customerId, WindowRequest.of(limit, after)).completePage();
     }
 }
 ```
@@ -486,6 +501,10 @@ public final class CustomerApplicationService {
 Controller HTTP girdisini doğrular. Uygulama servisi kullanım senaryosunu
 yönetir. Repository interface'i veri yolu sözleşmesini taşır. Generated kod;
 serileştirme, indeks ve veritabanı sağlayıcısı bağlantısını üstlenir.
+
+REST endpoint'i yanıttaki `nextCursor` değerini bir sonraki isteğin isteğe bağlı
+`after` parametresi olarak kabul eder. Cursor bu route'a, müşteri kapsamına ve
+sıralama sözleşmesine bağlıdır; başka müşteri veya route için kullanılamaz.
 
 ## Mevcut Veriyi Hazırlama
 
@@ -546,6 +565,96 @@ beklemez.
 Annotation processor metot imzasını derleme sırasında doğrular ve tipli bir
 Spring task adapter'ı üretir. Runtime, annotation eklenen metotları taramaz ve
 reflection ile çağırmaz.
+
+### Ön yükleme çalıştırma, sorgu niyeti ve kalıcılık
+
+Tipli hedef, entity mi yoksa yalnızca projection mı hazırlanacağını bir kez
+seçer. Generated plan bu kararı taşır; çalıştırma aşamasında yalnızca deneme
+veya uygulama modu seçilir:
+
+```java
+CacheWarmTarget target = projectionOnly
+        ? CacheWarmTarget.PROJECTIONS_ONLY
+        : CacheWarmTarget.ENTITY_AND_PROJECTIONS;
+CacheWarmPlan plan = orders.warmCustomerTimeline(customerId, limit, target);
+CacheWarmExecution execution = cacheDatabase.executeWarm(
+        plan,
+        dryRun ? CacheWarmExecutionMode.DRY_RUN : CacheWarmExecutionMode.APPLY
+);
+CacheWarmSummary summary = execution.summary("customer-orders");
+```
+
+`DRY_RUN` Redis'i değiştirmez. Aynı yol için ayrı entity/projection metotları
+oluşturma ve planın kararını ikinci bir `warmProjections`/`warm` koşuluyla
+uygulama kodunda tekrar etme.
+
+REST endpoint, ön yüklemeyi HTTP isteğini karşılayan iş parçacığında çalıştırmaz.
+Tipli komutu Redis üzerindeki dayanıklı iş kuyruğuna gönderir; `202 Accepted` ve
+işi izleyeceğin `Location` başlığını döndürür:
+
+```java
+public record SampleWarmCommand(Route route, int limit, boolean projectionOnly,
+                                boolean dryRun) {
+}
+
+static final CacheDistributedJobDefinition<SampleWarmCommand> WARM_JOB =
+        CacheDistributedJobDefinition.of("sample.route.warm", SampleWarmCommand.class);
+
+CacheDistributedJobSnapshot job = jobs.submit(WARM_JOB, command);
+// Location: /api/warm/jobs/{jobId}
+```
+
+Handler, `CacheDistributedJobHandler.Typed<SampleWarmCommand>` interface'ini
+uygular ve aynı tanımı döndürür. Sınırlı ilerleme bilgisi
+`CacheDistributedJobProgress` ile yazılır; route metni ve payload tipi tekrar edilmez.
+
+Her pod aynı iş tanımını kaydeder. Redis iş durumunu ve checkpoint bilgisini
+tutar; yarım kalan işi başka bir pod devralabilir. Satır sınırı, tekrarlanabilir
+ön yükleme davranışı ve generated SQL sözleşmesi korunur. Arka plan işi, sorguyu
+sınırsız hâle getirmez.
+
+Sorgu koşullarındaki gruplar da açık bir sözleşmedir. Aynı gruptaki koşullar
+AND, farklı gruplar OR ile birleştirilir. Aktif sipariş penceresi bilinçli
+olarak "son 90 gün OR aktif durum" anlamına geldiği için
+`@CacheRouteQuery`, `0` ve `1` gruplarıyla birlikte
+`explicitDisjunction = true` kullanır. Birden fazla grup kullanıp bu onayı
+vermeyen sorgu derleme sırasında reddedilir. İş kuralı AND ise bütün koşulları
+aynı grupta tut.
+
+Seed ve içe aktarma batch'leri SQL kalıcılık kanıtını korur:
+
+```java
+try (var orders = cacheDatabase.durableBatchWriter(
+        "sample seed/orders", 128, 1_024, Duration.ofSeconds(30),
+        orderRepository::saveAll
+)) {
+    sourceOrders.forEach(orders::add);
+}
+```
+
+Timeout, komutun Redis tarafından kabul edildiğini fakat verilen süre içinde
+SQL kalıcılığının doğrulanamadığını anlatır. Exception, receipt listesini ve
+operasyon adını taşır. Bu nedenle aynı yazıları körlemesine tekrar gönderme;
+önce receipt durumunu incele.
+
+### Üretilen route envanteri
+
+Annotation processor her repository için route (erişim yolu) kataloğu üretir.
+Starter bu katalogları runtime reflection kullanmadan bir araya getirir:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8091/actuator/cachedb
+```
+
+Yanıt; tanımlı repository ve route sayılarını, route türlerini, hızlı erişim
+route'larının doldurma stratejilerini, en fazla 250 route ayrıntısını, en fazla
+100 zamanlanmış ön yükleme ayrıntısını ve kesilme işaretlerini içerir. Micrometer
+tarafında `cachedb.repositories.declared`, `cachedb.routes.declared`,
+`cachedb.routes.hot.population{strategy=...}` ve `cachedb.scheduled.warm.*`
+ölçümleri bulunur. Strateji etiketi dört sabit değerle sınırlıdır; route,
+customer ve tenant adları metric etiketi yapılmaz. Katalog yalnızca derlenen
+yüzeyi kanıtlar; coverage, veri eşitliği, gecikme, bellek ve SQL kalıcılığı ayrı
+production kapılarıdır.
 
 ## Kullanım Senaryosuna Göre Ayar
 
@@ -689,7 +798,7 @@ sınırları, gerçek payload ve beklenen eş zamanlılıkla yapılmalıdır.
 | --- | --- | --- |
 | `/api/demo/seed` veya `/api/warm/**` için `404` | Uygulama `demo` profili olmadan açıldı | `SPRING_PROFILES_ACTIVE=demo` tanımlayıp yeniden başlat |
 | Maven `401 Unauthorized` döndürüyor | GitHub Packages kimlik bilgisi yok veya server kimlikleri farklı | `GITHUB_ACTOR`, `read:packages` token'ı ve aynı server kimliğini tanımla |
-| `0.7.1` dependency'leri çözümleniyor ancak `cachedb-maven-plugin` bulunamıyor | `pluginRepositories` tanımı yok veya başka server kimliği kullanıyor | GitHub Packages plugin repository tanımını ekle, `read:packages` token'ı kullan ve üç kimliği aynı tut |
+| `0.8.0` dependency'leri çözümleniyor ancak `cachedb-maven-plugin` bulunamıyor | `pluginRepositories` tanımı yok veya başka server kimliği kullanıyor | GitHub Packages plugin repository tanımını ekle, `read:packages` token'ı kullan ve üç kimliği aynı tut |
 | Aktif route `503` döndürüyor, arşiv route'u satır getiriyor | Redis route'u hazırlanmadı, coverage süresi doldu veya kapsam farklı | Dry-run yap, aynı route/scope'u hazırla, `COMPLETED` durumunu bekle ve coverage kaydını incele |
 | Detay yolu verinin hazır olmadığını söylüyor | Entity payload'ı aktif setin dışında | O detay kapsamı için entity warm et veya sınırlı source-detail yolu ekle |
 | Ana kaydı yazdıktan sonra `409 Conflict` | Ana kayıt henüz kalıcı değil veya optimistic version değişti | `Retry-After` değerine uy, write-behind durumunu kontrol et, idempotent retry yap |

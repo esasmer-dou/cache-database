@@ -26,12 +26,30 @@ application's own staging topology.
 
 | Current line | Value |
 | --- | --- |
-| Latest published release | `v0.7.1` |
-| Repository version | `0.7.1` |
+| Latest published release | `v0.8.0` |
+| Repository version | `0.8.0` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
+
+## What Is New In 0.8.0
+
+- `CursorPage<T>` carries a keyset continuation token from the generated
+  repository through the service and REST response. The token is bound to its
+  route, filter/parent scope, and sort contract.
+- `@CacheRepositoryDefaults` defines shared hot population, page/window,
+  memory, staleness, source-read, timeout, and warm limits once; explicit
+  method values still take priority at compile time.
+- Typed warm targets, distributed job definitions, bounded progress, and
+  `CacheDurableBatchWriter` remove repeated orchestration code while preserving
+  limits, backpressure, and SQL durability evidence.
+- PostgreSQL and SQL Server samples demonstrate the same declarative API and
+  include copy-paste HTTP continuation, warm, seed, archive, and provider
+  integration journeys.
+
+Read the complete [v0.8.0 release notes](docs/releases/v0.8.0.md) before
+upgrading.
 
 ## Product Positioning: What CacheDB Is And Is Not
 
@@ -80,6 +98,10 @@ happens when the requested data is outside the active set.
 | "Where is the full documentation map?" | [Documentation Map](DOCUMENTATION_MAP.md) |
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
+| "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
+| "What changed in the second framework UX cycle?" | [Second Ten-Iteration Engineering Report](docs/framework-ux-second-10-iteration-report.md) |
+| "What changed in the third framework UX cycle?" | [Third Ten-Iteration Engineering Report](docs/framework-ux-third-10-iteration-report.md) |
+| "What changed in the fourth framework UX cycle?" | [Fourth Ten-Iteration Engineering Report](docs/framework-ux-fourth-10-iteration-report.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "How do multiple pods refresh and clean a hot set periodically?" | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) |
@@ -128,13 +150,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.7.1` is an
+Keep `cachedb.version` aligned with the release you use. Version `0.8.0` is an
 immutable release distributed through GitHub Packages and the GitHub Release
 bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.7.1</cachedb.version>
+    <cachedb.version>0.8.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -232,7 +254,7 @@ the consumer POM when it is not inherited from a company parent:
 </settings>
 ```
 
-Use a token with `read:packages`. Version `0.7.1` is published as an immutable
+Use a token with `read:packages`. Version `0.8.0` is published as an immutable
 package; a consumer build does not need the CacheDB source repository.
 
 JDBC rule:

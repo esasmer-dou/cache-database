@@ -18,6 +18,16 @@ public final class KeysetPagination {
     }
 
     public static QuerySpec apply(QuerySpec base, WindowRequest request, List<QuerySort> stableSorts) {
+        return apply(base, request, stableSorts, null, null);
+    }
+
+    public static QuerySpec apply(
+            QuerySpec base,
+            WindowRequest request,
+            List<QuerySort> stableSorts,
+            String routeName,
+            String scope
+    ) {
         QuerySpec normalized = base == null ? QuerySpec.builder().build() : base;
         WindowRequest window = request == null ? WindowRequest.first(Math.min(100, normalized.limit())) : request;
         requireStableSorts(stableSorts);
@@ -25,7 +35,9 @@ public final class KeysetPagination {
         if (window.after() == null) {
             return result;
         }
-        Map<String, Object> cursor = WindowCursor.decode(window.after());
+        Map<String, Object> cursor = routeName == null
+                ? WindowCursor.decode(window.after())
+                : WindowCursor.decode(window.after(), cursorContract(routeName, scope, stableSorts));
         ArrayList<QueryNode> alternatives = new ArrayList<>(stableSorts.size());
         for (int current = 0; current < stableSorts.size(); current++) {
             ArrayList<QueryNode> conjunction = new ArrayList<>(current + 1);
@@ -50,7 +62,26 @@ public final class KeysetPagination {
             Function<T, Map<String, Object>> columns,
             RouteCoverage coverage
     ) {
-        Slice<T> slice = slice(rawItems, request, stableSorts, columns);
+        Slice<T> slice = slice(rawItems, request, stableSorts, columns, null);
+        return new HotWindow<>(slice.items(), slice.nextCursor(), coverage);
+    }
+
+    public static <T> HotWindow<T> hotWindow(
+            List<T> rawItems,
+            WindowRequest request,
+            List<QuerySort> stableSorts,
+            Function<T, Map<String, Object>> columns,
+            RouteCoverage coverage,
+            String routeName,
+            String scope
+    ) {
+        Slice<T> slice = slice(
+                rawItems,
+                request,
+                stableSorts,
+                columns,
+                cursorContract(routeName, scope, stableSorts)
+        );
         return new HotWindow<>(slice.items(), slice.nextCursor(), coverage);
     }
 
@@ -60,7 +91,25 @@ public final class KeysetPagination {
             List<QuerySort> stableSorts,
             Function<T, Map<String, Object>> columns
     ) {
-        Slice<T> slice = slice(rawItems, request, stableSorts, columns);
+        Slice<T> slice = slice(rawItems, request, stableSorts, columns, null);
+        return new SourceWindow<>(slice.items(), slice.nextCursor());
+    }
+
+    public static <T> SourceWindow<T> sourceWindow(
+            List<T> rawItems,
+            WindowRequest request,
+            List<QuerySort> stableSorts,
+            Function<T, Map<String, Object>> columns,
+            String routeName,
+            String scope
+    ) {
+        Slice<T> slice = slice(
+                rawItems,
+                request,
+                stableSorts,
+                columns,
+                cursorContract(routeName, scope, stableSorts)
+        );
         return new SourceWindow<>(slice.items(), slice.nextCursor());
     }
 
@@ -68,7 +117,8 @@ public final class KeysetPagination {
             List<T> rawItems,
             WindowRequest request,
             List<QuerySort> stableSorts,
-            Function<T, Map<String, Object>> columns
+            Function<T, Map<String, Object>> columns,
+            String cursorContract
     ) {
         WindowRequest window = request == null ? WindowRequest.first(100) : request;
         requireStableSorts(stableSorts);
@@ -86,7 +136,10 @@ public final class KeysetPagination {
             }
             cursorValues.put(sort.column(), values.get(sort.column()));
         }
-        return new Slice<>(items, WindowCursor.encode(cursorValues));
+        String nextCursor = cursorContract == null
+                ? WindowCursor.encode(cursorValues)
+                : WindowCursor.encode(cursorValues, cursorContract);
+        return new Slice<>(items, nextCursor);
     }
 
     private static Object requiredCursorValue(Map<String, Object> values, String column) {
@@ -104,6 +157,25 @@ public final class KeysetPagination {
         if (stableSorts == null || stableSorts.isEmpty()) {
             throw new IllegalArgumentException("Keyset pagination requires at least one stable sort");
         }
+    }
+
+    private static String cursorContract(String routeName, String scope, List<QuerySort> stableSorts) {
+        if (routeName == null || routeName.isBlank()) {
+            throw new IllegalArgumentException("routeName must not be blank for a contract-aware cursor");
+        }
+        String normalizedScope = scope == null || scope.isBlank() ? "global" : scope;
+        StringBuilder contract = new StringBuilder(routeName.length() + normalizedScope.length() + 64);
+        appendPart(contract, routeName);
+        appendPart(contract, normalizedScope);
+        for (QuerySort sort : stableSorts) {
+            appendPart(contract, sort.column());
+            appendPart(contract, sort.direction().name());
+        }
+        return contract.toString();
+    }
+
+    private static void appendPart(StringBuilder target, String value) {
+        target.append(value.length()).append(':').append(value);
     }
 
     private record Slice<T>(List<T> items, String nextCursor) {

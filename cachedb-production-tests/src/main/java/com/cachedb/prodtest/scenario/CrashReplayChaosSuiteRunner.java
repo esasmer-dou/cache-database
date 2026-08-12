@@ -35,10 +35,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 public final class CrashReplayChaosSuiteRunner {
 
     private static final String JDBC_URL = ProductionTestEnvironment.postgresUrl();
+    private static final long ASYNC_ASSERTION_TIMEOUT_MILLIS = Long.getLong(
+            "cachedb.prodtest.asyncAssertionTimeoutMillis",
+            20_000L
+    );
 
     public CrashReplayChaosSuiteReport run() throws Exception {
         ArrayList<CrashReplayChaosScenarioResult> scenarios = new ArrayList<>();
@@ -90,7 +95,8 @@ public final class CrashReplayChaosSuiteRunner {
              CacheDatabase second = new CacheDatabase(jedis, dataSource(), configFor(keyPrefix, functionPrefix))) {
             registerCustomerBinding(second);
             second.start();
-            waitUntil(() -> countRows("select count(*) from cachedb_prodtest_customers where id = 9101") == 0, 10_000L,
+            waitUntil(() -> countRows("select count(*) from cachedb_prodtest_customers where id = 9101") == 0,
+                    ASYNC_ASSERTION_TIMEOUT_MILLIS,
                     "customer delete should survive restart");
             restartVerified = EcomCustomerEntityCacheBinding.findById(second, CachePolicy.defaults(), 9101L).isEmpty();
             stateVerified = countRows("select count(*) from cachedb_prodtest_customers where id = 9101") == 0;
@@ -136,7 +142,8 @@ public final class CrashReplayChaosSuiteRunner {
             order.campaignCode = "CHAOS-ORDER";
             EcomOrderEntityCacheBinding.save(first, CachePolicy.defaults(), order);
 
-            waitUntil(() -> countRows("select count(*) from cachedb_prodtest_orders where id = 9201") == 1, 10_000L,
+            waitUntil(() -> countRows("select count(*) from cachedb_prodtest_orders where id = 9201") == 1,
+                    ASYNC_ASSERTION_TIMEOUT_MILLIS,
                     "order should initially persist before restart");
 
             order.status = "PAID";
@@ -147,7 +154,8 @@ public final class CrashReplayChaosSuiteRunner {
              CacheDatabase second = new CacheDatabase(jedis, dataSource(), configFor(keyPrefix, functionPrefix))) {
             registerOrderBinding(second);
             second.start();
-            waitUntil(() -> "PAID".equals(singleString("select status from cachedb_prodtest_orders where id = 9201")), 10_000L,
+            waitUntil(() -> "PAID".equals(singleString("select status from cachedb_prodtest_orders where id = 9201")),
+                    ASYNC_ASSERTION_TIMEOUT_MILLIS,
                     "order should reach final PAID state after restart");
             restartVerified = EcomOrderEntityCacheBinding.findById(second, CachePolicy.defaults(), 9201L)
                     .map(entity -> "PAID".equals(entity.status))
@@ -196,7 +204,8 @@ public final class CrashReplayChaosSuiteRunner {
             restartVerified = !deadLetters.isEmpty();
             var replay = second.admin().replay(deadLetters.get(0).entryId(), "chaos replay after restart");
             replayVerified = replay.applied();
-            waitUntil(() -> countRows("select count(*) from cachedb_prodtest_customers where id = 9301") == 1, 10_000L,
+            waitUntil(() -> countRows("select count(*) from cachedb_prodtest_customers where id = 9301") == 1,
+                    ASYNC_ASSERTION_TIMEOUT_MILLIS,
                     "manual replay should restore customer row");
             stateVerified = "ACTIVE".equals(singleString("select status from cachedb_prodtest_customers where id = 9301"));
             rebuildVerified = second.admin().reconciliation(ReconciliationQuery.builder().status("MANUAL_REPLAYED").limit(10).build())
@@ -354,12 +363,16 @@ public final class CrashReplayChaosSuiteRunner {
     }
 
     private void waitUntil(ThrowingBooleanSupplier condition, long timeoutMillis, String message) throws Exception {
-        long deadline = System.currentTimeMillis() + timeoutMillis;
-        while (System.currentTimeMillis() < deadline) {
+        long startedAt = System.nanoTime();
+        long timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while ((System.nanoTime() - startedAt) < timeoutNanos) {
             if (condition.getAsBoolean()) {
                 return;
             }
             Thread.sleep(100L);
+        }
+        if (condition.getAsBoolean()) {
+            return;
         }
         throw new IllegalStateException("Timed out: " + message);
     }

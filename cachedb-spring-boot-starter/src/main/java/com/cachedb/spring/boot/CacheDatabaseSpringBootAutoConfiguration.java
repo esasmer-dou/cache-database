@@ -7,6 +7,7 @@ import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.RuntimeCoordinationConfig;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.cache.CachePolicyCatalog;
+import com.reactor.cachedb.core.route.RepositoryRouteCatalog;
 import com.reactor.cachedb.jdbc.JdbcStorageProvider;
 import com.reactor.cachedb.jdbc.JdbcStorageProviders;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -42,7 +43,6 @@ import java.util.Map;
 public class CacheDatabaseSpringBootAutoConfiguration {
 
     @Bean(name = "cacheDbJedisPooled", destroyMethod = "close")
-    @org.springframework.context.annotation.Primary
     @ConditionalOnMissingBean(name = "cacheDbJedisPooled")
     public JedisPooled cacheDbJedisPooled(CacheDbSpringProperties properties) {
         return toConnectionConfig(properties.getRedis().getUri(), properties.getRedis().getPool()).createClient();
@@ -138,9 +138,26 @@ public class CacheDatabaseSpringBootAutoConfiguration {
     public CacheDbStartupReporter cacheDbStartupReporter(
             CacheDatabase cacheDatabase,
             CacheDbProviderInfo providerInfo,
+            CacheDbSpringProperties properties,
+            CacheDbRouteInventory routeInventory
+    ) {
+        return new CacheDbStartupReporter(cacheDatabase, providerInfo, properties, routeInventory);
+    }
+
+    /** @deprecated Direct factory calls should supply the generated route inventory. */
+    @Deprecated(forRemoval = false)
+    public CacheDbStartupReporter cacheDbStartupReporter(
+            CacheDatabase cacheDatabase,
+            CacheDbProviderInfo providerInfo,
             CacheDbSpringProperties properties
     ) {
         return new CacheDbStartupReporter(cacheDatabase, providerInfo, properties);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public CacheDbRouteInventory cacheDbRouteInventory(ObjectProvider<RepositoryRouteCatalog> catalogs) {
+        return new CacheDbRouteInventory(catalogs.orderedStream().toList());
     }
 
     @Bean
@@ -212,6 +229,16 @@ public class CacheDatabaseSpringBootAutoConfiguration {
     @ConditionalOnClass(MeterRegistry.class)
     @ConditionalOnBean({CacheDatabase.class, MeterRegistry.class})
     @ConditionalOnMissingBean
+    public CacheDatabaseMetrics cacheDatabaseMetrics(
+            CacheDatabase cacheDatabase,
+            CacheDbRouteInventory routeInventory,
+            ObjectProvider<CacheScheduledWarmRegistry> scheduledWarmRegistry
+    ) {
+        return new CacheDatabaseMetrics(cacheDatabase, routeInventory, scheduledWarmRegistry.getIfAvailable());
+    }
+
+    /** @deprecated Direct factory calls should supply route and scheduled-warm inventory. */
+    @Deprecated(forRemoval = false)
     public CacheDatabaseMetrics cacheDatabaseMetrics(CacheDatabase cacheDatabase) {
         return new CacheDatabaseMetrics(cacheDatabase);
     }
@@ -220,6 +247,22 @@ public class CacheDatabaseSpringBootAutoConfiguration {
     @ConditionalOnClass(Endpoint.class)
     @ConditionalOnBean(CacheDatabase.class)
     @ConditionalOnMissingBean
+    public CacheDatabaseEndpoint cacheDatabaseEndpoint(
+            CacheDatabase cacheDatabase,
+            CacheDbProviderInfo providerInfo,
+            CacheDbRouteInventory routeInventory,
+            ObjectProvider<CacheScheduledWarmRegistry> scheduledWarmRegistry
+    ) {
+        return new CacheDatabaseEndpoint(
+                cacheDatabase,
+                providerInfo,
+                routeInventory,
+                scheduledWarmRegistry.getIfAvailable()
+        );
+    }
+
+    /** @deprecated Direct factory calls should supply route and scheduled-warm inventory. */
+    @Deprecated(forRemoval = false)
     public CacheDatabaseEndpoint cacheDatabaseEndpoint(
             CacheDatabase cacheDatabase,
             CacheDbProviderInfo providerInfo

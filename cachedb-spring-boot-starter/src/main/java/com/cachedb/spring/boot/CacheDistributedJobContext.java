@@ -16,4 +16,11 @@ public interface CacheDistributedJobContext {
     Optional<JsonNode> checkpoint();
 
     void checkpoint(Object value);
+
+    default void checkpoint(CacheDistributedJobProgress progress) {
+        if (progress == null) {
+            throw new IllegalArgumentException("progress must not be null");
+        }
+        checkpoint((Object) progress);
+    }
 }

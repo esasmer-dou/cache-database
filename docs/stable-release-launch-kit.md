@@ -19,11 +19,11 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Official Distribution Channel
 
-For `v0.7.1`, the official distribution channels are GitHub Packages and the
+For `v0.8.0`, the official distribution channels are GitHub Packages and the
 GitHub Release asset:
 
 ```text
-cache-database-0.7.1-github-release.zip
+cache-database-0.8.0-github-release.zip
 ```
 
 The bundle contains binary, source, javadoc, and POM artifacts for 16 public
@@ -33,13 +33,14 @@ GitHub Release bundle are the selected official distribution channels.
 
 ## Release Positioning
 
-`cache-database v0.7.1`
+`cache-database v0.8.0`
 
-CacheDB `v0.7.1` completes the declarative repository surface with explicit
-hot-route coverage, bounded source and warm routes, safe optimistic hot
-updates, compile-time scheduled-warm adapters, fail-fast provider/configuration
-validation, a test kit, Maven doctor plugin, migration recipes, and provider
-equivalent PostgreSQL and MSSQL samples.
+CacheDB `v0.8.0` makes the declarative repository surface safer and easier to
+consume: continuation cursors are bound to route and scope contracts,
+repository defaults are resolved at compile time, HTTP layers return typed
+cursor pages, warm and distributed jobs use typed bounded contracts, and
+durable import batching has framework-owned backpressure. PostgreSQL and MSSQL
+samples expose the same application model and provider-specific runtime path.
 
 This release does not claim that every consuming application can cut production
 traffic over without its own validation. Before cutover, each application still
@@ -55,12 +56,18 @@ topologies must be proven in the consuming application's staging environment.
 ## Release Notes Template
 
 ```markdown
-## cache-database v0.7.1
+## cache-database v0.8.0
 
 This stable release improves the practical migration path for existing SQL-backed applications.
 
 ### What is stable
 
+- Route/scope/sort-bound keyset cursors and typed `CursorPage<T>` responses.
+- Compile-time repository defaults, route capabilities, route catalogs, and
+  bounded operational inventory.
+- Typed warm execution, distributed job definitions, structured progress, and
+  dry-run/apply/coverage test evidence.
+- Framework-owned durable batch writing with bounded receipt backpressure.
 - Redis-first entity repositories with bounded hot-set policies.
 - Compile-time generated `@CacheRepository` implementations for typed commands, hot/source routes, relations, projections, and warm plans.
 - Declarative per-entity policy configuration with explicit JDBC registration.
@@ -96,13 +103,13 @@ comparison, Redis memory budget, and rollback plan.
 ## Publication Checklist
 
 - `pom.xml` and all module parent versions use the stable version.
-- Release notes exist at `docs/releases/v0.7.1.md`.
+- Release notes exist at `docs/releases/v0.8.0.md`.
 - `mvn -DskipTests package` passes.
 - Public API compatibility check passes.
 - Turkish documentation quality check passes.
 - Local Docker HA preflight passes or the latest CI evidence is green.
 - `Public Beta Readiness` and `Production Evidence` are green for the release
   commit.
-- `Production GA Release Readiness` is green for `v0.7.1`.
+- `Production GA Release Readiness` is green for `v0.8.0`.
 - GitHub Release is not marked as prerelease.
-- GitHub Release asset `cache-database-0.7.1-github-release.zip` is attached.
+- GitHub Release asset `cache-database-0.8.0-github-release.zip` is attached.

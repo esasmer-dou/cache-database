@@ -4,6 +4,47 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.8.0 - 2026-08-12
+
+### Added
+
+- contract-bound keyset cursors and `CursorPage<T>` responses that preserve
+  route, scope, sort, and continuation state across HTTP boundaries
+- compile-time `@CacheRepositoryDefaults`, named `CacheMemoryBudget` constants,
+  typed repository capabilities, route population metadata, and indexed route
+  inventory
+- definition-first distributed jobs with bounded structured progress and a
+  framework-owned durable batch writer with explicit receipt backpressure
+- one dry-run, apply, and coverage evidence journey for warm integration tests
+
+### Changed
+
+- generated repository validation now requires explicit disjunction intent and
+  resolves repository defaults at compile time with method-level override
+  priority
+- warm execution uses typed targets, modes, summaries, and commands instead of
+  duplicate entity/projection orchestration paths
+- PostgreSQL and MSSQL samples use declarative Bean Validation, `CursorPage`,
+  typed jobs, readable memory budgets, and the same provider-neutral
+  application contract
+- Spring Boot diagnostics expose bounded route inventory, capabilities, warm
+  state, and job progress without introducing high-cardinality metric tags
+
+### Compatibility
+
+- the public API change is additive; compatibility overloads remain for the
+  existing cursor, warm, checkpoint, and distributed-job contracts
+- hot routes remain Redis-only and source routes remain explicit, bounded SQL
+  operations; no hidden SQL fallback or runtime reflection was introduced
+
+### Validation
+
+- the full Maven reactor, PostgreSQL integration sample, and SQL Server
+  integration sample pass with no failures or errors
+- public API compatibility, reflection-free principles, provider parity,
+  declarative sample boundaries, README, Turkish documentation, Markdown link,
+  Postman, release artifact, and whitespace gates pass
+
 ## 0.7.1 - 2026-08-10
 
 ### Fixed

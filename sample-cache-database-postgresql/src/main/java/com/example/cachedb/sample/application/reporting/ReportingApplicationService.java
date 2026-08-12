@@ -5,6 +5,7 @@ import com.example.cachedb.sample.domain.ReportJobEntity;
 import com.example.cachedb.sample.repository.AuditEventRepository;
 import com.example.cachedb.sample.repository.ReportJobRepository;
 import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
@@ -33,8 +34,8 @@ public final class ReportingApplicationService {
         return reportJobs.live(limit).completeItems();
     }
 
-    public List<ReportJobEntity> jobsByType(String reportType, int limit) {
-        return reportJobs.byType(reportType, WindowRequest.first(limit)).completeItems();
+    public CursorPage<ReportJobEntity> jobsByType(String reportType, int limit, String after) {
+        return reportJobs.byType(reportType, WindowRequest.of(limit, after)).completePage();
     }
 
     public WriteReceipt<ReportJobEntity, Long> createJob(CreateReportJob command) {
@@ -64,8 +65,8 @@ public final class ReportingApplicationService {
         return auditEvents.security(limit).completeItems();
     }
 
-    public List<AuditEventEntity> auditArchive(String entityName, long entityId, int limit) {
-        return auditEvents.archive(entityName, entityId, WindowRequest.first(limit)).items();
+    public CursorPage<AuditEventEntity> auditArchive(String entityName, long entityId, int limit, String after) {
+        return auditEvents.archive(entityName, entityId, WindowRequest.of(limit, after)).page();
     }
 
     private String defaultText(String value, String fallback) {

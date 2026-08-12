@@ -81,6 +81,20 @@ public final class OrderService {
 }
 ```
 
+The default generated bean name is the decapitalized repository name, such as
+`orderRepository`. If two packages contain repositories with the same simple
+name, make the ownership explicit:
+
+```java
+@CacheRepository(entity = SalesOrderEntity.class, springBeanName = "salesOrders")
+public interface Orders extends CacheDbRepository<SalesOrderEntity, Long> {
+}
+```
+
+The processor rejects duplicate generated repository bean names in the same
+compilation instead of leaving the collision for Spring startup. Generated
+route-catalog beans always use package-qualified names.
+
 Spring registration is deliberately two-phase. All generated entities receive
 their own policy and JDBC source first; relation/page loaders are wired only
 after every child repository is known. This avoids policy leakage through
@@ -480,7 +494,9 @@ sorting, limits, Redis coverage, and the source-database boundary:
 @CacheRepository(entity = OrderEntity.class)
 public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
-    @HotRoute(value = "customer-order-timeline", projection = OrderSummary.class,
+    @HotRoute(value = "customer-order-timeline",
+            population = HotRoute.Population.DECLARED_WARM,
+            projection = OrderSummary.class,
             pageSize = 100, hotWindow = 1_000,
             memoryBudgetBytes = 16_777_216L,
             coverageScopeParameter = "customerId")
@@ -500,8 +516,8 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
     @WarmRoute(value = "warm-customer-order-timeline", from = "timeline",
             maxRows = 1_000, maxRowsParameter = "maxRows",
-            coverageScopeParameter = "customerId", projectionsOnly = true)
-    CacheWarmPlan warmTimeline(long customerId, int maxRows);
+            coverageScopeParameter = "customerId", targetParameter = "target")
+    CacheWarmPlan warmTimeline(long customerId, int maxRows, CacheWarmTarget target);
 }
 ```
 
@@ -509,7 +525,7 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 List<OrderSummary> firstPage = orders.timeline(
         customerId,
         WindowRequest.first(24)
-).items();
+).completeItems();
 
 OrderEntity detail = orders.detail(orderId, 8)
         .orElseThrow(status -> mapHotLookupFailure(orderId, status));
@@ -520,6 +536,29 @@ arguments, unsafe windows, duplicate route names, and invalid warm contracts at
 compile time. For relation-heavy screens, use a summary projection first and a
 bounded explicit detail lookup second. `HotLookup.NOT_CACHED` is not a durable
 404 and must not trigger hidden SQL fallback.
+
+`population` states how a Redis-only route becomes representative:
+
+| Strategy | Use it when |
+| --- | --- |
+| `ON_DEMAND` | Traffic or explicit application code admits the bounded set |
+| `DECLARED_WARM` | A generated `@WarmRoute` must exist before startup succeeds |
+| `WRITE_FED` | CacheDB commands or a change feed continuously maintain the route |
+| `EXTERNAL` | An external, monitored process owns population and coverage |
+
+The starter rejects global HOT route-name collisions because coverage keys
+would otherwise overlap. `/actuator/cachedb` publishes the bounded generated
+route inventory and `hotRoutePopulation`; Micrometer publishes
+`cachedb.routes.hot.population{strategy=...}` with only four stable strategy
+values. Tests can assert the contract without reflection:
+
+```java
+cacheDb.requireDeclaredWarmRoute("customer-order-timeline");
+cacheDb.warmAndRequireCoverage(
+        orders.warmTimeline(42L, 1_000, CacheWarmTarget.PROJECTIONS_ONLY),
+        Duration.ofMinutes(5)
+);
+```
 
 ## Minimal Overhead Mode
 
@@ -910,3 +949,43 @@ After wiring the starter, the usual next pieces are:
 - define page loaders for expensive list endpoints
 - verify fetch plans with the admin explain UI
 - confirm the admin UI is reachable from `/cachedb-admin`
+
+## Definition-First Distributed Jobs
+
+Use `CacheDistributedJobHandler.Typed<A>` so the producer and every Kubernetes
+pod share one route/type definition. Do not repeat route strings in the handler.
+
+```java
+@Component
+final class CatalogWarmHandler
+        implements CacheDistributedJobHandler.Typed<CatalogWarmCommand> {
+
+    static final CacheDistributedJobDefinition<CatalogWarmCommand> DEFINITION =
+            CacheDistributedJobDefinition.of("catalog.warm", CatalogWarmCommand.class);
+
+    @Override
+    public CacheDistributedJobDefinition<CatalogWarmCommand> definition() {
+        return DEFINITION;
+    }
+
+    @Override
+    public Object execute(CatalogWarmCommand command, CacheDistributedJobContext context) {
+        context.checkpoint(CacheDistributedJobProgress.phase("WARMING", context.attempt())
+                .withAttribute("route", command.route()));
+        // Execute one bounded, resumable unit of work.
+        return result;
+    }
+}
+```
+
+Submit through the same definition:
+
+```java
+jobs.submit(CatalogWarmHandler.DEFINITION, new CatalogWarmCommand("products"));
+```
+
+`CacheDistributedJobProgress` bounds phase, percent, message, and attribute
+count/size before checkpoint serialization. Arbitrary checkpoint objects remain
+available for compatibility, but structured progress is the production default.
+Every pod must register the same handler set. Checkpoints make retries resumable;
+they do not make a non-idempotent operation safe automatically.

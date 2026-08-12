@@ -3,9 +3,11 @@ package com.example.cachedb.sample.repository;
 import com.example.cachedb.sample.domain.OrderEntity;
 import com.example.cachedb.sample.readmodel.OrderSummary;
 import com.reactor.cachedb.annotations.CacheLookup;
+import com.reactor.cachedb.annotations.CacheMemoryBudget;
 import com.reactor.cachedb.annotations.CacheOrder;
 import com.reactor.cachedb.annotations.CachePredicate;
 import com.reactor.cachedb.annotations.CacheRepository;
+import com.reactor.cachedb.annotations.CacheRepositoryDefaults;
 import com.reactor.cachedb.annotations.CacheRouteQuery;
 import com.reactor.cachedb.annotations.HotRoute;
 import com.reactor.cachedb.annotations.SourceRoute;
@@ -16,18 +18,22 @@ import com.reactor.cachedb.core.repository.HotWindow;
 import com.reactor.cachedb.core.repository.SourceWindow;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.starter.CacheWarmPlan;
+import com.reactor.cachedb.starter.CacheWarmTarget;
 
 import java.math.BigDecimal;
 
 @CacheRepository(entity = OrderEntity.class)
+@CacheRepositoryDefaults(hotPopulation = HotRoute.Population.DECLARED_WARM,
+        sourceMaxRows = 500, sourceTimeoutSeconds = 15)
 public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
     @CacheLookup(idParameter = "orderId", relation = "lines",
             relationLimitParameter = "linePreview", maxRelationRows = 50)
     HotLookup<OrderEntity> detail(Long orderId, int linePreview);
 
-    @HotRoute(value = "customer-order-timeline", projection = OrderSummary.class,
-            pageSize = 100, hotWindow = 1_000, memoryBudgetBytes = 16_777_216L,
+    @HotRoute(value = "customer-order-timeline",
+            projection = OrderSummary.class,
+            pageSize = 100, hotWindow = 1_000, memoryBudgetBytes = CacheMemoryBudget.MIB_16,
             coverageScopeParameter = "customerId")
     @CacheRouteQuery(
             predicates = {
@@ -42,8 +48,9 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
     )
     HotWindow<OrderSummary> customerTimeline(long customerId, WindowRequest window);
 
-    @HotRoute(value = "recent-high-value-orders", projection = OrderSummary.class,
-            pageSize = 100, hotWindow = 5_000, memoryBudgetBytes = 33_554_432L)
+    @HotRoute(value = "recent-high-value-orders",
+            projection = OrderSummary.class,
+            pageSize = 100, hotWindow = 5_000, memoryBudgetBytes = CacheMemoryBudget.MIB_32)
     @CacheRouteQuery(
             predicates = {
                     @CachePredicate(field = "orderAmount", operator = CachePredicate.Operator.GTE,
@@ -59,8 +66,9 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
     )
     HotWindow<OrderSummary> recentHighValue(BigDecimal minimumAmount, WindowRequest window);
 
-    @HotRoute(value = "dashboard-highlighted-orders", projection = OrderSummary.class,
-            pageSize = 100, hotWindow = 2_000, memoryBudgetBytes = 16_777_216L)
+    @HotRoute(value = "dashboard-highlighted-orders",
+            projection = OrderSummary.class,
+            pageSize = 100, hotWindow = 2_000, memoryBudgetBytes = CacheMemoryBudget.MIB_16)
     @CacheRouteQuery(
             predicates = {
                     @CachePredicate(field = "priorityScore", operator = CachePredicate.Operator.GTE,
@@ -76,8 +84,9 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
     )
     HotWindow<OrderSummary> highlighted(double minimumPriorityScore, int limit);
 
-    @HotRoute(value = "active-order-window", projection = OrderSummary.class,
-            pageSize = 100, hotWindow = 1_000, memoryBudgetBytes = 16_777_216L)
+    @HotRoute(value = "active-order-window",
+            projection = OrderSummary.class,
+            pageSize = 100, hotWindow = 1_000, memoryBudgetBytes = CacheMemoryBudget.MIB_16)
     @CacheRouteQuery(
             predicates = {
                     @CachePredicate(field = "orderDate", operator = CachePredicate.Operator.GTE,
@@ -85,6 +94,7 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
                     @CachePredicate(field = "status", operator = CachePredicate.Operator.IN,
                             constants = {"NEW", "PAID", "PICKING", "OPEN", "PENDING"}, group = 1)
             },
+            explicitDisjunction = true,
             orderBy = {
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
@@ -109,6 +119,7 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
                     @CachePredicate(field = "orderId", operator = CachePredicate.Operator.LT,
                             parameter = "beforeOrderId", group = 1)
             },
+            explicitDisjunction = true,
             orderBy = {
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
@@ -122,14 +133,10 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             WindowRequest window
     );
 
-    @WarmRoute(value = "warm-customer-order-timeline-projection", from = "customerTimeline",
+    @WarmRoute(value = "warm-customer-order-timeline", from = "customerTimeline",
             maxRows = 1_000, maxRowsParameter = "maxRows", coverageScopeParameter = "customerId",
-            projectionsOnly = true)
-    CacheWarmPlan warmCustomerTimelineProjection(long customerId, int maxRows);
-
-    @WarmRoute(value = "warm-customer-order-timeline-entities", from = "customerTimeline",
-            maxRows = 1_000, maxRowsParameter = "maxRows", coverageScopeParameter = "customerId")
-    CacheWarmPlan warmCustomerTimelineEntities(long customerId, int maxRows);
+            targetParameter = "target")
+    CacheWarmPlan warmCustomerTimeline(long customerId, int maxRows, CacheWarmTarget target);
 
     @WarmRoute(value = "warm-recent-high-value-orders", from = "recentHighValue",
             maxRows = 1_000, maxRowsParameter = "maxRows", projectionsOnly = true)

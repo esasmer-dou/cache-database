@@ -143,9 +143,11 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
      */
     public CacheDistributedJobSnapshot submit(String route, Object arguments) {
         String normalizedRoute = requireText(route, "route");
-        if (!handlers.containsKey(normalizedRoute)) {
+        CacheDistributedJobHandler<?> handler = handlers.get(normalizedRoute);
+        if (handler == null) {
             throw new IllegalArgumentException("No distributed job handler is registered for route=" + normalizedRoute);
         }
+        handler.definition().requireArguments(arguments);
         String payloadJson = writeJson(arguments);
         String jobId = UUID.randomUUID().toString();
         long submittedAt = Instant.now().toEpochMilli();
@@ -166,6 +168,23 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
             jedis.del(key(jobId));
             throw exception;
         }
+    }
+
+    public <A> CacheDistributedJobSnapshot submit(
+            CacheDistributedJobDefinition<A> definition,
+            A arguments
+    ) {
+        CacheDistributedJobDefinition<A> resolved = Objects.requireNonNull(definition, "definition");
+        A typedArguments = resolved.requireArguments(arguments);
+        CacheDistributedJobHandler<?> handler = handlers.get(resolved.route());
+        if (handler == null) {
+            throw new IllegalArgumentException("No distributed job handler is registered for route=" + resolved.route());
+        }
+        if (!handler.definition().argumentType().equals(resolved.argumentType())) {
+            throw new IllegalArgumentException("Distributed job definition for route=" + resolved.route()
+                    + " does not match the registered handler argument type");
+        }
+        return submit(resolved.route(), typedArguments);
     }
 
     /**
@@ -443,7 +462,10 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
     ) {
         Map<String, CacheDistributedJobHandler<?>> result = new ConcurrentHashMap<>();
         for (CacheDistributedJobHandler<?> handler : candidates) {
-            String route = requireText(handler.route(), "handler.route");
+            CacheDistributedJobDefinition<?> definition = Objects.requireNonNull(
+                    handler.definition(), "handler.definition"
+            );
+            String route = definition.route();
             CacheDistributedJobHandler<?> previous = result.putIfAbsent(route, handler);
             if (previous != null) {
                 throw new IllegalStateException("Multiple distributed job handlers use route=" + route);
@@ -459,7 +481,7 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
             CacheDistributedJobContext context
     ) throws JsonProcessingException {
         CacheDistributedJobHandler<A> handler = (CacheDistributedJobHandler<A>) rawHandler;
-        A arguments = objectMapper.readValue(payloadJson, handler.argumentType());
+        A arguments = objectMapper.readValue(payloadJson, handler.definition().argumentType());
         return handler.execute(arguments, context);
     }
 

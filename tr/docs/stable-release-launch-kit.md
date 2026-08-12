@@ -19,11 +19,11 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Resmi Dağıtım Kanalı
 
-`v0.7.1` için resmi dağıtım kanalları GitHub Packages ve GitHub Release
+`v0.8.0` için resmi dağıtım kanalları GitHub Packages ve GitHub Release
 paketidir:
 
 ```text
-cache-database-0.7.1-github-release.zip
+cache-database-0.8.0-github-release.zip
 ```
 
 Paket; 16 public modül ile CacheDB BOM için binary, source, javadoc ve POM
@@ -33,13 +33,14 @@ GitHub Packages ve GitHub Release paketidir.
 
 ## Release Konumlandırması
 
-`cache-database v0.7.1`
+`cache-database v0.8.0`
 
-CacheDB `v0.7.1`; deklaratif repository yüzeyini açık aktif-route kapsamı,
-sınırlı source ve warm route'ları, güvenli iyimser güncelleme, derleme zamanında
-üretilen periyodik warm adapter'ları, fail-fast provider/ayar doğrulaması, test
-kiti, Maven doctor eklentisi, migration recipe'leri ve eşdeğer PostgreSQL/MSSQL
-örnekleriyle tamamlar.
+CacheDB `v0.8.0`, deklaratif repository kullanımını daha güvenli ve daha sade
+hale getirir. Cursor; route, kapsam ve sıralama sözleşmesine bağlanır. Repository
+varsayılanları derleme zamanında çözülür. HTTP katmanı tipli cursor sayfası
+döndürür. Warm ve dağıtık işler tipli, sınırlı sözleşmeler kullanır. Kalıcı
+import batch'lerinin backpressure yönetimi framework tarafından sağlanır.
+PostgreSQL ve MSSQL örnekleri aynı uygulama modelini korur.
 
 Bu release, her uygulamanın kendi production trafiğini ek doğrulama olmadan
 CacheDB'ye kesebileceği anlamına gelmez. Cutover öncesinde her uygulama için
@@ -56,12 +57,19 @@ kanıtlanmalıdır.
 ## Release Note Şablonu
 
 ```markdown
-## cache-database v0.7.1
+## cache-database v0.8.0
 
 Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uygulanabilir hale getirir.
 
 ### Stable olan alanlar
 
+- Route, kapsam ve sıralama sözleşmesine bağlı keyset cursor ile tipli
+  `CursorPage<T>` cevapları.
+- Derleme zamanında çözülen repository varsayılanları, route yetenekleri, route
+  catalog ve sınırlı operasyon envanteri.
+- Tipli warm çalıştırma, dağıtık iş tanımı, yapısal ilerleme bilgisi ve
+  dry-run/apply/coverage test kanıtı.
+- Receipt beklemesini sınırlayan framework seviyesinde kalıcı batch yazımı.
 - Sınırlı hot-set policy'leriyle Redis-first entity repository'leri.
 - Tip güvenli komut, kritik/kaynak route'u, ilişki, projection ve warm planı için derleme zamanında üretilen `@CacheRepository` implementasyonları.
 - Entity bazlı deklaratif policy yapılandırması ve açık JDBC registration seçimi.
@@ -97,12 +105,12 @@ comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
 ## Yayın Kontrol Listesi
 
 - `pom.xml` ve tüm modül parent versiyonları stable sürümü kullanıyor.
-- Release note `docs/releases/v0.7.1.md` altında var.
+- Release note `docs/releases/v0.8.0.md` altında var.
 - `mvn -DskipTests package` geçiyor.
 - Public API compatibility kontrolü geçiyor.
 - Türkçe dokümantasyon kalite kontrolü geçiyor.
 - Lokal Docker HA preflight geçiyor veya son CI evidence yeşil.
 - `Public Beta Readiness` ve `Production Evidence` release commit'i için yeşil.
-- `Production GA Release Readiness`, `v0.7.1` için yeşil.
+- `Production GA Release Readiness`, `v0.8.0` için yeşil.
 - GitHub Release prerelease olarak işaretli değil.
-- GitHub Release asset'i `cache-database-0.7.1-github-release.zip` olarak eklendi.
+- GitHub Release asset'i `cache-database-0.8.0-github-release.zip` olarak eklendi.

@@ -75,6 +75,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 
 public final class CacheDatabase implements CacheSession, AutoCloseable {
 
@@ -630,6 +631,23 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     /**
+     * Executes the plan without asking callers to repeat its entity/projection
+     * admission decision in a second boolean flag.
+     */
+    public CacheWarmExecution executeWarm(CacheWarmPlan plan, CacheWarmExecutionMode mode) {
+        if (plan == null) {
+            throw new IllegalArgumentException("plan must not be null");
+        }
+        if (mode == null) {
+            throw new IllegalArgumentException("mode must not be null");
+        }
+        CacheWarmResult result = mode == CacheWarmExecutionMode.DRY_RUN
+                ? dryRun(plan)
+                : plan.projectionsOnly() ? warmProjections(plan) : warm(plan);
+        return new CacheWarmExecution(plan, mode, result);
+    }
+
+    /**
      * Incrementally evicts Redis entities and projections that no longer satisfy
      * their registered hot policy. The durable SQL row is never changed.
      */
@@ -754,8 +772,43 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return durabilityTracker.isDurable(receipt);
     }
 
+    /** Creates a bounded writer that applies backpressure until SQL durability is proven. */
+    public <T, ID> CacheDurableBatchWriter<T, ID> durableBatchWriter(
+            String operation,
+            int batchSize,
+            int maxPendingReceipts,
+            Duration durabilityTimeout,
+            Function<Collection<T>, List<WriteReceipt<T, ID>>> writer
+    ) {
+        if (durabilityTimeout == null || durabilityTimeout.isZero() || durabilityTimeout.isNegative()) {
+            throw new IllegalArgumentException("durabilityTimeout must be greater than zero");
+        }
+        return new CacheDurableBatchWriter<>(
+                operation,
+                batchSize,
+                maxPendingReceipts,
+                writer,
+                (receipts, resolvedOperation) -> awaitDurableOrThrow(
+                        receipts,
+                        durabilityTimeout,
+                        resolvedOperation
+                )
+        );
+    }
+
     public boolean awaitDurable(WriteReceipt<?, ?> receipt, Duration timeout) {
         return durabilityTracker.await(receipt, timeout, Duration.ofMillis(25));
+    }
+
+    public <T, ID> WriteReceipt<T, ID> awaitDurableOrThrow(
+            WriteReceipt<T, ID> receipt,
+            Duration timeout
+    ) {
+        requireDurabilityArguments(receipt, timeout);
+        if (!awaitDurable(receipt, timeout)) {
+            throw new com.reactor.cachedb.core.repository.WriteDurabilityTimeoutException(receipt, timeout);
+        }
+        return receipt;
     }
 
     public boolean awaitDurable(
@@ -763,6 +816,45 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             Duration timeout
     ) {
         return durabilityTracker.awaitAll(receipts, timeout, Duration.ofMillis(25));
+    }
+
+    public <C extends Collection<? extends WriteReceipt<?, ?>>> C awaitDurableOrThrow(
+            C receipts,
+            Duration timeout
+    ) {
+        return awaitDurableOrThrow(receipts, timeout, "");
+    }
+
+    public <C extends Collection<? extends WriteReceipt<?, ?>>> C awaitDurableOrThrow(
+            C receipts,
+            Duration timeout,
+            String operation
+    ) {
+        requireDurabilityArguments(receipts, timeout);
+        if (!awaitDurable(receipts, timeout)) {
+            throw new com.reactor.cachedb.core.repository.WriteBatchDurabilityTimeoutException(
+                    receipts,
+                    timeout,
+                    operation
+            );
+        }
+        return receipts;
+    }
+
+    private void requireDurabilityArguments(Object receipts, Duration timeout) {
+        if (receipts == null) {
+            throw new IllegalArgumentException("receipt(s) must not be null");
+        }
+        if (receipts instanceof Collection<?> collection) {
+            for (Object receipt : collection) {
+                if (receipt == null) {
+                    throw new IllegalArgumentException("receipts must not contain null");
+                }
+            }
+        }
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout must be greater than zero");
+        }
     }
 
     public com.reactor.cachedb.core.route.RouteCoverage routeCoverage(

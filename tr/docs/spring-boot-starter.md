@@ -85,6 +85,20 @@ public final class OrderService {
 }
 ```
 
+Üretilen varsayılan bean adı, repository adının küçük harfle başlayan biçimidir;
+örneğin `orderRepository`. Farklı paketlerde aynı basit ada sahip repository'ler
+varsa bean sahipliğini açıkça belirt:
+
+```java
+@CacheRepository(entity = SalesOrderEntity.class, springBeanName = "salesOrders")
+public interface Orders extends CacheDbRepository<SalesOrderEntity, Long> {
+}
+```
+
+Processor, aynı derlemede çakışan repository bean adlarını Spring başlangıcına
+bırakmadan reddeder. Üretilen route kataloğu bean'leri ise her zaman paket adıyla
+birlikte benzersiz ad kullanır.
+
 Spring kaydı bilinçli olarak iki aşamalıdır. Önce tüm generated entity’ler kendi
 policy değerleri ve JDBC kaynaklarıyla kaydedilir; ilişki ve sayfa yükleyicileri
 ancak bütün alt repository’ler bilindikten sonra bağlanır. Böylece constructor
@@ -489,7 +503,9 @@ kaynak veritabanı sınırını repository arayüzünde tut:
 @CacheRepository(entity = OrderEntity.class)
 public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
-    @HotRoute(value = "customer-order-timeline", projection = OrderSummary.class,
+    @HotRoute(value = "customer-order-timeline",
+            population = HotRoute.Population.DECLARED_WARM,
+            projection = OrderSummary.class,
             pageSize = 100, hotWindow = 1_000,
             memoryBudgetBytes = 16_777_216L,
             coverageScopeParameter = "customerId")
@@ -509,8 +525,8 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
     @WarmRoute(value = "warm-customer-order-timeline", from = "timeline",
             maxRows = 1_000, maxRowsParameter = "maxRows",
-            coverageScopeParameter = "customerId", projectionsOnly = true)
-    CacheWarmPlan warmTimeline(long customerId, int maxRows);
+            coverageScopeParameter = "customerId", targetParameter = "target")
+    CacheWarmPlan warmTimeline(long customerId, int maxRows, CacheWarmTarget target);
 }
 ```
 
@@ -518,7 +534,7 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 List<OrderSummary> firstPage = orders.timeline(
         customerId,
         WindowRequest.first(24)
-).items();
+).completeItems();
 
 OrderEntity detail = orders.detail(orderId, 8)
         .orElseThrow(status -> mapHotLookupFailure(orderId, status));
@@ -529,6 +545,31 @@ argümanları, güvensiz pencereleri, yinelenen route adlarını ve geçersiz wa
 sözleşmelerini derleme sırasında reddeder. İlişki yükü ağır ekranlarda önce
 summary projection, ardından sınırlı ve açık detay lookup kullan. Redis'te veri
 olmaması kalıcı 404 anlamına gelmez ve örtülü SQL fallback başlatmamalıdır.
+
+`population`, yalnızca Redis'ten çalışan yolun temsil edici veri kümesine nasıl
+ulaşacağını açıkça belirtir:
+
+| Strateji | Kullanım durumu |
+| --- | --- |
+| `ON_DEMAND` | Trafik veya açık uygulama kodu sınırlı veri kümesini Redis'e alır |
+| `DECLARED_WARM` | Uygulama başlamadan önce generated `@WarmRoute` bulunmalıdır |
+| `WRITE_FED` | CacheDB komutları veya değişiklik akışı yolu sürekli güncel tutar |
+| `EXTERNAL` | Doldurma ve coverage sorumluluğu izlenen harici bir süreçtedir |
+
+Starter, coverage anahtarları çakışacağı için global hızlı erişim route adı
+çakışmalarını reddeder. `/actuator/cachedb`, sınırlı generated route envanterini
+ve `hotRoutePopulation` dağılımını yayımlar. Micrometer tarafında yalnızca dört
+sabit strateji değeri taşıyan
+`cachedb.routes.hot.population{strategy=...}` metriği bulunur. Testte sözleşmeyi
+reflection kullanmadan doğrulayabilirsin:
+
+```java
+cacheDb.requireDeclaredWarmRoute("customer-order-timeline");
+cacheDb.warmAndRequireCoverage(
+        orders.warmTimeline(42L, 1_000, CacheWarmTarget.PROJECTIONS_ONLY),
+        Duration.ofMinutes(5)
+);
+```
 
 ## Minimal Overhead Modu
 
@@ -930,3 +971,45 @@ Starter'ı bağladıktan sonra tipik sonraki adımlar şunlardır:
 - pahalı liste akışları için page loader tanımlamak
 - admin explain ekranı ile fetch planlarını doğrulamak
 - `/cachedb-admin` üzerinden yönetim paneli erişimini kontrol etmek
+
+## Tanım Odaklı Dağıtık İşler
+
+Üretici ile bütün Kubernetes pod'larının aynı route ve payload tipini kullanması
+için `CacheDistributedJobHandler.Typed<A>` kullan. Handler içinde route metnini
+birden fazla yerde tekrar etme.
+
+```java
+@Component
+final class CatalogWarmHandler
+        implements CacheDistributedJobHandler.Typed<CatalogWarmCommand> {
+
+    static final CacheDistributedJobDefinition<CatalogWarmCommand> DEFINITION =
+            CacheDistributedJobDefinition.of("catalog.warm", CatalogWarmCommand.class);
+
+    @Override
+    public CacheDistributedJobDefinition<CatalogWarmCommand> definition() {
+        return DEFINITION;
+    }
+
+    @Override
+    public Object execute(CatalogWarmCommand command, CacheDistributedJobContext context) {
+        context.checkpoint(CacheDistributedJobProgress.phase("WARMING", context.attempt())
+                .withAttribute("route", command.route()));
+        // Tek seferde sınırlı ve yeniden başlatılabilir bir iş parçası çalıştır.
+        return result;
+    }
+}
+```
+
+İşi aynı tanımla gönder:
+
+```java
+jobs.submit(CatalogWarmHandler.DEFINITION, new CatalogWarmCommand("products"));
+```
+
+`CacheDistributedJobProgress`; checkpoint serialize edilmeden önce aşama,
+yüzde, mesaj, attribute sayısı ve boyutunu sınırlar. Geriye uyumluluk için
+serbest checkpoint nesnesi kabul edilir; production için önerilen yol tipli
+progress modelidir. Her pod aynı handler kümesini kaydetmelidir. Checkpoint,
+işin kaldığı yerden sürmesini sağlar; idempotent olmayan bir işi kendiliğinden
+güvenli hâle getirmez.

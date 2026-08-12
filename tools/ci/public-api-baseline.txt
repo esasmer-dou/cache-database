@@ -66,6 +66,19 @@ public interface com.reactor.cachedb.annotations.CacheLookup extends java.lang.a
   public abstract int maxRelationRows();
 }
 
+## cachedb-annotations :: com.reactor.cachedb.annotations.CacheMemoryBudget
+public final class com.reactor.cachedb.annotations.CacheMemoryBudget {
+  public static final long MIB_1;
+  public static final long MIB_2;
+  public static final long MIB_4;
+  public static final long MIB_8;
+  public static final long MIB_16;
+  public static final long MIB_32;
+  public static final long MIB_64;
+  public static final long MIB_128;
+  public static final long MIB_256;
+}
+
 ## cachedb-annotations :: com.reactor.cachedb.annotations.CacheNamedQuery
 public interface com.reactor.cachedb.annotations.CacheNamedQuery extends java.lang.annotation.Annotation {
   public abstract java.lang.String value();
@@ -134,6 +147,20 @@ public interface com.reactor.cachedb.annotations.CacheRelation extends java.lang
 public interface com.reactor.cachedb.annotations.CacheRepository extends java.lang.annotation.Annotation {
   public abstract java.lang.Class<?> entity();
   public abstract boolean springBean();
+  public abstract java.lang.String springBeanName();
+}
+
+## cachedb-annotations :: com.reactor.cachedb.annotations.CacheRepositoryDefaults
+public interface com.reactor.cachedb.annotations.CacheRepositoryDefaults extends java.lang.annotation.Annotation {
+  public abstract com.reactor.cachedb.annotations.HotRoute$Population hotPopulation();
+  public abstract int hotPageSize();
+  public abstract int hotWindow();
+  public abstract long hotMemoryBudgetBytes();
+  public abstract long hotMaxStalenessSeconds();
+  public abstract boolean hotStrict();
+  public abstract int sourceMaxRows();
+  public abstract int sourceTimeoutSeconds();
+  public abstract int warmMaxRows();
 }
 
 ## cachedb-annotations :: com.reactor.cachedb.annotations.CacheRoute
@@ -151,6 +178,7 @@ public interface com.reactor.cachedb.annotations.CacheRoute extends java.lang.an
 ## cachedb-annotations :: com.reactor.cachedb.annotations.CacheRouteQuery
 public interface com.reactor.cachedb.annotations.CacheRouteQuery extends java.lang.annotation.Annotation {
   public abstract com.reactor.cachedb.annotations.CachePredicate[] predicates();
+  public abstract boolean explicitDisjunction();
   public abstract com.reactor.cachedb.annotations.CacheOrder[] orderBy();
   public abstract java.lang.String limitParameter();
   public abstract int fixedLimit();
@@ -184,6 +212,7 @@ public interface com.reactor.cachedb.annotations.HotRoute extends java.lang.anno
   public abstract java.lang.String coverageScopeParameter();
   public abstract long maxStalenessSeconds();
   public abstract boolean strict();
+  public abstract com.reactor.cachedb.annotations.HotRoute$Population population();
 }
 
 ## cachedb-annotations :: com.reactor.cachedb.annotations.SourceRoute
@@ -209,6 +238,7 @@ public interface com.reactor.cachedb.annotations.WarmRoute extends java.lang.ann
   public abstract java.lang.String from();
   public abstract int maxRows();
   public abstract java.lang.String maxRowsParameter();
+  public abstract java.lang.String targetParameter();
   public abstract java.lang.String coverageScopeParameter();
   public abstract long coverageTtlSeconds();
   public abstract boolean projectionsOnly();
@@ -233,6 +263,7 @@ public interface com.reactor.cachedb.core.api.CacheSession {
 
 ## cachedb-core :: com.reactor.cachedb.core.api.EntityRepository
 public interface com.reactor.cachedb.core.api.EntityRepository<T, ID> {
+  public default com.reactor.cachedb.core.api.RepositoryCapabilities capabilities();
   public abstract java.util.Optional<T> findById(ID);
   public default com.reactor.cachedb.core.repository.HotLookup<T> findHotById(ID);
   public default java.util.Optional<com.reactor.cachedb.core.page.VersionedEntity<T>> findVersionedById(ID);
@@ -266,6 +297,37 @@ public interface com.reactor.cachedb.core.api.ProjectionRepository<P, ID> {
   public default java.util.List<P> query(com.reactor.cachedb.core.query.QueryNode);
   public default java.util.List<P> query(com.reactor.cachedb.core.query.QueryNode, com.reactor.cachedb.core.query.QuerySort...);
   public default java.util.List<P> query(com.reactor.cachedb.core.query.QueryNode, int, com.reactor.cachedb.core.query.QuerySort...);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.api.RepositoryCapabilities
+public final class com.reactor.cachedb.core.api.RepositoryCapabilities {
+  public static com.reactor.cachedb.core.api.RepositoryCapabilities none();
+  public static com.reactor.cachedb.core.api.RepositoryCapabilities all();
+  public static com.reactor.cachedb.core.api.RepositoryCapabilities of(com.reactor.cachedb.core.api.RepositoryCapability...);
+  public boolean supports(com.reactor.cachedb.core.api.RepositoryCapability);
+  public void require(com.reactor.cachedb.core.api.RepositoryCapability, java.lang.Class<?>);
+  public java.util.List<com.reactor.cachedb.core.api.RepositoryCapability> asList();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.api.RepositoryCapability
+public final class com.reactor.cachedb.core.api.RepositoryCapability extends java.lang.Enum<com.reactor.cachedb.core.api.RepositoryCapability> {
+  public static final com.reactor.cachedb.core.api.RepositoryCapability VERSIONED_READ;
+  public static final com.reactor.cachedb.core.api.RepositoryCapability WRITE_RECEIPT;
+  public static final com.reactor.cachedb.core.api.RepositoryCapability OPTIMISTIC_WRITE;
+  public static final com.reactor.cachedb.core.api.RepositoryCapability DEPENDENCY_AWARE_WRITE;
+  public static final com.reactor.cachedb.core.api.RepositoryCapability BULK_WRITE;
+  public static final com.reactor.cachedb.core.api.RepositoryCapability PARTITIONED_QUERY;
+  public static final com.reactor.cachedb.core.api.RepositoryCapability DELETE_RECEIPT;
+  public static final com.reactor.cachedb.core.api.RepositoryCapability PROJECTION;
+  public static com.reactor.cachedb.core.api.RepositoryCapability[] values();
+  public static com.reactor.cachedb.core.api.RepositoryCapability valueOf(java.lang.String);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.api.RepositoryCapabilityUnavailableException
+public final class com.reactor.cachedb.core.api.RepositoryCapabilityUnavailableException extends java.lang.UnsupportedOperationException {
+  public com.reactor.cachedb.core.api.RepositoryCapabilityUnavailableException(com.reactor.cachedb.core.api.RepositoryCapability, java.lang.Class<?>);
+  public com.reactor.cachedb.core.api.RepositoryCapability capability();
+  public java.lang.String implementationType();
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.api.SourceRepository
@@ -1500,8 +1562,11 @@ public final class com.reactor.cachedb.core.query.HardLimitQueryClass extends ja
 ## cachedb-core :: com.reactor.cachedb.core.query.KeysetPagination
 public final class com.reactor.cachedb.core.query.KeysetPagination {
   public static com.reactor.cachedb.core.query.QuerySpec apply(com.reactor.cachedb.core.query.QuerySpec, com.reactor.cachedb.core.repository.WindowRequest, java.util.List<com.reactor.cachedb.core.query.QuerySort>);
+  public static com.reactor.cachedb.core.query.QuerySpec apply(com.reactor.cachedb.core.query.QuerySpec, com.reactor.cachedb.core.repository.WindowRequest, java.util.List<com.reactor.cachedb.core.query.QuerySort>, java.lang.String, java.lang.String);
   public static <T> com.reactor.cachedb.core.repository.HotWindow<T> hotWindow(java.util.List<T>, com.reactor.cachedb.core.repository.WindowRequest, java.util.List<com.reactor.cachedb.core.query.QuerySort>, java.util.function.Function<T, java.util.Map<java.lang.String, java.lang.Object>>, com.reactor.cachedb.core.route.RouteCoverage);
+  public static <T> com.reactor.cachedb.core.repository.HotWindow<T> hotWindow(java.util.List<T>, com.reactor.cachedb.core.repository.WindowRequest, java.util.List<com.reactor.cachedb.core.query.QuerySort>, java.util.function.Function<T, java.util.Map<java.lang.String, java.lang.Object>>, com.reactor.cachedb.core.route.RouteCoverage, java.lang.String, java.lang.String);
   public static <T> com.reactor.cachedb.core.repository.SourceWindow<T> sourceWindow(java.util.List<T>, com.reactor.cachedb.core.repository.WindowRequest, java.util.List<com.reactor.cachedb.core.query.QuerySort>, java.util.function.Function<T, java.util.Map<java.lang.String, java.lang.Object>>);
+  public static <T> com.reactor.cachedb.core.repository.SourceWindow<T> sourceWindow(java.util.List<T>, com.reactor.cachedb.core.repository.WindowRequest, java.util.List<com.reactor.cachedb.core.query.QuerySort>, java.util.function.Function<T, java.util.Map<java.lang.String, java.lang.Object>>, java.lang.String, java.lang.String);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.query.PartitionedQuerySpec
@@ -2596,6 +2661,7 @@ public interface com.reactor.cachedb.core.repository.CacheDbRepository<T, ID> {
   public abstract com.reactor.cachedb.core.model.WriteReceipt<T, ID> deleteById(ID);
   public abstract boolean isDurable(com.reactor.cachedb.core.model.WriteReceipt<?, ?>);
   public abstract boolean awaitDurable(com.reactor.cachedb.core.model.WriteReceipt<?, ?>, java.time.Duration);
+  public default <R extends com.reactor.cachedb.core.model.WriteReceipt<?, ?>> R awaitDurableOrThrow(R, java.time.Duration);
   public default com.reactor.cachedb.core.model.WriteReceipt<T, ID> updateHot(ID, java.util.function.UnaryOperator<T>);
 }
 
@@ -2604,6 +2670,28 @@ public interface com.reactor.cachedb.core.repository.CacheIdGenerator {
   public abstract java.util.UUID nextUuid();
   public abstract java.lang.String nextUlid();
   public abstract long nextSequence(java.lang.String, int);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.repository.CursorContractMismatchException
+public final class com.reactor.cachedb.core.repository.CursorContractMismatchException extends java.lang.IllegalArgumentException {
+  public com.reactor.cachedb.core.repository.CursorContractMismatchException(java.lang.String, java.lang.String);
+  public java.lang.String expectedFingerprint();
+  public java.lang.String actualFingerprint();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.repository.CursorPage
+public final class com.reactor.cachedb.core.repository.CursorPage<T> extends java.lang.Record {
+  public com.reactor.cachedb.core.repository.CursorPage(java.util.List<T>, java.lang.String);
+  public static <T> com.reactor.cachedb.core.repository.CursorPage<T> from(com.reactor.cachedb.core.repository.WindowSlice<T>);
+  public int size();
+  public boolean isEmpty();
+  public boolean hasNext();
+  public java.util.Optional<com.reactor.cachedb.core.repository.WindowRequest> nextRequest(int);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.util.List<T> items();
+  public java.lang.String nextCursor();
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.repository.HotLookup
@@ -2615,6 +2703,10 @@ public final class com.reactor.cachedb.core.repository.HotLookup<T> extends java
   public static <T> com.reactor.cachedb.core.repository.HotLookup<T> outsidePolicy();
   public java.util.Optional<T> optional();
   public boolean isHit();
+  public boolean isNotCached();
+  public boolean isTombstoned();
+  public boolean isOutsideHotPolicy();
+  public <R> com.reactor.cachedb.core.repository.HotLookup<R> map(java.util.function.Function<? super T, ? extends R>);
   public <X extends java.lang.Throwable> T orElseThrow(java.util.function.Function<com.reactor.cachedb.core.repository.HotLookupStatus, ? extends X>) throws X;
   public final java.lang.String toString();
   public final int hashCode();
@@ -2646,11 +2738,14 @@ public final class com.reactor.cachedb.core.repository.HotUpdateUnavailableExcep
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.repository.HotWindow
-public final class com.reactor.cachedb.core.repository.HotWindow<T> extends java.lang.Record {
+public final class com.reactor.cachedb.core.repository.HotWindow<T> extends java.lang.Record implements com.reactor.cachedb.core.repository.WindowSlice<T> {
   public com.reactor.cachedb.core.repository.HotWindow(java.util.List<T>, java.lang.String, com.reactor.cachedb.core.route.RouteCoverage);
   public boolean complete();
   public java.util.List<T> completeItems();
+  public com.reactor.cachedb.core.repository.HotWindow<T> requireComplete();
+  public com.reactor.cachedb.core.repository.CursorPage<T> completePage();
   public <X extends java.lang.Throwable> java.util.List<T> completeItems(java.util.function.Function<com.reactor.cachedb.core.route.RouteCoverage, ? extends X>) throws X;
+  public <R> com.reactor.cachedb.core.repository.HotWindow<R> map(java.util.function.Function<? super T, ? extends R>);
   public final java.lang.String toString();
   public final int hashCode();
   public final boolean equals(java.lang.Object);
@@ -2684,8 +2779,10 @@ public final class com.reactor.cachedb.core.repository.SourceSqlValidator {
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.repository.SourceWindow
-public final class com.reactor.cachedb.core.repository.SourceWindow<T> extends java.lang.Record {
+public final class com.reactor.cachedb.core.repository.SourceWindow<T> extends java.lang.Record implements com.reactor.cachedb.core.repository.WindowSlice<T> {
   public com.reactor.cachedb.core.repository.SourceWindow(java.util.List<T>, java.lang.String);
+  public com.reactor.cachedb.core.repository.CursorPage<T> page();
+  public <R> com.reactor.cachedb.core.repository.SourceWindow<R> map(java.util.function.Function<? super T, ? extends R>);
   public final java.lang.String toString();
   public final int hashCode();
   public final boolean equals(java.lang.Object);
@@ -2696,7 +2793,9 @@ public final class com.reactor.cachedb.core.repository.SourceWindow<T> extends j
 ## cachedb-core :: com.reactor.cachedb.core.repository.WindowCursor
 public final class com.reactor.cachedb.core.repository.WindowCursor {
   public static java.lang.String encode(java.util.Map<java.lang.String, ?>);
+  public static java.lang.String encode(java.util.Map<java.lang.String, ?>, java.lang.String);
   public static java.util.Map<java.lang.String, java.lang.Object> decode(java.lang.String);
+  public static java.util.Map<java.lang.String, java.lang.Object> decode(java.lang.String, java.lang.String);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.repository.WindowRequest
@@ -2704,6 +2803,7 @@ public final class com.reactor.cachedb.core.repository.WindowRequest extends jav
   public static final int MAX_LIMIT;
   public com.reactor.cachedb.core.repository.WindowRequest(int, java.lang.String);
   public static com.reactor.cachedb.core.repository.WindowRequest first(int);
+  public static com.reactor.cachedb.core.repository.WindowRequest of(int, java.lang.String);
   public static com.reactor.cachedb.core.repository.WindowRequest after(java.lang.String, int);
   public int queryLimit();
   public final java.lang.String toString();
@@ -2711,6 +2811,25 @@ public final class com.reactor.cachedb.core.repository.WindowRequest extends jav
   public final boolean equals(java.lang.Object);
   public int limit();
   public java.lang.String after();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.repository.WindowSlice
+public interface com.reactor.cachedb.core.repository.WindowSlice<T> {
+  public abstract java.util.List<T> items();
+  public abstract java.lang.String nextCursor();
+  public default int size();
+  public default boolean isEmpty();
+  public default boolean hasNext();
+  public default java.util.Optional<com.reactor.cachedb.core.repository.WindowRequest> nextRequest(int);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.repository.WriteBatchDurabilityTimeoutException
+public final class com.reactor.cachedb.core.repository.WriteBatchDurabilityTimeoutException extends java.lang.IllegalStateException {
+  public com.reactor.cachedb.core.repository.WriteBatchDurabilityTimeoutException(java.util.Collection<? extends com.reactor.cachedb.core.model.WriteReceipt<?, ?>>, java.time.Duration);
+  public com.reactor.cachedb.core.repository.WriteBatchDurabilityTimeoutException(java.util.Collection<? extends com.reactor.cachedb.core.model.WriteReceipt<?, ?>>, java.time.Duration, java.lang.String);
+  public java.util.List<com.reactor.cachedb.core.model.WriteReceipt<?, ?>> receipts();
+  public java.time.Duration timeout();
+  public java.lang.String operation();
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.repository.WriteConsistency
@@ -2725,6 +2844,68 @@ public final class com.reactor.cachedb.core.repository.WriteConsistency extends 
 ## cachedb-core :: com.reactor.cachedb.core.repository.WriteDurabilityTimeoutException
 public final class com.reactor.cachedb.core.repository.WriteDurabilityTimeoutException extends java.lang.IllegalStateException {
   public com.reactor.cachedb.core.repository.WriteDurabilityTimeoutException(com.reactor.cachedb.core.model.WriteReceipt<?, ?>, java.time.Duration);
+  public com.reactor.cachedb.core.model.WriteReceipt<?, ?> receipt();
+  public java.time.Duration timeout();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.route.HotRoutePopulation
+public final class com.reactor.cachedb.core.route.HotRoutePopulation extends java.lang.Enum<com.reactor.cachedb.core.route.HotRoutePopulation> {
+  public static final com.reactor.cachedb.core.route.HotRoutePopulation NOT_APPLICABLE;
+  public static final com.reactor.cachedb.core.route.HotRoutePopulation ON_DEMAND;
+  public static final com.reactor.cachedb.core.route.HotRoutePopulation DECLARED_WARM;
+  public static final com.reactor.cachedb.core.route.HotRoutePopulation WRITE_FED;
+  public static final com.reactor.cachedb.core.route.HotRoutePopulation EXTERNAL;
+  public static com.reactor.cachedb.core.route.HotRoutePopulation[] values();
+  public static com.reactor.cachedb.core.route.HotRoutePopulation valueOf(java.lang.String);
+}
+
+## cachedb-core :: com.reactor.cachedb.core.route.RepositoryRouteCatalog
+public final class com.reactor.cachedb.core.route.RepositoryRouteCatalog extends java.lang.Record {
+  public com.reactor.cachedb.core.route.RepositoryRouteCatalog(java.lang.String, java.lang.String, java.util.List<com.reactor.cachedb.core.route.RepositoryRouteDefinition>);
+  public int count(com.reactor.cachedb.core.route.RepositoryRouteKind);
+  public java.util.List<com.reactor.cachedb.core.route.RepositoryRouteDefinition> routes(com.reactor.cachedb.core.route.RepositoryRouteKind);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String repositoryName();
+  public java.lang.String entityName();
+  public java.util.List<com.reactor.cachedb.core.route.RepositoryRouteDefinition> routes();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.route.RepositoryRouteDefinition
+public final class com.reactor.cachedb.core.route.RepositoryRouteDefinition extends java.lang.Record {
+  public com.reactor.cachedb.core.route.RepositoryRouteDefinition(java.lang.String, com.reactor.cachedb.core.route.RepositoryRouteKind, java.lang.String, java.lang.String, int, int, int, int, long, boolean, boolean, java.lang.String);
+  public com.reactor.cachedb.core.route.RepositoryRouteDefinition(java.lang.String, com.reactor.cachedb.core.route.RepositoryRouteKind, java.lang.String, java.lang.String, int, int, int, int, long, boolean, boolean, java.lang.String, com.reactor.cachedb.core.route.HotRoutePopulation);
+  public boolean projectionBacked();
+  public boolean requiresDeclaredWarm();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String methodName();
+  public com.reactor.cachedb.core.route.RepositoryRouteKind kind();
+  public java.lang.String routeName();
+  public java.lang.String projectionName();
+  public int pageSize();
+  public int maxRows();
+  public int hotWindow();
+  public int queryTimeoutSeconds();
+  public long memoryBudgetBytes();
+  public boolean coverageScoped();
+  public boolean projectionsOnly();
+  public java.lang.String detail();
+  public com.reactor.cachedb.core.route.HotRoutePopulation population();
+}
+
+## cachedb-core :: com.reactor.cachedb.core.route.RepositoryRouteKind
+public final class com.reactor.cachedb.core.route.RepositoryRouteKind extends java.lang.Enum<com.reactor.cachedb.core.route.RepositoryRouteKind> {
+  public static final com.reactor.cachedb.core.route.RepositoryRouteKind HOT;
+  public static final com.reactor.cachedb.core.route.RepositoryRouteKind SOURCE;
+  public static final com.reactor.cachedb.core.route.RepositoryRouteKind SOURCE_SQL;
+  public static final com.reactor.cachedb.core.route.RepositoryRouteKind WARM;
+  public static final com.reactor.cachedb.core.route.RepositoryRouteKind LOOKUP;
+  public static final com.reactor.cachedb.core.route.RepositoryRouteKind COMMAND;
+  public static com.reactor.cachedb.core.route.RepositoryRouteKind[] values();
+  public static com.reactor.cachedb.core.route.RepositoryRouteKind valueOf(java.lang.String);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.route.RouteCacheContext
@@ -2910,6 +3091,7 @@ public final class com.reactor.cachedb.redis.RedisDurabilityTracker {
 
 ## cachedb-storage-redis :: com.reactor.cachedb.redis.RedisEntityRepository
 public final class com.reactor.cachedb.redis.RedisEntityRepository<T, ID> implements com.reactor.cachedb.core.api.EntityRepository<T, ID>, com.reactor.cachedb.core.change.ExternalChangeHydrationRepository<T, ID> {
+  public com.reactor.cachedb.core.api.RepositoryCapabilities capabilities();
   public com.reactor.cachedb.redis.RedisEntityRepository(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.queue.WriteBehindQueue, com.reactor.cachedb.redis.RedisKeyStrategy, com.reactor.cachedb.core.plan.FetchPlan, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.redis.RedisFunctionExecutor, com.reactor.cachedb.redis.RedisProducerGuard, com.reactor.cachedb.core.config.RedisGuardrailConfig, java.lang.String, java.lang.String, int, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.redis.RedisPageCacheManager<T, ID>, com.reactor.cachedb.core.query.QueryEvaluator, com.reactor.cachedb.redis.RedisQueryIndexManager<T, ID>, com.reactor.cachedb.core.queue.StoragePerformanceCollector, redis.clients.jedis.JedisPooled, com.reactor.cachedb.redis.ProjectionRefreshDispatcher, com.reactor.cachedb.redis.RedisProjectionRefreshQueue);
   public com.reactor.cachedb.redis.RedisEntityRepository(redis.clients.jedis.JedisPooled, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, com.reactor.cachedb.core.queue.WriteBehindQueue, com.reactor.cachedb.redis.RedisKeyStrategy, com.reactor.cachedb.core.plan.FetchPlan, com.reactor.cachedb.core.cache.CachePolicy, com.reactor.cachedb.redis.RedisFunctionExecutor, com.reactor.cachedb.redis.RedisProducerGuard, com.reactor.cachedb.core.config.RedisGuardrailConfig, java.lang.String, java.lang.String, int, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.relation.RelationBatchLoader<T>, com.reactor.cachedb.core.config.RelationConfig, com.reactor.cachedb.core.config.QueryIndexConfig, com.reactor.cachedb.core.page.EntityPageLoader<T>, com.reactor.cachedb.core.page.EntityByIdLoader<T, ID>, com.reactor.cachedb.core.page.EntityQueryLoader<T>, com.reactor.cachedb.core.config.PageCacheConfig, com.reactor.cachedb.core.config.ReadThroughConfig, com.reactor.cachedb.core.config.ReadShapeGuardrailConfig, com.reactor.cachedb.redis.RedisPageCacheManager<T, ID>, com.reactor.cachedb.core.query.QueryEvaluator, com.reactor.cachedb.redis.RedisQueryIndexManager<T, ID>, com.reactor.cachedb.core.queue.StoragePerformanceCollector, redis.clients.jedis.JedisPooled, com.reactor.cachedb.redis.ProjectionRefreshDispatcher, com.reactor.cachedb.redis.RedisProjectionRefreshQueue);
   public java.util.Optional<T> findById(ID);
@@ -3669,6 +3851,7 @@ public final class com.reactor.cachedb.starter.CacheDatabase implements com.reac
   public com.reactor.cachedb.starter.CacheWarmResult warm(com.reactor.cachedb.starter.CacheWarmPlan);
   public com.reactor.cachedb.starter.CacheWarmResult dryRun(com.reactor.cachedb.starter.CacheWarmPlan);
   public com.reactor.cachedb.starter.CacheWarmResult warmProjections(com.reactor.cachedb.starter.CacheWarmPlan);
+  public com.reactor.cachedb.starter.CacheWarmExecution executeWarm(com.reactor.cachedb.starter.CacheWarmPlan, com.reactor.cachedb.starter.CacheWarmExecutionMode);
   public com.reactor.cachedb.starter.CacheHotSetReconciliationResult reconcileHotSet(java.lang.String, java.lang.String, int, int);
   public java.util.List<com.reactor.cachedb.starter.CacheWarmResult> warmAll(java.util.Collection<com.reactor.cachedb.starter.CacheWarmPlan>);
   public <T, ID, P> com.reactor.cachedb.core.projection.EntityProjectionBinding<T, P, ID> registerProjection(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.projection.EntityProjection<T, P, ID>);
@@ -3677,8 +3860,12 @@ public final class com.reactor.cachedb.starter.CacheDatabase implements com.reac
   public <T, ID> com.reactor.cachedb.core.api.SourceRepository<T, ID> sourceRepository(com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>);
   public <T> com.reactor.cachedb.core.repository.SourceSqlRepository<T> sourceSqlRepository(com.reactor.cachedb.core.model.EntityCodec<T>);
   public boolean isDurable(com.reactor.cachedb.core.model.WriteReceipt<?, ?>);
+  public <T, ID> com.reactor.cachedb.starter.CacheDurableBatchWriter<T, ID> durableBatchWriter(java.lang.String, int, int, java.time.Duration, java.util.function.Function<java.util.Collection<T>, java.util.List<com.reactor.cachedb.core.model.WriteReceipt<T, ID>>>);
   public boolean awaitDurable(com.reactor.cachedb.core.model.WriteReceipt<?, ?>, java.time.Duration);
+  public <T, ID> com.reactor.cachedb.core.model.WriteReceipt<T, ID> awaitDurableOrThrow(com.reactor.cachedb.core.model.WriteReceipt<T, ID>, java.time.Duration);
   public boolean awaitDurable(java.util.Collection<? extends com.reactor.cachedb.core.model.WriteReceipt<?, ?>>, java.time.Duration);
+  public <C extends java.util.Collection<? extends com.reactor.cachedb.core.model.WriteReceipt<?, ?>>> C awaitDurableOrThrow(C, java.time.Duration);
+  public <C extends java.util.Collection<? extends com.reactor.cachedb.core.model.WriteReceipt<?, ?>>> C awaitDurableOrThrow(C, java.time.Duration, java.lang.String);
   public com.reactor.cachedb.core.route.RouteCoverage routeCoverage(java.lang.String, java.lang.String, java.time.Duration);
   public com.reactor.cachedb.core.route.RouteCoverageStore routeCoverageStore();
   public com.reactor.cachedb.core.repository.CacheIdGenerator idGenerator();
@@ -3885,6 +4072,27 @@ public final class com.reactor.cachedb.starter.CacheDatabaseSchemaAdmin {
   public java.util.List<com.reactor.cachedb.starter.SchemaMigrationHistoryEntry> migrationHistory(int);
 }
 
+## cachedb-starter :: com.reactor.cachedb.starter.CacheDurableBatchResult
+public final class com.reactor.cachedb.starter.CacheDurableBatchResult extends java.lang.Record {
+  public com.reactor.cachedb.starter.CacheDurableBatchResult(java.lang.String, long, int, int);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String operation();
+  public long submittedRows();
+  public int writeBatches();
+  public int durabilityWaits();
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.CacheDurableBatchWriter
+public final class com.reactor.cachedb.starter.CacheDurableBatchWriter<T, ID> implements java.lang.AutoCloseable {
+  public void add(T);
+  public void addAll(java.lang.Iterable<? extends T>);
+  public void flush();
+  public com.reactor.cachedb.starter.CacheDurableBatchResult finish();
+  public void close();
+}
+
 ## cachedb-starter :: com.reactor.cachedb.starter.CacheHotSetReconciliationResult
 public final class com.reactor.cachedb.starter.CacheHotSetReconciliationResult extends java.lang.Record {
   public com.reactor.cachedb.starter.CacheHotSetReconciliationResult(java.lang.String, java.lang.String, int, int, int, int, boolean);
@@ -3900,11 +4108,37 @@ public final class com.reactor.cachedb.starter.CacheHotSetReconciliationResult e
   public boolean fullCycleCompleted();
 }
 
+## cachedb-starter :: com.reactor.cachedb.starter.CacheWarmExecution
+public final class com.reactor.cachedb.starter.CacheWarmExecution extends java.lang.Record {
+  public com.reactor.cachedb.starter.CacheWarmExecution(com.reactor.cachedb.starter.CacheWarmPlan, com.reactor.cachedb.starter.CacheWarmExecutionMode, com.reactor.cachedb.starter.CacheWarmResult);
+  public boolean dryRun();
+  public boolean projectionsOnly();
+  public java.lang.String routeName();
+  public java.lang.String scope();
+  public com.reactor.cachedb.starter.CacheWarmSummary summary();
+  public com.reactor.cachedb.starter.CacheWarmSummary summary(java.lang.String);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public com.reactor.cachedb.starter.CacheWarmPlan plan();
+  public com.reactor.cachedb.starter.CacheWarmExecutionMode mode();
+  public com.reactor.cachedb.starter.CacheWarmResult result();
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.CacheWarmExecutionMode
+public final class com.reactor.cachedb.starter.CacheWarmExecutionMode extends java.lang.Enum<com.reactor.cachedb.starter.CacheWarmExecutionMode> {
+  public static final com.reactor.cachedb.starter.CacheWarmExecutionMode APPLY;
+  public static final com.reactor.cachedb.starter.CacheWarmExecutionMode DRY_RUN;
+  public static com.reactor.cachedb.starter.CacheWarmExecutionMode[] values();
+  public static com.reactor.cachedb.starter.CacheWarmExecutionMode valueOf(java.lang.String);
+}
+
 ## cachedb-starter :: com.reactor.cachedb.starter.CacheWarmPlan
 public final class com.reactor.cachedb.starter.CacheWarmPlan extends java.lang.Record {
   public com.reactor.cachedb.starter.CacheWarmPlan(java.lang.String, java.lang.String, com.reactor.cachedb.core.query.QuerySpec, int, boolean, boolean);
   public com.reactor.cachedb.starter.CacheWarmPlan(java.lang.String, java.lang.String, com.reactor.cachedb.core.query.QuerySpec, int, boolean, boolean, java.lang.String, java.lang.String, long, boolean, java.lang.String);
   public static com.reactor.cachedb.starter.CacheWarmPlan$Builder builder(java.lang.String);
+  public com.reactor.cachedb.starter.CacheWarmTarget target();
   public final java.lang.String toString();
   public final int hashCode();
   public final boolean equals(java.lang.Object);
@@ -3943,6 +4177,37 @@ public final class com.reactor.cachedb.starter.CacheWarmRunner {
   public com.reactor.cachedb.starter.CacheWarmResult execute(com.reactor.cachedb.starter.CacheWarmPlan);
   public com.reactor.cachedb.starter.CacheWarmResult dryRun(com.reactor.cachedb.starter.CacheWarmPlan);
   public com.reactor.cachedb.starter.CacheWarmResult executeProjectionsOnly(com.reactor.cachedb.starter.CacheWarmPlan);
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.CacheWarmSummary
+public final class com.reactor.cachedb.starter.CacheWarmSummary extends java.lang.Record {
+  public com.reactor.cachedb.starter.CacheWarmSummary(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, int, int, int, long, com.reactor.cachedb.starter.CacheWarmTarget, com.reactor.cachedb.starter.CacheWarmExecutionMode, java.util.List<java.lang.String>);
+  public boolean dryRun();
+  public boolean projectionOnly();
+  public boolean fullySubmitted();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String operation();
+  public java.lang.String planName();
+  public java.lang.String routeName();
+  public java.lang.String entityName();
+  public java.lang.String scope();
+  public int requestedRows();
+  public int rowsReadFromSource();
+  public int rowsSubmittedToRedis();
+  public long durationMillis();
+  public com.reactor.cachedb.starter.CacheWarmTarget target();
+  public com.reactor.cachedb.starter.CacheWarmExecutionMode mode();
+  public java.util.List<java.lang.String> notes();
+}
+
+## cachedb-starter :: com.reactor.cachedb.starter.CacheWarmTarget
+public final class com.reactor.cachedb.starter.CacheWarmTarget extends java.lang.Enum<com.reactor.cachedb.starter.CacheWarmTarget> {
+  public static final com.reactor.cachedb.starter.CacheWarmTarget ENTITY_AND_PROJECTIONS;
+  public static final com.reactor.cachedb.starter.CacheWarmTarget PROJECTIONS_ONLY;
+  public static com.reactor.cachedb.starter.CacheWarmTarget[] values();
+  public static com.reactor.cachedb.starter.CacheWarmTarget valueOf(java.lang.String);
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.DefaultCacheSession
@@ -4342,6 +4607,7 @@ public interface com.reactor.cachedb.spring.boot.CacheDatabaseConfigCustomizer {
 ## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheDatabaseEndpoint
 public final class com.reactor.cachedb.spring.boot.CacheDatabaseEndpoint {
   public com.reactor.cachedb.spring.boot.CacheDatabaseEndpoint(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbProviderInfo);
+  public com.reactor.cachedb.spring.boot.CacheDatabaseEndpoint(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbProviderInfo, com.reactor.cachedb.spring.boot.CacheDbRouteInventory, com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry);
   public java.util.Map<java.lang.String, java.lang.Object> snapshot();
 }
 
@@ -4354,6 +4620,7 @@ public final class com.reactor.cachedb.spring.boot.CacheDatabaseHealthIndicator 
 ## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheDatabaseMetrics
 public final class com.reactor.cachedb.spring.boot.CacheDatabaseMetrics implements io.micrometer.core.instrument.binder.MeterBinder {
   public com.reactor.cachedb.spring.boot.CacheDatabaseMetrics(com.reactor.cachedb.starter.CacheDatabase);
+  public com.reactor.cachedb.spring.boot.CacheDatabaseMetrics(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbRouteInventory, com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry);
   public void bindTo(io.micrometer.core.instrument.MeterRegistry);
 }
 
@@ -4366,11 +4633,15 @@ public class com.reactor.cachedb.spring.boot.CacheDatabaseSpringBootAutoConfigur
   public org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler cacheDbScheduledWarmTaskScheduler(com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
   public com.reactor.cachedb.core.config.CacheDatabaseConfig cacheDatabaseConfig(com.reactor.cachedb.spring.boot.CacheDbSpringProperties, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CacheDatabaseConfigCustomizer>);
   public com.reactor.cachedb.spring.boot.CacheDbProviderInfo cacheDbProviderInfo(com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
+  public com.reactor.cachedb.spring.boot.CacheDbStartupReporter cacheDbStartupReporter(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbProviderInfo, com.reactor.cachedb.spring.boot.CacheDbSpringProperties, com.reactor.cachedb.spring.boot.CacheDbRouteInventory);
   public com.reactor.cachedb.spring.boot.CacheDbStartupReporter cacheDbStartupReporter(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbProviderInfo, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
+  public com.reactor.cachedb.spring.boot.CacheDbRouteInventory cacheDbRouteInventory(org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.core.route.RepositoryRouteCatalog>);
   public com.reactor.cachedb.core.cache.CachePolicyCatalog cachePolicyCatalog(com.reactor.cachedb.spring.boot.CacheDbSpringProperties, com.reactor.cachedb.core.config.CacheDatabaseConfig, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CachePolicyCatalogCustomizer>);
   public com.reactor.cachedb.starter.CacheDatabase cacheDatabase(org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, javax.sql.DataSource, com.reactor.cachedb.core.config.CacheDatabaseConfig, com.reactor.cachedb.core.cache.CachePolicyCatalog, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
   public com.reactor.cachedb.spring.boot.CacheDatabaseHealthIndicator cacheDatabaseHealthIndicator(com.reactor.cachedb.starter.CacheDatabase, redis.clients.jedis.JedisPooled, javax.sql.DataSource);
+  public com.reactor.cachedb.spring.boot.CacheDatabaseMetrics cacheDatabaseMetrics(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbRouteInventory, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry>);
   public com.reactor.cachedb.spring.boot.CacheDatabaseMetrics cacheDatabaseMetrics(com.reactor.cachedb.starter.CacheDatabase);
+  public com.reactor.cachedb.spring.boot.CacheDatabaseEndpoint cacheDatabaseEndpoint(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbProviderInfo, com.reactor.cachedb.spring.boot.CacheDbRouteInventory, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry>);
   public com.reactor.cachedb.spring.boot.CacheDatabaseEndpoint cacheDatabaseEndpoint(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbProviderInfo);
   public com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor cacheDistributedJobExecutor(com.reactor.cachedb.starter.CacheDatabase, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<com.fasterxml.jackson.databind.ObjectMapper>, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CacheDistributedJobHandler<?>>, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
   public com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor cacheDistributedJobExecutor(com.reactor.cachedb.starter.CacheDatabase, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<redis.clients.jedis.JedisPooled>, org.springframework.beans.factory.ObjectProvider<com.fasterxml.jackson.databind.ObjectMapper>, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
@@ -4398,6 +4669,22 @@ public final class com.reactor.cachedb.spring.boot.CacheDbProviderInfo extends j
   public java.util.List<java.lang.String> availableProviders();
 }
 
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheDbRouteInventory
+public final class com.reactor.cachedb.spring.boot.CacheDbRouteInventory {
+  public com.reactor.cachedb.spring.boot.CacheDbRouteInventory(java.util.Collection<com.reactor.cachedb.core.route.RepositoryRouteCatalog>);
+  public static com.reactor.cachedb.spring.boot.CacheDbRouteInventory empty();
+  public java.util.List<com.reactor.cachedb.core.route.RepositoryRouteCatalog> catalogs();
+  public int repositoryCount();
+  public int routeCount();
+  public int count(com.reactor.cachedb.core.route.RepositoryRouteKind);
+  public java.util.Map<com.reactor.cachedb.core.route.RepositoryRouteKind, java.lang.Integer> counts();
+  public java.util.Map<com.reactor.cachedb.core.route.HotRoutePopulation, java.lang.Integer> hotPopulationCounts();
+  public int hotPopulationCount(com.reactor.cachedb.core.route.HotRoutePopulation);
+  public java.util.Optional<com.reactor.cachedb.spring.boot.CacheDbRouteInventory$RouteDescriptor> route(java.lang.String, java.lang.String);
+  public java.util.Optional<com.reactor.cachedb.spring.boot.CacheDbRouteInventory$RouteDescriptor> hotRoute(java.lang.String);
+  public java.util.List<com.reactor.cachedb.spring.boot.CacheDbRouteInventory$RouteDescriptor> routes(int);
+}
+
 ## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheDbSpringProperties
 public class com.reactor.cachedb.spring.boot.CacheDbSpringProperties implements org.springframework.beans.factory.InitializingBean {
   public com.reactor.cachedb.spring.boot.CacheDbSpringProperties();
@@ -4420,6 +4707,7 @@ public class com.reactor.cachedb.spring.boot.CacheDbSpringProperties implements 
 ## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheDbStartupReporter
 public final class com.reactor.cachedb.spring.boot.CacheDbStartupReporter implements org.springframework.beans.factory.SmartInitializingSingleton {
   public com.reactor.cachedb.spring.boot.CacheDbStartupReporter(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbProviderInfo, com.reactor.cachedb.spring.boot.CacheDbSpringProperties);
+  public com.reactor.cachedb.spring.boot.CacheDbStartupReporter(com.reactor.cachedb.starter.CacheDatabase, com.reactor.cachedb.spring.boot.CacheDbProviderInfo, com.reactor.cachedb.spring.boot.CacheDbSpringProperties, com.reactor.cachedb.spring.boot.CacheDbRouteInventory);
   public void afterSingletonsInstantiated();
 }
 
@@ -4430,6 +4718,19 @@ public interface com.reactor.cachedb.spring.boot.CacheDistributedJobContext {
   public abstract int attempt();
   public abstract java.util.Optional<com.fasterxml.jackson.databind.JsonNode> checkpoint();
   public abstract void checkpoint(java.lang.Object);
+  public default void checkpoint(com.reactor.cachedb.spring.boot.CacheDistributedJobProgress);
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition
+public final class com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition<A> extends java.lang.Record {
+  public com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition(java.lang.String, java.lang.Class<A>);
+  public static <A> com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition<A> of(java.lang.String, java.lang.Class<A>);
+  public A requireArguments(java.lang.Object);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String route();
+  public java.lang.Class<A> argumentType();
 }
 
 ## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor
@@ -4437,6 +4738,7 @@ public final class com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor i
   public com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor(redis.clients.jedis.JedisPooled, com.fasterxml.jackson.databind.ObjectMapper, java.lang.String, com.reactor.cachedb.spring.boot.CacheDbSpringProperties$JobExecutorProperties);
   public com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor(redis.clients.jedis.JedisPooled, com.fasterxml.jackson.databind.ObjectMapper, java.lang.String, com.reactor.cachedb.spring.boot.CacheDbSpringProperties$JobExecutorProperties, java.util.Collection<? extends com.reactor.cachedb.spring.boot.CacheDistributedJobHandler<?>>);
   public com.reactor.cachedb.spring.boot.CacheDistributedJobSnapshot submit(java.lang.String, java.lang.Object);
+  public <A> com.reactor.cachedb.spring.boot.CacheDistributedJobSnapshot submit(com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition<A>, A);
   public com.reactor.cachedb.spring.boot.CacheDistributedJobSnapshot submit(java.lang.String, java.util.function.Supplier<?>);
   public java.util.Optional<com.reactor.cachedb.spring.boot.CacheDistributedJobSnapshot> find(java.lang.String);
   public void close();
@@ -4446,7 +4748,26 @@ public final class com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor i
 public interface com.reactor.cachedb.spring.boot.CacheDistributedJobHandler<A> {
   public abstract java.lang.String route();
   public abstract java.lang.Class<A> argumentType();
+  public default com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition<A> definition();
   public abstract java.lang.Object execute(A, com.reactor.cachedb.spring.boot.CacheDistributedJobContext);
+  public static <A> com.reactor.cachedb.spring.boot.CacheDistributedJobHandler<A> of(com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition<A>, com.reactor.cachedb.spring.boot.CacheDistributedJobHandler$Operation<A>);
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheDistributedJobProgress
+public final class com.reactor.cachedb.spring.boot.CacheDistributedJobProgress extends java.lang.Record {
+  public static final int MAX_ATTRIBUTES;
+  public com.reactor.cachedb.spring.boot.CacheDistributedJobProgress(java.lang.String, int, java.lang.Integer, java.lang.String, java.util.Map<java.lang.String, java.lang.String>);
+  public static com.reactor.cachedb.spring.boot.CacheDistributedJobProgress phase(java.lang.String, int);
+  public static com.reactor.cachedb.spring.boot.CacheDistributedJobProgress completed(int);
+  public com.reactor.cachedb.spring.boot.CacheDistributedJobProgress withAttribute(java.lang.String, java.lang.String);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String phase();
+  public int attempt();
+  public java.lang.Integer percent();
+  public java.lang.String message();
+  public java.util.Map<java.lang.String, java.lang.String> attributes();
 }
 
 ## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheDistributedJobQueueFullException
@@ -4545,7 +4866,12 @@ public final class com.reactor.cachedb.spring.boot.CacheScheduledWarmMode extend
 public final class com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry {
   public com.reactor.cachedb.spring.boot.CacheScheduledWarmRegistry();
   public java.util.List<com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot> snapshots();
+  public java.util.List<com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot> snapshots(int);
+  public int size();
   public com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot snapshot(java.lang.String);
+  public int runningCount();
+  public long failureCount();
+  public long skippedCount();
 }
 
 ## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.CacheScheduledWarmSnapshot
@@ -4643,16 +4969,33 @@ public interface com.reactor.cachedb.spring.boot.test.CacheDbTest extends java.l
 ## cachedb-spring-boot-test :: com.reactor.cachedb.spring.boot.test.CacheDbTestConfiguration
 public class com.reactor.cachedb.spring.boot.test.CacheDbTestConfiguration {
   public com.reactor.cachedb.spring.boot.test.CacheDbTestConfiguration();
+  public com.reactor.cachedb.spring.boot.test.CacheDbTestProbe cacheDbTestProbe(com.reactor.cachedb.starter.CacheDatabase, org.springframework.beans.factory.ObjectProvider<com.reactor.cachedb.spring.boot.CacheDbRouteInventory>);
   public com.reactor.cachedb.spring.boot.test.CacheDbTestProbe cacheDbTestProbe(com.reactor.cachedb.starter.CacheDatabase);
 }
 
 ## cachedb-spring-boot-test :: com.reactor.cachedb.spring.boot.test.CacheDbTestProbe
 public final class com.reactor.cachedb.spring.boot.test.CacheDbTestProbe {
   public com.reactor.cachedb.starter.CacheWarmResult warm(com.reactor.cachedb.starter.CacheWarmPlan);
+  public com.reactor.cachedb.starter.CacheWarmExecution executeWarm(com.reactor.cachedb.starter.CacheWarmPlan, com.reactor.cachedb.starter.CacheWarmExecutionMode);
   public com.reactor.cachedb.starter.CacheWarmResult warmAndRequireCoverage(com.reactor.cachedb.starter.CacheWarmPlan, java.time.Duration);
+  public com.reactor.cachedb.spring.boot.test.CacheDbWarmRouteEvidence dryRunApplyAndRequireCoverage(com.reactor.cachedb.starter.CacheWarmPlan, java.time.Duration);
   public com.reactor.cachedb.core.route.RouteCoverage coverage(java.lang.String, java.lang.String, java.time.Duration);
   public <T, ID> com.reactor.cachedb.core.model.WriteReceipt<T, ID> awaitDurable(com.reactor.cachedb.core.model.WriteReceipt<T, ID>, java.time.Duration);
   public com.reactor.cachedb.starter.CacheDatabase cacheDatabase();
+  public com.reactor.cachedb.spring.boot.CacheDbRouteInventory routeInventory();
+  public com.reactor.cachedb.spring.boot.CacheDbRouteInventory$RouteDescriptor requireDeclaredWarmRoute(java.lang.String);
+  public com.reactor.cachedb.spring.boot.CacheDbRouteInventory$RouteDescriptor requireHotRoute(java.lang.String, com.reactor.cachedb.core.route.HotRoutePopulation);
+}
+
+## cachedb-spring-boot-test :: com.reactor.cachedb.spring.boot.test.CacheDbWarmRouteEvidence
+public final class com.reactor.cachedb.spring.boot.test.CacheDbWarmRouteEvidence extends java.lang.Record {
+  public com.reactor.cachedb.spring.boot.test.CacheDbWarmRouteEvidence(com.reactor.cachedb.starter.CacheWarmExecution, com.reactor.cachedb.starter.CacheWarmExecution, com.reactor.cachedb.core.route.RouteCoverage);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public com.reactor.cachedb.starter.CacheWarmExecution dryRun();
+  public com.reactor.cachedb.starter.CacheWarmExecution applied();
+  public com.reactor.cachedb.core.route.RouteCoverage coverage();
 }
 
 ## cachedb-spring-boot-test :: com.reactor.cachedb.spring.boot.test.FaultInjectingDataSource

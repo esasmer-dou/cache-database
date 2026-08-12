@@ -6,6 +6,7 @@ import com.reactor.cachedb.starter.CacheWarmResult;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class CacheScheduledWarmRegistry {
@@ -18,8 +19,54 @@ public final class CacheScheduledWarmRegistry {
                 .toList();
     }
 
+    /** Returns the alphabetically first jobs while allocating at most {@code limit} entries. */
+    public List<CacheScheduledWarmSnapshot> snapshots(int limit) {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("limit must be greater than zero");
+        }
+        Comparator<CacheScheduledWarmSnapshot> order = Comparator.comparing(CacheScheduledWarmSnapshot::jobName);
+        int initialCapacity = Math.max(1, Math.min(limit, snapshots.size()));
+        PriorityQueue<CacheScheduledWarmSnapshot> selected = new PriorityQueue<>(initialCapacity, order.reversed());
+        for (CacheScheduledWarmSnapshot snapshot : snapshots.values()) {
+            if (selected.size() < limit) {
+                selected.add(snapshot);
+            } else if (order.compare(snapshot, selected.peek()) < 0) {
+                selected.poll();
+                selected.add(snapshot);
+            }
+        }
+        if (selected.isEmpty()) {
+            return List.of();
+        }
+        java.util.ArrayList<CacheScheduledWarmSnapshot> ordered = new java.util.ArrayList<>(selected);
+        ordered.sort(order);
+        return List.copyOf(ordered);
+    }
+
+    public int size() {
+        return snapshots.size();
+    }
+
     public CacheScheduledWarmSnapshot snapshot(String jobName) {
         return snapshots.get(jobName);
+    }
+
+    public int runningCount() {
+        int running = 0;
+        for (CacheScheduledWarmSnapshot snapshot : snapshots.values()) {
+            if (snapshot.state() == CacheScheduledWarmState.RUNNING) {
+                running++;
+            }
+        }
+        return running;
+    }
+
+    public long failureCount() {
+        return sumCounts(false);
+    }
+
+    public long skippedCount() {
+        return sumCounts(true);
     }
 
     void registered(String jobName, String instanceId) {
@@ -159,6 +206,17 @@ public final class CacheScheduledWarmRegistry {
 
     private long count(long current) {
         return current == Long.MAX_VALUE ? current : current + 1L;
+    }
+
+    private long sumCounts(boolean skipped) {
+        long total = 0L;
+        for (CacheScheduledWarmSnapshot snapshot : snapshots.values()) {
+            long value = skipped ? snapshot.skippedCount() : snapshot.failureCount();
+            if (value > 0L) {
+                total = Long.MAX_VALUE - total < value ? Long.MAX_VALUE : total + value;
+            }
+        }
+        return total;
     }
 
     private long durationMillis(Instant startedAt, Instant finishedAt) {

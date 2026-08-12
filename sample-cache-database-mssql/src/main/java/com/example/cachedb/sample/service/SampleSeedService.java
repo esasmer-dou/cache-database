@@ -12,12 +12,12 @@ import com.example.cachedb.sample.domain.SupportTicketEntity;
 import com.example.cachedb.sample.repository.SampleRepositories;
 import com.reactor.cachedb.core.model.WriteReceipt;
 import com.reactor.cachedb.starter.CacheDatabase;
+import com.reactor.cachedb.starter.CacheDurableBatchWriter;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.function.Function;
@@ -46,8 +46,8 @@ public class SampleSeedService {
         int linesEach = requireInRange("linesPerOrder", linesPerOrder, 1, 12);
         long now = Instant.now().getEpochSecond();
 
-        DurableBatch<ProductEntity, Long> products = batch("products", repositories.products()::saveAll);
-        DurableBatch<CustomerEntity, Long> customerBatch = batch("customers", repositories.customers()::saveAll);
+        CacheDurableBatchWriter<ProductEntity, Long> products = batch("products", repositories.products()::saveAll);
+        CacheDurableBatchWriter<CustomerEntity, Long> customerBatch = batch("customers", repositories.customers()::saveAll);
         for (long productId = 1; productId <= 50; productId++) {
             products.add(product(productId));
         }
@@ -63,8 +63,8 @@ public class SampleSeedService {
         long shipmentEventCount = 0;
         long reportJobCount = 0;
         long auditEventCount = 0;
-        DurableBatch<OrderEntity, Long> orders = batch("orders", repositories.orders()::saveAll);
-        DurableBatch<ShipmentEntity, Long> shipments = batch("shipments", repositories.shipments()::saveAll);
+        CacheDurableBatchWriter<OrderEntity, Long> orders = batch("orders", repositories.orders()::saveAll);
+        CacheDurableBatchWriter<ShipmentEntity, Long> shipments = batch("shipments", repositories.shipments()::saveAll);
         for (long customerId = 1; customerId <= customers; customerId++) {
             for (int index = 1; index <= ordersEach; index++) {
                 long orderId = (customerId * 10_000L) + index;
@@ -79,7 +79,7 @@ public class SampleSeedService {
             }
         }
 
-        DurableBatch<ReportJobEntity, Long> reportJobs = batch("report jobs", repositories.reportJobs()::saveAll);
+        CacheDurableBatchWriter<ReportJobEntity, Long> reportJobs = batch("report jobs", repositories.reportJobs()::saveAll);
         for (long reportJobId = 1; reportJobId <= 20; reportJobId++) {
             reportJobs.add(reportJob(reportJobId, now));
             reportJobCount++;
@@ -88,14 +88,14 @@ public class SampleSeedService {
         shipments.finish();
         reportJobs.finish();
 
-        DurableBatch<OrderLineEntity, Long> lines = batch("order lines", repositories.orderLines()::saveAll);
-        DurableBatch<ShipmentEventEntity, Long> shipmentEvents = batch(
+        CacheDurableBatchWriter<OrderLineEntity, Long> lines = batch("order lines", repositories.orderLines()::saveAll);
+        CacheDurableBatchWriter<ShipmentEventEntity, Long> shipmentEvents = batch(
                 "shipment events", repositories.shipmentEvents()::saveAll
         );
-        DurableBatch<SupportTicketEntity, Long> tickets = batch(
+        CacheDurableBatchWriter<SupportTicketEntity, Long> tickets = batch(
                 "support tickets", repositories.supportTickets()::saveAll
         );
-        DurableBatch<AuditEventEntity, Long> auditEvents = batch("audit events", repositories.auditEvents()::saveAll);
+        CacheDurableBatchWriter<AuditEventEntity, Long> auditEvents = batch("audit events", repositories.auditEvents()::saveAll);
         for (long customerId = 1; customerId <= customers; customerId++) {
             for (int orderIndex = 1; orderIndex <= ordersEach; orderIndex++) {
                 long orderId = (customerId * 10_000L) + orderIndex;
@@ -272,11 +272,17 @@ public class SampleSeedService {
         return event;
     }
 
-    private <T, ID> DurableBatch<T, ID> batch(
+    private <T, ID> CacheDurableBatchWriter<T, ID> batch(
             String surface,
             Function<Collection<T>, List<WriteReceipt<T, ID>>> writer
     ) {
-        return new DurableBatch<>(surface, writer);
+        return cacheDatabase.durableBatchWriter(
+                "sample seed/" + surface,
+                WRITE_BATCH_SIZE,
+                MAX_PENDING_RECEIPTS,
+                DURABILITY_TIMEOUT,
+                writer
+        );
     }
 
     private int requireInRange(String parameter, int value, int min, int max) {
@@ -301,51 +307,4 @@ public class SampleSeedService {
     ) {
     }
 
-    private final class DurableBatch<T, ID> {
-        private final String surface;
-        private final Function<Collection<T>, List<WriteReceipt<T, ID>>> writer;
-        private final ArrayList<T> buffer = new ArrayList<>(WRITE_BATCH_SIZE);
-        private final ArrayList<WriteReceipt<?, ?>> pending = new ArrayList<>(MAX_PENDING_RECEIPTS);
-
-        private DurableBatch(String surface, Function<Collection<T>, List<WriteReceipt<T, ID>>> writer) {
-            this.surface = surface;
-            this.writer = writer;
-        }
-
-        private void add(T entity) {
-            buffer.add(entity);
-            if (buffer.size() >= WRITE_BATCH_SIZE) {
-                flush();
-            }
-        }
-
-        private void finish() {
-            flush();
-            awaitPending();
-        }
-
-        private void flush() {
-            if (buffer.isEmpty()) {
-                return;
-            }
-            pending.addAll(writer.apply(List.copyOf(buffer)));
-            buffer.clear();
-            if (pending.size() >= MAX_PENDING_RECEIPTS) {
-                awaitPending();
-            }
-        }
-
-        private void awaitPending() {
-            if (pending.isEmpty()) {
-                return;
-            }
-            if (!cacheDatabase.awaitDurable(pending, DURABILITY_TIMEOUT)) {
-                throw new IllegalStateException(
-                        "Seed write-behind did not become durable for " + surface
-                                + " within " + DURABILITY_TIMEOUT.toSeconds() + " seconds"
-                );
-            }
-            pending.clear();
-        }
-    }
 }

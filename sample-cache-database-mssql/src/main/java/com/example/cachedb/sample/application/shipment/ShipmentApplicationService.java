@@ -9,6 +9,7 @@ import com.example.cachedb.sample.repository.ShipmentRepository;
 import com.example.cachedb.sample.service.DurableReferenceGuard;
 import com.example.cachedb.sample.service.SampleDomainPolicies;
 import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
@@ -44,20 +45,20 @@ public final class ShipmentApplicationService {
         return shipments.exceptions(limit).completeItems();
     }
 
-    public List<ShipmentSummary> forCustomer(long customerId, int limit) {
-        return shipments.forCustomer(customerId, WindowRequest.first(limit)).completeItems();
+    public CursorPage<ShipmentSummary> forCustomer(long customerId, int limit, String after) {
+        return shipments.forCustomer(customerId, WindowRequest.of(limit, after)).completePage();
     }
 
     public ShipmentEntity detail(long shipmentId, int eventPreview) {
         return SampleHotLookups.require("Shipment", shipmentId, shipments.detail(shipmentId, eventPreview));
     }
 
-    public List<ShipmentEventEntity> events(long shipmentId, int limit) {
-        return shipmentEvents.forShipment(shipmentId, WindowRequest.first(limit)).completeItems();
+    public CursorPage<ShipmentEventEntity> events(long shipmentId, int limit, String after) {
+        return shipmentEvents.forShipment(shipmentId, WindowRequest.of(limit, after)).completePage();
     }
 
-    public List<ShipmentSummary> deliveredArchive(long customerId, int limit) {
-        return shipments.deliveredArchive(customerId, WindowRequest.first(limit)).items();
+    public CursorPage<ShipmentSummary> deliveredArchive(long customerId, int limit, String after) {
+        return shipments.deliveredArchive(customerId, WindowRequest.of(limit, after)).page();
     }
 
     public WriteReceipt<ShipmentEntity, Long> create(CreateShipment command) {

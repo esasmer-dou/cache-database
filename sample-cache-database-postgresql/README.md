@@ -7,7 +7,7 @@ A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 a bounded Redis active data set, durable history stays in PostgreSQL, and
 growing lists use projections instead of full aggregates.
 
-> This sample consumes the immutable CacheDB `0.7.1` release from GitHub
+> This sample consumes the immutable CacheDB `0.8.0` release from GitHub
 > Packages; the CacheDB source repository is not part of the sample build.
 
 ## Start Here
@@ -106,7 +106,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.7.1</cachedb.version>
+    <cachedb.version>0.8.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -305,7 +305,13 @@ if ($warmState.status -ne "COMPLETED") {
 
 ```powershell
 # Redis projection route
-Invoke-RestMethod "http://127.0.0.1:8091/api/customers/1/orders?limit=10"
+$page = Invoke-RestMethod "http://127.0.0.1:8091/api/customers/1/orders?limit=10"
+$page.items
+
+# Continue without offset when nextCursor is present
+if ($page.nextCursor) {
+    Invoke-RestMethod "http://127.0.0.1:8091/api/customers/1/orders?limit=10&after=$($page.nextCursor)"
+}
 
 # Bounded PostgreSQL route
 Invoke-RestMethod "http://127.0.0.1:8091/api/orders/archive?customerId=1&limit=10"
@@ -415,6 +421,11 @@ declares the route; the processor generates its implementation:
 
 ```java
 @CacheRepository(entity = OrderEntity.class)
+@CacheRepositoryDefaults(
+        hotPopulation = HotRoute.Population.DECLARED_WARM,
+        sourceMaxRows = 500,
+        sourceTimeoutSeconds = 15
+)
 public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
     @HotRoute(
@@ -422,7 +433,7 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             projection = OrderSummary.class,
             pageSize = 100,
             hotWindow = 1_000,
-            memoryBudgetBytes = 16_777_216L,
+            memoryBudgetBytes = CacheMemoryBudget.MIB_16,
             coverageScopeParameter = "customerId"
     )
     @CacheRouteQuery(
@@ -436,14 +447,18 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
     HotWindow<OrderSummary> customerTimeline(long customerId, WindowRequest window);
 
     @WarmRoute(
-            value = "warm-customer-order-timeline-projection",
+            value = "warm-customer-order-timeline",
             from = "customerTimeline",
             maxRows = 1_000,
             maxRowsParameter = "maxRows",
             coverageScopeParameter = "customerId",
-            projectionsOnly = true
+            targetParameter = "target"
     )
-    CacheWarmPlan warmCustomerTimelineProjection(long customerId, int maxRows);
+    CacheWarmPlan warmCustomerTimeline(
+            long customerId,
+            int maxRows,
+            CacheWarmTarget target
+    );
 }
 ```
 
@@ -469,8 +484,8 @@ public final class CustomerApplicationService {
         );
     }
 
-    public List<OrderSummary> orderTimeline(long customerId, int limit) {
-        return orders.customerTimeline(customerId, WindowRequest.first(limit)).completeItems();
+    public CursorPage<OrderSummary> orderTimeline(long customerId, int limit, String after) {
+        return orders.customerTimeline(customerId, WindowRequest.of(limit, after)).completePage();
     }
 }
 ```
@@ -478,6 +493,10 @@ public final class CustomerApplicationService {
 Controllers validate HTTP input. Application services own use-case
 orchestration. Repository interfaces own data-path contracts. Generated code
 owns serialization, indexes, and provider wiring.
+
+The REST endpoint accepts the returned `nextCursor` as the next request's
+optional `after` parameter. The cursor is bound to this route, customer scope,
+and sort contract; it cannot be reused for another customer or route.
 
 ## Warm Existing Data
 
@@ -536,6 +555,92 @@ next schedule.
 The annotation processor validates the method and generates a typed Spring
 task adapter. The runtime does not scan annotated methods or invoke them through
 reflection.
+
+### Explicit warm execution, query intent, and durability
+
+A typed target selects the payload once. The generated plan then owns that
+decision, while execution selects only dry-run or apply:
+
+```java
+CacheWarmTarget target = projectionOnly
+        ? CacheWarmTarget.PROJECTIONS_ONLY
+        : CacheWarmTarget.ENTITY_AND_PROJECTIONS;
+CacheWarmPlan plan = orders.warmCustomerTimeline(customerId, limit, target);
+CacheWarmExecution execution = cacheDatabase.executeWarm(
+        plan,
+        dryRun ? CacheWarmExecutionMode.DRY_RUN : CacheWarmExecutionMode.APPLY
+);
+CacheWarmSummary summary = execution.summary("customer-orders");
+```
+
+Dry-run never mutates Redis. Do not create separate entity/projection methods
+for the same route or repeat the decision with a second
+`warmProjections`/`warm` branch.
+
+The REST endpoint does not execute a backfill on the request thread. It submits
+one typed command to the durable Redis job lane and returns `202 Accepted` with
+a `Location` header:
+
+```java
+public record SampleWarmCommand(Route route, int limit, boolean projectionOnly,
+                                boolean dryRun) {
+}
+
+static final CacheDistributedJobDefinition<SampleWarmCommand> WARM_JOB =
+        CacheDistributedJobDefinition.of("sample.route.warm", SampleWarmCommand.class);
+
+CacheDistributedJobSnapshot job = jobs.submit(WARM_JOB, command);
+// Location: /api/warm/jobs/{jobId}
+```
+
+The handler implements `CacheDistributedJobHandler.Typed<SampleWarmCommand>`
+and returns this same definition. It stores bounded progress with
+`CacheDistributedJobProgress`; route strings and payload types are not repeated.
+
+Every pod registers the same job definition. Redis stores status and
+checkpoints, so another pod can claim abandoned work. The route still keeps
+bounded row limits, idempotent warm behavior, and generated SQL; the job layer
+does not turn the operation into an unbounded background query.
+
+Predicate groups are also explicit. Predicates in one group are ANDed; separate
+groups are ORed. The active-order window deliberately means "last 90 days OR
+an active state", so its `@CacheRouteQuery` uses groups `0` and `1` together
+with `explicitDisjunction = true`. A multi-group query without that flag fails
+compilation. Keep predicates in one group when the business rule is AND.
+
+Seed and import batches preserve SQL durability evidence:
+
+```java
+try (var orders = cacheDatabase.durableBatchWriter(
+        "sample seed/orders", 128, 1_024, Duration.ofSeconds(30),
+        orderRepository::saveAll
+)) {
+    sourceOrders.forEach(orders::add);
+}
+```
+
+A timeout means Redis accepted the command but SQL durability was not proven
+within the deadline. The exception retains the receipts and operation name; do
+not issue blind duplicate writes.
+
+### Generated route inventory
+
+The processor generates a route catalog for every repository, and the starter
+aggregates it without runtime reflection:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8091/actuator/cachedb
+```
+
+The response contains declared route counts/kinds, HOT-route population
+strategies, at most 250 route details, at most 100 scheduled-warm details, and
+truncation flags. Aggregate Micrometer meters include
+`cachedb.repositories.declared`, `cachedb.routes.declared`,
+`cachedb.routes.hot.population{strategy=...}`, and the
+`cachedb.scheduled.warm.*` meters. The strategy tag has four bounded values;
+route, customer, and tenant names are never metric tags. The catalog proves
+what was compiled; route coverage, parity, latency, memory, and SQL durability
+remain separate production gates.
 
 ## Tuning by Use Case
 
@@ -675,7 +780,7 @@ limits, representative payloads, and expected concurrency.
 | --- | --- | --- |
 | `/api/demo/seed` or `/api/warm/**` returns `404` | Application was not started with the `demo` profile | Set `SPRING_PROFILES_ACTIVE=demo` and restart |
 | Maven returns `401 Unauthorized` | GitHub Packages credentials are absent or server IDs differ | Configure `GITHUB_ACTOR`, a `read:packages` token, and matching server ID |
-| `0.7.1` dependencies resolve but `cachedb-maven-plugin` does not | `pluginRepositories` is absent or uses another server ID | Add the GitHub Packages plugin repository, configure a `read:packages` token, and keep all three IDs identical |
+| `0.8.0` dependencies resolve but `cachedb-maven-plugin` does not | `pluginRepositories` is absent or uses another server ID | Add the GitHub Packages plugin repository, configure a `read:packages` token, and keep all three IDs identical |
 | Active route returns `503` while archive returns rows | Redis route has not been warmed, its coverage expired, or the scope differs | Run dry-run, warm the exact route/scope, poll to `COMPLETED`, then inspect coverage |
 | Detail route reports unavailable data | Entity payload is outside the active set | Warm entities for that detail scope or add a bounded source-detail route |
 | `409 Conflict` after a parent write | Parent is not durable yet or optimistic version changed | Honor `Retry-After`, verify write-behind health, retry idempotently |

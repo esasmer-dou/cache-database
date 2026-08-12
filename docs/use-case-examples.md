@@ -557,7 +557,11 @@ Use this for controlled startup, staging warm-up, or migration rehearsal.
 
 ```java
 CacheWarmResult result = cacheDatabase.warm(
-        orders.warmCustomerTimelineProjection(customerId, 1_000)
+        orders.warmCustomerTimeline(
+                customerId,
+                1_000,
+                CacheWarmTarget.PROJECTIONS_ONLY
+        )
 );
 ```
 
@@ -710,7 +714,12 @@ ANTI-PATTERN: eager-load every child row for the first screen.
 Use the generated route and test kit when deciding whether a route is safe.
 
 ```java
-cacheDb.warm(orders.warmCustomerTimelineProjection(42L, 1_000));
+cacheDb.requireDeclaredWarmRoute("customer-order-timeline");
+cacheDb.warm(orders.warmCustomerTimeline(
+        42L,
+        1_000,
+        CacheWarmTarget.PROJECTIONS_ONLY
+));
 CacheDbAssertions.requireComplete(
         orders.customerTimeline(42L, WindowRequest.first(100))
 );

@@ -163,8 +163,8 @@ public final class CacheWarmRunner {
         return new CacheWarmResult(
                 plan.name(),
                 plan.entityName(),
-                submittedRows,
                 loaded.size(),
+                submittedRows,
                 elapsedMillis(startedAtNanos),
                 mode == WarmMode.ENTITY_AND_PROJECTIONS && plan.forceImmediateProjectionRefresh(),
                 mode == WarmMode.ENTITY_AND_PROJECTIONS && plan.reindexQueryIndexes(),

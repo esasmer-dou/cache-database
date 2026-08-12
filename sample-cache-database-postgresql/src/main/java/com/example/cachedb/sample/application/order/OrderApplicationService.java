@@ -7,6 +7,7 @@ import com.example.cachedb.sample.repository.OrderRepository;
 import com.example.cachedb.sample.service.DurableReferenceGuard;
 import com.example.cachedb.sample.service.SampleDomainPolicies;
 import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import org.springframework.stereotype.Service;
 
@@ -51,17 +52,23 @@ public final class OrderApplicationService {
         return SampleHotLookups.require("Order", orderId, orders.detail(orderId, linePreview));
     }
 
-    public List<OrderSummary> highValue(BigDecimal minimumAmount, int limit) {
-        return orders.recentHighValue(minimumAmount, WindowRequest.first(limit)).completeItems();
+    public CursorPage<OrderSummary> highValue(BigDecimal minimumAmount, int limit, String after) {
+        return orders.recentHighValue(minimumAmount, WindowRequest.of(limit, after)).completePage();
     }
 
-    public List<OrderSummary> archive(long customerId, long beforeOrderDate, long beforeOrderId, int limit) {
+    public CursorPage<OrderSummary> archive(
+            long customerId,
+            long beforeOrderDate,
+            long beforeOrderId,
+            int limit,
+            String after
+    ) {
         return orders.archive(
                 customerId,
                 beforeOrderDate,
                 beforeOrderId,
-                WindowRequest.first(limit)
-        ).items();
+                WindowRequest.of(limit, after)
+        ).page();
     }
 
     public WriteReceipt<OrderEntity, Long> updateStatus(long orderId, String status) {

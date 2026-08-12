@@ -13,6 +13,13 @@ import java.lang.annotation.Target;
 public @interface CacheRouteQuery {
     CachePredicate[] predicates() default {};
 
+    /**
+     * Confirms that predicates split across multiple groups are intentionally
+     * ORed. Keeping this false makes an accidental group change a compile-time
+     * error instead of silently widening a production route.
+     */
+    boolean explicitDisjunction() default false;
+
     CacheOrder[] orderBy() default {};
 
     /** int parameter used as the bounded row limit. */

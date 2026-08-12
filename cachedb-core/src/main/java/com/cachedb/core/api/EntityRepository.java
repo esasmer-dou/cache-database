@@ -20,12 +20,16 @@ import java.util.Map;
 import java.util.Optional;
 
 public interface EntityRepository<T, ID> {
+    default RepositoryCapabilities capabilities() {
+        return RepositoryCapabilities.none();
+    }
+
     Optional<T> findById(ID id);
     default HotLookup<T> findHotById(ID id) {
         return findById(id).map(HotLookup::hit).orElseGet(HotLookup::notCached);
     }
     default Optional<VersionedEntity<T>> findVersionedById(ID id) {
-        throw new UnsupportedOperationException("Versioned reads are not supported by this EntityRepository implementation");
+        throw unsupported(RepositoryCapability.VERSIONED_READ);
     }
     List<T> findAll(Collection<ID> ids);
     List<T> findPage(PageWindow pageWindow);
@@ -33,23 +37,23 @@ public interface EntityRepository<T, ID> {
     List<T> query(QuerySpec querySpec);
     T save(T entity);
     default WriteReceipt<T, ID> saveWithReceipt(T entity) {
-        throw new UnsupportedOperationException("Write receipts are not supported by this EntityRepository implementation");
+        throw unsupported(RepositoryCapability.WRITE_RECEIPT);
     }
     default WriteReceipt<T, ID> save(T entity, long expectedVersion) {
-        throw new UnsupportedOperationException("Optimistic writes are not supported by this EntityRepository implementation");
+        throw unsupported(RepositoryCapability.OPTIMISTIC_WRITE);
     }
     default WriteReceipt<T, ID> saveAfter(T entity, WriteDependency dependency) {
-        throw new UnsupportedOperationException("Dependency-aware writes are not supported by this EntityRepository implementation");
+        throw unsupported(RepositoryCapability.DEPENDENCY_AWARE_WRITE);
     }
     default List<WriteReceipt<T, ID>> saveAll(Collection<T> entities) {
-        throw new UnsupportedOperationException("Bulk writes are not supported by this EntityRepository implementation");
+        throw unsupported(RepositoryCapability.BULK_WRITE);
     }
     default <K> Map<K, List<T>> queryPartitions(PartitionedQuerySpec<K> querySpec) {
-        throw new UnsupportedOperationException("Partitioned queries are not supported by this EntityRepository implementation");
+        throw unsupported(RepositoryCapability.PARTITIONED_QUERY);
     }
     void deleteById(ID id);
     default WriteReceipt<T, ID> deleteWithReceipt(ID id) {
-        throw new UnsupportedOperationException("Delete receipts are not supported by this EntityRepository implementation");
+        throw unsupported(RepositoryCapability.DELETE_RECEIPT);
     }
     EntityRepository<T, ID> withFetchPlan(FetchPlan fetchPlan);
 
@@ -78,6 +82,10 @@ public interface EntityRepository<T, ID> {
     }
 
     default <P> ProjectionRepository<P, ID> projected(EntityProjection<T, P, ID> projection) {
-        throw new UnsupportedOperationException("Projection repositories are not supported by this EntityRepository implementation");
+        throw unsupported(RepositoryCapability.PROJECTION);
+    }
+
+    private RepositoryCapabilityUnavailableException unsupported(RepositoryCapability capability) {
+        return new RepositoryCapabilityUnavailableException(capability, getClass());
     }
 }

@@ -30,6 +30,9 @@ production tuning should be approached.
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
 | How do I declare hot, source, warm, and command routes? | [Declarative Repositories](docs/declarative-repositories.md) |
 | What changed during the ten framework UX hardening iterations? | [Framework UX Engineering Report](docs/framework-ux-10-iteration-report.md) |
+| What changed during the second ten-iteration framework UX cycle? | [Second Framework UX Engineering Report](docs/framework-ux-second-10-iteration-report.md) |
+| What changed during the third ten-iteration framework UX cycle? | [Third Framework UX Engineering Report](docs/framework-ux-third-10-iteration-report.md) |
+| What changed during the fourth ten-iteration framework UX cycle? | [Fourth Framework UX Engineering Report](docs/framework-ux-fourth-10-iteration-report.md) |
 | Do I need the Spring Boot JDBC starter? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | What are entity, relation, projection, and route contract? | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | How do insert, read, update, and delete work? | [Use Case Examples](docs/use-case-examples.md) |
@@ -106,6 +109,9 @@ with evidence.
 | [Getting Started](docs/getting-started.md) | First working setup |
 | [Declarative Repositories](docs/declarative-repositories.md) | Preferred repository-first API, route contracts, warm, commands, tests, and migration |
 | [Framework UX Engineering Report](docs/framework-ux-10-iteration-report.md) | Ten review, implementation, safety, performance, and verification iterations |
+| [Second Framework UX Engineering Report](docs/framework-ux-second-10-iteration-report.md) | Query intent, window ergonomics, warm/durability APIs, route inventory, observability, and generated-path hardening |
+| [Third Framework UX Engineering Report](docs/framework-ux-third-10-iteration-report.md) | Route population, typed warm/jobs, sample orchestration, diagnostics, and regression gates |
+| [Fourth Framework UX Engineering Report](docs/framework-ux-fourth-10-iteration-report.md) | Contract-bound cursors, repository defaults, typed job progress, durable batches, and warm journey evidence |
 | [Concepts and Assumptions](docs/concepts-and-assumptions.md) | Definitions, assumptions, and design boundaries |
 | [Use Case Examples](docs/use-case-examples.md) | Real entity, query, update, delete, projection, and dashboard examples |
 | [Production Tuning Guide](docs/production-tuning-guide.md) | Redis memory, hot policy, route contract, write-behind, Kubernetes tuning |
@@ -119,6 +125,7 @@ with evidence.
 | [Production Test Report](docs/production-test-report.md) | Test evidence, smoke results, benchmark, certification lane |
 | [Production Readiness Report](docs/production-readiness-report.md) | Current production maturity assessment |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
+| [v0.8.0 Release Notes](docs/releases/v0.8.0.md) | Contract-bound cursors, repository defaults, typed warm/jobs, durable batches, and provider-equivalent samples |
 | [v0.7.1 Release Notes](docs/releases/v0.7.1.md) | Clean-runner Maven plugin resolution and immutable sample consumption |
 | [v0.7.0 Release Notes](docs/releases/v0.7.0.md) | Declarative repositories, explicit route coverage, safe updates, compile-time scheduled warm, test tooling, and provider-equivalent samples |
 | [v0.6.0 Release Notes](docs/releases/v0.6.0.md) | Declarative domain, generated relations/projections/routes, durable jobs, and upgrade notes |

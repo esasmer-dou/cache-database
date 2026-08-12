@@ -15,4 +15,10 @@ public @interface CacheRepository {
 
     /** Generate a Spring bean configuration next to the repository. */
     boolean springBean() default true;
+
+    /**
+     * Optional explicit Spring bean name. Use this when repositories in
+     * different packages share the same simple interface name.
+     */
+    String springBeanName() default "";
 }

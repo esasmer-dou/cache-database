@@ -19,6 +19,9 @@ public @interface WarmRoute {
     /** Optional int parameter that selects a runtime row count up to maxRows. */
     String maxRowsParameter() default "";
 
+    /** Optional CacheWarmTarget parameter that selects entity or projection-only hydration at call time. */
+    String targetParameter() default "";
+
     String coverageScopeParameter() default "";
 
     long coverageTtlSeconds() default 86_400L;

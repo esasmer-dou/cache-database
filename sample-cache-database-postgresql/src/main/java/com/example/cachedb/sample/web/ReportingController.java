@@ -3,13 +3,17 @@ package com.example.cachedb.sample.web;
 import com.example.cachedb.sample.application.reporting.ReportingApplicationService;
 import com.example.cachedb.sample.domain.AuditEventEntity;
 import com.example.cachedb.sample.domain.ReportJobEntity;
+import com.reactor.cachedb.core.repository.CursorPage;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,6 +27,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/reports")
+@Validated
 public class ReportingController {
 
     private final ReportingApplicationService reporting;
@@ -32,16 +37,17 @@ public class ReportingController {
     }
 
     @GetMapping("/jobs/live")
-    public List<ReportJobEntity> liveJobs(@RequestParam(defaultValue = "25") int limit) {
-        return reporting.liveJobs(ApiLimits.requireInRange("limit", limit, 1, 50));
+    public List<ReportJobEntity> liveJobs(@RequestParam(defaultValue = "25") @Min(1) @Max(50) int limit) {
+        return reporting.liveJobs(limit);
     }
 
     @GetMapping("/jobs/type/{reportType}")
-    public List<ReportJobEntity> jobsByType(
-            @PathVariable String reportType,
-            @RequestParam(defaultValue = "25") int limit
+    public CursorPage<ReportJobEntity> jobsByType(
+            @PathVariable @NotBlank @Size(max = 64) String reportType,
+            @RequestParam(defaultValue = "25") @Min(1) @Max(50) int limit,
+            @RequestParam(required = false) @Size(max = 8_192) String after
     ) {
-        return reporting.jobsByType(reportType, ApiLimits.requireInRange("limit", limit, 1, 50));
+        return reporting.jobsByType(reportType, limit, after);
     }
 
     @PostMapping("/jobs")
@@ -66,21 +72,20 @@ public class ReportingController {
     }
 
     @GetMapping("/audit/security")
-    public List<AuditEventEntity> securityAuditEvents(@RequestParam(defaultValue = "25") int limit) {
-        return reporting.securityAuditEvents(ApiLimits.requireInRange("limit", limit, 1, 50));
+    public List<AuditEventEntity> securityAuditEvents(
+            @RequestParam(defaultValue = "25") @Min(1) @Max(50) int limit
+    ) {
+        return reporting.securityAuditEvents(limit);
     }
 
     @GetMapping("/audit/archive")
-    public List<AuditEventEntity> auditArchive(
-            @RequestParam String entityName,
-            @RequestParam long entityId,
-            @RequestParam(defaultValue = "50") int limit
+    public CursorPage<AuditEventEntity> auditArchive(
+            @RequestParam @NotBlank @Size(max = 128) String entityName,
+            @RequestParam @Positive long entityId,
+            @RequestParam(defaultValue = "50") @Min(1) @Max(500) int limit,
+            @RequestParam(required = false) @Size(max = 8_192) String after
     ) {
-        return reporting.auditArchive(
-                entityName,
-                entityId,
-                ApiLimits.requireInRange("limit", limit, 1, 500)
-        );
+        return reporting.auditArchive(entityName, entityId, limit, after);
     }
 
     public record CreateReportJobRequest(

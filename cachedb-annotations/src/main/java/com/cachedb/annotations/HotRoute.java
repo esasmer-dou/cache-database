@@ -25,4 +25,18 @@ public @interface HotRoute {
     long maxStalenessSeconds() default 300L;
 
     boolean strict() default true;
+
+    /** Declares how this Redis-only route receives its representative data set. */
+    Population population() default Population.ON_DEMAND;
+
+    enum Population {
+        /** The application decides explicitly; retained for source compatibility. */
+        ON_DEMAND,
+        /** At least one @WarmRoute must reference this method. */
+        DECLARED_WARM,
+        /** Normal CacheDB writes or an outbox/CDC apply runner feed the route. */
+        WRITE_FED,
+        /** An operator-owned external process establishes route coverage. */
+        EXTERNAL
+    }
 }

@@ -1,6 +1,7 @@
 package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.api.EntityRepository;
+import com.reactor.cachedb.core.api.RepositoryCapabilities;
 import com.reactor.cachedb.core.api.ProjectionRepository;
 import com.reactor.cachedb.core.cache.CacheAdmissionSource;
 import com.reactor.cachedb.core.cache.CachePolicy;
@@ -67,6 +68,7 @@ import java.util.Map;
 import java.util.Optional;
 
 public final class RedisEntityRepository<T, ID> implements EntityRepository<T, ID>, ExternalChangeHydrationRepository<T, ID> {
+    private static final RepositoryCapabilities CAPABILITIES = RepositoryCapabilities.all();
 
     private final JedisPooled jedis;
     private final JedisPooled backgroundJedis;
@@ -101,6 +103,11 @@ public final class RedisEntityRepository<T, ID> implements EntityRepository<T, I
     private final RedisVersionedHydrator versionedHydrator;
     private final RedisDurabilityTracker durabilityTracker;
     private final Map<String, ProjectionSupport<T, ID, ?>> projectionSupportCache = new ConcurrentHashMap<>();
+
+    @Override
+    public RepositoryCapabilities capabilities() {
+        return CAPABILITIES;
+    }
 
     public RedisEntityRepository(
             JedisPooled jedis,

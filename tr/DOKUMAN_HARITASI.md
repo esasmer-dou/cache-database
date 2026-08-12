@@ -31,6 +31,9 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Yeni projeye nasıl eklerim? | [Başlangıç Rehberi](docs/getting-started.md) |
 | Hızlı erişim, SQL, warm ve command route'larını nasıl tanımlarım? | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
 | On framework iyileştirme turunda neler değişti? | [Framework Kullanım Deneyimi Raporu](docs/framework-ux-10-iterasyon-raporu.md) |
+| İkinci on iterasyonluk framework iyileştirme döngüsünde neler değişti? | [İkinci Framework Kullanım Deneyimi Raporu](docs/framework-ux-ikinci-10-iterasyon-raporu.md) |
+| Üçüncü on iterasyonluk framework iyileştirme döngüsünde neler değişti? | [Üçüncü Framework Kullanım Deneyimi Raporu](docs/framework-ux-ucuncu-10-iterasyon-raporu.md) |
+| Dördüncü on iterasyonluk framework iyileştirme döngüsünde neler değişti? | [Dördüncü Framework Kullanım Deneyimi Raporu](docs/framework-ux-dorduncu-10-iterasyon-raporu.md) |
 | Spring Boot'ta JDBC dependency gerekiyor mu? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | Entity, relation, projection, route contract ne demek? | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | Insert, read, update, delete nasıl yapılır? | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
@@ -108,6 +111,9 @@ kararını kanıtla vermek.
 | [Başlangıç Rehberi](docs/getting-started.md) | Sıfırdan çalışan ilk kullanım |
 | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) | Önerilen repository-first API, route sözleşmeleri, warm, command, test ve geçiş adımları |
 | [Framework Kullanım Deneyimi Raporu](docs/framework-ux-10-iterasyon-raporu.md) | On inceleme, geliştirme, güvenlik, performans ve doğrulama turu |
+| [İkinci Framework Kullanım Deneyimi Raporu](docs/framework-ux-ikinci-10-iterasyon-raporu.md) | Sorgu niyeti, pencere kullanımı, warm ve kalıcılık API'leri, route envanteri, gözlemlenebilirlik ve generated veri yolu iyileştirmeleri |
+| [Üçüncü Framework Kullanım Deneyimi Raporu](docs/framework-ux-ucuncu-10-iterasyon-raporu.md) | Route population, tipli warm ve işler, sample orkestrasyonu, tanılama ve regresyon kapıları |
+| [Dördüncü Framework Kullanım Deneyimi Raporu](docs/framework-ux-dorduncu-10-iterasyon-raporu.md) | Route ve kapsama bağlı cursor, repository varsayılanı, tipli iş ilerlemesi, kalıcı batch ve warm yolculuğu kanıtı |
 | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) | Arka plandaki tanımlar, kabuller ve tasarım sınırları |
 | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) | Gerçek hayat entity, query, update, delete, projection ve dashboard örnekleri |
 | [Production Tuning Rehberi](docs/production-tuning-rehberi.md) | Redis memory, hot policy, route contract, write-behind ve Kubernetes tuning kararları |
@@ -121,6 +127,7 @@ kararını kanıtla vermek.
 | [Production Test Raporu](docs/production-test-report.md) | Test kanıtları, smoke sonuçları, benchmark ve certification lane |
 | [Production Readiness Raporu](docs/production-readiness-report.md) | Ürünün production seviyesine ne kadar yakın olduğu |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Stabil GA release için sert go/no-go akışı |
+| [v0.8.0 Sürüm Notları](docs/releases/v0.8.0.md) | Sözleşmeye bağlı cursor, repository varsayılanı, tipli warm/işler, kalıcı batch ve provider eşdeğerliği |
 | [v0.7.1 Sürüm Notları](docs/releases/v0.7.1.md) | Temiz runner'da Maven plugin çözümleme ve değişmez sample tüketimi |
 | [v0.7.0 Sürüm Notları](docs/releases/v0.7.0.md) | Deklaratif repository'ler, açık route kapsamı, güvenli güncelleme, derleme zamanında periyodik warm, test araçları ve provider eşdeğerliği |
 | [v0.6.0 Sürüm Notları](docs/releases/v0.6.0.md) | Deklaratif domain, üretilen relation/projection/route yüzeyleri, dayanıklı işler ve yükseltme notları |
