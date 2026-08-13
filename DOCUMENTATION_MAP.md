@@ -29,7 +29,7 @@ production tuning should be approached.
 | How do I run a complete REST API sample? | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
 | How do I declare hot, source, warm, and command routes? | [Declarative Repositories](docs/declarative-repositories.md) |
-| What changed in the latest stable release? | [v0.9.0 Release Notes](docs/releases/v0.9.0.md) |
+| What changed in the latest stable release? | [v0.10.0 Release Notes](docs/releases/v0.10.0.md) |
 | Do I need the Spring Boot JDBC starter? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | What are entity, relation, projection, and route contract? | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | How do insert, read, update, and delete work? | [Use Case Examples](docs/use-case-examples.md) |
@@ -41,8 +41,9 @@ production tuning should be approached.
 | How do I migrate an existing SQL database + ORM app? | [Migration Planner](docs/migration-planner.md) |
 | How do I keep Redis fresh when the source database changes outside CacheDB? | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
 | Can CacheDB support MSSQL or another SQL database? | [Database Provider SPI Direction](docs/database-provider-spi.md) |
-| What must be proven before production? | [Production Test Report](docs/production-test-report.md) |
-| Stable release or provider-specific production boundary? | [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) and [Stable Release Launch Kit](docs/stable-release-launch-kit.md) |
+| What must be proven before production? | [Production Readiness Contract](PRODUCTION_GA_CRITERIA.md) |
+| How does an application prove cutover readiness? | [Production Certification](docs/production-certification.md) |
+| Stable release or application-specific production boundary? | [Production Readiness Contract](PRODUCTION_GA_CRITERIA.md) and [Stable Release Launch Kit](docs/stable-release-launch-kit.md) |
 | How do I decide whether a GA release can ship? | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 | How do I cut a release? | [Release Flow](docs/release-flow.md) |
 | What is missing for Maven Central? | [Maven Central Publish Checklist](docs/maven-central-publish-checklist.md) |
@@ -77,9 +78,9 @@ the production risks are.
 Start with:
 
 - [Tuning Parameters](docs/tuning-parameters.md)
-- [Production Test Report](docs/production-test-report.md)
-- [Production Readiness Report](docs/production-readiness-report.md)
-- [Final Production Go/No-Go Report](docs/final-production-go-no-go-report.md)
+- [Production Readiness Contract](PRODUCTION_GA_CRITERIA.md)
+- [Production Certification](docs/production-certification.md)
+- [Production Evidence Guide](docs/production-test-report.md)
 
 Goal: understand Redis, durable SQL providers, workers, leader lease, failover,
 CI evidence, and observability boundaries.
@@ -115,9 +116,11 @@ with evidence.
 | [Database Provider SPI Direction](docs/database-provider-spi.md) | Storage provider boundary for PostgreSQL, MSSQL, and future SQL dialects |
 | [Production Recipes](docs/production-recipes.md) | BEST/ACCEPTABLE/ANTI-PATTERN production usage patterns |
 | [Architecture](docs/architecture.md) | Internal architecture, data flow, registry, relation loading |
-| [Production Test Report](docs/production-test-report.md) | Test evidence, smoke results, benchmark, certification lane |
-| [Production Readiness Report](docs/production-readiness-report.md) | Current production maturity assessment |
+| [Production Evidence Guide](docs/production-test-report.md) | Reproducible test lanes, report locations, and evidence boundaries |
+| [Production Readiness Contract](PRODUCTION_GA_CRITERIA.md) | Single current maturity and go/no-go contract |
+| [Production Certification](docs/production-certification.md) | Consumer application route, parity, memory, failover, canary, and rollback gate |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
+| [v0.10.0 Release Notes](docs/releases/v0.10.0.md) | Compile-ready migration projections, SQL Server batched writes, application certification, and anonymous Maven distribution |
 | [v0.9.0 Release Notes](docs/releases/v0.9.0.md) | Compile-time inference, direct cursor pages, typed route references, route capacity evidence, and explicit durability helpers |
 | [v0.8.0 Release Notes](docs/releases/v0.8.0.md) | Contract-bound cursors, repository defaults, typed warm/jobs, durable batches, and provider-equivalent samples |
 | [v0.7.1 Release Notes](docs/releases/v0.7.1.md) | Clean-runner Maven plugin resolution and immutable sample consumption |

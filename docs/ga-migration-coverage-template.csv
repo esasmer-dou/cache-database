@@ -1,2 +1,2 @@
-RouteName,Owner,RootTable,ChildTable,QueryShape,CacheDbShape,WarmStatus,CompareStatus,CutoverStatus,RollbackPlan,Blocker
-customer-order-timeline,team-name,customers,orders,"customer_id filter; order_date desc; first page",projection,warm ok,matched,ready,"route traffic can fall back to existing PostgreSQL SQL",none
+RouteName,RouteKind,Owner,QueryShape,CacheDbShape,WarmStatus,WarmEvidence,CompareStatus,CompareEvidence,MemoryStatus,MemoryEvidence,CutoverStatus,RollbackPlan,RollbackEvidence,Blocker
+customer-order-timeline,api,team-name,"customer_id filter; order_date desc; first page",projection,passed,evidence/customer-order-warm.md,matched,evidence/customer-order-parity.md,within budget,evidence/customer-order-memory.md,ready,"disable the route flag and return traffic to the bounded SQL source route",evidence/customer-order-rollback.md,none

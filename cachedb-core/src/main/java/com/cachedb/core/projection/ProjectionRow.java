@@ -1,6 +1,10 @@
 package com.reactor.cachedb.core.projection;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -33,8 +37,16 @@ public final class ProjectionRow {
         return value(column, ProjectionValueCodecs.INTEGER);
     }
 
+    public Short shortValue(String column) {
+        return value(column, ProjectionValueCodecs.SHORT);
+    }
+
     public Double doubleValue(String column) {
         return value(column, ProjectionValueCodecs.DOUBLE);
+    }
+
+    public Float floatValue(String column) {
+        return value(column, ProjectionValueCodecs.FLOAT);
     }
 
     public Boolean booleanValue(String column) {
@@ -47,5 +59,21 @@ public final class ProjectionRow {
 
     public UUID uuid(String column) {
         return value(column, ProjectionValueCodecs.UUID_VALUE);
+    }
+
+    public Instant instant(String column) {
+        return value(column, ProjectionValueCodecs.INSTANT);
+    }
+
+    public LocalDate localDate(String column) {
+        return value(column, ProjectionValueCodecs.LOCAL_DATE);
+    }
+
+    public LocalDateTime localDateTime(String column) {
+        return value(column, ProjectionValueCodecs.LOCAL_DATE_TIME);
+    }
+
+    public LocalTime localTime(String column) {
+        return value(column, ProjectionValueCodecs.LOCAL_TIME);
     }
 }

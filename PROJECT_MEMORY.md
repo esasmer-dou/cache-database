@@ -1,10 +1,10 @@
 # CacheDB Project Memory
 
-Last updated: 2026-08-12
+Last updated: 2026-08-13
 
-Purpose: durable engineering handoff for future work in
-`E:\ReactorRepository\cache-database`. Revalidate Git, CI, package, release,
-Docker, and runtime state before treating historical evidence as current.
+This is the durable handoff for `E:\ReactorRepository\cache-database` and its
+two standalone sample repositories. Revalidate Git, CI, release, Docker, and
+runtime state before treating a previous run as current evidence.
 
 ## Repository Family
 
@@ -12,169 +12,129 @@ Docker, and runtime state before treating historical evidence as current.
 - PostgreSQL sample: `E:\ReactorRepository\sample-cache-database-postgresql`
 - MSSQL sample: `E:\ReactorRepository\sample-cache-database-mssql`
 - Branch: `main` in all three repositories
-- Framework Maven coordinates: `com.reactor.cachedb:*`
-- Current source release: `0.8.0`
-- Stable tag: `v0.8.0`
-- Official distribution: GitHub Packages plus the GitHub Release bundle
-  `cache-database-0.8.0-github-release.zip`
+- Framework coordinates: `com.reactor.cachedb:*`
+- Current stable source version: `0.10.0`
+- Official distribution: anonymous public Maven repository and GitHub Release
+- Public Maven URL: `https://esasmer-dou.github.io/cache-database/maven2`
+- GitHub Packages is an optional authenticated compatibility mirror
 
-Do not mix this repository family with
-`E:\ReactorRepository\rust-spring-performance` or NMC repositories.
+Do not mix this repository family with NMC or
+`E:\ReactorRepository\rust-spring-performance` work.
 
 ## Product Contract
 
-CacheDB is a Redis-first active-data and read-model framework. The selected SQL
-provider remains the durable source of truth.
+CacheDB is a Redis-first active-data and read-model framework. PostgreSQL or
+SQL Server remains the durable source of truth.
 
 - Redis serves explicitly bounded operational entity and projection routes.
-- Redis misses do not trigger arbitrary hidden SQL scans.
-- SQL archive, reporting, audit, export, and full-history reads use explicit
+- A Redis miss never hides an arbitrary SQL scan.
+- Archive, reporting, audit, export, and complete-history queries use explicit,
   bounded source routes.
-- Existing SQL data enters Redis through explicit warm/backfill plans.
+- Existing SQL data enters Redis through warm/backfill and reconciliation.
 - External SQL writes require outbox/CDC or an explicit reconciliation plan.
-- Relation-heavy and global sorted screens use compact projections/read models.
-- Hot-set size, page size, source-read limit, relation fan-out, payload budget,
-  tenant quota, and queue capacity remain bounded.
-- Redis acceptance and durable SQL completion are separate observable events.
-- Multi-pod singleton work uses Redis leases; handlers remain idempotent because
-  distributed execution is at least once.
+- Relation-heavy and globally sorted screens use compact projections.
+- Active windows, pages, source reads, fan-out, payloads, tenant quotas, pools,
+  queues, retries, and timeouts remain bounded.
+- Redis command acceptance and durable SQL completion are separate observable
+  states.
+- Multi-pod singleton work uses Redis leases and idempotent handlers.
 
 ## Non-Negotiable Engineering Principles
 
-- No runtime entity discovery through reflection.
-- No `Method.invoke` for scheduled warm or repository dispatch.
-- Generate codecs, repositories, route contracts, metadata, and Spring adapters
-  at compile time.
+- No runtime entity discovery through reflection or `Method.invoke` dispatch.
+- Generate codecs, repositories, route contracts, metadata, and Spring
+  adapters at compile time.
 - Do not introduce N+1 relation loading or unbounded source/cache scans.
-- Do not hide SQL fallback behind an entity/projection Redis miss.
-- Do not automatically merge partial updates when the current entity is absent
-  from Redis.
-- Prefer explicit backpressure, retry limits, timeouts, failure classification,
-  health, metrics, and operator-visible state.
-- Preserve PostgreSQL and MSSQL provider parity at the application contract;
-  keep dialect, locking, retry, and topology behavior provider specific.
+- Do not automatically merge partial updates when Redis lacks the current row.
+- Preserve explicit backpressure, retries, timeouts, health, metrics, failure
+  classification, and operator-visible state.
+- Preserve PostgreSQL and MSSQL application-contract parity while keeping
+  dialect, locking, batching, and topology behavior provider-specific.
 
-## 0.8.0 Functional Surface
+## 0.10.0 Functional Surface
 
-- Compile-time `@CacheRepository` implementations for hot lookup/window,
-  bounded source query, warm route, command, delete, generated ID, projection,
-  keyset pagination, and optimistic writes.
-- Route/scope/sort-bound cursors reject cross-route token reuse, while
-  `CursorPage<T>` carries safe continuation through service and HTTP layers.
-- `@CacheRepositoryDefaults`, named memory constants, typed capabilities,
-  route population metadata, and generated route inventory keep shared policy
-  declarative and compile-time validated.
-- Warm execution uses typed targets, modes, summaries, and one
-  dry-run/apply/coverage evidence journey.
-- Distributed jobs share typed definitions and bounded structured progress;
-  durable import batching uses framework-owned receipt backpressure.
-- `HotWindow.completeItems()` exposes data only when requested route coverage is
-  complete.
-- Required but unavailable hot coverage is represented by
-  `HotRouteUnavailableException`; samples map it to HTTP 503.
-- `CacheDbRepository.updateHot` refuses unsafe partial merge through
-  `HotUpdateUnavailableException` when Redis lacks the current row.
-- `@CacheScheduledWarm` has source retention and a compile-time processor that
-  generates typed direct-call Spring tasks.
-- Generic repository fragments are supported without forcing application code
-  to depend on generated implementation classes.
-- Spring properties fail fast for invalid pool, timeout, lease, retry, queue,
-  admin-security, input, and MSSQL timeout settings.
-- `cachedb-spring-boot-test` provides assertions, typed durability waiting,
-  fault injection, and warm-plus-coverage probes.
-- Explicit PostgreSQL and MSSQL provider starters, optional admin starter,
-  CacheDB BOM, Maven doctor plugin, and OpenRewrite migration recipes are public
-  release artifacts.
-- Legacy SQL rows with null or zero entity version normalize to initial version
-  1 during first warm; negative or malformed versions fail.
+- Compile-time generated repositories, codecs, indexes, route contracts,
+  projection bindings, Spring beans, and scheduled warm tasks.
+- Bounded active routes, explicit source routes, typed warm/backfill,
+  reconciliation, route coverage, and cursor-safe pagination.
+- Compile-ready migration scaffolds with actual projection records, generated
+  bindings, and partitioned relation loaders.
+- PostgreSQL and MSSQL provider starters with provider-specific retry, timeout,
+  locking, idempotency, and write-behind behavior.
+- MSSQL same-shape upserts use batch update, one bounded locked version probe,
+  and batch insert for missing rows; the SQL Server parameter limit is enforced.
+- Redis leases coordinate scheduled jobs across pods.
+- `cachedb-maven-plugin:certify` fails a consuming build when route inventory,
+  parity, memory, failover, canary, or rollback evidence is missing or stale.
+- `cachedb-spring-boot-test` provides durability, warm coverage, and fault
+  injection helpers.
+- The Maven BOM, provider starters, Maven plugin, migration recipes, sources,
+  Javadocs, checksums, and release bundle are public release artifacts.
 
 ## Sample Contract
 
-Both standalone samples use Java 21 and the published `0.8.0` Maven artifacts.
-Their provider-neutral Java surfaces are kept equivalent by CI.
+Both standalone samples use Java 21 and immutable `0.10.0` artifacts from the
+anonymous public Maven repository.
 
 - Application code depends on repository interfaces, not generated internals.
-- Every `HotWindow` route has a matching bounded `@WarmRoute`.
-- Seed creates durable SQL data but does not claim hot-route coverage.
-- Before exact warm coverage, required active routes return HTTP 503.
-- Warm jobs are polled to `COMPLETED`; the matching active route then succeeds.
-- Postman collections contain ordered seed, archive, warm, status, active-read,
-  tuning, and health journeys.
-- PostgreSQL and MSSQL sample executable JARs are release assets, not framework
-  dependencies.
+- Every required active route has a matching bounded warm route.
+- Seed creates durable SQL data but does not claim active-route coverage.
+- Required routes return HTTP 503 until exact warm coverage is complete.
+- Postman flows cover seed, source read, warm, status, active read, tuning, and
+  health.
+- The `production-certification` Maven profile is present but accepts only real
+  application staging evidence; sample placeholders are never treated as proof.
 
-## 0.8.0 Local Release Evidence
+## Production Evidence Boundary
 
-- Semeru OpenJ9 JDK: `D:\Dropbox\java64\Semeru\jdk-21.0.2.13-openj9`
-- Clean 20-project reactor: 313 tests, 0 failures, 0 errors, 12 explicit
-  topology-gated skips.
-- `cachedb-integration-tests`: 90 tests passed.
-- `cachedb-production-tests`: 27 tests passed.
-- PostgreSQL standalone sample: 10 unit tests plus 1 live provider integration
-  test passed.
-- MSSQL standalone sample: 10 unit tests plus 1 live provider integration test
-  passed.
-- OSS packaging produced binary, source, and Javadoc JARs for 16 public modules
-  plus the BOM.
-- Release ZIP inspection: 280 entries, 48 JARs, and 18 POMs.
-- Public API compatibility, benchmark thresholds, provider parity, Postman,
-  English/Turkish documentation, release metadata, framework-principle, sample
-  boundary, and whitespace checks passed.
+Framework CI and Docker tests certify framework behavior, not every customer
+topology. Every consuming application must run `mvn verify
+-Pproduction-certification` with evidence bound to the exact application
+commit and staging environment. The required contract is authoritative in:
 
-Remote CI, package workflow, tag, release assets, and sample consumer workflows
-must still be revalidated live for every release operation.
+- `PRODUCTION_GA_CRITERIA.md`
+- `docs/production-certification.md`
+- `tr/docs/production-sertifikasi.md`
+- `docs/production-test-report.md`
+- `tr/docs/production-test-report.md`
+
+The application evidence must cover every screen, API, batch, worker, and
+report route; warm/reconciliation; SQL-to-CacheDB membership and ordering
+parity; Redis memory; SQL/Redis failover; canary; rollback; and recovery.
 
 ## Release Order
 
-1. Verify the framework release commit locally.
-2. Push framework `main` and wait for Public Beta Readiness and Production
-   Evidence on the exact commit.
-3. Publish `0.8.0` through GitHub Packages from the exact release ref.
-4. Create and push annotated `v0.8.0`.
-5. Create the non-prerelease GitHub Release and attach ZIP, public binary JARs,
-   BOM POM, and SHA-256 checksums.
-6. Build standalone samples against the published remote package.
-7. Commit, push, tag, and release both sample repositories with their executable
-   JAR and checksum assets.
-8. Verify final tag, release, package, workflow, and clean-worktree state.
-
-## Production Boundary
-
-Framework release evidence is not an application cutover certificate. Every
-consumer must still prove:
-
-- complete route inventory and coverage
-- representative warm/reconciliation behavior
-- source-vs-CacheDB membership and ordering parity
-- Redis memory and payload budget
-- SQL/Redis timeout and pool tuning under its Kubernetes limits
-- external-write freshness through outbox/CDC when applicable
-- canary, rollback, failure recovery, and application-specific HA topology
-- admin UI/API exposure behind gateway authentication or CacheDB token auth
-
-Do not claim generic certification for every managed Redis, PostgreSQL HA, SQL
-Server Always On, network, or Kubernetes topology.
+1. Run the complete reactor, documentation, artifact, compatibility, sample,
+   Docker Redis outage, PostgreSQL, and MSSQL evidence gates.
+2. Push the exact framework release commit and require successful Framework
+   Readiness and Production Evidence workflows for that SHA.
+3. Create and push the stable `v0.10.0` tag.
+4. Publish the immutable anonymous Maven2 repository and verify clean anonymous
+   resolution of BOM, provider starters, Maven plugin, and core JAR.
+5. Publish the non-prerelease GitHub Release and compatibility package mirror.
+6. Build both standalone samples from the remote anonymous repository, then
+   push, tag, and release them.
+7. Verify tags, releases, assets, workflows, anonymous dependency resolution,
+   and clean worktrees in all three repositories.
 
 ## First Files For Future Work
 
 - `README.md`
 - `tr/README.md`
 - `CHANGELOG.md`
-- `docs/releases/v0.8.0.md`
-- `tr/docs/releases/v0.8.0.md`
-- `docs/framework-ux-10-iteration-report.md`
-- `tr/docs/framework-ux-10-iterasyon-raporu.md`
 - `PRODUCTION_GA_CRITERIA.md`
-- `tools/ci/check-framework-principles.ps1`
-- `tools/ci/check-sample-framework-usage.ps1`
-- `tools/ci/check-sample-provider-parity.ps1`
-- `tools/ci/check-public-api-compatibility.ps1`
+- `docs/releases/v0.10.0.md`
+- `tr/docs/releases/v0.10.0.md`
+- `docs/production-certification.md`
+- `tr/docs/production-sertifikasi.md`
+- `tools/ci/check-ga-release-readiness.ps1`
+- `tools/ci/run-local-docker-ha-preflight.ps1`
+- `tools/release/build-public-maven-repository.ps1`
 - `tools/release/build-release-package.ps1`
 
 ## Communication Rules
 
-- Lead with the direct production judgment, then evidence and boundaries.
-- Classify alternatives as BEST, ACCEPTABLE, or ANTI-PATTERN when useful.
-- Preserve natural Turkish and correct Turkish characters in Turkish docs.
+- Lead with the production judgment, then evidence and boundaries.
+- Use natural Turkish with correct Turkish characters in Turkish documents.
 - Do not claim production readiness from compilation or unit tests alone.
-- Never overwrite user changes or mix repository families during release work.
+- Never overwrite user changes or mix repository families.

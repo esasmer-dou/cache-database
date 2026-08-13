@@ -1,6 +1,6 @@
 param(
-    [string]$Version = "0.1.0-beta.4",
-    [string]$PackageLabel = "public-beta",
+    [string]$Version = "",
+    [string]$PackageLabel = "github-release",
     [switch]$SkipBuild
 )
 
@@ -8,9 +8,12 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    [xml]$rootPom = Get-Content -LiteralPath (Join-Path $repoRoot "pom.xml") -Raw
+    $Version = [string]$rootPom.project.version
+}
 $releaseRoot = Join-Path $repoRoot "target\releases"
 $stagingRoot = Join-Path $releaseRoot "cache-database-$Version"
-$isBetaPackage = $PackageLabel -match '(?i)beta'
 
 if ($PackageLabel -notmatch '^[A-Za-z0-9_.-]+$') {
     throw "PackageLabel may only contain letters, numbers, dot, underscore, and dash."
@@ -64,6 +67,8 @@ $docFiles = @(
     "docs\production-recipes.md",
     "docs\orm-alternative.md",
     "docs\production-ga-release-runbook.md",
+    "docs\production-certification.md",
+    "docs\production-test-report.md",
     "docs\release-checklist.md",
     "docs\maven-central-publish-checklist.md",
     "docs\releases\v$Version.md",
@@ -79,22 +84,16 @@ $docFiles = @(
     "tr\docs\migration-planner.md",
     "tr\docs\production-recipes.md",
     "tr\docs\production-ga-release-runbook.md",
+    "tr\docs\production-olgunlugu.md",
+    "tr\docs\production-sertifikasi.md",
+    "tr\docs\production-test-report.md",
     "tr\docs\release-checklist.md"
 )
 
-if ($isBetaPackage) {
-    $docFiles += @(
-        "docs\public-beta-readiness.md",
-        "tr\docs\public-beta-readiness.md",
-        "docs\public-beta-launch-kit.md",
-        "tr\docs\public-beta-launch-kit.md"
-    )
-} else {
-    $docFiles += @(
-        "docs\stable-release-launch-kit.md",
-        "tr\docs\stable-release-launch-kit.md"
-    )
-}
+$docFiles += @(
+    "docs\stable-release-launch-kit.md",
+    "tr\docs\stable-release-launch-kit.md"
+)
 
 foreach ($file in $docFiles) {
     $source = Join-Path $repoRoot $file
@@ -196,6 +195,10 @@ Copy-Item `
     -Destination (Join-Path $bomDest "cachedb-bom-$Version.pom")
 
 Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $zipPath -Force
+$checksumPath = "$zipPath.sha256"
+$checksum = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath $checksumPath -Value "$checksum  $([System.IO.Path]::GetFileName($zipPath))" -NoNewline
 
 Write-Host "Release bundle created:"
 Write-Host " - $zipPath"
+Write-Host " - $checksumPath"

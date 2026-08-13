@@ -424,9 +424,16 @@ public final class CacheProjectionRecordProcessor extends AbstractProcessor {
         STRING("stringColumn", "string"),
         LONG("longColumn", "longValue"),
         INTEGER("integerColumn", "integer"),
+        SHORT("shortColumn", "shortValue"),
         DOUBLE("doubleColumn", "doubleValue"),
+        FLOAT("floatColumn", "floatValue"),
         BOOLEAN("booleanColumn", "booleanValue"),
-        DECIMAL("decimalColumn", "decimal");
+        DECIMAL("decimalColumn", "decimal"),
+        UUID_VALUE("uuidColumn", "uuid"),
+        INSTANT("instantColumn", "instant"),
+        LOCAL_DATE("localDateColumn", "localDate"),
+        LOCAL_DATE_TIME("localDateTimeColumn", "localDateTime"),
+        LOCAL_TIME("localTimeColumn", "localTime");
 
         private final String builderMethod;
         private final String rowMethod;
@@ -449,9 +456,16 @@ public final class CacheProjectionRecordProcessor extends AbstractProcessor {
                 case "java.lang.String" -> STRING;
                 case "long", "java.lang.Long" -> LONG;
                 case "int", "java.lang.Integer" -> INTEGER;
+                case "short", "java.lang.Short" -> SHORT;
                 case "double", "java.lang.Double" -> DOUBLE;
+                case "float", "java.lang.Float" -> FLOAT;
                 case "boolean", "java.lang.Boolean" -> BOOLEAN;
                 case "java.math.BigDecimal" -> DECIMAL;
+                case "java.util.UUID" -> UUID_VALUE;
+                case "java.time.Instant" -> INSTANT;
+                case "java.time.LocalDate" -> LOCAL_DATE;
+                case "java.time.LocalDateTime" -> LOCAL_DATE_TIME;
+                case "java.time.LocalTime" -> LOCAL_TIME;
                 default -> null;
             };
         }

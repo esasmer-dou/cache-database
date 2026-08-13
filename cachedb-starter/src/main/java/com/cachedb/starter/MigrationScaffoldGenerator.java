@@ -40,20 +40,20 @@ final class MigrationScaffoldGenerator {
 
         ArrayList<GeneratedFile> files = new ArrayList<>();
         files.add(renderRootEntityFile(naming, rootTable, plan));
-        files.add(renderChildEntityFile(naming, childTable, plan));
+        files.add(renderChildEntityFile(naming, childTable, plan, normalized.includeProjectionSkeleton()));
         if (normalized.includeRelationLoader()) {
-            files.add(renderRelationLoaderFile(naming, plan));
+            files.add(renderRelationLoaderFile(naming, rootTable, childTable, plan));
         }
         if (normalized.includeProjectionSkeleton()) {
-            files.add(renderProjectionSkeletonFile(naming, childTable, plan));
+            files.add(renderProjectionRecordFile(naming, childTable, plan, normalized.projectionColumns()));
         }
         files.add(renderUsageSnippetFile(naming, plan));
 
         ArrayList<String> notes = new ArrayList<>();
-        notes.add("The generated entity classes are derived from the discovered PostgreSQL schema, not from existing ORM source code.");
+        notes.add("The generated entity classes are derived from the discovered SQL schema, not from existing ORM source code.");
         notes.add("Generated binding classes are produced by the annotation processor after these entity skeletons are added to the project.");
         if (plan.projectionRequired()) {
-            notes.add("The child route includes a projection skeleton because this screen should move to summary-first reads before cutover.");
+            notes.add("The child route includes a compile-time generated projection record because this screen should move to summary-first reads before cutover.");
         }
 
         ArrayList<String> warnings = new ArrayList<>(discoveryResult.warnings());
@@ -160,7 +160,7 @@ final class MigrationScaffoldGenerator {
         }
         body.append("    @CacheRelation(\n")
                 .append("            targetEntity = \"").append(naming.childClassName()).append("\",\n")
-                .append("            mappedBy = \"").append(plan.request().relationColumn()).append("\",\n")
+                .append("            mappedBy = \"").append(fieldName(plan.request().relationColumn())).append("\",\n")
                 .append("            kind = CacheRelation.RelationKind.ONE_TO_MANY,\n")
                 .append("            batchLoadOnly = true\n")
                 .append("    )\n")
@@ -180,13 +180,18 @@ final class MigrationScaffoldGenerator {
     private GeneratedFile renderChildEntityFile(
             Naming naming,
             MigrationSchemaDiscovery.TableInfo childTable,
-            MigrationPlanner.Result plan
+            MigrationPlanner.Result plan,
+            boolean includeProjection
     ) {
         ArrayList<String> imports = new ArrayList<>();
         imports.add("com.reactor.cachedb.annotations.CacheColumn");
         imports.add("com.reactor.cachedb.annotations.CacheEntity");
         imports.add("com.reactor.cachedb.annotations.CacheId");
         imports.add("com.reactor.cachedb.annotations.CacheNamedQuery");
+        if (includeProjection) {
+            imports.add("com.reactor.cachedb.annotations.CacheProjectionDefinition");
+            imports.add("com.reactor.cachedb.core.projection.EntityProjection");
+        }
         imports.add("com.reactor.cachedb.core.query.QueryFilter");
         imports.add("com.reactor.cachedb.core.query.QuerySort");
         imports.add("com.reactor.cachedb.core.query.QuerySpec");
@@ -214,8 +219,22 @@ final class MigrationScaffoldGenerator {
                 .append("                .orderBy(").append(renderSortExpression(plan.request().sortColumn(), plan.request().sortDirection())).append(", QuerySort.desc(\"")
                 .append(plan.request().childPrimaryKeyColumn()).append("\"))\n")
                 .append("                .limitTo(limit);\n")
-                .append("    }\n")
-                .append("}\n");
+                .append("    }\n");
+        if (includeProjection) {
+            String projectionName = projectionName(plan);
+            String projectionMethod = camelCase(projectionName) + "Projection";
+            body.append("\n")
+                    .append("    @CacheProjectionDefinition(\"").append(projectionName).append("\")\n")
+                    .append("    public static EntityProjection<").append(naming.childClassName()).append(", ")
+                    .append(naming.projectionSupportClassName()).append(", ")
+                    .append(javaTypeName(columnByName(childTable, plan.request().childPrimaryKeyColumn()).orElse(null), plan.request().childPrimaryKeyColumn()))
+                    .append("> ").append(projectionMethod).append("() {\n")
+                    .append("        return ").append(naming.projectionSupportClassName()).append("Projection.PROJECTION;\n")
+                    .append("    }\n");
+        }
+        body.append("}")
+                .append("\n")
+                ;
         return new GeneratedFile(
                 naming.childClassName() + ".java",
                 javaPath(naming.basePackage(), naming.childClassName() + ".java"),
@@ -225,50 +244,48 @@ final class MigrationScaffoldGenerator {
         );
     }
 
-    private GeneratedFile renderRelationLoaderFile(Naming naming, MigrationPlanner.Result plan) {
+    private GeneratedFile renderRelationLoaderFile(
+            Naming naming,
+            MigrationSchemaDiscovery.TableInfo rootTable,
+            MigrationSchemaDiscovery.TableInfo childTable,
+            MigrationPlanner.Result plan
+    ) {
         ArrayList<String> imports = new ArrayList<>();
         imports.add("com.reactor.cachedb.core.api.EntityRepository");
-        imports.add("com.reactor.cachedb.core.query.QueryFilter");
         imports.add("com.reactor.cachedb.core.query.QuerySort");
-        imports.add("com.reactor.cachedb.core.query.QuerySpec");
-        imports.add("com.reactor.cachedb.core.relation.RelationBatchContext");
-        imports.add("com.reactor.cachedb.core.relation.RelationBatchLoader");
-        imports.add("java.util.List");
-        imports.add("java.util.Objects");
+        imports.add("com.reactor.cachedb.core.relation.PartitionedRelationBatchLoader");
 
-        String childIdType = javaTypeName(null, plan.request().childPrimaryKeyColumn());
+        String rootIdType = javaTypeName(
+                columnByName(rootTable, plan.request().rootPrimaryKeyColumn()).orElse(null),
+                plan.request().rootPrimaryKeyColumn()
+        );
+        String childIdType = javaTypeName(
+                columnByName(childTable, plan.request().childPrimaryKeyColumn()).orElse(null),
+                plan.request().childPrimaryKeyColumn()
+        );
+        int maxRelationLimit = Math.max(plan.request().firstPageSize(), plan.request().hotWindowPerRoot());
 
         StringBuilder body = new StringBuilder();
         body.append("package ").append(naming.basePackage()).append(";\n\n");
         body.append(renderImports(imports));
         body.append("public final class ").append(naming.relationLoaderClassName())
-                .append(" implements RelationBatchLoader<").append(naming.rootClassName()).append("> {\n\n")
-                .append("    private static final String RELATION_NAME = \"").append(naming.relationFieldName()).append("\";\n")
-                .append("    private static final int DEFAULT_PREVIEW_LIMIT = ").append(Math.max(1, plan.request().firstPageSize())).append(";\n\n")
-                .append("    private final EntityRepository<").append(naming.childClassName()).append(", ").append(childIdType).append("> childRepository;\n\n")
+                .append(" extends PartitionedRelationBatchLoader<")
+                .append(naming.rootClassName()).append(", ")
+                .append(naming.childClassName()).append(", ")
+                .append(rootIdType).append("> {\n\n")
                 .append("    public ").append(naming.relationLoaderClassName()).append("(EntityRepository<")
                 .append(naming.childClassName()).append(", ").append(childIdType).append("> childRepository) {\n")
-                .append("        this.childRepository = Objects.requireNonNull(childRepository, \"childRepository\");\n")
-                .append("    }\n\n")
-                .append("    @Override\n")
-                .append("    public void preload(List<").append(naming.rootClassName()).append("> entities, RelationBatchContext context) {\n")
-                .append("        if (entities.isEmpty() || !context.fetchPlan().includes(RELATION_NAME)) {\n")
-                .append("            return;\n")
-                .append("        }\n")
-                .append("        int requestedLimit = context.relationLimit(RELATION_NAME);\n")
-                .append("        int relationLimit = requestedLimit == Integer.MAX_VALUE ? DEFAULT_PREVIEW_LIMIT : Math.max(1, requestedLimit);\n")
-                .append("        for (").append(naming.rootClassName()).append(" entity : entities) {\n")
-                .append("            if (entity == null || entity.").append(fieldName(plan.request().rootPrimaryKeyColumn())).append(" == null) {\n")
-                .append("                continue;\n")
-                .append("            }\n")
-                .append("            entity.").append(naming.relationFieldName()).append(" = childRepository.query(\n")
-                .append("                    QuerySpec.where(QueryFilter.eq(\"").append(plan.request().relationColumn()).append("\", entity.")
-                .append(fieldName(plan.request().rootPrimaryKeyColumn())).append("))\n")
-                .append("                            .orderBy(").append(renderSortExpression(plan.request().sortColumn(), plan.request().sortDirection())).append(", QuerySort.desc(\"")
-                .append(plan.request().childPrimaryKeyColumn()).append("\"))\n")
-                .append("                            .limitTo(relationLimit)\n")
-                .append("            );\n")
-                .append("        }\n")
+                .append("        super(\n")
+                .append("                \"").append(naming.relationFieldName()).append("\",\n")
+                .append("                ").append(maxRelationLimit).append(",\n")
+                .append("                100,\n")
+                .append("                childRepository,\n")
+                .append("                parent -> parent.").append(fieldName(plan.request().rootPrimaryKeyColumn())).append(",\n")
+                .append("                (parent, children) -> parent.").append(naming.relationFieldName()).append(" = children,\n")
+                .append("                \"").append(plan.request().relationColumn()).append("\",\n")
+                .append("                ").append(renderSortExpression(plan.request().sortColumn(), plan.request().sortDirection())).append(",\n")
+                .append("                QuerySort.desc(\"").append(plan.request().childPrimaryKeyColumn()).append("\")\n")
+                .append("        );\n")
                 .append("    }\n")
                 .append("}\n");
         return new GeneratedFile(
@@ -280,58 +297,90 @@ final class MigrationScaffoldGenerator {
         );
     }
 
-    private GeneratedFile renderProjectionSkeletonFile(
+    private GeneratedFile renderProjectionRecordFile(
             Naming naming,
             MigrationSchemaDiscovery.TableInfo childTable,
-            MigrationPlanner.Result plan
+            MigrationPlanner.Result plan,
+            List<String> requestedColumns
     ) {
-        ArrayList<String> summaryColumns = new ArrayList<>();
-        summaryColumns.add(plan.request().childPrimaryKeyColumn());
-        if (!plan.request().relationColumn().equalsIgnoreCase(plan.request().childPrimaryKeyColumn())) {
-            summaryColumns.add(plan.request().relationColumn());
-        }
-        if (!plan.request().sortColumn().equalsIgnoreCase(plan.request().childPrimaryKeyColumn())
-                && !plan.request().sortColumn().equalsIgnoreCase(plan.request().relationColumn())) {
-            summaryColumns.add(plan.request().sortColumn());
-        }
-        childTable.columns().stream()
-                .filter(column -> !summaryColumns.stream().anyMatch(name -> name.equalsIgnoreCase(column.name())))
-                .filter(column -> !TECHNICAL_COLUMNS.contains(normalize(column.name())))
-                .limit(3)
-                .forEach(column -> summaryColumns.add(column.name()));
+        List<String> summaryColumns = projectionColumns(childTable, plan, requestedColumns);
+        String projectionName = projectionName(plan);
 
         StringBuilder body = new StringBuilder();
         body.append("package ").append(naming.basePackage()).append(";\n\n")
-                .append("// Skeleton only: wire this class into ").append(naming.childClassName()).append(" with @CacheProjectionDefinition.\n")
-                .append("// Suggested projection name: ").append(plan.summaryProjectionName()).append("\n");
+                .append("import com.reactor.cachedb.annotations.CacheColumn;\n")
+                .append("import com.reactor.cachedb.annotations.CacheProjectionRecord;\n\n")
+                .append("@CacheProjectionRecord(\n")
+                .append("        source = ").append(naming.childClassName()).append(".class,\n")
+                .append("        id = \"").append(fieldName(plan.request().childPrimaryKeyColumn())).append("\",\n")
+                .append("        name = \"").append(projectionName).append("\"");
         if (plan.rankedProjectionRequired()) {
-            body.append("// Suggested ranked column: ").append(plan.request().sortColumn()).append("\n");
+            body.append(",\n        rankedBy = \"").append(plan.request().sortColumn()).append("\"");
         }
-        body.append("\n")
-                .append("/*\n")
-                .append("Suggested summary projection columns:\n");
-        for (String column : summaryColumns) {
-            body.append(" - ").append(column).append('\n');
+        body.append(",\n        refresh = CacheProjectionRecord.Refresh.ASYNC\n")
+                .append(")\n")
+                .append("public record ").append(naming.projectionSupportClassName()).append("(\n");
+        for (int index = 0; index < summaryColumns.size(); index++) {
+            String columnName = summaryColumns.get(index);
+            MigrationSchemaDiscovery.ColumnInfo column = columnByName(childTable, columnName)
+                    .orElseThrow(() -> new IllegalArgumentException("Projection column was not discovered: " + columnName));
+            body.append("        @CacheColumn(\"").append(column.name()).append("\") ")
+                    .append(javaTypeName(column, column.name())).append(' ').append(fieldName(column.name()))
+                    .append(index == summaryColumns.size() - 1 ? "\n" : ",\n");
         }
-        body.append("\n")
-                .append("Suggested child entity hook:\n")
-                .append("@CacheProjectionDefinition(\"").append(plan.summaryProjectionName()).append("\")\n")
-                .append("public static EntityProjection<").append(naming.childClassName()).append(", ")
-                .append(stripEntitySuffix(naming.childClassName())).append("SummaryView, ")
-                .append(javaTypeName(columnByName(childTable, plan.request().childPrimaryKeyColumn()).orElse(null), plan.request().childPrimaryKeyColumn())).append("> ")
-                .append(camelCase(plan.summaryProjectionName())).append("Projection() {\n")
-                .append("    // TODO: build EntityProjection.of(...).asyncRefresh()")
-                .append(plan.rankedProjectionRequired() ? ".rankedBy(\"" + plan.request().sortColumn() + "\")" : "")
-                .append(";\n")
-                .append("}\n")
-                .append("*/\n");
+        body.append(") {\n")
+                .append("}\n");
         return new GeneratedFile(
                 naming.projectionSupportClassName() + ".java",
                 javaPath(naming.basePackage(), naming.projectionSupportClassName() + ".java"),
-                "Projection support skeleton for the hot list route",
+                "Compile-time generated projection record for the hot list route",
                 "java",
                 body.toString()
         );
+    }
+
+    private List<String> projectionColumns(
+            MigrationSchemaDiscovery.TableInfo childTable,
+            MigrationPlanner.Result plan,
+            List<String> requestedColumns
+    ) {
+        LinkedHashSet<String> selected = new LinkedHashSet<>();
+        addProjectionColumn(selected, childTable, plan.request().childPrimaryKeyColumn());
+        addProjectionColumn(selected, childTable, plan.request().relationColumn());
+        addProjectionColumn(selected, childTable, plan.request().sortColumn());
+        if (requestedColumns != null && !requestedColumns.isEmpty()) {
+            for (String requested : requestedColumns) {
+                addProjectionColumn(selected, childTable, requested);
+            }
+        } else {
+            childTable.columns().stream()
+                    .filter(column -> selected.stream().noneMatch(name -> name.equalsIgnoreCase(column.name())))
+                    .filter(column -> !TECHNICAL_COLUMNS.contains(normalize(column.name())))
+                    .limit(3)
+                    .forEach(column -> selected.add(column.name()));
+        }
+        return List.copyOf(selected);
+    }
+
+    private void addProjectionColumn(
+            Set<String> selected,
+            MigrationSchemaDiscovery.TableInfo childTable,
+            String requestedColumn
+    ) {
+        if (requestedColumn == null || requestedColumn.isBlank()) {
+            return;
+        }
+        MigrationSchemaDiscovery.ColumnInfo column = columnByName(childTable, requestedColumn)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Projection column was not found on " + childTable.qualifiedTableName() + ": " + requestedColumn
+                ));
+        selected.add(column.name());
+    }
+
+    private String projectionName(MigrationPlanner.Result plan) {
+        return plan.rankedProjectionRequired() && plan.rankedProjectionName() != null && !plan.rankedProjectionName().isBlank()
+                ? plan.rankedProjectionName()
+                : plan.summaryProjectionName();
     }
 
     private GeneratedFile renderUsageSnippetFile(Naming naming, MigrationPlanner.Result plan) {
@@ -514,8 +563,32 @@ final class MigrationScaffoldGenerator {
             String relationLoaderClassName,
             String projectionSupportClassName,
             boolean includeRelationLoader,
-            boolean includeProjectionSkeleton
+            boolean includeProjectionSkeleton,
+            List<String> projectionColumns
     ) {
+        Request(
+                MigrationPlanner.Request plannerRequest,
+                String basePackage,
+                String rootClassName,
+                String childClassName,
+                String relationLoaderClassName,
+                String projectionSupportClassName,
+                boolean includeRelationLoader,
+                boolean includeProjectionSkeleton
+        ) {
+            this(
+                    plannerRequest,
+                    basePackage,
+                    rootClassName,
+                    childClassName,
+                    relationLoaderClassName,
+                    projectionSupportClassName,
+                    includeRelationLoader,
+                    includeProjectionSkeleton,
+                    List.of()
+            );
+        }
+
         Request normalize() {
             return new Request(
                     plannerRequest == null ? MigrationPlanner.Request.defaults() : plannerRequest.normalize(),
@@ -525,7 +598,15 @@ final class MigrationScaffoldGenerator {
                     relationLoaderClassName == null ? "" : relationLoaderClassName.trim(),
                     projectionSupportClassName == null ? "" : projectionSupportClassName.trim(),
                     includeRelationLoader,
-                    includeProjectionSkeleton
+                    includeProjectionSkeleton,
+                    projectionColumns == null
+                            ? List.of()
+                            : projectionColumns.stream()
+                            .filter(Objects::nonNull)
+                            .map(String::trim)
+                            .filter(value -> !value.isBlank())
+                            .distinct()
+                            .toList()
             );
         }
     }

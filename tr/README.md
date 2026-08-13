@@ -39,29 +39,30 @@ doğrulanmalıdır.
 
 | Sürüm bilgisi | Değer |
 | --- | --- |
-| Yayımlanmış son sürüm | `v0.9.0` |
-| Repo sürümü | `0.9.0` |
+| Yayımlanmış son sürüm | `v0.10.0` |
+| Repo sürümü | `0.10.0` |
 | Kütüphane bytecode seviyesi | Java 17 |
 | Çalıştırılabilir örnekler | Java 21 |
 | Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
 | Uygulama API'si | Derleme sırasında üretilen `@CacheRepository` interface'leri |
 
-## 0.9.0 Sürümünde Neler Değişti?
+## 0.10.0 Sürümünde Neler Değişti?
 
-- Annotation processor; kesin biçimde belirlenebilen query, lookup, pencere ve
-  warm parametre rollerini çıkarır. Belirsiz bir tanım varsa derlemeyi durdurur.
-- Strict HOT ve sınırlı SOURCE route'lar doğrudan `CursorPage<T>` döndürebilir.
-  Coverage ve cursor tamamlama denetimleri generated kodun içinde kalır.
-- Generated `RepositoryRouteRef` değerleri, ham route adı veya reflection
-  kullanmadan repository tanımlarını warm, coverage ve test API'lerine taşır.
-- Coverage kapsamı, her query grubunda aynı alanı `EQ` koşuluyla daraltmak
-  zorundadır.
-- Actuator ve Micrometer; HOT route bütçesini, projection kullanımını ve bütçe
-  tanımlanmamış route sayısını yüksek metric cardinality oluşturmadan gösterir.
-- Açık timeout isteyen kalıcılık yardımcıları tekil komutları sadeleştirir;
-  toplu aktarımlar sınırlı batch ve backpressure kullanmaya devam eder.
+- Geçiş scaffold'u, keşfedilen SQL kolonlarından derlenebilir projection
+  record, entity kayıt bağlantısı ve parent bazlı toplu relation loader üretir.
+  UUID ile yaygın SQL tarih/saat tipleri uçtan uca desteklenir.
+- SQL Server write-behind, aynı şekle sahip upsert işlemlerini toplu update,
+  kilitli version kontrolü ve insert aşamalarında yürütür; canlı throughput
+  eşiği performans gerilemesini durdurur.
+- `cachedb:certify`; rota kapsamı, veri eşitliği, bellek, failover, canary, geri
+  dönüş veya commit'e bağlı kanıt eksikse uygulama derlemesini başarısız yapar.
+- Kararlı artifact'ler POM, BOM, source, Javadoc, SHA-1 ve SHA-256 dosyalarıyla
+  kimlik doğrulaması istemeyen Maven2 deposundan sunulur. GitHub Packages,
+  isteğe bağlı kimlik doğrulamalı ayna olarak kalır.
+- Production olgunluğu için birbiriyle çelişebilen eski kararlar yerine tek bir
+  güncel sözleşme kullanılır.
 
-Yükseltmeden önce [v0.9.0 sürüm notlarını](docs/releases/v0.9.0.md) oku.
+Yükseltmeden önce [v0.10.0 sürüm notlarını](docs/releases/v0.10.0.md) oku.
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -116,7 +117,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
 | "Repository'leri güvenli biçimde nasıl tanımlar ve işletirim?" | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| "Güncel sürümde neler değişti?" | [v0.9.0 Sürüm Notları](docs/releases/v0.9.0.md) |
+| "Güncel sürümde neler değişti?" | [v0.10.0 Sürüm Notları](docs/releases/v0.10.0.md) |
 | "Çalışan REST API örneği nerede?" | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [SQL Server Örneği](../sample-cache-database-mssql/README.tr.md) |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Birden fazla pod aktif veri setini düzenli olarak nasıl yeniler ve temizler?" | [Periyodik Warm ve Aktif Veri Seti Uzlaştırması](docs/periodik-warm.md) |
@@ -126,7 +127,8 @@ CacheDB özellikle şu problemlere odaklanır:
 | "Tüm property'ler ve varsayılanlar nerede?" | [Tuning Parametreleri](docs/tuning-parameters.md) |
 | "Mevcut SQL veritabanı sistemimi nasıl taşırım?" | [Geçiş Planlayıcı](docs/migration-planner.md) |
 | "Production'a çıkmadan önce ne kanıtlamalıyım?" | [Production Reçeteleri](docs/production-recipes.md) |
-| "Kararlı bir sürüm hangi kontrollerden geçer?" | [Production GA Criteria](../PRODUCTION_GA_CRITERIA.md) |
+| "Uygulamam geçişe hazır olduğunu nasıl kanıtlar?" | [Production Sertifikası](docs/production-sertifikasi.md) |
+| "Kararlı bir sürüm hangi kontrollerden geçer?" | [Production Olgunluğu](docs/production-olgunlugu.md) |
 | "GA release çıkabilir mi, nasıl karar verilir?" | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 
 ## Doğru Başlangıç Yolunu Seç
@@ -164,12 +166,13 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut. `0.9.0`, GitHub
-Packages ve GitHub Release paketi üzerinden dağıtılan değişmez sürümdür.
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.10.0`, kimlik
+doğrulaması istemeyen CacheDB Maven deposu ve GitHub Release paketi üzerinden
+sunulan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.9.0</cachedb.version>
+    <cachedb.version>0.10.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -227,21 +230,21 @@ Packages ve GitHub Release paketi üzerinden dağıtılan değişmez sürümdür
 </build>
 ```
 
-Yayımlanmış artifact'ler GitHub Packages üzerinden sunulur. Şirket parent POM'u
-bu repository'yi sağlamıyorsa consumer POM'a şu tanımı ekle:
+Şirket parent POM'u bu adresi tanımlamıyorsa public repository'yi consumer POM'a
+ekle. GitHub hesabı, token veya `settings.xml` gerekmez:
 
 ```xml
 <repositories>
     <repository>
-        <id>cache-database-github-packages</id>
-        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
     </repository>
 </repositories>
 
 <pluginRepositories>
     <pluginRepository>
-        <id>cache-database-github-packages</id>
-        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
         <releases>
             <enabled>true</enabled>
         </releases>
@@ -253,23 +256,9 @@ bu repository'yi sağlamıyorsa consumer POM'a şu tanımı ekle:
 ```
 
 `repositories` CacheDB dependency'lerini, `pluginRepositories` ise
-`cachedb-maven-plugin` artefact'ını çözümler. İki tanımdaki kimlik de Maven
-server kimliğiyle aynı olmalıdır:
-
-```xml
-<settings>
-    <servers>
-        <server>
-            <id>cache-database-github-packages</id>
-            <username>${env.GITHUB_ACTOR}</username>
-            <password>${env.GITHUB_TOKEN}</password>
-        </server>
-    </servers>
-</settings>
-```
-
-`read:packages` yetkili token kullan. `0.9.0` değişmez paket olarak
-yayımlanmıştır; consumer build'i için CacheDB kaynak reposuna ihtiyaç yoktur.
+`cachedb-maven-plugin` artifact'ını çözümler. GitHub Packages istenirse kimlik
+doğrulamalı ayna olarak kullanılabilir; normal public kullanımda zorunlu
+değildir. Consumer build'i için CacheDB kaynak reposuna ihtiyaç yoktur.
 
 JDBC kuralı:
 

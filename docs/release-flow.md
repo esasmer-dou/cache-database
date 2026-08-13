@@ -1,47 +1,37 @@
-# Release Flow
+# Stable Release Flow
 
-Use this flow after each public beta release.
+Every stable release is built, tested, distributed, and verified from one
+immutable tag.
 
-## Recommended cadence
+## Release Sequence
 
-1. ship the current beta release
-2. validate the release asset and GitHub release page
-3. open the next development cycle immediately
-4. keep `main` on the next `-SNAPSHOT` version
+1. Set the stable semantic version in the root and module POM files.
+2. Update `CHANGELOG.md`, English/Turkish release notes, README files, and the
+   two standalone samples.
+3. Run the full reactor, provider integration, Docker HA, documentation,
+   compatibility, benchmark, and release-artifact checks locally.
+4. Commit and push `main`; wait for `Framework Readiness` and `Production
+   Evidence` on that exact commit.
+5. Create and push the annotated stable tag.
+6. Wait for `Public Maven Repository Publish`; verify anonymous Maven
+   resolution for the tag.
+7. Publish GitHub Packages as a compatibility channel.
+8. Create the non-prerelease GitHub Release with the ZIP, BOM, binary JARs, and
+   checksums.
+9. Run `Production GA Release Readiness` for the tag.
+10. Build the standalone PostgreSQL and SQL Server samples against the remote,
+    anonymous Maven repository; then tag and release both samples.
 
-## Start the next beta cycle
+Do not rebuild or replace an existing version. A correction receives a new
+semantic version.
 
-Run:
+## Next Development Version
 
-```powershell
-./tools/release/start-next-beta-cycle.ps1 `
-  -CurrentVersion 0.1.0-beta.4 `
-  -NextVersion 0.1.0-beta.5-SNAPSHOT `
-  -CreateReleaseNotesTemplate
-```
+After the release is verified, move `main` to the next `-SNAPSHOT` version only
+when new development starts. Stable tags and published Maven paths remain
+immutable.
 
-This does three things:
+## Branch Rule
 
-- updates root and module `pom.xml` versions
-- reopens `CHANGELOG.md` with an `Unreleased` section
-- optionally creates the next release note template under `docs/releases/`
-
-## Recommended branch flow
-
-- `main` stays on the next `-SNAPSHOT` version
-- short-lived work can happen on feature branches, but do not leave `codex/*`
-  branches on the public remote unless explicitly intended
-- beta release tags are created from the commit you actually want to ship
-
-## Before cutting the next beta
-
-- confirm production evidence workflows are green
-- confirm coordination smoke is green
-- confirm release notes are updated
-- confirm `CHANGELOG.md` is ready to freeze
-- confirm the release bundle is rebuilt from the intended commit
-
-## Important note
-
-Do not leave `main` pinned to the previous shipped beta version after a public release.
-Open the next cycle immediately so dependency consumers and contributors can see where active development continues.
+`main` is the public integration branch. Use short-lived feature branches when
+needed, delete them after merge, and never publish internal `codex/*` branches.

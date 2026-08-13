@@ -1277,7 +1277,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 first(parameters, "relationLoaderClassName"),
                 first(parameters, "projectionSupportClassName"),
                 parseBoolean(parameters.get("includeRelationLoader"), true),
-                parseBoolean(parameters.get("includeProjectionSkeleton"), true)
+                parseBoolean(parameters.get("includeProjectionSkeleton"), true),
+                parseCommaSeparated(parameters.get("projectionColumns"))
         );
     }
 
@@ -2700,7 +2701,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + "\"relationLoaderClassName\":\"" + escapeJson(request.relationLoaderClassName()) + "\","
                 + "\"projectionSupportClassName\":\"" + escapeJson(request.projectionSupportClassName()) + "\","
                 + "\"includeRelationLoader\":" + request.includeRelationLoader() + ","
-                + "\"includeProjectionSkeleton\":" + request.includeProjectionSkeleton()
+                + "\"includeProjectionSkeleton\":" + request.includeProjectionSkeleton() + ","
+                + "\"projectionColumns\":" + toJsonStringArray(request.projectionColumns())
                 + "}";
     }
 
@@ -3318,7 +3320,8 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
                 + fieldInput("rootClassName", localized(normalizedLanguage, "Kök entity sınıf adı", "Root entity class name"), "CustomerEntity", "", plannerValues.get("rootClassName"))
                 + fieldInput("childClassName", localized(normalizedLanguage, "Çocuk entity sınıf adı", "Child entity class name"), "OrderEntity", "", plannerValues.get("childClassName"))
                 + fieldInput("relationLoaderClassName", localized(normalizedLanguage, "Relation loader sınıf adı", "Relation loader class name"), "CustomerOrderRelationBatchLoader", "", plannerValues.get("relationLoaderClassName"))
-                + fieldInput("projectionSupportClassName", localized(normalizedLanguage, "Projection destek sınıf adı", "Projection support class name"), "CustomerOrderReadModels", "", plannerValues.get("projectionSupportClassName"))
+                + fieldInput("projectionSupportClassName", localized(normalizedLanguage, "Projection record sınıf adı", "Projection record class name"), "CustomerOrderReadModels", "", plannerValues.get("projectionSupportClassName"))
+                + fieldInput("projectionColumns", localized(normalizedLanguage, "Projection kolonları", "Projection columns"), localized(normalizedLanguage, "Boşsa kimlik, ilişki, sıralama ve üç iş kolonu seçilir", "Defaults to id, relation, sort, and three business columns"), "full", plannerValues.get("projectionColumns"))
                 + fieldInput("comparisonSampleRootId", localized(normalizedLanguage, "Karşılaştırma örnek kök id", "Comparison sample root id"), localized(normalizedLanguage, "Boş bırakırsan sistem seçer", "Leave blank to auto-pick"), "", plannerValues.get("comparisonSampleRootId"))
                 + fieldInput("comparisonSampleRootCount", localized(normalizedLanguage, "Karşılaştırılacak örnek kök sayısı", "Comparison sample root count"), "3", "", plannerValues.get("comparisonSampleRootCount"))
                 + fieldInput("comparisonPageSize", localized(normalizedLanguage, "Karşılaştırma sayfa boyutu", "Comparison page size"), "100", "", plannerValues.get("comparisonPageSize"))
@@ -4024,6 +4027,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         values.put("childClassName", "OrderEntity");
         values.put("relationLoaderClassName", "CustomerOrderRelationBatchLoader");
         values.put("projectionSupportClassName", "CustomerOrderReadModels");
+        values.put("projectionColumns", "");
         values.put("comparisonSampleRootId", "");
         values.put("comparisonSampleRootCount", "3");
         values.put("comparisonPageSize", String.valueOf(defaults.firstPageSize()));
@@ -7628,6 +7632,20 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
         }
         builder.append(']');
         return builder.toString();
+    }
+
+    private List<String> parseCommaSeparated(List<String> values) {
+        if (values == null || values.isEmpty() || values.get(0) == null || values.get(0).isBlank()) {
+            return List.of();
+        }
+        ArrayList<String> parsed = new ArrayList<>();
+        for (String value : values.get(0).split(",")) {
+            String normalized = value == null ? "" : value.trim();
+            if (!normalized.isBlank() && !parsed.contains(normalized)) {
+                parsed.add(normalized);
+            }
+        }
+        return List.copyOf(parsed);
     }
 
     private int parseInt(List<String> values, int defaultValue) {

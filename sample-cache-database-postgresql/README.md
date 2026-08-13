@@ -3,16 +3,16 @@
 English | [Türkçe](README.tr.md)
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.9.0](https://img.shields.io/badge/CacheDB-0.9.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.9.0)
+[![CacheDB 0.10.0](https://img.shields.io/badge/CacheDB-0.10.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.10.0)
 
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and PostgreSQL. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in PostgreSQL, and
 growing lists use projections instead of full aggregates.
 
-> This release consumes the immutable CacheDB `0.9.0` package from GitHub
-> Packages. Configure Maven credentials once; the CacheDB source repository is
-> not required to build or run the sample.
+> This release consumes the immutable CacheDB `0.10.0` package from the public
+> CacheDB Maven repository. It requires no GitHub token and does not require a
+> local CacheDB source checkout.
 
 After the quick start, you will have proved one complete production-shaped
 route: seed durable PostgreSQL rows, read the bounded archive route, warm the
@@ -30,6 +30,7 @@ miss.
 | Warm existing PostgreSQL rows | [Warm Existing Data](#warm-existing-data) |
 | Choose cache limits | [Tuning by Use Case](#tuning-by-use-case) |
 | Exercise every route | [API Catalog](#api-catalog) or [Postman](#postman) |
+| Prove production readiness | [Production Certification](#production-certification) |
 | Prepare a production rollout | [Production Checklist](#production-checklist) |
 | Fix a startup or data-path problem | [Troubleshooting](#troubleshooting) |
 
@@ -96,8 +97,6 @@ discovery.
 - Maven 3.9+
 - Docker Desktop or a compatible Docker Engine
 - PowerShell 7+ for the bundled load script
-- a GitHub token with `read:packages` only when resolving a published package
-  from GitHub Packages
 
 Verify the local toolchain:
 
@@ -116,7 +115,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.9.0</cachedb.version>
+    <cachedb.version>0.10.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -176,21 +175,21 @@ If JPA or another starter already creates the application `DataSource`, adding
 `DataSource`, one provider starter, the annotations artifact, and the annotation
 processor.
 
-The sample POM declares GitHub Packages twice because Maven resolves normal
-dependencies and build plugins from separate repository lists:
+Maven resolves normal dependencies and build plugins from separate repository
+lists, so the public CacheDB repository appears in both sections:
 
 ```xml
 <repositories>
     <repository>
-        <id>cache-database-github-packages</id>
-        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
     </repository>
 </repositories>
 
 <pluginRepositories>
     <pluginRepository>
-        <id>cache-database-github-packages</id>
-        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
         <releases><enabled>true</enabled></releases>
         <snapshots><enabled>false</enabled></snapshots>
     </pluginRepository>
@@ -198,28 +197,15 @@ dependencies and build plugins from separate repository lists:
 ```
 
 `repositories` resolves the BOM, starters, and libraries.
-`pluginRepositories` resolves `cachedb-maven-plugin:doctor`. The repository
-ID in both POM sections and the server ID in Maven `settings.xml` must match:
-
-```xml
-<settings>
-    <servers>
-        <server>
-            <id>cache-database-github-packages</id>
-            <username>${env.GITHUB_ACTOR}</username>
-            <password>${env.GITHUB_TOKEN}</password>
-        </server>
-    </servers>
-</settings>
-```
+`pluginRepositories` resolves `cachedb-maven-plugin`. The endpoint is public;
+no Maven `settings.xml`, username, or token is required.
 
 ## Quick Start
 
 ### 1. Resolve the published CacheDB package
 
-Configure the GitHub Packages credentials shown above, then validate the
-sample. Maven resolves the BOM, starter, annotation processor, and doctor
-plugin from the immutable `0.9.0` package:
+Validate the sample directly. Maven resolves the BOM, starter, annotation
+processor, and doctor plugin anonymously from the immutable `0.10.0` package:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -783,6 +769,24 @@ limits, representative payloads, and expected concurrency.
 - Treat PostgreSQL as the durable source of truth even when Redis serves the
   operational route.
 
+## Production Certification
+
+The framework repository proves CacheDB's own Docker and provider behavior.
+Your application must separately prove its routes and its real staging
+topology. After collecting route coverage, parity, memory, failover, canary,
+and rollback evidence under `cachedb-certification/`, run:
+
+```powershell
+mvn verify -Pproduction-certification
+```
+
+The command fails on missing routes, evidence from another commit or
+environment, unresolved parity, an exceeded memory budget, or a missing
+failover/rollback drill. It writes the shareable result to
+`target/cachedb-production-certification.md`. Use the complete
+[production certification contract](https://github.com/esasmer-dou/cache-database/blob/main/docs/production-certification.md);
+never copy placeholder evidence and mark it as passed.
+
 ## Production Checklist
 
 - [ ] Every operational endpoint is classified as command, active entity,
@@ -810,8 +814,9 @@ limits, representative payloads, and expected concurrency.
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | `/api/demo/seed` or `/api/warm/**` returns `404` | Application was not started with the `demo` profile | Set `SPRING_PROFILES_ACTIVE=demo` and restart |
-| Maven returns `401 Unauthorized` | GitHub Packages credentials are absent or server IDs differ | Configure `GITHUB_ACTOR`, a `read:packages` token, and matching server ID |
-| Release dependencies resolve but `cachedb-maven-plugin` does not | `pluginRepositories` is absent or uses another server ID | Add the GitHub Packages plugin repository, configure a `read:packages` token, and keep all three IDs identical |
+| CacheDB artifacts return `404` | The requested version is not published or the public repository URL is missing | Use a released stable version and declare `https://esasmer-dou.github.io/cache-database/maven2` in both repository sections |
+| Dependencies resolve but `cachedb-maven-plugin` does not | `pluginRepositories` is absent | Add the same public CacheDB URL under `pluginRepositories` |
+| `production-certification` fails | Route evidence is missing, stale, or belongs to another commit/environment | Read the generated report, regenerate real staging evidence, and rerun the profile |
 | Active route returns `503` while archive returns rows | Redis route has not been warmed, its coverage expired, or the scope differs | Run dry-run, warm the exact route/scope, poll to `COMPLETED`, then inspect coverage |
 | Detail route reports unavailable data | Entity payload is outside the active set | Warm entities for that detail scope or add a bounded source-detail route |
 | `409 Conflict` after a parent write | Parent is not durable yet or optimistic version changed | Honor `Retry-After`, verify write-behind health, retry idempotently |

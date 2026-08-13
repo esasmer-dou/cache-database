@@ -32,6 +32,11 @@ class MssqlDatabaseDialectTest {
     void shouldRespectSqlServerParameterLimit() {
         assertEquals(700, dialect.safeStatementRowLimit(1_000, 3));
         assertEquals(64, dialect.safeStatementRowLimit(64, 3));
+        String probeSql = dialect.currentVersionsSql(operation("1", 1), 3);
+        assertTrue(probeSql.contains("(?, ?), (?, ?), (?, ?)"));
+        assertTrue(probeSql.contains("WITH (UPDLOCK, HOLDLOCK)"));
+        assertThrows(IllegalArgumentException.class, () ->
+                dialect.currentVersionsSql(operation("1", 1), (MssqlDatabaseDialect.MSSQL_PARAMETER_LIMIT / 2) + 1));
     }
 
     private static QueuedWriteOperation operation(String id, long version) {

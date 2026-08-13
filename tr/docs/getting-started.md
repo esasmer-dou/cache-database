@@ -33,12 +33,12 @@ ANTI-PATTERN: Tüm tabloları modelleyip tüm trafiği bir anda CacheDB'ye almak
 
 ## 2. Spring Boot Dependency'leri
 
-Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur. `0.9.0`, GitHub
-Packages üzerinden değişmez paket olarak yayımlanmıştır.
+Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur. `0.10.0`, kimlik
+doğrulaması istemeyen CacheDB Maven deposunda değişmez paket olarak yayımlanır.
 
 ```xml
 <properties>
-    <cachedb.version>0.9.0</cachedb.version>
+    <cachedb.version>0.10.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -91,6 +91,26 @@ Packages üzerinden değişmez paket olarak yayımlanmıştır.
 </build>
 ```
 
+Şirket parent POM'u bu tanımları sağlamıyorsa aynı anonim adresi dependency ve
+plugin repository listelerine ekle:
+
+```xml
+<repositories>
+    <repository>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
+    </repository>
+</repositories>
+<pluginRepositories>
+    <pluginRepository>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
+    </pluginRepository>
+</pluginRepositories>
+```
+
+Token veya CacheDB kaynak kodunu yerelde derlemek gerekmez.
+
 JDBC kuralı:
 
 - Projede `DataSource` yoksa `spring-boot-starter-jdbc` eklenmelidir.
@@ -111,7 +131,7 @@ Spring Boot kullanmıyorsan:
 
 ```xml
 <properties>
-    <cachedb.version>0.9.0</cachedb.version>
+    <cachedb.version>0.10.0</cachedb.version>
 </properties>
 
 <dependencies>

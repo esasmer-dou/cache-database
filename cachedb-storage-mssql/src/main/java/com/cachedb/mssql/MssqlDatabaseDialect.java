@@ -79,6 +79,21 @@ public final class MssqlDatabaseDialect implements JdbcDatabaseDialect {
                 + " (" + insertColumns + ") VALUES (" + insertValues + ")";
     }
 
+    String currentVersionsSql(QueuedWriteOperation operation, int rowCount) {
+        if (rowCount <= 0 || rowCount > MSSQL_PARAMETER_LIMIT / 2) {
+            throw new IllegalArgumentException("MSSQL version probe row count must be between 1 and "
+                    + (MSSQL_PARAMETER_LIMIT / 2) + ": " + rowCount);
+        }
+        StringJoiner rows = new StringJoiner(", ");
+        for (int index = 0; index < rowCount; index++) {
+            rows.add("(?, ?)");
+        }
+        return "SELECT source.operation_ordinal, target." + operation.versionColumn()
+                + " FROM (VALUES " + rows + ") AS source(operation_ordinal, entity_id)"
+                + " INNER JOIN " + operation.tableName() + " AS target WITH (UPDLOCK, HOLDLOCK)"
+                + " ON target." + operation.idColumn() + " = source.entity_id";
+    }
+
     @Override
     public String sqlCastType(String javaTypeName) {
         return switch (javaTypeName) {

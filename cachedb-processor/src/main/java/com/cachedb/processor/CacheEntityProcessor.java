@@ -1481,13 +1481,15 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                     "long", "java.lang.Long",
                     "boolean", "java.lang.Boolean",
                     "double", "java.lang.Double",
-                    "java.math.BigDecimal",
-                    "float", "java.lang.Float",
+                     "java.math.BigDecimal",
+                     "java.util.UUID",
+                     "float", "java.lang.Float",
                     "short", "java.lang.Short",
                     "byte", "java.lang.Byte",
-                    "java.time.Instant",
-                    "java.time.LocalDate",
-                    "java.time.LocalDateTime",
+                     "java.time.Instant",
+                     "java.time.LocalDate",
+                     "java.time.LocalTime",
+                     "java.time.LocalDateTime",
                     "java.time.OffsetDateTime" -> true;
             default -> false;
         };
@@ -3256,11 +3258,13 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         }
         return switch (field.typeName()) {
             case "java.lang.String" -> accessor;
-            case "java.lang.Integer", "java.lang.Long", "java.lang.Boolean", "java.lang.Double",
-                    "java.math.BigDecimal",
-                    "java.lang.Float", "java.lang.Short", "java.lang.Byte",
-                    "java.time.Instant", "java.time.LocalDate", "java.time.LocalDateTime", "java.time.OffsetDateTime" ->
-                    accessor + " == null ? null : String.valueOf(" + accessor + ")";
+             case "java.lang.Integer", "java.lang.Long", "java.lang.Boolean", "java.lang.Double",
+                     "java.math.BigDecimal",
+                     "java.util.UUID",
+                     "java.lang.Float", "java.lang.Short", "java.lang.Byte",
+                     "java.time.Instant", "java.time.LocalDate", "java.time.LocalTime",
+                     "java.time.LocalDateTime", "java.time.OffsetDateTime" ->
+                     accessor + " == null ? null : String.valueOf(" + accessor + ")";
             default -> "String.valueOf(" + accessor + ")";
         };
     }
@@ -3282,7 +3286,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             case "java.lang.Boolean" -> source + " == null ? null : Boolean.valueOf(" + source + ")";
             case "double" -> source + " == null ? 0D : Double.parseDouble(" + source + ")";
             case "java.lang.Double" -> source + " == null ? null : Double.valueOf(" + source + ")";
-            case "java.math.BigDecimal" -> source + " == null ? null : new java.math.BigDecimal(" + source + ")";
+             case "java.math.BigDecimal" -> source + " == null ? null : new java.math.BigDecimal(" + source + ")";
+             case "java.util.UUID" -> source + " == null ? null : java.util.UUID.fromString(" + source + ")";
             case "float" -> source + " == null ? 0F : Float.parseFloat(" + source + ")";
             case "java.lang.Float" -> source + " == null ? null : Float.valueOf(" + source + ")";
             case "short" -> source + " == null ? (short) 0 : Short.parseShort(" + source + ")";
@@ -3290,7 +3295,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             case "byte" -> source + " == null ? (byte) 0 : Byte.parseByte(" + source + ")";
             case "java.lang.Byte" -> source + " == null ? null : Byte.valueOf(" + source + ")";
             case "java.time.Instant" -> source + " == null ? null : java.time.Instant.parse(" + source + ")";
-            case "java.time.LocalDate" -> source + " == null ? null : java.time.LocalDate.parse(" + source + ")";
+             case "java.time.LocalDate" -> source + " == null ? null : java.time.LocalDate.parse(" + source + ")";
+             case "java.time.LocalTime" -> source + " == null ? null : java.time.LocalTime.parse(" + source + ")";
             case "java.time.LocalDateTime" -> source + " == null ? null : java.time.LocalDateTime.parse(" + source + ")";
             case "java.time.OffsetDateTime" -> source + " == null ? null : java.time.OffsetDateTime.parse(" + source + ")";
             default -> throw new IllegalArgumentException("Unsupported type: " + field.typeName());
@@ -3314,7 +3320,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             case "java.lang.Boolean" -> source + " instanceof Boolean bool ? bool : (" + source + " == null ? null : Boolean.valueOf(String.valueOf(" + source + ")))";
             case "double" -> source + " instanceof Number number ? number.doubleValue() : (" + source + " == null ? 0D : Double.parseDouble(String.valueOf(" + source + ")))";
             case "java.lang.Double" -> source + " instanceof Number number ? Double.valueOf(number.doubleValue()) : (" + source + " == null ? null : Double.valueOf(String.valueOf(" + source + ")))";
-            case "java.math.BigDecimal" -> source + " == null ? null : new java.math.BigDecimal(String.valueOf(" + source + "))";
+             case "java.math.BigDecimal" -> source + " == null ? null : new java.math.BigDecimal(String.valueOf(" + source + "))";
+             case "java.util.UUID" -> source + " instanceof java.util.UUID uuid ? uuid : (" + source + " == null ? null : java.util.UUID.fromString(String.valueOf(" + source + ")))";
             case "float" -> source + " instanceof Number number ? number.floatValue() : (" + source + " == null ? 0F : Float.parseFloat(String.valueOf(" + source + ")))";
             case "java.lang.Float" -> source + " instanceof Number number ? Float.valueOf(number.floatValue()) : (" + source + " == null ? null : Float.valueOf(String.valueOf(" + source + ")))";
             case "short" -> source + " instanceof Number number ? number.shortValue() : (" + source + " == null ? (short) 0 : Short.parseShort(String.valueOf(" + source + ")))";
@@ -3322,7 +3329,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             case "byte" -> source + " instanceof Number number ? number.byteValue() : (" + source + " == null ? (byte) 0 : Byte.parseByte(String.valueOf(" + source + ")))";
             case "java.lang.Byte" -> source + " instanceof Number number ? Byte.valueOf(number.byteValue()) : (" + source + " == null ? null : Byte.valueOf(String.valueOf(" + source + ")))";
             case "java.time.Instant" -> source + " instanceof java.time.Instant instant ? instant : (" + source + " instanceof java.sql.Timestamp timestamp ? timestamp.toInstant() : (" + source + " instanceof java.time.OffsetDateTime offsetDateTime ? offsetDateTime.toInstant() : (" + source + " == null ? null : java.time.Instant.parse(String.valueOf(" + source + ")))))";
-            case "java.time.LocalDate" -> source + " instanceof java.time.LocalDate localDate ? localDate : (" + source + " instanceof java.sql.Date sqlDate ? sqlDate.toLocalDate() : (" + source + " instanceof java.sql.Timestamp timestamp ? timestamp.toLocalDateTime().toLocalDate() : (" + source + " == null ? null : java.time.LocalDate.parse(String.valueOf(" + source + ")))))";
+             case "java.time.LocalDate" -> source + " instanceof java.time.LocalDate localDate ? localDate : (" + source + " instanceof java.sql.Date sqlDate ? sqlDate.toLocalDate() : (" + source + " instanceof java.sql.Timestamp timestamp ? timestamp.toLocalDateTime().toLocalDate() : (" + source + " == null ? null : java.time.LocalDate.parse(String.valueOf(" + source + ")))))";
+             case "java.time.LocalTime" -> source + " instanceof java.time.LocalTime localTime ? localTime : (" + source + " instanceof java.sql.Time sqlTime ? sqlTime.toLocalTime() : (" + source + " instanceof java.sql.Timestamp timestamp ? timestamp.toLocalDateTime().toLocalTime() : (" + source + " == null ? null : java.time.LocalTime.parse(String.valueOf(" + source + ")))))";
             case "java.time.LocalDateTime" -> source + " instanceof java.time.LocalDateTime localDateTime ? localDateTime : (" + source + " instanceof java.sql.Timestamp timestamp ? timestamp.toLocalDateTime() : (" + source + " instanceof java.time.OffsetDateTime offsetDateTime ? offsetDateTime.toLocalDateTime() : (" + source + " instanceof java.time.Instant instant ? java.time.LocalDateTime.ofInstant(instant, java.time.ZoneOffset.UTC) : (" + source + " == null ? null : java.time.LocalDateTime.parse(String.valueOf(" + source + "))))))";
             case "java.time.OffsetDateTime" -> source + " instanceof java.time.OffsetDateTime offsetDateTime ? offsetDateTime : (" + source + " instanceof java.sql.Timestamp timestamp ? timestamp.toInstant().atOffset(java.time.ZoneOffset.UTC) : (" + source + " instanceof java.time.Instant instant ? instant.atOffset(java.time.ZoneOffset.UTC) : (" + source + " == null ? null : java.time.OffsetDateTime.parse(String.valueOf(" + source + ")))))";
             default -> throw new IllegalArgumentException("Unsupported type: " + field.typeName());

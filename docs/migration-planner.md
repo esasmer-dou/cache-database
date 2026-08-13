@@ -133,12 +133,21 @@ Expected result:
 - root `@CacheEntity` skeleton
 - child `@CacheEntity` skeleton
 - hot-list named query
-- optional relation loader skeleton
-- optional projection support skeleton
+- optional bounded, partitioned relation loader
+- optional compile-ready `@CacheProjectionRecord`
+- entity-side projection registration method
 - generated binding usage snippet
 
-This is a starting point, not a production-ready domain model. Review column
-types, naming, nullability, and index assumptions before committing the code.
+Primary key, relation key, and sort key are always included in the generated
+projection. Use `Projection columns` to select the remaining direct SQL columns.
+The generated files are designed to compile with the CacheDB processors; UUID
+and common SQL date/time columns are supported. Review naming, nullability,
+indexes, and payload size before committing the code.
+
+Database metadata cannot infer computed business fields such as display status,
+converted amount, authorization decision, or tenant-specific score. Add those
+transformations explicitly after generation; the scaffold does not insert a
+placeholder or silently guess their meaning.
 
 ### 6. Run Dry-Run Warm
 
@@ -240,21 +249,6 @@ write route must be mapped to one of these outcomes:
 
 Do not claim 100% migration coverage until unmapped routes are zero and every
 mapped route has either parity evidence or an explicit manual acceptance note.
-
-### 9. Download Migration Report
-
-Download the report after comparison.
-
-The report should include:
-
-- route summary
-- selected design
-- warm results
-- comparison results
-- readiness status
-- cutover action plan
-- blockers
-- rollback notes
 
 ## Full-System Migration Coverage
 

@@ -4,6 +4,39 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.10.0 - 2026-08-13
+
+### Added
+
+- compile-ready migration projection records with generated registration hooks,
+  selectable direct-column payloads, and partitioned relation loaders
+- entity and projection codec support for UUID plus common SQL date/time types
+- the `cachedb:certify` Maven gate for commit-bound route, parity, memory,
+  failover, canary, and rollback evidence
+- an anonymous, immutable Maven2 repository publishing POM, BOM, binary,
+  source, Javadoc, SHA-1, and SHA-256 files
+- a live SQL Server write-throughput report and regression threshold
+
+### Changed
+
+- SQL Server same-shape upserts use batch update, one locked multi-row version
+  probe, and batch insert instead of a per-row update/insert decision loop
+- production maturity and go/no-go rules are maintained in one authoritative
+  contract; old verdict pages no longer carry independent status claims
+- public and sample dependency setup defaults to the anonymous Maven repository;
+  GitHub Packages is an optional compatibility mirror
+- route coverage evidence must identify the exact application commit,
+  environment, owner, timestamp, status, and measured summary
+
+### Compatibility
+
+- runtime and generated API changes are additive
+- direct-column migration mappings are generated automatically; computed
+  business fields remain explicit because database metadata cannot safely infer
+  business transformations
+- PostgreSQL and SQL Server remain first-class providers with separate dialect,
+  lock, timeout, restart, and performance evidence
+
 ## 0.9.0 - 2026-08-13
 
 ### Added

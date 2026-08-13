@@ -38,28 +38,29 @@ application's own staging topology.
 
 | Release information | Value |
 | --- | --- |
-| Latest published release | `v0.9.0` |
-| Repository version | `0.9.0` |
+| Latest published release | `v0.10.0` |
+| Repository version | `0.10.0` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
 
-## What Is New In 0.9.0
+## What Is New In 0.10.0
 
-- The annotation processor infers unambiguous query, lookup, window, and warm
-  parameter roles while rejecting ambiguous declarations at compilation.
-- Strict HOT and bounded SOURCE routes may return `CursorPage<T>` directly;
-  coverage checks and cursor completion remain inside generated code.
-- Generated `RepositoryRouteRef` values connect repository declarations to
-  warm, coverage, and test APIs without raw route-name strings or reflection.
-- Coverage scopes must constrain the same field with `EQ` in every query group.
-- Actuator and Micrometer expose aggregate HOT route budgets, projection use,
-  and unbudgeted route counts without route-name metric cardinality.
-- Explicit timeout-bounded durability helpers simplify single commands while
-  bulk imports continue to use bounded batch writing and backpressure.
+- Migration scaffold generation emits compile-ready projection records, entity
+  registration hooks, and partitioned relation loaders from discovered SQL
+  columns. UUID and common SQL date/time types are supported end to end.
+- SQL Server write-behind batches same-shape upserts into update, locked version
+  probe, and insert phases, with a live throughput regression gate.
+- `cachedb:certify` fails a consumer build when route coverage, parity, memory,
+  failover, canary, rollback, or commit-bound evidence is missing.
+- Stable artifacts are published to an anonymous Maven2 repository with POM,
+  BOM, source, Javadoc, SHA-1, and SHA-256 files. GitHub Packages remains an
+  optional authenticated mirror.
+- Production maturity has one authoritative contract instead of separate,
+  potentially stale readiness verdicts.
 
-Read the complete [v0.9.0 release notes](docs/releases/v0.9.0.md) before
+Read the complete [v0.10.0 release notes](docs/releases/v0.10.0.md) before
 upgrading.
 
 ## Product Positioning: What CacheDB Is And Is Not
@@ -110,7 +111,7 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the current release?" | [v0.9.0 Release Notes](docs/releases/v0.9.0.md) |
+| "What changed in the current release?" | [v0.10.0 Release Notes](docs/releases/v0.10.0.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "How do multiple pods refresh and clean a hot set periodically?" | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) |
@@ -120,7 +121,8 @@ happens when the requested data is outside the active set.
 | "Where are all properties and defaults?" | [Tuning Parameters](docs/tuning-parameters.md) |
 | "How do I migrate an existing SQL database system?" | [Migration Planner](docs/migration-planner.md) |
 | "What must be proven before production?" | [Production Recipes](docs/production-recipes.md) |
-| "Which checks define a production release?" | [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) |
+| "How does my application prove cutover readiness?" | [Production Certification](docs/production-certification.md) |
+| "Which checks define a production release?" | [Production Readiness Contract](PRODUCTION_GA_CRITERIA.md) |
 | "How do I decide whether a GA release can ship?" | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 
 ## Choose Your Starting Path
@@ -159,13 +161,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.9.0` is an
-immutable release distributed through GitHub Packages and the GitHub Release
-bundle.
+Keep `cachedb.version` aligned with the release you use. Version `0.10.0` is an
+immutable release available from the anonymous CacheDB Maven repository and
+the GitHub Release bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.9.0</cachedb.version>
+    <cachedb.version>0.10.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -223,21 +225,21 @@ bundle.
 </build>
 ```
 
-Published artifacts are served through GitHub Packages. Add the repository to
-the consumer POM when it is not inherited from a company parent:
+Add the public repository to the consumer POM when it is not inherited from a
+company parent. It does not require a GitHub account, token, or `settings.xml`:
 
 ```xml
 <repositories>
     <repository>
-        <id>cache-database-github-packages</id>
-        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
     </repository>
 </repositories>
 
 <pluginRepositories>
     <pluginRepository>
-        <id>cache-database-github-packages</id>
-        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
         <releases>
             <enabled>true</enabled>
         </releases>
@@ -249,22 +251,9 @@ the consumer POM when it is not inherited from a company parent:
 ```
 
 `repositories` resolves CacheDB dependencies and `pluginRepositories` resolves
-`cachedb-maven-plugin`. Both IDs must match the Maven server ID:
-
-```xml
-<settings>
-    <servers>
-        <server>
-            <id>cache-database-github-packages</id>
-            <username>${env.GITHUB_ACTOR}</username>
-            <password>${env.GITHUB_TOKEN}</password>
-        </server>
-    </servers>
-</settings>
-```
-
-Use a token with `read:packages`. Version `0.9.0` is published as an immutable
-package; a consumer build does not need the CacheDB source repository.
+`cachedb-maven-plugin`. GitHub Packages may still be used as an authenticated
+mirror, but it is not required for normal public consumption. A consumer build
+does not need the CacheDB source checkout.
 
 JDBC rule:
 

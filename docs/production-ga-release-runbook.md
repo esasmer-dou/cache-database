@@ -1,6 +1,6 @@
 # Production GA Release Runbook
 
-This runbook is intentionally stricter than the public beta release flow.
+This runbook is the mandatory stable release flow.
 CacheDB framework GA means the library release is safe to consume with clear
 boundaries, green CI evidence, and a documented distribution channel. It does
 not mean every consuming application's production topology has already been
@@ -74,7 +74,7 @@ restart/reconnect and provider evidence, not as topology certification.
    This proves stale JDBC connection invalidation and new-connection recovery
    through a stable listener endpoint. It does not replace a real Always On
    topology test for replication, quorum, or managed failover policy.
-4. Push the release commit to `main` and wait for `Public Beta Readiness` and
+4. Push the release commit to `main` and wait for `Framework Readiness` and
    `Production Evidence` to pass on that exact commit.
 5. Build the official GitHub Release artifact from the intended commit:
 
@@ -140,4 +140,4 @@ boundaries, while individual applications still run route-level coverage,
 rollback, and staging HA evidence before cutover.
 
 ANTI-PATTERN: rename a beta build to GA because the unit tests, local Docker
-tests, or public beta readiness workflow passed.
+tests, or the framework readiness workflow passed.

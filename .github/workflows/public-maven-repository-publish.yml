@@ -1,0 +1,118 @@
+name: Public Maven Repository Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      targetRef:
+        description: Stable tag to publish, for example v0.10.0
+        required: true
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: public-maven-pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Resolve stable release ref
+        id: release
+        shell: pwsh
+        run: |
+          $releaseRef = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.targetRef }}" } else { "${{ github.ref_name }}" }
+          if ($releaseRef -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Public Maven repository only accepts stable semantic-version tags: $releaseRef"
+          }
+          "ref=$releaseRef" >> $env:GITHUB_OUTPUT
+          "version=$($releaseRef.Substring(1))" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout release source
+        uses: actions/checkout@v6.0.3
+        with:
+          ref: ${{ steps.release.outputs.ref }}
+          fetch-depth: 0
+          path: source
+
+      - name: Setup Java
+        uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build signed-shape release artifacts
+        working-directory: source
+        run: mvn -B -P oss-release -DskipTests -Dgpg.skip=true package
+
+      - name: Checkout persistent public repository branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir public-repository
+          cd public-repository
+          git init
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch --depth=1 origin public-maven; then
+            git checkout -B public-maven FETCH_HEAD
+          else
+            git checkout --orphan public-maven
+          fi
+
+      - name: Add immutable Maven artifacts
+        shell: pwsh
+        run: |
+          ./source/tools/release/build-public-maven-repository.ps1 `
+            -Version "${{ steps.release.outputs.version }}" `
+            -OutputDirectory "${{ github.workspace }}/public-repository" `
+            -SkipBuild `
+            -PreserveExisting
+
+      - name: Commit public Maven repository state
+        shell: bash
+        working-directory: public-repository
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "Public Maven repository already contains this immutable release."
+          else
+            git commit -m "Publish CacheDB ${{ steps.release.outputs.version }}"
+            git push origin HEAD:public-maven
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Prepare Pages artifact without Git metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir public-site
+          cp -a public-repository/. public-site/
+          rm -rf public-site/.git
+
+      - name: Upload Maven repository site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: public-site
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

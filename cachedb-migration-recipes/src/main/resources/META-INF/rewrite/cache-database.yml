@@ -9,7 +9,7 @@ recipeList:
       oldArtifactId: cachedb-spring-boot-starter
       newGroupId: com.reactor.cachedb
       newArtifactId: cachedb-spring-boot-starter-postgres
-      newVersion: 0.8.0
+      newVersion: 0.10.0
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: com.reactor.cachedb.starter.PostgresConnectionConfig
       newFullyQualifiedTypeName: com.reactor.cachedb.postgres.PostgresConnectionConfig
@@ -27,4 +27,4 @@ recipeList:
       oldArtifactId: cachedb-spring-boot-starter
       newGroupId: com.reactor.cachedb
       newArtifactId: cachedb-spring-boot-starter-mssql
-      newVersion: 0.8.0
+      newVersion: 0.10.0

@@ -6,7 +6,7 @@
     <parent>
         <groupId>com.reactor.cachedb</groupId>
         <artifactId>cache-database</artifactId>
-        <version>0.9.0</version>
+        <version>0.10.0</version>
     </parent>
     <artifactId>cachedb-spring-boot-test</artifactId>
     <name>cachedb-spring-boot-test</name>

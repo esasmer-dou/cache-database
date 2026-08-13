@@ -18,6 +18,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -94,13 +95,28 @@ class MigrationScaffoldGeneratorTest {
         assertTrue(result.files().stream().anyMatch(file ->
                 file.fileName().equals("CustomerOrderEntity.java")
                         && file.content().contains("@CacheNamedQuery(\"listByCustomerAccount\")")
-                        && file.content().contains("QuerySort.desc(\"order_date\")")));
+                        && file.content().contains("QuerySort.desc(\"order_date\")")
+                        && file.content().contains("@CacheProjectionDefinition(\"CustomerAccountCustomerOrderSummaryHot\")")
+                        && file.content().contains("CustomerAccountCustomerOrderReadModelsProjection.PROJECTION")));
         assertTrue(result.files().stream().anyMatch(file ->
                 file.fileName().equals("CustomerAccountCustomerOrderRelationBatchLoader.java")
-                        && file.content().contains("implements RelationBatchLoader<CustomerAccountEntity>")));
-        assertTrue(result.files().stream().anyMatch(file ->
-                file.fileName().equals("CustomerAccountCustomerOrderReadModels.java")
-                        && file.content().contains("Suggested projection name: CustomerAccountCustomerOrderSummaryHot")));
+                        && file.content().contains("extends PartitionedRelationBatchLoader<CustomerAccountEntity, CustomerOrderEntity, Long>")
+                        && file.content().contains("parent -> parent.customerId")
+                        && !file.content().contains("for (CustomerAccountEntity entity")));
+        MigrationScaffoldGenerator.GeneratedFile projectionFile = result.files().stream()
+                .filter(file -> file.fileName().equals("CustomerAccountCustomerOrderReadModels.java"))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(projectionFile.content().contains("@CacheProjectionRecord("), projectionFile.content());
+        assertTrue(projectionFile.content().contains("source = CustomerOrderEntity.class"), projectionFile.content());
+        assertTrue(projectionFile.content().contains("name = \"CustomerAccountCustomerOrderSummaryHot\""), projectionFile.content());
+        assertTrue(projectionFile.content().contains("refresh = CacheProjectionRecord.Refresh.ASYNC"), projectionFile.content());
+        assertTrue(
+                projectionFile.content().toLowerCase(Locale.ROOT)
+                        .contains("@cachecolumn(\"order_amount\") java.math.bigdecimal orderamount"),
+                projectionFile.content()
+        );
+        assertTrue(!projectionFile.content().contains("TODO"), projectionFile.content());
     }
 
     private DataSource newDataSource(String name) {

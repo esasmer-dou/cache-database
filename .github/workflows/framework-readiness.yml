@@ -1,10 +1,10 @@
-name: Public Beta Readiness
+name: Framework Readiness
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
-      - ".github/workflows/public-beta-readiness.yml"
+      - ".github/workflows/framework-readiness.yml"
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/pull_request_template.md"
       - "docs/**"
@@ -47,7 +47,7 @@ on:
       - main
       - master
     paths:
-      - ".github/workflows/public-beta-readiness.yml"
+      - ".github/workflows/framework-readiness.yml"
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/pull_request_template.md"
       - "docs/**"
@@ -87,7 +87,7 @@ on:
       - "tools/ci/**"
 
 jobs:
-  public-beta-readiness:
+  framework-readiness:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -104,7 +104,7 @@ jobs:
 
       - name: Validate community and release metadata
         shell: pwsh
-        run: ./tools/ci/validate-public-beta-readiness.ps1 -SummaryPath ./target/public-beta-readiness-summary.md
+        run: ./tools/ci/validate-framework-readiness.ps1 -SummaryPath ./target/framework-readiness-summary.md
 
       - name: Validate Turkish docs quality
         shell: pwsh
@@ -149,7 +149,7 @@ jobs:
       - name: Publish readiness summary
         shell: pwsh
         run: |
-          Get-Content ./target/public-beta-readiness-summary.md >> $env:GITHUB_STEP_SUMMARY
+          Get-Content ./target/framework-readiness-summary.md >> $env:GITHUB_STEP_SUMMARY
           "" >> $env:GITHUB_STEP_SUMMARY
           Get-Content ./target/tr-docs-quality-summary.md >> $env:GITHUB_STEP_SUMMARY
           "" >> $env:GITHUB_STEP_SUMMARY
@@ -166,9 +166,9 @@ jobs:
       - name: Upload readiness artifacts
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: public-beta-readiness
+          name: framework-readiness
           path: |
-            target/public-beta-readiness-summary.md
+            target/framework-readiness-summary.md
             target/tr-docs-quality-summary.md
             target/markdown-link-summary.md
             target/readme-quality-summary.md
@@ -200,6 +200,32 @@ jobs:
         working-directory: sample-cache-database-postgresql
         run: mvn -B clean verify -Pprovider-integration
 
+      - name: Verify PostgreSQL certification fails closed without evidence
+        working-directory: sample-cache-database-postgresql
+        shell: bash
+        run: |
+          set +e
+          mvn -B -DskipTests -Pproduction-certification verify > target/certification-gate.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q "CacheDB production certification failed" target/certification-gate.log
+          grep -q "Missing certification manifest" target/cachedb-production-certification.md
+          grep -q "Missing route coverage CSV" target/cachedb-production-certification.md
+
       - name: Verify MSSQL sample with real providers
         working-directory: sample-cache-database-mssql
         run: mvn -B clean verify -Pprovider-integration
+
+      - name: Verify MSSQL certification fails closed without evidence
+        working-directory: sample-cache-database-mssql
+        shell: bash
+        run: |
+          set +e
+          mvn -B -DskipTests -Pproduction-certification verify > target/certification-gate.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q "CacheDB production certification failed" target/certification-gate.log
+          grep -q "Missing certification manifest" target/cachedb-production-certification.md
+          grep -q "Missing route coverage CSV" target/cachedb-production-certification.md

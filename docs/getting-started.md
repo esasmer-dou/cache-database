@@ -32,12 +32,12 @@ ANTI-PATTERN: model every table and move every route to CacheDB at once.
 
 ## 2. Spring Boot Dependencies
 
-Use this path for most Spring Boot applications. Version `0.9.0` is published
-as an immutable package through GitHub Packages.
+Use this path for most Spring Boot applications. Version `0.10.0` is published
+as an immutable package through the anonymous CacheDB Maven repository.
 
 ```xml
 <properties>
-    <cachedb.version>0.9.0</cachedb.version>
+    <cachedb.version>0.10.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -90,6 +90,26 @@ as an immutable package through GitHub Packages.
 </build>
 ```
 
+If your company parent POM does not already provide it, add the same anonymous
+URL under both dependency and plugin repositories:
+
+```xml
+<repositories>
+    <repository>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
+    </repository>
+</repositories>
+<pluginRepositories>
+    <pluginRepository>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
+    </pluginRepository>
+</pluginRepositories>
+```
+
+No token or CacheDB source checkout is required.
+
 JDBC rule:
 
 - Add `spring-boot-starter-jdbc` if the application does not already create a
@@ -111,7 +131,7 @@ Use this path when you do not use Spring Boot.
 
 ```xml
 <properties>
-    <cachedb.version>0.9.0</cachedb.version>
+    <cachedb.version>0.10.0</cachedb.version>
 </properties>
 
 <dependencies>

@@ -48,7 +48,7 @@ için BEST varsayılan kanaldır.
   doğrulaması yeşil
 - GitHub release yayınlanmadan önce seçilen opsiyonel kapılarla
   `Production GA Release Readiness` yeşil
-- public-beta readiness workflow yeşil
+- framework readiness workflow yeşil
 - performans hassas değişiklikler için güncel benchmark kanıtı mevcut
 
 ## GitHub Release

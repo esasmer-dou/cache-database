@@ -58,6 +58,8 @@ Require-Text -RelativePath "README.md" -Patterns @(
     'actions/workflows/production-evidence\.yml',
     'cachedb-spring-boot-starter-postgres',
     'cachedb-spring-boot-starter-mssql',
+    'esasmer-dou\.github\.io/cache-database/maven2',
+    'Production Certification',
     '## Ten-Minute Learning Path',
     '## Production Checklist'
 )
@@ -114,7 +116,8 @@ foreach ($sample in $samples) {
     Require-Text -RelativePath "$root/pom.xml" -Patterns @(
         '<repositories>',
         '<pluginRepositories>',
-        '<id>cache-database-github-packages</id>',
+        '<id>cachedb-public</id>',
+        'esasmer-dou\.github\.io/cache-database/maven2',
         '<artifactId>cachedb-maven-plugin</artifactId>'
     )
 
@@ -162,8 +165,8 @@ $publicEntryPoints = @(
     'sample-cache-database-mssql/README.tr.md',
     'DOCUMENTATION_MAP.md',
     'tr/DOKUMAN_HARITASI.md',
-    'docs/releases/v0.9.0.md',
-    'tr/docs/releases/v0.9.0.md'
+    "docs/releases/v$([string]$rootPom.project.version).md",
+    "tr/docs/releases/v$([string]$rootPom.project.version).md"
 )
 
 $internalCadencePatterns = @(

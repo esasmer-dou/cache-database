@@ -135,12 +135,21 @@ Beklenen sonuç:
 - kök `@CacheEntity` iskeleti
 - çocuk `@CacheEntity` iskeleti
 - kritik liste named query'si
-- opsiyonel relation loader iskeleti
-- opsiyonel projection support iskeleti
+- isteğe bağlı, sınırlandırılmış ve parent bazlı çalışan relation loader
+- isteğe bağlı, derlenebilir `@CacheProjectionRecord`
+- entity tarafında projection kayıt metodu
 - generated binding kullanım örneği
 
-Bu çıktı production domain modeli değildir. Column type, isimlendirme,
-nullability ve index varsayımlarını commit etmeden önce gözden geçir.
+Primary key, relation key ve sort key üretilen projection'a her zaman eklenir.
+Kalan doğrudan SQL kolonlarını `Projection kolonları` alanından seç. Üretilen
+dosyalar CacheDB processor'larıyla derlenecek biçimdedir; UUID ve yaygın SQL
+tarih/saat kolonları desteklenir. İsimlendirme, nullability, index ve payload
+boyutunu commit etmeden önce gözden geçir.
+
+Veritabanı metadata'sı; ekranda gösterilecek durum, dönüştürülmüş tutar, onay
+kararı veya tenant'a özgü puan gibi hesaplanmış business alanlarının anlamını
+bilemez. Bu dönüşümleri scaffold sonrasında açıkça ekle. Sistem placeholder
+bırakmaz ve alanın anlamını tahmin etmez.
 
 ### 6. Dry-Run Ön Isıtma Çalıştır
 

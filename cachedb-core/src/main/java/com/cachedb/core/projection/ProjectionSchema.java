@@ -3,11 +3,16 @@ package com.reactor.cachedb.core.projection;
 import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.function.Function;
 
 /**
@@ -109,8 +114,16 @@ public final class ProjectionSchema<P> implements ProjectionCodec<P> {
             return column(name, accessor, ProjectionValueCodecs.INTEGER);
         }
 
+        public Builder<P> shortColumn(String name, Function<P, Short> accessor) {
+            return column(name, accessor, ProjectionValueCodecs.SHORT);
+        }
+
         public Builder<P> doubleColumn(String name, Function<P, Double> accessor) {
             return column(name, accessor, ProjectionValueCodecs.DOUBLE);
+        }
+
+        public Builder<P> floatColumn(String name, Function<P, Float> accessor) {
+            return column(name, accessor, ProjectionValueCodecs.FLOAT);
         }
 
         public Builder<P> booleanColumn(String name, Function<P, Boolean> accessor) {
@@ -119,6 +132,26 @@ public final class ProjectionSchema<P> implements ProjectionCodec<P> {
 
         public Builder<P> decimalColumn(String name, Function<P, BigDecimal> accessor) {
             return column(name, accessor, ProjectionValueCodecs.BIG_DECIMAL);
+        }
+
+        public Builder<P> uuidColumn(String name, Function<P, UUID> accessor) {
+            return column(name, accessor, ProjectionValueCodecs.UUID_VALUE);
+        }
+
+        public Builder<P> instantColumn(String name, Function<P, Instant> accessor) {
+            return column(name, accessor, ProjectionValueCodecs.INSTANT);
+        }
+
+        public Builder<P> localDateColumn(String name, Function<P, LocalDate> accessor) {
+            return column(name, accessor, ProjectionValueCodecs.LOCAL_DATE);
+        }
+
+        public Builder<P> localDateTimeColumn(String name, Function<P, LocalDateTime> accessor) {
+            return column(name, accessor, ProjectionValueCodecs.LOCAL_DATE_TIME);
+        }
+
+        public Builder<P> localTimeColumn(String name, Function<P, LocalTime> accessor) {
+            return column(name, accessor, ProjectionValueCodecs.LOCAL_TIME);
         }
 
         public Builder<P> decodeWith(Function<ProjectionRow, P> decoder) {

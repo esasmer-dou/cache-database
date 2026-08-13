@@ -5,6 +5,7 @@ param(
     [string]$ReleaseTag,
     [string]$CoverageCsvPath = "docs/ga-migration-coverage.csv",
     [string]$SummaryPath = "target/ga-release-readiness-summary.md",
+    [string]$PublicMavenBaseUrl = "https://esasmer-dou.github.io/cache-database/maven2",
     [switch]$CheckGitHubSecrets,
     [switch]$RequireManagedStagingHa,
     [switch]$RequireApplicationMigrationCoverage,
@@ -280,14 +281,26 @@ if ($SkipRemoteWorkflowChecks) {
 } else {
     $targetSha = $releaseCommitSha
 
-    Invoke-ReadinessCheck -Name "Public Beta Readiness workflow" -Check {
-        $run = Get-LatestSuccessfulRun -WorkflowName "Public Beta Readiness" -HeadBranch $targetRefValue -HeadSha $targetSha
+    Invoke-ReadinessCheck -Name "Framework Readiness workflow" -Check {
+        $run = Get-LatestSuccessfulRun -WorkflowName "Framework Readiness" -HeadBranch $targetRefValue -HeadSha $targetSha
         "Run $($run.databaseId): $($run.url)"
     }
 
     Invoke-ReadinessCheck -Name "Production Evidence workflow" -Check {
         $run = Get-LatestSuccessfulRun -WorkflowName "Production Evidence" -HeadBranch $targetRefValue -HeadSha $targetSha
         "Run $($run.databaseId): $($run.url)"
+    }
+
+    Invoke-ReadinessCheck -Name "Anonymous public Maven repository" -Check {
+        $version = $releaseTagValue.Substring(1)
+        $validatorPath = Join-Path $repoRoot "tools/ci/check-public-maven-repository.ps1"
+        Invoke-Native -Command "pwsh" -Arguments @(
+            $validatorPath,
+            "-Version", $version,
+            "-BaseUrl", $PublicMavenBaseUrl,
+            "-SummaryPath", "target/public-maven-repository-summary.md"
+        ) | Out-Null
+        "Version $version resolved without authentication from $PublicMavenBaseUrl"
     }
 
     if ($RequireManagedStagingHa) {
@@ -300,7 +313,7 @@ if ($SkipRemoteWorkflowChecks) {
     }
 
     if (-not $RequireMavenCentralPublish) {
-        Add-Check -Name "Maven Central Publish workflow" -Status "SKIP" -Details "Maven Central publish was not requested. Use this when the official distribution channel is GitHub Release or GitHub Packages."
+        Add-Check -Name "Maven Central Publish workflow" -Status "SKIP" -Details "Maven Central publish was not requested. The anonymous public Maven repository and GitHub Release are the official distribution channels."
     } elseif ($SkipMavenCentralPublishCheck) {
         Add-Check -Name "Maven Central Publish workflow" -Status "SKIP" -Details "Skipped by caller before the publish job."
     } else {

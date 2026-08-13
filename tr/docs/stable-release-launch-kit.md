@@ -19,29 +19,27 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Resmi Dağıtım Kanalı
 
-`v0.9.0` için resmi dağıtım kanalları GitHub Packages ve GitHub Release
-paketidir:
+`v0.10.0` için resmi dağıtım kanalları, kimlik doğrulaması istemeyen CacheDB
+Maven deposu ile GitHub Release paketidir. GitHub Packages, isteğe bağlı kimlik
+doğrulamalı ayna olarak kalır:
 
 ```text
-cache-database-0.9.0-github-release.zip
+cache-database-0.10.0-github-release.zip
 ```
 
 Paket; 16 public modül ile CacheDB BOM için binary, source, javadoc ve POM
 artefact'larını, README'yi, güvenlik/topluluk dosyalarını, İngilizce ve Türkçe
-dokümanları içerir. Maven Central zorunlu değildir; resmi dağıtım kanalları
-GitHub Packages ve GitHub Release paketidir.
+dokümanları içerir. Maven Central zorunlu değildir; anonim Maven2 erişimi ve
+GitHub Release paketi resmi dağıtım kanallarıdır.
 
 ## Release Konumlandırması
 
-`cache-database v0.9.0`
+`cache-database v0.10.0`
 
-CacheDB `v0.9.0`, production sözleşmelerini açık tutarken deklaratif repository
-bağlantı kodunu azaltır. Processor yalnızca kesin parametre rollerini çıkarır.
-Strict HOT ve sınırlı SOURCE route'lar doğrudan cursor sayfası döndürebilir.
-Generated route referansları tanımları warm, coverage ve test API'lerine taşır.
-Coverage kapsam doğrulaması, başka kapsama ait verinin eksiksiz kabul edilmesini
-önler. HOT route bütçeleri Actuator ve Micrometer üzerinden görülebilir.
-PostgreSQL ve MSSQL örnekleri aynı uygulama modelini korur.
+CacheDB `v0.10.0`; derlenebilir migration projection'ları, toplu SQL Server
+write-behind yolu, commit'e bağlı uygulama sertifikası ve anonim Maven erişimi
+ekler. Açık production sözleşmeleri korunur. PostgreSQL ile SQL Server örnekleri
+aynı uygulama modelini ve provider'a özgü çalışma yolunu gösterir.
 
 Bu release, her uygulamanın kendi production trafiğini ek doğrulama olmadan
 CacheDB'ye kesebileceği anlamına gelmez. Cutover öncesinde her uygulama için
@@ -58,7 +56,7 @@ kanıtlanmalıdır.
 ## Release Note Şablonu
 
 ```markdown
-## cache-database v0.9.0
+## cache-database v0.10.0
 
 Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uygulanabilir hale getirir.
 
@@ -91,14 +89,14 @@ Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uyg
 - Pod kaybında işi devralma, terk edilmiş işi sahiplenme ve sınırlı retry sağlayan tip güvenli Redis Stream işleri.
 - Redis, SQL, write-behind backlog, dead-letter ve recovery durumu için Spring Boot Actuator health sinyali.
 - Docker Compose, Postman koleksiyonu ve yerel hot-route load script'leri olan PostgreSQL ve MSSQL REST örnekleri.
-- Resmi paket dağıtım kanalı olarak GitHub Release asset'i.
+- Resmi paket dağıtım kanalları olarak anonim Maven2 deposu ve GitHub Release paketi.
 
 ### Provider sınırları
 
 - PostgreSQL varsayılan provider yoludur.
 - MSSQL, SQL Server sample ve integration kanıtı olan açıkça seçilen provider olarak kullanılabilir.
 - SQL Server HA veya Always On hazırlığı, production iddiasının parçasıysa tüketen uygulamanın staging topolojisinde ayrıca kanıtlanmalıdır.
-- Maven Central bu release için opsiyoneldir; seçilen resmi dağıtım kanalı GitHub Release'tir.
+- Maven Central isteğe bağlıdır; anonim Maven2 deposu ve GitHub Release resmi dağıtım kanallarıdır.
 
 ### Production kullanımı
 
@@ -110,12 +108,13 @@ comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
 ## Yayın Kontrol Listesi
 
 - `pom.xml` ve tüm modül parent versiyonları stable sürümü kullanıyor.
-- Release note `docs/releases/v0.9.0.md` altında var.
+- Release note `docs/releases/v0.10.0.md` altında var.
 - `mvn -DskipTests package` geçiyor.
 - Public API compatibility kontrolü geçiyor.
 - Türkçe dokümantasyon kalite kontrolü geçiyor.
 - Lokal Docker HA preflight geçiyor veya son CI evidence yeşil.
-- `Public Beta Readiness` ve `Production Evidence` release commit'i için yeşil.
-- `Production GA Release Readiness`, `v0.9.0` için yeşil.
+- `Framework Readiness` ve `Production Evidence` release commit'i için yeşil.
+- `Production GA Release Readiness`, `v0.10.0` için yeşil.
 - GitHub Release prerelease olarak işaretli değil.
-- GitHub Release asset'i `cache-database-0.9.0-github-release.zip` olarak eklendi.
+- `0.10.0` için anonim Maven çözümleme kontrolü geçiyor.
+- GitHub Release asset'i `cache-database-0.10.0-github-release.zip` olarak eklendi.

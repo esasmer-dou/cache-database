@@ -15,14 +15,18 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class MssqlWriteBehindFlusherLoadSqlServerTest {
@@ -34,6 +38,10 @@ class MssqlWriteBehindFlusherLoadSqlServerTest {
     private static final String JDBC_USER = System.getProperty("cachedb.it.mssql.user", "sa");
     private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.mssql.password", "YourStrong!Passw0rd");
     private static final int ROW_COUNT = Integer.getInteger("cachedb.it.mssql.loadRows", 1_000);
+    private static final double MINIMUM_OPERATIONS_PER_SECOND = Double.parseDouble(System.getProperty(
+            "cachedb.it.mssql.minWriteOperationsPerSecond",
+            "100"
+    ));
 
     @BeforeEach
     void setUp() throws Exception {
@@ -70,14 +78,47 @@ class MssqlWriteBehindFlusherLoadSqlServerTest {
                 WriteBehindConfig.builder().maxFlushBatchSize(64).build()
         );
 
+        long startedAt = System.nanoTime();
         flusher.flushBatch(operations(1, ROW_COUNT, OperationType.UPSERT, 1, "created-"));
         flusher.flushBatch(operations(1, ROW_COUNT, OperationType.UPSERT, 0, "stale-"));
         flusher.flushBatch(operations(1, ROW_COUNT / 2, OperationType.UPSERT, 2, "updated-"));
         flusher.flushBatch(deleteOperations(5, ROW_COUNT, 5, 3));
+        long elapsedNanos = System.nanoTime() - startedAt;
+        int operationCount = ROW_COUNT + ROW_COUNT + (ROW_COUNT / 2) + (ROW_COUNT / 5);
+        double operationsPerSecond = operationCount / (elapsedNanos / 1_000_000_000.0d);
 
         assertEquals(ROW_COUNT - (ROW_COUNT / 5), scalarLong("SELECT COUNT(*) FROM cachedb_it_load_entity"));
         assertEquals(0L, scalarLong("SELECT COUNT(*) FROM cachedb_it_load_entity WHERE name LIKE 'stale-%'"));
         assertEquals(0L, scalarLong("SELECT COUNT(*) FROM cachedb_it_load_entity WHERE id % 5 = 0"));
+        writeBenchmarkReport(operationCount, elapsedNanos, operationsPerSecond);
+        assertTrue(
+                operationsPerSecond >= MINIMUM_OPERATIONS_PER_SECOND,
+                () -> "MSSQL write-behind throughput regression: actual=" + operationsPerSecond
+                        + " ops/s, required=" + MINIMUM_OPERATIONS_PER_SECOND + " ops/s"
+        );
+    }
+
+    private void writeBenchmarkReport(int operationCount, long elapsedNanos, double operationsPerSecond) throws Exception {
+        Path report = Path.of("target", "mssql-write-behind-benchmark.json");
+        Files.createDirectories(report.getParent());
+        Files.writeString(report, String.format(Locale.ROOT, """
+                {
+                  "provider": "mssql",
+                  "rowCount": %d,
+                  "operationCount": %d,
+                  "elapsedMillis": %.3f,
+                  "operationsPerSecond": %.3f,
+                  "minimumOperationsPerSecond": %.3f,
+                  "status": "%s"
+                }
+                """,
+                ROW_COUNT,
+                operationCount,
+                elapsedNanos / 1_000_000.0d,
+                operationsPerSecond,
+                MINIMUM_OPERATIONS_PER_SECOND,
+                operationsPerSecond >= MINIMUM_OPERATIONS_PER_SECOND ? "PASS" : "FAIL"
+        ));
     }
 
     private List<QueuedWriteOperation> operations(

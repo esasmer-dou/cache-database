@@ -18,9 +18,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher {
 
@@ -142,8 +144,7 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
                     if (operation.type() == OperationType.DELETE) {
                         index = deleteConsecutiveBatch(statements, operations, index);
                     } else {
-                        upsert(statements, operation);
-                        index++;
+                        index = upsertConsecutiveBatch(statements, operations, index);
                     }
                 }
             }
@@ -223,40 +224,98 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
         statement.setLong(2, operation.version());
     }
 
-    private void upsert(StatementCache statements, QueuedWriteOperation operation) throws SQLException {
-        List<Map.Entry<String, String>> entries = new ArrayList<>(operation.columns().entrySet());
-        int updated = update(statements, operation, entries);
-        if (updated > 0) {
-            return;
+    private int upsertConsecutiveBatch(
+            StatementCache statements,
+            List<QueuedWriteOperation> operations,
+            int startIndex
+    ) throws SQLException {
+        QueuedWriteOperation template = operations.get(startIndex);
+        List<Map.Entry<String, String>> templateEntries = entries(template);
+        String updateSql = dialect.updateSql(template, templateEntries);
+        String insertSql = dialect.insertSql(template, templateEntries);
+        int maxProbeRows = MssqlDatabaseDialect.MSSQL_PARAMETER_LIMIT / 2;
+        ArrayList<QueuedWriteOperation> batch = new ArrayList<>();
+        Set<String> identities = new HashSet<>();
+
+        int index = startIndex;
+        while (index < operations.size() && batch.size() < maxProbeRows) {
+            QueuedWriteOperation candidate = operations.get(index);
+            if (candidate.type() == OperationType.DELETE) {
+                break;
+            }
+            List<Map.Entry<String, String>> candidateEntries = entries(candidate);
+            if (!dialect.updateSql(candidate, candidateEntries).equals(updateSql)
+                    || !dialect.insertSql(candidate, candidateEntries).equals(insertSql)) {
+                break;
+            }
+            String identity = candidate.entityName() + '\u001F' + candidate.id();
+            if (!identities.add(identity)) {
+                break;
+            }
+            batch.add(candidate);
+            index++;
         }
-        Long currentVersion = VersionGuardedWriteSupport.currentVersion(
-                statements.connection(),
-                entityRegistry,
-                operation,
-                options.queryTimeoutSeconds()
-        );
-        if (currentVersion != null && currentVersion >= operation.version()) {
-            return;
+
+        PreparedStatement updateStatement = statements.get(updateSql);
+        for (QueuedWriteOperation operation : batch) {
+            updateStatement.clearParameters();
+            bindUpdate(updateStatement, operation, entries(operation));
+            updateStatement.addBatch();
         }
-        if (currentVersion != null) {
-            throw new SQLException(
-                    "Version-guarded MSSQL upsert did not reach durable state for entity=" + operation.entityName()
-                            + ", id=" + operation.id()
-                            + ", incomingVersion=" + operation.version()
-                            + ", currentVersion=" + currentVersion,
-                    "CDB02"
-            );
+        int[] updateOutcomes = updateStatement.executeBatch();
+        updateStatement.clearBatch();
+        if (updateOutcomes == null || updateOutcomes.length != batch.size()) {
+            throw new SQLException("MSSQL update batch returned an unexpected result count: expected="
+                    + batch.size() + ", actual=" + (updateOutcomes == null ? "null" : updateOutcomes.length));
         }
-        insert(statements, operation, entries);
+
+        ArrayList<QueuedWriteOperation> unresolved = new ArrayList<>();
+        for (int operationIndex = 0; operationIndex < batch.size(); operationIndex++) {
+            int outcome = updateOutcomes[operationIndex];
+            if (outcome > 0 || outcome == Statement.SUCCESS_NO_INFO) {
+                continue;
+            }
+            if (outcome == Statement.EXECUTE_FAILED) {
+                throw new SQLException("MSSQL update batch failed for entity=" + batch.get(operationIndex).entityName()
+                        + ", id=" + batch.get(operationIndex).id());
+            }
+            if (outcome != 0) {
+                throw new SQLException("MSSQL update batch returned unsupported outcome=" + outcome);
+            }
+            unresolved.add(batch.get(operationIndex));
+        }
+
+        if (!unresolved.isEmpty()) {
+            Map<Integer, Long> currentVersions = currentVersions(statements, unresolved);
+            ArrayList<QueuedWriteOperation> missing = new ArrayList<>();
+            for (int unresolvedIndex = 0; unresolvedIndex < unresolved.size(); unresolvedIndex++) {
+                QueuedWriteOperation operation = unresolved.get(unresolvedIndex);
+                Long currentVersion = currentVersions.get(unresolvedIndex);
+                if (currentVersion == null) {
+                    missing.add(operation);
+                    continue;
+                }
+                if (currentVersion >= operation.version()) {
+                    continue;
+                }
+                throw new SQLException(
+                        "Version-guarded MSSQL upsert did not reach durable state for entity=" + operation.entityName()
+                                + ", id=" + operation.id()
+                                + ", incomingVersion=" + operation.version()
+                                + ", currentVersion=" + currentVersion,
+                        "CDB02"
+                );
+            }
+            insertBatch(statements, insertSql, missing);
+        }
+        return index;
     }
 
-    private int update(
-            StatementCache statements,
+    private void bindUpdate(
+            PreparedStatement statement,
             QueuedWriteOperation operation,
             List<Map.Entry<String, String>> entries
     ) throws SQLException {
-        PreparedStatement statement = statements.get(dialect.updateSql(operation, entries));
-        statement.clearParameters();
         int parameterIndex = 1;
         for (Map.Entry<String, String> entry : entries) {
             if (entry.getKey().equals(operation.idColumn())) {
@@ -272,18 +331,62 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
                 JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
         ));
         statement.setLong(parameterIndex, operation.version());
-        return statement.executeUpdate();
     }
 
-    private void insert(
+    private Map<Integer, Long> currentVersions(
             StatementCache statements,
-            QueuedWriteOperation operation,
-            List<Map.Entry<String, String>> entries
+            List<QueuedWriteOperation> operations
     ) throws SQLException {
-        PreparedStatement statement = statements.get(dialect.insertSql(operation, entries));
+        QueuedWriteOperation template = operations.get(0);
+        PreparedStatement statement = statements.get(dialect.currentVersionsSql(template, operations.size()));
         statement.clearParameters();
-        JdbcWriteBehindSupport.bindUpsert(statement, operation, entityRegistry, entries);
-        statement.executeUpdate();
+        int parameterIndex = 1;
+        for (int index = 0; index < operations.size(); index++) {
+            QueuedWriteOperation operation = operations.get(index);
+            statement.setInt(parameterIndex++, index);
+            statement.setObject(parameterIndex++, JdbcWriteBehindSupport.convertValue(
+                    operation.id(),
+                    JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn())
+            ));
+        }
+        LinkedHashMap<Integer, Long> versions = new LinkedHashMap<>();
+        try (ResultSet resultSet = statement.executeQuery()) {
+            while (resultSet.next()) {
+                int operationOrdinal = resultSet.getInt(1);
+                long version = resultSet.getLong(2);
+                versions.put(operationOrdinal, resultSet.wasNull() ? null : version);
+            }
+        }
+        return versions;
+    }
+
+    private void insertBatch(
+            StatementCache statements,
+            String insertSql,
+            List<QueuedWriteOperation> operations
+    ) throws SQLException {
+        if (operations.isEmpty()) {
+            return;
+        }
+        PreparedStatement statement = statements.get(insertSql);
+        for (QueuedWriteOperation operation : operations) {
+            statement.clearParameters();
+            JdbcWriteBehindSupport.bindUpsert(statement, operation, entityRegistry, entries(operation));
+            statement.addBatch();
+        }
+        int[] outcomes = statement.executeBatch();
+        statement.clearBatch();
+        VersionGuardedWriteSupport.verifyBatchOutcome(
+                statements.connection(),
+                entityRegistry,
+                operations,
+                outcomes,
+                options.queryTimeoutSeconds()
+        );
+    }
+
+    private List<Map.Entry<String, String>> entries(QueuedWriteOperation operation) {
+        return new ArrayList<>(operation.columns().entrySet());
     }
 
     private PreparedStatement prepareStatement(Connection connection, String sql) throws SQLException {

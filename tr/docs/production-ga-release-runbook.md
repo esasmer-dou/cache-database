@@ -1,6 +1,6 @@
 # Production GA Release Runbook
 
-Bu akış public beta release akışından bilerek daha serttir. CacheDB için
+Bu akış CacheDB'nin zorunlu kararlı sürüm sürecidir.
 framework GA demek, kütüphane release'inin net sınırlar, yeşil CI kanıtı ve
 belgelenmiş bir dağıtım kanalıyla güvenle tüketilebilir olması demektir. Bu,
 her kullanıcının kendi production topolojisinin otomatik olarak sertifikalandığı
@@ -75,7 +75,7 @@ anlat.
    Always On replikasyonunun, quorum davranışının veya yönetilen failover
    politikasının yerine geçmez.
 4. Release commit'ini `main` branch'ine gönder ve aynı commit üzerinde
-   `Public Beta Readiness` ile `Production Evidence` workflow'larının
+   `Framework Readiness` ile `Production Evidence` workflow'larının
    geçtiğini doğrula.
 5. Resmi GitHub Release artifact'ini hedef commit'ten üret:
 
@@ -141,5 +141,5 @@ ACCEPTABLE: framework GA'yı Docker/CI outage evidence ve açık sınırlarla ç
 uygulamalar ise production cutover öncesinde route bazlı coverage, rollback ve
 staging HA evidence çalıştırmaya devam eder.
 
-ANTI-PATTERN: unit testler, lokal Docker testleri veya public beta readiness
+ANTI-PATTERN: unit testler, lokal Docker testleri veya framework readiness
 workflow'u geçtiği için beta build'i GA olarak yeniden adlandırmak.

@@ -117,6 +117,23 @@ function Invoke-MssqlEvidenceTests {
         "-Dcachedb.it.mssql.user=$MssqlUser",
         "-Dcachedb.it.mssql.password=$MssqlPassword"
     )
+
+    $benchmarkSource = Join-Path $repoRoot "cachedb-storage-mssql/target/mssql-write-behind-benchmark.json"
+    if (-not (Test-Path $benchmarkSource)) {
+        throw "MSSQL write-behind benchmark report was not generated: $benchmarkSource"
+    }
+    try {
+        $benchmark = Get-Content -LiteralPath $benchmarkSource -Raw | ConvertFrom-Json
+    } catch {
+        throw "MSSQL write-behind benchmark report is not valid JSON: $($_.Exception.Message)"
+    }
+    if ($benchmark.status -ne "PASS") {
+        throw "MSSQL write-behind benchmark reported status '$($benchmark.status)'"
+    }
+    if ([double]$benchmark.operationsPerSecond -lt [double]$benchmark.minimumOperationsPerSecond) {
+        throw "MSSQL write-behind benchmark is below its threshold: $($benchmark.operationsPerSecond) < $($benchmark.minimumOperationsPerSecond)"
+    }
+    Copy-Item -Path $benchmarkSource -Destination (Join-Path $reportsDir "mssql-write-behind-benchmark-$Phase.json") -Force
 }
 
 if (Test-Path $reportsDir) {
@@ -154,6 +171,7 @@ $summary = @(
     "- Spring Boot explicit MSSQL provider wiring: passed",
     "- SQL Server provider-tagged write performance breakdown: passed",
     "- SQL Server write-behind high-volume load: passed",
+    "- SQL Server write-behind throughput regression threshold: passed",
     "- SQL Server outbox checkpoint smoke: passed",
     "- SQL Server high-volume multi-pod outbox replay: passed",
     "- SQL Server representative-volume migration discovery/warm/compare: passed",
@@ -177,6 +195,7 @@ $json = [ordered]@{
         "MssqlOutboxMultiPodApplyRunnerTest",
         "CacheDbSpringPropertiesTest"
     )
+    benchmarks = @(Get-ChildItem -Path $reportsDir -Filter "mssql-write-behind-benchmark-*.json" | ForEach-Object { $_.Name })
     restartSqlServerContainer = [bool]$RestartSqlServerContainer
     restartedContainer = $restartContainer
     generatedAt = [DateTimeOffset]::UtcNow.ToString("O")

@@ -48,7 +48,7 @@ public Java consumption.
   application's production cutover
 - `Production GA Release Readiness` green with the selected optional gates
   before publishing the GitHub release
-- public-beta readiness workflow green
+- framework readiness workflow green
 - any recent performance-sensitive change has fresh benchmark evidence
 
 ## GitHub Release

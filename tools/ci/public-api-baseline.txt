@@ -1491,10 +1491,16 @@ public final class com.reactor.cachedb.core.projection.ProjectionRow {
   public java.lang.String string(java.lang.String);
   public java.lang.Long longValue(java.lang.String);
   public java.lang.Integer integer(java.lang.String);
+  public java.lang.Short shortValue(java.lang.String);
   public java.lang.Double doubleValue(java.lang.String);
+  public java.lang.Float floatValue(java.lang.String);
   public java.lang.Boolean booleanValue(java.lang.String);
   public java.math.BigDecimal decimal(java.lang.String);
   public java.util.UUID uuid(java.lang.String);
+  public java.time.Instant instant(java.lang.String);
+  public java.time.LocalDate localDate(java.lang.String);
+  public java.time.LocalDateTime localDateTime(java.lang.String);
+  public java.time.LocalTime localTime(java.lang.String);
 }
 
 ## cachedb-core :: com.reactor.cachedb.core.projection.ProjectionSchema
@@ -1517,10 +1523,16 @@ public final class com.reactor.cachedb.core.projection.ProjectionValueCodecs {
   public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.String> STRING;
   public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Long> LONG;
   public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Integer> INTEGER;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Short> SHORT;
   public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Double> DOUBLE;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Float> FLOAT;
   public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.lang.Boolean> BOOLEAN;
   public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.math.BigDecimal> BIG_DECIMAL;
   public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.util.UUID> UUID_VALUE;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.time.Instant> INSTANT;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.time.LocalDate> LOCAL_DATE;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.time.LocalDateTime> LOCAL_DATE_TIME;
+  public static final com.reactor.cachedb.core.projection.ProjectionValueCodec<java.time.LocalTime> LOCAL_TIME;
   public static <V> com.reactor.cachedb.core.projection.ProjectionValueCodec<V> codec(java.util.function.Function<V, java.lang.String>, java.util.function.Function<java.lang.String, V>);
 }
 
@@ -5044,6 +5056,12 @@ public final class com.reactor.cachedb.spring.boot.test.FaultInjectingDataSource
   public java.util.logging.Logger getParentLogger();
   public <T> T unwrap(java.lang.Class<T>) throws java.sql.SQLException;
   public boolean isWrapperFor(java.lang.Class<?>) throws java.sql.SQLException;
+}
+
+## cachedb-maven-plugin :: com.reactor.cachedb.maven.CacheDbCertifyMojo
+public final class com.reactor.cachedb.maven.CacheDbCertifyMojo extends org.apache.maven.plugin.AbstractMojo {
+  public com.reactor.cachedb.maven.CacheDbCertifyMojo();
+  public void execute() throws org.apache.maven.plugin.MojoExecutionException, org.apache.maven.plugin.MojoFailureException;
 }
 
 ## cachedb-maven-plugin :: com.reactor.cachedb.maven.CacheDbDoctorMojo

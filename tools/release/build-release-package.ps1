@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.0",
+    [string]$Version = "",
     [string]$PackageLabel = "github-release",
     [switch]$SkipBuild
 )
@@ -7,7 +7,13 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$scriptPath = Join-Path $PSScriptRoot "build-public-beta-package.ps1"
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    [xml]$rootPom = Get-Content -LiteralPath (Join-Path $repoRoot "pom.xml") -Raw
+    $Version = [string]$rootPom.project.version
+}
+
+$scriptPath = Join-Path $PSScriptRoot "build-release-bundle.ps1"
 $arguments = @{
     Version = $Version
     PackageLabel = $PackageLabel

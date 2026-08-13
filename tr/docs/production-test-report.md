@@ -1,290 +1,81 @@
-# Production Test Raporu
+# Production Kanıt Rehberi
 
-Bu doküman, `cache-database` e-ticaret DAO modülü için şu ana kadar çalıştırılan production-benzeri smoke test sonuçlarını ve bir sonraki full benchmark aşamasını özetler.
+İngilizce sürüm: [../../docs/production-test-report.md](../../docs/production-test-report.md)
 
-## Güncel Smoke Sonuçları
+Bu belge, CacheDB production kanıtlarının nasıl üretildiğini ve nasıl
+yorumlanacağını anlatır. İkinci bir hazırlık kararı yayımlamaz. Güncel karar
+kaynağı [Production Olgunluğu](production-olgunlugu.md) belgesidir.
 
-Doğrulama ortamı:
+## Kanıt Hatları
 
-- Redis: `redis://default:welcome1@127.0.0.1:56379`
-- PostgreSQL: `jdbc:postgresql://127.0.0.1:55432/postgres`
-- PostgreSQL kullanıcı bilgisi: `postgres / postgresql`
-- Test sınıfı: `EcommerceProductionScenarioSmokeTest`
+| Hat | Neyi kanıtlar? | Neyi kanıtlamaz? |
+| --- | --- | --- |
+| Tüm Maven reactor | Derleme zamanı üretimi, unit ve integration sözleşmeleri, modül uyumluluğu | Müşterinin iş yükü kapasitesi |
+| Framework Readiness | Public API, reflection kullanılmaması, doküman, paket yapısı, provider ve sample eşdeğerliği | Yönetilen altyapı failover'ı |
+| Production Evidence | Redis kesintisi sonrası toparlanma, çok instance koordinasyonu, projection ve sıralama benchmark'ları, provider smoke testleri | Uygulamanın rota envanterinin eksiksizliği |
+| SQL Server provider evidence | Version korumalı yazma, batching, throughput eşiği, yeniden başlatma ve bağlantı yenileme, lock sınıflandırması, outbox ve migration davranışı | Her Always On topolojisi |
+| Public Maven Repository Publish | Değişmez artifact'lerin anonim indirilmesi ve checksum kontrolü | Uygulamanın geçişe hazır olması |
+| `cachedb:certify` | Tek uygulamanın rota, veri eşitliği, bellek, failover, canary ve geri dönüş kanıtı | Başka uygulama veya ortam |
 
-Provider kapsamı: bu rapor varsayılan PostgreSQL provider lane'i için kanıttır.
-MSSQL veya başka bir SQL provider için aynı production iddiası, kendi
-provider'ına özel evidence lane ile doğrulanmalıdır.
+## Yerel Framework Komutları
 
-Koşulan senaryolar:
-
-| Senaryo | Tip | İşlem | Okuma | Yazma | Hata | Ort. Gecikme | Maks Gecikme | Write-Behind Backlog | DLQ | Health |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| `campaign-push-spike-smoke` | LOAD | 72 | 38 | 34 | 0 | 27,224 us | 107,732 us | 434 | 0 | `DEGRADED` |
-| `write-behind-backpressure-breaker-smoke` | BREAK | 42 | 10 | 32 | 0 | 48,305 us | 117,131 us | 432 | 0 | `DEGRADED` |
-
-## Bu Sonuçlar Ne Söylüyor
-
-Olumlu sinyaller:
-
-- DAO katmanı karışık okuma/yazma trafiğini runtime hatası olmadan işleyebildi.
-- Redis-first yol hem dengeli hem de yazma ağırlıklı trafiğe cevap verdi.
-- Her iki smoke koşusunda da dead-letter oluşmadı.
-- Production test modülü hem makine-okunur hem de insan-okunur rapor üretti.
-
-Görülen darboğaz:
-
-- Her iki koşu sonunda da anlamlı write-behind backlog oluştu.
-- Bu, kısa vadede asıl limitin Redis mutation hızı değil, kaynak veritabanı flush kapasitesi ve drain hızı olduğunu gösteriyor.
-- `BREAK` senaryosunda gecikme, karışık yük senaryosuna göre belirgin şekilde daha kötü; bu da inventory/order yazma baskısıyla uyumlu.
-
-Bugünkü yorum:
-
-- Mimari smoke ölçeğinde doğru çalışıyor.
-- Patlama trafiği için production hazırlığı henüz kanıtlanmış değil.
-- Sistem bugünkü haliyle aniden kırılmaktan çok, async flush backlog biriktirerek degrade olma eğiliminde.
-
-## Production Öncesi Ana Riskler
-
-1. Write-behind saturation.
-   SQL provider flush worker'ları kampanya piklerinde geride kalabilir ve kalıcı backlog üretebilir.
-
-2. Sustained burst altında health degradation.
-   DLQ oluşmasa bile backlog çok uzun süre taşınırsa sistem uzun süre `DEGRADED` kalabilir.
-
-3. Hot SKU contention.
-   Flash-sale benzeri az sayıda SKU üzerindeki inventory yazmaları gecikmeyi artırabilir ve worker dağılımını bozabilir.
-
-4. Geniş katalog taramasında cache churn.
-   Düşük hot-set bütçesiyle büyük browse fırtınaları Redis verimini azaltıp read-through baskısını arttırabilir.
-
-5. Benchmark boşluğu.
-   Bugünkü doğrulama bilerek küçültülmüş smoke testtir. 10k, 25k veya 50k TPS sınıfında davranış henüz kanıtlanmadı.
-
-## Guardrail Alert ve Runbook Seti
-
-Önerilen production alert seti:
-
-| Alert | Warning Tetik | Critical Tetik | Ana Risk | İlk Operator Aksiyonu |
-| --- | --- | --- | --- | --- |
-| `WRITE_BEHIND_BACKLOG` | backlog warning eşiğini geçer | backlog critical eşiğini geçer | kaynak veritabanı drain saturation | producer'ları yavaşlat, flush throughput ve drain durumunu kontrol et |
-| `COMPACTION_PENDING_BACKLOG` | pending compaction warning eşiğini geçer | pending compaction critical eşiğini geçer | Redis memory büyümesi ve stale flush gecikmesi | compaction worker sağlığını ve runtime profile switching'i kontrol et |
-| `REDIS_MEMORY_PRESSURE` | used memory warning bütçesini geçer | used memory critical bütçesini geçer | Redis eviction baskısı ve degraded serving | daha sert guardrail profile'a geç, hot-set/page-cache bütçelerini daralt |
-| `REDIS_HARD_REJECTIONS` | yok | herhangi bir rejected write | bounded-memory koruması yazıları düşürüyor | kampanya trafiğini azalt ve drain kapasitesini geri kazan |
-| `QUERY_INDEX_DEGRADED` | namespace degraded işaretlenir | degraded namespace SLA içinde rebuild edilmez | full-scan fallback nedeniyle query latency artar | query-index rebuild tetikle ve hard-limit baskısının bittiğini doğrula |
-| `TOMBSTONE_BUILDUP` | tombstone sayısı delete baseline üstünde büyür | tombstone TTL ile boşalmıyor | delete ağırlıklı churn veya drain lag | delete trafiğini, stale resurrection korumasını ve TTL cleanup'i kontrol et |
-
-Önerilen operator runbook:
-
-1. Backlog ve memory birlikte yükseliyorsa önce Redis sizing değil kaynak veritabanı drain kapasitesini şüpheli kabul et.
-2. Hard rejection görülürse önce kritik olmayan kampanya trafiğini kıs; sistem bounded memory koruması için availability'den feragat ediyor olabilir.
-3. Bir namespace degraded query-index modundaysa hard-limit baskısının düştüğünü doğrula ve `/api/query-index/rebuild` tetikle.
-4. Pressure düştükten sonra tombstone yüksek kalmaya devam ediyorsa delete ağırlıklı iş yüklerini, write-behind drain'i ve tombstone TTL ayarlarını incele.
-5. Throughput kazanmak için tombstone'u kapatma; bu stale resurrection riskini geri getirir.
-
-## Admin Metrics Export
-
-Admin HTTP artık Prometheus uyumlu scrape endpoint'i de açıyor:
-
-```text
-GET /api/prometheus
-```
-
-Buradan şu metrik aileleri alınabilir:
-
-- write-behind, DLQ, reconciliation ve diagnostics stream uzunlukları
-- write-behind worker flush/coalescing/dead-letter sayaçları
-- dead-letter recovery replay/failure sayaçları
-- planner statistics key sayıları
-- Redis used memory, peak memory, compaction pending, payload count ve hard rejection sayıları
-- runtime profile etiketi ve switch sayısı
-
-Bu sayede production alerting yalnızca dashboard'a bağlı kalmadan Prometheus tarafına da taşınabilir.
-
-## Production Certification Runner
-
-Production test modülü artık certification giriş noktası da içeriyor:
+Repository wrapper'ı üzerinden Java 21 kullan:
 
 ```powershell
-mvn -q -pl cachedb-production-tests -am exec:java `
-  "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.ProductionCertificationMain"
+pwsh ./tools/build/invoke-maven-semeru.ps1 `
+  -WorkingDirectory . `
+  -MavenArgs @('-B', 'clean', 'verify')
+
+pwsh ./tools/ci/run-local-docker-ha-preflight.ps1
 ```
 
-Certification raporu şunları birleştirir:
+Docker kontrolü; birbirinden ayrılmış Redis 8, PostgreSQL 16 ve SQL Server 2022
+container'larını başlatır, kesinti ve yeniden başlatma kanıtlarını üretir,
+raporları `target` altında yazar. `-KeepContainers` verilmezse container'ları
+işlem sonunda kaldırır.
 
-- representative benchmark koşusu
-- gerçek Redis/kaynak veritabanı yığınında restart/recover doğrulaması
-- throughput, backlog, hata, hard rejection, rebuild başarısı ve restart recovery için açık gate'ler
+## Performans Kontrolleri
 
-Üretilen dosyalar:
+- Projection-first, parent bazlı relation, ranked-window ve summary/detail
+  benchmark'ları CI içinde açık eşikler kullanır.
+- SQL Server yüksek hacimli yazma kanıtı; satır sayısını, işlem sayısını, geçen
+  süreyi, saniyedeki işlem sayısını, gereken eşiği ve sonucu raporlar.
+- Eşik sonucu yalnızca aynı commit, runner, payload, veritabanı ve ayar için
+  anlamlıdır. Eğilimleri eşdeğer ortamlarda karşılaştır.
+- CI'ı geçirmek için eşiği düşürmek çözüm değildir. SQL round trip, lock
+  beklemesi, allocation, connection pool baskısı ve batch şeklini incele.
 
-- `target/cachedb-prodtest-reports/production-certification-report.json`
-- `target/cachedb-prodtest-reports/production-certification-report.md`
+## Rapor Konumları
 
-## Production Scenario Certification Lane
+| Rapor | Konum |
+| --- | --- |
+| Production evidence | `target/cachedb-prodtest-reports/` |
+| Redis failover | `target/cachedb-redis-failover-reports/` |
+| SQL Server provider | `target/cachedb-mssql-provider-reports/` |
+| Yerel Docker HA | `target/cachedb-local-docker-ha-reports/` |
+| Public Maven çözümleme | `target/public-maven-repository-summary.md` |
+| Uygulama sertifikası | `target/cachedb-production-certification.md` |
 
-Production evidence workflow içinde daha odaklı bir senaryo kapısı da vardır:
+CI artifact'leri sınırlı süre saklanır. Sürüm kararında kullanılan değişmez
+özetleri release kanıt konumuna veya uygulamanın sertifika dizinine taşı.
 
-```powershell
-.\tools\ci\run-production-scenario-certification.ps1 `
-  -RedisUri "redis://default:welcome1@127.0.0.1:56379" `
-  -PostgresUrl "jdbc:postgresql://127.0.0.1:55432/postgres"
+## Uygulama Kanıtı
+
+Framework kanıtı, uygulamanın ekran, API, batch, worker ve raporlarını
+kendiliğinden çıkaramaz. Her uygulama şu kontrolü çalıştırmalıdır:
+
+```bash
+mvn verify -Pproduction-certification
 ```
 
-Bu koşu ağır certification runner'ın yerine geçmez. API geliştirmeleri sırasında
-kolay bozulabilecek production contract'larını hızlıca doğrulamak için vardır:
+Kanıt biçimi ve kopyalanabilir Maven profili
+[Production Sertifikası](production-sertifikasi.md) belgesinde bulunur. Her
+kanıt dosyası, uygulamanın kesin commit'ine ve staging ortamına bağlanır.
 
-- projection zorunlu route, entity fallback yolunu strict mode'da reddeder
-- tenant başına hot-row quota en eski tenant üyesini çıkarır
-- tenant memory budget gerçek Redis payload byte ölçümünü içerir
-- PostgreSQL outbox adapter sınırlı batch okur
-- outbox checkpoint yalnız kabul edilen event'lerden sonra ilerler
+## Karar Kuralı
 
-Üretilen dosyalar:
-
-- `target/cachedb-prodtest-reports/production-scenario-certification.json`
-- `target/cachedb-prodtest-reports/production-scenario-certification.md`
-
-## Semantics ve Shedding Matrisi
-
-| Entity / Query Sınıfı | Persistence Semantiği | Hard-Limit Davranışı | Recovery Yolu |
-| --- | --- | --- | --- |
-| `customer` | `LATEST_STATE` | cache, index ve learning daha agresif shed edilebilir | otomatik veya admin query-index rebuild |
-| `inventory` | `LATEST_STATE` | son stok doğrusunu korumak için cache ve index yolları agresif shed edilebilir | otomatik veya admin query-index rebuild |
-| `cart` | `LATEST_STATE` | mutable session state olduğu için agresif shedding kabul edilir | otomatik veya admin query-index rebuild |
-| `order` | `EXACT_SEQUENCE` | query index daha tutucu tutulabilir; write ordering korunur | persistence sıralaması bozulmadan rebuild |
-| exact lookup query'leri | sağlıklı durumda indexed | namespace policy izin verirse açık kalabilir | degrade değilse rebuild gerekmez |
-| text / relation / sort ağırlıklı query'ler | sağlıklı durumda indexed | hard-limit altında önce shed edilmesi tercih edilir | rebuild bitene kadar full-scan fallback |
-
-## Önerilen Full Benchmark Planı
-
-Repository artık doğrudan tam ölçekli suite giriş noktası da içeriyor:
-
-```powershell
-mvn -q -pl cachedb-production-tests -am exec:java `
-  "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.FullScaleBenchmarkMain" `
-  "-Dcachedb.prod.scaleFactor=1.0" `
-  "-Dcachedb.prod.redis.uri=redis://default:welcome1@127.0.0.1:6379" `
-  "-Dcachedb.prod.postgres.url=jdbc:postgresql://127.0.0.1:5432/postgres"
-```
-
-Tam ölçek suite şu an browse ağırlıklı, checkout ağırlıklı, contention, cache-thrash ve backpressure karakterli sekiz farklı `50k TPS` senaryo içerir.
-
-Ayrıca kademeli ölçek koşusu için ayrı bir giriş noktası vardır:
-
-```powershell
-mvn -q -pl cachedb-production-tests -am exec:java `
-  "-Dexec.mainClass=com.reactor.cachedb.prodtest.scenario.ScaleLadderBenchmarkMain" `
-  "-Dcachedb.prod.scaleLadder=0.10,0.25,0.50,1.0" `
-  "-Dcachedb.prod.redis.uri=redis://default:welcome1@127.0.0.1:6379" `
-  "-Dcachedb.prod.postgres.url=jdbc:postgresql://127.0.0.1:5432/postgres"
-```
-
-### Faz 1: Kontrollü Yük Rampası
-
-Amaç:
-
-- güvenli throughput aralığını bulmak
-- ilk kalıcı degradation noktasını görmek
-
-Önerilen adımlar:
-
-1. `campaign-push-spike` senaryosunu `0.05`, `0.10`, `0.20` `scaleFactor` ile koş.
-2. Şu metrikleri kaydet:
-   - ops/sn
-   - ortalama ve p95 gecikme
-   - write-behind backlog artış hızı
-   - yük bittikten sonraki drain süresi
-   - kaynak veritabanı CPU ve IO
-3. Backlog hedef iyileşme penceresinde boşalamıyorsa artık yükü artırma.
-
-Başarı kriterleri:
-
-- DLQ oluşmaması
-- backlog'un hedef sürede boşalması
-- health'in `DEGRADED` seviyesinden tekrar `UP` seviyesine dönmesi
-
-### Faz 2: Yazma Ağırlıklı Eşik Testi
-
-Amaç:
-
-- write-behind çöküş noktasını bulmak
-
-Önerilen senaryolar:
-
-- `write-behind-backpressure-breaker`
-- `flash-sale-hot-sku-contention`
-
-Ölçülecekler:
-
-- queue length eğimi
-- DLQ oluşumu
-- recovery worker claim sayısı
-- order/inventory persistence lag
-
-Başarı kriterleri:
-
-- kalıcı DLQ birikmemesi
-- recovery'nin kontrol edilebilir kalması
-- stale write'ların yeni durumu ezmemesi
-
-### Faz 3: Browse Fırtınasında Cache Verimi
-
-Amaç:
-
-- katalog ağırlıklı dönemlerde Redis hot-set ve page-cache davranışını görmek
-
-Önerilen senaryo:
-
-- `weekend-browse-storm`
-
-Ölçülecekler:
-
-- hot-set eviction hızı
-- page cache hit oranı
-- planner learned-stat büyümesi
-- Redis bellek kullanımı
-
-Başarı kriterleri:
-
-- eviction'in kontrol altında kalması
-- Redis belleğinin bütçe içinde kalması
-- uzun taramalarda okuma gecikmesinin sert biçimde artmaması
-
-### Faz 4: Bilerek Kırma Testleri
-
-Amaç:
-
-- sistemi konfor alanının dışına itince recovery davranışını doğrulamak
-
-Önerilen kırma testleri:
-
-- write-behind worker sayısını `1`e düşürmek
-- batch size'i agresif şekilde küçültmek
-- hot-set limitlerini daraltmak
-- checkout ve inventory oranını arttırmak
-- yük altında PostgreSQL'i kısa süre durdurmak
-
-Beklenen çıktılar:
-
-- backlog büyür
-- health degrade olur
-- recovery yolu gözlemlenebilir kalır
-- veri tutarlılığı korumaları yine de çalışır
-
-## Production Gate Önerisi
-
-Gerçek bir e-ticaret kampanya yolu için DAO katmanına production-ready denmeden önce şunlar sağlanmalı:
-
-- birden fazla ölçekte sustained burst testleri koşulmuş olmalı
-- write-behind drain süresi ölçülüp kabul edilmiş olmalı
-- browse storm altında Redis bellek bütçesi doğrulanmış olmalı
-- DLQ boş kalmalı ya da operasyonel olarak geri alınabilir olmalı
-- hot inventory contention güvensiz persistence lag üretmemeli
-- operasyon ekibinin `DEGRADED` ve `DOWN` eşikleri net olmalı
-
-## Sonraki Somut Çıktılar
-
-1. `5m`, `15m`, `30m` gibi sabit süreli uzun benchmark profilleri ekle.
-2. Benchmark raporlarına p95/p99 gecikme ve backlog eğimi ekle.
-3. Resilience testi için opsiyonel PostgreSQL pause/fault injection ekle.
-4. Koşuları zaman içinde karşılaştıracak benchmark karşılaştırma dokümanı ekle.
+- Kararlı framework sürümünü yalnızca zorunlu framework hatları aynı etiket
+  üzerinde geçerse ve public artifact'ler anonim indirilebilirse yayımla.
+- Uygulamayı yalnızca kendi sertifika kontrolü engelsiz geçerse canlı trafiğe aç.
+- İş yükü, payload, ağ, kaynak limiti, provider, Redis topolojisi veya SQL
+  topolojisi önemli ölçüde değişirse kanıtları yeniden üret.

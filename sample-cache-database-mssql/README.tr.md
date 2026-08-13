@@ -3,7 +3,7 @@
 [English](README.md) | Türkçe
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.9.0](https://img.shields.io/badge/CacheDB-0.9.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.9.0)
+[![CacheDB 0.10.0](https://img.shields.io/badge/CacheDB-0.10.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.10.0)
 
 Bu proje, CacheDB'nin Redis 8 ve SQL Server ile nasıl kullanılacağını gösteren
 bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
@@ -11,9 +11,8 @@ açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
 kullanır, kalıcı geçmiş SQL Server'da tutulur, büyüyen listeler ise bütün nesne
 ağacı yerine projection üzerinden okunur.
 
-> Bu sürüm, GitHub Packages üzerinden yayımlanan değişmez CacheDB `0.9.0`
-> paketini kullanır. Maven kimlik bilgilerini bir kez yapılandırman yeterlidir;
-> örneği derlemek veya çalıştırmak için CacheDB kaynak deposu gerekmez.
+> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.10.0`
+> paketini kullanır. GitHub token'ı veya yerel CacheDB kaynak kodu gerekmez.
 
 Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
 doğrulamış olacaksın: kalıcı SQL Server verisini oluşturacak, sınırlı arşiv
@@ -31,6 +30,7 @@ bulunmaması arka planda gizli bir SQL Server sorgusu başlatmaz.
 | SQL Server'daki mevcut veriyi Redis'e hazırlamak | [Mevcut Veriyi Hazırlama](#mevcut-veriyi-hazırlama) |
 | Cache sınırlarını belirlemek | [Kullanım Senaryosuna Göre Ayar](#kullanım-senaryosuna-göre-ayar) |
 | Tüm yolları denemek | [API Kataloğu](#api-kataloğu) veya [Postman](#postman) |
+| Canlı ortam hazırlığını kanıtlamak | [Production Sertifikası](#production-sertifikası) |
 | Canlı ortam geçişini hazırlamak | [Canlı Ortam Kontrol Listesi](#canlı-ortam-kontrol-listesi) |
 | Başlangıç veya veri yolu sorununu çözmek | [Sorun Giderme](#sorun-giderme) |
 
@@ -98,8 +98,6 @@ reflection'ı kullanılmaz.
 - Maven 3.9+
 - Docker Desktop veya uyumlu bir Docker Engine
 - Hazır yük testi için PowerShell 7+
-- Yalnızca GitHub Packages'tan yayımlanmış paket çekerken `read:packages`
-  yetkili GitHub token'ı
 
 Yerel araçları kontrol et:
 
@@ -118,7 +116,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.9.0</cachedb.version>
+    <cachedb.version>0.10.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -178,22 +176,22 @@ başka bir starter uygulama için zaten `DataSource` oluşturuyorsa
 ihtiyacı; çalışan bir `DataSource`, tek bir veritabanı starter'ı, annotations
 artifact'i ve annotation processor'dır.
 
-Maven, normal dependency'leri ve build plugin'lerini farklı repository
-listelerinden çözümlediği için sample POM'u GitHub Packages adresini iki yerde
-tanımlar:
+Maven, normal bağımlılıkları ve build plugin'lerini farklı repository
+listelerinden çözümler. Bu nedenle genel kullanıma açık CacheDB deposu iki
+bölümde de tanımlanır:
 
 ```xml
 <repositories>
     <repository>
-        <id>cache-database-github-packages</id>
-        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
     </repository>
 </repositories>
 
 <pluginRepositories>
     <pluginRepository>
-        <id>cache-database-github-packages</id>
-        <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
         <releases><enabled>true</enabled></releases>
         <snapshots><enabled>false</enabled></snapshots>
     </pluginRepository>
@@ -201,29 +199,15 @@ tanımlar:
 ```
 
 `repositories`; BOM, starter ve kütüphaneleri çözümler.
-`pluginRepositories` ise `cachedb-maven-plugin:doctor` eklentisini çözümler.
-POM'daki iki repository kimliği ile Maven `settings.xml` içindeki server kimliği
-aynı olmalıdır:
-
-```xml
-<settings>
-    <servers>
-        <server>
-            <id>cache-database-github-packages</id>
-            <username>${env.GITHUB_ACTOR}</username>
-            <password>${env.GITHUB_TOKEN}</password>
-        </server>
-    </servers>
-</settings>
-```
+`pluginRepositories` ise `cachedb-maven-plugin` eklentisini çözümler. Adres
+herkese açıktır; Maven `settings.xml`, kullanıcı adı veya token gerekmez.
 
 ## Hızlı Başlangıç
 
 ### 1. Yayımlanmış CacheDB paketini çözümle
 
-Yukarıda gösterilen GitHub Packages kimlik bilgilerini yapılandırdıktan sonra
-sample projesini doğrula. Maven; BOM, starter, annotation processor ve doctor
-plugin'ini değişmez `0.9.0` paketinden çözümler:
+Sample projesini doğrudan doğrula. Maven; BOM, starter, annotation processor ve
+doctor plugin'ini değişmez `0.10.0` paketinden kimlik bilgisi istemeden çözümler:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -813,6 +797,24 @@ sınırları, gerçek payload ve beklenen eş zamanlılıkla yapılmalıdır.
 - Operasyonel yol Redis'ten çalışsa bile kalıcı doğruluk kaynağının SQL Server
   olduğunu koru.
 
+## Production Sertifikası
+
+Framework deposundaki testler CacheDB'nin kendi Docker ve provider davranışını
+kanıtlar. Uygulamanın rotaları ile gerçek staging topolojisi ayrıca
+kanıtlanmalıdır. Rota kapsamı, veri eşitliği, bellek, failover, canary ve geri
+dönüş kanıtlarını `cachedb-certification/` altında topladıktan sonra çalıştır:
+
+```powershell
+mvn verify -Pproduction-certification
+```
+
+Eksik rota, başka commit veya ortama ait kanıt, veri eşitliği sorunu, aşılmış
+bellek bütçesi ya da eksik failover/geri dönüş provası build'i durdurur.
+Paylaşılabilir sonuç `target/cachedb-production-certification.md` altında
+oluşur. Ayrıntılı sözleşme için
+[production sertifikası rehberini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/production-sertifikasi.md)
+kullan. Örnek kanıtları başarılı gibi işaretleme.
+
 ## Canlı Ortam Kontrol Listesi
 
 - [ ] Her operasyonel endpoint; komut, aktif entity, projection veya source
@@ -840,8 +842,9 @@ sınırları, gerçek payload ve beklenen eş zamanlılıkla yapılmalıdır.
 | Belirti | Olası neden | Çözüm |
 | --- | --- | --- |
 | `/api/demo/seed` veya `/api/warm/**` için `404` | Uygulama `demo` profili olmadan açıldı | `SPRING_PROFILES_ACTIVE=demo` tanımlayıp yeniden başlat |
-| Maven `401 Unauthorized` döndürüyor | GitHub Packages kimlik bilgisi yok veya server kimlikleri farklı | `GITHUB_ACTOR`, `read:packages` token'ı ve aynı server kimliğini tanımla |
-| Release dependency'leri çözümleniyor ancak `cachedb-maven-plugin` bulunamıyor | `pluginRepositories` tanımı yok veya başka server kimliği kullanıyor | GitHub Packages plugin repository tanımını ekle, `read:packages` token'ı kullan ve üç kimliği aynı tut |
+| CacheDB artifact'leri için `404` alınıyor | İstenen sürüm yayımlanmamış veya genel Maven deposu eksik | Yayımlanmış kararlı sürümü kullan ve iki repository bölümüne de `https://esasmer-dou.github.io/cache-database/maven2` adresini ekle |
+| Bağımlılıklar çözülüyor ancak `cachedb-maven-plugin` bulunamıyor | `pluginRepositories` tanımı yok | Aynı genel CacheDB adresini `pluginRepositories` altına ekle |
+| `production-certification` başarısız oluyor | Rota kanıtı eksik, eski veya başka commit/ortama ait | Üretilen raporu oku, gerçek staging kanıtını yenile ve profili yeniden çalıştır |
 | Aktif route `503` döndürüyor, arşiv route'u satır getiriyor | Redis route'u hazırlanmadı, coverage süresi doldu veya kapsam farklı | Dry-run yap, aynı route/scope'u hazırla, `COMPLETED` durumunu bekle ve coverage kaydını incele |
 | Detay yolu verinin hazır olmadığını söylüyor | Entity payload'ı aktif setin dışında | O detay kapsamı için entity warm et veya sınırlı source-detail yolu ekle |
 | Ana kaydı yazdıktan sonra `409 Conflict` | Ana kayıt henüz kalıcı değil veya optimistic version değişti | `Retry-After` değerine uy, write-behind durumunu kontrol et, idempotent retry yap |

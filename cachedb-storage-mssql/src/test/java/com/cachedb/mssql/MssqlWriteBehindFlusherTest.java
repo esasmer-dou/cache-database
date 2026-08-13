@@ -116,6 +116,21 @@ class MssqlWriteBehindFlusherTest {
     }
 
     @Test
+    void shouldBatchMissingUpsertsIntoThreeDatabaseCommands() throws Exception {
+        RecordingDataSource dataSource = new RecordingDataSource(0, false);
+        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(dataSource, emptyRegistry());
+
+        flusher.flushBatch(List.of(
+                operation(OperationType.UPSERT, "11", 1),
+                operation(OperationType.UPSERT, "12", 1),
+                operation(OperationType.UPSERT, "13", 1)
+        ));
+
+        assertEquals(List.of("UPDATE", "SELECT", "INSERT"), dataSource.statementKinds());
+        assertEquals(1, dataSource.commitCount);
+    }
+
+    @Test
     void shouldApplySharedPoolMssqlTimeoutOptionsAndRestoreLockTimeout() throws Exception {
         RecordingDataSource dataSource = new RecordingDataSource(1, false);
         MssqlWriteBehindOptions options = MssqlWriteBehindOptions.builder()
@@ -399,7 +414,7 @@ class MssqlWriteBehindFlusherTest {
                     }
                     case "executeBatch" -> {
                         int[] results = new int[batchSize];
-                        java.util.Arrays.fill(results, dataSource.updateCount);
+                        java.util.Arrays.fill(results, sql.startsWith("INSERT") ? 1 : dataSource.updateCount);
                         yield results;
                     }
                     case "clearBatch" -> {

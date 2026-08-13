@@ -225,6 +225,51 @@ class CacheRepositoryProcessorTest {
     }
 
     @Test
+    void supportsSqlSchemaTypesInDeclarativeProjectionRecords() throws IOException {
+        Compilation compilation = compile(
+                source("types/TypedEntity.java", """
+                        package types;
+                        import com.reactor.cachedb.annotations.*;
+                        @CacheEntity(table = "typed_entities")
+                        public class TypedEntity {
+                            @CacheId(column = "entity_id") public java.util.UUID entityId;
+                            @CacheColumn("event_time") public java.time.Instant eventTime;
+                            @CacheColumn("business_date") public java.time.LocalDate businessDate;
+                            @CacheColumn("business_date_time") public java.time.LocalDateTime businessDateTime;
+                            @CacheColumn("business_time") public java.time.LocalTime businessTime;
+                            @CacheColumn("short_value") public Short shortValue;
+                            @CacheColumn("float_value") public Float floatValue;
+                            public TypedEntity() {}
+                        }
+                        """),
+                source("types/TypedSummary.java", """
+                        package types;
+                        import com.reactor.cachedb.annotations.*;
+                        @CacheProjectionRecord(source = TypedEntity.class, id = "entityId", name = "typed-summary")
+                        public record TypedSummary(
+                            java.util.UUID entityId,
+                            java.time.Instant eventTime,
+                            java.time.LocalDate businessDate,
+                            java.time.LocalDateTime businessDateTime,
+                            java.time.LocalTime businessTime,
+                            Short shortValue,
+                            Float floatValue
+                        ) {}
+                        """)
+        );
+
+        assertTrue(compilation.success(), compilation.diagnosticsText());
+        String schema = Files.readString(compilation.generated().resolve("types/TypedSummaryProjectionSchema.java"));
+        assertTrue(schema.contains(".uuidColumn(\"entity_id\""));
+        assertTrue(schema.contains(".instantColumn(\"event_time\""));
+        assertTrue(schema.contains(".localDateColumn(\"business_date\""));
+        assertTrue(schema.contains(".localDateTimeColumn(\"business_date_time\""));
+        assertTrue(schema.contains(".localTimeColumn(\"business_time\""));
+        assertTrue(schema.contains(".shortColumn(\"short_value\""));
+        assertTrue(schema.contains(".floatColumn(\"float_value\""));
+    }
+
+    @Test
     void supportsGenericBaseRepositoriesAndDefaultConvenienceOverloads() throws IOException {
         Compilation compilation = compile(
                 source("fragments/BaseRepository.java", """

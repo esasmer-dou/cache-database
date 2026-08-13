@@ -1,5 +1,5 @@
 param(
-    [string]$SummaryPath = "target/public-beta-readiness-summary.md"
+    [string]$SummaryPath = "target/framework-readiness-summary.md"
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,8 +23,9 @@ $requiredFiles = @(
     ".github/pull_request_template.md",
     "docs/release-checklist.md",
     "tr/docs/release-checklist.md",
-    "docs/public-beta-readiness.md",
-    "tr/docs/public-beta-readiness.md"
+    "docs/production-certification.md",
+    "tr/docs/production-olgunlugu.md",
+    "tr/docs/production-sertifikasi.md"
 )
 
 $missing = @()
@@ -59,7 +60,7 @@ if (-not (Test-Path $summaryDir)) {
 }
 
 $summaryLines = @(
-    "# Public Beta Readiness Summary",
+    "# Framework Readiness Summary",
     "",
     "## Files",
     ""
@@ -98,8 +99,8 @@ if ($missingPomTokens.Count -gt 0) {
 Set-Content -Path $summaryFullPath -Value ($summaryLines -join [Environment]::NewLine)
 
 if ($missing.Count -gt 0 -or $missingPomTokens.Count -gt 0) {
-    throw "Public beta readiness validation failed."
+    throw "Framework readiness validation failed."
 }
 
-Write-Host "Public beta readiness validation passed."
+Write-Host "Framework readiness validation passed."
 Write-Host "Summary written to $summaryFullPath"

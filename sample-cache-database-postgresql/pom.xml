@@ -13,30 +13,30 @@
 
     <groupId>com.example.cachedb</groupId>
     <artifactId>sample-cache-database-postgresql</artifactId>
-        <version>0.9.0</version>
+    <version>0.10.0</version>
     <name>sample-cache-database-postgresql</name>
     <description>CacheDB REST API sample using Redis and PostgreSQL</description>
 
     <properties>
         <java.version>21</java.version>
         <cachedb.groupId>com.reactor.cachedb</cachedb.groupId>
-        <cachedb.version>0.9.0</cachedb.version>
+        <cachedb.version>0.10.0</cachedb.version>
         <testcontainers.version>2.0.5</testcontainers.version>
     </properties>
 
     <repositories>
         <repository>
-            <id>cache-database-github-packages</id>
-            <name>CacheDB GitHub Packages</name>
-            <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+            <id>cachedb-public</id>
+            <name>CacheDB Public Maven Repository</name>
+            <url>https://esasmer-dou.github.io/cache-database/maven2</url>
         </repository>
     </repositories>
 
     <pluginRepositories>
         <pluginRepository>
-            <id>cache-database-github-packages</id>
-            <name>CacheDB GitHub Packages</name>
-            <url>https://maven.pkg.github.com/esasmer-dou/cache-database</url>
+            <id>cachedb-public</id>
+            <name>CacheDB Public Maven Repository</name>
+            <url>https://esasmer-dou.github.io/cache-database/maven2</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -175,6 +175,27 @@
                                 <goals>
                                     <goal>integration-test</goal>
                                     <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>production-certification</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>${cachedb.groupId}</groupId>
+                        <artifactId>cachedb-maven-plugin</artifactId>
+                        <version>${cachedb.version}</version>
+                        <executions>
+                            <execution>
+                                <id>certify-cache-database</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>certify</goal>
                                 </goals>
                             </execution>
                         </executions>

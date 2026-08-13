@@ -19,29 +19,28 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Official Distribution Channel
 
-For `v0.9.0`, the official distribution channels are GitHub Packages and the
-GitHub Release asset:
+For `v0.10.0`, the official distribution channels are the anonymous CacheDB
+Maven repository and the GitHub Release asset. GitHub Packages is an optional
+authenticated mirror:
 
 ```text
-cache-database-0.9.0-github-release.zip
+cache-database-0.10.0-github-release.zip
 ```
 
 The bundle contains binary, source, javadoc, and POM artifacts for 16 public
 modules plus the CacheDB BOM, README, security/community files, English docs,
-and Turkish docs. Maven Central is not required because GitHub Packages and the
-GitHub Release bundle are the selected official distribution channels.
+and Turkish docs. Maven Central is not required because anonymous Maven2
+resolution and the GitHub Release bundle are the selected official channels.
 
 ## Release Positioning
 
-`cache-database v0.9.0`
+`cache-database v0.10.0`
 
-CacheDB `v0.9.0` reduces declarative repository wiring while preserving explicit
-production contracts. The processor infers only unambiguous parameter roles,
-strict HOT and bounded SOURCE routes can return cursor pages directly, generated
-route references connect declarations to warm/coverage/test APIs, and coverage
-scope validation prevents cross-scope completeness claims. HOT route budgets
-are visible through Actuator and Micrometer. PostgreSQL and MSSQL samples expose
-the same application model and provider-specific runtime path.
+CacheDB `v0.10.0` adds compile-ready migration projections, batched SQL Server
+write-behind, commit-bound application certification, and anonymous Maven
+consumption while preserving explicit production contracts. PostgreSQL and
+SQL Server samples expose the same application model and provider-specific
+runtime path.
 
 This release does not claim that every consuming application can cut production
 traffic over without its own validation. Before cutover, each application still
@@ -57,7 +56,7 @@ topologies must be proven in the consuming application's staging environment.
 ## Release Notes Template
 
 ```markdown
-## cache-database v0.9.0
+## cache-database v0.10.0
 
 This stable release improves the practical migration path for existing SQL-backed applications.
 
@@ -89,14 +88,14 @@ This stable release improves the practical migration path for existing SQL-backe
 - Typed Redis Stream jobs with pod failover, abandoned-work claiming, bounded retries, and idempotent-handler contracts.
 - Spring Boot Actuator health for Redis, SQL, write-behind backlog, dead letters, and recovery state.
 - PostgreSQL and MSSQL REST samples with Docker Compose, Postman collections, and local hot-route load scripts.
-- GitHub Release asset as the official package distribution channel.
+- Anonymous Maven2 repository and GitHub Release asset as official package distribution channels.
 
 ### Provider boundaries
 
 - PostgreSQL is the default provider path.
 - MSSQL is available as an explicitly selected provider with SQL Server sample and integration evidence.
 - SQL Server HA or Always On readiness must be proven in the consuming application's staging topology when that topology is part of the production claim.
-- Maven Central is optional for this release because GitHub Release is the selected official distribution channel.
+- Maven Central is optional because the anonymous Maven2 repository and GitHub Release are official distribution channels.
 
 ### Production use
 
@@ -108,13 +107,14 @@ comparison, Redis memory budget, and rollback plan.
 ## Publication Checklist
 
 - `pom.xml` and all module parent versions use the stable version.
-- Release notes exist at `docs/releases/v0.9.0.md`.
+- Release notes exist at `docs/releases/v0.10.0.md`.
 - `mvn -DskipTests package` passes.
 - Public API compatibility check passes.
 - Turkish documentation quality check passes.
 - Local Docker HA preflight passes or the latest CI evidence is green.
-- `Public Beta Readiness` and `Production Evidence` are green for the release
+- `Framework Readiness` and `Production Evidence` are green for the release
   commit.
-- `Production GA Release Readiness` is green for `v0.9.0`.
+- `Production GA Release Readiness` is green for `v0.10.0`.
 - GitHub Release is not marked as prerelease.
-- GitHub Release asset `cache-database-0.9.0-github-release.zip` is attached.
+- Anonymous Maven resolution passes for `0.10.0`.
+- GitHub Release asset `cache-database-0.10.0-github-release.zip` is attached.

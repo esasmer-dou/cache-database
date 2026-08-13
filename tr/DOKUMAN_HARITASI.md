@@ -30,7 +30,7 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Çalışan REST API örneği nerede? | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md) |
 | Yeni projeye nasıl eklerim? | [Başlangıç Rehberi](docs/getting-started.md) |
 | Hızlı erişim, SQL, warm ve command route'larını nasıl tanımlarım? | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| Güncel kararlı sürümde neler değişti? | [v0.9.0 Sürüm Notları](docs/releases/v0.9.0.md) |
+| Güncel kararlı sürümde neler değişti? | [v0.10.0 Sürüm Notları](docs/releases/v0.10.0.md) |
 | Spring Boot'ta JDBC dependency gerekiyor mu? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | Entity, relation, projection, route contract ne demek? | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | Insert, read, update, delete nasıl yapılır? | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
@@ -42,8 +42,9 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Mevcut SQL veritabanı + ORM uygulamasını nasıl taşırım? | [Geçiş Planlayıcı](docs/migration-planner.md) |
 | Kaynak veritabanı CacheDB dışında değişirse Redis'i nasıl güncel tutarım? | [Outbox ve CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
 | CacheDB MSSQL veya başka SQL veritabanını destekleyebilir mi? | [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md) |
-| Production'a çıkmadan önce hangi kanıtlar gerekir? | [Production Test Raporu](docs/production-test-report.md) |
-| Stable release mi, provider bazlı production sınırı mı? | [Production GA Criteria](../PRODUCTION_GA_CRITERIA.md) ve [Stable Release Launch Kit](docs/stable-release-launch-kit.md) |
+| Production'a çıkmadan önce hangi kanıtlar gerekir? | [Production Olgunluğu](docs/production-olgunlugu.md) |
+| Uygulama geçişe hazır olduğunu nasıl kanıtlar? | [Production Sertifikası](docs/production-sertifikasi.md) |
+| Kararlı release ile uygulamaya özgü production sınırı nasıl ayrılır? | [Production Olgunluğu](docs/production-olgunlugu.md) ve [Stable Release Launch Kit](docs/stable-release-launch-kit.md) |
 | GA release çıkabilir mi, nasıl karar verilir? | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 | Release nasıl kesilir? | [Release Akışı](docs/release-flow.md) |
 | Maven Central yayını için ne eksik? | [Maven Central Publish Checklist](docs/maven-central-publish-checklist.md) |
@@ -79,9 +80,9 @@ olduğunu ve production risklerini görmek.
 Önce şunları oku:
 
 - [Tuning Parametreleri](docs/tuning-parameters.md)
-- [Production Test Raporu](docs/production-test-report.md)
-- [Production Readiness Raporu](docs/production-readiness-report.md)
-- [Final Production Go/No-Go Raporu](docs/final-production-go-no-go-report.md)
+- [Production Olgunluğu](docs/production-olgunlugu.md)
+- [Production Sertifikası](docs/production-sertifikasi.md)
+- [Production Kanıt Rehberi](docs/production-test-report.md)
 
 Hedef: Redis, kalıcı SQL provider, worker, leader lease, failover, CI evidence
 ve operasyonel gözlemlenebilirlik sınırlarını anlamak.
@@ -117,9 +118,11 @@ kararını kanıtla vermek.
 | [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md) | PostgreSQL, MSSQL ve ilerideki SQL dialect'leri için storage provider sınırı |
 | [Production Reçeteleri](docs/production-recipes.md) | Production kullanım desenleri, BEST/ACCEPTABLE/ANTI-PATTERN ayrımı |
 | [Mimari](docs/architecture.md) | İç mimari, veri akışı, registry, relation loading ve açık tasarım kararları |
-| [Production Test Raporu](docs/production-test-report.md) | Test kanıtları, smoke sonuçları, benchmark ve certification lane |
-| [Production Readiness Raporu](docs/production-readiness-report.md) | Ürünün production seviyesine ne kadar yakın olduğu |
+| [Production Kanıt Rehberi](docs/production-test-report.md) | Tekrarlanabilir test hatları, rapor konumları ve kanıt sınırları |
+| [Production Olgunluğu](docs/production-olgunlugu.md) | Tek güncel olgunluk ve yayına çıkma sözleşmesi |
+| [Production Sertifikası](docs/production-sertifikasi.md) | Uygulamanın rota, veri eşitliği, bellek, failover, canary ve geri dönüş kontrolü |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Stabil GA release için sert go/no-go akışı |
+| [v0.10.0 Sürüm Notları](docs/releases/v0.10.0.md) | Derlenebilir migration projection'ları, toplu SQL Server yazmaları, uygulama sertifikası ve anonim Maven dağıtımı |
 | [v0.9.0 Sürüm Notları](docs/releases/v0.9.0.md) | Derleme zamanı çıkarımı, doğrudan cursor sayfaları, tipli route referansları, route kapasite kanıtı ve açık kalıcılık yardımcıları |
 | [v0.8.0 Sürüm Notları](docs/releases/v0.8.0.md) | Sözleşmeye bağlı cursor, repository varsayılanı, tipli warm/işler, kalıcı batch ve provider eşdeğerliği |
 | [v0.7.1 Sürüm Notları](docs/releases/v0.7.1.md) | Temiz runner'da Maven plugin çözümleme ve değişmez sample tüketimi |

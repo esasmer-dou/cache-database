@@ -2,12 +2,10 @@
 
 ## Supported Versions
 
-`cache-database` is currently in public-beta posture.
+`cache-database` publishes stable releases. Security support covers:
 
-Security fixes are best-effort for:
-
-- the latest `main` branch
-- the latest published beta line, once public releases begin
+- the latest published stable minor line
+- the latest `main` branch while a fix is being prepared for release
 
 Older snapshots may not receive fixes.
 
@@ -33,8 +31,8 @@ coordinated disclosure plan.
 
 ## Security Expectations
 
-This project relies heavily on Redis and PostgreSQL for correctness and
-durability behavior. Production deployments should treat:
+This project relies on Redis and the selected durable SQL provider for
+correctness and durability behavior. Production deployments should treat:
 
 - Redis durability and failover posture
 - credential management
