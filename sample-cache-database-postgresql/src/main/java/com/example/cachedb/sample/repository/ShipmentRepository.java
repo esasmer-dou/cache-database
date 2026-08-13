@@ -13,9 +13,9 @@ import com.reactor.cachedb.annotations.HotRoute;
 import com.reactor.cachedb.annotations.SourceRoute;
 import com.reactor.cachedb.annotations.WarmRoute;
 import com.reactor.cachedb.core.repository.CacheDbRepository;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.HotLookup;
 import com.reactor.cachedb.core.repository.HotWindow;
-import com.reactor.cachedb.core.repository.SourceWindow;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.starter.CacheWarmPlan;
 import com.reactor.cachedb.starter.CacheWarmTarget;
@@ -25,8 +25,7 @@ import com.reactor.cachedb.starter.CacheWarmTarget;
         sourceMaxRows = 500, sourceTimeoutSeconds = 15)
 public interface ShipmentRepository extends CacheDbRepository<ShipmentEntity, Long> {
 
-    @CacheLookup(idParameter = "shipmentId", relation = "events",
-            relationLimitParameter = "eventPreview", relationLimit = 20, maxRelationRows = 20)
+    @CacheLookup(relation = "events", relationLimit = 20, maxRelationRows = 20)
     HotLookup<ShipmentEntity> detail(Long shipmentId, int eventPreview);
 
     @HotRoute(value = "active-shipments",
@@ -39,8 +38,7 @@ public interface ShipmentRepository extends CacheDbRepository<ShipmentEntity, Lo
                     @CacheOrder(field = "riskScore", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "updatedAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "shipmentId", direction = CacheOrder.Direction.DESC)
-            },
-            limitParameter = "limit"
+            }
     )
     HotWindow<ShipmentSummary> active(int limit);
 
@@ -49,14 +47,13 @@ public interface ShipmentRepository extends CacheDbRepository<ShipmentEntity, Lo
             pageSize = 100, hotWindow = 1_000, memoryBudgetBytes = CacheMemoryBudget.MIB_16,
             coverageScopeParameter = "customerId")
     @CacheRouteQuery(
-            predicates = @CachePredicate(field = "customerId", parameter = "customerId"),
+            predicates = @CachePredicate(field = "customerId"),
             orderBy = {
                     @CacheOrder(field = "updatedAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "shipmentId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    HotWindow<ShipmentSummary> forCustomer(long customerId, WindowRequest window);
+    CursorPage<ShipmentSummary> forCustomer(long customerId, WindowRequest window);
 
     @HotRoute(value = "shipment-exceptions",
             projection = ShipmentSummary.class,
@@ -68,8 +65,7 @@ public interface ShipmentRepository extends CacheDbRepository<ShipmentEntity, Lo
                     @CacheOrder(field = "riskScore", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "updatedAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "shipmentId", direction = CacheOrder.Direction.DESC)
-            },
-            limitParameter = "limit"
+            }
     )
     HotWindow<ShipmentSummary> exceptions(int limit);
 
@@ -77,26 +73,24 @@ public interface ShipmentRepository extends CacheDbRepository<ShipmentEntity, Lo
             maxRows = 500, timeoutSeconds = 15)
     @CacheRouteQuery(
             predicates = {
-                    @CachePredicate(field = "customerId", parameter = "customerId"),
+                    @CachePredicate(field = "customerId"),
                     @CachePredicate(field = "shipmentStatus", constants = "DELIVERED")
             },
             orderBy = {
                     @CacheOrder(field = "updatedAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "shipmentId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    SourceWindow<ShipmentSummary> deliveredArchive(long customerId, WindowRequest window);
+    CursorPage<ShipmentSummary> deliveredArchive(long customerId, WindowRequest window);
 
-    @WarmRoute(value = "warm-active-shipments", from = "active", maxRows = 1_000,
-            maxRowsParameter = "maxRows", targetParameter = "target")
+    @WarmRoute(value = "warm-active-shipments", from = "active", maxRows = 1_000)
     CacheWarmPlan warmActive(int maxRows, CacheWarmTarget target);
 
     @WarmRoute(value = "warm-customer-shipments", from = "forCustomer", maxRows = 1_000,
-            maxRowsParameter = "maxRows", coverageScopeParameter = "customerId", projectionsOnly = true)
+            projectionsOnly = true)
     CacheWarmPlan warmForCustomer(long customerId, int maxRows);
 
     @WarmRoute(value = "warm-shipment-exceptions", from = "exceptions", maxRows = 1_000,
-            maxRowsParameter = "maxRows", projectionsOnly = true)
+            projectionsOnly = true)
     CacheWarmPlan warmExceptions(int maxRows);
 }

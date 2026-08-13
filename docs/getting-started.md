@@ -32,12 +32,12 @@ ANTI-PATTERN: model every table and move every route to CacheDB at once.
 
 ## 2. Spring Boot Dependencies
 
-Use this path for most Spring Boot applications. Version `0.8.0` is published
+Use this path for most Spring Boot applications. Version `0.9.0` is published
 as an immutable package through GitHub Packages.
 
 ```xml
 <properties>
-    <cachedb.version>0.8.0</cachedb.version>
+    <cachedb.version>0.9.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -111,7 +111,7 @@ Use this path when you do not use Spring Boot.
 
 ```xml
 <properties>
-    <cachedb.version>0.8.0</cachedb.version>
+    <cachedb.version>0.9.0</cachedb.version>
 </properties>
 
 <dependencies>

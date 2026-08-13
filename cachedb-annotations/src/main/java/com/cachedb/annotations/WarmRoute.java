@@ -16,12 +16,13 @@ public @interface WarmRoute {
 
     int maxRows() default 1_000;
 
-    /** Optional int parameter that selects a runtime row count up to maxRows. */
+    /** Optional int parameter. A single int not consumed by the source query is inferred when omitted. */
     String maxRowsParameter() default "";
 
-    /** Optional CacheWarmTarget parameter that selects entity or projection-only hydration at call time. */
+    /** Optional CacheWarmTarget parameter. A single parameter of that type is inferred when omitted. */
     String targetParameter() default "";
 
+    /** Defaults to the source HOT route's scope parameter when that parameter is present. */
     String coverageScopeParameter() default "";
 
     long coverageTtlSeconds() default 86_400L;

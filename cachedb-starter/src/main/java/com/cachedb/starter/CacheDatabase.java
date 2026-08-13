@@ -865,6 +865,17 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return routeCoverageStore.get(routeName, scope, maxAge);
     }
 
+    public com.reactor.cachedb.core.route.RouteCoverage routeCoverage(
+            com.reactor.cachedb.core.route.RepositoryRouteRef route,
+            String scope,
+            Duration maxAge
+    ) {
+        com.reactor.cachedb.core.route.RepositoryRouteRef hotRoute = java.util.Objects
+                .requireNonNull(route, "route")
+                .requireKind(com.reactor.cachedb.core.route.RepositoryRouteKind.HOT);
+        return routeCoverage(hotRoute.routeName(), scope, maxAge);
+    }
+
     public com.reactor.cachedb.core.route.RouteCoverageStore routeCoverageStore() {
         return routeCoverageStore;
     }

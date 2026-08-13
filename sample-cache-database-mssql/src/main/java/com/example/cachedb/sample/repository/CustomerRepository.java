@@ -20,12 +20,7 @@ import com.reactor.cachedb.starter.CacheWarmPlan;
         sourceMaxRows = 500, sourceTimeoutSeconds = 15)
 public interface CustomerRepository extends CacheDbRepository<CustomerEntity, Long> {
 
-    @CacheLookup(
-            idParameter = "customerId",
-            relation = "orders",
-            relationLimitParameter = "orderPreview",
-            maxRelationRows = 25
-    )
+    @CacheLookup(relation = "orders", maxRelationRows = 25)
     HotLookup<CustomerEntity> detail(Long customerId, int orderPreview);
 
     @HotRoute(value = "active-customers",
@@ -36,12 +31,10 @@ public interface CustomerRepository extends CacheDbRepository<CustomerEntity, Lo
             orderBy = {
                     @CacheOrder(field = "updatedAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "customerId")
-            },
-            limitParameter = "limit"
+            }
     )
     HotWindow<CustomerEntity> active(int limit);
 
-    @WarmRoute(value = "warm-active-customers", from = "active", maxRows = 1_000,
-            maxRowsParameter = "maxRows")
+    @WarmRoute(value = "warm-active-customers", from = "active", maxRows = 1_000)
     CacheWarmPlan warmActive(int maxRows);
 }

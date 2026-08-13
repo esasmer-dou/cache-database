@@ -53,7 +53,7 @@ public final class OrderApplicationService {
     }
 
     public CursorPage<OrderSummary> highValue(BigDecimal minimumAmount, int limit, String after) {
-        return orders.recentHighValue(minimumAmount, WindowRequest.of(limit, after)).completePage();
+        return orders.recentHighValue(minimumAmount, WindowRequest.of(limit, after));
     }
 
     public CursorPage<OrderSummary> archive(
@@ -68,7 +68,7 @@ public final class OrderApplicationService {
                 beforeOrderDate,
                 beforeOrderId,
                 WindowRequest.of(limit, after)
-        ).page();
+        );
     }
 
     public WriteReceipt<OrderEntity, Long> updateStatus(long orderId, String status) {

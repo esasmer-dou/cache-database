@@ -30,4 +30,14 @@ public interface WindowSlice<T> {
                 ? Optional.of(WindowRequest.after(nextCursor(), limit))
                 : Optional.empty();
     }
+
+    /** Preserves the caller's validated page limit while advancing the cursor. */
+    default Optional<WindowRequest> nextRequest(WindowRequest currentRequest) {
+        if (currentRequest == null) {
+            throw new IllegalArgumentException("currentRequest must not be null");
+        }
+        return hasNext()
+                ? Optional.of(currentRequest.continueAfter(nextCursor()))
+                : Optional.empty();
+    }
 }

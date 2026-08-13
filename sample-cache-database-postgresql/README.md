@@ -7,8 +7,9 @@ A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 a bounded Redis active data set, durable history stays in PostgreSQL, and
 growing lists use projections instead of full aggregates.
 
-> This sample consumes the immutable CacheDB `0.8.0` release from GitHub
-> Packages; the CacheDB source repository is not part of the sample build.
+> This release consumes the immutable CacheDB `0.9.0` package from GitHub
+> Packages. Configure Maven credentials once; the CacheDB source repository is
+> not required to build or run the sample.
 
 ## Start Here
 
@@ -106,7 +107,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.8.0</cachedb.version>
+    <cachedb.version>0.9.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -205,19 +206,19 @@ ID in both POM sections and the server ID in Maven `settings.xml` must match:
 
 ## Quick Start
 
-### 1. Verify published package access
+### 1. Resolve the published CacheDB package
 
-Configure `GITHUB_ACTOR`, a `read:packages` token, and the matching Maven
-server entry shown above. Then prove that dependencies and the build plugin are
-resolved without the CacheDB source repository:
+Configure the GitHub Packages credentials shown above, then validate the
+sample. Maven resolves the BOM, starter, annotation processor, and doctor
+plugin from the immutable `0.9.0` package:
 
 ```powershell
 mvn -U -DskipTests validate
 ```
 
-The build must print `CacheDB doctor` and `OK: CacheDB build contract is
-consistent`. Install framework sources locally only when intentionally testing
-an unreleased framework change.
+The build must print `CacheDB doctor` and
+`OK: CacheDB build contract is consistent`. It must not depend on a locally
+installed CacheDB checkout.
 
 ### 2. Start Redis and PostgreSQL
 
@@ -437,22 +438,18 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             coverageScopeParameter = "customerId"
     )
     @CacheRouteQuery(
-            predicates = @CachePredicate(field = "customerId", parameter = "customerId"),
+            predicates = @CachePredicate(field = "customerId"),
             orderBy = {
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    HotWindow<OrderSummary> customerTimeline(long customerId, WindowRequest window);
+    CursorPage<OrderSummary> customerTimeline(long customerId, WindowRequest window);
 
     @WarmRoute(
             value = "warm-customer-order-timeline",
             from = "customerTimeline",
-            maxRows = 1_000,
-            maxRowsParameter = "maxRows",
-            coverageScopeParameter = "customerId",
-            targetParameter = "target"
+            maxRows = 1_000
     )
     CacheWarmPlan warmCustomerTimeline(
             long customerId,
@@ -463,7 +460,10 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 ```
 
 The route contract puts the page size, active window, memory budget, sort order,
-coverage scope, and warm limit in one reviewable place.
+coverage scope, and warm limit in one reviewable place. The processor infers the
+same-name predicate parameter, the single `WindowRequest`, the warm row-limit,
+warm target, and warm coverage scope. Ambiguous declarations fail compilation;
+the processor never chooses between multiple candidates silently.
 
 ### 4. Application service: business orchestration
 
@@ -485,7 +485,7 @@ public final class CustomerApplicationService {
     }
 
     public CursorPage<OrderSummary> orderTimeline(long customerId, int limit, String after) {
-        return orders.customerTimeline(customerId, WindowRequest.of(limit, after)).completePage();
+        return orders.customerTimeline(customerId, WindowRequest.of(limit, after));
     }
 }
 ```
@@ -496,7 +496,29 @@ owns serialization, indexes, and provider wiring.
 
 The REST endpoint accepts the returned `nextCursor` as the next request's
 optional `after` parameter. The cursor is bound to this route, customer scope,
-and sort contract; it cannot be reused for another customer or route.
+and sort contract; it cannot be reused for another customer or route. A strict
+HOT route may return `CursorPage<T>` directly because generated code verifies
+complete and fresh coverage before creating the page. Return `HotWindow<T>`
+instead when application code must inspect coverage evidence itself.
+
+The processor also generates a reflection-free route companion. Use it in
+integration tests and operational code instead of repeating route-name strings:
+
+```java
+cacheDbTestProbe.requireDeclaredWarmRoute(
+        OrderRepositoryCacheDbRoutes.customerTimeline()
+);
+
+RouteCoverage coverage = cacheDbTestProbe.coverage(
+        OrderRepositoryCacheDbRoutes.customerTimeline(),
+        String.valueOf(customerId),
+        Duration.ofMinutes(5)
+);
+```
+
+If the repository method or route contract changes, this code changes at
+compile time. The generated companion is under `target/generated-sources`; do
+not copy it into `src/main/java`.
 
 ## Warm Existing Data
 
@@ -780,7 +802,7 @@ limits, representative payloads, and expected concurrency.
 | --- | --- | --- |
 | `/api/demo/seed` or `/api/warm/**` returns `404` | Application was not started with the `demo` profile | Set `SPRING_PROFILES_ACTIVE=demo` and restart |
 | Maven returns `401 Unauthorized` | GitHub Packages credentials are absent or server IDs differ | Configure `GITHUB_ACTOR`, a `read:packages` token, and matching server ID |
-| `0.8.0` dependencies resolve but `cachedb-maven-plugin` does not | `pluginRepositories` is absent or uses another server ID | Add the GitHub Packages plugin repository, configure a `read:packages` token, and keep all three IDs identical |
+| Release dependencies resolve but `cachedb-maven-plugin` does not | `pluginRepositories` is absent or uses another server ID | Add the GitHub Packages plugin repository, configure a `read:packages` token, and keep all three IDs identical |
 | Active route returns `503` while archive returns rows | Redis route has not been warmed, its coverage expired, or the scope differs | Run dry-run, warm the exact route/scope, poll to `COMPLETED`, then inspect coverage |
 | Detail route reports unavailable data | Entity payload is outside the active set | Warm entities for that detail scope or add a bounded source-detail route |
 | `409 Conflict` after a parent write | Parent is not durable yet or optimistic version changed | Honor `Retry-After`, verify write-behind health, retry idempotently |

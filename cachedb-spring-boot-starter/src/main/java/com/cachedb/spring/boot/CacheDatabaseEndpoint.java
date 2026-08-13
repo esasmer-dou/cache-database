@@ -56,6 +56,7 @@ public final class CacheDatabaseEndpoint {
         result.put("declaredRoutes", routeInventory.routeCount());
         result.put("declaredRouteKinds", routeInventory.counts());
         result.put("hotRoutePopulation", routeInventory.hotPopulationCounts());
+        result.put("hotRouteAssessment", routeInventory.hotRouteAssessment());
         result.put("routeDetails", routeInventory.routes(MAX_ROUTE_DETAILS));
         result.put("routeDetailsTruncated", routeInventory.routeCount() > MAX_ROUTE_DETAILS);
         int scheduledWarmJobCount = scheduledWarmRegistry == null ? 0 : scheduledWarmRegistry.size();

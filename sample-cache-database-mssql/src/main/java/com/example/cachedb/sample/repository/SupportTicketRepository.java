@@ -20,7 +20,7 @@ import com.reactor.cachedb.starter.CacheWarmPlan;
         sourceMaxRows = 500, sourceTimeoutSeconds = 15)
 public interface SupportTicketRepository extends CacheDbRepository<SupportTicketEntity, Long> {
 
-    @CacheLookup(idParameter = "ticketId")
+    @CacheLookup
     HotLookup<SupportTicketEntity> detail(Long ticketId);
 
     @HotRoute(value = "open-tickets",
@@ -31,12 +31,10 @@ public interface SupportTicketRepository extends CacheDbRepository<SupportTicket
             orderBy = {
                     @CacheOrder(field = "updatedAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "ticketId")
-            },
-            limitParameter = "limit"
+            }
     )
     HotWindow<SupportTicketEntity> open(int limit);
 
-    @WarmRoute(value = "warm-open-tickets", from = "open", maxRows = 1_000,
-            maxRowsParameter = "maxRows")
+    @WarmRoute(value = "warm-open-tickets", from = "open", maxRows = 1_000)
     CacheWarmPlan warmOpen(int maxRows);
 }

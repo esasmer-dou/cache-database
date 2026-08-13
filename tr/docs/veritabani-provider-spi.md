@@ -74,7 +74,7 @@ uygulamanın sorumluluğundadır.
 <dependency>
   <groupId>com.reactor.cachedb</groupId>
   <artifactId>cachedb-storage-mssql</artifactId>
-  <version>0.8.0</version>
+  <version>0.9.0</version>
 </dependency>
 
 <dependency>

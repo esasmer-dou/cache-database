@@ -11,8 +11,8 @@ import com.reactor.cachedb.annotations.HotRoute;
 import com.reactor.cachedb.annotations.SourceRoute;
 import com.reactor.cachedb.annotations.WarmRoute;
 import com.reactor.cachedb.core.repository.CacheDbRepository;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.HotWindow;
-import com.reactor.cachedb.core.repository.SourceWindow;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.starter.CacheWarmPlan;
 
@@ -30,26 +30,23 @@ public interface AuditEventRepository extends CacheDbRepository<AuditEventEntity
             orderBy = {
                     @CacheOrder(field = "createdAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "auditEventId", direction = CacheOrder.Direction.DESC)
-            },
-            limitParameter = "limit"
+            }
     )
     HotWindow<AuditEventEntity> security(int limit);
 
     @SourceRoute(value = "entity-audit-archive", maxRows = 500, timeoutSeconds = 15)
     @CacheRouteQuery(
             predicates = {
-                    @CachePredicate(field = "entityName", parameter = "entityName"),
-                    @CachePredicate(field = "entityId", parameter = "entityId")
+                    @CachePredicate(field = "entityName"),
+                    @CachePredicate(field = "entityId")
             },
             orderBy = {
                     @CacheOrder(field = "createdAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "auditEventId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    SourceWindow<AuditEventEntity> archive(String entityName, long entityId, WindowRequest window);
+    CursorPage<AuditEventEntity> archive(String entityName, long entityId, WindowRequest window);
 
-    @WarmRoute(value = "warm-security-audit", from = "security", maxRows = 500,
-            maxRowsParameter = "maxRows")
+    @WarmRoute(value = "warm-security-audit", from = "security", maxRows = 500)
     CacheWarmPlan warmSecurity(int maxRows);
 }

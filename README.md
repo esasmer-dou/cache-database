@@ -26,30 +26,30 @@ application's own staging topology.
 
 | Current line | Value |
 | --- | --- |
-| Latest published release | `v0.8.0` |
-| Repository version | `0.8.0` |
+| Latest published release | `v0.9.0` |
+| Repository version | `0.9.0` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
 
-## What Is New In 0.8.0
+## What Is New In 0.9.0
 
-- `CursorPage<T>` carries a keyset continuation token from the generated
-  repository through the service and REST response. The token is bound to its
-  route, filter/parent scope, and sort contract.
-- `@CacheRepositoryDefaults` defines shared hot population, page/window,
-  memory, staleness, source-read, timeout, and warm limits once; explicit
-  method values still take priority at compile time.
-- Typed warm targets, distributed job definitions, bounded progress, and
-  `CacheDurableBatchWriter` remove repeated orchestration code while preserving
-  limits, backpressure, and SQL durability evidence.
-- PostgreSQL and SQL Server samples demonstrate the same declarative API and
-  include copy-paste HTTP continuation, warm, seed, archive, and provider
-  integration journeys.
+- The annotation processor infers unambiguous query, lookup, window, and warm
+  parameter roles while rejecting ambiguous declarations at compilation.
+- Strict HOT and bounded SOURCE routes may return `CursorPage<T>` directly;
+  coverage checks and cursor completion remain inside generated code.
+- Generated `RepositoryRouteRef` values connect repository declarations to
+  warm, coverage, and test APIs without raw route-name strings or reflection.
+- Coverage scopes must constrain the same field with `EQ` in every query group.
+- Actuator and Micrometer expose aggregate HOT route budgets, projection use,
+  and unbudgeted route counts without route-name metric cardinality.
+- Explicit timeout-bounded durability helpers simplify single commands while
+  bulk imports continue to use bounded batch writing and backpressure.
 
-Read the complete [v0.8.0 release notes](docs/releases/v0.8.0.md) before
-upgrading.
+Read the complete [v0.9.0 release notes](docs/releases/v0.9.0.md) and the
+[fifth ten-iteration report](docs/framework-ux-fifth-10-iteration-report.md)
+before upgrading.
 
 ## Product Positioning: What CacheDB Is And Is Not
 
@@ -102,6 +102,7 @@ happens when the requested data is outside the active set.
 | "What changed in the second framework UX cycle?" | [Second Ten-Iteration Engineering Report](docs/framework-ux-second-10-iteration-report.md) |
 | "What changed in the third framework UX cycle?" | [Third Ten-Iteration Engineering Report](docs/framework-ux-third-10-iteration-report.md) |
 | "What changed in the fourth framework UX cycle?" | [Fourth Ten-Iteration Engineering Report](docs/framework-ux-fourth-10-iteration-report.md) |
+| "What changed in the fifth framework UX cycle?" | [Fifth Ten-Iteration Engineering Report](docs/framework-ux-fifth-10-iteration-report.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "How do multiple pods refresh and clean a hot set periodically?" | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) |
@@ -150,13 +151,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.8.0` is an
+Keep `cachedb.version` aligned with the release you use. Version `0.9.0` is an
 immutable release distributed through GitHub Packages and the GitHub Release
 bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.8.0</cachedb.version>
+    <cachedb.version>0.9.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -254,7 +255,7 @@ the consumer POM when it is not inherited from a company parent:
 </settings>
 ```
 
-Use a token with `read:packages`. Version `0.8.0` is published as an immutable
+Use a token with `read:packages`. Version `0.9.0` is published as an immutable
 package; a consumer build does not need the CacheDB source repository.
 
 JDBC rule:

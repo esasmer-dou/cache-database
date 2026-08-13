@@ -8,8 +8,9 @@ bilinçli olarak açıktır: operasyonel yollar Redis'teki sınırlı aktif veri
 kullanır, kalıcı geçmiş PostgreSQL'de tutulur, büyüyen listeler ise tam
 aggregate yerine projection üzerinden okunur.
 
-> Bu örnek, CacheDB `0.8.0` değişmez sürümünü GitHub Packages üzerinden kullanır;
-> sample build'i CacheDB kaynak reposunu kendi içinde derlemez.
+> Bu sürüm, GitHub Packages üzerinden yayımlanan değişmez CacheDB `0.9.0`
+> paketini kullanır. Maven kimlik bilgilerini bir kez yapılandırman yeterlidir;
+> örneği derlemek veya çalıştırmak için CacheDB kaynak reposu gerekmez.
 
 ## Buradan Başla
 
@@ -108,7 +109,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.8.0</cachedb.version>
+    <cachedb.version>0.9.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -209,19 +210,19 @@ aynı olmalıdır:
 
 ## Hızlı Başlangıç
 
-### 1. Yayın paketine erişimi doğrula
+### 1. Yayımlanmış CacheDB paketini çözümle
 
-`GITHUB_ACTOR`, `read:packages` yetkili token ve yukarıdaki Maven server
-tanımını hazırla. Ardından dependency'lerin ve build plugin'inin CacheDB kaynak
-reposuna ihtiyaç duymadan çözümlendiğini doğrula:
+Yukarıda gösterilen GitHub Packages kimlik bilgilerini yapılandırdıktan sonra
+sample projesini doğrula. Maven; BOM, starter, annotation processor ve doctor
+plugin'ini değişmez `0.9.0` paketinden çözümler:
 
 ```powershell
 mvn -U -DskipTests validate
 ```
 
-Build çıktısında `CacheDB doctor` ve `OK: CacheDB build contract is consistent`
-satırları görünmelidir. Framework kaynaklarını yalnızca henüz yayımlanmamış bir
-framework değişikliğini bilerek test ediyorsan yerel Maven deposuna kur.
+Build çıktısında `CacheDB doctor` ve
+`OK: CacheDB build contract is consistent` satırları görünmelidir. Build,
+yerel olarak kurulmuş bir CacheDB checkout'una bağımlı olmamalıdır.
 
 ### 2. Redis ve PostgreSQL'i başlat
 
@@ -445,22 +446,18 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             coverageScopeParameter = "customerId"
     )
     @CacheRouteQuery(
-            predicates = @CachePredicate(field = "customerId", parameter = "customerId"),
+            predicates = @CachePredicate(field = "customerId"),
             orderBy = {
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    HotWindow<OrderSummary> customerTimeline(long customerId, WindowRequest window);
+    CursorPage<OrderSummary> customerTimeline(long customerId, WindowRequest window);
 
     @WarmRoute(
             value = "warm-customer-order-timeline",
             from = "customerTimeline",
-            maxRows = 1_000,
-            maxRowsParameter = "maxRows",
-            coverageScopeParameter = "customerId",
-            targetParameter = "target"
+            maxRows = 1_000
     )
     CacheWarmPlan warmCustomerTimeline(
             long customerId,
@@ -471,7 +468,10 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 ```
 
 Yol sözleşmesi; sayfa boyutunu, aktif pencereyi, bellek bütçesini, sıralamayı,
-coverage kapsamını ve warm sınırını tek yerde görünür kılar.
+coverage kapsamını ve warm sınırını tek yerde görünür kılar. Processor; alanla
+aynı adı taşıyan predicate parametresini, tek `WindowRequest` parametresini,
+warm satır sınırını, warm hedefini ve warm coverage kapsamını çıkarır. Birden
+fazla aday varsa sessiz seçim yapmaz; derlemeyi açık bir hatayla durdurur.
 
 ### 4. Uygulama servisi: iş akışının yönetimi
 
@@ -493,7 +493,7 @@ public final class CustomerApplicationService {
     }
 
     public CursorPage<OrderSummary> orderTimeline(long customerId, int limit, String after) {
-        return orders.customerTimeline(customerId, WindowRequest.of(limit, after)).completePage();
+        return orders.customerTimeline(customerId, WindowRequest.of(limit, after));
     }
 }
 ```
@@ -505,6 +505,29 @@ serileştirme, indeks ve veritabanı sağlayıcısı bağlantısını üstlenir.
 REST endpoint'i yanıttaki `nextCursor` değerini bir sonraki isteğin isteğe bağlı
 `after` parametresi olarak kabul eder. Cursor bu route'a, müşteri kapsamına ve
 sıralama sözleşmesine bağlıdır; başka müşteri veya route için kullanılamaz.
+Strict bir HOT route doğrudan `CursorPage<T>` dönebilir; generated kod sayfayı
+oluşturmadan önce coverage bilgisinin eksiksiz ve güncel olduğunu doğrular.
+Uygulama coverage kanıtını ayrıca inceleyecekse dönüş tipi `HotWindow<T>` kalmalıdır.
+
+Processor ayrıca reflection kullanmayan bir route companion sınıfı üretir.
+Integration test ve operasyon kodunda route adını string olarak tekrarlamak
+yerine bu referansı kullan:
+
+```java
+cacheDbTestProbe.requireDeclaredWarmRoute(
+        OrderRepositoryCacheDbRoutes.customerTimeline()
+);
+
+RouteCoverage coverage = cacheDbTestProbe.coverage(
+        OrderRepositoryCacheDbRoutes.customerTimeline(),
+        String.valueOf(customerId),
+        Duration.ofMinutes(5)
+);
+```
+
+Repository metodu veya route sözleşmesi değişirse bu kullanım derleme sırasında
+değişmek zorunda kalır. Generated companion `target/generated-sources` altında
+oluşur; bu sınıfı `src/main/java` dizinine kopyalama.
 
 ## Mevcut Veriyi Hazırlama
 
@@ -798,7 +821,7 @@ sınırları, gerçek payload ve beklenen eş zamanlılıkla yapılmalıdır.
 | --- | --- | --- |
 | `/api/demo/seed` veya `/api/warm/**` için `404` | Uygulama `demo` profili olmadan açıldı | `SPRING_PROFILES_ACTIVE=demo` tanımlayıp yeniden başlat |
 | Maven `401 Unauthorized` döndürüyor | GitHub Packages kimlik bilgisi yok veya server kimlikleri farklı | `GITHUB_ACTOR`, `read:packages` token'ı ve aynı server kimliğini tanımla |
-| `0.8.0` dependency'leri çözümleniyor ancak `cachedb-maven-plugin` bulunamıyor | `pluginRepositories` tanımı yok veya başka server kimliği kullanıyor | GitHub Packages plugin repository tanımını ekle, `read:packages` token'ı kullan ve üç kimliği aynı tut |
+| Release dependency'leri çözümleniyor ancak `cachedb-maven-plugin` bulunamıyor | `pluginRepositories` tanımı yok veya başka server kimliği kullanıyor | GitHub Packages plugin repository tanımını ekle, `read:packages` token'ı kullan ve üç kimliği aynı tut |
 | Aktif route `503` döndürüyor, arşiv route'u satır getiriyor | Redis route'u hazırlanmadı, coverage süresi doldu veya kapsam farklı | Dry-run yap, aynı route/scope'u hazırla, `COMPLETED` durumunu bekle ve coverage kaydını incele |
 | Detay yolu verinin hazır olmadığını söylüyor | Entity payload'ı aktif setin dışında | O detay kapsamı için entity warm et veya sınırlı source-detail yolu ekle |
 | Ana kaydı yazdıktan sonra `409 Conflict` | Ana kayıt henüz kalıcı değil veya optimistic version değişti | `Retry-After` değerine uy, write-behind durumunu kontrol et, idempotent retry yap |

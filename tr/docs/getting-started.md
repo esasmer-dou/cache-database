@@ -33,12 +33,12 @@ ANTI-PATTERN: Tüm tabloları modelleyip tüm trafiği bir anda CacheDB'ye almak
 
 ## 2. Spring Boot Dependency'leri
 
-Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur. `0.8.0`, GitHub
+Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur. `0.9.0`, GitHub
 Packages üzerinden değişmez paket olarak yayımlanmıştır.
 
 ```xml
 <properties>
-    <cachedb.version>0.8.0</cachedb.version>
+    <cachedb.version>0.9.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -111,7 +111,7 @@ Spring Boot kullanmıyorsan:
 
 ```xml
 <properties>
-    <cachedb.version>0.8.0</cachedb.version>
+    <cachedb.version>0.9.0</cachedb.version>
 </properties>
 
 <dependencies>

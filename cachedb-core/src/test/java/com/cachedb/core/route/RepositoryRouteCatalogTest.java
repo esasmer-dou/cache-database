@@ -28,6 +28,12 @@ class RepositoryRouteCatalogTest {
         assertEquals(1, catalog.count(RepositoryRouteKind.HOT));
         assertEquals(List.of(warm), catalog.routes(RepositoryRouteKind.WARM));
         assertTrue(hot.projectionBacked());
+        RepositoryRouteRef ref = catalog.requireMethod("timeline");
+        assertEquals("customer-timeline", ref.routeName());
+        assertEquals(RepositoryRouteKind.HOT, ref.kind());
+        assertTrue(ref.projectionBacked());
+        assertTrue(catalog.findMethod("missing").isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> catalog.requireMethod("missing"));
     }
 
     @Test

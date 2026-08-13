@@ -1,7 +1,10 @@
 package com.reactor.cachedb.starter;
 
 import com.reactor.cachedb.core.query.QuerySpec;
+import com.reactor.cachedb.core.route.RepositoryRouteKind;
+import com.reactor.cachedb.core.route.RepositoryRouteRef;
 
+import java.time.Duration;
 import java.util.Objects;
 
 public record CacheWarmPlan(
@@ -116,6 +119,27 @@ public record CacheWarmPlan(
             this.coverageRouteName = routeName;
             this.coverageScope = scope;
             this.coverageTtlSeconds = ttlSeconds;
+            return this;
+        }
+
+        public Builder coverage(RepositoryRouteRef route, String scope, Duration ttl) {
+            RepositoryRouteRef hotRoute = Objects.requireNonNull(route, "route")
+                    .requireKind(RepositoryRouteKind.HOT);
+            Objects.requireNonNull(ttl, "ttl");
+            if (ttl.isNegative() || ttl.isZero() || ttl.getSeconds() < 60L) {
+                throw new IllegalArgumentException("coverage ttl must be at least 60 seconds");
+            }
+            return coverage(hotRoute.routeName(), scope, ttl.getSeconds());
+        }
+
+        public Builder projection(RepositoryRouteRef route) {
+            RepositoryRouteRef resolved = Objects.requireNonNull(route, "route");
+            if (!resolved.projectionBacked()) {
+                throw new IllegalArgumentException(resolved.repositoryName() + '#' + resolved.methodName()
+                        + " is not projection-backed");
+            }
+            this.projectionsOnly = true;
+            this.projectionName = resolved.definition().projectionName();
             return this;
         }
 

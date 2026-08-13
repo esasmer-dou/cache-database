@@ -45,7 +45,7 @@ public final class CustomerApplicationService {
     }
 
     public CursorPage<OrderSummary> orderTimeline(long customerId, int limit, String after) {
-        return orders.customerTimeline(customerId, WindowRequest.of(limit, after)).completePage();
+        return orders.customerTimeline(customerId, WindowRequest.of(limit, after));
     }
 
     public List<CustomerEntity> active(int limit) {

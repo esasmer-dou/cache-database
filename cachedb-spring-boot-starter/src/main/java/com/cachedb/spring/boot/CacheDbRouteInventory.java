@@ -26,6 +26,7 @@ public final class CacheDbRouteInventory {
     private final Map<String, RouteDescriptor> hotRoutesByName;
     private final List<RouteDescriptor> routes;
     private final int routeCount;
+    private final HotRouteAssessment hotRouteAssessment;
 
     public CacheDbRouteInventory(Collection<RepositoryRouteCatalog> catalogs) {
         ArrayList<RepositoryRouteCatalog> ordered = new ArrayList<>();
@@ -44,6 +45,12 @@ public final class CacheDbRouteInventory {
         LinkedHashMap<String, RouteDescriptor> indexedRoutes = new LinkedHashMap<>();
         LinkedHashMap<String, RouteDescriptor> indexedHotRoutes = new LinkedHashMap<>();
         ArrayList<RouteDescriptor> routeDescriptors = new ArrayList<>();
+        int hotRoutes = 0;
+        int projectionBackedHotRoutes = 0;
+        int entityBackedHotRoutes = 0;
+        int scopedHotRoutes = 0;
+        int budgetedHotRoutes = 0;
+        long declaredMemoryBudgetBytes = 0L;
         for (RepositoryRouteCatalog catalog : ordered) {
             if (!names.add(catalog.repositoryName())) {
                 throw new IllegalArgumentException("duplicate repository route catalog: " + catalog.repositoryName());
@@ -56,6 +63,20 @@ public final class CacheDbRouteInventory {
                 }
                 routeDescriptors.add(descriptor);
                 if (route.kind() == RepositoryRouteKind.HOT) {
+                    hotRoutes++;
+                    if (route.projectionBacked()) {
+                        projectionBackedHotRoutes++;
+                    } else {
+                        entityBackedHotRoutes++;
+                    }
+                    if (route.coverageScoped()) {
+                        scopedHotRoutes++;
+                    }
+                    if (route.memoryBudgetBytes() > 0L) {
+                        budgetedHotRoutes++;
+                        declaredMemoryBudgetBytes = saturatedAdd(
+                                declaredMemoryBudgetBytes, route.memoryBudgetBytes());
+                    }
                     RouteDescriptor duplicateHotRoute = indexedHotRoutes.putIfAbsent(route.routeName(), descriptor);
                     if (duplicateHotRoute != null) {
                         throw new IllegalArgumentException("duplicate HOT route name '" + route.routeName()
@@ -75,6 +96,15 @@ public final class CacheDbRouteInventory {
         this.hotRoutesByName = Map.copyOf(indexedHotRoutes);
         this.routes = List.copyOf(routeDescriptors);
         this.routeCount = routes.size();
+        this.hotRouteAssessment = new HotRouteAssessment(
+                hotRoutes,
+                projectionBackedHotRoutes,
+                entityBackedHotRoutes,
+                scopedHotRoutes,
+                budgetedHotRoutes,
+                hotRoutes - budgetedHotRoutes,
+                declaredMemoryBudgetBytes
+        );
     }
 
     public static CacheDbRouteInventory empty() {
@@ -106,6 +136,10 @@ public final class CacheDbRouteInventory {
 
     public Map<HotRoutePopulation, Integer> hotPopulationCounts() {
         return hotPopulationCounts;
+    }
+
+    public HotRouteAssessment hotRouteAssessment() {
+        return hotRouteAssessment;
     }
 
     public int hotPopulationCount(HotRoutePopulation population) {
@@ -144,6 +178,21 @@ public final class CacheDbRouteInventory {
         public String id() {
             return routeId(repositoryName, route.methodName());
         }
+    }
+
+    public record HotRouteAssessment(
+            int hotRoutes,
+            int projectionBackedRoutes,
+            int entityBackedRoutes,
+            int coverageScopedRoutes,
+            int budgetedRoutes,
+            int unbudgetedRoutes,
+            long declaredMemoryBudgetBytes
+    ) {
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        return Long.MAX_VALUE - left < right ? Long.MAX_VALUE : left + right;
     }
 
     private static void validateDeclaredWarm(

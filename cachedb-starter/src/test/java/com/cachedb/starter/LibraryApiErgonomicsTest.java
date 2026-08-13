@@ -8,9 +8,13 @@ import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySortDirection;
 import com.reactor.cachedb.core.query.QuerySpec;
+import com.reactor.cachedb.core.route.RepositoryRouteDefinition;
+import com.reactor.cachedb.core.route.RepositoryRouteKind;
+import com.reactor.cachedb.core.route.RepositoryRouteRef;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -89,6 +93,29 @@ class LibraryApiErgonomicsTest {
                 CacheWarmExecutionMode.APPLY,
                 new CacheWarmResult("other-plan", "OrderEntity", 0, 0, 0L, false, false, List.of())
         ));
+    }
+
+    @Test
+    void shouldBuildWarmCoverageFromGeneratedRouteReference() {
+        RepositoryRouteRef route = new RepositoryRouteRef(
+                "sample.OrderRepository",
+                "sample.OrderEntity",
+                new RepositoryRouteDefinition(
+                        "timeline", RepositoryRouteKind.HOT, "customer-timeline", "order-summary",
+                        100, 1_000, 1_000, 0, 8_388_608L, true, false, "strict=true"
+                )
+        );
+
+        CacheWarmPlan plan = CacheWarmPlan.builder("OrderEntity")
+                .coverage(route, "42", Duration.ofMinutes(5))
+                .projection(route)
+                .build();
+
+        assertEquals("customer-timeline", plan.coverageRouteName());
+        assertEquals("42", plan.coverageScope());
+        assertEquals(300L, plan.coverageTtlSeconds());
+        assertEquals("order-summary", plan.projectionName());
+        assertTrue(plan.projectionsOnly());
     }
 
     @Test

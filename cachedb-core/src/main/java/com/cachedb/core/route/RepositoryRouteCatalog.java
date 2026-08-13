@@ -3,6 +3,7 @@ package com.reactor.cachedb.core.route;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /** Compile-time repository inventory; it requires no classpath or runtime reflection. */
@@ -50,6 +51,21 @@ public record RepositoryRouteCatalog(
             }
         }
         return List.copyOf(matching);
+    }
+
+    public Optional<RepositoryRouteRef> findMethod(String methodName) {
+        String normalized = requireText(methodName, "methodName");
+        for (RepositoryRouteDefinition route : routes) {
+            if (route.methodName().equals(normalized)) {
+                return Optional.of(new RepositoryRouteRef(repositoryName, entityName, route));
+            }
+        }
+        return Optional.empty();
+    }
+
+    public RepositoryRouteRef requireMethod(String methodName) {
+        return findMethod(methodName).orElseThrow(() -> new IllegalArgumentException(
+                "Unknown repository route method: " + repositoryName + '#' + methodName));
     }
 
     private static String requireText(String value, String name) {

@@ -22,11 +22,17 @@ public @interface CacheRouteQuery {
 
     CacheOrder[] orderBy() default {};
 
-    /** int parameter used as the bounded row limit. */
+    /**
+     * int parameter used as the bounded row limit. When omitted, the processor
+     * infers the single unused int parameter or falls back to fixedLimit.
+     */
     String limitParameter() default "";
 
     int fixedLimit() default 100;
 
-    /** WindowRequest parameter used for keyset pagination. */
+    /**
+     * WindowRequest parameter used for keyset pagination. When omitted, the
+     * processor infers the single WindowRequest parameter.
+     */
     String windowParameter() default "";
 }

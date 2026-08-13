@@ -13,7 +13,11 @@ public @interface CachePredicate {
 
     Operator operator() default Operator.EQ;
 
-    /** Method parameter that supplies the value. Empty means constants() is used. */
+    /**
+     * Method parameter that supplies the value. When both this value and
+     * constants are empty, the processor infers a compatible parameter whose
+     * name matches field.
+     */
     String parameter() default "";
 
     String[] constants() default {};

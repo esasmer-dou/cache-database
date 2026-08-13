@@ -112,6 +112,7 @@ with evidence.
 | [Second Framework UX Engineering Report](docs/framework-ux-second-10-iteration-report.md) | Query intent, window ergonomics, warm/durability APIs, route inventory, observability, and generated-path hardening |
 | [Third Framework UX Engineering Report](docs/framework-ux-third-10-iteration-report.md) | Route population, typed warm/jobs, sample orchestration, diagnostics, and regression gates |
 | [Fourth Framework UX Engineering Report](docs/framework-ux-fourth-10-iteration-report.md) | Contract-bound cursors, repository defaults, typed job progress, durable batches, and warm journey evidence |
+| [Fifth Framework UX Engineering Report](docs/framework-ux-fifth-10-iteration-report.md) | Compile-time role inference, direct cursor pages, typed route references, coverage safety, and HOT route capacity evidence |
 | [Concepts and Assumptions](docs/concepts-and-assumptions.md) | Definitions, assumptions, and design boundaries |
 | [Use Case Examples](docs/use-case-examples.md) | Real entity, query, update, delete, projection, and dashboard examples |
 | [Production Tuning Guide](docs/production-tuning-guide.md) | Redis memory, hot policy, route contract, write-behind, Kubernetes tuning |
@@ -125,6 +126,7 @@ with evidence.
 | [Production Test Report](docs/production-test-report.md) | Test evidence, smoke results, benchmark, certification lane |
 | [Production Readiness Report](docs/production-readiness-report.md) | Current production maturity assessment |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
+| [v0.9.0 Release Notes](docs/releases/v0.9.0.md) | Compile-time inference, direct cursor pages, typed route references, route capacity evidence, and explicit durability helpers |
 | [v0.8.0 Release Notes](docs/releases/v0.8.0.md) | Contract-bound cursors, repository defaults, typed warm/jobs, durable batches, and provider-equivalent samples |
 | [v0.7.1 Release Notes](docs/releases/v0.7.1.md) | Clean-runner Maven plugin resolution and immutable sample consumption |
 | [v0.7.0 Release Notes](docs/releases/v0.7.0.md) | Declarative repositories, explicit route coverage, safe updates, compile-time scheduled warm, test tooling, and provider-equivalent samples |

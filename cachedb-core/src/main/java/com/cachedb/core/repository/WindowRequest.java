@@ -25,6 +25,11 @@ public record WindowRequest(int limit, String after) {
         return new WindowRequest(limit, cursor);
     }
 
+    /** Continues this bounded request with the same limit and a new opaque cursor. */
+    public WindowRequest continueAfter(String cursor) {
+        return after(cursor, limit);
+    }
+
     public int queryLimit() {
         return limit + 1;
     }

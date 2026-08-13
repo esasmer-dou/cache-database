@@ -54,6 +54,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
     private static final String HOT_WINDOW = "com.reactor.cachedb.core.repository.HotWindow";
     private static final String HOT_LOOKUP = "com.reactor.cachedb.core.repository.HotLookup";
     private static final String SOURCE_WINDOW = "com.reactor.cachedb.core.repository.SourceWindow";
+    private static final String CURSOR_PAGE = "com.reactor.cachedb.core.repository.CursorPage";
     private static final String WINDOW_REQUEST = "com.reactor.cachedb.core.repository.WindowRequest";
     private static final String WARM_PLAN = "com.reactor.cachedb.starter.CacheWarmPlan";
     private static final String WARM_TARGET = "com.reactor.cachedb.starter.CacheWarmTarget";
@@ -89,6 +90,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                     }
                 }
                 writeSource(model.implementationQualifiedName(), renderImplementation(model), repository);
+                writeSource(model.packageName() + "." + model.repositoryName() + "CacheDbRoutes",
+                        renderRouteReferences(model), repository);
                 if (model.springBean()) {
                     writeSource(model.configurationQualifiedName(), renderSpringConfiguration(model), repository);
                 }
@@ -221,15 +224,18 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             }
             routeMethods.put(methodName, route);
         }
-        for (WarmMethod warm : warmMethods) {
+        for (int warmIndex = 0; warmIndex < warmMethods.size(); warmIndex++) {
+            WarmMethod warm = warmMethods.get(warmIndex);
             RouteMethod source = routeMethods.get(warm.fromMethod());
             if (source == null) {
                 error(warm.element(), "@WarmRoute.from does not reference a declared route method: " + warm.fromMethod());
                 return null;
             }
-            if (!validateWarmParameters(warm, source)) {
+            warm = resolveWarmParameters(warm, source);
+            if (warm == null) {
                 return null;
             }
+            warmMethods.set(warmIndex, warm);
             if (source.kind() != RouteKind.HOT) {
                 error(warm.element(), "@WarmRoute.from must reference a @HotRoute method");
                 return null;
@@ -358,7 +364,21 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             return null;
         }
         LinkedHashMap<String, ParameterModel> parameters = parameters(method);
-        ParameterModel id = parameters.get(annotation.idParameter().trim());
+        String idParameter = annotation.idParameter().trim();
+        ParameterModel id;
+        if (idParameter.isEmpty()) {
+            List<ParameterModel> candidates = parameters.values().stream()
+                    .filter(parameter -> processingEnv.getTypeUtils().isSameType(
+                            parameter.type(), entity.idField().type()))
+                    .toList();
+            if (candidates.size() != 1) {
+                error(method, "@CacheLookup requires exactly one ID-compatible parameter when idParameter is omitted");
+                return null;
+            }
+            id = candidates.get(0);
+        } else {
+            id = parameters.get(idParameter);
+        }
         if (id == null || !processingEnv.getTypeUtils().isSameType(id.type(), entity.idField().type())) {
             error(method, "@CacheLookup idParameter must name a " + entity.idField().typeName() + " parameter");
             return null;
@@ -388,6 +408,19 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                         || relationLimit.typeName().equals("java.lang.Integer"))) {
                     error(method, "@CacheLookup relationLimitParameter must name an int parameter");
                     return null;
+                }
+            } else {
+                List<ParameterModel> candidates = parameters.values().stream()
+                        .filter(parameter -> !parameter.name().equals(id.name()))
+                        .filter(parameter -> parameter.typeName().equals("int")
+                                || parameter.typeName().equals("java.lang.Integer"))
+                        .toList();
+                if (candidates.size() > 1) {
+                    error(method, "Multiple relation limit candidates require an explicit relationLimitParameter");
+                    return null;
+                }
+                if (candidates.size() == 1) {
+                    relationLimit = candidates.get(0);
                 }
             }
         }
@@ -740,10 +773,11 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             return null;
         }
         String expectedContainer = kind == RouteKind.HOT ? HOT_WINDOW : SOURCE_WINDOW;
-        TypeMirror itemType = resolveWindowItem(method, expectedContainer);
-        if (itemType == null) {
+        RouteReturn routeReturn = resolveRouteReturn(method, expectedContainer);
+        if (routeReturn == null) {
             return null;
         }
+        TypeMirror itemType = routeReturn.itemType();
 
         TypeMirror projectionType = hotRoute != null ? mirroredProjection(hotRoute) : mirroredProjection(sourceRoute);
         ProjectionModel projection = null;
@@ -765,6 +799,10 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         String coverageScopeParameter = hotRoute == null ? "" : hotRoute.coverageScopeParameter().trim();
         if (!coverageScopeParameter.isEmpty() && !parameters.containsKey(coverageScopeParameter)) {
             error(method, "coverageScopeParameter does not name a method parameter: " + coverageScopeParameter);
+            return null;
+        }
+        if (!coverageScopeParameter.isEmpty()
+                && !validateCoverageScope(method, queryModel, coverageScopeParameter)) {
             return null;
         }
         int hotPageSize = hotRoute == null ? 0 : explicitOrDefault(
@@ -796,6 +834,10 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 error(method, "@HotRoute.maxStalenessSeconds must be greater than zero");
                 return null;
             }
+            if (routeReturn.pageReturn() && !hotStrict) {
+                error(method, "A @HotRoute returning CursorPage<T> requires strict=true so partial coverage cannot be hidden");
+                return null;
+            }
         }
         int maxRows = sourceRoute == null
                 ? hotWindow
@@ -816,6 +858,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 method,
                 method.getSimpleName().toString(),
                 method.getReturnType().toString(),
+                routeReturn.pageReturn(),
                 kind,
                 routeName.trim(),
                 List.copyOf(parameters.values()),
@@ -831,6 +874,39 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 hotStrict,
                 hotPopulation
         );
+    }
+
+    private boolean validateCoverageScope(
+            ExecutableElement method,
+            QueryModel query,
+            String coverageScopeParameter
+    ) {
+        if (query.groups().isEmpty()) {
+            error(method, "coverageScopeParameter requires an EQ predicate in the route query: "
+                    + coverageScopeParameter);
+            return false;
+        }
+        String scopedField = null;
+        for (List<PredicateModel> group : query.groups()) {
+            List<PredicateModel> matches = group.stream()
+                    .filter(predicate -> predicate.parameter().equals(coverageScopeParameter))
+                    .filter(predicate -> predicate.operator() == CachePredicate.Operator.EQ)
+                    .toList();
+            if (matches.size() != 1) {
+                error(method, "coverageScopeParameter must be used by exactly one EQ predicate in every query group: "
+                        + coverageScopeParameter);
+                return false;
+            }
+            String candidateField = matches.get(0).field().javaName();
+            if (scopedField == null) {
+                scopedField = candidateField;
+            } else if (!scopedField.equals(candidateField)) {
+                error(method, "coverageScopeParameter must constrain the same field in every query group: "
+                        + coverageScopeParameter);
+                return false;
+            }
+        }
+        return true;
     }
 
     private QueryModel resolveQuery(
@@ -852,8 +928,16 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             }
             String parameter = predicate.parameter().trim();
             List<String> constants = List.of(predicate.constants());
+            if (parameter.isEmpty() && constants.isEmpty()) {
+                ParameterModel inferred = parameters.get(field.javaName());
+                if (inferred != null && isPredicateParameterCompatible(field, predicate.operator(), inferred)) {
+                    parameter = inferred.name();
+                }
+            }
             if (parameter.isEmpty() == constants.isEmpty()) {
-                error(method, "@CachePredicate must declare exactly one of parameter or constants for " + predicate.field());
+                error(method, "@CachePredicate must declare exactly one of parameter or constants for "
+                        + predicate.field() + "; parameter may be omitted only when a compatible method parameter "
+                        + "has the same name as the field");
                 return null;
             }
             if (!parameter.isEmpty()) {
@@ -919,6 +1003,37 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         if (!limitParameter.isEmpty() && !windowParameter.isEmpty()) {
             error(method, "@CacheRouteQuery cannot declare both limitParameter and windowParameter");
             return null;
+        }
+        if (limitParameter.isEmpty() && windowParameter.isEmpty()) {
+            List<ParameterModel> windows = parameters.values().stream()
+                    .filter(parameter -> processingEnv.getTypeUtils().erasure(parameter.type()).toString()
+                            .equals(WINDOW_REQUEST))
+                    .toList();
+            if (windows.size() > 1) {
+                error(method, "Multiple WindowRequest parameters require an explicit windowParameter");
+                return null;
+            }
+            if (windows.size() == 1) {
+                windowParameter = windows.get(0).name();
+            } else {
+                LinkedHashSet<String> predicateParameters = new LinkedHashSet<>();
+                groups.values().forEach(group -> group.stream()
+                        .map(PredicateModel::parameter)
+                        .filter(value -> !value.isEmpty())
+                        .forEach(predicateParameters::add));
+                List<ParameterModel> limits = parameters.values().stream()
+                        .filter(parameter -> !predicateParameters.contains(parameter.name()))
+                        .filter(parameter -> parameter.typeName().equals("int")
+                                || parameter.typeName().equals("java.lang.Integer"))
+                        .toList();
+                if (limits.size() > 1) {
+                    error(method, "Multiple unused int parameters require an explicit limitParameter");
+                    return null;
+                }
+                if (limits.size() == 1) {
+                    limitParameter = limits.get(0).name();
+                }
+            }
         }
         if (!limitParameter.isEmpty()) {
             ParameterModel parameter = parameters.get(limitParameter);
@@ -1132,7 +1247,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         );
     }
 
-    private boolean validateWarmParameters(WarmMethod warm, RouteMethod source) {
+    private WarmMethod resolveWarmParameters(WarmMethod warm, RouteMethod source) {
         Set<String> required = new LinkedHashSet<>();
         for (List<PredicateModel> group : source.query().groups()) {
             for (PredicateModel predicate : group) {
@@ -1149,25 +1264,77 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             if (sourceParameter == null || warmParameter == null
                     || !processingEnv.getTypeUtils().isSameType(sourceParameter.type(), warmParameter.type())) {
                 error(warm.element(), "@WarmRoute must declare query parameter with matching type: " + parameter);
-                return false;
+                return null;
             }
         }
-        if (!warm.coverageScopeParameter().isBlank()
-                && !required.contains(warm.coverageScopeParameter())) {
+        String coverageScope = warm.coverageScopeParameter().isBlank()
+                ? source.coverageScopeParameter()
+                : warm.coverageScopeParameter();
+        if (!coverageScope.isBlank() && !required.contains(coverageScope)) {
             error(warm.element(), "@WarmRoute coverage scope must also be a source route query parameter");
-            return false;
+            return null;
+        }
+
+        ParameterModel targetParameter = warm.targetParameter();
+        if (targetParameter == null) {
+            List<ParameterModel> candidates = available.values().stream()
+                    .filter(parameter -> !required.contains(parameter.name()))
+                    .filter(parameter -> parameter.typeName().equals(WARM_TARGET))
+                    .toList();
+            if (candidates.size() > 1) {
+                error(warm.element(), "Multiple CacheWarmTarget parameters require an explicit targetParameter");
+                return null;
+            }
+            if (candidates.size() == 1) {
+                if (warm.projectionsOnly()) {
+                    error(warm.element(), "@WarmRoute cannot combine projectionsOnly=true with a CacheWarmTarget parameter");
+                    return null;
+                }
+                targetParameter = candidates.get(0);
+            }
+        }
+
+        ParameterModel maxRowsParameter = warm.maxRowsParameter();
+        if (maxRowsParameter == null) {
+            ParameterModel resolvedTarget = targetParameter;
+            List<ParameterModel> candidates = available.values().stream()
+                    .filter(parameter -> !required.contains(parameter.name()))
+                    .filter(parameter -> resolvedTarget == null || !parameter.name().equals(resolvedTarget.name()))
+                    .filter(parameter -> parameter.typeName().equals("int")
+                            || parameter.typeName().equals("java.lang.Integer"))
+                    .toList();
+            if (candidates.size() > 1) {
+                error(warm.element(), "Multiple warm row-limit candidates require an explicit maxRowsParameter");
+                return null;
+            }
+            if (candidates.size() == 1) {
+                maxRowsParameter = candidates.get(0);
+            }
         }
         LinkedHashSet<String> allowed = new LinkedHashSet<>(required);
-        if (warm.maxRowsParameter() != null) allowed.add(warm.maxRowsParameter().name());
-        if (warm.targetParameter() != null) allowed.add(warm.targetParameter().name());
+        if (maxRowsParameter != null) allowed.add(maxRowsParameter.name());
+        if (targetParameter != null) allowed.add(targetParameter.name());
         if (!allowed.equals(available.keySet())) {
             LinkedHashSet<String> unused = new LinkedHashSet<>(available.keySet());
             unused.removeAll(allowed);
             error(warm.element(), "Every warm method parameter must be used by the source query or maxRows; unused="
                     + unused);
-            return false;
+            return null;
         }
-        return true;
+        return new WarmMethod(
+                warm.element(),
+                warm.name(),
+                warm.returnType(),
+                warm.routeName(),
+                warm.fromMethod(),
+                warm.parameters(),
+                warm.maxRows(),
+                maxRowsParameter,
+                targetParameter,
+                coverageScope,
+                warm.coverageTtlSeconds(),
+                warm.projectionsOnly()
+        );
     }
 
     private String renderImplementation(RepositoryModel model) {
@@ -1424,7 +1591,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             out.append("        return com.reactor.cachedb.core.query.KeysetPagination.hotWindow(cachedb$rows, cachedb$window, sorts")
                     .append(capitalize(route.name())).append("(), ").append(extractor(model, route))
                     .append(", cachedb$coverage, ").append(quote(route.routeName())).append(", ")
-                    .append(scopeExpression(route.coverageScopeParameter())).append(");\n");
+                    .append(scopeExpression(route.coverageScopeParameter())).append(")")
+                    .append(route.pageReturn() ? ".completePage()" : "")
+                    .append(";\n");
         } else {
             if (route.projection() == null) {
                 out.append("        java.util.List<").append(rawType)
@@ -1437,7 +1606,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             out.append("        return com.reactor.cachedb.core.query.KeysetPagination.sourceWindow(cachedb$rows, cachedb$window, sorts")
                     .append(capitalize(route.name())).append("(), ").append(extractor(model, route)).append(", ")
                     .append(quote(route.routeName())).append(", ")
-                    .append(scopeExpression(route.coverageScopeParameter())).append(");\n");
+                    .append(scopeExpression(route.coverageScopeParameter())).append(")")
+                    .append(route.pageReturn() ? ".page()" : "")
+                    .append(";\n");
         }
         out.append("    }\n\n");
     }
@@ -1728,6 +1899,40 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 + "}\n";
     }
 
+    private String renderRouteReferences(RepositoryModel model) {
+        String className = model.repositoryName() + "CacheDbRoutes";
+        String implementationName = simpleName(model.implementationQualifiedName());
+        StringBuilder out = new StringBuilder(2_048);
+        out.append("package ").append(model.packageName()).append(";\n\n")
+                .append("/** Compile-time generated route references; no reflection or classpath scanning. */\n")
+                .append("public final class ").append(className).append(" {\n")
+                .append("    public static final com.reactor.cachedb.core.route.RepositoryRouteCatalog CATALOG = ")
+                .append(implementationName).append(".routeCatalog();\n\n");
+        ArrayList<String> methodNames = new ArrayList<>();
+        model.routes().forEach(route -> methodNames.add(route.name()));
+        model.sourceSqlMethods().forEach(route -> methodNames.add(route.name()));
+        model.warmMethods().forEach(route -> methodNames.add(route.name()));
+        model.lookupMethods().forEach(route -> methodNames.add(route.name()));
+        model.commandMethods().forEach(route -> methodNames.add(route.name()));
+        for (int index = 0; index < methodNames.size(); index++) {
+            out.append("    private static final com.reactor.cachedb.core.route.RepositoryRouteRef ROUTE_")
+                    .append(index).append(" = CATALOG.requireMethod(")
+                    .append(quote(methodNames.get(index))).append(");\n");
+        }
+        if (!methodNames.isEmpty()) {
+            out.append('\n');
+        }
+        for (int index = 0; index < methodNames.size(); index++) {
+            String methodName = methodNames.get(index);
+            out.append("    public static com.reactor.cachedb.core.route.RepositoryRouteRef ")
+                    .append(methodName).append("() {\n")
+                    .append("        return ROUTE_").append(index).append(";\n")
+                    .append("    }\n\n");
+        }
+        out.append("    private ").append(className).append("() {\n    }\n}\n");
+        return out.toString();
+    }
+
     private void renderRepositoryRouteCatalog(StringBuilder out, RepositoryModel model) {
         ArrayList<String> definitions = new ArrayList<>();
         for (RouteMethod route : model.routes()) {
@@ -1743,7 +1948,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                     route.memoryBudgetBytes(),
                     !route.coverageScopeParameter().isBlank(),
                     false,
-                    route.kind() == RouteKind.HOT ? "strict=" + route.strict() : "bounded-source",
+                    route.kind() == RouteKind.HOT
+                            ? "strict=" + route.strict() + ";return=" + (route.pageReturn() ? "page" : "window")
+                            : "bounded-source;return=" + (route.pageReturn() ? "page" : "window"),
                     route.kind() == RouteKind.HOT ? route.population().name() : "NOT_APPLICABLE"
             ));
         }
@@ -1840,6 +2047,20 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             return null;
         }
         return declared.getTypeArguments().get(0);
+    }
+
+    private RouteReturn resolveRouteReturn(ExecutableElement method, String expectedContainer) {
+        if (!(method.getReturnType() instanceof DeclaredType declared)
+                || declared.getTypeArguments().size() != 1) {
+            error(method, "Route method must return " + simpleName(expectedContainer) + "<T> or CursorPage<T>");
+            return null;
+        }
+        String container = processingEnv.getTypeUtils().erasure(declared).toString();
+        if (!container.equals(expectedContainer) && !container.equals(CURSOR_PAGE)) {
+            error(method, "Route method must return " + simpleName(expectedContainer) + "<T> or CursorPage<T>");
+            return null;
+        }
+        return new RouteReturn(declared.getTypeArguments().get(0), container.equals(CURSOR_PAGE));
     }
 
     private LinkedHashMap<String, ParameterModel> parameters(ExecutableElement method) {
@@ -2003,6 +2224,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             ExecutableElement element,
             String name,
             String returnType,
+            boolean pageReturn,
             RouteKind kind,
             String routeName,
             List<ParameterModel> parameters,
@@ -2018,6 +2240,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             boolean strict,
             HotRoute.Population population
     ) {
+    }
+
+    private record RouteReturn(TypeMirror itemType, boolean pageReturn) {
     }
 
     private record WarmMethod(

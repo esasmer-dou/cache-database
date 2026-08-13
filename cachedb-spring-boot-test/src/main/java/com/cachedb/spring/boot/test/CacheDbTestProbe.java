@@ -3,6 +3,8 @@ package com.reactor.cachedb.spring.boot.test;
 import com.reactor.cachedb.core.model.WriteReceipt;
 import com.reactor.cachedb.core.route.HotRoutePopulation;
 import com.reactor.cachedb.core.route.RouteCoverage;
+import com.reactor.cachedb.core.route.RepositoryRouteKind;
+import com.reactor.cachedb.core.route.RepositoryRouteRef;
 import com.reactor.cachedb.spring.boot.CacheDbRouteInventory;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheWarmPlan;
@@ -65,6 +67,10 @@ public final class CacheDbTestProbe {
         return cacheDatabase.routeCoverage(routeName, scope, maxAge);
     }
 
+    public RouteCoverage coverage(RepositoryRouteRef route, String scope, Duration maxAge) {
+        return cacheDatabase.routeCoverage(route, scope, maxAge);
+    }
+
     public <T, ID> WriteReceipt<T, ID> awaitDurable(WriteReceipt<T, ID> receipt, Duration timeout) {
         try {
             return cacheDatabase.awaitDurableOrThrow(receipt, timeout);
@@ -85,6 +91,27 @@ public final class CacheDbTestProbe {
         return requireHotRoute(routeName, HotRoutePopulation.DECLARED_WARM);
     }
 
+    public CacheDbRouteInventory.RouteDescriptor requireDeclaredWarmRoute(RepositoryRouteRef route) {
+        return requireHotRoute(route, HotRoutePopulation.DECLARED_WARM);
+    }
+
+    public CacheDbRouteInventory.RouteDescriptor requireHotRoute(
+            RepositoryRouteRef route,
+            HotRoutePopulation expectedPopulation
+    ) {
+        RepositoryRouteRef hotRoute = Objects.requireNonNull(route, "route")
+                .requireKind(RepositoryRouteKind.HOT);
+        CacheDbRouteInventory.RouteDescriptor descriptor = routeInventory
+                .route(hotRoute.repositoryName(), hotRoute.methodName())
+                .orElseThrow(() -> new AssertionError("Expected generated HOT route: "
+                        + hotRoute.repositoryName() + '#' + hotRoute.methodName()));
+        if (!descriptor.route().equals(hotRoute.definition())) {
+            throw new AssertionError("Generated route reference does not match the Spring route inventory: "
+                    + hotRoute.repositoryName() + '#' + hotRoute.methodName());
+        }
+        return requirePopulation(descriptor, expectedPopulation);
+    }
+
     public CacheDbRouteInventory.RouteDescriptor requireHotRoute(
             String routeName,
             HotRoutePopulation expectedPopulation
@@ -92,9 +119,17 @@ public final class CacheDbTestProbe {
         Objects.requireNonNull(expectedPopulation, "expectedPopulation");
         CacheDbRouteInventory.RouteDescriptor descriptor = routeInventory.hotRoute(routeName)
                 .orElseThrow(() -> new AssertionError("Expected generated HOT route: " + routeName));
+        return requirePopulation(descriptor, expectedPopulation);
+    }
+
+    private CacheDbRouteInventory.RouteDescriptor requirePopulation(
+            CacheDbRouteInventory.RouteDescriptor descriptor,
+            HotRoutePopulation expectedPopulation
+    ) {
+        Objects.requireNonNull(expectedPopulation, "expectedPopulation");
         HotRoutePopulation actual = descriptor.route().population();
         if (actual != expectedPopulation) {
-            throw new AssertionError("Expected HOT route " + routeName + " population="
+            throw new AssertionError("Expected HOT route " + descriptor.route().routeName() + " population="
                     + expectedPopulation + " but was " + actual);
         }
         return descriptor;

@@ -44,13 +44,39 @@ public interface CacheDbRepository<T, ID> {
         if (receipt == null) {
             throw new IllegalArgumentException("receipt must not be null");
         }
-        if (timeout == null || timeout.isNegative() || timeout.isZero()) {
-            throw new IllegalArgumentException("timeout must be greater than zero");
-        }
+        requireDurabilityTimeout(timeout);
         if (!awaitDurable(receipt, timeout)) {
             throw new WriteDurabilityTimeoutException(receipt, timeout);
         }
         return receipt;
+    }
+
+    /** Redis-first save followed by an explicit, bounded SQL durability wait. */
+    default WriteReceipt<T, ID> saveDurably(T entity, Duration timeout) {
+        requireDurabilityTimeout(timeout);
+        return awaitDurableOrThrow(save(entity), timeout);
+    }
+
+    /** Optimistic Redis-first save followed by an explicit, bounded SQL durability wait. */
+    default WriteReceipt<T, ID> saveDurably(T entity, long expectedVersion, Duration timeout) {
+        requireDurabilityTimeout(timeout);
+        return awaitDurableOrThrow(save(entity, expectedVersion), timeout);
+    }
+
+    /** Dependency-aware save followed by an explicit, bounded SQL durability wait. */
+    default WriteReceipt<T, ID> saveAfterDurably(
+            T entity,
+            WriteDependency dependency,
+            Duration timeout
+    ) {
+        requireDurabilityTimeout(timeout);
+        return awaitDurableOrThrow(saveAfter(entity, dependency), timeout);
+    }
+
+    /** Redis tombstone followed by an explicit, bounded SQL durability wait. */
+    default WriteReceipt<T, ID> deleteDurably(ID id, Duration timeout) {
+        requireDurabilityTimeout(timeout);
+        return awaitDurableOrThrow(deleteById(id), timeout);
     }
 
     default WriteReceipt<T, ID> updateHot(ID id, UnaryOperator<T> update) {
@@ -64,5 +90,21 @@ public interface CacheDbRepository<T, ID> {
             throw new IllegalArgumentException("update must return a full entity");
         }
         return save(updated, current.version());
+    }
+
+    /** Full hot-entity update followed by an explicit, bounded SQL durability wait. */
+    default WriteReceipt<T, ID> updateHotDurably(
+            ID id,
+            UnaryOperator<T> update,
+            Duration timeout
+    ) {
+        requireDurabilityTimeout(timeout);
+        return awaitDurableOrThrow(updateHot(id, update), timeout);
+    }
+
+    private static void requireDurabilityTimeout(Duration timeout) {
+        if (timeout == null || timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("timeout must be greater than zero");
+        }
     }
 }

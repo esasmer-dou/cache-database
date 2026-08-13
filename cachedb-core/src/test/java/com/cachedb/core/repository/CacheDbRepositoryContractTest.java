@@ -58,6 +58,32 @@ class CacheDbRepositoryContractTest {
     }
 
     @Test
+    void exposesExplicitSingleWriteDurabilityConveniences() {
+        TestRepository repository = new TestRepository(null, true);
+        Counter counter = new Counter(3);
+
+        WriteReceipt<Counter, Long> saved = repository.saveDurably(counter, Duration.ofSeconds(1));
+        WriteReceipt<Counter, Long> optimistic = repository.saveDurably(
+                counter, 7L, Duration.ofSeconds(1));
+        WriteReceipt<Counter, Long> deleted = repository.deleteDurably(42L, Duration.ofSeconds(1));
+
+        assertSame(counter, saved.entity());
+        assertEquals(7L, repository.expectedVersion);
+        assertEquals(42L, deleted.id());
+        assertSame(counter, optimistic.entity());
+    }
+
+    @Test
+    void durableConvenienceRejectsInvalidTimeoutBeforeAcceptingTheWrite() {
+        TestRepository repository = new TestRepository(null, true);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> repository.saveDurably(new Counter(3), Duration.ZERO));
+
+        assertEquals(0, repository.writeCount);
+    }
+
+    @Test
     void batchDurabilityFailurePreservesReceiptsAndOperationContext() {
         WriteReceipt<Counter, Long> receipt = new TestRepository(null).save(new Counter(1));
 
@@ -80,6 +106,7 @@ class CacheDbRepositoryContractTest {
         private final VersionedEntity<Counter> current;
         private long expectedVersion;
         private int sourceReads;
+        private int writeCount;
         private final boolean durable;
 
         private TestRepository(VersionedEntity<Counter> current) {
@@ -109,11 +136,13 @@ class CacheDbRepositoryContractTest {
 
         @Override
         public WriteReceipt<Counter, Long> save(Counter entity) {
+            writeCount++;
             return receipt(entity, 1);
         }
 
         @Override
         public WriteReceipt<Counter, Long> save(Counter entity, long expectedVersion) {
+            writeCount++;
             this.expectedVersion = expectedVersion;
             return receipt(entity, expectedVersion + 1);
         }

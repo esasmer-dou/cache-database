@@ -4,6 +4,49 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.9.0 - 2026-08-13
+
+### Added
+
+- generated `RepositoryRouteRef` companions that carry compile-time route
+  identity into warm, coverage, and integration-test APIs without reflection
+- cursor continuation helpers that preserve the validated request limit and an
+  allocation-bounded `CursorPage.map` operation
+- explicit timeout-bounded `saveDurably`, `saveAfterDurably`,
+  `deleteDurably`, and `updateHotDurably` single-command helpers
+- aggregate HOT route capacity evidence for Actuator, startup logs, and
+  bounded-cardinality Micrometer gauges
+
+### Changed
+
+- the annotation processor infers unambiguous predicate, window, limit, lookup,
+  warm-target, and warm-row-limit parameter roles while rejecting ambiguity
+- strict HOT and bounded SOURCE repository methods may return `CursorPage<T>`
+  directly; generated code retains coverage and cursor completion checks
+- scoped HOT routes must constrain the same entity field with one `EQ`
+  predicate in every query group
+- PostgreSQL and MSSQL samples use the shorter generated API, typed route
+  references, and immutable `0.9.0` GitHub Packages dependencies
+
+### Compatibility
+
+- the public API delta from `0.8.0` is additive; existing explicit annotation
+  attributes and `HotWindow<T>`/`SourceWindow<T>` return types remain valid
+- `CursorPage<T>` retains its two-field transport shape: `items` and
+  `nextCursor`
+- HOT routes remain Redis-only, SOURCE routes remain explicit bounded SQL
+  operations, and normal writes remain Redis-first with asynchronous SQL
+  durability
+
+### Validation
+
+- the full Maven reactor completed with 318 tests, 0 failures, 0 errors, and 12
+  existing environment/profile skips
+- PostgreSQL 16 and SQL Server 2022 sample integration profiles passed with
+  Redis 8.2.1 through Testcontainers
+- public API, reflection-free principles, provider parity, declarative sample,
+  README, Turkish documentation, Markdown link, Postman, and package gates pass
+
 ## 0.8.0 - 2026-08-12
 
 ### Added

@@ -27,30 +27,31 @@ kanıtlanmalıdır.
 
 | Güncel hat | Değer |
 | --- | --- |
-| Yayımlanmış son sürüm | `v0.8.0` |
-| Repo sürümü | `0.8.0` |
+| Yayımlanmış son sürüm | `v0.9.0` |
+| Repo sürümü | `0.9.0` |
 | Kütüphane bytecode seviyesi | Java 17 |
 | Çalıştırılabilir örnekler | Java 21 |
 | Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
 | Uygulama API'si | Derleme sırasında üretilen `@CacheRepository` interface'leri |
 
-## 0.8.0 Sürümünde Neler Değişti?
+## 0.9.0 Sürümünde Neler Değişti?
 
-- `CursorPage<T>`, keyset devam anahtarını generated repository'den service ve
-  REST cevabına kadar taşır. Bu anahtar üretildiği route'a, filtre veya parent
-  kapsamına ve sıralama sözleşmesine bağlıdır.
-- `@CacheRepositoryDefaults`; ortak aktif veri kapsamını, sayfa/pencere
-  sınırını, bellek ve güncellik bütçesini, kaynak okuma limitini, zaman aşımını
-  ve warm sınırını tek yerde tanımlar. Metot üzerinde açıkça verilen değerler
-  derleme sırasında önceliğini korur.
-- Tipli warm hedefleri, dağıtık iş tanımları, sınırlı ilerleme bilgisi ve
-  `CacheDurableBatchWriter`; limit, backpressure ve SQL kalıcılık kanıtını
-  koruyarak tekrarlanan orkestrasyon kodunu azaltır.
-- PostgreSQL ile SQL Server örnekleri aynı deklaratif API'yi kullanır; cursor,
-  warm, seed, arşiv ve provider entegrasyon akışları çalıştırılabilir biçimde
-  gösterilir.
+- Annotation processor; kesin biçimde belirlenebilen query, lookup, pencere ve
+  warm parametre rollerini çıkarır. Belirsiz bir tanım varsa derlemeyi durdurur.
+- Strict HOT ve sınırlı SOURCE route'lar doğrudan `CursorPage<T>` döndürebilir.
+  Coverage ve cursor tamamlama denetimleri generated kodun içinde kalır.
+- Generated `RepositoryRouteRef` değerleri, ham route adı veya reflection
+  kullanmadan repository tanımlarını warm, coverage ve test API'lerine taşır.
+- Coverage kapsamı, her query grubunda aynı alanı `EQ` koşuluyla daraltmak
+  zorundadır.
+- Actuator ve Micrometer; HOT route bütçesini, projection kullanımını ve bütçe
+  tanımlanmamış route sayısını yüksek metric cardinality oluşturmadan gösterir.
+- Açık timeout isteyen kalıcılık yardımcıları tekil komutları sadeleştirir;
+  toplu aktarımlar sınırlı batch ve backpressure kullanmaya devam eder.
 
-Yükseltmeden önce [v0.8.0 sürüm notlarını](docs/releases/v0.8.0.md) oku.
+Yükseltmeden önce [v0.9.0 sürüm notlarını](docs/releases/v0.9.0.md) ve
+[beşinci on iterasyonluk raporu](docs/framework-ux-besinci-10-iterasyon-raporu.md)
+oku.
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -108,6 +109,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "İkinci framework iyileştirme döngüsünde neler değişti?" | [İkinci On İterasyonluk Mühendislik Raporu](docs/framework-ux-ikinci-10-iterasyon-raporu.md) |
 | "Üçüncü framework iyileştirme döngüsünde neler değişti?" | [Üçüncü On İterasyonluk Mühendislik Raporu](docs/framework-ux-ucuncu-10-iterasyon-raporu.md) |
 | "Dördüncü framework iyileştirme döngüsünde neler değişti?" | [Dördüncü On İterasyonluk Mühendislik Raporu](docs/framework-ux-dorduncu-10-iterasyon-raporu.md) |
+| "Beşinci framework iyileştirme döngüsünde neler değişti?" | [Beşinci On İterasyonluk Mühendislik Raporu](docs/framework-ux-besinci-10-iterasyon-raporu.md) |
 | "Çalışan REST API örneği nerede?" | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [SQL Server Örneği](../sample-cache-database-mssql/README.tr.md) |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Birden fazla pod aktif veri setini düzenli olarak nasıl yeniler ve temizler?" | [Periyodik Warm ve Aktif Veri Seti Uzlaştırması](docs/periodik-warm.md) |
@@ -155,12 +157,12 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut. `0.8.0`, GitHub
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.9.0`, GitHub
 Packages ve GitHub Release paketi üzerinden dağıtılan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.8.0</cachedb.version>
+    <cachedb.version>0.9.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -259,7 +261,7 @@ server kimliğiyle aynı olmalıdır:
 </settings>
 ```
 
-`read:packages` yetkili token kullan. `0.8.0` değişmez paket olarak
+`read:packages` yetkili token kullan. `0.9.0` değişmez paket olarak
 yayımlanmıştır; consumer build'i için CacheDB kaynak reposuna ihtiyaç yoktur.
 
 JDBC kuralı:

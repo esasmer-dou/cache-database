@@ -91,6 +91,9 @@ class CacheDbRouteInventoryTest {
         assertEquals("sample.OrderRepository#timeline", inventory.hotRoute("customer-timeline")
                 .orElseThrow().id());
         assertEquals(1, inventory.hotPopulationCounts().get(HotRoutePopulation.DECLARED_WARM));
+        assertEquals(1_024L, inventory.hotRouteAssessment().declaredMemoryBudgetBytes());
+        assertEquals(1, inventory.hotRouteAssessment().projectionBackedRoutes());
+        assertEquals(0, inventory.hotRouteAssessment().unbudgetedRoutes());
 
         assertThrows(IllegalArgumentException.class, () -> new CacheDbRouteInventory(List.of(catalog(
                 "sample.BrokenRepository", hot
@@ -128,12 +131,14 @@ class CacheDbRouteInventoryTest {
         assertEquals(1, snapshot.get("scheduledWarmRunning"));
         assertEquals(1L, snapshot.get("scheduledWarmFailures"));
         assertEquals(1L, snapshot.get("scheduledWarmSkipped"));
+        assertTrue(snapshot.get("hotRouteAssessment") instanceof CacheDbRouteInventory.HotRouteAssessment);
 
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
         new CacheDatabaseMetrics(database, inventory, warmRegistry).bindTo(meters);
         assertEquals(2.0d, meters.get("cachedb.routes.declared").gauge().value());
         assertEquals(1.0d, meters.get("cachedb.routes.hot.population")
                 .tag("strategy", "on_demand").gauge().value());
+        assertEquals(1.0d, meters.get("cachedb.routes.hot.unbudgeted").gauge().value());
         assertEquals(0.0d, meters.get("cachedb.routes.hot.population")
                 .tag("strategy", "declared_warm").gauge().value());
         assertEquals(1.0d, meters.get("cachedb.scheduled.warm.running").gauge().value());

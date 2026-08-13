@@ -1,9 +1,9 @@
 package com.example.cachedb.sample;
 
 import com.example.cachedb.sample.repository.OrderRepository;
+import com.example.cachedb.sample.repository.OrderRepositoryCacheDbRoutes;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.core.route.HotRoutePopulation;
-import com.reactor.cachedb.spring.boot.test.CacheDbAssertions;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestConfiguration;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestProbe;
 import com.reactor.cachedb.starter.CacheWarmTarget;
@@ -246,7 +246,8 @@ class PostgresqlSampleIT {
         assertEquals(Boolean.FALSE, cacheDbSnapshot.getBody().get("routeDetailsTruncated"));
         assertTrue(((Map<?, ?>) cacheDbSnapshot.getBody().get("hotRoutePopulation"))
                 .containsKey(HotRoutePopulation.DECLARED_WARM.name()));
-        cacheDbTestProbe.requireDeclaredWarmRoute("customer-order-timeline");
+        assertTrue(cacheDbSnapshot.getBody().get("hotRouteAssessment") instanceof Map<?, ?>);
+        cacheDbTestProbe.requireDeclaredWarmRoute(OrderRepositoryCacheDbRoutes.customerTimeline());
         var journey = cacheDbTestProbe.dryRunApplyAndRequireCoverage(
                 orderRepository.warmCustomerTimeline(1L, 2, CacheWarmTarget.PROJECTIONS_ONLY),
                 Duration.ofMinutes(5)
@@ -264,9 +265,9 @@ class PostgresqlSampleIT {
         assertEquals("/api/warm/jobs/" + jobId, warmAccepted.getHeaders().getLocation().getPath());
         ResponseEntity<Map> warmJob = awaitJob(jobId, Duration.ofSeconds(15));
         assertEquals("COMPLETED", warmJob.getBody().get("status"));
-        CacheDbAssertions.requireComplete(orderRepository.customerTimeline(1L, WindowRequest.first(2)));
+        assertTrue(!orderRepository.customerTimeline(1L, WindowRequest.first(2)).isEmpty());
         assertTrue(cacheDbTestProbe.coverage(
-                "customer-order-timeline", "1", Duration.ofMinutes(5)
+                OrderRepositoryCacheDbRoutes.customerTimeline(), "1", Duration.ofMinutes(5)
         ).complete());
 
         ResponseEntity<List> scheduledWarm = rest.getForEntity(url("/api/warm/schedules"), List.class);

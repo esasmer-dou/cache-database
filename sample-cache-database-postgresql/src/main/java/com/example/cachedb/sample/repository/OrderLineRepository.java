@@ -9,7 +9,7 @@ import com.reactor.cachedb.annotations.CacheRouteQuery;
 import com.reactor.cachedb.annotations.HotRoute;
 import com.reactor.cachedb.annotations.WarmRoute;
 import com.reactor.cachedb.core.repository.CacheDbRepository;
-import com.reactor.cachedb.core.repository.HotWindow;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.starter.CacheWarmPlan;
 
@@ -22,16 +22,14 @@ public interface OrderLineRepository extends CacheDbRepository<OrderLineEntity, 
             pageSize = 100, hotWindow = 1_000,
             coverageScopeParameter = "orderId")
     @CacheRouteQuery(
-            predicates = @CachePredicate(field = "orderId", parameter = "orderId"),
+            predicates = @CachePredicate(field = "orderId"),
             orderBy = {
                     @CacheOrder(field = "lineNumber"),
                     @CacheOrder(field = "lineId")
-            },
-            windowParameter = "window"
+            }
     )
-    HotWindow<OrderLineEntity> forOrder(long orderId, WindowRequest window);
+    CursorPage<OrderLineEntity> forOrder(long orderId, WindowRequest window);
 
-    @WarmRoute(value = "warm-order-lines", from = "forOrder", maxRows = 1_000,
-            maxRowsParameter = "maxRows", coverageScopeParameter = "orderId")
+    @WarmRoute(value = "warm-order-lines", from = "forOrder", maxRows = 1_000)
     CacheWarmPlan warmForOrder(long orderId, int maxRows);
 }

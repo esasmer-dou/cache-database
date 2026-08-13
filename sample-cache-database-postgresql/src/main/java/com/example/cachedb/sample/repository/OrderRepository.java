@@ -13,9 +13,9 @@ import com.reactor.cachedb.annotations.HotRoute;
 import com.reactor.cachedb.annotations.SourceRoute;
 import com.reactor.cachedb.annotations.WarmRoute;
 import com.reactor.cachedb.core.repository.CacheDbRepository;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.HotLookup;
 import com.reactor.cachedb.core.repository.HotWindow;
-import com.reactor.cachedb.core.repository.SourceWindow;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.starter.CacheWarmPlan;
 import com.reactor.cachedb.starter.CacheWarmTarget;
@@ -27,8 +27,7 @@ import java.math.BigDecimal;
         sourceMaxRows = 500, sourceTimeoutSeconds = 15)
 public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
 
-    @CacheLookup(idParameter = "orderId", relation = "lines",
-            relationLimitParameter = "linePreview", maxRelationRows = 50)
+    @CacheLookup(relation = "lines", maxRelationRows = 50)
     HotLookup<OrderEntity> detail(Long orderId, int linePreview);
 
     @HotRoute(value = "customer-order-timeline",
@@ -37,16 +36,15 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             coverageScopeParameter = "customerId")
     @CacheRouteQuery(
             predicates = {
-                    @CachePredicate(field = "customerId", parameter = "customerId"),
+                    @CachePredicate(field = "customerId"),
                     @CachePredicate(field = "status", operator = CachePredicate.Operator.NE, constants = "DELETED")
             },
             orderBy = {
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    HotWindow<OrderSummary> customerTimeline(long customerId, WindowRequest window);
+    CursorPage<OrderSummary> customerTimeline(long customerId, WindowRequest window);
 
     @HotRoute(value = "recent-high-value-orders",
             projection = OrderSummary.class,
@@ -61,10 +59,9 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
                     @CacheOrder(field = "priorityScore", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    HotWindow<OrderSummary> recentHighValue(BigDecimal minimumAmount, WindowRequest window);
+    CursorPage<OrderSummary> recentHighValue(BigDecimal minimumAmount, WindowRequest window);
 
     @HotRoute(value = "dashboard-highlighted-orders",
             projection = OrderSummary.class,
@@ -79,8 +76,7 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
                     @CacheOrder(field = "priorityScore", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
-            },
-            limitParameter = "limit"
+            }
     )
     HotWindow<OrderSummary> highlighted(double minimumPriorityScore, int limit);
 
@@ -98,21 +94,20 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             orderBy = {
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    HotWindow<OrderSummary> activeWindow(long cutoffEpochSeconds, WindowRequest window);
+    CursorPage<OrderSummary> activeWindow(long cutoffEpochSeconds, WindowRequest window);
 
     @SourceRoute(value = "customer-order-archive", projection = OrderSummary.class,
             maxRows = 500, timeoutSeconds = 15)
     @CacheRouteQuery(
             predicates = {
-                    @CachePredicate(field = "customerId", parameter = "customerId", group = 0),
+                    @CachePredicate(field = "customerId", group = 0),
                     @CachePredicate(field = "status", operator = CachePredicate.Operator.NE,
                             constants = "DELETED", group = 0),
                     @CachePredicate(field = "orderDate", operator = CachePredicate.Operator.LT,
                             parameter = "beforeOrderDate", group = 0),
-                    @CachePredicate(field = "customerId", parameter = "customerId", group = 1),
+                    @CachePredicate(field = "customerId", group = 1),
                     @CachePredicate(field = "status", operator = CachePredicate.Operator.NE,
                             constants = "DELETED", group = 1),
                     @CachePredicate(field = "orderDate", parameter = "beforeOrderDate", group = 1),
@@ -123,30 +118,26 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             orderBy = {
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    SourceWindow<OrderSummary> archive(
+    CursorPage<OrderSummary> archive(
             long customerId,
             long beforeOrderDate,
             long beforeOrderId,
             WindowRequest window
     );
 
-    @WarmRoute(value = "warm-customer-order-timeline", from = "customerTimeline",
-            maxRows = 1_000, maxRowsParameter = "maxRows", coverageScopeParameter = "customerId",
-            targetParameter = "target")
+    @WarmRoute(value = "warm-customer-order-timeline", from = "customerTimeline", maxRows = 1_000)
     CacheWarmPlan warmCustomerTimeline(long customerId, int maxRows, CacheWarmTarget target);
 
     @WarmRoute(value = "warm-recent-high-value-orders", from = "recentHighValue",
-            maxRows = 1_000, maxRowsParameter = "maxRows", projectionsOnly = true)
+            maxRows = 1_000, projectionsOnly = true)
     CacheWarmPlan warmRecentHighValue(BigDecimal minimumAmount, int maxRows);
 
     @WarmRoute(value = "warm-dashboard-highlighted-orders", from = "highlighted",
-            maxRows = 1_000, maxRowsParameter = "maxRows", projectionsOnly = true)
+            maxRows = 1_000, projectionsOnly = true)
     CacheWarmPlan warmHighlighted(double minimumPriorityScore, int maxRows);
 
-    @WarmRoute(value = "warm-active-order-window", from = "activeWindow",
-            maxRows = 1_000, maxRowsParameter = "maxRows")
+    @WarmRoute(value = "warm-active-order-window", from = "activeWindow", maxRows = 1_000)
     CacheWarmPlan warmActiveWindow(long cutoffEpochSeconds, int maxRows);
 }

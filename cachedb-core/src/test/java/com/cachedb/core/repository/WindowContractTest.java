@@ -26,6 +26,9 @@ class WindowContractTest {
         assertEquals(List.of("a", "b"), page.items());
         assertTrue(page.hasNext());
         assertEquals(WindowRequest.after("next-token", 25), page.nextRequest(25).orElseThrow());
+        assertEquals(WindowRequest.after("next-token", 25),
+                page.nextRequest(WindowRequest.first(25)).orElseThrow());
+        assertEquals(List.of(1, 1), page.map(String::length).items());
     }
 
     @Test
@@ -138,6 +141,8 @@ class WindowContractTest {
         assertSame(window, window.requireComplete());
         assertTrue(window.hasNext());
         assertEquals(WindowRequest.after("next", 25), window.nextRequest(25).orElseThrow());
+        assertEquals(WindowRequest.after("next", 25),
+                window.nextRequest(WindowRequest.first(25)).orElseThrow());
         assertEquals(List.of(5), window.map(String::length).items());
     }
 
@@ -149,11 +154,19 @@ class WindowContractTest {
         assertFalse(source.isEmpty());
         assertFalse(source.hasNext());
         assertTrue(source.nextRequest(10).isEmpty());
+        assertTrue(source.nextRequest(WindowRequest.first(10)).isEmpty());
         assertThrows(IllegalArgumentException.class, () -> source.nextRequest(0));
+        assertThrows(IllegalArgumentException.class, () -> source.nextRequest((WindowRequest) null));
         assertThrows(IllegalArgumentException.class,
                 () -> source.nextRequest(WindowRequest.MAX_LIMIT + 1));
         assertEquals(List.of(3, 5), source.map(String::length).items());
         assertThrows(NullPointerException.class, () -> source.map(ignored -> null));
+    }
+
+    @Test
+    void windowRequestContinuesWithTheSameBound() {
+        assertEquals(new WindowRequest(37, "next"), WindowRequest.first(37).continueAfter("next"));
+        assertThrows(IllegalArgumentException.class, () -> WindowRequest.first(37).continueAfter(" "));
     }
 
     @Test

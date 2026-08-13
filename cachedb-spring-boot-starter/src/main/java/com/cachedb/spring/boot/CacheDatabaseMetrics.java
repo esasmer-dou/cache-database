@@ -69,6 +69,22 @@ public final class CacheDatabaseMetrics implements MeterBinder {
                 .description("Compile-time generated CacheDB repository routes")
                 .strongReference(true)
                 .register(registry);
+        Gauge.builder("cachedb.routes.hot.memory.budget", routeInventory,
+                        inventory -> inventory.hotRouteAssessment().declaredMemoryBudgetBytes())
+                .baseUnit("bytes")
+                .description("Sum of compile-time declared HOT route memory budgets")
+                .strongReference(true)
+                .register(registry);
+        Gauge.builder("cachedb.routes.hot.unbudgeted", routeInventory,
+                        inventory -> inventory.hotRouteAssessment().unbudgetedRoutes())
+                .description("Compile-time HOT routes without an explicit memory budget")
+                .strongReference(true)
+                .register(registry);
+        Gauge.builder("cachedb.routes.hot.projection", routeInventory,
+                        inventory -> inventory.hotRouteAssessment().projectionBackedRoutes())
+                .description("Compile-time HOT routes backed by a projection")
+                .strongReference(true)
+                .register(registry);
         for (HotRoutePopulation population : HotRoutePopulation.values()) {
             if (population == HotRoutePopulation.NOT_APPLICABLE) {
                 continue;

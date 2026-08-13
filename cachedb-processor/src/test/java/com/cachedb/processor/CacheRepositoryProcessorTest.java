@@ -59,23 +59,21 @@ class CacheRepositoryProcessorTest {
                                       coverageScopeParameter = "customerId")
                             @CacheRouteQuery(
                                 predicates = {
-                                    @CachePredicate(field = "customerId", parameter = "customerId"),
+                                    @CachePredicate(field = "customerId"),
                                     @CachePredicate(field = "status", operator = CachePredicate.Operator.NE,
                                                     constants = "DELETED")
                                 },
-                                orderBy = @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
-                                windowParameter = "window"
+                                orderBy = @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC)
                             )
-                            HotWindow<OrderSummary> timeline(long customerId, WindowRequest window);
+                            CursorPage<OrderSummary> timeline(long customerId, WindowRequest window);
 
                             @SourceRoute(value = "customer-archive", projection = OrderSummary.class,
                                          maxRows = 250, timeoutSeconds = 7)
                             @CacheRouteQuery(
-                                predicates = @CachePredicate(field = "customerId", parameter = "customerId"),
-                                orderBy = @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
-                                windowParameter = "window"
+                                predicates = @CachePredicate(field = "customerId"),
+                                orderBy = @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC)
                             )
-                            SourceWindow<OrderSummary> archiveRoute(long customerId, WindowRequest window);
+                            CursorPage<OrderSummary> archiveRoute(long customerId, WindowRequest window);
 
                             @WarmRoute(value = "warm-customer-timeline", from = "timeline", maxRows = 1000,
                                        projectionsOnly = true)
@@ -114,8 +112,7 @@ class CacheRepositoryProcessorTest {
                         import com.reactor.cachedb.core.repository.*;
                         @CacheRepository(entity = CustomerEntity.class, springBean = false)
                         public interface Customers extends CacheDbRepository<CustomerEntity, Long> {
-                            @CacheLookup(idParameter = "customerId", relation = "orders",
-                                         relationLimitParameter = "previewRows", maxRelationRows = 50)
+                            @CacheLookup(relation = "orders", maxRelationRows = 50)
                             HotLookup<CustomerEntity> detail(Long customerId, int previewRows);
                         }
                         """)
@@ -130,6 +127,8 @@ class CacheRepositoryProcessorTest {
         assertFalse(generated.contains("entities.stream().map(this::ensureGeneratedId)"));
         assertTrue(generated.contains("QuerySort.desc(\"order_id\")"));
         assertTrue(generated.contains("routeCoverage(\"customer-timeline\""));
+        assertTrue(generated.contains(".completePage();"));
+        assertTrue(generated.contains(".page();"));
         assertTrue(generated.contains("Route customer-timeline accepts at most 100 rows per request"));
         assertTrue(generated.contains(".name(\"warm-customer-timeline\")"));
         assertTrue(generated.contains(".projectionName(orderSummaryProjection.name())"));
@@ -148,6 +147,11 @@ class CacheRepositoryProcessorTest {
         assertTrue(generated.contains("RepositoryRouteKind.WARM"));
         assertTrue(generated.contains("operation=SAVE;acknowledgement=SQL_DURABLE"));
         assertTrue(generated.contains("public static com.reactor.cachedb.core.route.RepositoryRouteCatalog routeCatalog()"));
+
+        String routeReferences = Files.readString(compilation.generated().resolve("sample/OrdersCacheDbRoutes.java"));
+        assertTrue(routeReferences.contains("RepositoryRouteRef timeline()"));
+        assertTrue(routeReferences.contains("RepositoryRouteRef warmTimeline()"));
+        assertTrue(routeReferences.contains("CATALOG.requireMethod(\"timeline\")"));
 
         String configuration = Files.readString(compilation.generated().resolve("sample/OrdersCacheDbConfiguration.java"));
         assertTrue(configuration.contains("OrdersCacheDbImplementation.routeCatalog()"));
@@ -200,7 +204,7 @@ class CacheRepositoryProcessorTest {
                         @CacheRepository(entity = ProductEntity.class, springBean = false)
                         public interface Products extends CacheDbRepository<ProductEntity, Long> {
                             @HotRoute(value = "available", projection = ProductAvailability.class)
-                            @CacheRouteQuery(limitParameter = "limit")
+                            @CacheRouteQuery
                             HotWindow<ProductAvailability> available(int limit);
                         }
                         """)
@@ -391,6 +395,38 @@ class CacheRepositoryProcessorTest {
         assertFalse(compilation.success());
         assertTrue(compilation.diagnosticsText().contains("parameter type is incompatible")
                         || compilation.diagnosticsText().contains("unused=[unused]"),
+                compilation.diagnosticsText());
+    }
+
+    @Test
+    void rejectsCoverageScopeThatDoesNotEqualityConstrainEveryQueryGroup() throws IOException {
+        Compilation compilation = compile(
+                source("scope/OrderEntity.java", """
+                        package scope;
+                        import com.reactor.cachedb.annotations.*;
+                        @CacheEntity(table = "orders")
+                        public class OrderEntity {
+                            @CacheId(column = "order_id") public Long orderId;
+                            @CacheColumn("customer_id") public Long customerId;
+                            public OrderEntity() {}
+                        }
+                        """),
+                source("scope/Orders.java", """
+                        package scope;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.*;
+                        @CacheRepository(entity = OrderEntity.class, springBean = false)
+                        public interface Orders extends CacheDbRepository<OrderEntity, Long> {
+                            @HotRoute(value = "unsafe-scope", coverageScopeParameter = "customerId")
+                            @CacheRouteQuery(predicates = @CachePredicate(
+                                    field = "customerId", operator = CachePredicate.Operator.GTE))
+                            HotWindow<OrderEntity> unsafe(long customerId);
+                        }
+                        """)
+        );
+
+        assertFalse(compilation.success());
+        assertTrue(compilation.diagnosticsText().contains("exactly one EQ predicate"),
                 compilation.diagnosticsText());
     }
 

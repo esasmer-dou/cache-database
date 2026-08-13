@@ -10,6 +10,7 @@ import com.reactor.cachedb.annotations.CacheRouteQuery;
 import com.reactor.cachedb.annotations.HotRoute;
 import com.reactor.cachedb.annotations.WarmRoute;
 import com.reactor.cachedb.core.repository.CacheDbRepository;
+import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.HotWindow;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.starter.CacheWarmPlan;
@@ -28,8 +29,7 @@ public interface ReportJobRepository extends CacheDbRepository<ReportJobEntity, 
             orderBy = {
                     @CacheOrder(field = "updatedAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "reportJobId", direction = CacheOrder.Direction.DESC)
-            },
-            limitParameter = "limit"
+            }
     )
     HotWindow<ReportJobEntity> live(int limit);
 
@@ -37,20 +37,17 @@ public interface ReportJobRepository extends CacheDbRepository<ReportJobEntity, 
             pageSize = 50, hotWindow = 500,
             coverageScopeParameter = "reportType")
     @CacheRouteQuery(
-            predicates = @CachePredicate(field = "reportType", parameter = "reportType"),
+            predicates = @CachePredicate(field = "reportType"),
             orderBy = {
                     @CacheOrder(field = "createdAt", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "reportJobId", direction = CacheOrder.Direction.DESC)
-            },
-            windowParameter = "window"
+            }
     )
-    HotWindow<ReportJobEntity> byType(String reportType, WindowRequest window);
+    CursorPage<ReportJobEntity> byType(String reportType, WindowRequest window);
 
-    @WarmRoute(value = "warm-live-report-jobs", from = "live", maxRows = 500,
-            maxRowsParameter = "maxRows")
+    @WarmRoute(value = "warm-live-report-jobs", from = "live", maxRows = 500)
     CacheWarmPlan warmLive(int maxRows);
 
-    @WarmRoute(value = "warm-report-jobs-by-type", from = "byType", maxRows = 500,
-            maxRowsParameter = "maxRows", coverageScopeParameter = "reportType")
+    @WarmRoute(value = "warm-report-jobs-by-type", from = "byType", maxRows = 500)
     CacheWarmPlan warmByType(String reportType, int maxRows);
 }

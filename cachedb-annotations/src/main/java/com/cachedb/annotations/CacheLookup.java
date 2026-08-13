@@ -9,11 +9,12 @@ import java.lang.annotation.Target;
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.SOURCE)
 public @interface CacheLookup {
-    String idParameter() default "id";
+    /** Optional id parameter name. The single ID-compatible parameter is inferred when omitted. */
+    String idParameter() default "";
 
     String relation() default "";
 
-    /** Optional int parameter. When omitted, relationLimit is used. */
+    /** Optional int parameter. A single unused int parameter is inferred when omitted. */
     String relationLimitParameter() default "";
 
     int relationLimit() default 25;

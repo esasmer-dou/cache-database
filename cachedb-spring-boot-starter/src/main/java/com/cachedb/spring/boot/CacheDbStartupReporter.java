@@ -42,7 +42,7 @@ public final class CacheDbStartupReporter implements SmartInitializingSingleton 
                 .mapToInt(binding -> cacheDatabase.entityRegistry().projections(binding.metadata().entityName()).size())
                 .sum();
         LOGGER.info(
-                "CacheDB ready instanceId={} provider={} entities={} projections={} repositories={} routes={} hotRoutes={} warmRoutes={} hotPopulation={} registration={} scheduledWarm={} adminUi={}",
+                "CacheDB ready instanceId={} provider={} entities={} projections={} repositories={} routes={} hotRoutes={} warmRoutes={} hotPopulation={} hotMemoryBudgetBytes={} unbudgetedHotRoutes={} registration={} scheduledWarm={} adminUi={}",
                 cacheDatabase.instanceId(),
                 providerInfo.id(),
                 entities,
@@ -52,6 +52,8 @@ public final class CacheDbStartupReporter implements SmartInitializingSingleton 
                 routeInventory.count(com.reactor.cachedb.core.route.RepositoryRouteKind.HOT),
                 routeInventory.count(com.reactor.cachedb.core.route.RepositoryRouteKind.WARM),
                 routeInventory.hotPopulationCounts(),
+                routeInventory.hotRouteAssessment().declaredMemoryBudgetBytes(),
+                routeInventory.hotRouteAssessment().unbudgetedRoutes(),
                 properties.getRegistration().isEnabled(),
                 properties.getScheduledWarm().isEnabled(),
                 properties.getAdmin().isHttpEnabled()

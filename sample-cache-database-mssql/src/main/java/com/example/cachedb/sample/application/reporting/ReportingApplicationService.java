@@ -35,7 +35,7 @@ public final class ReportingApplicationService {
     }
 
     public CursorPage<ReportJobEntity> jobsByType(String reportType, int limit, String after) {
-        return reportJobs.byType(reportType, WindowRequest.of(limit, after)).completePage();
+        return reportJobs.byType(reportType, WindowRequest.of(limit, after));
     }
 
     public WriteReceipt<ReportJobEntity, Long> createJob(CreateReportJob command) {
@@ -66,7 +66,7 @@ public final class ReportingApplicationService {
     }
 
     public CursorPage<AuditEventEntity> auditArchive(String entityName, long entityId, int limit, String after) {
-        return auditEvents.archive(entityName, entityId, WindowRequest.of(limit, after)).page();
+        return auditEvents.archive(entityName, entityId, WindowRequest.of(limit, after));
     }
 
     private String defaultText(String value, String fallback) {

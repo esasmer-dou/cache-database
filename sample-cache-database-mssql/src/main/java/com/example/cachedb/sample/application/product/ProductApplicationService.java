@@ -26,7 +26,7 @@ public final class ProductApplicationService {
     }
 
     public CursorPage<ProductAvailability> activeByCategory(String category, int limit, String after) {
-        return products.activeByCategory(category, WindowRequest.of(limit, after)).completePage();
+        return products.activeByCategory(category, WindowRequest.of(limit, after));
     }
 
     public List<ProductAvailability> lowStock(int limit) {
@@ -38,7 +38,7 @@ public final class ProductApplicationService {
     }
 
     public CursorPage<ProductAvailability> inactiveArchive(int limit, String after) {
-        return products.inactiveArchive(WindowRequest.of(limit, after)).page();
+        return products.inactiveArchive(WindowRequest.of(limit, after));
     }
 
     public WriteReceipt<ProductEntity, Long> updateStock(long productId, UpdateStock command) {

@@ -46,7 +46,7 @@ public final class ShipmentApplicationService {
     }
 
     public CursorPage<ShipmentSummary> forCustomer(long customerId, int limit, String after) {
-        return shipments.forCustomer(customerId, WindowRequest.of(limit, after)).completePage();
+        return shipments.forCustomer(customerId, WindowRequest.of(limit, after));
     }
 
     public ShipmentEntity detail(long shipmentId, int eventPreview) {
@@ -54,11 +54,11 @@ public final class ShipmentApplicationService {
     }
 
     public CursorPage<ShipmentEventEntity> events(long shipmentId, int limit, String after) {
-        return shipmentEvents.forShipment(shipmentId, WindowRequest.of(limit, after)).completePage();
+        return shipmentEvents.forShipment(shipmentId, WindowRequest.of(limit, after));
     }
 
     public CursorPage<ShipmentSummary> deliveredArchive(long customerId, int limit, String after) {
-        return shipments.deliveredArchive(customerId, WindowRequest.of(limit, after)).page();
+        return shipments.deliveredArchive(customerId, WindowRequest.of(limit, after));
     }
 
     public WriteReceipt<ShipmentEntity, Long> create(CreateShipment command) {

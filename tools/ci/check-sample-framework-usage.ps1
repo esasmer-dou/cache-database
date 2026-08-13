@@ -63,7 +63,7 @@ foreach ($sampleRoot in $SampleRoots) {
             ForEach-Object { $_.Groups[1].Value })
         $hotMethods = @([regex]::Matches(
                 $content,
-                'HotWindow<[^>]+>\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\('
+                '(?s)@HotRoute\s*\(.*?\)\s*@CacheRouteQuery\s*\(.*?\)\s*(?:HotWindow|CursorPage)<[^>]+>\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\('
             ) | ForEach-Object { $_.Groups[1].Value })
         foreach ($hotMethod in $hotMethods) {
             if ($warmSources -notcontains $hotMethod) {
@@ -74,6 +74,12 @@ foreach ($sampleRoot in $SampleRoots) {
             }
         }
     }
+
+    Add-Matches $repositoryFiles 'windowParameter\s*=|limitParameter\s*=|maxRowsParameter\s*=|targetParameter\s*=' `
+        "redundant-generated-role-binding"
+    Add-Matches $repositoryFiles '@CacheLookup\s*\([^)]*(idParameter|relationLimitParameter)\s*=' `
+        "redundant-lookup-role-binding"
+    Add-Matches $application '\.(completePage|page)\(\)' "application-window-conversion"
 }
 
 $summary = @(
