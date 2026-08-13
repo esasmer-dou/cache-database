@@ -59,5 +59,13 @@ temp/
 .codex/
 .playwright-cli/
 
+# Local collaboration memory and engineering work logs
+PROJECT_MEMORY.md
+**/PROJECT_MEMORY.md
+MEMORY.md
+**/MEMORY.md
+docs/framework-ux-*-iteration-report.md
+tr/docs/framework-ux-*-iterasyon-raporu.md
+
 # Local Windows path artifact accidentally created in this workspace
 %SystemDrive%/
