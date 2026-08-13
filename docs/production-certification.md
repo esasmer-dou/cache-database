@@ -85,7 +85,7 @@ add passwords, tokens, or JDBC URLs containing credentials.
 application=orders-api
 environment=staging
 application.commit=0123456789abcdef
-framework.version=0.10.0
+framework.version=0.10.1
 inventory.complete=true
 inventory.routeCount=1
 redis.failover=passed

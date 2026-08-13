@@ -33,12 +33,12 @@ ANTI-PATTERN: Tüm tabloları modelleyip tüm trafiği bir anda CacheDB'ye almak
 
 ## 2. Spring Boot Dependency'leri
 
-Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur. `0.10.0`, kimlik
+Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur. `0.10.1`, kimlik
 doğrulaması istemeyen CacheDB Maven deposunda değişmez paket olarak yayımlanır.
 
 ```xml
 <properties>
-    <cachedb.version>0.10.0</cachedb.version>
+    <cachedb.version>0.10.1</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -131,7 +131,7 @@ Spring Boot kullanmıyorsan:
 
 ```xml
 <properties>
-    <cachedb.version>0.10.0</cachedb.version>
+    <cachedb.version>0.10.1</cachedb.version>
 </properties>
 
 <dependencies>

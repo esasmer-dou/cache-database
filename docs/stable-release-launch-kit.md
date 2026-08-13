@@ -19,12 +19,12 @@ java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, 
 
 ## Official Distribution Channel
 
-For `v0.10.0`, the official distribution channels are the anonymous CacheDB
+For `v0.10.1`, the official distribution channels are the anonymous CacheDB
 Maven repository and the GitHub Release asset. GitHub Packages is an optional
 authenticated mirror:
 
 ```text
-cache-database-0.10.0-github-release.zip
+cache-database-0.10.1-github-release.zip
 ```
 
 The bundle contains binary, source, javadoc, and POM artifacts for 16 public
@@ -34,9 +34,9 @@ resolution and the GitHub Release bundle are the selected official channels.
 
 ## Release Positioning
 
-`cache-database v0.10.0`
+`cache-database v0.10.1`
 
-CacheDB `v0.10.0` adds compile-ready migration projections, batched SQL Server
+CacheDB `v0.10.1` includes compile-ready migration projections, batched SQL Server
 write-behind, commit-bound application certification, and anonymous Maven
 consumption while preserving explicit production contracts. PostgreSQL and
 SQL Server samples expose the same application model and provider-specific
@@ -56,7 +56,7 @@ topologies must be proven in the consuming application's staging environment.
 ## Release Notes Template
 
 ```markdown
-## cache-database v0.10.0
+## cache-database v0.10.1
 
 This stable release improves the practical migration path for existing SQL-backed applications.
 
@@ -107,14 +107,14 @@ comparison, Redis memory budget, and rollback plan.
 ## Publication Checklist
 
 - `pom.xml` and all module parent versions use the stable version.
-- Release notes exist at `docs/releases/v0.10.0.md`.
+- Release notes exist at `docs/releases/v0.10.1.md`.
 - `mvn -DskipTests package` passes.
 - Public API compatibility check passes.
 - Turkish documentation quality check passes.
 - Local Docker HA preflight passes or the latest CI evidence is green.
 - `Framework Readiness` and `Production Evidence` are green for the release
   commit.
-- `Production GA Release Readiness` is green for `v0.10.0`.
+- `Production GA Release Readiness` is green for `v0.10.1`.
 - GitHub Release is not marked as prerelease.
-- Anonymous Maven resolution passes for `0.10.0`.
-- GitHub Release asset `cache-database-0.10.0-github-release.zip` is attached.
+- Anonymous Maven resolution passes for `0.10.1`.
+- GitHub Release asset `cache-database-0.10.1-github-release.zip` is attached.

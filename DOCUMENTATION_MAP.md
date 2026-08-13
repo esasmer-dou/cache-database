@@ -29,7 +29,7 @@ production tuning should be approached.
 | How do I run a complete REST API sample? | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
 | How do I declare hot, source, warm, and command routes? | [Declarative Repositories](docs/declarative-repositories.md) |
-| What changed in the latest stable release? | [v0.10.0 Release Notes](docs/releases/v0.10.0.md) |
+| What changed in the latest stable release? | [v0.10.1 Release Notes](docs/releases/v0.10.1.md) |
 | Do I need the Spring Boot JDBC starter? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | What are entity, relation, projection, and route contract? | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | How do insert, read, update, and delete work? | [Use Case Examples](docs/use-case-examples.md) |
@@ -120,6 +120,7 @@ with evidence.
 | [Production Readiness Contract](PRODUCTION_GA_CRITERIA.md) | Single current maturity and go/no-go contract |
 | [Production Certification](docs/production-certification.md) | Consumer application route, parity, memory, failover, canary, and rollback gate |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
+| [v0.10.1 Release Notes](docs/releases/v0.10.1.md) | Anonymous sample dependency parity and fail-closed consumer certification |
 | [v0.10.0 Release Notes](docs/releases/v0.10.0.md) | Compile-ready migration projections, SQL Server batched writes, application certification, and anonymous Maven distribution |
 | [v0.9.0 Release Notes](docs/releases/v0.9.0.md) | Compile-time inference, direct cursor pages, typed route references, route capacity evidence, and explicit durability helpers |
 | [v0.8.0 Release Notes](docs/releases/v0.8.0.md) | Contract-bound cursors, repository defaults, typed warm/jobs, durable batches, and provider-equivalent samples |

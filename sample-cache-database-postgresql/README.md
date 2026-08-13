@@ -3,14 +3,14 @@
 English | [Türkçe](README.tr.md)
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.10.0](https://img.shields.io/badge/CacheDB-0.10.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.10.0)
+[![CacheDB 0.10.1](https://img.shields.io/badge/CacheDB-0.10.1-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.10.1)
 
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and PostgreSQL. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in PostgreSQL, and
 growing lists use projections instead of full aggregates.
 
-> This release consumes the immutable CacheDB `0.10.0` package from the public
+> This release consumes the immutable CacheDB `0.10.1` package from the public
 > CacheDB Maven repository. It requires no GitHub token and does not require a
 > local CacheDB source checkout.
 
@@ -115,7 +115,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.10.0</cachedb.version>
+    <cachedb.version>0.10.1</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -205,7 +205,7 @@ no Maven `settings.xml`, username, or token is required.
 ### 1. Resolve the published CacheDB package
 
 Validate the sample directly. Maven resolves the BOM, starter, annotation
-processor, and doctor plugin anonymously from the immutable `0.10.0` package:
+processor, and doctor plugin anonymously from the immutable `0.10.1` package:
 
 ```powershell
 mvn -U -DskipTests validate

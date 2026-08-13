@@ -39,14 +39,19 @@ doğrulanmalıdır.
 
 | Sürüm bilgisi | Değer |
 | --- | --- |
-| Yayımlanmış son sürüm | `v0.10.0` |
-| Repo sürümü | `0.10.0` |
+| Yayımlanmış son sürüm | `v0.10.1` |
+| Repo sürümü | `0.10.1` |
 | Kütüphane bytecode seviyesi | Java 17 |
 | Çalıştırılabilir örnekler | Java 21 |
 | Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
 | Uygulama API'si | Derleme sırasında üretilen `@CacheRepository` interface'leri |
 
-## 0.10.0 Sürümünde Neler Değişti?
+## Güncel Sürüm: 0.10.1
+
+`0.10.1`, `0.10.0` sürümünün çalışma zamanı özelliklerini korur ve son dağıtım
+tutarsızlığını kapatır. Ana repodaki örnekler ile bağımsız örnek projeler artık
+aynı anonim Maven sözleşmesiyle derlenir. Uygulama kanıtı eksik olduğunda
+sertifika kontrolünün derlemeyi durdurduğu da örnek CI akışında doğrulanır.
 
 - Geçiş scaffold'u, keşfedilen SQL kolonlarından derlenebilir projection
   record, entity kayıt bağlantısı ve parent bazlı toplu relation loader üretir.
@@ -62,7 +67,7 @@ doğrulanmalıdır.
 - Production olgunluğu için birbiriyle çelişebilen eski kararlar yerine tek bir
   güncel sözleşme kullanılır.
 
-Yükseltmeden önce [v0.10.0 sürüm notlarını](docs/releases/v0.10.0.md) oku.
+Yükseltmeden önce [v0.10.1 sürüm notlarını](docs/releases/v0.10.1.md) oku.
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -117,7 +122,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
 | "Repository'leri güvenli biçimde nasıl tanımlar ve işletirim?" | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| "Güncel sürümde neler değişti?" | [v0.10.0 Sürüm Notları](docs/releases/v0.10.0.md) |
+| "Güncel sürümde neler değişti?" | [v0.10.1 Sürüm Notları](docs/releases/v0.10.1.md) |
 | "Çalışan REST API örneği nerede?" | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [SQL Server Örneği](../sample-cache-database-mssql/README.tr.md) |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Birden fazla pod aktif veri setini düzenli olarak nasıl yeniler ve temizler?" | [Periyodik Warm ve Aktif Veri Seti Uzlaştırması](docs/periodik-warm.md) |
@@ -166,13 +171,13 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut. `0.10.0`, kimlik
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.10.1`, kimlik
 doğrulaması istemeyen CacheDB Maven deposu ve GitHub Release paketi üzerinden
 sunulan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.10.0</cachedb.version>
+    <cachedb.version>0.10.1</cachedb.version>
 </properties>
 
 <dependencyManagement>

@@ -13,7 +13,7 @@ runtime state before treating a previous run as current evidence.
 - MSSQL sample: `E:\ReactorRepository\sample-cache-database-mssql`
 - Branch: `main` in all three repositories
 - Framework coordinates: `com.reactor.cachedb:*`
-- Current stable source version: `0.10.0`
+- Current stable source version: `0.10.1`
 - Official distribution: anonymous public Maven repository and GitHub Release
 - Public Maven URL: `https://esasmer-dou.github.io/cache-database/maven2`
 - GitHub Packages is an optional authenticated compatibility mirror
@@ -51,7 +51,7 @@ SQL Server remains the durable source of truth.
 - Preserve PostgreSQL and MSSQL application-contract parity while keeping
   dialect, locking, batching, and topology behavior provider-specific.
 
-## 0.10.0 Functional Surface
+## 0.10.1 Functional Surface
 
 - Compile-time generated repositories, codecs, indexes, route contracts,
   projection bindings, Spring beans, and scheduled warm tasks.
@@ -73,7 +73,7 @@ SQL Server remains the durable source of truth.
 
 ## Sample Contract
 
-Both standalone samples use Java 21 and immutable `0.10.0` artifacts from the
+Both standalone samples use Java 21 and immutable `0.10.1` artifacts from the
 anonymous public Maven repository.
 
 - Application code depends on repository interfaces, not generated internals.
@@ -108,7 +108,7 @@ parity; Redis memory; SQL/Redis failover; canary; rollback; and recovery.
    Docker Redis outage, PostgreSQL, and MSSQL evidence gates.
 2. Push the exact framework release commit and require successful Framework
    Readiness and Production Evidence workflows for that SHA.
-3. Create and push the stable `v0.10.0` tag.
+3. Create and push the stable `v0.10.1` tag.
 4. Publish the immutable anonymous Maven2 repository and verify clean anonymous
    resolution of BOM, provider starters, Maven plugin, and core JAR.
 5. Publish the non-prerelease GitHub Release and compatibility package mirror.
@@ -123,8 +123,8 @@ parity; Redis memory; SQL/Redis failover; canary; rollback; and recovery.
 - `tr/README.md`
 - `CHANGELOG.md`
 - `PRODUCTION_GA_CRITERIA.md`
-- `docs/releases/v0.10.0.md`
-- `tr/docs/releases/v0.10.0.md`
+- `docs/releases/v0.10.1.md`
+- `tr/docs/releases/v0.10.1.md`
 - `docs/production-certification.md`
 - `tr/docs/production-sertifikasi.md`
 - `tools/ci/check-ga-release-readiness.ps1`

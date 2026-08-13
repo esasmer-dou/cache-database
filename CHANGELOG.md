@@ -4,6 +4,26 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.10.1 - 2026-08-13
+
+### Fixed
+
+- embedded and standalone sample workflows now use the same anonymous Maven
+  repository contract without redundant GitHub Packages permissions or
+  credentials
+- sample CI verifies that production certification fails closed when route
+  coverage and evidence manifests are absent
+- public Maven deployment uses the Node 24 generation of the official GitHub
+  Pages actions
+- current-version documentation, OpenRewrite targets, release packaging, and
+  runnable samples consistently reference the immutable `0.10.1` artifacts
+
+### Compatibility
+
+- no runtime or generated public API changed from `0.10.0`
+- `0.10.0` remains immutable; `0.10.1` is the distribution and sample-contract
+  correction
+
 ## 0.10.0 - 2026-08-13
 
 ### Added

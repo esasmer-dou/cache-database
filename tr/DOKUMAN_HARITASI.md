@@ -30,7 +30,7 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Çalışan REST API örneği nerede? | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md) |
 | Yeni projeye nasıl eklerim? | [Başlangıç Rehberi](docs/getting-started.md) |
 | Hızlı erişim, SQL, warm ve command route'larını nasıl tanımlarım? | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| Güncel kararlı sürümde neler değişti? | [v0.10.0 Sürüm Notları](docs/releases/v0.10.0.md) |
+| Güncel kararlı sürümde neler değişti? | [v0.10.1 Sürüm Notları](docs/releases/v0.10.1.md) |
 | Spring Boot'ta JDBC dependency gerekiyor mu? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | Entity, relation, projection, route contract ne demek? | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | Insert, read, update, delete nasıl yapılır? | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
@@ -122,6 +122,7 @@ kararını kanıtla vermek.
 | [Production Olgunluğu](docs/production-olgunlugu.md) | Tek güncel olgunluk ve yayına çıkma sözleşmesi |
 | [Production Sertifikası](docs/production-sertifikasi.md) | Uygulamanın rota, veri eşitliği, bellek, failover, canary ve geri dönüş kontrolü |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Stabil GA release için sert go/no-go akışı |
+| [v0.10.1 Sürüm Notları](docs/releases/v0.10.1.md) | Örnek projelerde anonim bağımlılık eşitliği ve kanıt eksikliğinde derlemeyi durduran uygulama sertifikası |
 | [v0.10.0 Sürüm Notları](docs/releases/v0.10.0.md) | Derlenebilir migration projection'ları, toplu SQL Server yazmaları, uygulama sertifikası ve anonim Maven dağıtımı |
 | [v0.9.0 Sürüm Notları](docs/releases/v0.9.0.md) | Derleme zamanı çıkarımı, doğrudan cursor sayfaları, tipli route referansları, route kapasite kanıtı ve açık kalıcılık yardımcıları |
 | [v0.8.0 Sürüm Notları](docs/releases/v0.8.0.md) | Sözleşmeye bağlı cursor, repository varsayılanı, tipli warm/işler, kalıcı batch ve provider eşdeğerliği |

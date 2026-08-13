@@ -38,14 +38,19 @@ application's own staging topology.
 
 | Release information | Value |
 | --- | --- |
-| Latest published release | `v0.10.0` |
-| Repository version | `0.10.0` |
+| Latest published release | `v0.10.1` |
+| Repository version | `0.10.1` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
 
-## What Is New In 0.10.0
+## Current Release: 0.10.1
+
+`0.10.1` keeps the `0.10.0` runtime feature set and closes the last
+distribution inconsistency: embedded and standalone samples now build against
+the same anonymous Maven contract, and their CI proves that application
+certification fails closed when evidence is missing.
 
 - Migration scaffold generation emits compile-ready projection records, entity
   registration hooks, and partitioned relation loaders from discovered SQL
@@ -60,7 +65,7 @@ application's own staging topology.
 - Production maturity has one authoritative contract instead of separate,
   potentially stale readiness verdicts.
 
-Read the complete [v0.10.0 release notes](docs/releases/v0.10.0.md) before
+Read the complete [v0.10.1 release notes](docs/releases/v0.10.1.md) before
 upgrading.
 
 ## Product Positioning: What CacheDB Is And Is Not
@@ -111,7 +116,7 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the current release?" | [v0.10.0 Release Notes](docs/releases/v0.10.0.md) |
+| "What changed in the current release?" | [v0.10.1 Release Notes](docs/releases/v0.10.1.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "How do multiple pods refresh and clean a hot set periodically?" | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) |
@@ -161,13 +166,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.10.0` is an
+Keep `cachedb.version` aligned with the release you use. Version `0.10.1` is an
 immutable release available from the anonymous CacheDB Maven repository and
 the GitHub Release bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.10.0</cachedb.version>
+    <cachedb.version>0.10.1</cachedb.version>
 </properties>
 
 <dependencyManagement>

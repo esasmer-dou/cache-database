@@ -3,7 +3,7 @@
 [English](README.md) | Türkçe
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.10.0](https://img.shields.io/badge/CacheDB-0.10.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.10.0)
+[![CacheDB 0.10.1](https://img.shields.io/badge/CacheDB-0.10.1-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.10.1)
 
 Bu proje, CacheDB'nin Redis 8 ve SQL Server ile nasıl kullanılacağını gösteren
 bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
@@ -11,7 +11,7 @@ açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
 kullanır, kalıcı geçmiş SQL Server'da tutulur, büyüyen listeler ise bütün nesne
 ağacı yerine projection üzerinden okunur.
 
-> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.10.0`
+> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.10.1`
 > paketini kullanır. GitHub token'ı veya yerel CacheDB kaynak kodu gerekmez.
 
 Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
@@ -116,7 +116,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-    <cachedb.version>0.10.0</cachedb.version>
+    <cachedb.version>0.10.1</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -207,7 +207,7 @@ herkese açıktır; Maven `settings.xml`, kullanıcı adı veya token gerekmez.
 ### 1. Yayımlanmış CacheDB paketini çözümle
 
 Sample projesini doğrudan doğrula. Maven; BOM, starter, annotation processor ve
-doctor plugin'ini değişmez `0.10.0` paketinden kimlik bilgisi istemeden çözümler:
+doctor plugin'ini değişmez `0.10.1` paketinden kimlik bilgisi istemeden çözümler:
 
 ```powershell
 mvn -U -DskipTests validate
