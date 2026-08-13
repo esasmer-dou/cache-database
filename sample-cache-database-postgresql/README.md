@@ -2,6 +2,9 @@
 
 English | [Türkçe](README.tr.md)
 
+[![Consumer build](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml)
+[![CacheDB 0.9.0](https://img.shields.io/badge/CacheDB-0.9.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.9.0)
+
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and PostgreSQL. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in PostgreSQL, and
@@ -10,6 +13,12 @@ growing lists use projections instead of full aggregates.
 > This release consumes the immutable CacheDB `0.9.0` package from GitHub
 > Packages. Configure Maven credentials once; the CacheDB source repository is
 > not required to build or run the sample.
+
+After the quick start, you will have proved one complete production-shaped
+route: seed durable PostgreSQL rows, read the bounded archive route, warm the
+matching Redis projection, read the active route, and inspect coverage and
+durability signals. The sample does not hide a PostgreSQL query behind a Redis
+miss.
 
 ## Start Here
 

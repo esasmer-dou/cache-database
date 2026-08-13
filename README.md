@@ -1,6 +1,18 @@
 # CacheDB
 
-Turkish version: [tr/README.md](tr/README.md)
+English | [Türkçe](tr/README.md)
+
+[![Latest release](https://img.shields.io/github/v/release/esasmer-dou/cache-database?display_name=tag&sort=semver)](https://github.com/esasmer-dou/cache-database/releases/latest)
+[![Production evidence](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
+[![GA readiness](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml/badge.svg)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-0b7285.svg)](LICENSE)
+
+[Why CacheDB](#product-positioning-what-cachedb-is-and-is-not) |
+[Quick start](#install-in-5-minutes-spring-boot) |
+[Relations](#relation-model) |
+[Projections](#when-projection-is-required) |
+[Production](#production-checklist) |
+[Documentation](#documentation-map)
 
 CacheDB is a Redis-first Java data-layer framework that keeps the selected SQL
 database as the durable source of truth. PostgreSQL and SQL Server are explicit,
@@ -21,10 +33,10 @@ The core design rule is simple:
 Both providers cover the same CacheDB application model: generated
 repositories, bounded active routes, projections, warm/backfill, write-behind,
 outbox integration, and explicit source routes. Database-specific connection,
-locking, timeout, indexing, and HA behavior still has to be proven in the
+locking, timeout, indexing, and HA behavior must still be proven in the
 application's own staging topology.
 
-| Current line | Value |
+| Release information | Value |
 | --- | --- |
 | Latest published release | `v0.9.0` |
 | Repository version | `0.9.0` |
@@ -47,9 +59,8 @@ application's own staging topology.
 - Explicit timeout-bounded durability helpers simplify single commands while
   bulk imports continue to use bounded batch writing and backpressure.
 
-Read the complete [v0.9.0 release notes](docs/releases/v0.9.0.md) and the
-[fifth ten-iteration report](docs/framework-ux-fifth-10-iteration-report.md)
-before upgrading.
+Read the complete [v0.9.0 release notes](docs/releases/v0.9.0.md) before
+upgrading.
 
 ## Product Positioning: What CacheDB Is And Is Not
 
@@ -99,10 +110,7 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the second framework UX cycle?" | [Second Ten-Iteration Engineering Report](docs/framework-ux-second-10-iteration-report.md) |
-| "What changed in the third framework UX cycle?" | [Third Ten-Iteration Engineering Report](docs/framework-ux-third-10-iteration-report.md) |
-| "What changed in the fourth framework UX cycle?" | [Fourth Ten-Iteration Engineering Report](docs/framework-ux-fourth-10-iteration-report.md) |
-| "What changed in the fifth framework UX cycle?" | [Fifth Ten-Iteration Engineering Report](docs/framework-ux-fifth-10-iteration-report.md) |
+| "What changed in the current release?" | [v0.9.0 Release Notes](docs/releases/v0.9.0.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "How do multiple pods refresh and clean a hot set periodically?" | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) |
@@ -112,7 +120,7 @@ happens when the requested data is outside the active set.
 | "Where are all properties and defaults?" | [Tuning Parameters](docs/tuning-parameters.md) |
 | "How do I migrate an existing SQL database system?" | [Migration Planner](docs/migration-planner.md) |
 | "What must be proven before production?" | [Production Recipes](docs/production-recipes.md) |
-| "What is still missing for GA?" | [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) |
+| "Which checks define a production release?" | [Production GA Criteria](PRODUCTION_GA_CRITERIA.md) |
 | "How do I decide whether a GA release can ship?" | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 
 ## Choose Your Starting Path

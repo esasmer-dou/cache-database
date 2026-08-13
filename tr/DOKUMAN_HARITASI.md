@@ -30,10 +30,7 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Çalışan REST API örneği nerede? | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md) |
 | Yeni projeye nasıl eklerim? | [Başlangıç Rehberi](docs/getting-started.md) |
 | Hızlı erişim, SQL, warm ve command route'larını nasıl tanımlarım? | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| On framework iyileştirme turunda neler değişti? | [Framework Kullanım Deneyimi Raporu](docs/framework-ux-10-iterasyon-raporu.md) |
-| İkinci on iterasyonluk framework iyileştirme döngüsünde neler değişti? | [İkinci Framework Kullanım Deneyimi Raporu](docs/framework-ux-ikinci-10-iterasyon-raporu.md) |
-| Üçüncü on iterasyonluk framework iyileştirme döngüsünde neler değişti? | [Üçüncü Framework Kullanım Deneyimi Raporu](docs/framework-ux-ucuncu-10-iterasyon-raporu.md) |
-| Dördüncü on iterasyonluk framework iyileştirme döngüsünde neler değişti? | [Dördüncü Framework Kullanım Deneyimi Raporu](docs/framework-ux-dorduncu-10-iterasyon-raporu.md) |
+| Güncel kararlı sürümde neler değişti? | [v0.9.0 Sürüm Notları](docs/releases/v0.9.0.md) |
 | Spring Boot'ta JDBC dependency gerekiyor mu? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | Entity, relation, projection, route contract ne demek? | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | Insert, read, update, delete nasıl yapılır? | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
@@ -110,11 +107,6 @@ kararını kanıtla vermek.
 | [README](README.md) | Ürünün kısa konumlandırması ve ana karar kapısı |
 | [Başlangıç Rehberi](docs/getting-started.md) | Sıfırdan çalışan ilk kullanım |
 | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) | Önerilen repository-first API, route sözleşmeleri, warm, command, test ve geçiş adımları |
-| [Framework Kullanım Deneyimi Raporu](docs/framework-ux-10-iterasyon-raporu.md) | On inceleme, geliştirme, güvenlik, performans ve doğrulama turu |
-| [İkinci Framework Kullanım Deneyimi Raporu](docs/framework-ux-ikinci-10-iterasyon-raporu.md) | Sorgu niyeti, pencere kullanımı, warm ve kalıcılık API'leri, route envanteri, gözlemlenebilirlik ve generated veri yolu iyileştirmeleri |
-| [Üçüncü Framework Kullanım Deneyimi Raporu](docs/framework-ux-ucuncu-10-iterasyon-raporu.md) | Route population, tipli warm ve işler, sample orkestrasyonu, tanılama ve regresyon kapıları |
-| [Dördüncü Framework Kullanım Deneyimi Raporu](docs/framework-ux-dorduncu-10-iterasyon-raporu.md) | Route ve kapsama bağlı cursor, repository varsayılanı, tipli iş ilerlemesi, kalıcı batch ve warm yolculuğu kanıtı |
-| [Beşinci Framework Kullanım Deneyimi Raporu](docs/framework-ux-besinci-10-iterasyon-raporu.md) | Derleme zamanı rol çıkarımı, doğrudan cursor sayfaları, tipli route referansları, coverage güvenliği ve HOT route kapasite kanıtı |
 | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) | Arka plandaki tanımlar, kabuller ve tasarım sınırları |
 | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) | Gerçek hayat entity, query, update, delete, projection ve dashboard örnekleri |
 | [Production Tuning Rehberi](docs/production-tuning-rehberi.md) | Redis memory, hot policy, route contract, write-behind ve Kubernetes tuning kararları |

@@ -29,10 +29,7 @@ production tuning should be approached.
 | How do I run a complete REST API sample? | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
 | How do I declare hot, source, warm, and command routes? | [Declarative Repositories](docs/declarative-repositories.md) |
-| What changed during the ten framework UX hardening iterations? | [Framework UX Engineering Report](docs/framework-ux-10-iteration-report.md) |
-| What changed during the second ten-iteration framework UX cycle? | [Second Framework UX Engineering Report](docs/framework-ux-second-10-iteration-report.md) |
-| What changed during the third ten-iteration framework UX cycle? | [Third Framework UX Engineering Report](docs/framework-ux-third-10-iteration-report.md) |
-| What changed during the fourth ten-iteration framework UX cycle? | [Fourth Framework UX Engineering Report](docs/framework-ux-fourth-10-iteration-report.md) |
+| What changed in the latest stable release? | [v0.9.0 Release Notes](docs/releases/v0.9.0.md) |
 | Do I need the Spring Boot JDBC starter? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | What are entity, relation, projection, and route contract? | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | How do insert, read, update, and delete work? | [Use Case Examples](docs/use-case-examples.md) |
@@ -108,11 +105,6 @@ with evidence.
 | [README](README.md) | Product positioning and first decision gate |
 | [Getting Started](docs/getting-started.md) | First working setup |
 | [Declarative Repositories](docs/declarative-repositories.md) | Preferred repository-first API, route contracts, warm, commands, tests, and migration |
-| [Framework UX Engineering Report](docs/framework-ux-10-iteration-report.md) | Ten review, implementation, safety, performance, and verification iterations |
-| [Second Framework UX Engineering Report](docs/framework-ux-second-10-iteration-report.md) | Query intent, window ergonomics, warm/durability APIs, route inventory, observability, and generated-path hardening |
-| [Third Framework UX Engineering Report](docs/framework-ux-third-10-iteration-report.md) | Route population, typed warm/jobs, sample orchestration, diagnostics, and regression gates |
-| [Fourth Framework UX Engineering Report](docs/framework-ux-fourth-10-iteration-report.md) | Contract-bound cursors, repository defaults, typed job progress, durable batches, and warm journey evidence |
-| [Fifth Framework UX Engineering Report](docs/framework-ux-fifth-10-iteration-report.md) | Compile-time role inference, direct cursor pages, typed route references, coverage safety, and HOT route capacity evidence |
 | [Concepts and Assumptions](docs/concepts-and-assumptions.md) | Definitions, assumptions, and design boundaries |
 | [Use Case Examples](docs/use-case-examples.md) | Real entity, query, update, delete, projection, and dashboard examples |
 | [Production Tuning Guide](docs/production-tuning-guide.md) | Redis memory, hot policy, route contract, write-behind, Kubernetes tuning |

@@ -2,9 +2,13 @@
 
 [Türkçe](../tr/cachedb-examples/README.md)
 
-This module is the framework-maintainer demo: it exercises load profiles,
+This module is the maintainer and operator lab. It exercises load profiles,
 operations screens, migration planning, and low-level compatibility surfaces.
-Application teams should begin with one of the standalone REST API samples.
+It is not the shortest application onboarding path.
+
+> Application developers should begin with the standalone PostgreSQL or SQL
+> Server REST API sample. Use this module when the goal is to inspect the admin
+> UI, rehearse migration, or qualify runtime behavior under controlled load.
 
 ## Choose the Right Sample
 
@@ -21,6 +25,10 @@ Use it for two purposes:
 
 - observe Redis-first runtime behavior under demo load
 - rehearse the SQL migration planner flow against a real PostgreSQL demo schema
+
+A successful run gives you local behavioral evidence. It does not establish a
+Kubernetes capacity number or replace staging parity, failover, and rollback
+tests.
 
 ## Product Positioning For The Demo
 

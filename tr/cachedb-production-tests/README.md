@@ -2,24 +2,30 @@
 
 [English](../../cachedb-production-tests/README.md)
 
-Bu modül CacheDB için production odaklı yük, kapasite, recovery, chaos ve
-go/no-go kanıtları üretir. Framework yeterlilik paketidir; burada alınan bir
-sonuç uygulamanın kapasite planına doğrudan kopyalanamaz.
+[![Production doğrulaması](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
+
+Bu modül CacheDB için canlı ortam odaklı yük, kapasite, toparlanma, hata
+enjeksiyonu ve go/no-go kanıtları üretir. CacheDB yeterlilik paketidir; burada
+alınan bir sonuç uygulamanın kapasite planına doğrudan kopyalanamaz.
 
 ## Buradan Başla
 
 | Karar | Çalıştırılacak bölüm |
 | --- | --- |
 | Modül küçük veriyle çalışıyor mu? | [Smoke Test](#smoke-test) |
-| Birden fazla uygulama instance'ı doğru koordine oluyor mu? | [Çoklu Instance Koordinasyonu](#çoklu-instance-koordinasyonu) |
+| Birden fazla uygulama örneği doğru koordine oluyor mu? | [Çoklu Instance Koordinasyonu](#çoklu-instance-koordinasyonu) |
 | Hangi repository/okuma şekli daha az iş üretiyor? | [API ve Okuma Şekli Benchmark'ları](#api-ve-okuma-şekli-benchmarkları) |
-| Throughput hangi noktada ölçeklenmeyi bırakıyor? | [Kapasite Benchmark'ları](#kapasite-benchmarkları) |
-| Sistem restart, outage ve replay sonrasında toparlanıyor mu? | [Hata ve Toparlanma](#hata-ve-toparlanma) |
-| Bu framework revizyonu birleşik kapıyı geçiyor mu? | [Production Kapısı](#production-kapısı) |
+| İş hacmi hangi noktada ölçeklenmeyi bırakıyor? | [Kapasite Benchmark'ları](#kapasite-benchmarkları) |
+| Sistem yeniden başlatma, kesinti ve replay sonrasında toparlanıyor mu? | [Hata ve Toparlanma](#hata-ve-toparlanma) |
+| Bu derleme birleşik sürüm kapısını geçiyor mu? | [Production Kapısı](#production-kapısı) |
 
 Önerilen sıra: smoke, temsilî kapasite, çoklu instance koordinasyonu,
 hata/toparlanma ve son olarak birleşik production kapısı. En büyük profille
 başlamak güven değil, gürültü üretir.
+
+Her sonucu; tam commit, JVM, container limitleri, Redis ve SQL topolojisi, veri
+seti, eş zamanlılık ve kullanılan komutla birlikte yorumla. Bu bilgilerden
+koparılmış tek bir sayı yeniden kullanılabilir kanıt değildir.
 
 ## Bu Testler Neyi Kanıtlar?
 

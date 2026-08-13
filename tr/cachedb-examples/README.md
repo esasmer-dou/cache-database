@@ -2,10 +2,15 @@
 
 [English](../../cachedb-examples/README.md)
 
-Bu modül framework geliştiricileri için hazırlanmış kapsamlı demodur. Yük
-profillerini, operasyon ekranlarını, geçiş planlamasını ve düşük seviyeli
-uyumluluk yüzeylerini çalıştırır. Uygulama ekipleri önce bağımsız REST API
-örneklerinden başlamalıdır.
+Bu modül, CacheDB geliştiricileri ve operasyon ekipleri için hazırlanmış bir
+çalışma alanıdır. Yük profillerini, yönetim ekranlarını, geçiş planlamasını ve
+düşük seviyeli uyumluluk yüzeylerini çalıştırır. Bir uygulamayı öğrenmenin en
+kısa yolu değildir.
+
+> Uygulama geliştiricileri önce bağımsız PostgreSQL veya SQL Server REST API
+> örneğinden başlamalıdır. Yönetim ekranını incelemek, geçiş provası yapmak ya
+> da çalışma zamanı davranışını kontrollü yük altında doğrulamak istiyorsan bu
+> modülü kullan.
 
 ## Doğru Örneği Seç
 
@@ -21,7 +26,11 @@ uyumluluk yüzeylerini çalıştırır. Uygulama ekipleri önce bağımsız REST
 İki amaç için kullanılır:
 
 - Demo yük altında Redis öncelikli çalışma davranışını gözlemlemek.
-- Gerçek bir PostgreSQL demo şeması üzerinde SQL geçiş planlayıcı akışını prova etmek.
+- Gerçek bir PostgreSQL demo şeması üzerinde geçiş planlayıcısı akışını prova etmek.
+
+Başarılı bir koşu yerel davranış kanıtı üretir. Kubernetes kapasitesini
+belirlemez; test ortamındaki veri eşitliği, failover ve geri dönüş testlerinin
+yerine geçmez.
 
 ## Demo İçin Ürün Konumlandırması
 

@@ -2,15 +2,24 @@
 
 [English](README.md) | Türkçe
 
-Bu proje, CacheDB'nin Redis 8 ve PostgreSQL ile nasıl kullanılacağını gösteren,
-canlı ortam yaklaşımına yakın bir Spring Boot REST API örneğidir. Tasarım
-bilinçli olarak açıktır: operasyonel yollar Redis'teki sınırlı aktif veri setini
-kullanır, kalıcı geçmiş PostgreSQL'de tutulur, büyüyen listeler ise tam
-aggregate yerine projection üzerinden okunur.
+[![Consumer build](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml)
+[![CacheDB 0.9.0](https://img.shields.io/badge/CacheDB-0.9.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.9.0)
+
+Bu proje, CacheDB'nin Redis 8 ve PostgreSQL ile nasıl kullanılacağını gösteren
+bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
+açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
+kullanır, kalıcı geçmiş PostgreSQL'de tutulur, büyüyen listeler ise bütün nesne
+ağacı yerine projection üzerinden okunur.
 
 > Bu sürüm, GitHub Packages üzerinden yayımlanan değişmez CacheDB `0.9.0`
 > paketini kullanır. Maven kimlik bilgilerini bir kez yapılandırman yeterlidir;
-> örneği derlemek veya çalıştırmak için CacheDB kaynak reposu gerekmez.
+> örneği derlemek veya çalıştırmak için CacheDB kaynak deposu gerekmez.
+
+Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
+doğrulamış olacaksın: kalıcı PostgreSQL verisini oluşturacak, sınırlı arşiv
+yolunu okuyacak, karşılık gelen Redis projection'ını hazırlayacak, aktif yolu
+çağıracak ve kapsam ile kalıcılık sinyallerini inceleyeceksin. Redis'te kayıt
+bulunmaması arka planda gizli bir PostgreSQL sorgusu başlatmaz.
 
 ## Buradan Başla
 

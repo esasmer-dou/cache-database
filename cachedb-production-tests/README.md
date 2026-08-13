@@ -2,6 +2,8 @@
 
 [Türkçe](../tr/cachedb-production-tests/README.md)
 
+[![Production evidence](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
+
 This module contains production-oriented load, capacity, recovery, chaos, and
 go/no-go evidence for CacheDB. It is a framework qualification suite, not an
 application benchmark result that can be copied into a capacity plan.
@@ -15,11 +17,15 @@ application benchmark result that can be copied into a capacity plan.
 | Which repository/read shape allocates less work? | [API and Read-Shape Benchmarks](#api-and-read-shape-benchmarks) |
 | Where does throughput stop scaling? | [Capacity Benchmarks](#capacity-benchmarks) |
 | Does the system recover from restart/outage/replay? | [Failure and Recovery](#failure-and-recovery) |
-| Can this framework revision pass the composed gate? | [Production Gate](#production-gate) |
+| Can this build pass the composed release gate? | [Production Gate](#production-gate) |
 
 Recommended order: smoke, representative capacity, multi-instance
 coordination, failure/recovery, then the composed production gate. Running the
 largest profile first produces noise, not confidence.
+
+Interpret every result together with the exact commit, JVM, container limits,
+Redis and SQL topology, dataset, concurrency, and command line. A number
+without that context is not reusable evidence.
 
 If you are deciding which application surface to use before running these scenarios, start with the decision guide in [../docs/production-recipes.md](../docs/production-recipes.md).
 If you are preparing a release, also review the [GA criteria](../PRODUCTION_GA_CRITERIA.md)

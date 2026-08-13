@@ -1,13 +1,25 @@
 # CacheDB
 
-English version: [../README.md](../README.md)
+[English](../README.md) | Türkçe
+
+[![Son sürüm](https://img.shields.io/github/v/release/esasmer-dou/cache-database?display_name=tag&sort=semver)](https://github.com/esasmer-dou/cache-database/releases/latest)
+[![Production doğrulaması](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
+[![Sürüm uygunluğu](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml/badge.svg)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml)
+[![Lisans: MIT](https://img.shields.io/badge/lisans-MIT-0b7285.svg)](../LICENSE)
+
+[Ürün kararı](#ürün-konumlandırması-cachedb-nedir-ne-değildir) |
+[Hızlı kurulum](#5-dakikada-spring-boot-kurulumu) |
+[İlişkiler](#relation-nasıl-düşünülmeli) |
+[Projection](#projection-ne-zaman-şart) |
+[Canlı ortam](#productiona-yakın-kullanım-için-kısa-kontrol-listesi) |
+[Dokümanlar](#bu-repoda-nereden-başlamalısın)
 
 CacheDB, Redis'i düşük gecikmeli operasyonel veri katmanı olarak kullanan ve
-kalıcı doğruluk kaynağını seçilen SQL veritabanında tutan bir Java data-layer
-framework'üdür. PostgreSQL ve SQL Server, ayrı starter'ları ve provider'a özel
-kanıt hatları olan eşit seviyedeki açık sağlayıcılardır. Amaç, ORM'e benzeyen
-geliştirme ergonomisini korurken okuma, yazma, ön yükleme ve arşiv davranışını
-çalışma zamanı sihrinin arkasına saklamamaktır.
+kalıcı doğruluk kaynağını seçilen SQL veritabanında tutan bir Java veri erişim
+çatısıdır. PostgreSQL ve SQL Server; ayrı starter'ları ve veritabanına özel
+doğrulama senaryoları bulunan, eşit seviyede desteklenen sağlayıcılardır. Amaç,
+ORM'e benzeyen geliştirme kolaylığını korurken okuma, yazma, ön yükleme ve arşiv
+davranışını örtük çalışma zamanı kurallarının arkasına saklamamaktır.
 
 CacheDB şu iddiayla konumlanır:
 
@@ -19,13 +31,13 @@ CacheDB şu iddiayla konumlanır:
 - çalışma zamanı reflection'ı yerine derleme zamanında üretilen metadata
   kullanılmalıdır
 
-İki provider da aynı CacheDB uygulama modelini destekler: generated repository,
+İki sağlayıcı da aynı CacheDB uygulama modelini destekler: üretilen repository,
 sınırlı aktif yollar, projection, warm/backfill, write-behind, outbox
-entegrasyonu ve açık source route'lar. Bağlantı, lock, timeout, indeks ve HA
-davranışı veritabanına özgüdür; uygulamanın kendi staging topolojisinde ayrıca
-kanıtlanmalıdır.
+entegrasyonu ve açık kaynak yolları. Bağlantı, kilit, zaman aşımı, indeks ve HA
+davranışı veritabanına özgüdür; uygulamanın kendi test ortamında ayrıca
+doğrulanmalıdır.
 
-| Güncel hat | Değer |
+| Sürüm bilgisi | Değer |
 | --- | --- |
 | Yayımlanmış son sürüm | `v0.9.0` |
 | Repo sürümü | `0.9.0` |
@@ -49,9 +61,7 @@ kanıtlanmalıdır.
 - Açık timeout isteyen kalıcılık yardımcıları tekil komutları sadeleştirir;
   toplu aktarımlar sınırlı batch ve backpressure kullanmaya devam eder.
 
-Yükseltmeden önce [v0.9.0 sürüm notlarını](docs/releases/v0.9.0.md) ve
-[beşinci on iterasyonluk raporu](docs/framework-ux-besinci-10-iterasyon-raporu.md)
-oku.
+Yükseltmeden önce [v0.9.0 sürüm notlarını](docs/releases/v0.9.0.md) oku.
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -67,7 +77,7 @@ read-model katmanıdır.
 
 | Net ifade | Çalışma zamanı anlamı |
 | --- | --- |
-| Redis anlık okuma yoludur | Entity ve projection repository'leri Redis'teki aktif veri setini okur. Kayıt Redis'te bulunmadığında otomatik SQL taraması yapılmaz. |
+| Düşük gecikmeli operasyonel okumalar Redis'ten yapılır | Entity ve projection repository'leri Redis'teki aktif veri setini okur. Kayıt Redis'te bulunmadığında otomatik SQL taraması yapılmaz. |
 | SQL kalıcı doğruluk kaynağıdır | PostgreSQL veya MSSQL, write-behind ile kalıcı geçmişi tutar. Arşiv, export, audit ve tam geçmiş okumaları açık SQL yollarıyla tasarlanmalıdır. |
 | Hot policy bir sözleşmedir | Kayıt aktif veri politikasının dışındaysa entity veya projection okuması boş dönebilir. Bu veri kaybı değil, beklenen davranıştır. |
 | Projection modelin parçasıdır | İlişki yoğun listeler, paneller, zaman çizelgeleri, top-N ve global sıralı ekranlar küçük read-model'ler üzerinden okunmalıdır. |
@@ -106,10 +116,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
 | "Repository'leri güvenli biçimde nasıl tanımlar ve işletirim?" | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| "İkinci framework iyileştirme döngüsünde neler değişti?" | [İkinci On İterasyonluk Mühendislik Raporu](docs/framework-ux-ikinci-10-iterasyon-raporu.md) |
-| "Üçüncü framework iyileştirme döngüsünde neler değişti?" | [Üçüncü On İterasyonluk Mühendislik Raporu](docs/framework-ux-ucuncu-10-iterasyon-raporu.md) |
-| "Dördüncü framework iyileştirme döngüsünde neler değişti?" | [Dördüncü On İterasyonluk Mühendislik Raporu](docs/framework-ux-dorduncu-10-iterasyon-raporu.md) |
-| "Beşinci framework iyileştirme döngüsünde neler değişti?" | [Beşinci On İterasyonluk Mühendislik Raporu](docs/framework-ux-besinci-10-iterasyon-raporu.md) |
+| "Güncel sürümde neler değişti?" | [v0.9.0 Sürüm Notları](docs/releases/v0.9.0.md) |
 | "Çalışan REST API örneği nerede?" | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [SQL Server Örneği](../sample-cache-database-mssql/README.tr.md) |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Birden fazla pod aktif veri setini düzenli olarak nasıl yeniler ve temizler?" | [Periyodik Warm ve Aktif Veri Seti Uzlaştırması](docs/periodik-warm.md) |
@@ -119,7 +126,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "Tüm property'ler ve varsayılanlar nerede?" | [Tuning Parametreleri](docs/tuning-parameters.md) |
 | "Mevcut SQL veritabanı sistemimi nasıl taşırım?" | [Geçiş Planlayıcı](docs/migration-planner.md) |
 | "Production'a çıkmadan önce ne kanıtlamalıyım?" | [Production Reçeteleri](docs/production-recipes.md) |
-| "GA için hâlâ eksik olan kapılar neler?" | [Production GA Criteria](../PRODUCTION_GA_CRITERIA.md) |
+| "Kararlı bir sürüm hangi kontrollerden geçer?" | [Production GA Criteria](../PRODUCTION_GA_CRITERIA.md) |
 | "GA release çıkabilir mi, nasıl karar verilir?" | [Production GA Release Runbook](docs/production-ga-release-runbook.md) |
 
 ## Doğru Başlangıç Yolunu Seç

@@ -32,9 +32,30 @@ function Require-Text {
     }
 }
 
+function Reject-Text {
+    param(
+        [Parameter(Mandatory = $true)][string]$RelativePath,
+        [Parameter(Mandatory = $true)][string[]]$Patterns
+    )
+
+    $path = Join-Path $repoRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        $findings.Add("$RelativePath is missing")
+        return
+    }
+
+    $content = Get-Content -LiteralPath $path -Raw
+    foreach ($pattern in $Patterns) {
+        if ($content -match $pattern) {
+            $findings.Add("$RelativePath exposes internal engineering cadence: $pattern")
+        }
+    }
+}
+
 Require-Text -RelativePath "README.md" -Patterns @(
     'Latest published release',
     $versionPattern,
+    'actions/workflows/production-evidence\.yml',
     'cachedb-spring-boot-starter-postgres',
     'cachedb-spring-boot-starter-mssql',
     '## Ten-Minute Learning Path',
@@ -44,6 +65,7 @@ Require-Text -RelativePath "README.md" -Patterns @(
 Require-Text -RelativePath "tr/README.md" -Patterns @(
     'Yayımlanmış son sürüm',
     $versionPattern,
+    'actions/workflows/production-evidence\.yml',
     'cachedb-spring-boot-starter-postgres',
     'cachedb-spring-boot-starter-mssql',
     '## On Dakikalık Öğrenme Akışı',
@@ -97,6 +119,7 @@ foreach ($sample in $samples) {
     )
 
     Require-Text -RelativePath "$root/README.md" -Patterns @(
+        'actions/workflows/consumer-build\.yml',
         "cachedb-spring-boot-starter-$provider",
         'SPRING_PROFILES_ACTIVE.*demo',
         "127\.0\.0\.1:$port",
@@ -111,6 +134,7 @@ foreach ($sample in $samples) {
     )
 
     Require-Text -RelativePath "$root/README.tr.md" -Patterns @(
+        'actions/workflows/consumer-build\.yml',
         "cachedb-spring-boot-starter-$provider",
         'SPRING_PROFILES_ACTIVE.*demo',
         "127\.0\.0\.1:$port",
@@ -123,6 +147,35 @@ foreach ($sample in $samples) {
         '<pluginRepositories>',
         [regex]::Escape($database)
     )
+}
+
+$publicEntryPoints = @(
+    'README.md',
+    'tr/README.md',
+    'cachedb-examples/README.md',
+    'tr/cachedb-examples/README.md',
+    'cachedb-production-tests/README.md',
+    'tr/cachedb-production-tests/README.md',
+    'sample-cache-database-postgresql/README.md',
+    'sample-cache-database-postgresql/README.tr.md',
+    'sample-cache-database-mssql/README.md',
+    'sample-cache-database-mssql/README.tr.md',
+    'DOCUMENTATION_MAP.md',
+    'tr/DOKUMAN_HARITASI.md',
+    'docs/releases/v0.9.0.md',
+    'tr/docs/releases/v0.9.0.md'
+)
+
+$internalCadencePatterns = @(
+    'framework-ux-[^\s\)]+',
+    'ten[- ]iteration\s+(engineering\s+)?report',
+    'on\s+iterasyonluk\s+(mühendislik\s+)?rapor',
+    'framework\s+(UX\s+)?improvement\s+cycle',
+    'framework\s+iyileştirme\s+döngüsü'
+)
+
+foreach ($entryPoint in $publicEntryPoints) {
+    Reject-Text -RelativePath $entryPoint -Patterns $internalCadencePatterns
 }
 
 if (-not (Test-Path -LiteralPath $summaryDirectory)) {
