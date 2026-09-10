@@ -232,14 +232,35 @@ class SnapshotProvidersIntegrationTest {
             execute("CREATE TABLE " + child + " (id INTEGER PRIMARY KEY, payload VARCHAR(100))");
             execute("INSERT INTO " + root + " VALUES (1,'root')");
             execute("INSERT INTO " + child + " VALUES (1,'old')");
-            // Separate disposable fixture DDL from Oracle's read-only snapshot boundary.
-            // Concurrent DDL during a real refresh remains an error, never a weaker read.
             if ("oracle".equals(provider)) {
-                try {
-                    Thread.sleep(1500);
-                } catch (InterruptedException failure) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("Interrupted while preparing Oracle fixture", failure);
+                awaitOracleFixtureVisible();
+            }
+        }
+
+        // Readiness belongs to disposable DDL setup, never to production refresh retry policy.
+        // Poll the actual snapshot visibility instead of assuming a fixed sleep is sufficient.
+        private void awaitOracleFixtureVisible() {
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(15);
+            while (true) {
+                try (var connection = source.getConnection();
+                        var transaction = SnapshotTransaction.begin(connection);
+                        var statement = connection.createStatement()) {
+                    statement.setQueryTimeout(5);
+                    for (String table : List.of(root, child)) {
+                        try (var rows = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
+                            if (!rows.next()) throw new IllegalStateException("Missing Oracle fixture count");
+                        }
+                    }
+                    return;
+                } catch (java.sql.SQLException failure) {
+                    if (failure.getErrorCode() != 1466 || System.nanoTime() >= deadline)
+                        throw new IllegalStateException("Oracle fixture snapshot is not ready", failure);
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("Interrupted during Oracle fixture setup", interrupted);
+                    }
                 }
             }
         }
