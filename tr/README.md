@@ -16,8 +16,9 @@
 
 CacheDB, Redis'i düşük gecikmeli operasyonel veri katmanı olarak kullanan ve
 kalıcı doğruluk kaynağını seçilen SQL veritabanında tutan bir Java veri erişim
-çatısıdır. PostgreSQL ve SQL Server; ayrı starter'ları ve veritabanına özel
-doğrulama senaryoları bulunan, eşit seviyede desteklenen sağlayıcılardır. Amaç,
+çatısıdır. PostgreSQL, SQL Server ve Oracle Database; ayrı starter'ları ve
+veritabanına özel doğrulama senaryoları bulunan, eşit seviyede desteklenen
+sağlayıcılardır. Amaç,
 ORM'e benzeyen geliştirme kolaylığını korurken okuma, yazma, ön yükleme ve arşiv
 davranışını örtük çalışma zamanı kurallarının arkasına saklamamaktır.
 
@@ -31,7 +32,7 @@ CacheDB şu iddiayla konumlanır:
 - çalışma zamanı reflection'ı yerine derleme zamanında üretilen metadata
   kullanılmalıdır
 
-İki sağlayıcı da aynı CacheDB uygulama modelini destekler: üretilen repository,
+Üç sağlayıcı da aynı CacheDB uygulama modelini destekler: üretilen repository,
 sınırlı aktif yollar, projection, warm/backfill, write-behind, outbox
 entegrasyonu ve açık kaynak yolları. Bağlantı, kilit, zaman aşımı, indeks ve HA
 davranışı veritabanına özgüdür; uygulamanın kendi test ortamında ayrıca
@@ -39,35 +40,42 @@ doğrulanmalıdır.
 
 | Sürüm bilgisi | Değer |
 | --- | --- |
-| Yayımlanmış son sürüm | `v0.10.1` |
-| Repo sürümü | `0.10.1` |
+| Yayımlanmış son sürüm | `v0.11.0` |
+| Repo sürümü | `0.11.0` |
 | Kütüphane bytecode seviyesi | Java 17 |
 | Çalıştırılabilir örnekler | Java 21 |
-| Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
+| Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 ve lisanslı self-hosted runner üzerinde Oracle 19c fiziksel Data Guard |
 | Uygulama API'si | Derleme sırasında üretilen `@CacheRepository` interface'leri |
 
-## Güncel Sürüm: 0.10.1
+Çok tablodan hazırlanan bir API cevabını yenilemek için [tanımla katalog yenileme rehberini](docs/snapshot-projectionlar.md) kullanın. Kaynak, projection ve ayarları tanımlayın; dosya, partileme, kilit ve güvenli yayını framework yönetsin.
 
-`0.10.1`, `0.10.0` sürümünün çalışma zamanı özelliklerini korur ve son dağıtım
-tutarsızlığını kapatır. Ana repodaki örnekler ile bağımsız örnek projeler artık
-aynı anonim Maven sözleşmesiyle derlenir. Uygulama kanıtı eksik olduğunda
-sertifika kontrolünün derlemeyi durdurduğu da örnek CI akışında doğrulanır.
+## Güncel Sürüm: 0.11.0
 
-- Geçiş scaffold'u, keşfedilen SQL kolonlarından derlenebilir projection
-  record, entity kayıt bağlantısı ve parent bazlı toplu relation loader üretir.
-  UUID ile yaygın SQL tarih/saat tipleri uçtan uca desteklenir.
-- SQL Server write-behind, aynı şekle sahip upsert işlemlerini toplu update,
-  kilitli version kontrolü ve insert aşamalarında yürütür; canlı throughput
-  eşiği performans gerilemesini durdurur.
-- `cachedb:certify`; rota kapsamı, veri eşitliği, bellek, failover, canary, geri
-  dönüş veya commit'e bağlı kanıt eksikse uygulama derlemesini başarısız yapar.
-- Kararlı artifact'ler POM, BOM, source, Javadoc, SHA-1 ve SHA-256 dosyalarıyla
-  kimlik doğrulaması istemeyen Maven2 deposundan sunulur. GitHub Packages,
-  isteğe bağlı kimlik doğrulamalı ayna olarak kalır.
-- Production olgunluğu için birbiriyle çelişebilen eski kararlar yerine tek bir
-  güncel sözleşme kullanılır.
+`0.11.0`, mevcut Redis öncelikli rota, projection, ön yükleme ve kalıcılık
+sözleşmelerini koruyarak Oracle Database desteğini eşit seviyede desteklenen
+bir sağlayıcı olarak ekler.
 
-Yükseltmeden önce [v0.10.1 sürüm notlarını](docs/releases/v0.10.1.md) oku.
+- `cachedb-spring-boot-starter-oracle`; Oracle JDBC Thin bağlantısı, sürüm
+  kontrollü toplu `MERGE`, silme, yeniden deneme, zaman aşımı ve boş metin
+  kurallarıyla açık Oracle seçimi sağlar.
+- Oracle şema keşfi, sınırlandırılmış ön yükleme, yan yana karşılaştırma, Redis
+  bellek tahmini, outbox checkpoint'i ve çok pod'lu apply koordinasyonu canlı
+  veritabanı testleriyle doğrulanır.
+- JDBC sorgu ve şema dialect SPI'ları; sayfalama, güvenli `IN` parçalama, veri
+  tipi eşleme, metadata harf kuralları ve migration DDL'ini sağlayıcıya özel
+  hale getirir.
+- Şema hazırlama artık hata durumunda uygulamayı durdurur. Eksik tablo veya
+  kolon, desteklenmeyen veritabanı ve geçersiz DDL artık gizli bir başlangıç
+  hatası olarak kalmaz.
+- Java 21 Oracle REST örneği; Docker Compose, şema, seed route'ları, Postman
+  kapsamı, ayar rehberi ve gerçek Oracle/Redis integration testleri içerir.
+- Self-hosted fiziksel Data Guard hattı; redo uygulamayı, planlı switchover'ı,
+  primary kaybını, Oracle JDBC'nin çok adresli ve tek servis adlı bağlantı tanımı
+  üzerinden Hikari toparlanmasını, iki rol geçişinden sonra provider davranışını
+  ve eski primary'nin güncel standby olarak yeniden devreye alınmasını doğrular.
+  RAC/SCAN/FAN kapsamı veya sıfır veri kaybı iddiasında bulunmaz.
+
+Yükseltmeden önce [v0.11.0 sürüm notlarını](docs/releases/v0.11.0.md) oku.
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -84,7 +92,7 @@ read-model katmanıdır.
 | Net ifade | Çalışma zamanı anlamı |
 | --- | --- |
 | Düşük gecikmeli operasyonel okumalar Redis'ten yapılır | Entity ve projection repository'leri Redis'teki aktif veri setini okur. Kayıt Redis'te bulunmadığında otomatik SQL taraması yapılmaz. |
-| SQL kalıcı doğruluk kaynağıdır | PostgreSQL veya MSSQL, write-behind ile kalıcı geçmişi tutar. Arşiv, export, audit ve tam geçmiş okumaları açık SQL yollarıyla tasarlanmalıdır. |
+| SQL kalıcı doğruluk kaynağıdır | PostgreSQL, SQL Server veya Oracle Database, write-behind ile kalıcı geçmişi tutar. Arşiv, dışa aktarma, denetim ve tam geçmiş okumaları açık SQL yollarıyla tasarlanmalıdır. |
 | Hot policy bir sözleşmedir | Kayıt aktif veri politikasının dışındaysa entity veya projection okuması boş dönebilir. Bu veri kaybı değil, beklenen davranıştır. |
 | Projection modelin parçasıdır | İlişki yoğun listeler, paneller, zaman çizelgeleri, top-N ve global sıralı ekranlar küçük read-model'ler üzerinden okunmalıdır. |
 | Aktif veri seti dışındaki yol açık olmalıdır | Aktif veri seti dışında kalan veri için sınırlı SQL endpoint'i, kayıtlı page loader, warm/backfill job'ı veya migration yolu tasarlanmalıdır. |
@@ -122,9 +130,10 @@ CacheDB özellikle şu problemlere odaklanır:
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
 | "Repository'leri güvenli biçimde nasıl tanımlar ve işletirim?" | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| "Güncel sürümde neler değişti?" | [v0.10.1 Sürüm Notları](docs/releases/v0.10.1.md) |
-| "Çalışan REST API örneği nerede?" | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [SQL Server Örneği](../sample-cache-database-mssql/README.tr.md) |
+| "Güncel sürümde neler değişti?" | [v0.11.0 Sürüm Notları](docs/releases/v0.11.0.md) |
+| "Çalışan REST API örneği nerede?" | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) örneği |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
+| "Oracle provider sözleşmesi nedir?" | [Oracle Provider](docs/oracle-provider.md) |
 | "Birden fazla pod aktif veri setini düzenli olarak nasıl yeniler ve temizler?" | [Periyodik Warm ve Aktif Veri Seti Uzlaştırması](docs/periodik-warm.md) |
 | "Entity, relation, projection ve route contract ne demek?" | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | "Gerçek hayatta nasıl modellemeliyim?" | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
@@ -140,8 +149,8 @@ CacheDB özellikle şu problemlere odaklanır:
 
 | Durum | Önerilen yol | Neden |
 | --- | --- | --- |
-| Önce çalışan bir örnek görmek istiyorsun | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [SQL Server Örneği](../sample-cache-database-mssql/README.tr.md) | REST API, Docker Compose, şema, seed verisi ve Postman koleksiyonu hazırdır |
-| Yeni Spring Boot servisi | `cachedb-spring-boot-starter-postgres` veya `cachedb-spring-boot-starter-mssql` | Açık provider seçimi ve Spring `DataSource` entegrasyonu |
+| Önce çalışan bir örnek görmek istiyorsun | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) örneği | REST API, Docker Compose, şema, seed verisi ve Postman koleksiyonu hazırdır |
+| Yeni Spring Boot servisi | PostgreSQL, MSSQL veya Oracle provider starter'ını seç | Açık provider seçimi ve Spring `DataSource` entegrasyonu |
 | Zaten JPA kullanan Spring Boot uygulaması | Starter + mevcut `DataSource` | JPA zaten `DataSource` oluşturuyorsa JDBC starter tekrar eklenmez |
 | Plain Java servisi | `cachedb-starter` | Başlatma, kapatma ve bağlantı yaşam döngüsü sende kalır |
 | Mevcut SQL veritabanı + ORM sistemi | Migration Planner | Şema keşfi, warm planı, compare ve cutover raporu üretir |
@@ -156,8 +165,9 @@ otomatik hızlandırmasını beklemek.
 
 ## On Dakikalık Öğrenme Akışı
 
-1. [PostgreSQL örneğini](../sample-cache-database-postgresql/README.tr.md) veya
-   [SQL Server örneğini](../sample-cache-database-mssql/README.tr.md) `demo`
+1. [PostgreSQL](../sample-cache-database-postgresql/README.tr.md),
+   [SQL Server](../sample-cache-database-mssql/README.tr.md) veya
+   [Oracle](../sample-cache-database-oracle/README.tr.md) örneğini `demo`
    profiliyle çalıştır.
 2. Kalıcı demo verisini oluştur ve dağıtık seed işinin tamamlanmasını bekle.
 3. SQL source route'u doğrulamak için arşiv endpoint'ini çağır.
@@ -171,13 +181,13 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut. `0.10.1`, kimlik
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.11.0`, kimlik
 doğrulaması istemeyen CacheDB Maven deposu ve GitHub Release paketi üzerinden
 sunulan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.10.1</cachedb.version>
+    <cachedb.version>0.11.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -271,6 +281,7 @@ JDBC kuralı:
 | --- | --- | --- | --- |
 | PostgreSQL | `cachedb-spring-boot-starter-postgres` | `org.postgresql:postgresql` | [PostgreSQL örneği](../sample-cache-database-postgresql/README.tr.md) |
 | SQL Server | `cachedb-spring-boot-starter-mssql` | `com.microsoft.sqlserver:mssql-jdbc` | [SQL Server örneği](../sample-cache-database-mssql/README.tr.md) |
+| Oracle Database | `cachedb-spring-boot-starter-oracle` | transitive `com.oracle.database.jdbc:ojdbc17` | [Oracle örneği](../sample-cache-database-oracle/README.tr.md) |
 
 - Uygulamada henüz `DataSource` yoksa `spring-boot-starter-jdbc` ekle.
 - Uygulamada `spring-boot-starter-data-jpa` veya başka bir starter zaten
@@ -280,7 +291,8 @@ JDBC kuralı:
   her durumda gereklidir.
 - Yalnızca bir provider starter seç. PostgreSQL için
   `cachedb-spring-boot-starter-postgres`, SQL Server için
-  `cachedb-spring-boot-starter-mssql` kullan.
+  `cachedb-spring-boot-starter-mssql`, Oracle Database için
+  `cachedb-spring-boot-starter-oracle` kullan.
 - Classpath'te tek provider varsa `cachedb.sql.provider=AUTO` onu seçer. Birden
   fazla provider bulunursa sistem sessizce seçim yapmak yerine başlangıcı
   durdurur.
@@ -288,7 +300,8 @@ JDBC kuralı:
   Bu modül çekirdek runtime starter'ın parçası değildir.
 - Önerilen uygulama API'si için [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md),
   provider ayarları için [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md)
-  sayfasına bak.
+  sayfasına bak. Oracle kullanıyorsan [Oracle Provider](docs/oracle-provider.md)
+  sözleşmesini de oku.
 
 Minimal `application.yml`:
 

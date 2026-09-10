@@ -7,7 +7,9 @@ import java.util.Locale;
 
 enum MigrationSqlDialect {
     POSTGRES,
-    MSSQL;
+    MSSQL,
+    ORACLE,
+    H2;
 
     static MigrationSqlDialect from(Connection connection) throws SQLException {
         DatabaseMetaData metadata = connection.getMetaData();
@@ -16,21 +18,30 @@ enum MigrationSqlDialect {
         if (normalized.contains("microsoft") || normalized.contains("sql server")) {
             return MSSQL;
         }
-        return POSTGRES;
+        if (normalized.contains("postgresql")) {
+            return POSTGRES;
+        }
+        if (normalized.contains("oracle")) {
+            return ORACLE;
+        }
+        if (normalized.contains("h2")) {
+            return H2;
+        }
+        throw new SQLException("Unsupported migration database product: " + productName);
     }
 
     String limitTail(int limit) {
         int safeLimit = Math.max(1, limit);
         return switch (this) {
-            case POSTGRES -> "LIMIT " + safeLimit;
-            case MSSQL -> "OFFSET 0 ROWS FETCH NEXT " + safeLimit + " ROWS ONLY";
+            case POSTGRES, H2 -> "LIMIT " + safeLimit;
+            case MSSQL, ORACLE -> "OFFSET 0 ROWS FETCH NEXT " + safeLimit + " ROWS ONLY";
         };
     }
 
     String parameterizedLimitTail() {
         return switch (this) {
-            case POSTGRES -> "LIMIT :page_size";
-            case MSSQL -> "OFFSET 0 ROWS FETCH NEXT :page_size ROWS ONLY";
+            case POSTGRES, H2 -> "LIMIT :page_size";
+            case MSSQL, ORACLE -> "OFFSET 0 ROWS FETCH NEXT :page_size ROWS ONLY";
         };
     }
 

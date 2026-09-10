@@ -2,11 +2,11 @@
 
 English version: [../../docs/database-provider-spi.md](../../docs/database-provider-spi.md)
 
-CacheDB, PostgreSQL'i varsayılan kalıcı SQL provider olarak kullanır. Bunun
-yanında storage provider tarafında açık bir SPI katmanı vardır ve MSSQL kendi
-SQL Server evidence hattı olan açık bir provider olarak desteklenir. Bu yüzden
-MSSQL desteği artık "JDBC URL'yi değiştir, aynı kod çalışır" gibi riskli ve
-yanıltıcı bir yaklaşım üzerinden ilerlemiyor.
+CacheDB, geriye dönük uyumluluk için PostgreSQL'i varsayılan kalıcı SQL
+sağlayıcısı olarak kullanır. MSSQL ve Oracle Database ise kendi SQL lehçesi,
+hata sınıflandırması, outbox sözleşmesi, migration desteği ve canlı kanıt hattı
+olan ayrı sağlayıcılardır. Destek modeli, yalnızca JDBC adresini değiştirmeye
+dayanmaz.
 
 ## Karar
 
@@ -16,15 +16,15 @@ write-behind flusher'ını açıkça bağlamak.
 ACCEPTABLE: Uygulama bilinçli olarak varsayılan PostgreSQL provider yolunu
 kullanıyorsa starter'ın varsayılan wiring'ini kullanmak.
 
-ANTI-PATTERN: PostgreSQL flusher'ını MSSQL JDBC URL'sine bağlayıp aynı SQL'in,
-aynı retry davranışının ve aynı parametre limitlerinin güvenli olduğunu
-varsaymak.
+ANTI-PATTERN: Bir sağlayıcının flusher'ını başka bir veritabanına bağlayıp SQL,
+retry, transaction ve parametre sınırlarının aynı olduğunu varsaymak.
 
 ## Mevcut Modül Yapısı
 
 ```text
 cachedb-storage-jdbc
 - JdbcDatabaseDialect
+- JdbcQueryDialect ve JdbcSchemaDialect
 - JdbcWriteBehindSupport
 - SqlFailureClassifierSupport
 - JdbcOutboxExternalChangeFeedAdapter
@@ -44,11 +44,37 @@ cachedb-storage-mssql
 - MssqlFailureClassifier
 - MssqlOutboxExternalChangeFeedAdapter
 - SQL Server update/existence/insert yazma yolu
+
+cachedb-storage-oracle
+- OracleDatabaseDialect ve OracleQueryDialect
+- OracleWriteBehindFlusher ve OracleWriteBehindOptions
+- OracleFailureClassifier
+- OracleOutboxDialect ve OracleOutboxExternalChangeFeedAdapter
+- sürüm kontrollü MERGE batch'leri, sınırlı IN grupları ve Oracle değer bağlama
 ```
 
 `cachedb-starter`, geriye dönük uyumluluk için PostgreSQL flusher'ını varsayılan
-tutar. PostgreSQL dışındaki kullanıcılar `WriteBehindFlusherFactory` değerini
-açıkça vermelidir.
+tutar. Plain Java uygulamalarında MSSQL veya Oracle için uygun
+`WriteBehindFlusherFactory` açıkça verilir. Spring Boot uygulamalarında tek bir
+provider starter kullanılmalı veya `cachedb.sql.provider` açıkça seçilmelidir.
+
+Sorgu dialect'i sınırlı sayfalamayı, parametre bağlamayı ve güvenli `IN`
+parçalarını yönetir. Şema dialect'i Java-SQL veri tipi eşlemesini, metadata harf
+düzenini, tablo oluşturmayı ve kolon ekleme DDL'ini yönetir. Bilinmeyen
+veritabanı ürünü başlangıçta hata verir; CacheDB sessizce PostgreSQL SQL'ine
+dönmez.
+
+## Oracle Kullanımı
+
+Spring Boot için `cachedb-spring-boot-starter-oracle`, plain Java için
+`cachedb-storage-oracle` kullanılır. Provider; kimliğin uygulama tarafında
+üretilmesini, sayısal sürüm kolonunu ve Oracle'ın boş metni `NULL` kabul eden
+davranışı için açık bir karar verilmesini ister. Sınırlı source okuma, warm,
+write-behind, outbox/checkpoint, şema keşfi, migration karşılaştırması ve bellek
+tahmini desteklenir.
+
+Bağımlılık, ayar, veri tipi, outbox, tuning ve kanıt sözleşmesinin tamamı
+[Oracle Provider](oracle-provider.md) belgesindedir.
 
 ## PostgreSQL Kullanımı
 
@@ -74,7 +100,7 @@ uygulamanın sorumluluğundadır.
 <dependency>
   <groupId>com.reactor.cachedb</groupId>
   <artifactId>cachedb-storage-mssql</artifactId>
-  <version>0.10.1</version>
+  <version>0.11.0</version>
 </dependency>
 
 <dependency>
@@ -171,16 +197,16 @@ idempotent tutar.
 
 ## Önemli Provider Farkları
 
-| Alan | PostgreSQL | MSSQL |
-| --- | --- | --- |
-| Upsert | `INSERT ... ON CONFLICT` | version guard'lı update/existence/insert transaction |
-| Bulk load | opsiyonel `COPY` yolu | varsayılan olarak bilinçli şekilde kapalı; önce route bazlı batch kullanılmalı |
-| Parametre limiti | 65.535 parametre | 2.100 parametre |
-| Geçici tablo | PostgreSQL temp table semantiği | SQL Server `#temp` semantiği, henüz bağlanmadı |
-| Hata sınıflandırma | SQLSTATE odaklı | SQL Server vendor code odaklı |
-| Timeout sözleşmesi | PostgreSQL driver/socket ayarları | `MssqlWriteBehindOptions` ile JDBC driver/pool ayarları birlikte |
-| Spring Boot provider seçimi | varsayılan | modül classpath'teyse `cachedb.sql.provider=mssql` |
-| Production durumu | varsayılan provider yolu | SQL Server CI kanıtı olan açık provider; HA topolojisi uygulama ortamında kanıtlanmalı |
+| Alan | PostgreSQL | MSSQL | Oracle Database |
+| --- | --- | --- | --- |
+| Upsert | `INSERT ... ON CONFLICT` | sürüm kontrollü update/existence/insert transaction | JDBC batch ile sürüm kontrollü tek satırlı `MERGE` |
+| Toplu yükleme | isteğe bağlı `COPY` yolu | route bazlı JDBC batch | route bazlı JDBC batch |
+| Parametre sınırı | 65.535 parametre | 2.100 parametre | `IN` koşulları güvenli 900 değerlik gruplara ayrılır |
+| Boş metin | `NULL` değerinden farklıdır | `NULL` değerinden farklıdır | `NULL` olarak saklanır; policy açıkça seçilir |
+| Hata sınıflandırması | SQLSTATE odaklı | SQL Server vendor code odaklı | ORA/vendor code odaklı |
+| Süre sınırı | driver/socket ayarları | `MssqlWriteBehindOptions` ile driver/pool | `OracleWriteBehindOptions` ile driver/pool |
+| Spring Boot seçimi | geriye dönük varsayılan | `cachedb.sql.provider=mssql` | `cachedb.sql.provider=oracle` |
+| Provider kanıtı | canlı PostgreSQL hattı | canlı SQL Server hattı | restart, gecikmeli ağ, migration, outbox, eşzamanlılık ve throughput içeren canlı Oracle hattı |
 
 ## Mevcut MSSQL Kapısı
 

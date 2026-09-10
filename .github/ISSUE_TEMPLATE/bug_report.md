@@ -28,7 +28,8 @@ What happened instead?
 
 - CacheDB version or commit:
 - Redis version:
-- PostgreSQL version:
+- SQL provider and version: PostgreSQL / SQL Server / Oracle Database / custom
+- JDBC driver and connection-pool version:
 - Runtime shape: Spring Boot / plain Java / benchmark / demo
 - Deployment shape: local / container / Kubernetes
 

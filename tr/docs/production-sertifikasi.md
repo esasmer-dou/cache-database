@@ -85,7 +85,7 @@ token veya kimlik bilgisi içeren JDBC adresi yazma.
 application=orders-api
 environment=staging
 application.commit=0123456789abcdef
-framework.version=0.10.1
+framework.version=0.11.0
 inventory.complete=true
 inventory.routeCount=1
 redis.failover=passed

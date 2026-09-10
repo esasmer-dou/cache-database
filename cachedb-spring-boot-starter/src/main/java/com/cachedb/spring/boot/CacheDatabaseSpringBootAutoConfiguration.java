@@ -23,6 +23,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.boot.actuate.endpoint.annotation.Endpoint;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
@@ -181,6 +182,7 @@ public class CacheDatabaseSpringBootAutoConfiguration {
 
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
+    @DependsOnDatabaseInitialization
     public CacheDatabase cacheDatabase(
             @Qualifier("cacheDbJedisPooled") ObjectProvider<JedisPooled> namedForegroundJedisProvider,
             ObjectProvider<JedisPooled> jedisProvider,
@@ -434,14 +436,15 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         switch (sqlProperties.getProvider()) {
             case AUTO -> {
                 JdbcStorageProvider provider = resolveProvider(CacheDbSpringProperties.SqlProvider.AUTO);
-                Map<String, String> options = provider.id().equals("mssql")
-                        ? mssqlOptions(sqlProperties.getMssql())
-                        : Map.of();
+                Map<String, String> options = providerOptions(provider.id(), sqlProperties);
                 builder.writeBehindFlusherFactory(provider.writeBehindFlusherFactory(options));
             }
             case POSTGRES -> builder.writeBehindFlusherFactory(providerFactory("postgres", Map.of()));
             case MSSQL -> builder.writeBehindFlusherFactory(providerFactory(
                     "mssql", mssqlOptions(sqlProperties.getMssql())
+            ));
+            case ORACLE -> builder.writeBehindFlusherFactory(providerFactory(
+                    "oracle", oracleOptions(sqlProperties.getOracle())
             ));
             case CUSTOM -> builder.writeBehindFlusherFactory((dataSource, entityRegistry, writeBehindConfig, collector) -> {
                 throw new IllegalStateException(
@@ -461,8 +464,24 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         if (configured == null || configured == CacheDbSpringProperties.SqlProvider.AUTO) {
             return JdbcStorageProviders.requireSingle(resolveRegistrationClassLoader());
         }
-        String id = configured == CacheDbSpringProperties.SqlProvider.MSSQL ? "mssql" : "postgres";
+        String id = switch (configured) {
+            case POSTGRES -> "postgres";
+            case MSSQL -> "mssql";
+            case ORACLE -> "oracle";
+            case AUTO, CUSTOM -> throw new IllegalArgumentException("Provider cannot be resolved directly: " + configured);
+        };
         return JdbcStorageProviders.require(id, resolveRegistrationClassLoader());
+    }
+
+    private Map<String, String> providerOptions(
+            String providerId,
+            CacheDbSpringProperties.SqlProperties properties
+    ) {
+        return switch (providerId) {
+            case "mssql" -> mssqlOptions(properties.getMssql());
+            case "oracle" -> oracleOptions(properties.getOracle());
+            default -> Map.of();
+        };
     }
 
     private Map<String, String> mssqlOptions(CacheDbSpringProperties.MssqlProperties properties) {
@@ -471,6 +490,15 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         options.put("queryTimeoutSeconds", String.valueOf(properties.getQueryTimeoutSeconds()));
         options.put("transactionIsolation", String.valueOf(jdbcIsolation(properties.getTransactionIsolation())));
         options.put("restoreLockTimeoutAfterTransaction", String.valueOf(properties.isRestoreLockTimeoutAfterTransaction()));
+        return Map.copyOf(options);
+    }
+
+    private Map<String, String> oracleOptions(CacheDbSpringProperties.OracleProperties properties) {
+        LinkedHashMap<String, String> options = new LinkedHashMap<>();
+        options.put("queryTimeoutSeconds", String.valueOf(properties.getQueryTimeoutSeconds()));
+        options.put("transactionIsolation", String.valueOf(jdbcIsolation(properties.getTransactionIsolation())));
+        options.put("duplicateRaceRetries", String.valueOf(properties.getDuplicateRaceRetries()));
+        options.put("emptyStringPolicy", properties.getEmptyStringPolicy().name());
         return Map.copyOf(options);
     }
 

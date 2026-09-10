@@ -120,7 +120,7 @@ final class MigrationWarmRunner {
         if (normalized.dryRun()) {
             notes.add("Dry run completed. Redis was not mutated.");
         } else {
-            notes.add("Redis hot entities were hydrated directly without enqueueing PostgreSQL write-behind.");
+            notes.add("Redis hot entities were hydrated directly without enqueueing durable SQL write-behind.");
             notes.add("Warm hydration skips eager query-index rebuilds and page-cache touches so the hot set can be loaded faster.");
             if (plan.projectionRequired()) {
                 if (childHydrator.supportsProjectionOnlyWarm()) {
@@ -149,7 +149,8 @@ final class MigrationWarmRunner {
         }
         long missingReferencedRoots = Math.max(0L, referencedRootIds.size() - rootCounters.hydratedRows());
         if (missingReferencedRoots > 0L) {
-            notes.add("Some referenced root ids were not found in PostgreSQL during warm execution: " + missingReferencedRoots);
+            notes.add("Some referenced root ids were not found in the durable SQL source during warm execution: "
+                    + missingReferencedRoots);
         }
         if (!normalized.dryRun()) {
             clearCheckpoint(normalized.jobId());

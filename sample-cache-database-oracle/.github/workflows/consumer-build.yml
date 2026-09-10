@@ -1,0 +1,42 @@
+name: CacheDB Consumer Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Setup Java
+        uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build sample against published CacheDB package
+        run: mvn -B clean verify -Pprovider-integration
+
+      - name: Verify production certification fails closed without evidence
+        shell: bash
+        run: |
+          set +e
+          mvn -B -DskipTests -Pproduction-certification verify > target/certification-gate.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q "CacheDB production certification failed" target/certification-gate.log
+          grep -q "Missing certification manifest" target/cachedb-production-certification.md
+          grep -q "Missing route coverage CSV" target/cachedb-production-certification.md

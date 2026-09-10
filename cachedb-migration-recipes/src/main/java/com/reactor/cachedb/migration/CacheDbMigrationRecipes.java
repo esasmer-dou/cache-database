@@ -4,6 +4,7 @@ package com.reactor.cachedb.migration;
 public final class CacheDbMigrationRecipes {
     public static final String USE_POSTGRES_STARTER = "com.reactor.cachedb.migrate.UsePostgresStarter";
     public static final String USE_MSSQL_STARTER = "com.reactor.cachedb.migrate.UseMssqlStarter";
+    public static final String USE_ORACLE_STARTER = "com.reactor.cachedb.migrate.UseOracleStarter";
 
     private CacheDbMigrationRecipes() {
     }

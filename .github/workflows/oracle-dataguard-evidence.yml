@@ -1,0 +1,81 @@
+name: Oracle Data Guard Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      oracleImage:
+        description: Preloaded, licensed Oracle Database Enterprise image
+        required: true
+        default: oracle/database:19.3.0-ee
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-dataguard-evidence-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  physical-dataguard-and-service-recovery:
+    runs-on: [self-hosted, windows, x64, oracle-dataguard]
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Setup Java
+        uses: actions/setup-java@v5.2.0
+        with:
+          distribution: semeru
+          java-version: "21"
+          cache: maven
+
+      - name: Verify self-hosted runner prerequisites
+        shell: pwsh
+        env:
+          ORACLE_IMAGE: ${{ inputs.oracleImage }}
+        run: |
+          docker info | Out-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker is not available on the self-hosted runner."
+          }
+          docker image inspect $env:ORACLE_IMAGE | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "The licensed Oracle image is not preloaded: $env:ORACLE_IMAGE"
+          }
+          Get-Command mvn -ErrorAction Stop | Out-Null
+
+      - name: Run physical Data Guard and service recovery evidence
+        shell: pwsh
+        env:
+          ORACLE_IMAGE: ${{ inputs.oracleImage }}
+        run: |
+          ./tools/ci/run-local-oracle-dataguard-evidence.ps1 `
+            -MavenExecutable mvn `
+            -OracleImage $env:ORACLE_IMAGE `
+            -RunId "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+      - name: Publish evidence summary
+        if: always()
+        shell: pwsh
+        run: |
+          $summary = "./target/cachedb-local-oracle-dataguard-reports/local-oracle-dataguard-evidence.md"
+          if (Test-Path -LiteralPath $summary) {
+            Get-Content -LiteralPath $summary | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload Oracle Data Guard evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: oracle-dataguard-evidence
+          path: |
+            target/cachedb-local-oracle-dataguard-reports/**
+            cachedb-storage-oracle/target/surefire-reports/**
+            cachedb-starter/target/surefire-reports/**
+            cachedb-spring-boot-starter/target/surefire-reports/**
+            cachedb-spring-boot-starter-oracle/target/surefire-reports/**
+          if-no-files-found: warn
+          retention-days: 14

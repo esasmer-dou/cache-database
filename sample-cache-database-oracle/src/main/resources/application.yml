@@ -1,0 +1,221 @@
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: 8093
+
+spring:
+  application:
+    name: sample-cache-database-oracle
+  datasource:
+    url: ${DB_URL:jdbc:oracle:thin:@//127.0.0.1:15212/FREEPDB1}
+    username: ${DB_USERNAME:cachedb}
+    password: ${DB_PASSWORD:CacheDbOracle123}
+    hikari:
+      maximum-pool-size: 12
+      minimum-idle: 2
+      connection-timeout: 2000
+      validation-timeout: 1000
+  sql:
+    init:
+      mode: never
+      separator: "@@"
+
+cachedb:
+  enabled: true
+  profile: ${CACHEDB_PROFILE:production}
+  redis:
+    uri: ${REDIS_URI:redis://127.0.0.1:56381}
+    background:
+      enabled: true
+  sql:
+    provider: ORACLE
+    oracle:
+      query-timeout-seconds: 10
+      transaction-isolation: READ_COMMITTED
+      duplicate-race-retries: 2
+      empty-string-policy: REJECT
+  registration:
+    source: jdbc
+    fail-on-unknown-entity: true
+    entities:
+      CustomerEntity:
+        hot-entity-limit: 50000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 60
+        hot-policy:
+          mode: COMPOSITE
+          composite-operator: ANY
+          children:
+            - mode: STATE_WINDOW
+              state-column: status
+              state-values: [ACTIVE]
+            - mode: STATE_WINDOW
+              state-column: segment
+              state-values: [VIP]
+            - mode: TIME_WINDOW
+              time-column: updated_at
+              hot-for-seconds: 2592000
+      OrderEntity:
+        hot-entity-limit: 100000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 60
+        hot-policy:
+          mode: COMPOSITE
+          composite-operator: ANY
+          children:
+            - mode: TIME_WINDOW
+              time-column: order_date
+              hot-for-seconds: 7776000
+            - mode: STATE_WINDOW
+              state-column: status
+              state-values: [NEW, PAID, PICKING, OPEN, PENDING]
+      OrderLineEntity:
+        hot-entity-limit: 250000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 30
+        hot-policy:
+          mode: COUNT_WINDOW
+      ProductEntity:
+        hot-entity-limit: 25000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 15
+        hot-policy:
+          mode: COMPOSITE
+          composite-operator: ANY
+          children:
+            - mode: STATE_WINDOW
+              state-column: active_status
+              state-values: [ACTIVE]
+            - mode: STATE_WINDOW
+              state-column: stock_status
+              state-values: [IN_STOCK, LOW_STOCK, RESERVED]
+            - mode: TIME_WINDOW
+              time-column: updated_at
+              hot-for-seconds: 604800
+      SupportTicketEntity:
+        hot-entity-limit: 50000
+        page-size: 50
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 20
+        hot-policy:
+          mode: COMPOSITE
+          composite-operator: ANY
+          children:
+            - mode: TIME_WINDOW
+              time-column: updated_at
+              hot-for-seconds: 2592000
+            - mode: STATE_WINDOW
+              state-column: status
+              state-values: [OPEN, PENDING, ESCALATED, SLA_BREACH]
+      ShipmentEntity:
+        hot-entity-limit: 150000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 30
+        hot-policy:
+          mode: COMPOSITE
+          composite-operator: ANY
+          children:
+            - mode: TIME_WINDOW
+              time-column: updated_at
+              hot-for-seconds: 1209600
+            - mode: STATE_WINDOW
+              state-column: shipment_status
+              state-values: [IN_TRANSIT, OUT_FOR_DELIVERY, DELAYED, EXCEPTION]
+      ShipmentEventEntity:
+        hot-entity-limit: 300000
+        page-size: 100
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 30
+        hot-policy:
+          mode: COMPOSITE
+          composite-operator: ANY
+          children:
+            - mode: TIME_WINDOW
+              time-column: event_time
+              hot-for-seconds: 2592000
+            - mode: STATE_WINDOW
+              state-column: severity
+              state-values: [WARN, ERROR, SECURITY]
+            - mode: STATE_WINDOW
+              state-column: event_type
+              state-values: [DELAY, EXCEPTION, DELIVERED]
+      ReportJobEntity:
+        hot-entity-limit: 5000
+        page-size: 50
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 30
+        hot-policy:
+          mode: COMPOSITE
+          composite-operator: ANY
+          children:
+            - mode: TIME_WINDOW
+              time-column: created_at
+              hot-for-seconds: 86400
+            - mode: STATE_WINDOW
+              state-column: status
+              state-values: [QUEUED, RUNNING, FAILED]
+      AuditEventEntity:
+        hot-entity-limit: 2000
+        page-size: 50
+        entity-ttl-seconds: 0
+        page-ttl-seconds: 10
+        hot-policy:
+          mode: COMPOSITE
+          composite-operator: ANY
+          admit-on-read: false
+          children:
+            - mode: TIME_WINDOW
+              time-column: created_at
+              hot-for-seconds: 86400
+            - mode: STATE_WINDOW
+              state-column: severity
+              state-values: [WARN, ERROR, SECURITY]
+  admin:
+    enabled: ${CACHEDB_ADMIN_ENABLED:false}
+    http-enabled: false
+    base-path: /cachedb-admin
+    dashboard-enabled: false
+    title: CacheDB Oracle Sample
+    request-queue-capacity: 128
+    background-worker-threads: 2
+    background-queue-capacity: 32
+    max-request-body-bytes: 1048576
+    job-status-ttl-seconds: 86400
+  runtime:
+    append-instance-id-to-consumer-names: true
+    leader-lease-enabled: true
+
+sample:
+  scheduled-warm:
+    enabled: ${SAMPLE_SCHEDULED_WARM_ENABLED:false}
+    orders:
+      fixed-delay: ${SAMPLE_ORDER_WARM_FIXED_DELAY:PT15M}
+      initial-delay: ${SAMPLE_ORDER_WARM_INITIAL_DELAY:PT30S}
+      minimum-interval: ${SAMPLE_ORDER_WARM_MINIMUM_INTERVAL:PT15M}
+      lock-at-most-for: ${SAMPLE_ORDER_WARM_LOCK_AT_MOST_FOR:PT2M}
+      lock-wait-timeout: ${SAMPLE_ORDER_WARM_LOCK_WAIT_TIMEOUT:PT20S}
+      warm-max-rows: ${SAMPLE_ORDER_WARM_MAX_ROWS:1000}
+      reconcile-max-rows: ${SAMPLE_ORDER_RECONCILE_MAX_ROWS:10000}
+      reconcile-scan-count: ${SAMPLE_ORDER_RECONCILE_SCAN_COUNT:500}
+  demo:
+    write-tools-enabled: ${SAMPLE_WRITE_TOOLS_ENABLED:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,cachedb
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        readiness:
+          include: readinessState,cacheDatabase
+        liveness:
+          include: livenessState

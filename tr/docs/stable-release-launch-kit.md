@@ -14,17 +14,17 @@ Redis-first Java data layer with bounded hot sets, projections, compile-time gen
 ## Önerilen Topic'ler
 
 ```text
-java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, spring-boot
+java, redis, sql, postgresql, mssql, oracle, oracle-database, cache, cqrs, projections, orm-alternative, spring-boot
 ```
 
 ## Resmi Dağıtım Kanalı
 
-`v0.10.1` için resmi dağıtım kanalları, kimlik doğrulaması istemeyen CacheDB
+`v0.11.0` için resmi dağıtım kanalları, kimlik doğrulaması istemeyen CacheDB
 Maven deposu ile GitHub Release paketidir. GitHub Packages, isteğe bağlı kimlik
 doğrulamalı ayna olarak kalır:
 
 ```text
-cache-database-0.10.1-github-release.zip
+cache-database-0.11.0-github-release.zip
 ```
 
 Paket; 16 public modül ile CacheDB BOM için binary, source, javadoc ve POM
@@ -34,29 +34,29 @@ GitHub Release paketi resmi dağıtım kanallarıdır.
 
 ## Release Konumlandırması
 
-`cache-database v0.10.1`
+`cache-database v0.11.0`
 
-CacheDB `v0.10.1`; derlenebilir migration projection'ları, toplu SQL Server
-write-behind yolu, commit'e bağlı uygulama sertifikası ve anonim Maven erişimi
-ekler. Açık production sözleşmeleri korunur. PostgreSQL ile SQL Server örnekleri
-aynı uygulama modelini ve provider'a özgü çalışma yolunu gösterir.
+CacheDB `v0.11.0`; Oracle Database'i eşit seviyede desteklenen bir sağlayıcı
+olarak ekler, sorgu ve şema dialect'lerini sağlayıcıya göre ayırır, şema
+hazırlama hatalarında uygulama başlangıcını durdurur. Açık production
+sözleşmeleri korunur. PostgreSQL, SQL Server ve Oracle örnekleri aynı uygulama
+modelini ayrı starter'lar ve veritabanına özgü çalışma yollarıyla gösterir.
 
 Bu release, her uygulamanın kendi production trafiğini ek doğrulama olmadan
 CacheDB'ye kesebileceği anlamına gelmez. Cutover öncesinde her uygulama için
 route envanteri, warm-up, side-by-side comparison, Redis bellek bütçesi,
 rollback planı ve ortama özel HA kanıtı gerekir.
 
-MSSQL, canlı SQL Server evidence hattı olan açıkça seçilen bir provider'dır.
-Restart/reconnect kontrolü, concurrency ve lock-classification kapsamı,
-outbox/checkpoint desteği ve migration planner coverage vardır. Bu yine de her
-SQL Server HA veya Always On topolojisinin otomatik sertifikalı olduğu anlamına
-gelmez; bu topolojiler tüketen uygulamanın staging ortamında ayrıca
-kanıtlanmalıdır.
+Üç sağlayıcının da desteklenen sözleşmeleri canlı veritabanı testleriyle
+doğrulanır. Bu kanıt; her PostgreSQL cluster'ını, SQL Server Always On kurulumunu,
+Oracle RAC/Data Guard topolojisini, ağı veya connection pool ayarını otomatik
+olarak sertifikalandırmaz. Uygulama ekibi kendi gerçek topolojisini staging
+ortamında ayrıca doğrulamalıdır.
 
 ## Release Note Şablonu
 
 ```markdown
-## cache-database v0.10.1
+## cache-database v0.11.0
 
 Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uygulanabilir hale getirir.
 
@@ -76,7 +76,7 @@ Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uyg
 - Sınırlı hot-set policy'leriyle Redis-first entity repository'leri.
 - Tip güvenli komut, kritik/kaynak route'u, ilişki, projection ve warm planı için derleme zamanında üretilen `@CacheRepository` implementasyonları.
 - Entity bazlı deklaratif policy yapılandırması ve açık JDBC registration seçimi.
-- Tam olarak bir provider starter ile seçilen PostgreSQL ve SQL Server kalıcı provider yolları.
+- Tam olarak bir provider starter ile seçilen PostgreSQL, SQL Server ve Oracle kalıcı sağlayıcı yolları.
 - İki aşamalı generated JDBC source ve relation-loader registration.
 - Açık ve sınırlı kaynak route'ları ile route'tan türeyen warm/backfill; Redis miss arkasında gizli SQL fallback yoktur.
 - İlişki yoğun ve global sıralı route'lar için projection/read-model reçeteleri.
@@ -88,14 +88,14 @@ Bu stable release, mevcut SQL kullanan uygulamalar için geçiş yolunu daha uyg
 - İyimser yazma receipt'leri, kalıcı parent bağımlılıkları ve açık SQL kalıcılık takibi.
 - Pod kaybında işi devralma, terk edilmiş işi sahiplenme ve sınırlı retry sağlayan tip güvenli Redis Stream işleri.
 - Redis, SQL, write-behind backlog, dead-letter ve recovery durumu için Spring Boot Actuator health sinyali.
-- Docker Compose, Postman koleksiyonu ve yerel hot-route load script'leri olan PostgreSQL ve MSSQL REST örnekleri.
+- Docker Compose, Postman koleksiyonu ve yerel aktif route yük script'leri bulunan PostgreSQL, SQL Server ve Oracle REST örnekleri.
 - Resmi paket dağıtım kanalları olarak anonim Maven2 deposu ve GitHub Release paketi.
 
 ### Provider sınırları
 
-- PostgreSQL varsayılan provider yoludur.
-- MSSQL, SQL Server sample ve integration kanıtı olan açıkça seçilen provider olarak kullanılabilir.
-- SQL Server HA veya Always On hazırlığı, production iddiasının parçasıysa tüketen uygulamanın staging topolojisinde ayrıca kanıtlanmalıdır.
+- PostgreSQL, MSSQL veya Oracle starter'larından yalnızca birini seç.
+- Her sağlayıcının çalıştırılabilir örneği, canlı integration kanıtı ve kendine özgü ayar rehberi vardır.
+- Veritabanı HA hazırlığı production iddiasının parçasıysa uygulamanın kendi staging topolojisinde ayrıca kanıtlanmalıdır.
 - Maven Central isteğe bağlıdır; anonim Maven2 deposu ve GitHub Release resmi dağıtım kanallarıdır.
 
 ### Production kullanımı
@@ -108,13 +108,13 @@ comparison, Redis bellek bütçesi ve rollback planı oluşmadan cutover yapma.
 ## Yayın Kontrol Listesi
 
 - `pom.xml` ve tüm modül parent versiyonları stable sürümü kullanıyor.
-- Release note `docs/releases/v0.10.1.md` altında var.
+- Release note `docs/releases/v0.11.0.md` altında var.
 - `mvn -DskipTests package` geçiyor.
 - Public API compatibility kontrolü geçiyor.
 - Türkçe dokümantasyon kalite kontrolü geçiyor.
 - Lokal Docker HA preflight geçiyor veya son CI evidence yeşil.
 - `Framework Readiness` ve `Production Evidence` release commit'i için yeşil.
-- `Production GA Release Readiness`, `v0.10.1` için yeşil.
+- `Production GA Release Readiness`, `v0.11.0` için yeşil.
 - GitHub Release prerelease olarak işaretli değil.
-- `0.10.1` için anonim Maven çözümleme kontrolü geçiyor.
-- GitHub Release asset'i `cache-database-0.10.1-github-release.zip` olarak eklendi.
+- `0.11.0` için anonim Maven çözümleme kontrolü geçiyor.
+- GitHub Release asset'i `cache-database-0.11.0-github-release.zip` olarak eklendi.

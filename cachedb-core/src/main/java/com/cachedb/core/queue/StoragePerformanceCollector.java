@@ -54,12 +54,28 @@ public class StoragePerformanceCollector {
         record(postgresRead, postgresReadBreakdown, tag, elapsedMicros);
     }
 
+    public void recordSqlRead(long elapsedMicros) {
+        recordPostgresRead(elapsedMicros);
+    }
+
+    public void recordSqlRead(String tag, long elapsedMicros) {
+        recordPostgresRead(tag, elapsedMicros);
+    }
+
     public void recordPostgresWrite(long elapsedMicros) {
         record(postgresWrite, postgresWriteBreakdown, PerformanceObservationContext.currentTag(), elapsedMicros);
     }
 
     public void recordPostgresWrite(String tag, long elapsedMicros) {
         record(postgresWrite, postgresWriteBreakdown, tag, elapsedMicros);
+    }
+
+    public void recordSqlWrite(long elapsedMicros) {
+        recordPostgresWrite(elapsedMicros);
+    }
+
+    public void recordSqlWrite(String tag, long elapsedMicros) {
+        recordPostgresWrite(tag, elapsedMicros);
     }
 
     public void recordCacheAdmission(String tag, boolean admitted) {

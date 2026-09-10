@@ -31,8 +31,12 @@ jobs:
       - name: Resolve stable release ref
         id: release
         shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET_REF: ${{ inputs.targetRef }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          $releaseRef = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.targetRef }}" } else { "${{ github.ref_name }}" }
+          $releaseRef = if ($env:EVENT_NAME -eq "workflow_dispatch") { $env:TARGET_REF } else { $env:REF_NAME }
           if ($releaseRef -notmatch '^v\d+\.\d+\.\d+$') {
             throw "Public Maven repository only accepts stable semantic-version tags: $releaseRef"
           }

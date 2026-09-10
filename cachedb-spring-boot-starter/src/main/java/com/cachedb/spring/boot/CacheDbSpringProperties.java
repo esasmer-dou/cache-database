@@ -126,6 +126,7 @@ public class CacheDbSpringProperties implements InitializingBean {
         }
         validateAdmin();
         validateMssql();
+        validateOracle();
     }
 
     private void validatePool(String prefix, PoolProperties pool) {
@@ -169,6 +170,23 @@ public class CacheDbSpringProperties implements InitializingBean {
         }
     }
 
+    private void validateOracle() {
+        int timeout = sql.getOracle().getQueryTimeoutSeconds();
+        if (timeout <= 0 || timeout > 300) {
+            throw invalid("cachedb.sql.oracle.query-timeout-seconds", "must be between 1 and 300");
+        }
+        requireNonNegative("cachedb.sql.oracle.duplicate-race-retries", sql.getOracle().getDuplicateRaceRetries());
+        if (sql.getOracle().getDuplicateRaceRetries() > 10) {
+            throw invalid("cachedb.sql.oracle.duplicate-race-retries", "must not exceed 10");
+        }
+        if (sql.getOracle().getTransactionIsolation() == TransactionIsolation.REPEATABLE_READ) {
+            throw invalid(
+                    "cachedb.sql.oracle.transaction-isolation",
+                    "Oracle supports READ_COMMITTED or SERIALIZABLE for this provider"
+            );
+        }
+    }
+
     private void requireText(String property, String value) {
         if (value == null || value.isBlank()) {
             throw invalid(property, "must not be blank");
@@ -204,7 +222,13 @@ public class CacheDbSpringProperties implements InitializingBean {
         AUTO,
         POSTGRES,
         MSSQL,
+        ORACLE,
         CUSTOM
+    }
+
+    public enum OracleEmptyStringPolicy {
+        REJECT,
+        NORMALIZE_TO_NULL
     }
 
     public enum TransactionIsolation {
@@ -407,6 +431,7 @@ public class CacheDbSpringProperties implements InitializingBean {
     public static final class SqlProperties {
         private SqlProvider provider = SqlProvider.AUTO;
         private final MssqlProperties mssql = new MssqlProperties();
+        private final OracleProperties oracle = new OracleProperties();
 
         public SqlProvider getProvider() {
             return provider;
@@ -418,6 +443,10 @@ public class CacheDbSpringProperties implements InitializingBean {
 
         public MssqlProperties getMssql() {
             return mssql;
+        }
+
+        public OracleProperties getOracle() {
+            return oracle;
         }
     }
 
@@ -459,6 +488,49 @@ public class CacheDbSpringProperties implements InitializingBean {
 
         public void setRestoreLockTimeoutAfterTransaction(boolean restoreLockTimeoutAfterTransaction) {
             this.restoreLockTimeoutAfterTransaction = restoreLockTimeoutAfterTransaction;
+        }
+    }
+
+    public static final class OracleProperties {
+        private int queryTimeoutSeconds = 10;
+        private TransactionIsolation transactionIsolation = TransactionIsolation.READ_COMMITTED;
+        private int duplicateRaceRetries = 2;
+        private OracleEmptyStringPolicy emptyStringPolicy = OracleEmptyStringPolicy.REJECT;
+
+        public int getQueryTimeoutSeconds() {
+            return queryTimeoutSeconds;
+        }
+
+        public void setQueryTimeoutSeconds(int queryTimeoutSeconds) {
+            this.queryTimeoutSeconds = queryTimeoutSeconds;
+        }
+
+        public TransactionIsolation getTransactionIsolation() {
+            return transactionIsolation;
+        }
+
+        public void setTransactionIsolation(TransactionIsolation transactionIsolation) {
+            this.transactionIsolation = transactionIsolation == null
+                    ? TransactionIsolation.READ_COMMITTED
+                    : transactionIsolation;
+        }
+
+        public int getDuplicateRaceRetries() {
+            return duplicateRaceRetries;
+        }
+
+        public void setDuplicateRaceRetries(int duplicateRaceRetries) {
+            this.duplicateRaceRetries = duplicateRaceRetries;
+        }
+
+        public OracleEmptyStringPolicy getEmptyStringPolicy() {
+            return emptyStringPolicy;
+        }
+
+        public void setEmptyStringPolicy(OracleEmptyStringPolicy emptyStringPolicy) {
+            this.emptyStringPolicy = emptyStringPolicy == null
+                    ? OracleEmptyStringPolicy.REJECT
+                    : emptyStringPolicy;
         }
     }
 

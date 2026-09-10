@@ -14,7 +14,8 @@ görünür hale getirmektir.
 Şu durumlarda planlayıcıyı kullan:
 
 - desteklenen JDBC kaynak veritabanı tabloların varsa
-- PostgreSQL varsayılan keşif hedefidir; MSSQL açık SQL Server provider yolu ile desteklenir
+- şema keşfi uygulamanın yapılandırılmış `DataSource` bağlantısını kullanır;
+  PostgreSQL, SQL Server ve Oracle Database için ayrı dialect yolu bulunur
 - akış bugün JPA, Hibernate, MyBatis, JDBC veya başka bir veri erişim katmanı ile çalışıyorsa
 - çocuk satır sayısı arttıkça liste veya detay ekranı pahalılaşıyorsa
 - akışın entity read, projection read veya ranked projection read olarak mı tasarlanacağını netleştirmek istiyorsan

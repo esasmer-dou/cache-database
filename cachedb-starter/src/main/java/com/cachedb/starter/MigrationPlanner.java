@@ -76,10 +76,10 @@ public final class MigrationPlanner {
                 : "Start on GeneratedCacheModule.using(session) and keep the route on entity reads until profiling says otherwise.";
         String redisPlacement = boundedRedisWindowRequired
                 ? "Keep " + normalized.rootTableOrEntity() + " hot in Redis and keep a bounded per-parent " + summaryProjectionName
-                + " window in Redis. Leave full " + normalized.childTableOrEntity() + " history in PostgreSQL."
+                + " window in Redis. Leave full " + normalized.childTableOrEntity() + " history in the source database."
                 : "Keep both " + normalized.rootTableOrEntity() + " and " + normalized.childTableOrEntity()
                 + " hot in Redis, but still prefer " + summaryProjectionName + " for the first paint list.";
-        String postgresPlacement = "PostgreSQL remains the durable source of truth for the full "
+        String postgresPlacement = "The configured SQL database remains the durable source of truth for the full "
                 + normalized.childTableOrEntity() + " history and all archive or replay reads.";
         long routeMemoryBudgetBytes = estimateRouteMemoryBudgetBytes(
                 normalized,
@@ -156,7 +156,7 @@ public final class MigrationPlanner {
                 "Measure the existing ORM/source-database route before introducing CacheDB.",
                 List.of(
                         "Capture p50/p95 for the list route and the detail route separately.",
-                        "Capture current PostgreSQL query count, average rows scanned, and connection pool pressure.",
+                        "Capture current source-database query count, average rows scanned, and connection pool pressure.",
                         "Capture the typical first page size and the deepest page real users hit."
                 )
         ));
@@ -177,7 +177,7 @@ public final class MigrationPlanner {
                         "Warm all hot " + normalized.rootTableOrEntity() + " rows needed by the target service.",
                         "Warm per-parent " + summaryProjectionName + " rows up to " + recommendedHotWindow + " items.",
                         boundedRedisWindowRequired
-                                ? "Leave older " + normalized.childTableOrEntity() + " rows in PostgreSQL archive/history path."
+                                ? "Leave older " + normalized.childTableOrEntity() + " rows in the source-database archive/history path."
                                 : "Keep full child rows hot only if Redis memory budget and growth rate still support it."
                 )
         ));
@@ -195,7 +195,7 @@ public final class MigrationPlanner {
                 "Use side-by-side results before a full production move.",
                 List.of(
                         "Compare Redis read latency against the baseline source-database route.",
-                        "Confirm PostgreSQL load dropped on the hot path instead of just moving cost elsewhere.",
+                        "Confirm source-database load dropped on the hot path instead of just moving cost elsewhere.",
                         "Confirm Redis memory stays inside the planned hot window."
                 )
         ));
@@ -203,13 +203,13 @@ public final class MigrationPlanner {
         ArrayList<ComparisonCheck> comparisonChecks = new ArrayList<>();
         comparisonChecks.add(new ComparisonCheck(
                 "Hot list latency",
-                "Compare baseline ORM/PostgreSQL list p50/p95 against CacheDB summary projection p50/p95.",
+                "Compare baseline ORM/source-database list p50/p95 against CacheDB summary projection p50/p95.",
                 "CacheDB summary route should materially reduce p95 without widening Redis memory beyond the planned window."
         ));
         comparisonChecks.add(new ComparisonCheck(
                 "Database pressure",
-                "Compare PostgreSQL query count and rows scanned before and after the CacheDB route is enabled.",
-                "Hot list traffic should move to Redis, while PostgreSQL remains mainly durability, detail, and archive path."
+                "Compare source-database query count and rows scanned before and after the CacheDB route is enabled.",
+                "Hot list traffic should move to Redis, while the SQL database remains mainly the durability, detail, and archive path."
         ));
         comparisonChecks.add(new ComparisonCheck(
                 "First paint object count",
@@ -341,7 +341,7 @@ public final class MigrationPlanner {
                     SELECT source.*
                     FROM %s source
                     ORDER BY %s %s, %s DESC
-                    %s;
+                    %s
                     """.formatted(
                     safeChildTableName,
                     safeSortColumn,
@@ -361,7 +361,7 @@ public final class MigrationPlanner {
                 )
                 SELECT ranked_source.*
                 FROM ranked_source
-                WHERE cachedb_hot_rank <= %d;
+                WHERE cachedb_hot_rank <= %d
                 """.formatted(
                 safeRelationColumn,
                 safeSortColumn,
@@ -407,7 +407,7 @@ public final class MigrationPlanner {
         }
         if (projectionRequired) {
             return "Use a summary projection for the hot list route, keep the hot window at " + hotWindowPerRoot
-                    + " rows per parent, and validate first-paint latency plus PostgreSQL load before cutover.";
+                    + " rows per parent, and validate first-paint latency plus source-database load before cutover.";
         }
         return "This route can start on direct entity reads, but still baseline p95 and move to a summary projection as soon as fan-out or growth makes the first paint expensive.";
     }

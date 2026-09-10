@@ -19,10 +19,12 @@ import java.util.Objects;
 public final class JdbcSourceSqlRepository<T> implements SourceSqlRepository<T> {
     private final DataSource dataSource;
     private final EntityCodec<T> codec;
+    private final JdbcQueryDialect dialect;
 
     public JdbcSourceSqlRepository(DataSource dataSource, EntityCodec<T> codec) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.codec = Objects.requireNonNull(codec, "codec");
+        this.dialect = JdbcQueryDialects.resolve(dataSource);
     }
 
     @Override
@@ -37,7 +39,7 @@ public final class JdbcSourceSqlRepository<T> implements SourceSqlRepository<T> 
                 statement.setFetchSize(Math.min(query.maxRows(), 1_000));
                 statement.setMaxRows(probeLimit);
                 for (int index = 0; index < query.parameters().size(); index++) {
-                    statement.setObject(index + 1, query.parameters().get(index));
+                    dialect.bindParameter(statement, index + 1, query.parameters().get(index));
                 }
                 try (ResultSet resultSet = statement.executeQuery()) {
                     ArrayList<T> rows = new ArrayList<>(Math.min(query.maxRows(), 128));

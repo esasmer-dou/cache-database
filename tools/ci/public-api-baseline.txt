@@ -2430,8 +2430,12 @@ public class com.reactor.cachedb.core.queue.StoragePerformanceCollector {
   public void recordRedisWrite(java.lang.String, long);
   public void recordPostgresRead(long);
   public void recordPostgresRead(java.lang.String, long);
+  public void recordSqlRead(long);
+  public void recordSqlRead(java.lang.String, long);
   public void recordPostgresWrite(long);
   public void recordPostgresWrite(java.lang.String, long);
+  public void recordSqlWrite(long);
+  public void recordSqlWrite(java.lang.String, long);
   public void recordCacheAdmission(java.lang.String, boolean);
   public void recordCacheEviction(java.lang.String, long);
   public com.reactor.cachedb.core.queue.StoragePerformanceSnapshot snapshot();
@@ -3428,6 +3432,13 @@ public final class com.reactor.cachedb.redis.RedisWriteOperationMapper {
   public com.reactor.cachedb.core.queue.QueuedWriteOperation fromBody(java.util.Map<java.lang.String, java.lang.String>);
 }
 
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.CacheDbDatabaseProductUnsupportedException
+public final class com.reactor.cachedb.jdbc.CacheDbDatabaseProductUnsupportedException extends java.lang.IllegalStateException {
+  public com.reactor.cachedb.jdbc.CacheDbDatabaseProductUnsupportedException(java.lang.String, java.util.List<java.lang.String>);
+  public java.lang.String databaseProductName();
+  public java.util.List<java.lang.String> availableProviderIds();
+}
+
 ## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.CacheDbProviderAmbiguousException
 public final class com.reactor.cachedb.jdbc.CacheDbProviderAmbiguousException extends java.lang.IllegalStateException {
   public com.reactor.cachedb.jdbc.CacheDbProviderAmbiguousException(java.util.List<java.lang.String>);
@@ -3459,6 +3470,7 @@ public interface com.reactor.cachedb.jdbc.JdbcDatabaseDialect {
 public final class com.reactor.cachedb.jdbc.JdbcEntitySourceLoader<T, ID> implements com.reactor.cachedb.core.page.VersionedEntitySourceLoader<T, ID> {
   public com.reactor.cachedb.jdbc.JdbcEntitySourceLoader(javax.sql.DataSource, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, int);
   public com.reactor.cachedb.jdbc.JdbcEntitySourceLoader(javax.sql.DataSource, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, int, int);
+  public com.reactor.cachedb.jdbc.JdbcEntitySourceLoader(javax.sql.DataSource, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, int, int, com.reactor.cachedb.jdbc.JdbcQueryDialect);
   public java.util.Optional<com.reactor.cachedb.core.page.VersionedEntity<T>> loadVersionedById(ID);
   public java.util.List<com.reactor.cachedb.core.page.VersionedEntity<T>> loadVersionedPage(com.reactor.cachedb.core.cache.PageWindow);
   public java.util.List<com.reactor.cachedb.core.page.VersionedEntity<T>> loadVersionedQuery(com.reactor.cachedb.core.query.QuerySpec);
@@ -3507,6 +3519,47 @@ public final class com.reactor.cachedb.jdbc.JdbcOutboxMapping extends java.lang.
   public java.lang.String sourceColumn();
 }
 
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcQueryDialect
+public interface com.reactor.cachedb.jdbc.JdbcQueryDialect {
+  public abstract java.lang.String name();
+  public abstract boolean supportsDatabaseProduct(java.lang.String);
+  public abstract int maxInListExpressions();
+  public default java.lang.String offsetFetchClause();
+  public default java.lang.String limitTail(int);
+  public default java.lang.String parameterizedLimitTail();
+  public default void bindParameter(java.sql.PreparedStatement, int, java.lang.Object) throws java.sql.SQLException;
+}
+
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcQueryDialects
+public final class com.reactor.cachedb.jdbc.JdbcQueryDialects {
+  public static com.reactor.cachedb.jdbc.JdbcQueryDialect resolve(javax.sql.DataSource);
+  public static com.reactor.cachedb.jdbc.JdbcQueryDialect resolve(java.sql.Connection) throws java.sql.SQLException;
+  public static com.reactor.cachedb.jdbc.JdbcQueryDialect resolve(java.sql.Connection, java.lang.ClassLoader) throws java.sql.SQLException;
+  public static com.reactor.cachedb.jdbc.JdbcQueryDialect standard(java.lang.String, java.util.Set<java.lang.String>, int, boolean);
+}
+
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcSchemaDialect
+public interface com.reactor.cachedb.jdbc.JdbcSchemaDialect {
+  public abstract java.lang.String name();
+  public abstract java.lang.String sqlType(java.lang.String);
+  public default java.lang.String columnDefinition(java.lang.String, java.lang.String, boolean);
+  public default java.lang.String versionColumnDefinition(java.lang.String);
+  public default java.lang.String createTableSql(java.lang.String, java.util.List<java.lang.String>, java.lang.String);
+  public default java.lang.String addColumnSql(java.lang.String, java.lang.String);
+  public default java.lang.String metadataIdentifier(java.sql.DatabaseMetaData, java.lang.String) throws java.sql.SQLException;
+}
+
+## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcSchemaDialects
+public final class com.reactor.cachedb.jdbc.JdbcSchemaDialects {
+  public static com.reactor.cachedb.jdbc.JdbcSchemaDialect resolve(javax.sql.DataSource);
+  public static com.reactor.cachedb.jdbc.JdbcSchemaDialect resolve(java.sql.Connection) throws java.sql.SQLException;
+  public static com.reactor.cachedb.jdbc.JdbcSchemaDialect resolve(java.sql.Connection, java.lang.ClassLoader) throws java.sql.SQLException;
+  public static com.reactor.cachedb.jdbc.JdbcSchemaDialect ansi(java.lang.String);
+  public static com.reactor.cachedb.jdbc.JdbcSchemaDialect postgres();
+  public static com.reactor.cachedb.jdbc.JdbcSchemaDialect mssql();
+  public static com.reactor.cachedb.jdbc.JdbcSchemaDialect oracle();
+}
+
 ## cachedb-storage-jdbc :: com.reactor.cachedb.jdbc.JdbcSourceSqlRepository
 public final class com.reactor.cachedb.jdbc.JdbcSourceSqlRepository<T> implements com.reactor.cachedb.core.repository.SourceSqlRepository<T> {
   public com.reactor.cachedb.jdbc.JdbcSourceSqlRepository(javax.sql.DataSource, com.reactor.cachedb.core.model.EntityCodec<T>);
@@ -3517,6 +3570,8 @@ public final class com.reactor.cachedb.jdbc.JdbcSourceSqlRepository<T> implement
 public interface com.reactor.cachedb.jdbc.JdbcStorageProvider {
   public abstract java.lang.String id();
   public abstract com.reactor.cachedb.jdbc.JdbcDatabaseDialect dialect();
+  public default com.reactor.cachedb.jdbc.JdbcQueryDialect queryDialect();
+  public default com.reactor.cachedb.jdbc.JdbcSchemaDialect schemaDialect();
   public abstract com.reactor.cachedb.core.queue.WriteBehindFlusherFactory writeBehindFlusherFactory(java.util.Map<java.lang.String, java.lang.String>);
   public default java.util.Set<java.lang.String> supportedOptions();
 }
@@ -3633,6 +3688,8 @@ public final class com.reactor.cachedb.postgres.PostgresStorageProvider implemen
   public com.reactor.cachedb.postgres.PostgresStorageProvider();
   public java.lang.String id();
   public com.reactor.cachedb.jdbc.JdbcDatabaseDialect dialect();
+  public com.reactor.cachedb.jdbc.JdbcQueryDialect queryDialect();
+  public com.reactor.cachedb.jdbc.JdbcSchemaDialect schemaDialect();
   public com.reactor.cachedb.core.queue.WriteBehindFlusherFactory writeBehindFlusherFactory(java.util.Map<java.lang.String, java.lang.String>);
 }
 
@@ -3702,6 +3759,8 @@ public final class com.reactor.cachedb.mssql.MssqlStorageProvider implements com
   public com.reactor.cachedb.mssql.MssqlStorageProvider();
   public java.lang.String id();
   public com.reactor.cachedb.jdbc.JdbcDatabaseDialect dialect();
+  public com.reactor.cachedb.jdbc.JdbcQueryDialect queryDialect();
+  public com.reactor.cachedb.jdbc.JdbcSchemaDialect schemaDialect();
   public com.reactor.cachedb.core.queue.WriteBehindFlusherFactory writeBehindFlusherFactory(java.util.Map<java.lang.String, java.lang.String>);
   public java.util.Set<java.lang.String> supportedOptions();
 }
@@ -3735,6 +3794,102 @@ public final class com.reactor.cachedb.mssql.MssqlWriteBehindOptions extends jav
   public int queryTimeoutSeconds();
   public int transactionIsolation();
   public boolean restoreLockTimeoutAfterTransaction();
+}
+
+## cachedb-storage-oracle :: com.reactor.cachedb.oracle.OracleDatabaseDialect
+public final class com.reactor.cachedb.oracle.OracleDatabaseDialect implements com.reactor.cachedb.jdbc.JdbcDatabaseDialect {
+  public com.reactor.cachedb.oracle.OracleDatabaseDialect();
+  public java.lang.String name();
+  public int maxParametersPerStatement();
+  public boolean supportsMultiRowUpsert();
+  public java.lang.String deleteSql(com.reactor.cachedb.core.queue.QueuedWriteOperation);
+  public java.lang.String deleteMultiRowSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, int);
+  public java.lang.String upsertSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>);
+  public java.lang.String upsertMultiRowSql(com.reactor.cachedb.core.queue.QueuedWriteOperation, java.util.List<java.util.Map$Entry<java.lang.String, java.lang.String>>, int);
+  public java.lang.String sqlCastType(java.lang.String);
+}
+
+## cachedb-storage-oracle :: com.reactor.cachedb.oracle.OracleFailureClassifier
+public final class com.reactor.cachedb.oracle.OracleFailureClassifier {
+  public com.reactor.cachedb.oracle.OracleFailureClassifier();
+  public com.reactor.cachedb.core.queue.WriteFailureDetails classify(java.lang.Exception);
+}
+
+## cachedb-storage-oracle :: com.reactor.cachedb.oracle.OracleOutboxDialect
+public final class com.reactor.cachedb.oracle.OracleOutboxDialect implements com.reactor.cachedb.jdbc.JdbcOutboxDialect {
+  public com.reactor.cachedb.oracle.OracleOutboxDialect();
+  public com.reactor.cachedb.oracle.OracleOutboxDialect(int);
+  public java.lang.String name();
+  public java.lang.String createCheckpointTableSql(java.lang.String);
+  public java.lang.String ensureCheckpointSql(java.lang.String);
+  public void bindEnsureCheckpoint(java.sql.PreparedStatement, java.lang.String) throws java.sql.SQLException;
+  public java.lang.String readCheckpointForUpdateSql(java.lang.String);
+  public java.lang.String readBatchSql(com.reactor.cachedb.jdbc.JdbcOutboxMapping, int);
+  public void bindReadBatch(java.sql.PreparedStatement, long, int) throws java.sql.SQLException;
+  public java.lang.String writeCheckpointSql(java.lang.String);
+  public void bindWriteCheckpoint(java.sql.PreparedStatement, java.lang.String, long) throws java.sql.SQLException;
+}
+
+## cachedb-storage-oracle :: com.reactor.cachedb.oracle.OracleOutboxExternalChangeFeedAdapter
+public final class com.reactor.cachedb.oracle.OracleOutboxExternalChangeFeedAdapter implements com.reactor.cachedb.core.change.ExternalChangeFeedAdapter {
+  public static com.reactor.cachedb.oracle.OracleOutboxExternalChangeFeedAdapter$Builder builder(javax.sql.DataSource);
+  public static com.reactor.cachedb.oracle.OracleOutboxExternalChangeFeedAdapter$Builder builder(javax.sql.DataSource, int);
+  public void start(com.reactor.cachedb.core.change.ExternalChangeSink);
+  public int pollOnce(com.reactor.cachedb.core.change.ExternalChangeSink);
+  public void initialize() throws java.sql.SQLException;
+  public java.lang.RuntimeException lastFailure();
+  public void close();
+}
+
+## cachedb-storage-oracle :: com.reactor.cachedb.oracle.OracleQueryDialect
+public final class com.reactor.cachedb.oracle.OracleQueryDialect implements com.reactor.cachedb.jdbc.JdbcQueryDialect {
+  public static final int SAFE_IN_LIST_EXPRESSIONS;
+  public com.reactor.cachedb.oracle.OracleQueryDialect();
+  public java.lang.String name();
+  public boolean supportsDatabaseProduct(java.lang.String);
+  public int maxInListExpressions();
+  public void bindParameter(java.sql.PreparedStatement, int, java.lang.Object) throws java.sql.SQLException;
+}
+
+## cachedb-storage-oracle :: com.reactor.cachedb.oracle.OracleStorageProvider
+public final class com.reactor.cachedb.oracle.OracleStorageProvider implements com.reactor.cachedb.jdbc.JdbcStorageProvider {
+  public static final java.lang.String QUERY_TIMEOUT_SECONDS;
+  public static final java.lang.String TRANSACTION_ISOLATION;
+  public static final java.lang.String DUPLICATE_RACE_RETRIES;
+  public static final java.lang.String EMPTY_STRING_POLICY;
+  public com.reactor.cachedb.oracle.OracleStorageProvider();
+  public java.lang.String id();
+  public com.reactor.cachedb.jdbc.JdbcDatabaseDialect dialect();
+  public com.reactor.cachedb.jdbc.JdbcQueryDialect queryDialect();
+  public com.reactor.cachedb.jdbc.JdbcSchemaDialect schemaDialect();
+  public com.reactor.cachedb.core.queue.WriteBehindFlusherFactory writeBehindFlusherFactory(java.util.Map<java.lang.String, java.lang.String>);
+  public java.util.Set<java.lang.String> supportedOptions();
+}
+
+## cachedb-storage-oracle :: com.reactor.cachedb.oracle.OracleWriteBehindFlusher
+public final class com.reactor.cachedb.oracle.OracleWriteBehindFlusher implements com.reactor.cachedb.core.queue.FailureClassifyingFlusher {
+  public com.reactor.cachedb.oracle.OracleWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry);
+  public com.reactor.cachedb.oracle.OracleWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig);
+  public com.reactor.cachedb.oracle.OracleWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.oracle.OracleWriteBehindOptions);
+  public com.reactor.cachedb.oracle.OracleWriteBehindFlusher(javax.sql.DataSource, com.reactor.cachedb.core.registry.EntityRegistry, com.reactor.cachedb.core.config.WriteBehindConfig, com.reactor.cachedb.core.queue.StoragePerformanceCollector, com.reactor.cachedb.oracle.OracleWriteBehindOptions);
+  public static com.reactor.cachedb.core.queue.WriteBehindFlusherFactory factory(com.reactor.cachedb.oracle.OracleWriteBehindOptions);
+  public void flush(com.reactor.cachedb.core.queue.QueuedWriteOperation) throws java.sql.SQLException;
+  public void flushBatch(java.util.List<com.reactor.cachedb.core.queue.QueuedWriteOperation>) throws java.sql.SQLException;
+  public com.reactor.cachedb.core.queue.WriteFailureDetails classify(java.lang.Exception);
+}
+
+## cachedb-storage-oracle :: com.reactor.cachedb.oracle.OracleWriteBehindOptions
+public final class com.reactor.cachedb.oracle.OracleWriteBehindOptions extends java.lang.Record {
+  public com.reactor.cachedb.oracle.OracleWriteBehindOptions(int, int, int, com.reactor.cachedb.oracle.OracleWriteBehindOptions$EmptyStringPolicy);
+  public static com.reactor.cachedb.oracle.OracleWriteBehindOptions defaults();
+  public static com.reactor.cachedb.oracle.OracleWriteBehindOptions$Builder builder();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public int queryTimeoutSeconds();
+  public int transactionIsolation();
+  public int duplicateRaceRetries();
+  public com.reactor.cachedb.oracle.OracleWriteBehindOptions$EmptyStringPolicy emptyStringPolicy();
 }
 
 ## cachedb-starter :: com.reactor.cachedb.starter.AdminIncidentDeliveryManager
@@ -4557,6 +4712,11 @@ public final class com.reactor.cachedb.starter.RuntimeProfilePropertySnapshot ex
   public java.lang.String description();
 }
 
+## cachedb-starter :: com.reactor.cachedb.starter.SchemaBootstrapException
+public final class com.reactor.cachedb.starter.SchemaBootstrapException extends java.lang.IllegalStateException {
+  public com.reactor.cachedb.starter.SchemaBootstrapException(com.reactor.cachedb.starter.SchemaBootstrapResult);
+}
+
 ## cachedb-starter :: com.reactor.cachedb.starter.SchemaBootstrapIssue
 public final class com.reactor.cachedb.starter.SchemaBootstrapIssue extends java.lang.Record {
   public com.reactor.cachedb.starter.SchemaBootstrapIssue(java.lang.String, java.lang.String, java.lang.String);
@@ -4960,6 +5120,139 @@ public interface com.reactor.cachedb.spring.boot.CacheScheduledWarmTask {
   public abstract com.reactor.cachedb.starter.CacheWarmPlan createPlan();
 }
 
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.CacheSnapshotAutoConfiguration
+public class com.reactor.cachedb.spring.boot.snapshot.CacheSnapshotAutoConfiguration {
+  public com.reactor.cachedb.spring.boot.snapshot.CacheSnapshotAutoConfiguration();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotJobs
+public final class com.reactor.cachedb.spring.boot.snapshot.SnapshotJobs implements com.reactor.cachedb.spring.boot.snapshot.SnapshotOperations,org.springframework.context.SmartLifecycle,java.lang.AutoCloseable {
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotJobs(javax.sql.DataSource, redis.clients.jedis.JedisPooled, com.fasterxml.jackson.databind.ObjectMapper, java.time.Clock, java.lang.String, java.util.List<com.reactor.cachedb.spring.boot.snapshot.SnapshotPlan<?, ?>>, java.util.Map<java.lang.String, com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings>);
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotJobs(javax.sql.DataSource, redis.clients.jedis.JedisPooled, redis.clients.jedis.JedisPooled, com.fasterxml.jackson.databind.ObjectMapper, java.time.Clock, java.lang.String, java.util.List<com.reactor.cachedb.spring.boot.snapshot.SnapshotPlan<?, ?>>, java.util.Map<java.lang.String, com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings>);
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotRepository repository(java.lang.String);
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings settings(java.lang.String);
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotRefreshResult refresh(java.lang.String, boolean);
+  public synchronized void start();
+  public boolean isRunning();
+  public int getPhase();
+  public void stop();
+  public synchronized void close();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotOperations
+public interface com.reactor.cachedb.spring.boot.snapshot.SnapshotOperations {
+  public abstract com.reactor.cachedb.spring.boot.snapshot.SnapshotRepository repository(java.lang.String);
+  public abstract com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings settings(java.lang.String);
+  public abstract com.reactor.cachedb.spring.boot.snapshot.SnapshotRefreshResult refresh(java.lang.String, boolean);
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotPlan
+public final class com.reactor.cachedb.spring.boot.snapshot.SnapshotPlan<R, V> extends java.lang.Record {
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotPlan(java.lang.String, com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<R>, java.util.function.Function<R, java.lang.String>, java.util.List<com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<?>>, java.lang.Class<V>, java.util.function.Function<com.reactor.cachedb.spring.boot.snapshot.SnapshotRows, java.util.function.Function<R, java.lang.Iterable<V>>>);
+  public <U> com.reactor.cachedb.spring.boot.snapshot.SnapshotPlan<R, U> map(java.lang.String, java.lang.Class<U>, java.util.function.BiFunction<R, java.lang.Iterable<V>, java.lang.Iterable<U>>);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String name();
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<R> roots();
+  public java.util.function.Function<R, java.lang.String> id();
+  public java.util.List<com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<?>> sources();
+  public java.lang.Class<V> valueType();
+  public java.util.function.Function<com.reactor.cachedb.spring.boot.snapshot.SnapshotRows, java.util.function.Function<R, java.lang.Iterable<V>>> projection();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotProperties
+public final class com.reactor.cachedb.spring.boot.snapshot.SnapshotProperties extends java.lang.Record {
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotProperties(java.util.Map<java.lang.String, com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings>);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.util.Map<java.lang.String, com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings> jobs();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotReadOnlyProfile
+public final class com.reactor.cachedb.spring.boot.snapshot.SnapshotReadOnlyProfile {
+  public static final long RETENTION_SECONDS;
+  public static final int PUBLICATION_BATCH_SIZE;
+  public static void configure(com.reactor.cachedb.core.config.CacheDatabaseConfig$Builder, java.lang.String);
+  public static com.reactor.cachedb.core.cache.CachePolicy policy();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotRefreshResult
+public final class com.reactor.cachedb.spring.boot.snapshot.SnapshotRefreshResult extends java.lang.Record {
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotRefreshResult(java.lang.String, int, int, long);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String status();
+  public int loadedRows();
+  public int submittedRows();
+  public long durationMillis();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotRepository
+public interface com.reactor.cachedb.spring.boot.snapshot.SnapshotRepository {
+  public abstract java.util.Optional<com.reactor.cachedb.spring.boot.snapshot.SnapshotValue> findById(java.lang.String);
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotRows
+public final class com.reactor.cachedb.spring.boot.snapshot.SnapshotRows {
+  public <T> java.util.List<T> get(com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<T>);
+  public <T, K> java.util.Map<K, T> unique(com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<T>, java.util.function.Function<T, K>);
+  public <T, K, V> java.util.Map<K, java.util.List<V>> group(com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<T>, java.util.function.Function<T, K>, java.util.function.Function<T, V>, java.util.Comparator<V>);
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings
+public final class com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings extends java.lang.Record {
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings(boolean, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, int, int, int, int, org.springframework.util.unit.DataSize, org.springframework.util.unit.DataSize, org.springframework.util.unit.DataSize, org.springframework.util.unit.DataSize, java.lang.String);
+  public static com.reactor.cachedb.spring.boot.snapshot.SnapshotSettings defaults();
+  public java.nio.file.Path directory();
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public boolean enabled();
+  public java.time.Duration interval();
+  public java.time.Duration warnAge();
+  public java.time.Duration maxAge();
+  public java.time.Duration retention();
+  public java.time.Duration timeout();
+  public java.time.Duration preparationTimeout();
+  public java.time.Duration leaseDuration();
+  public int batchRows();
+  public int fetchRows();
+  public int maxSourceRows();
+  public int maxRowsPerSource();
+  public org.springframework.util.unit.DataSize maxSourceSize();
+  public org.springframework.util.unit.DataSize batchTargetSize();
+  public org.springframework.util.unit.DataSize payloadWarningSize();
+  public org.springframework.util.unit.DataSize catalogWarningSize();
+  public java.lang.String spoolDirectory();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotSource
+public final class com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<T> {
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotSource(java.lang.String, java.lang.String, java.util.function.Function<java.util.Map<java.lang.String, java.lang.Object>, T>);
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotSource(java.lang.String, java.lang.String, java.util.function.Function<java.util.Map<java.lang.String, java.lang.Object>, T>, boolean);
+  public java.lang.String name();
+  public java.lang.String sql();
+  public java.util.function.Function<java.util.Map<java.lang.String, java.lang.Object>, T> decoder();
+  public boolean bounded();
+  public static <T, ID> com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<T> entity(java.lang.String, com.reactor.cachedb.core.model.EntityMetadata<T, ID>, com.reactor.cachedb.core.model.EntityCodec<T>, java.lang.String);
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotSource<T> withoutPerSourceLimit();
+}
+
+## cachedb-spring-boot-starter :: com.reactor.cachedb.spring.boot.snapshot.SnapshotValue
+public final class com.reactor.cachedb.spring.boot.snapshot.SnapshotValue extends java.lang.Record {
+  public com.reactor.cachedb.spring.boot.snapshot.SnapshotValue(java.lang.String, java.lang.String, long, java.lang.String);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public java.lang.String id();
+  public java.lang.String payload();
+  public long refreshedAt();
+  public java.lang.String generation();
+}
+
 ## cachedb-spring-boot-starter-postgres :: com.reactor.cachedb.spring.boot.postgres.CacheDbPostgresStarter
 public final class com.reactor.cachedb.spring.boot.postgres.CacheDbPostgresStarter {
   public static final java.lang.String PROVIDER_ID;
@@ -4968,6 +5261,12 @@ public final class com.reactor.cachedb.spring.boot.postgres.CacheDbPostgresStart
 
 ## cachedb-spring-boot-starter-mssql :: com.reactor.cachedb.spring.boot.mssql.CacheDbMssqlStarter
 public final class com.reactor.cachedb.spring.boot.mssql.CacheDbMssqlStarter {
+  public static final java.lang.String PROVIDER_ID;
+  public static final java.lang.String ARTIFACT_ID;
+}
+
+## cachedb-spring-boot-starter-oracle :: com.reactor.cachedb.spring.boot.oracle.CacheDbOracleStarter
+public final class com.reactor.cachedb.spring.boot.oracle.CacheDbOracleStarter {
   public static final java.lang.String PROVIDER_ID;
   public static final java.lang.String ARTIFACT_ID;
 }
@@ -5074,4 +5373,5 @@ public final class com.reactor.cachedb.maven.CacheDbDoctorMojo extends org.apach
 public final class com.reactor.cachedb.migration.CacheDbMigrationRecipes {
   public static final java.lang.String USE_POSTGRES_STARTER;
   public static final java.lang.String USE_MSSQL_STARTER;
+  public static final java.lang.String USE_ORACLE_STARTER;
 }

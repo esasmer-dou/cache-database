@@ -1,5 +1,7 @@
 # Spring Boot Starter
 
+For multi-table, ID-addressed response catalogs, see [Declarative Snapshot Projections](snapshot-projections.md). The development API moves scheduling, disk spooling and fenced publication into the framework; applications declare a plan and its settings.
+
 This project can be used in two ways:
 
 - as a standalone demo/runtime from `cachedb-examples`
@@ -27,6 +29,29 @@ For most teams, the recommended default is:
 5. use low-level bindings or provider repositories only for framework and operational infrastructure
 
 That gives you the easiest startup path without giving up the project's first priority of keeping runtime overhead low.
+
+### Schema Ownership And Startup Order
+
+Use one component to change DDL. If Spring SQL initialization, Flyway, or
+Liquibase owns the schema, keep CacheDB in `VALIDATE_ONLY` mode. The starter
+orders the `CacheDatabase` bean after application database initialization, so
+validation and worker startup cannot race the migration scripts.
+
+```java
+@Bean
+CacheDatabaseConfigCustomizer schemaOwnership() {
+    return (builder, properties) -> builder.schemaBootstrap(
+            SchemaBootstrapConfig.builder()
+                    .mode(SchemaBootstrapMode.VALIDATE_ONLY)
+                    .autoApplyOnStart(true)
+                    .build()
+    );
+}
+```
+
+Use `CREATE_IF_MISSING` only when CacheDB is the sole DDL owner, normally in a
+local development environment. Do not run it concurrently with another schema
+manager.
 
 ### Declarative Application Surface
 
@@ -399,9 +424,10 @@ Notes:
 
 - `cachedb-spring-boot-starter` does not replace your JDBC starter.
 - A Spring `DataSource` is still required.
-- The dependency snippets use PostgreSQL because it is the default provider. If
-  you choose MSSQL, add `cachedb-storage-mssql`, use the Microsoft SQL Server
-  JDBC driver, and set `cachedb.sql.provider=mssql`.
+- The dependency snippets use PostgreSQL because it is the backward-compatible
+  default provider. Use `cachedb-spring-boot-starter-mssql` for SQL Server or
+  `cachedb-spring-boot-starter-oracle` for Oracle Database and select the
+  matching `cachedb.sql.provider` value.
 - If you do not provide a `JedisPooled` bean, the starter creates one from `cachedb.redis.uri`.
 - The legacy alias `cachedb.redis-uri` still works.
 - `cachedb.profile` accepts `default`, `development`, `production`, `benchmark`, `memory-constrained`, or `minimal-overhead`.
@@ -457,6 +483,44 @@ BEST: give CacheDB write-behind a dedicated SQL Server pool in high-write
 services and size that pool from total cluster worker concurrency. If you use a
 shared application pool, keep `restore-lock-timeout-after-transaction=true` so
 CacheDB does not leak a changed `LOCK_TIMEOUT` into unrelated SQL code.
+
+### Oracle Database With Spring Boot
+
+Use the Oracle provider starter. It includes the Oracle storage module and the
+supported `ojdbc17` runtime driver:
+
+```xml
+<dependency>
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cachedb-spring-boot-starter-oracle</artifactId>
+</dependency>
+```
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:oracle:thin:@//oracle:1521/APP_SERVICE
+    username: app
+    password: ${DB_PASSWORD}
+
+cachedb:
+  enabled: true
+  profile: production
+  sql:
+    provider: oracle
+    oracle:
+      query-timeout-seconds: 10
+      transaction-isolation: read_committed
+      duplicate-race-retries: 2
+      empty-string-policy: reject
+  redis:
+    uri: redis://redis:6379
+```
+
+Oracle commands need an identifier before Redis acceptance and a numeric
+version column for durable ordering. Empty strings are rejected by default
+because Oracle stores them as `NULL`. See [Oracle Provider](oracle-provider.md)
+for the complete value, outbox, pool, and HA evidence contract.
 
 ## First Working Plain Java Example
 

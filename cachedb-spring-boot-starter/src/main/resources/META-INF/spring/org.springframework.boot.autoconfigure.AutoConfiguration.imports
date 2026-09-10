@@ -1,1 +1,2 @@
 com.reactor.cachedb.spring.boot.CacheDatabaseSpringBootAutoConfiguration
+com.reactor.cachedb.spring.boot.snapshot.CacheSnapshotAutoConfiguration

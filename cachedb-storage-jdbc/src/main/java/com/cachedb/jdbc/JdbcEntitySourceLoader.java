@@ -47,6 +47,7 @@ public final class JdbcEntitySourceLoader<T, ID>
     private final String tableName;
     private final List<String> selectColumns;
     private final Set<String> allowedColumns;
+    private final JdbcQueryDialect dialect;
 
     public JdbcEntitySourceLoader(
             DataSource dataSource,
@@ -64,6 +65,17 @@ public final class JdbcEntitySourceLoader<T, ID>
             int maxRows,
             int queryTimeoutSeconds
     ) {
+        this(dataSource, metadata, codec, maxRows, queryTimeoutSeconds, JdbcQueryDialects.resolve(dataSource));
+    }
+
+    public JdbcEntitySourceLoader(
+            DataSource dataSource,
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            int maxRows,
+            int queryTimeoutSeconds,
+            JdbcQueryDialect dialect
+    ) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.metadata = Objects.requireNonNull(metadata, "metadata");
         this.codec = Objects.requireNonNull(codec, "codec");
@@ -72,6 +84,7 @@ public final class JdbcEntitySourceLoader<T, ID>
             throw new IllegalArgumentException("queryTimeoutSeconds must be greater than zero");
         }
         this.queryTimeoutSeconds = queryTimeoutSeconds;
+        this.dialect = Objects.requireNonNull(dialect, "dialect");
         this.tableName = requireQualifiedIdentifier(metadata.tableName(), "tableName");
         this.selectColumns = validateColumns(metadata.columns());
         this.allowedColumns = new HashSet<>(selectColumns);
@@ -94,7 +107,7 @@ public final class JdbcEntitySourceLoader<T, ID>
                 + " WHERE " + requireAllowedColumn(metadata.idColumn()) + " = ?"
                 + activePredicate(parameters)
                 + " ORDER BY " + requireAllowedColumn(metadata.idColumn()) + " ASC"
-                + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
+                + dialect.offsetFetchClause();
         parameters.add(0);
         parameters.add(1);
         List<VersionedEntity<T>> rows = executeVersioned(sql, parameters, 1);
@@ -111,7 +124,7 @@ public final class JdbcEntitySourceLoader<T, ID>
                 + " WHERE 1 = 1"
                 + activePredicate(parameters)
                 + " ORDER BY " + requireAllowedColumn(metadata.idColumn()) + " ASC"
-                + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
+                + dialect.offsetFetchClause();
         parameters.add(Math.max(0, normalized.offset()));
         parameters.add(pageSize);
         return executeVersioned(sql, parameters, pageSize);
@@ -127,7 +140,7 @@ public final class JdbcEntitySourceLoader<T, ID>
                 + " WHERE " + renderNode(normalized.rootGroup(), parameters)
                 + activePredicate(parameters)
                 + renderOrderBy(normalized.sorts())
-                + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
+                + dialect.offsetFetchClause();
         parameters.add(Math.max(0, normalized.offset()));
         parameters.add(limit);
         return executeVersioned(sql, parameters, limit, normalized.queryTimeoutSeconds());
@@ -152,7 +165,7 @@ public final class JdbcEntitySourceLoader<T, ID>
             statement.setFetchSize(Math.min(boundedExpectedLimit, maxRows));
             statement.setMaxRows(boundedExpectedLimit);
             for (int index = 0; index < parameters.size(); index++) {
-                statement.setObject(index + 1, parameters.get(index));
+                dialect.bindParameter(statement, index + 1, parameters.get(index));
             }
             try (ResultSet resultSet = statement.executeQuery()) {
                 ArrayList<VersionedEntity<T>> rows = new ArrayList<>(Math.min(boundedExpectedLimit, 128));
@@ -275,12 +288,18 @@ public final class JdbcEntitySourceLoader<T, ID>
             throw new IllegalArgumentException("IN filter for " + metadata.entityName()
                     + " has " + values.size() + " values but maxRows=" + maxRows);
         }
-        StringJoiner placeholders = new StringJoiner(", ", "(", ")");
-        for (Object value : values) {
-            parameters.add(value);
-            placeholders.add("?");
+        int chunkSize = Math.max(1, dialect.maxInListExpressions());
+        StringJoiner chunks = new StringJoiner(" OR ", "(", ")");
+        for (int start = 0; start < values.size(); start += chunkSize) {
+            int end = Math.min(values.size(), start + chunkSize);
+            StringJoiner placeholders = new StringJoiner(", ", "(", ")");
+            for (int index = start; index < end; index++) {
+                parameters.add(values.get(index));
+                placeholders.add("?");
+            }
+            chunks.add(column + " IN " + placeholders);
         }
-        return column + " IN " + placeholders;
+        return chunks.toString();
     }
 
     private String bind(List<Object> parameters, Object value, String sql) {

@@ -1,0 +1,22 @@
+spring:
+  sql:
+    init:
+      mode: always
+
+cachedb:
+  profile: development
+  admin:
+    enabled: true
+    http-enabled: true
+    dashboard-enabled: true
+
+sample:
+  scheduled-warm:
+    enabled: true
+  demo:
+    write-tools-enabled: true
+
+management:
+  endpoint:
+    health:
+      show-details: always

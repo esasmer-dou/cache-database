@@ -12,12 +12,15 @@ on:
       - "cachedb-storage-jdbc/**"
       - "cachedb-storage-postgres/**"
       - "cachedb-storage-mssql/**"
+      - "cachedb-storage-oracle/**"
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
+      - "cachedb-spring-boot-starter-oracle/**"
       - "cachedb-examples/**"
       - "cachedb-production-tests/**"
       - "sample-cache-database-postgresql/**"
       - "sample-cache-database-mssql/**"
+      - "sample-cache-database-oracle/**"
       - "tools/ci/**"
       - "tools/ops/cluster/**"
       - "tools/samples/**"
@@ -37,12 +40,15 @@ on:
       - "cachedb-storage-jdbc/**"
       - "cachedb-storage-postgres/**"
       - "cachedb-storage-mssql/**"
+      - "cachedb-storage-oracle/**"
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
+      - "cachedb-spring-boot-starter-oracle/**"
       - "cachedb-examples/**"
       - "cachedb-production-tests/**"
       - "sample-cache-database-postgresql/**"
       - "sample-cache-database-mssql/**"
+      - "sample-cache-database-oracle/**"
       - "tools/ci/**"
       - "tools/ops/cluster/**"
       - "tools/samples/**"
@@ -374,5 +380,41 @@ jobs:
             cachedb-storage-mssql/target/surefire-reports/**
             cachedb-starter/target/surefire-reports/**
             cachedb-integration-tests/target/surefire-reports/**
+          if-no-files-found: error
+          retention-days: 14
+
+  oracle-provider-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Setup Java
+        uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run Oracle provider evidence
+        shell: pwsh
+        run: ./tools/ci/run-oracle-provider-evidence.ps1 -MavenExecutable mvn -RestartOracleContainer
+
+      - name: Publish Oracle provider summary
+        shell: pwsh
+        run: Get-Content ./target/cachedb-oracle-provider-reports/oracle-provider-evidence.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload Oracle provider evidence artifacts
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: oracle-provider-evidence
+          path: |
+            target/cachedb-oracle-provider-reports/**
+            cachedb-storage-oracle/target/surefire-reports/**
+            cachedb-starter/target/surefire-reports/**
+            cachedb-spring-boot-starter/target/surefire-reports/**
+            cachedb-spring-boot-starter-oracle/target/surefire-reports/**
           if-no-files-found: error
           retention-days: 14

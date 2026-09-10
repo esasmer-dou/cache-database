@@ -40,8 +40,8 @@ final class MigrationComparisonReportRenderer {
         markdown.append("- Performance status: `").append(assessment.performanceStatus().name()).append("`\n");
         markdown.append("- Route status: `").append(assessment.routeStatus().name()).append("`\n");
         markdown.append("- Exact sample matches: `").append(assessment.exactMatchCount()).append(" / ").append(assessment.sampleCount()).append("`\n");
-        markdown.append("- Avg latency ratio (CacheDB / PostgreSQL): `").append(formatRatio(assessment.averageLatencyRatio())).append("`\n");
-        markdown.append("- p95 latency ratio (CacheDB / PostgreSQL): `").append(formatRatio(assessment.p95LatencyRatio())).append("`\n\n");
+        markdown.append("- Avg latency ratio (CacheDB / source database): `").append(formatRatio(assessment.averageLatencyRatio())).append("`\n");
+        markdown.append("- p95 latency ratio (CacheDB / source database): `").append(formatRatio(assessment.p95LatencyRatio())).append("`\n\n");
 
         appendList(markdown, "Strengths", assessment.strengths(), "No strong positive signal was recorded in this run.");
         appendList(markdown, "Cutover Blockers", assessment.blockers(), "No direct blocker was recorded in this run.");
@@ -112,7 +112,7 @@ final class MigrationComparisonReportRenderer {
                 .append("`, page size `").append(request.firstPageSize())
                 .append("`, hot window `").append(plan.recommendedHotWindowPerRoot())
                 .append("`. | Contract is reviewed and no endpoint uses a wider first-paint aggregate. |\n");
-        markdown.append("| Schema/index | Verify PostgreSQL has a covering list index for `")
+        markdown.append("| Schema/index | Verify the source database has a covering list index for `")
                 .append(relation).append(", ").append(sort)
                 .append("` and a deterministic tie-breaker on `").append(safe(request.childPrimaryKeyColumn()))
                 .append("`. | Baseline query plan avoids full scans for the measured route. |\n");
@@ -126,7 +126,7 @@ final class MigrationComparisonReportRenderer {
                 .append("` in this report and must remain exact after increasing sample coverage. |\n");
         markdown.append("| Full cutover rehearsal | Because hybrid runtime is not the target, rehearse the full switch in staging with the old stack stopped or isolated. | New stack serves the route from CacheDB with exact parity and accepted p95/p99 latency. |\n");
         markdown.append("| Production switch | Take the agreed maintenance/freeze window if writes cannot be dual-controlled, warm Redis, deploy the CacheDB-backed application, then route traffic to the new stack. | Health, Redis memory, projection lag, and route latency stay inside the production gate. |\n");
-        markdown.append("| Rollback | Keep PostgreSQL as durable source of truth and keep the previous deploy artifact/config ready until the go/no-go window closes. | Rollback path is tested before production switch; Redis hot data can be discarded and rebuilt. |\n");
+        markdown.append("| Rollback | Keep the SQL database as durable source of truth and keep the previous deploy artifact/config ready until the go/no-go window closes. | Rollback path is tested before production switch; Redis working-set data can be discarded and rebuilt. |\n");
         markdown.append("| Go/No-Go | Use this report plus the full coverage matrix below. | Go only when readiness is `READY`, parity is exact, route status is projection/ranked projection when required, and there are no blockers. |\n\n");
     }
 
@@ -144,20 +144,20 @@ final class MigrationComparisonReportRenderer {
         markdown.append("| Relation column | `").append(safe(request.relationColumn())).append("` |\n");
         markdown.append("| Sort contract | `").append(safe(request.sortColumn())).append(" ").append(safe(request.sortDirection())).append("` |\n");
         markdown.append("| Required Redis artifacts | `").append(plan.recommendedRedisArtifacts().size()).append("` artifact(s) |\n");
-        markdown.append("| Required PostgreSQL artifacts | `").append(plan.recommendedPostgresArtifacts().size()).append("` artifact(s) |\n");
+        markdown.append("| Required durable SQL artifacts | `").append(plan.recommendedPostgresArtifacts().size()).append("` artifact(s) |\n");
         markdown.append("| API shapes covered | `").append(plan.recommendedApiShapes().size()).append("` shape(s) |\n\n");
         markdown.append("### 100% Coverage Gate\n\n");
         markdown.append("The following checklist is mandatory for a full-system conversion. A single unchecked item keeps the route out of GA cutover scope.\n\n");
         markdown.append("| Coverage item | Required evidence | Gate |\n");
         markdown.append("| --- | --- | --- |\n");
         markdown.append("| Route inventory | Every endpoint, service method, scheduled job, report query, external callback, and admin screen is listed. | No unknown route remains. |\n");
-        markdown.append("| Table/view ownership | Every PostgreSQL table and view has one owner route and one migration decision. | No table/view is orphaned. |\n");
+        markdown.append("| Table/view ownership | Every source table and view has one owner route and one migration decision. | No table/view is orphaned. |\n");
         markdown.append("| Read-shape classification | Each route is classified as CRUD entity, bounded relation projection, ranked/global projection, detail lookup, aggregate/report path, or archive-only path. | No unclassified route remains. |\n");
         markdown.append("| Projection contract | Every relation-heavy or sorted/range route has an explicit projection/read-model contract. | No required projection falls back to `entity:*`. |\n");
         markdown.append("| Warm evidence | Dry-run and warm execution exist for each Redis hot set. | Hydrated rows match read rows; missing referenced roots are `0`. |\n");
         markdown.append("| Side-by-side parity | Source database baseline and CacheDB route are compared with representative samples. | Exact parity is required for membership and order. |\n");
         markdown.append("| Performance budget | p95/p99 budgets are documented per route and checked after warm. | CacheDB latency stays inside the accepted route budget. |\n");
-        markdown.append("| Write semantics | Every write path proves idempotency, primary-key ownership, Redis mutation, PostgreSQL durability, retry, poison visibility, and rollback behavior. | No write path is undocumented. |\n");
+        markdown.append("| Write semantics | Every write path proves idempotency, primary-key ownership, Redis mutation, SQL durability, retry, poison visibility, and rollback behavior. | No write path is undocumented. |\n");
         markdown.append("| Staging rehearsal | The full conversion is rehearsed with the old stack stopped or isolated because hybrid runtime is not the target. | Final rehearsal is green before production switch. |\n\n");
         markdown.append("Do not declare 100% coverage until every inventory item has a ready report, no route falls back unexpectedly, and the final staging rehearsal passes with representative production data.\n\n");
     }

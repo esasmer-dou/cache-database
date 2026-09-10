@@ -12,6 +12,7 @@ Aşağıdakilerden biri eksikse framework GA release yayınlama veya duyurma:
 
 - Redis coordination ve SQL provider reconnect davranışı için lokal Docker veya
   CI outage/restart kanıtı
+- Oracle desteği sürüm kapsamındaysa self-hosted fiziksel Data Guard kanıtı
 - belgelenmiş resmi dağıtım yolu. Şu an seçilen yol: GitHub Release artifact
 - Maven Central seçildiyse source ve javadoc artifact'leriyle imzalı Maven
   Central publish
@@ -43,12 +44,15 @@ STAGING_POSTGRES_PASSWORD
 STAGING_MSSQL_URL
 STAGING_MSSQL_USER
 STAGING_MSSQL_PASSWORD
+STAGING_ORACLE_URL
+STAGING_ORACLE_USER
+STAGING_ORACLE_PASSWORD
 ```
 
-MSSQL staging secret'ları yalnızca release iddiası managed SQL Server HA veya
-Always On kanıtını kapsıyorsa zorunludur. Aksi durumda MSSQL desteğini topology
-sertifikası olarak değil, Docker restart/reconnect ve provider evidence olarak
-anlat.
+Provider staging secret'ları yalnızca sürüm iddiası ilgili yönetilen HA
+topolojisini kapsıyorsa zorunludur. Yerel fiziksel Data Guard hattı, temsilî
+framework kanıtı olarak raporlanabilir; PostgreSQL HA, SQL Server Always On,
+Oracle RAC veya müşteri topolojisi sertifikası değildir.
 
 ## Adım Adım GA Akışı
 
@@ -62,7 +66,31 @@ anlat.
 
    Bu komut Redis, PostgreSQL ve SQL Server container'larını başlatır; Redis
    outage/recovery evidence ve SQL Server restart/reconnect evidence çalıştırır.
-3. Release iddiası MSSQL listener/failover davranışını içeriyorsa ama ortak
+3. Oracle provider kanıtını container restart ile çalıştır:
+
+   ```powershell
+   pwsh ./tools/ci/run-oracle-provider-evidence.ps1 -RestartOracleContainer
+   ```
+
+   Bu hat; Oracle JDBC Thin bağlantısını, sürüm kontrollü yazmaları, outbox'ı,
+   migration keşfini, sınırlı okumaları, gecikmeli ağ davranışını, throughput'u
+   ve tek instance restart sonrasında yeniden bağlantıyı doğrular. RAC veya Data
+   Guard sertifikası vermez.
+4. Lisanslı Oracle 19c Enterprise image'ının hazır olduğu Windows self-hosted
+   runner üzerinde fiziksel Data Guard hattını çalıştır:
+
+   ```powershell
+   pwsh ./tools/ci/run-local-oracle-dataguard-evidence.ps1 `
+     -MavenExecutable C:\apache-maven-3.9.9\bin\mvn.cmd
+   ```
+
+   Bu test gerçek redo taşıma ve uygulamayı, planlı broker switchover'ını,
+   primary kaybını, eski bağlantının reddedilmesini, çok adresli tek servis adlı
+   Oracle JDBC tanımı üzerinden Hikari toparlanmasını, iki geçişten sonra provider
+   davranışını ve eski primary'nin yeniden standby yapılarak son boşluksuz/sıfır
+   gecikmeli hazırlık kontrolünü kanıtlar. RAC/SCAN/FAN/FCF yapısını, sıfır RPO'yu
+   veya müşterinin production ağ ve servis politikasını kanıtlamaz.
+5. Release iddiası MSSQL listener/failover davranışını içeriyorsa ama ortak
    staging Always On ortamında isteğe bağlı failover tetikleyemiyorsan lokal
    listener preflight'i çalıştır:
 
@@ -74,10 +102,10 @@ anlat.
    geçersiz kaldığını ve yeni connection'ın yeni backend'e gittiğini kanıtlar.
    Always On replikasyonunun, quorum davranışının veya yönetilen failover
    politikasının yerine geçmez.
-4. Release commit'ini `main` branch'ine gönder ve aynı commit üzerinde
+6. Release commit'ini `main` branch'ine gönder ve aynı commit üzerinde
    `Framework Readiness` ile `Production Evidence` workflow'larının
    geçtiğini doğrula.
-5. Resmi GitHub Release artifact'ini hedef commit'ten üret:
+7. Resmi GitHub Release artifact'ini hedef commit'ten üret:
 
    ```powershell
    pwsh ./tools/release/build-release-package.ps1 `
@@ -87,16 +115,16 @@ anlat.
 
    Stabil release için `github-release` gibi beta içermeyen bir package label
    kullan.
-6. Stabil tag'i oluştur ve gönder; örnek: `v0.1.0`.
-7. Maven Central resmi dağıtım kanalı olarak seçildiyse, stabil tag üzerinde
+8. Stabil tag'i oluştur ve gönder; örnek: `v0.1.0`.
+9. Maven Central resmi dağıtım kanalı olarak seçildiyse, stabil tag üzerinde
    `Maven Central Publish` workflow'unu manuel olarak
    `gaRelease=true` ile çalıştır. Workflow, imzalı artifact publish etmeden
    önce GA preflight kontrolünü çalıştırır.
-8. Aynı tag için `Production GA Release Readiness` workflow'unu çalıştır.
+10. Aynı tag için `Production GA Release Readiness` workflow'unu çalıştır.
    `requireManagedStagingHa`, `requireApplicationMigrationCoverage` veya
    `requireMavenCentralPublish` seçeneklerini yalnızca release iddiası bu
    opsiyonel kapıları kapsıyorsa aç.
-9. GitHub release'i yalnızca readiness özeti `PASS` ise yayınla ve resmi
+11. GitHub release'i yalnızca readiness özeti `PASS` ise yayınla ve resmi
    release artifact'ini ekle.
 
 ## Lokal Ön Kontrol

@@ -2,10 +2,11 @@
 
 Turkish version: [../tr/docs/veritabani-provider-spi.md](../tr/docs/veritabani-provider-spi.md)
 
-CacheDB uses PostgreSQL as the default durable SQL provider and has an explicit
-storage-provider SPI. MSSQL is available as an explicitly selected provider
-with its own SQL Server evidence lane, so this is no longer a fake "change the
-JDBC URL" story.
+CacheDB uses PostgreSQL as the backward-compatible default durable SQL provider
+and exposes an explicit storage-provider SPI. MSSQL and Oracle Database are
+separately selected providers with their own dialects, failure classifiers,
+outbox contracts, migration support, and live evidence lanes. Provider support
+is not a fake "change the JDBC URL" story.
 
 ## Decision
 
@@ -15,14 +16,15 @@ write-behind flusher.
 ACCEPTABLE: use the default starter path when the application intentionally
 uses the default PostgreSQL provider.
 
-ANTI-PATTERN: point a PostgreSQL flusher at an MSSQL JDBC URL and assume the
-same SQL, retry rules, and parameter limits are safe.
+ANTI-PATTERN: point one provider's flusher at another database and assume the
+same SQL, retry rules, transaction behavior, and parameter limits are safe.
 
 ## Current Module Shape
 
 ```text
 cachedb-storage-jdbc
 - JdbcDatabaseDialect
+- JdbcQueryDialect and JdbcSchemaDialect
 - JdbcWriteBehindSupport
 - SqlFailureClassifierSupport
 - JdbcOutboxExternalChangeFeedAdapter
@@ -42,11 +44,36 @@ cachedb-storage-mssql
 - MssqlFailureClassifier
 - MssqlOutboxExternalChangeFeedAdapter
 - SQL Server update/existence/insert write path
+
+cachedb-storage-oracle
+- OracleDatabaseDialect and OracleQueryDialect
+- OracleWriteBehindFlusher and OracleWriteBehindOptions
+- OracleFailureClassifier
+- OracleOutboxDialect and OracleOutboxExternalChangeFeedAdapter
+- version-guarded MERGE batching, bounded IN-list chunks, and Oracle value binding
 ```
 
 `cachedb-starter` keeps PostgreSQL as the default flusher for backward
-compatibility. Non-PostgreSQL users must provide a `WriteBehindFlusherFactory`
-explicitly.
+compatibility. Plain Java applications using MSSQL or Oracle provide the
+matching `WriteBehindFlusherFactory`; Spring Boot applications use exactly one
+matching provider starter or set `cachedb.sql.provider` explicitly.
+
+The query dialect owns bounded paging, parameter binding, and safe `IN` chunk
+sizes. The schema dialect owns Java-to-SQL type mapping, metadata identifier
+case, table creation, and add-column DDL. Unknown database products fail fast;
+CacheDB never falls back silently to PostgreSQL SQL.
+
+## Oracle Usage
+
+Use `cachedb-spring-boot-starter-oracle` for Spring Boot or
+`cachedb-storage-oracle` for plain Java. The provider requires application-side
+identifiers, a numeric version column, and an explicit decision for Oracle's
+empty-string-to-`NULL` behavior. It supports bounded source reads, warm,
+write-behind, outbox/checkpoint, schema discovery, migration comparison, and
+memory estimation.
+
+The complete dependency, configuration, type, outbox, tuning, and evidence
+contract is in [Oracle Provider](oracle-provider.md).
 
 ## PostgreSQL Usage
 
@@ -71,7 +98,7 @@ not force a driver version transitively; the application owns the `DataSource`.
 <dependency>
   <groupId>com.reactor.cachedb</groupId>
   <artifactId>cachedb-storage-mssql</artifactId>
-  <version>0.10.1</version>
+  <version>0.11.0</version>
 </dependency>
 
 <dependency>
@@ -164,16 +191,16 @@ the version guard keeps retry behavior idempotent.
 
 ## Provider Differences That Matter
 
-| Area | PostgreSQL | MSSQL |
-| --- | --- | --- |
-| Upsert | `INSERT ... ON CONFLICT` | version-guarded update/existence/insert transaction |
-| Bulk load | optional `COPY` path | intentionally not enabled by default; use route-specific batches first |
-| Parameter limit | 65,535 parameters | 2,100 parameters |
-| Temporary table | PostgreSQL temp table semantics | SQL Server `#temp` semantics, not wired yet |
-| Failure classification | SQLSTATE-oriented | SQL Server vendor-code-oriented |
-| Timeout contract | PostgreSQL driver/socket properties | `MssqlWriteBehindOptions` plus JDBC driver/pool settings |
-| Spring Boot provider choice | default | `cachedb.sql.provider=mssql` when module is on the classpath |
-| Production status | default provider path | explicit provider with SQL Server CI evidence; HA topology still environment-specific |
+| Area | PostgreSQL | MSSQL | Oracle Database |
+| --- | --- | --- | --- |
+| Upsert | `INSERT ... ON CONFLICT` | version-guarded update/existence/insert transaction | version-guarded single-row `MERGE`, batched through JDBC |
+| Bulk load | optional `COPY` path | route-specific JDBC batches | route-specific JDBC batches |
+| Parameter boundary | 65,535 parameters | 2,100 parameters | `IN` predicates split into safe 900-expression chunks |
+| Empty text | distinct from `NULL` | distinct from `NULL` | stored as `NULL`; policy is explicit |
+| Failure classification | SQLSTATE-oriented | SQL Server vendor-code-oriented | ORA/vendor-code-oriented |
+| Timeout contract | driver/socket settings | `MssqlWriteBehindOptions` plus driver/pool | `OracleWriteBehindOptions` plus driver/pool |
+| Spring Boot provider choice | backward-compatible default | `cachedb.sql.provider=mssql` | `cachedb.sql.provider=oracle` |
+| Provider evidence | live PostgreSQL lane | live SQL Server lane | live Oracle lane with restart, delayed network, migration, outbox, concurrency, and throughput checks |
 
 ## Current MSSQL Gate
 

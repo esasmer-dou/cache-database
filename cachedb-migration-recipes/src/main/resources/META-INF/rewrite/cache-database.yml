@@ -9,7 +9,7 @@ recipeList:
       oldArtifactId: cachedb-spring-boot-starter
       newGroupId: com.reactor.cachedb
       newArtifactId: cachedb-spring-boot-starter-postgres
-      newVersion: 0.10.1
+      newVersion: 0.11.0
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: com.reactor.cachedb.starter.PostgresConnectionConfig
       newFullyQualifiedTypeName: com.reactor.cachedb.postgres.PostgresConnectionConfig
@@ -27,4 +27,16 @@ recipeList:
       oldArtifactId: cachedb-spring-boot-starter
       newGroupId: com.reactor.cachedb
       newArtifactId: cachedb-spring-boot-starter-mssql
-      newVersion: 0.10.1
+      newVersion: 0.11.0
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: com.reactor.cachedb.migrate.UseOracleStarter
+displayName: Use the explicit CacheDB Oracle starter
+description: Replaces the legacy combined Spring Boot starter with the Oracle provider starter.
+recipeList:
+  - org.openrewrite.maven.ChangeDependency:
+      oldGroupId: com.reactor.cachedb
+      oldArtifactId: cachedb-spring-boot-starter
+      newGroupId: com.reactor.cachedb
+      newArtifactId: cachedb-spring-boot-starter-oracle
+      newVersion: 0.11.0

@@ -7,6 +7,8 @@ import com.reactor.cachedb.core.queue.SchemaMigrationPlan;
 import com.reactor.cachedb.core.queue.SchemaMigrationStep;
 import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
+import com.reactor.cachedb.jdbc.JdbcSchemaDialect;
+import com.reactor.cachedb.jdbc.JdbcSchemaDialects;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -19,7 +21,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 public final class CacheDatabaseSchemaAdmin {
@@ -57,12 +58,13 @@ public final class CacheDatabaseSchemaAdmin {
         ArrayList<SchemaBootstrapIssue> issues = new ArrayList<>();
 
         try (Connection connection = dataSource.getConnection()) {
+            JdbcSchemaDialect dialect = JdbcSchemaDialects.resolve(connection);
             for (EntityBinding<?, ?> binding : entityRegistry.all()) {
                 EntityMetadata<?, ?> metadata = binding.metadata();
                 String tableName = qualifiedTableName(metadata.tableName());
-                boolean exists = tableExists(connection, tableName);
+                boolean exists = tableExists(connection, dialect, tableName);
                 if (!exists && mode == SchemaBootstrapMode.CREATE_IF_MISSING) {
-                    createTable(connection, metadata, tableName);
+                    createTable(connection, dialect, metadata, tableName);
                     createdTables.add(tableName);
                     exists = true;
                 }
@@ -70,7 +72,7 @@ public final class CacheDatabaseSchemaAdmin {
                     issues.add(new SchemaBootstrapIssue(metadata.entityName(), tableName, "Missing table"));
                     continue;
                 }
-                List<String> missingColumns = missingColumns(connection, metadata, tableName);
+                List<String> missingColumns = missingColumns(connection, dialect, metadata, tableName);
                 if (!missingColumns.isEmpty()) {
                     issues.add(new SchemaBootstrapIssue(
                             metadata.entityName(),
@@ -98,10 +100,15 @@ public final class CacheDatabaseSchemaAdmin {
     }
 
     public Map<String, String> exportDdl() {
+        JdbcSchemaDialect dialect = JdbcSchemaDialects.resolve(dataSource);
         LinkedHashMap<String, String> ddl = new LinkedHashMap<>();
         for (EntityBinding<?, ?> binding : entityRegistry.all()) {
             EntityMetadata<?, ?> metadata = binding.metadata();
-            ddl.put(metadata.entityName(), createTableSql(metadata, qualifiedTableName(metadata.tableName())));
+            ddl.put(metadata.entityName(), createTableSql(
+                    dialect,
+                    metadata,
+                    qualifiedTableName(metadata.tableName())
+            ));
         }
         return Map.copyOf(ddl);
     }
@@ -109,24 +116,25 @@ public final class CacheDatabaseSchemaAdmin {
     public SchemaMigrationPlan planMigration() {
         ArrayList<SchemaMigrationStep> steps = new ArrayList<>();
         try (Connection connection = dataSource.getConnection()) {
+            JdbcSchemaDialect dialect = JdbcSchemaDialects.resolve(connection);
             for (EntityBinding<?, ?> binding : entityRegistry.all()) {
                 EntityMetadata<?, ?> metadata = binding.metadata();
                 String tableName = qualifiedTableName(metadata.tableName());
-                if (!tableExists(connection, tableName)) {
+                if (!tableExists(connection, dialect, tableName)) {
                     steps.add(new SchemaMigrationStep(
                             metadata.entityName(),
                             tableName,
-                            createTableSql(metadata, tableName),
+                            createTableSql(dialect, metadata, tableName),
                             "Create missing table"
                     ));
                     continue;
                 }
                 for (String column : expectedColumns(metadata)) {
-                    if (!columnExists(connection, tableName, column)) {
+                    if (!columnExists(connection, dialect, tableName, column)) {
                         steps.add(new SchemaMigrationStep(
                                 metadata.entityName(),
                                 tableName,
-                                "ALTER TABLE " + tableName + " ADD COLUMN " + columnDefinition(metadata, column),
+                                dialect.addColumnSql(tableName, columnDefinition(dialect, metadata, column)),
                                 "Add missing column " + column
                         ));
                     }
@@ -206,73 +214,88 @@ public final class CacheDatabaseSchemaAdmin {
         return List.copyOf(tail);
     }
 
-    private void createTable(Connection connection, EntityMetadata<?, ?> metadata, String tableName) throws SQLException {
+    private void createTable(
+            Connection connection,
+            JdbcSchemaDialect dialect,
+            EntityMetadata<?, ?> metadata,
+            String tableName
+    ) throws SQLException {
         try (Statement statement = connection.createStatement()) {
-            statement.executeUpdate(createTableSql(metadata, tableName));
+            try {
+                statement.executeUpdate(createTableSql(dialect, metadata, tableName));
+            } catch (SQLException exception) {
+                if (!tableExists(connection, dialect, tableName)) {
+                    throw exception;
+                }
+            }
         }
     }
 
-    private String createTableSql(EntityMetadata<?, ?> metadata, String tableName) {
+    private String createTableSql(
+            JdbcSchemaDialect dialect,
+            EntityMetadata<?, ?> metadata,
+            String tableName
+    ) {
         LinkedHashMap<String, String> columns = new LinkedHashMap<>();
         for (String column : metadata.columns()) {
-            columns.put(column, columnDefinition(metadata, column));
+            columns.put(column, columnDefinition(dialect, metadata, column));
         }
         if (config.includeVersionColumn() && !columns.containsKey(metadata.versionColumn())) {
-            columns.put(metadata.versionColumn(), metadata.versionColumn() + " BIGINT NOT NULL DEFAULT 0");
+            columns.put(metadata.versionColumn(), dialect.versionColumnDefinition(metadata.versionColumn()));
         }
         if (config.includeDeletedColumn()
                 && metadata.deletedColumn() != null
                 && !metadata.deletedColumn().isBlank()
                 && !columns.containsKey(metadata.deletedColumn())) {
-            columns.put(metadata.deletedColumn(), metadata.deletedColumn() + " TEXT");
+            columns.put(metadata.deletedColumn(), dialect.columnDefinition(
+                    metadata.deletedColumn(),
+                    String.class.getName(),
+                    false
+            ));
         }
-        StringBuilder builder = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
-                .append(tableName)
-                .append(" (");
-        int index = 0;
-        for (String definition : columns.values()) {
-            if (index++ > 0) {
-                builder.append(", ");
-            }
-            builder.append(definition);
-        }
-        builder.append(", PRIMARY KEY (").append(metadata.idColumn()).append("))");
-        return builder.toString();
+        return dialect.createTableSql(tableName, List.copyOf(columns.values()), metadata.idColumn());
     }
 
-    private String columnDefinition(EntityMetadata<?, ?> metadata, String column) {
-        String sqlType = sqlType(metadata.columnTypes().get(column));
-        String notNull = metadata.idColumn().equals(column) ? " NOT NULL" : "";
-        return column + " " + sqlType + notNull;
-    }
-
-    private String sqlType(String javaType) {
-        if (javaType == null || javaType.isBlank()) {
-            return "TEXT";
+    private String columnDefinition(
+            JdbcSchemaDialect dialect,
+            EntityMetadata<?, ?> metadata,
+            String column
+    ) {
+        if (column.equals(metadata.versionColumn()) && !metadata.columns().contains(column)) {
+            return dialect.versionColumnDefinition(column);
         }
-        return switch (javaType) {
-            case "java.lang.Long", "long" -> "BIGINT";
-            case "java.lang.Integer", "int" -> "INTEGER";
-            case "java.lang.Double", "double" -> "DOUBLE PRECISION";
-            case "java.lang.Float", "float" -> "REAL";
-            case "java.lang.Boolean", "boolean" -> "BOOLEAN";
-            case "java.time.Instant", "java.time.LocalDateTime", "java.time.OffsetDateTime" -> "TIMESTAMP";
-            case "java.time.LocalDate" -> "DATE";
-            default -> "TEXT";
-        };
+        return dialect.columnDefinition(
+                column,
+                metadata.columnTypes().get(column),
+                metadata.idColumn().equals(column)
+        );
     }
 
-    private boolean tableExists(Connection connection, String tableName) throws SQLException {
+    private boolean tableExists(
+            Connection connection,
+            JdbcSchemaDialect dialect,
+            String tableName
+    ) throws SQLException {
         DatabaseMetaData metaData = connection.getMetaData();
-        try (ResultSet resultSet = metaData.getTables(connection.getCatalog(), schemaPattern(), normalizedTableName(tableName), new String[]{"TABLE"})) {
+        try (ResultSet resultSet = metaData.getTables(
+                connection.getCatalog(),
+                schemaPattern(connection, dialect),
+                dialect.metadataIdentifier(metaData, normalizedTableName(tableName)),
+                new String[]{"TABLE"}
+        )) {
             return resultSet.next();
         }
     }
 
-    private List<String> missingColumns(Connection connection, EntityMetadata<?, ?> metadata, String tableName) throws SQLException {
+    private List<String> missingColumns(
+            Connection connection,
+            JdbcSchemaDialect dialect,
+            EntityMetadata<?, ?> metadata,
+            String tableName
+    ) throws SQLException {
         ArrayList<String> missing = new ArrayList<>();
         for (String column : expectedColumns(metadata)) {
-            if (!columnExists(connection, tableName, column)) {
+            if (!columnExists(connection, dialect, tableName, column)) {
                 missing.add(column);
             }
         }
@@ -302,13 +325,33 @@ public final class CacheDatabaseSchemaAdmin {
         return separator >= 0 ? tableName.substring(separator + 1) : tableName;
     }
 
-    private String schemaPattern() {
-        return config.schemaName().isBlank() ? null : config.schemaName().toLowerCase(Locale.ROOT);
+    private String schemaPattern(Connection connection, JdbcSchemaDialect dialect) throws SQLException {
+        String schemaName = config.schemaName();
+        if (schemaName.isBlank()) {
+            try {
+                schemaName = connection.getSchema();
+            } catch (SQLException ignored) {
+                schemaName = "";
+            }
+        }
+        return schemaName == null || schemaName.isBlank()
+                ? null
+                : dialect.metadataIdentifier(connection.getMetaData(), schemaName);
     }
 
-    private boolean columnExists(Connection connection, String tableName, String column) throws SQLException {
+    private boolean columnExists(
+            Connection connection,
+            JdbcSchemaDialect dialect,
+            String tableName,
+            String column
+    ) throws SQLException {
         DatabaseMetaData metaData = connection.getMetaData();
-        try (ResultSet resultSet = metaData.getColumns(connection.getCatalog(), schemaPattern(), normalizedTableName(tableName), column)) {
+        try (ResultSet resultSet = metaData.getColumns(
+                connection.getCatalog(),
+                schemaPattern(connection, dialect),
+                dialect.metadataIdentifier(metaData, normalizedTableName(tableName)),
+                dialect.metadataIdentifier(metaData, column)
+        )) {
             return resultSet.next();
         }
     }

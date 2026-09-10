@@ -3,8 +3,8 @@
 Turkish version: [../tr/docs/getting-started.md](../tr/docs/getting-started.md)
 
 This guide takes a new project, or an existing SQL-database application, to a
-working CacheDB integration. PostgreSQL is the default provider in the starter;
-MSSQL is an explicit provider with its own SQL Server evidence lane.
+working CacheDB integration. PostgreSQL is the backward-compatible default;
+MSSQL and Oracle Database are explicit providers with separate evidence lanes.
 
 The day-one goal is to:
 
@@ -32,12 +32,12 @@ ANTI-PATTERN: model every table and move every route to CacheDB at once.
 
 ## 2. Spring Boot Dependencies
 
-Use this path for most Spring Boot applications. Version `0.10.1` is published
+Use this path for most Spring Boot applications. Version `0.11.0` is published
 as an immutable package through the anonymous CacheDB Maven repository.
 
 ```xml
 <properties>
-    <cachedb.version>0.10.1</cachedb.version>
+    <cachedb.version>0.11.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -118,12 +118,16 @@ JDBC rule:
   `DataSource`, do not add the JDBC starter again.
 - Keep the JDBC driver for your selected SQL provider as a runtime dependency.
 - Configure `cachedb-processor` as an annotation processor.
-- The example uses the PostgreSQL provider starter. For SQL Server, replace it
-  with `cachedb-spring-boot-starter-mssql`.
+- The example uses the PostgreSQL provider starter. Replace it with
+  `cachedb-spring-boot-starter-mssql` for SQL Server or
+  `cachedb-spring-boot-starter-oracle` for Oracle Database. The Oracle starter
+  supplies `ojdbc17`; keep only one Oracle JDBC version on the classpath.
 - Add exactly one provider starter. `AUTO` resolves one provider and fails fast
   when the classpath is ambiguous.
 - Add `cachedb-spring-boot-starter-admin` separately only when the operations UI
   is required.
+- Read [Oracle Provider](oracle-provider.md) before mapping Oracle IDs, versions,
+  empty strings, outbox tables, or connection-pool limits.
 
 ## 3. Plain Java Dependencies
 
@@ -131,7 +135,7 @@ Use this path when you do not use Spring Boot.
 
 ```xml
 <properties>
-    <cachedb.version>0.10.1</cachedb.version>
+    <cachedb.version>0.11.0</cachedb.version>
 </properties>
 
 <dependencies>

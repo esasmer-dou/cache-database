@@ -13,6 +13,7 @@ missing:
 
 - local Docker or CI outage/restart evidence for Redis coordination and SQL
   provider reconnect behavior
+- self-hosted physical Data Guard evidence when Oracle support is part of the release
 - a documented official distribution path. Current selected path: GitHub
   Release artifact
 - signed Maven Central publish with source and javadoc artifacts when Maven
@@ -45,11 +46,15 @@ STAGING_POSTGRES_PASSWORD
 STAGING_MSSQL_URL
 STAGING_MSSQL_USER
 STAGING_MSSQL_PASSWORD
+STAGING_ORACLE_URL
+STAGING_ORACLE_USER
+STAGING_ORACLE_PASSWORD
 ```
 
-MSSQL staging secrets are mandatory only if the release claim includes managed
-SQL Server HA or Always On evidence. If not, describe MSSQL support as Docker
-restart/reconnect and provider evidence, not as topology certification.
+Provider staging secrets are mandatory only when the release claim includes the
+corresponding managed HA topology. The local physical Data Guard lane may be
+reported as representative framework evidence; it is not PostgreSQL HA, SQL
+Server Always On, Oracle RAC, or customer-topology certification.
 
 ## Step-by-Step GA Flow
 
@@ -63,7 +68,31 @@ restart/reconnect and provider evidence, not as topology certification.
 
    This starts Redis, PostgreSQL, and SQL Server containers, runs Redis
    outage/recovery evidence, and runs SQL Server restart/reconnect evidence.
-3. If the release includes MSSQL listener/failover claims but the shared staging
+3. Run the Oracle provider evidence lane with a container restart:
+
+   ```powershell
+   pwsh ./tools/ci/run-oracle-provider-evidence.ps1 -RestartOracleContainer
+   ```
+
+   This verifies the Oracle JDBC Thin path, version-guarded writes, outbox,
+   migration discovery, bounded reads, delayed-network behavior, throughput,
+   and reconnect after a single-instance restart. It does not claim RAC or Data
+   Guard certification.
+4. Run the physical Data Guard lane on a Windows self-hosted runner with the
+   licensed Oracle 19c Enterprise image already present:
+
+   ```powershell
+   pwsh ./tools/ci/run-local-oracle-dataguard-evidence.ps1 `
+     -MavenExecutable C:\apache-maven-3.9.9\bin\mvn.cmd
+   ```
+
+   This proves real redo transport/apply, planned broker switchover, forced
+   primary loss, stale-connection rejection, Hikari recovery through a
+   multi-address Oracle JDBC service-name descriptor, full provider behavior
+   after both transitions, and reinstatement of the former primary with final
+   no-gap/zero-lag readiness. It does not prove RAC/SCAN/FAN/FCF, zero-RPO, or a
+   customer's production network and service policy.
+5. If the release includes MSSQL listener/failover claims but the shared staging
    Always On environment cannot be failed over on demand, run the local listener
    preflight:
 
@@ -74,9 +103,9 @@ restart/reconnect and provider evidence, not as topology certification.
    This proves stale JDBC connection invalidation and new-connection recovery
    through a stable listener endpoint. It does not replace a real Always On
    topology test for replication, quorum, or managed failover policy.
-4. Push the release commit to `main` and wait for `Framework Readiness` and
+6. Push the release commit to `main` and wait for `Framework Readiness` and
    `Production Evidence` to pass on that exact commit.
-5. Build the official GitHub Release artifact from the intended commit:
+7. Build the official GitHub Release artifact from the intended commit:
 
    ```powershell
    pwsh ./tools/release/build-release-package.ps1 `
@@ -85,16 +114,16 @@ restart/reconnect and provider evidence, not as topology certification.
    ```
 
    For stable releases, use a non-beta package label such as `github-release`.
-6. Create and push the stable tag, for example `v0.1.0`.
-7. If Maven Central is the selected distribution channel, run `Maven Central
+8. Create and push the stable tag, for example `v0.1.0`.
+9. If Maven Central is the selected distribution channel, run `Maven Central
    Publish` manually on the stable tag with
    `gaRelease=true`. The workflow runs the GA preflight before deploying signed
    artifacts.
-8. Run `Production GA Release Readiness` for the same tag. Enable
+10. Run `Production GA Release Readiness` for the same tag. Enable
    `requireManagedStagingHa`, `requireApplicationMigrationCoverage`, or
    `requireMavenCentralPublish` only when that release claim includes those
    optional gates.
-9. Publish the GitHub release only after the readiness summary is `PASS` and
+11. Publish the GitHub release only after the readiness summary is `PASS` and
    attach the official release artifact.
 
 ## Local Preflight

@@ -6,9 +6,10 @@ This module is the maintainer and operator lab. It exercises load profiles,
 operations screens, migration planning, and low-level compatibility surfaces.
 It is not the shortest application onboarding path.
 
-> Application developers should begin with the standalone PostgreSQL or SQL
-> Server REST API sample. Use this module when the goal is to inspect the admin
-> UI, rehearse migration, or qualify runtime behavior under controlled load.
+> Application developers should begin with the standalone PostgreSQL, SQL
+> Server, or Oracle REST API sample. Use this module when the goal is to inspect
+> the admin UI, rehearse migration, or qualify runtime behavior under controlled
+> load.
 
 ## Choose the Right Sample
 
@@ -16,6 +17,7 @@ It is not the shortest application onboarding path.
 | --- | --- |
 | Build a PostgreSQL application | [PostgreSQL REST API sample](../sample-cache-database-postgresql/README.md) |
 | Build a SQL Server application | [SQL Server REST API sample](../sample-cache-database-mssql/README.md) |
+| Build an Oracle application | [Oracle REST API sample](../sample-cache-database-oracle/README.md) |
 | Learn generated repositories | [Declarative repository guide](../docs/declarative-repositories.md) |
 | Operate the admin UI and load profiles | Continue with this module |
 | Rehearse an existing-system migration | [Migration Planner Demo Flow](#migration-planner-demo-flow) |

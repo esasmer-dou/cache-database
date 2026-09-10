@@ -11,13 +11,14 @@ English | [Türkçe](tr/README.md)
 [Quick start](#install-in-5-minutes-spring-boot) |
 [Relations](#relation-model) |
 [Projections](#when-projection-is-required) |
+[Declarative refresh](docs/snapshot-projections.md) |
 [Production](#production-checklist) |
 [Documentation](#documentation-map)
 
 CacheDB is a Redis-first Java data-layer framework that keeps the selected SQL
-database as the durable source of truth. PostgreSQL and SQL Server are explicit,
-first-class providers with separate starters and provider-specific evidence
-lanes. CacheDB is built for teams that want ORM-like developer ergonomics
+database as the durable source of truth. PostgreSQL, SQL Server, and Oracle
+Database are explicit, first-class providers with separate starters and
+provider-specific evidence lanes. CacheDB is built for teams that want ORM-like developer ergonomics
 without hiding operational read, write, warm, or archive behavior behind
 runtime magic.
 
@@ -30,7 +31,7 @@ The core design rule is simple:
 - generate metadata at compile time instead of discovering it with runtime
   reflection
 
-Both providers cover the same CacheDB application model: generated
+All three providers cover the same CacheDB application model: generated
 repositories, bounded active routes, projections, warm/backfill, write-behind,
 outbox integration, and explicit source routes. Database-specific connection,
 locking, timeout, indexing, and HA behavior must still be proven in the
@@ -38,34 +39,38 @@ application's own staging topology.
 
 | Release information | Value |
 | --- | --- |
-| Latest published release | `v0.10.1` |
-| Repository version | `0.10.1` |
+| Latest published release | `v0.11.0` |
+| Repository version | `0.11.0` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
-| Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022 |
+| Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23, Oracle 19c physical Data Guard on a licensed self-hosted runner |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
 
-## Current Release: 0.10.1
+## Current Release: 0.11.0
 
-`0.10.1` keeps the `0.10.0` runtime feature set and closes the last
-distribution inconsistency: embedded and standalone samples now build against
-the same anonymous Maven contract, and their CI proves that application
-certification fails closed when evidence is missing.
+`0.11.0` adds Oracle Database as a first-class provider while preserving the
+existing Redis-first route, projection, warm, and durability contracts.
 
-- Migration scaffold generation emits compile-ready projection records, entity
-  registration hooks, and partitioned relation loaders from discovered SQL
-  columns. UUID and common SQL date/time types are supported end to end.
-- SQL Server write-behind batches same-shape upserts into update, locked version
-  probe, and insert phases, with a live throughput regression gate.
-- `cachedb:certify` fails a consumer build when route coverage, parity, memory,
-  failover, canary, rollback, or commit-bound evidence is missing.
-- Stable artifacts are published to an anonymous Maven2 repository with POM,
-  BOM, source, Javadoc, SHA-1, and SHA-256 files. GitHub Packages remains an
-  optional authenticated mirror.
-- Production maturity has one authoritative contract instead of separate,
-  potentially stale readiness verdicts.
+- `cachedb-spring-boot-starter-oracle` provides explicit Oracle selection with
+  JDBC Thin, version-guarded batch `MERGE`, delete, retry, timeout, and empty
+  string controls.
+- Oracle schema discovery, bounded warm, side-by-side comparison, Redis memory
+  estimation, outbox checkpoints, and multi-pod apply coordination are covered
+  by live database tests.
+- JDBC query and schema dialect SPIs now make paging, safe `IN` chunking, type
+  mapping, metadata case rules, and migration DDL provider-specific.
+- Schema bootstrap is fail-fast. A missing table, missing column, unsupported
+  database product, or invalid provider DDL no longer leaves the application
+  running with a hidden schema error.
+- A Java 21 Oracle REST sample includes Docker Compose, schema, seed routes,
+  Postman coverage, tuning guidance, and real Oracle/Redis integration tests.
+- A self-hosted physical Data Guard lane verifies redo apply, planned
+  switchover, forced primary loss, Hikari recovery through an Oracle JDBC
+  multi-address service-name descriptor, provider behavior after both role
+  transitions, and reinstatement of the former primary as a caught-up standby
+  without claiming RAC/SCAN/FAN coverage or zero-RPO.
 
-Read the complete [v0.10.1 release notes](docs/releases/v0.10.1.md) before
+Read the complete [v0.11.0 release notes](docs/releases/v0.11.0.md) before
 upgrading.
 
 ## Product Positioning: What CacheDB Is And Is Not
@@ -81,7 +86,7 @@ bounded operational routes.
 | Statement | Runtime meaning |
 | --- | --- |
 | Redis is the online read path | Entity and projection repositories read the active Redis data set. They do not automatically scan SQL on every miss. |
-| SQL is the durable source of truth | PostgreSQL or MSSQL keeps the durable history through write-behind. Archive, export, audit, and full-history reads should use explicit SQL routes. |
+| SQL is the durable source of truth | PostgreSQL, SQL Server, or Oracle Database keeps durable history through write-behind. Archive, export, audit, and full-history reads should use explicit SQL routes. |
 | Hot policy is a contract | If a row is outside the active policy, an entity or projection read may return empty. That is expected behavior, not data loss. |
 | Projection is part of the model | Relation-heavy lists, dashboards, timelines, top-N, and globally sorted screens should use compact read models. |
 | Cold paths must be explicit | Use a bounded SQL endpoint, registered page loader, warm/backfill job, or migration route for data outside the active set. |
@@ -116,9 +121,10 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the current release?" | [v0.10.1 Release Notes](docs/releases/v0.10.1.md) |
-| "Where is a runnable REST API sample?" | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
+| "What changed in the current release?" | [v0.11.0 Release Notes](docs/releases/v0.11.0.md) |
+| "Where is a runnable REST API sample?" | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
+| "What is the Oracle provider contract?" | [Oracle Provider](docs/oracle-provider.md) |
 | "How do multiple pods refresh and clean a hot set periodically?" | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) |
 | "What are entity, relation, projection, and route contract?" | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | "How do I model real production cases?" | [Use Case Examples](docs/use-case-examples.md) |
@@ -134,8 +140,8 @@ happens when the requested data is outside the active set.
 
 | Situation | Recommended path | Why |
 | --- | --- | --- |
-| I want to run a complete sample first | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) | REST API, Docker Compose, schema, seed data, Postman collection |
-| New Spring Boot service | `cachedb-spring-boot-starter-postgres` or `cachedb-spring-boot-starter-mssql` | Explicit provider selection and Spring `DataSource` integration |
+| I want to run a complete sample first | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) | REST API, Docker Compose, schema, seed data, Postman collection |
+| New Spring Boot service | Select the PostgreSQL, MSSQL, or Oracle provider starter | Explicit provider selection and Spring `DataSource` integration |
 | Existing Spring Boot app with JPA | Starter plus existing `DataSource` | JPA usually already creates the `DataSource`; do not duplicate JDBC setup |
 | Plain Java service | `cachedb-starter` | You own bootstrap, shutdown, and connection lifecycle |
 | Existing SQL database + ORM system | Migration Planner | Discover schema, warm Redis, compare the source database vs CacheDB, generate a cutover report |
@@ -151,9 +157,9 @@ make every dynamic query fast.
 
 ## Ten-Minute Learning Path
 
-1. Run either the [PostgreSQL sample](sample-cache-database-postgresql/README.md)
-   or the [SQL Server sample](sample-cache-database-mssql/README.md) with its
-   `demo` profile.
+1. Run the [PostgreSQL](sample-cache-database-postgresql/README.md),
+   [SQL Server](sample-cache-database-mssql/README.md), or
+   [Oracle](sample-cache-database-oracle/README.md) sample with its `demo` profile.
 2. Seed durable rows and wait for the distributed seed job to complete.
 3. Call an archive endpoint to prove the SQL source route.
 4. Run a projection-only warm job and wait for route coverage.
@@ -166,13 +172,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.10.1` is an
+Keep `cachedb.version` aligned with the release you use. Version `0.11.0` is an
 immutable release available from the anonymous CacheDB Maven repository and
 the GitHub Release bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.10.1</cachedb.version>
+    <cachedb.version>0.11.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -266,6 +272,7 @@ JDBC rule:
 | --- | --- | --- | --- |
 | PostgreSQL | `cachedb-spring-boot-starter-postgres` | `org.postgresql:postgresql` | [PostgreSQL sample](sample-cache-database-postgresql/README.md) |
 | SQL Server | `cachedb-spring-boot-starter-mssql` | `com.microsoft.sqlserver:mssql-jdbc` | [SQL Server sample](sample-cache-database-mssql/README.md) |
+| Oracle Database | `cachedb-spring-boot-starter-oracle` | transitive `com.oracle.database.jdbc:ojdbc17` | [Oracle sample](sample-cache-database-oracle/README.md) |
 
 - Add `spring-boot-starter-jdbc` if your application does not already create a
   Spring `DataSource`.
@@ -276,14 +283,16 @@ JDBC rule:
   still required.
 - Choose exactly one provider starter. Use
   `cachedb-spring-boot-starter-postgres` for PostgreSQL or
-  `cachedb-spring-boot-starter-mssql` for SQL Server.
+  `cachedb-spring-boot-starter-mssql` for SQL Server, or
+  `cachedb-spring-boot-starter-oracle` for Oracle Database.
 - With one provider on the classpath, `cachedb.sql.provider=AUTO` selects it.
   Multiple providers fail startup instead of being resolved silently.
 - Add `cachedb-spring-boot-starter-admin` only when the operations console is
   required. It is not part of the core runtime starter.
 - See [Declarative Repositories](docs/declarative-repositories.md) for the
   preferred application API and [Database Provider SPI](docs/database-provider-spi.md)
-  for provider-specific tuning.
+  for provider-specific tuning. Oracle users should also read the
+  [Oracle Provider](docs/oracle-provider.md) contract.
 
 Minimal `application.yml`:
 

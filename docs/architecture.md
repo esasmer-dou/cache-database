@@ -8,7 +8,7 @@ CacheDB is a Redis-first persistence and read-model framework. It is not a
 transparent cache in front of every SQL query.
 
 - Redis serves explicitly declared low-latency entity and projection routes.
-- PostgreSQL or SQL Server remains the durable source of truth.
+- PostgreSQL, SQL Server, or Oracle Database remains the durable source of truth.
 - Writes are accepted in Redis and persisted by versioned write-behind.
 - Archive and history reads use explicit, bounded source routes.
 - Compile-time processors generate codecs, metadata, repository implementations,
@@ -45,7 +45,7 @@ flowchart LR
     B --> C["Redis Function"]
     C --> D["Entity, version, indexes, stream event"]
     D --> E["Write-behind consumer group"]
-    E --> F["PostgreSQL or SQL Server"]
+    E --> F["PostgreSQL, SQL Server, or Oracle Database"]
     E --> G["Retry and dead-letter handling"]
 ```
 
@@ -149,8 +149,9 @@ limits appropriate to that role.
 ## 9. SQL Provider Model
 
 `cachedb-storage-jdbc` owns shared source-query and provider contracts.
-`cachedb-storage-postgres` and `cachedb-storage-mssql` provide vendor dialects,
-locking, idempotency, retry classification, and metadata behavior.
+`cachedb-storage-postgres`, `cachedb-storage-mssql`, and
+`cachedb-storage-oracle` provide vendor dialects, locking, idempotency, retry
+classification, query limits, and metadata behavior.
 
 Spring Boot applications select exactly one provider starter. `AUTO` succeeds
 only when one provider is present and fails startup on an ambiguous classpath.
@@ -174,6 +175,7 @@ Provider-specific tuning remains necessary:
 | `cachedb-storage-jdbc` | Shared JDBC source and provider SPI |
 | `cachedb-storage-postgres` | PostgreSQL durable provider |
 | `cachedb-storage-mssql` | SQL Server durable provider |
+| `cachedb-storage-oracle` | Oracle Database durable provider |
 | `cachedb-starter` | Runtime bootstrap, warm runner, workers, and operational wiring |
 | `cachedb-spring-boot-starter-*` | Core, provider, and optional admin auto-configuration |
 | `cachedb-spring-boot-test` | Route coverage and integration-test helpers |
@@ -202,8 +204,9 @@ gateway/authentication boundary and outside the public request path.
 - CacheDB does not infer hot routes from arbitrary application queries.
 - CacheDB does not turn every SQL table into a Redis entity automatically.
 - Large reporting, export, and archive scans remain database/reporting jobs.
-- A library test cannot certify an application's SQL Server Always On or
-  PostgreSQL HA topology; each deployment must run its own failover proof.
+- A library test cannot certify an application's SQL Server Always On,
+  PostgreSQL HA, Oracle RAC, or Oracle Data Guard topology; each deployment
+  must run its own failover proof.
 
 These limits keep behavior explicit and prevent expensive production work from
 being hidden behind ORM-like convenience.

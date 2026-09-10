@@ -577,7 +577,7 @@ public final class CacheDatabaseAdmin {
         addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.batchSize",
                 cacheDatabaseConfig.writeBehind().batchSize(), "Base Redis stream read batch size.");
         addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.maxFlushBatchSize",
-                cacheDatabaseConfig.writeBehind().maxFlushBatchSize(), "Maximum PostgreSQL flush batch size.");
+                cacheDatabaseConfig.writeBehind().maxFlushBatchSize(), "Maximum durable SQL flush batch size.");
         addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.postgresCopyThreshold",
                 cacheDatabaseConfig.writeBehind().postgresCopyThreshold(), "Row threshold before COPY bulk path.");
         addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.statementTimeoutSeconds",
@@ -711,7 +711,7 @@ public final class CacheDatabaseAdmin {
         addTuning(items, modeledProperties, "schema", "cachedb.config.schemaBootstrap.autoApplyOnStart",
                 cacheDatabaseConfig.schemaBootstrap().autoApplyOnStart(), "Applies schema bootstrap on start.");
         addTuning(items, modeledProperties, "schema", "cachedb.config.schemaBootstrap.schemaName",
-                defaultString(cacheDatabaseConfig.schemaBootstrap().schemaName()), "Target PostgreSQL schema.");
+                defaultString(cacheDatabaseConfig.schemaBootstrap().schemaName()), "Target durable SQL schema.");
 
         int explicitOverrideCount = 0;
         TreeSet<String> propertyNames = new TreeSet<>();
@@ -1399,7 +1399,7 @@ public final class CacheDatabaseAdmin {
                 ? ""
                 : metrics.writeBehindWorkerSnapshot().lastErrorMessage();
         if (writeBehindMessage.contains("ON CONFLICT DO UPDATE command cannot affect row a second time")) {
-            return "Write-behind batch sent the same entity id to PostgreSQL more than once in a single bulk upsert statement.";
+            return "Write-behind batch sent the same entity id to the durable SQL provider more than once in a single bulk upsert statement.";
         }
         String projectionRefreshMessage = defaultString(metrics.projectionRefreshSnapshot().lastErrorMessage());
         if (!projectionRefreshMessage.isBlank()) {

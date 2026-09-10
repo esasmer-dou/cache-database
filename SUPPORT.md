@@ -10,7 +10,7 @@ Use the channel that matches the problem:
 When asking for help, include:
 
 - CacheDB version or commit
-- Redis and PostgreSQL versions
+- Redis version and selected SQL provider, database, and JDBC driver versions
 - whether you are using Spring Boot starter or plain Java bootstrap
 - workload shape or benchmark name
 - logs, stack traces, and any relevant evidence report paths

@@ -23,6 +23,30 @@
       "type": "java.lang.Boolean",
       "defaultValue": true,
       "description": "Enables declarative scheduled warm registration. Redis leases prevent the same warm definition from running concurrently in multiple pods."
+    },
+    {
+      "name": "cachedb.sql.oracle.query-timeout-seconds",
+      "type": "java.lang.Integer",
+      "defaultValue": 10,
+      "description": "Applies a finite JDBC statement timeout to Oracle write-behind operations. Valid range: 1-300 seconds."
+    },
+    {
+      "name": "cachedb.sql.oracle.transaction-isolation",
+      "type": "com.reactor.cachedb.spring.boot.CacheDbSpringProperties$TransactionIsolation",
+      "defaultValue": "READ_COMMITTED",
+      "description": "Selects READ_COMMITTED or SERIALIZABLE for Oracle write-behind transactions."
+    },
+    {
+      "name": "cachedb.sql.oracle.duplicate-race-retries",
+      "type": "java.lang.Integer",
+      "defaultValue": 2,
+      "description": "Bounds retries for concurrent first-insert ORA-00001 races after durable version inspection. Valid range: 0-10."
+    },
+    {
+      "name": "cachedb.sql.oracle.empty-string-policy",
+      "type": "com.reactor.cachedb.spring.boot.CacheDbSpringProperties$OracleEmptyStringPolicy",
+      "defaultValue": "REJECT",
+      "description": "Controls Oracle empty-string handling. REJECT prevents silent conversion to NULL; NORMALIZE_TO_NULL must be an explicit domain decision."
     }
   ],
   "hints": [
@@ -32,7 +56,15 @@
         { "value": "AUTO", "description": "Use the only provider starter found on the classpath." },
         { "value": "POSTGRES", "description": "Use cachedb-spring-boot-starter-postgres." },
         { "value": "MSSQL", "description": "Use cachedb-spring-boot-starter-mssql." },
+        { "value": "ORACLE", "description": "Use cachedb-spring-boot-starter-oracle." },
         { "value": "CUSTOM", "description": "Supply WriteBehindFlusherFactory through CacheDatabaseConfigCustomizer." }
+      ]
+    },
+    {
+      "name": "cachedb.sql.oracle.empty-string-policy",
+      "values": [
+        { "value": "REJECT", "description": "Fail before SQL execution when a Java String is empty." },
+        { "value": "NORMALIZE_TO_NULL", "description": "Bind an empty Java String as SQL NULL explicitly." }
       ]
     }
   ]

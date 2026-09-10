@@ -12,6 +12,7 @@ public final class CacheDbProviderFailureAnalyzer
         String starter = switch (cause.providerId()) {
             case "postgres" -> "com.reactor.cachedb:cachedb-spring-boot-starter-postgres";
             case "mssql" -> "com.reactor.cachedb:cachedb-spring-boot-starter-mssql";
+            case "oracle" -> "com.reactor.cachedb:cachedb-spring-boot-starter-oracle";
             default -> "a JdbcStorageProvider implementation registered through ServiceLoader";
         };
         return new FailureAnalysis(

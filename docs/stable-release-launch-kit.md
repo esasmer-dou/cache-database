@@ -14,17 +14,17 @@ Redis-first Java data layer with bounded hot sets, projections, compile-time gen
 ## Suggested Topics
 
 ```text
-java, redis, sql, postgresql, mssql, cache, cqrs, projections, orm-alternative, spring-boot
+java, redis, sql, postgresql, mssql, oracle, oracle-database, cache, cqrs, projections, orm-alternative, spring-boot
 ```
 
 ## Official Distribution Channel
 
-For `v0.10.1`, the official distribution channels are the anonymous CacheDB
+For `v0.11.0`, the official distribution channels are the anonymous CacheDB
 Maven repository and the GitHub Release asset. GitHub Packages is an optional
 authenticated mirror:
 
 ```text
-cache-database-0.10.1-github-release.zip
+cache-database-0.11.0-github-release.zip
 ```
 
 The bundle contains binary, source, javadoc, and POM artifacts for 16 public
@@ -34,29 +34,29 @@ resolution and the GitHub Release bundle are the selected official channels.
 
 ## Release Positioning
 
-`cache-database v0.10.1`
+`cache-database v0.11.0`
 
-CacheDB `v0.10.1` includes compile-ready migration projections, batched SQL Server
-write-behind, commit-bound application certification, and anonymous Maven
-consumption while preserving explicit production contracts. PostgreSQL and
-SQL Server samples expose the same application model and provider-specific
-runtime path.
+CacheDB `v0.11.0` adds Oracle Database as a first-class provider, introduces
+provider-aware query and schema dialects, and makes schema bootstrap fail-fast
+while preserving explicit production contracts. PostgreSQL, SQL Server, and
+Oracle samples expose the same application model through separate provider
+starters and database-specific runtime paths.
 
 This release does not claim that every consuming application can cut production
 traffic over without its own validation. Before cutover, each application still
 needs route inventory, warm-up, side-by-side comparison, Redis memory budgets,
 rollback planning, and environment-specific HA evidence.
 
-MSSQL is an explicitly selected provider with live SQL Server evidence,
-restart/reconnect checks, concurrency and lock-classification coverage,
-outbox/checkpoint support, and migration planner coverage. This is still not a
-blanket claim that every SQL Server HA or Always On topology is certified; those
-topologies must be proven in the consuming application's staging environment.
+All three providers have live database evidence for their supported contracts.
+This is not a blanket certification for every PostgreSQL cluster, SQL Server
+Always On deployment, Oracle RAC/Data Guard topology, network, or connection
+pool configuration. The consuming application must prove its actual topology
+in staging.
 
 ## Release Notes Template
 
 ```markdown
-## cache-database v0.10.1
+## cache-database v0.11.0
 
 This stable release improves the practical migration path for existing SQL-backed applications.
 
@@ -75,7 +75,7 @@ This stable release improves the practical migration path for existing SQL-backe
 - Redis-first entity repositories with bounded hot-set policies.
 - Compile-time generated `@CacheRepository` implementations for typed commands, hot/source routes, relations, projections, and warm plans.
 - Declarative per-entity policy configuration with explicit JDBC registration.
-- PostgreSQL and SQL Server durable provider paths selected through exactly one provider starter.
+- PostgreSQL, SQL Server, and Oracle durable provider paths selected through exactly one provider starter.
 - Two-phase generated JDBC source and relation-loader registration.
 - Explicit bounded source routes plus route-derived warm/backfill; no hidden SQL fallback behind Redis misses.
 - Projection/read-model recipes for relation-heavy and globally ranked routes.
@@ -87,14 +87,14 @@ This stable release improves the practical migration path for existing SQL-backe
 - Optimistic write receipts, durable parent dependencies, and explicit SQL durability tracking.
 - Typed Redis Stream jobs with pod failover, abandoned-work claiming, bounded retries, and idempotent-handler contracts.
 - Spring Boot Actuator health for Redis, SQL, write-behind backlog, dead letters, and recovery state.
-- PostgreSQL and MSSQL REST samples with Docker Compose, Postman collections, and local hot-route load scripts.
+- PostgreSQL, SQL Server, and Oracle REST samples with Docker Compose, Postman collections, and local hot-route load scripts.
 - Anonymous Maven2 repository and GitHub Release asset as official package distribution channels.
 
 ### Provider boundaries
 
-- PostgreSQL is the default provider path.
-- MSSQL is available as an explicitly selected provider with SQL Server sample and integration evidence.
-- SQL Server HA or Always On readiness must be proven in the consuming application's staging topology when that topology is part of the production claim.
+- Select exactly one PostgreSQL, MSSQL, or Oracle provider starter.
+- Each provider has a runnable sample, live integration evidence, and provider-specific tuning guidance.
+- Database HA readiness must be proven in the consuming application's staging topology when that topology is part of the production claim.
 - Maven Central is optional because the anonymous Maven2 repository and GitHub Release are official distribution channels.
 
 ### Production use
@@ -107,14 +107,14 @@ comparison, Redis memory budget, and rollback plan.
 ## Publication Checklist
 
 - `pom.xml` and all module parent versions use the stable version.
-- Release notes exist at `docs/releases/v0.10.1.md`.
+- Release notes exist at `docs/releases/v0.11.0.md`.
 - `mvn -DskipTests package` passes.
 - Public API compatibility check passes.
 - Turkish documentation quality check passes.
 - Local Docker HA preflight passes or the latest CI evidence is green.
 - `Framework Readiness` and `Production Evidence` are green for the release
   commit.
-- `Production GA Release Readiness` is green for `v0.10.1`.
+- `Production GA Release Readiness` is green for `v0.11.0`.
 - GitHub Release is not marked as prerelease.
-- Anonymous Maven resolution passes for `0.10.1`.
-- GitHub Release asset `cache-database-0.10.1-github-release.zip` is attached.
+- Anonymous Maven resolution passes for `0.11.0`.
+- GitHub Release asset `cache-database-0.11.0-github-release.zip` is attached.

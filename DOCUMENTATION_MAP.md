@@ -10,7 +10,7 @@ questions a new user or technical lead is likely to ask.
 Read in this order:
 
 1. [README](README.md)
-2. [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md)
+2. Run the [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) sample
 3. [Getting Started](docs/getting-started.md)
 4. [Declarative Repositories](docs/declarative-repositories.md)
 5. [Concepts and Assumptions](docs/concepts-and-assumptions.md)
@@ -26,10 +26,10 @@ production tuning should be approached.
 | Question | Document |
 | --- | --- |
 | What is CacheDB, and what is it not? | [README](README.md) |
-| How do I run a complete REST API sample? | [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md) |
+| How do I run a complete REST API sample? | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
 | How do I declare hot, source, warm, and command routes? | [Declarative Repositories](docs/declarative-repositories.md) |
-| What changed in the latest stable release? | [v0.10.1 Release Notes](docs/releases/v0.10.1.md) |
+| What changed in the latest stable release? | [v0.11.0 Release Notes](docs/releases/v0.11.0.md) |
 | Do I need the Spring Boot JDBC starter? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | What are entity, relation, projection, and route contract? | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | How do insert, read, update, and delete work? | [Use Case Examples](docs/use-case-examples.md) |
@@ -41,6 +41,8 @@ production tuning should be approached.
 | How do I migrate an existing SQL database + ORM app? | [Migration Planner](docs/migration-planner.md) |
 | How do I keep Redis fresh when the source database changes outside CacheDB? | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
 | Can CacheDB support MSSQL or another SQL database? | [Database Provider SPI Direction](docs/database-provider-spi.md) |
+| How do I use Oracle Database safely? | [Oracle Provider](docs/oracle-provider.md) |
+| How do I prove Oracle Data Guard role-transition recovery? | [Oracle Provider: Local physical Data Guard lane](docs/oracle-provider.md#local-physical-data-guard-lane) |
 | What must be proven before production? | [Production Readiness Contract](PRODUCTION_GA_CRITERIA.md) |
 | How does an application prove cutover readiness? | [Production Certification](docs/production-certification.md) |
 | Stable release or application-specific production boundary? | [Production Readiness Contract](PRODUCTION_GA_CRITERIA.md) and [Stable Release Launch Kit](docs/stable-release-launch-kit.md) |
@@ -55,7 +57,7 @@ production tuning should be approached.
 Start with:
 
 - [Getting Started](docs/getting-started.md)
-- [PostgreSQL Sample](sample-cache-database-postgresql/README.md) or [MSSQL Sample](sample-cache-database-mssql/README.md)
+- [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) sample
 - [Use Case Examples](docs/use-case-examples.md)
 - [Spring Boot Starter](docs/spring-boot-starter.md)
 
@@ -113,13 +115,15 @@ with evidence.
 | [Migration Planner](docs/migration-planner.md) | Migration flow from existing SQL database systems |
 | [Outbox and CDC Apply Runner](docs/outbox-cdc-apply-runner.md) | External database changes, outbox/CDC events, cache-only apply behavior |
 | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) | Declarative periodic warm, Redis lease, bounded waiting, and incremental cache cleanup |
-| [Database Provider SPI Direction](docs/database-provider-spi.md) | Storage provider boundary for PostgreSQL, MSSQL, and future SQL dialects |
+| [Database Provider SPI](docs/database-provider-spi.md) | Storage provider boundary for PostgreSQL, MSSQL, and Oracle Database |
+| [Oracle Provider](docs/oracle-provider.md) | Oracle dependency, value, write, outbox, tuning, and evidence contract |
 | [Production Recipes](docs/production-recipes.md) | BEST/ACCEPTABLE/ANTI-PATTERN production usage patterns |
 | [Architecture](docs/architecture.md) | Internal architecture, data flow, registry, relation loading |
 | [Production Evidence Guide](docs/production-test-report.md) | Reproducible test lanes, report locations, and evidence boundaries |
 | [Production Readiness Contract](PRODUCTION_GA_CRITERIA.md) | Single current maturity and go/no-go contract |
 | [Production Certification](docs/production-certification.md) | Consumer application route, parity, memory, failover, canary, and rollback gate |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Hard go/no-go flow for stable GA releases |
+| [v0.11.0 Release Notes](docs/releases/v0.11.0.md) | First-class Oracle provider, provider-aware schema DDL, live evidence, and runnable Oracle sample |
 | [v0.10.1 Release Notes](docs/releases/v0.10.1.md) | Anonymous sample dependency parity and fail-closed consumer certification |
 | [v0.10.0 Release Notes](docs/releases/v0.10.0.md) | Compile-ready migration projections, SQL Server batched writes, application certification, and anonymous Maven distribution |
 | [v0.9.0 Release Notes](docs/releases/v0.9.0.md) | Compile-time inference, direct cursor pages, typed route references, route capacity evidence, and explicit durability helpers |

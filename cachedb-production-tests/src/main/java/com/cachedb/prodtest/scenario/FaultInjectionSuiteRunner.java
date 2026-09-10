@@ -107,7 +107,7 @@ public final class FaultInjectionSuiteRunner {
         boolean faultInjected;
         String entryId;
         try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
-             CacheDatabase broken = new CacheDatabase(jedis, badDataSource(), configFor(keyPrefix, functionPrefix))) {
+             CacheDatabase broken = new CacheDatabase(jedis, badDataSource(), configForUnavailableDatabase(keyPrefix, functionPrefix))) {
             registerCustomerBinding(broken);
             broken.start();
             EcomCustomerEntityCacheBinding.save(broken, CachePolicy.defaults(), customer(9501L, "ACTIVE", "PG-LOSS"));
@@ -154,7 +154,7 @@ public final class FaultInjectionSuiteRunner {
 
         String staleEntryId;
         try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
-             CacheDatabase broken = new CacheDatabase(jedis, badDataSource(), configFor(keyPrefix, functionPrefix))) {
+             CacheDatabase broken = new CacheDatabase(jedis, badDataSource(), configForUnavailableDatabase(keyPrefix, functionPrefix))) {
             registerCustomerBinding(broken);
             broken.start();
             EcomCustomerEntityCacheBinding.save(broken, CachePolicy.defaults(), customer(9601L, "ACTIVE", "ORDERING-A"));
@@ -208,7 +208,7 @@ public final class FaultInjectionSuiteRunner {
         for (int cycle = 1; cycle <= 3; cycle++) {
             long id = 9700L + cycle;
             try (JedisPooled jedis = ProductionTestEnvironment.redisClient();
-                 CacheDatabase broken = new CacheDatabase(jedis, badDataSource(), configFor(keyPrefix, functionPrefix))) {
+                 CacheDatabase broken = new CacheDatabase(jedis, badDataSource(), configForUnavailableDatabase(keyPrefix, functionPrefix))) {
                 registerCustomerBinding(broken);
                 broken.start();
                 EcomCustomerEntityCacheBinding.save(broken, CachePolicy.defaults(), customer(id, "ACTIVE", "SOAK-" + cycle));
@@ -249,6 +249,14 @@ public final class FaultInjectionSuiteRunner {
     }
 
     private CacheDatabaseConfig configFor(String keyPrefix, String functionPrefix) {
+        return configFor(keyPrefix, functionPrefix, true);
+    }
+
+    private CacheDatabaseConfig configForUnavailableDatabase(String keyPrefix, String functionPrefix) {
+        return configFor(keyPrefix, functionPrefix, false);
+    }
+
+    private CacheDatabaseConfig configFor(String keyPrefix, String functionPrefix, boolean bootstrapSchema) {
         CacheDatabaseConfig base = CacheDatabaseProfiles.benchmark();
         return CacheDatabaseConfig.builder()
                 .writeBehind(WriteBehindConfig.builder()
@@ -307,8 +315,8 @@ public final class FaultInjectionSuiteRunner {
                         .compactionCompleteFunctionName(functionPrefix + "_compaction_complete")
                         .build())
                 .schemaBootstrap(SchemaBootstrapConfig.builder()
-                        .mode(SchemaBootstrapMode.CREATE_IF_MISSING)
-                        .autoApplyOnStart(true)
+                        .mode(bootstrapSchema ? SchemaBootstrapMode.CREATE_IF_MISSING : SchemaBootstrapMode.DISABLED)
+                        .autoApplyOnStart(bootstrapSchema)
                         .build())
                 .build();
     }

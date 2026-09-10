@@ -121,7 +121,8 @@ if ($autoConfiguration -match '@(?:org\.springframework\.context\.annotation\.)?
 
 $sampleRoots = @(
     (Join-Path $root 'sample-cache-database-postgresql'),
-    (Join-Path $root 'sample-cache-database-mssql')
+    (Join-Path $root 'sample-cache-database-mssql'),
+    (Join-Path $root 'sample-cache-database-oracle')
 )
 foreach ($sampleRoot in $sampleRoots) {
     $repositorySources = Get-ChildItem -LiteralPath (Join-Path $sampleRoot 'src/main/java') -Recurse -Filter '*Repository.java' -File
@@ -184,7 +185,8 @@ $documentationSources = Get-ChildItem -LiteralPath @(
     (Join-Path $root 'docs'),
     (Join-Path $root 'tr'),
     (Join-Path $root 'sample-cache-database-postgresql'),
-    (Join-Path $root 'sample-cache-database-mssql')
+    (Join-Path $root 'sample-cache-database-mssql'),
+    (Join-Path $root 'sample-cache-database-oracle')
 ) -Recurse -Filter '*.md' -File
 foreach ($match in Select-String -LiteralPath $documentationSources.FullName -Pattern (
     'warmCustomerTimelineProjection|warmCustomerTimelineEntities|warmActiveProjection|warmActiveEntities'

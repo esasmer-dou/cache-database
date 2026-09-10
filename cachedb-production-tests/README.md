@@ -46,7 +46,8 @@ They do **not** prove that:
 
 - every arbitrary ORM query is suitable for Redis
 - a laptop result predicts Kubernetes capacity
-- PostgreSQL or SQL Server HA is correct in an application's own topology
+- PostgreSQL HA, SQL Server Always On, or Oracle RAC/Data Guard is correct in an
+  application's own topology
 - passing once replaces soak, failover, and rollback evidence
 
 If a scenario needs archive, export, audit, or full-history data, model it as an
@@ -57,12 +58,14 @@ The repo also ships official CI evidence lanes:
 - workflow: [../.github/workflows/production-evidence.yml](../.github/workflows/production-evidence.yml)
 - local runner: [../tools/ci/run-production-evidence.ps1](../tools/ci/run-production-evidence.ps1)
 - coordination runner: [../tools/ci/run-multi-instance-coordination-evidence.ps1](../tools/ci/run-multi-instance-coordination-evidence.ps1)
+- Oracle provider runner: [../tools/ci/run-oracle-provider-evidence.ps1](../tools/ci/run-oracle-provider-evidence.ps1)
 - summary generator: [../tools/ci/write-production-evidence-summary.ps1](../tools/ci/write-production-evidence-summary.ps1)
 
 Those lanes cover two different concerns:
 
 - benchmark and recipe evidence for production-facing read-model/runtime decisions
-- multi-instance coordination evidence for shared Redis + shared PostgreSQL deployments
+- multi-instance coordination evidence for shared Redis plus the selected shared
+  SQL provider
 
 Coverage:
 

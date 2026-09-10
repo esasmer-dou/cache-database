@@ -41,9 +41,10 @@ jobs:
       - name: Publish Maven artifacts to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          mvn -B
-          -DskipTests=${{ inputs.skipTests }}
-          -Dgpg.skip=true
-          deploy
-          -DaltDeploymentRepository=github::default::https://maven.pkg.github.com/${{ github.repository }}
+          SKIP_TESTS: ${{ inputs.skipTests }}
+          PACKAGE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "$SKIP_TESTS" in true|false) ;; *) echo "skipTests must be true or false"; exit 1;; esac
+          mvn -B -P oss-release "-DskipTests=$SKIP_TESTS" -Dgpg.skip=true deploy \
+            "-DaltDeploymentRepository=github::https://maven.pkg.github.com/$PACKAGE_REPOSITORY"

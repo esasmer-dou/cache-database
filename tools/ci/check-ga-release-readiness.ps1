@@ -291,6 +291,11 @@ if ($SkipRemoteWorkflowChecks) {
         "Run $($run.databaseId): $($run.url)"
     }
 
+    Invoke-ReadinessCheck -Name "Snapshot Provider Evidence workflow" -Check {
+        $run = Get-LatestSuccessfulRun -WorkflowName "Snapshot Provider Evidence" -HeadBranch $targetRefValue -HeadSha $targetSha
+        "Run $($run.databaseId): $($run.url)"
+    }
+
     Invoke-ReadinessCheck -Name "Anonymous public Maven repository" -Check {
         $version = $releaseTagValue.Substring(1)
         $validatorPath = Join-Path $repoRoot "tools/ci/check-public-maven-repository.ps1"

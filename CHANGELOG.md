@@ -4,6 +4,58 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.11.0 - 2026-09-10
+
+### Added
+
+- declarative SnapshotPlan sources, business mapping and scheduled/manual refresh;
+  framework-owned spooling, bounded batches, renewable leases and atomic catalog publication
+- transaction-consistent snapshot sources for PostgreSQL, SQL Server and Oracle,
+  pooled connection state restoration and three-provider integration evidence
+
+- first-class Oracle Database storage and Spring Boot starter modules using
+  Oracle JDBC Thin and `ojdbc17`
+- version-guarded Oracle batch `MERGE`, guarded delete, duplicate-race recovery,
+  outbox checkpointing, multi-pod apply coordination, and provider controls for
+  timeouts, isolation, retries, and empty strings
+- Oracle migration discovery, bounded warm, parity comparison, Redis memory
+  estimation, high-latency and restart evidence, and throughput regression gate
+- self-hosted Oracle 19c physical Data Guard evidence with real redo apply,
+  broker switchover, forced primary loss, multi-address service-name pool
+  recovery, and provider verification after both transitions, followed by
+  former-primary reinstatement and final no-gap/zero-lag readiness checks
+- a complete Java 21 Oracle REST sample with Docker Compose, Oracle DDL, seed and
+  warm routes, Postman collection, and English/Turkish guidance
+- provider-contributed JDBC schema dialects for PostgreSQL, SQL Server, Oracle,
+  and H2 test environments
+
+### Changed
+
+- bounded JDBC reads resolve the database product explicitly and use
+  provider-specific paging, parameter binding, and safe `IN` chunk sizes
+- schema create, validation, and migration use provider-specific SQL types,
+  identifier casing, and `ALTER TABLE` syntax
+- configured schema bootstrap now fails application startup when validation or
+  creation reports an issue instead of continuing with a hidden schema error
+- release packaging, public Maven repository checks, API compatibility gates,
+  readiness workflows, documentation, and sample parity checks cover all three
+  providers
+
+### Fixed
+
+- Oracle delayed-network tests now derive the proxy target from the configured
+  Easy Connect URL instead of assuming the single-instance test port and service
+- migration warm SQL no longer sends a trailing statement terminator through
+  Oracle JDBC `PreparedStatement`
+
+### Compatibility
+
+- PostgreSQL and SQL Server APIs remain source compatible
+- the new `JdbcStorageProvider.schemaDialect()` method has a default
+  implementation for existing third-party providers
+- applications that relied on ignored automatic schema-bootstrap failures must
+  fix the schema or disable automatic bootstrap explicitly
+
 ## 0.10.1 - 2026-08-13
 
 ### Fixed

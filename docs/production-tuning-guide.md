@@ -241,9 +241,11 @@ ANTI-PATTERN:
 
 The selected SQL provider remains the durable source of truth. Even with
 Redis-first reads, connection-pool, transaction, and index quality still matter.
-PostgreSQL is the default provider path; MSSQL is an explicit provider and must
-be tuned with its own dialect limits, lock behavior, driver settings, and
-topology evidence.
+PostgreSQL is the backward-compatible default provider path. MSSQL and Oracle
+Database are explicit providers and must be tuned with their own dialect limits,
+lock behavior, driver settings, and topology evidence. Oracle teams must also
+account for empty-string semantics, service session budgets, and redo behavior
+described in [Oracle Provider](oracle-provider.md).
 
 Watch:
 

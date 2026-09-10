@@ -1,6 +1,7 @@
 param(
     [string] $PostgresqlCollection = "sample-cache-database-postgresql/postman/cache-database-postgresql-sample.postman_collection.json",
     [string] $MssqlCollection = "sample-cache-database-mssql/postman/cache-database-mssql-sample.postman_collection.json",
+    [string] $OracleCollection = "sample-cache-database-oracle/postman/cache-database-oracle-sample.postman_collection.json",
     [string] $SummaryPath = "target/postman-collection-summary.md"
 )
 
@@ -144,13 +145,19 @@ function Assert-CollectionContract {
 
 $postgresql = Read-Collection -RelativePath $PostgresqlCollection
 $mssql = Read-Collection -RelativePath $MssqlCollection
+$oracle = Read-Collection -RelativePath $OracleCollection
 $postgresqlRequests = @(Assert-CollectionContract -Collection $postgresql -ExpectedBaseUrl "http://127.0.0.1:8091" -Provider "PostgreSQL")
 $mssqlRequests = @(Assert-CollectionContract -Collection $mssql -ExpectedBaseUrl "http://127.0.0.1:8092" -Provider "MSSQL")
+$oracleRequests = @(Assert-CollectionContract -Collection $oracle -ExpectedBaseUrl "http://127.0.0.1:8093" -Provider "Oracle")
 
 $postgresqlContract = @($postgresqlRequests | ForEach-Object { "$($_.Path)|$($_.Method)|$($_.Url)" })
 $mssqlContract = @($mssqlRequests | ForEach-Object { "$($_.Path)|$($_.Method)|$($_.Url)" })
 if (($postgresqlContract -join "`n") -cne ($mssqlContract -join "`n")) {
-    throw "PostgreSQL and MSSQL Postman request contracts differ."
+    throw "PostgreSQL and SQL Server Postman request contracts differ."
+}
+$oracleContract = @($oracleRequests | ForEach-Object { "$($_.Path)|$($_.Method)|$($_.Url)" })
+if (($postgresqlContract -join "`n") -cne ($oracleContract -join "`n")) {
+    throw "PostgreSQL and Oracle Postman request contracts differ."
 }
 
 $summary = @"
@@ -158,6 +165,7 @@ $summary = @"
 
 - PostgreSQL requests: $($postgresqlRequests.Count)
 - MSSQL requests: $($mssqlRequests.Count)
+- Oracle requests: $($oracleRequests.Count)
 - Required bounded warm routes: 15
 - Provider request contract parity: passed
 - Warm-before-hot ordering: passed
@@ -170,5 +178,5 @@ if (-not (Test-Path -LiteralPath $summaryDirectory)) {
 }
 [System.IO.File]::WriteAllText($summaryFullPath, $summary.Trim() + "`n", [System.Text.UTF8Encoding]::new($false))
 
-Write-Host "Validated $($postgresqlRequests.Count) requests in each Postman collection."
+Write-Host "Validated $($postgresqlRequests.Count) requests in each of the three Postman collections."
 Write-Host "Summary: $summaryFullPath"

@@ -6,7 +6,7 @@ yayımlanır ve doğrulanır.
 ## Sürüm Sırası
 
 1. Kök POM ile bütün modüllerde kararlı semantic version değerini ayarla.
-2. `CHANGELOG.md`, Türkçe ve İngilizce sürüm notları, README dosyaları ve iki
+2. `CHANGELOG.md`, Türkçe ve İngilizce sürüm notları, README dosyaları ve üç
    bağımsız sample projeyi güncelle.
 3. Tüm reactor testlerini, provider entegrasyonlarını, Docker HA kontrollerini,
    dokümantasyon kontrollerini, API uyumluluğunu, benchmark eşiklerini ve release
@@ -20,8 +20,8 @@ yayımlanır ve doğrulanır.
 8. ZIP, BOM, binary JAR ve checksum dosyalarıyla prerelease olmayan GitHub
    Release kaydını oluştur.
 9. Etiket için `Production GA Release Readiness` kontrolünü çalıştır.
-10. PostgreSQL ve SQL Server sample projelerini uzak ve anonim Maven deposundan
-    derle; ardından iki sample için de etiket ve release oluştur.
+10. PostgreSQL, SQL Server ve Oracle sample projelerini uzak ve anonim Maven
+    deposundan derle; ardından üç sample için de etiket ve release oluştur.
 
 Var olan bir sürümü yeniden derleme veya değiştirme. Düzeltme gerekiyorsa yeni
 bir semantic version yayımla.

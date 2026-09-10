@@ -49,6 +49,7 @@ class MigrationPlannerTest {
         assertTrue(result.recommendedRedisArtifacts().stream().anyMatch(item -> item.contains("customer_id")));
         assertTrue(result.sampleWarmSql().contains("ROW_NUMBER() OVER"));
         assertTrue(result.sampleWarmSql().contains("PARTITION BY customer_id"));
+        assertFalse(result.sampleWarmSql().endsWith(";"));
         assertTrue(result.sampleRootWarmSql().contains(":referenced_root_ids"));
         assertTrue(result.routeCacheContract().projectionRequired());
         assertEquals("CustomerOrdersSummaryHot", result.routeCacheContract().projectionName());

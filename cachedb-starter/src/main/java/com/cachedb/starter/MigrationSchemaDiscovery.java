@@ -32,7 +32,20 @@ final class MigrationSchemaDiscovery {
             "pg_toast",
             "sys",
             "mysql",
-            "performance_schema"
+            "performance_schema",
+            "sysaux",
+            "system",
+            "xdb",
+            "mdsys",
+            "ctxsys",
+            "ordsys",
+            "outln",
+            "dbsnmp",
+            "audsys",
+            "ojvmsys",
+            "dvsys",
+            "lbacsys",
+            "wmsys"
     );
 
     private final DataSource dataSource;
@@ -50,12 +63,13 @@ final class MigrationSchemaDiscovery {
         try (Connection connection = dataSource.getConnection()) {
             DatabaseMetaData metaData = connection.getMetaData();
             String catalog = connection.getCatalog();
-            loadTables(metaData, catalog, tables);
+            String schemaPattern = metadataSchemaPattern(connection, metaData);
+            loadTables(metaData, catalog, schemaPattern, tables);
             loadColumns(metaData, catalog, tables);
             loadPrimaryKeys(metaData, catalog, tables);
             loadImportedKeys(metaData, catalog, tables);
         } catch (SQLException exception) {
-            throw new IllegalStateException("Could not inspect PostgreSQL schema for migration planning: " + exception.getMessage(), exception);
+            throw new IllegalStateException("Could not inspect the configured SQL schema for migration planning: " + exception.getMessage(), exception);
         }
         if (tables.isEmpty()) {
             warnings.add("No user tables were discovered from the configured DataSource.");
@@ -71,8 +85,25 @@ final class MigrationSchemaDiscovery {
         return new Result(tableInfos, suggestions, List.copyOf(warnings), discoveredAt);
     }
 
-    private void loadTables(DatabaseMetaData metaData, String catalog, Map<TableKey, MutableTable> tables) throws SQLException {
-        try (ResultSet resultSet = metaData.getTables(catalog, null, "%", new String[]{"TABLE", "VIEW"})) {
+    private String metadataSchemaPattern(Connection connection, DatabaseMetaData metaData) throws SQLException {
+        String productName = metaData.getDatabaseProductName();
+        if (productName != null && productName.toLowerCase(Locale.ROOT).contains("oracle")) {
+            String schema = connection.getSchema();
+            if (schema == null || schema.isBlank()) {
+                throw new SQLException("Oracle connection did not expose a current schema");
+            }
+            return schema;
+        }
+        return null;
+    }
+
+    private void loadTables(
+            DatabaseMetaData metaData,
+            String catalog,
+            String schemaPattern,
+            Map<TableKey, MutableTable> tables
+    ) throws SQLException {
+        try (ResultSet resultSet = metaData.getTables(catalog, schemaPattern, "%", new String[]{"TABLE", "VIEW"})) {
             while (resultSet.next()) {
                 String schema = resultSet.getString("TABLE_SCHEM");
                 if (isSystemSchema(schema)) {

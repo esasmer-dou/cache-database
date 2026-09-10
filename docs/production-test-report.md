@@ -14,6 +14,8 @@ decision source is the [Production Readiness Contract](../PRODUCTION_GA_CRITERIA
 | Framework Readiness | Public API, reflection-free rules, docs, package shape, provider and sample parity | Managed infrastructure failover |
 | Production Evidence | Redis outage recovery, multi-instance coordination, projection/ranking benchmarks, provider smokes | Application route completeness |
 | SQL Server provider evidence | Versioned writes, batching, throughput threshold, restart/reconnect, lock classification, outbox and migration behavior | Every Always On topology |
+| Oracle provider evidence | Version-guarded MERGE/delete, query bounds, outbox, schema/migration behavior, delayed network, throughput, restart/reconnect | Every RAC or Data Guard topology |
+| Oracle physical Data Guard evidence | Redo transport/apply, broker switchover, forced primary loss, multi-address service-name Hikari recovery, provider behavior after both transitions, and former-primary reinstatement with final no-gap/zero-lag readiness | RAC/SCAN/FAN/FCF, production network policy, zero-RPO, or a consuming application's RTO/RPO |
 | Public Maven Repository Publish | Immutable anonymous artifact resolution and checksums | Application cutover readiness |
 | `cachedb:certify` | One application's route, parity, memory, failover, canary, and rollback evidence | Another application or environment |
 
@@ -27,11 +29,22 @@ pwsh ./tools/build/invoke-maven-semeru.ps1 `
   -MavenArgs @('-B', 'clean', 'verify')
 
 pwsh ./tools/ci/run-local-docker-ha-preflight.ps1
+
+pwsh ./tools/ci/run-oracle-provider-evidence.ps1 -RestartOracleContainer
+
+pwsh ./tools/ci/run-local-oracle-dataguard-evidence.ps1 `
+  -MavenExecutable C:\apache-maven-3.9.9\bin\mvn.cmd
 ```
 
-The Docker preflight starts isolated Redis 8, PostgreSQL 16, and SQL Server
-2022 containers, runs outage/restart evidence, writes reports under `target`,
-and removes the containers unless `-KeepContainers` is supplied.
+The Docker HA preflight starts isolated Redis 8, PostgreSQL 16, and SQL Server
+2022 containers. The Oracle command runs the pinned Oracle Database Free 23
+provider lane and verifies reconnect after restart. The Data Guard command
+requires a preloaded licensed Oracle 19c Enterprise image, 14 GiB of Docker
+memory, 6 CPUs and about 30 GiB of free Docker disk. It creates a real physical
+standby and runs planned and unplanned
+role transitions through a stable HAProxy endpoint. These commands write reports
+under `target`; temporary containers are removed unless the corresponding keep
+or existing-container option is supplied.
 
 ## Performance Gates
 
@@ -39,6 +52,8 @@ and removes the containers unless `-KeepContainers` is supplied.
   benchmarks use explicit thresholds in CI.
 - SQL Server high-volume write evidence reports row count, operation count,
   elapsed time, operations per second, required threshold, and result.
+- Oracle version-guarded batch evidence applies the same explicit throughput
+  floor and also verifies delayed-network and 1,000-expression-limit safety.
 - A threshold result is valid only for its commit, runner, payload, database,
   and configuration. Compare trends on equivalent environments.
 - Lowering a threshold to make CI green is not a fix. Investigate SQL round
@@ -51,6 +66,8 @@ and removes the containers unless `-KeepContainers` is supplied.
 | Production evidence | `target/cachedb-prodtest-reports/` |
 | Redis failover | `target/cachedb-redis-failover-reports/` |
 | SQL Server provider | `target/cachedb-mssql-provider-reports/` |
+| Oracle provider | `target/cachedb-oracle-provider-reports/` |
+| Oracle physical Data Guard | `target/cachedb-local-oracle-dataguard-reports/` |
 | Local Docker HA | `target/cachedb-local-docker-ha-reports/` |
 | Public Maven resolution | `target/public-maven-repository-summary.md` |
 | Application certificate | `target/cachedb-production-certification.md` |

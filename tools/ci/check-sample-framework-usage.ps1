@@ -1,7 +1,8 @@
 param(
     [string[]] $SampleRoots = @(
         "./sample-cache-database-postgresql",
-        "./sample-cache-database-mssql"
+        "./sample-cache-database-mssql",
+        "./sample-cache-database-oracle"
     ),
     [string] $SummaryPath = "./target/sample-framework-usage-summary.md"
 )

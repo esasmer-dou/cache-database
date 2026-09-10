@@ -30,6 +30,7 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
     private final int batchSize;
     private final long pollIntervalMillis;
     private final boolean createCheckpointTable;
+    private final int transactionIsolation;
     private final Object initializationMonitor = new Object();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean checkpointTableInitialized = new AtomicBoolean(false);
@@ -56,6 +57,7 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         this.batchSize = Math.max(1, builder.batchSize);
         this.pollIntervalMillis = Math.max(50L, builder.pollIntervalMillis);
         this.createCheckpointTable = builder.createCheckpointTable;
+        this.transactionIsolation = builder.transactionIsolation;
     }
 
     public static Builder builder(DataSource dataSource, JdbcOutboxDialect dialect) {
@@ -80,13 +82,14 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
             try (Connection connection = dataSource.getConnection()) {
                 boolean previousAutoCommit = connection.getAutoCommit();
                 int previousIsolation = connection.getTransactionIsolation();
+                Exception primaryFailure = null;
                 long checkpoint = 0L;
                 long lastAcceptedId = 0L;
                 int accepted = 0;
                 boolean ensuredCheckpoint = false;
                 try {
                     connection.setAutoCommit(false);
-                    connection.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
+                    connection.setTransactionIsolation(transactionIsolation);
                     ensuredCheckpoint = ensureCheckpoint(connection);
                     checkpoint = readCheckpointForUpdate(connection);
                     List<OutboxRow> rows = readBatch(connection, checkpoint);
@@ -104,11 +107,18 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
                         checkpointRowEnsured.set(true);
                     }
                 } catch (SQLException | RuntimeException exception) {
+                    primaryFailure = exception;
                     rollbackQuietly(connection, exception);
                     throw exception;
                 } finally {
-                    connection.setTransactionIsolation(previousIsolation);
-                    connection.setAutoCommit(previousAutoCommit);
+                    try {
+                        restoreConnection(connection, previousIsolation, previousAutoCommit);
+                    } catch (SQLException restoreFailure) {
+                        if (primaryFailure == null) {
+                            throw restoreFailure;
+                        }
+                        primaryFailure.addSuppressed(restoreFailure);
+                    }
                 }
                 lastFailure.set(null);
                 return accepted;
@@ -131,6 +141,28 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
             connection.rollback();
         } catch (SQLException rollbackFailure) {
             original.addSuppressed(rollbackFailure);
+        }
+    }
+
+    private void restoreConnection(Connection connection, int previousIsolation, boolean previousAutoCommit)
+            throws SQLException {
+        SQLException failure = null;
+        try {
+            connection.setTransactionIsolation(previousIsolation);
+        } catch (SQLException exception) {
+            failure = exception;
+        }
+        try {
+            connection.setAutoCommit(previousAutoCommit);
+        } catch (SQLException exception) {
+            if (failure == null) {
+                failure = exception;
+            } else {
+                failure.addSuppressed(exception);
+            }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 
@@ -289,6 +321,7 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         private int batchSize = 100;
         private long pollIntervalMillis = 1_000L;
         private boolean createCheckpointTable = true;
+        private int transactionIsolation = Connection.TRANSACTION_SERIALIZABLE;
 
         private Builder(DataSource dataSource, JdbcOutboxDialect dialect) {
             this.dataSource = dataSource;
@@ -362,6 +395,16 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
 
         public Builder createCheckpointTable(boolean createCheckpointTable) {
             this.createCheckpointTable = createCheckpointTable;
+            return this;
+        }
+
+        public Builder transactionIsolation(int transactionIsolation) {
+            if (transactionIsolation != Connection.TRANSACTION_READ_COMMITTED
+                    && transactionIsolation != Connection.TRANSACTION_REPEATABLE_READ
+                    && transactionIsolation != Connection.TRANSACTION_SERIALIZABLE) {
+                throw new IllegalArgumentException("Unsupported JDBC outbox transaction isolation: " + transactionIsolation);
+            }
+            this.transactionIsolation = transactionIsolation;
             return this;
         }
 

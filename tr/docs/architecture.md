@@ -8,7 +8,7 @@ CacheDB, Redis öncelikli bir persistence ve okuma modeli framework'üdür. Her 
 sorgusunun önüne şeffaf biçimde yerleşen genel amaçlı bir cache değildir.
 
 - Açıkça tanımlanan düşük gecikmeli entity ve projection route'larını Redis sunar.
-- PostgreSQL veya SQL Server kalıcı doğruluk kaynağı olarak kalır.
+- PostgreSQL, SQL Server veya Oracle Database kalıcı doğruluk kaynağı olarak kalır.
 - Yazmalar Redis tarafından kabul edilir ve sürüm kontrollü write-behind ile kalıcılaştırılır.
 - Arşiv ve geçmiş okumaları açık, sınırlı kaynak route'larıyla yapılır.
 - Processor; codec, metadata, repository implementasyonu, Spring bean'i,
@@ -44,7 +44,7 @@ flowchart LR
     B --> C["Redis Function"]
     C --> D["Entity, sürüm, indeksler, stream olayı"]
     D --> E["Write-behind consumer group"]
-    E --> F["PostgreSQL veya SQL Server"]
+    E --> F["PostgreSQL, SQL Server veya Oracle Database"]
     E --> G["Retry ve dead-letter yönetimi"]
 ```
 
@@ -146,8 +146,9 @@ kalıcılık, failover, timeout ve kaynak sınırları bu role uygun işletilmel
 ## 9. SQL Provider Modeli
 
 `cachedb-storage-jdbc`, ortak kaynak sorgusu ve provider SPI sözleşmelerini taşır.
-`cachedb-storage-postgres` ve `cachedb-storage-mssql`; dialect, kilit,
-idempotency, retry sınıflandırması ve metadata davranışını sağlar.
+`cachedb-storage-postgres`, `cachedb-storage-mssql` ve
+`cachedb-storage-oracle`; dialect, kilit, idempotency, retry sınıflandırması,
+sorgu sınırları ve metadata davranışını sağlar.
 
 Spring Boot uygulaması tam olarak bir provider starter seçer. Classpath'te tek
 provider varsa `AUTO` bunu seçer; birden fazla provider varsa uygulama belirsiz
@@ -172,6 +173,7 @@ Provider'a özel tuning yine gereklidir:
 | `cachedb-storage-jdbc` | Ortak JDBC kaynak katmanı ve provider SPI |
 | `cachedb-storage-postgres` | PostgreSQL kalıcı provider'ı |
 | `cachedb-storage-mssql` | SQL Server kalıcı provider'ı |
+| `cachedb-storage-oracle` | Oracle Database kalıcı provider'ı |
 | `cachedb-starter` | Runtime başlangıcı, warm runner, worker'lar ve operasyonel wiring |
 | `cachedb-spring-boot-starter-*` | Core, provider ve isteğe bağlı admin auto-configuration |
 | `cachedb-spring-boot-test` | Route coverage ve entegrasyon testi yardımcıları |
@@ -200,8 +202,9 @@ arkasında ve genel istek yolunun dışında tutulmalıdır.
 - CacheDB, rastgele uygulama sorgularından kritik route tahmin etmez.
 - Her SQL tablosunu kendiliğinden Redis entity'sine dönüştürmez.
 - Büyük raporlama, export ve arşiv taramaları veritabanı/reporting işi olarak kalır.
-- Library testi, uygulamanın SQL Server Always On veya PostgreSQL HA topolojisini
-  sertifikalandıramaz; her deployment kendi failover kanıtını üretmelidir.
+- Library testi, uygulamanın SQL Server Always On, PostgreSQL HA, Oracle RAC veya
+  Oracle Data Guard topolojisini sertifikalandıramaz; her deployment kendi
+  failover kanıtını üretmelidir.
 
 Bu sınırlar davranışı açık tutar ve pahalı production işlerinin ORM benzeri
 kolaylıkların arkasında gizlenmesini önler.

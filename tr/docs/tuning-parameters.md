@@ -252,7 +252,7 @@ PostgreSQL'e dönmez; startup sırasında açık hata verir.
 | `cachedb.config.writeBehind.deadLetterStreamKey` | `cachedb:stream:write-behind:dlq` | Write-behind DLQ stream key'i. |
 | `cachedb.config.writeBehind.compactionMaxLength` | `0` | `0` kalmalıdır. Onaylanmamış dayanıklı compaction kayıtları otomatik olarak silinemez. |
 | `cachedb.config.writeBehind.retryOverrides` | boş | Entity bazlı retry override. Format aşağıda. |
-| `cachedb.config.writeBehind.entityFlushPolicies` | boş | Entity bazlı PostgreSQL flush policy. Format aşağıda. |
+| `cachedb.config.writeBehind.entityFlushPolicies` | boş | Entity bazlı kalıcı SQL flush policy. Biçimi aşağıdadır. |
 
 ### Resource Limits ve Default Cache Policy
 

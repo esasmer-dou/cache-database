@@ -12,6 +12,7 @@ import com.reactor.cachedb.jdbc.CacheDbProviderAmbiguousException;
 import com.reactor.cachedb.jdbc.JdbcStorageProviders;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.context.annotation.Primary;
 
 import java.util.List;
@@ -24,6 +25,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CacheDbSpringPropertiesTest {
+
+    @Test
+    void cacheDatabaseStartsAfterApplicationDatabaseInitialization() {
+        assertTrue(List.of(CacheDatabaseSpringBootAutoConfiguration.class.getDeclaredMethods()).stream()
+                .filter(method -> method.getName().equals("cacheDatabase"))
+                .anyMatch(method -> method.isAnnotationPresent(DependsOnDatabaseInitialization.class)));
+    }
 
     @Test
     void cacheDbRedisClientDoesNotOverrideTheApplicationsPrimaryRedisClient() throws Exception {
@@ -83,6 +91,16 @@ class CacheDbSpringPropertiesTest {
                 properties.getSql().getMssql().getTransactionIsolation()
         );
         assertTrue(properties.getSql().getMssql().isRestoreLockTimeoutAfterTransaction());
+        assertEquals(10, properties.getSql().getOracle().getQueryTimeoutSeconds());
+        assertEquals(2, properties.getSql().getOracle().getDuplicateRaceRetries());
+        assertEquals(
+                CacheDbSpringProperties.TransactionIsolation.READ_COMMITTED,
+                properties.getSql().getOracle().getTransactionIsolation()
+        );
+        assertEquals(
+                CacheDbSpringProperties.OracleEmptyStringPolicy.REJECT,
+                properties.getSql().getOracle().getEmptyStringPolicy()
+        );
         assertTrue(properties.getAdmin().isEnabled());
         assertFalse(properties.getAdmin().isHttpEnabled());
         assertFalse(properties.getAdmin().isAuthEnabled());
@@ -226,6 +244,22 @@ class CacheDbSpringPropertiesTest {
                 StoragePerformanceCollector.noop()
         );
         assertInstanceOf(MssqlWriteBehindFlusher.class, flusher);
+    }
+
+    @Test
+    void shouldValidateOracleSpecificSafetySettings() {
+        CacheDbSpringProperties properties = new CacheDbSpringProperties();
+        properties.getSql().setProvider(CacheDbSpringProperties.SqlProvider.ORACLE);
+        properties.getSql().getOracle().setTransactionIsolation(
+                CacheDbSpringProperties.TransactionIsolation.REPEATABLE_READ
+        );
+
+        IllegalArgumentException failure = assertThrows(
+                IllegalArgumentException.class,
+                properties::afterPropertiesSet
+        );
+
+        assertTrue(failure.getMessage().contains("cachedb.sql.oracle.transaction-isolation"));
     }
 
     @Test

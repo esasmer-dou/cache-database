@@ -7,7 +7,7 @@ immutable tag.
 
 1. Set the stable semantic version in the root and module POM files.
 2. Update `CHANGELOG.md`, English/Turkish release notes, README files, and the
-   two standalone samples.
+   three standalone samples.
 3. Run the full reactor, provider integration, Docker HA, documentation,
    compatibility, benchmark, and release-artifact checks locally.
 4. Commit and push `main`; wait for `Framework Readiness` and `Production
@@ -19,8 +19,8 @@ immutable tag.
 8. Create the non-prerelease GitHub Release with the ZIP, BOM, binary JARs, and
    checksums.
 9. Run `Production GA Release Readiness` for the tag.
-10. Build the standalone PostgreSQL and SQL Server samples against the remote,
-    anonymous Maven repository; then tag and release both samples.
+10. Build the standalone PostgreSQL, SQL Server, and Oracle samples against the
+    remote, anonymous Maven repository; then tag and release all three samples.
 
 Do not rebuild or replace an existing version. A correction receives a new
 semantic version.

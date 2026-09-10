@@ -50,7 +50,8 @@ public final class CacheDbDoctorMojo extends AbstractMojo {
         validateProcessor(artifacts, errors, warnings);
         if (artifacts.contains("cachedb-spring-boot-starter")
                 && !artifacts.contains("cachedb-spring-boot-starter-postgres")
-                && !artifacts.contains("cachedb-spring-boot-starter-mssql")) {
+                && !artifacts.contains("cachedb-spring-boot-starter-mssql")
+                && !artifacts.contains("cachedb-spring-boot-starter-oracle")) {
             warnings.add("Provider-neutral cachedb-spring-boot-starter is present without a provider starter");
         }
 
@@ -99,13 +100,26 @@ public final class CacheDbDoctorMojo extends AbstractMojo {
     }
 
     private void validateProvider(Set<String> artifacts, List<String> errors, List<String> warnings) {
+        validateProvider(artifacts, configuredProvider, errors, warnings);
+    }
+
+    static void validateProvider(
+            Set<String> artifacts,
+            String configuredProvider,
+            List<String> errors,
+            List<String> warnings
+    ) {
         boolean postgres = artifacts.contains("cachedb-spring-boot-starter-postgres")
                 || artifacts.contains("cachedb-storage-postgres");
         boolean mssql = artifacts.contains("cachedb-spring-boot-starter-mssql")
                 || artifacts.contains("cachedb-storage-mssql");
+        boolean oracle = artifacts.contains("cachedb-spring-boot-starter-oracle")
+                || artifacts.contains("cachedb-storage-oracle");
         String configured = configuredProvider == null ? "" : configuredProvider.trim().toLowerCase(Locale.ROOT);
-        if (postgres && mssql && configured.isBlank()) {
-            errors.add("Both SQL providers are present; set -Dcachedb.provider=postgres or mssql for an explicit build contract");
+        int providerCount = (postgres ? 1 : 0) + (mssql ? 1 : 0) + (oracle ? 1 : 0);
+        if (providerCount > 1 && configured.isBlank()) {
+            errors.add("Multiple SQL providers are present; set -Dcachedb.provider=postgres, mssql, or oracle "
+                    + "for an explicit build contract");
         }
         if (configured.equals("postgres") && !postgres) {
             errors.add("PostgreSQL is configured but its CacheDB provider starter is missing");
@@ -113,7 +127,11 @@ public final class CacheDbDoctorMojo extends AbstractMojo {
         if (configured.equals("mssql") && !mssql) {
             errors.add("MSSQL is configured but its CacheDB provider starter is missing");
         }
+        if (configured.equals("oracle") && !oracle) {
+            errors.add("Oracle is configured but its CacheDB provider starter is missing");
+        }
         if (!configured.isBlank() && !configured.equals("postgres") && !configured.equals("mssql")
+                && !configured.equals("oracle")
                 && !configured.equals("custom")) {
             warnings.add("Unknown cachedb.provider value: " + configured);
         }

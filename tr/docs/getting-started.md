@@ -4,8 +4,8 @@ English version: [../../docs/getting-started.md](../../docs/getting-started.md)
 
 Bu rehber, CacheDB'yi sıfırdan bir projeye eklemek veya mevcut SQL veritabanı
 üzerinde çalışan bir uygulamada kontrollü biçimde denemek için izlenecek yolu
-anlatır. Starter tarafında varsayılan provider PostgreSQL'dir; MSSQL açıkça
-seçilen ve kendi SQL Server evidence hattı olan provider olarak kullanılır.
+anlatır. Geriye dönük varsayılan provider PostgreSQL'dir. MSSQL ve Oracle
+Database ise ayrı kanıt hatları bulunan açık provider'lardır.
 
 Hedef, ilk gün şunları başarmaktır:
 
@@ -33,12 +33,12 @@ ANTI-PATTERN: Tüm tabloları modelleyip tüm trafiği bir anda CacheDB'ye almak
 
 ## 2. Spring Boot Dependency'leri
 
-Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur. `0.10.1`, kimlik
+Spring Boot kullanıyorsan çoğu ekip için önerilen yol budur. `0.11.0`, kimlik
 doğrulaması istemeyen CacheDB Maven deposunda değişmez paket olarak yayımlanır.
 
 ```xml
 <properties>
-    <cachedb.version>0.10.1</cachedb.version>
+    <cachedb.version>0.11.0</cachedb.version>
 </properties>
 
 <dependencyManagement>
@@ -118,12 +118,16 @@ JDBC kuralı:
   vardır; sadece CacheDB için JDBC starter'ı tekrar ekleme.
 - Seçtiğin SQL provider'a ait JDBC driver runtime dependency olarak kalmalıdır.
 - `cachedb-processor` annotation processor olarak tanımlanmalıdır.
-- Örnek PostgreSQL provider starter'ını kullanır. SQL Server için bunu
-  `cachedb-spring-boot-starter-mssql` ile değiştir.
+- Örnek PostgreSQL provider starter'ını kullanır. SQL Server için
+  `cachedb-spring-boot-starter-mssql`, Oracle Database için
+  `cachedb-spring-boot-starter-oracle` kullan. Oracle starter `ojdbc17`
+  sürücüsünü getirir; classpath'te tek Oracle JDBC sürümü tut.
 - Yalnızca bir provider starter ekle. `AUTO`, tek provider'ı bulur; classpath
   belirsizse başlangıcı durdurur.
 - Yönetim ekranı gerekiyorsa `cachedb-spring-boot-starter-admin` paketini ayrıca
   ekle.
+- Oracle kimlik, sürüm, boş metin, outbox ve bağlantı havuzu kararlarından önce
+  [Oracle Provider](oracle-provider.md) belgesini oku.
 
 ## 3. Plain Java Dependency'leri
 
@@ -131,7 +135,7 @@ Spring Boot kullanmıyorsan:
 
 ```xml
 <properties>
-    <cachedb.version>0.10.1</cachedb.version>
+    <cachedb.version>0.11.0</cachedb.version>
 </properties>
 
 <dependencies>

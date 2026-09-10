@@ -1,0 +1,30 @@
+services:
+  redis:
+    image: redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "56381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  oracle:
+    image: gvenzl/oracle-free:23.9-slim@sha256:202889b03adeb66f0b87713f5cf01a06af2cfeb0c25e9ba31a74f5cd24172e31
+    environment:
+      ORACLE_PASSWORD: "CacheDbOracle123"
+      APP_USER: "cachedb"
+      APP_USER_PASSWORD: "CacheDbOracle123"
+    ports:
+      - "15212:1521"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 42
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+
+volumes:
+  oracle-data:

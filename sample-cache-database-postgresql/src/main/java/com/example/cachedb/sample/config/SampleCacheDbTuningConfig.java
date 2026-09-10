@@ -6,6 +6,8 @@ import com.reactor.cachedb.core.config.ReadThroughConfig;
 import com.reactor.cachedb.core.config.ReadThroughMode;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.ResourceLimits;
+import com.reactor.cachedb.core.config.SchemaBootstrapConfig;
+import com.reactor.cachedb.core.config.SchemaBootstrapMode;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.spring.boot.CacheDatabaseConfigCustomizer;
 import org.springframework.context.annotation.Bean;
@@ -51,6 +53,10 @@ public class SampleCacheDbTuningConfig {
                         .writeBehindBacklogWarnThreshold(500)
                         .writeBehindBacklogCriticalThreshold(2_000)
                         .automaticRuntimeProfileSwitchingEnabled(true)
+                        .build())
+                .schemaBootstrap(SchemaBootstrapConfig.builder()
+                        .mode(SchemaBootstrapMode.VALIDATE_ONLY)
+                        .autoApplyOnStart(true)
                         .build())
                 .writeBehind(WriteBehindConfig.builder()
                         .workerThreads(2)

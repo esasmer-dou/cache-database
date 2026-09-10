@@ -11,7 +11,7 @@ public final class CacheDbProviderAmbiguousFailureAnalyzer
     protected FailureAnalysis analyze(Throwable rootFailure, CacheDbProviderAmbiguousException cause) {
         return new FailureAnalysis(
                 "CacheDB found multiple SQL providers: " + cause.availableProviders(),
-                "Keep one provider starter or set cachedb.sql.provider=POSTGRES or MSSQL explicitly.",
+                "Keep one provider starter or set cachedb.sql.provider=POSTGRES, MSSQL, or ORACLE explicitly.",
                 cause
         );
     }

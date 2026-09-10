@@ -25,10 +25,12 @@ on:
       - "cachedb-storage-jdbc/**"
       - "cachedb-storage-postgres/**"
       - "cachedb-storage-mssql/**"
+      - "cachedb-storage-oracle/**"
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
       - "cachedb-spring-boot-starter-postgres/**"
       - "cachedb-spring-boot-starter-mssql/**"
+      - "cachedb-spring-boot-starter-oracle/**"
       - "cachedb-spring-boot-starter-admin/**"
       - "cachedb-spring-boot-test/**"
       - "cachedb-bom/**"
@@ -37,6 +39,7 @@ on:
       - "cachedb-examples/**"
       - "sample-cache-database-postgresql/**"
       - "sample-cache-database-mssql/**"
+      - "sample-cache-database-oracle/**"
       - "DOCUMENTATION_MAP.md"
       - "tr/DOKUMAN_HARITASI.md"
       - "tr/cachedb-examples/**"
@@ -68,10 +71,12 @@ on:
       - "cachedb-storage-jdbc/**"
       - "cachedb-storage-postgres/**"
       - "cachedb-storage-mssql/**"
+      - "cachedb-storage-oracle/**"
       - "cachedb-starter/**"
       - "cachedb-spring-boot-starter/**"
       - "cachedb-spring-boot-starter-postgres/**"
       - "cachedb-spring-boot-starter-mssql/**"
+      - "cachedb-spring-boot-starter-oracle/**"
       - "cachedb-spring-boot-starter-admin/**"
       - "cachedb-spring-boot-test/**"
       - "cachedb-bom/**"
@@ -80,6 +85,7 @@ on:
       - "cachedb-examples/**"
       - "sample-cache-database-postgresql/**"
       - "sample-cache-database-mssql/**"
+      - "sample-cache-database-oracle/**"
       - "DOCUMENTATION_MAP.md"
       - "tr/DOKUMAN_HARITASI.md"
       - "tr/cachedb-examples/**"
@@ -219,6 +225,23 @@ jobs:
 
       - name: Verify MSSQL certification fails closed without evidence
         working-directory: sample-cache-database-mssql
+        shell: bash
+        run: |
+          set +e
+          mvn -B -DskipTests -Pproduction-certification verify > target/certification-gate.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q "CacheDB production certification failed" target/certification-gate.log
+          grep -q "Missing certification manifest" target/cachedb-production-certification.md
+          grep -q "Missing route coverage CSV" target/cachedb-production-certification.md
+
+      - name: Verify Oracle sample with real providers
+        working-directory: sample-cache-database-oracle
+        run: mvn -B clean verify -Pprovider-integration
+
+      - name: Verify Oracle certification fails closed without evidence
+        working-directory: sample-cache-database-oracle
         shell: bash
         run: |
           set +e

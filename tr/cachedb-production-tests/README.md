@@ -43,11 +43,26 @@ Bu testler şunları **kanıtlamaz**:
 
 - her rastgele ORM sorgusunun Redis için uygun olduğunu
 - dizüstü bilgisayardaki sonucun Kubernetes kapasitesini gösterdiğini
-- PostgreSQL veya SQL Server HA topolojisinin uygulama ortamında doğru olduğunu
+- PostgreSQL HA, SQL Server Always On veya Oracle RAC/Data Guard topolojisinin
+  uygulamanın kendi ortamında doğru olduğunu
 - tek başarılı koşunun soak, failover ve rollback kanıtının yerine geçtiğini
 
 Bir senaryo arşiv, export, audit veya tam geçmiş verisi istiyorsa bunu normal
 Redis entity sorgusu gibi değil, açık SQL yolu olarak modelle.
+
+Repo ayrıca şu resmî kanıt hatlarını içerir:
+
+- workflow: [../../.github/workflows/production-evidence.yml](../../.github/workflows/production-evidence.yml)
+- yerel runner: [../../tools/ci/run-production-evidence.ps1](../../tools/ci/run-production-evidence.ps1)
+- çoklu instance runner'ı: [../../tools/ci/run-multi-instance-coordination-evidence.ps1](../../tools/ci/run-multi-instance-coordination-evidence.ps1)
+- Oracle provider runner'ı: [../../tools/ci/run-oracle-provider-evidence.ps1](../../tools/ci/run-oracle-provider-evidence.ps1)
+- özet üretici: [../../tools/ci/write-production-evidence-summary.ps1](../../tools/ci/write-production-evidence-summary.ps1)
+
+Bu hatlar iki ayrı alanı doğrular:
+
+- production okuma modeli ve çalışma zamanı kararları için benchmark ve recipe kanıtları
+- ortak Redis ile seçilen ortak SQL provider üzerinde çalışan birden fazla
+  uygulama örneğinin koordinasyon kanıtı
 
 Kapsam:
 

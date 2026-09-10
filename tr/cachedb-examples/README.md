@@ -7,9 +7,9 @@ Bu modül, CacheDB geliştiricileri ve operasyon ekipleri için hazırlanmış b
 düşük seviyeli uyumluluk yüzeylerini çalıştırır. Bir uygulamayı öğrenmenin en
 kısa yolu değildir.
 
-> Uygulama geliştiricileri önce bağımsız PostgreSQL veya SQL Server REST API
-> örneğinden başlamalıdır. Yönetim ekranını incelemek, geçiş provası yapmak ya
-> da çalışma zamanı davranışını kontrollü yük altında doğrulamak istiyorsan bu
+> Uygulama geliştiricileri önce bağımsız PostgreSQL, SQL Server veya Oracle REST
+> API örneğinden başlamalıdır. Yönetim ekranını incelemek, geçiş provası yapmak
+> ya da çalışma zamanı davranışını kontrollü yük altında doğrulamak istiyorsan bu
 > modülü kullan.
 
 ## Doğru Örneği Seç
@@ -18,6 +18,7 @@ kısa yolu değildir.
 | --- | --- |
 | PostgreSQL uygulaması geliştirmek | [PostgreSQL REST API örneği](../../sample-cache-database-postgresql/README.tr.md) |
 | SQL Server uygulaması geliştirmek | [SQL Server REST API örneği](../../sample-cache-database-mssql/README.tr.md) |
+| Oracle uygulaması geliştirmek | [Oracle REST API örneği](../../sample-cache-database-oracle/README.tr.md) |
 | Generated repository öğrenmek | [Deklaratif repository rehberi](../docs/deklaratif-repositoryler.md) |
 | Yönetim ekranını ve yük profillerini işletmek | Bu modülle devam et |
 | Mevcut sistem geçişini prova etmek | [Geçiş Planlayıcı Demo Akışı](#geçiş-planlayıcı-demo-akışı) |

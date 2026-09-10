@@ -11,7 +11,7 @@ sağlamaktır.
 Sıra ile oku:
 
 1. [README](README.md)
-2. [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md)
+2. [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) örneğini çalıştır
 3. [Başlangıç Rehberi](docs/getting-started.md)
 4. [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md)
 5. [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md)
@@ -27,10 +27,10 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Soru | Doküman |
 | --- | --- |
 | CacheDB nedir, ne değildir? | [README](README.md) |
-| Çalışan REST API örneği nerede? | [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md) |
+| Çalışan REST API örneği nerede? | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) |
 | Yeni projeye nasıl eklerim? | [Başlangıç Rehberi](docs/getting-started.md) |
 | Hızlı erişim, SQL, warm ve command route'larını nasıl tanımlarım? | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| Güncel kararlı sürümde neler değişti? | [v0.10.1 Sürüm Notları](docs/releases/v0.10.1.md) |
+| Güncel kararlı sürümde neler değişti? | [v0.11.0 Sürüm Notları](docs/releases/v0.11.0.md) |
 | Spring Boot'ta JDBC dependency gerekiyor mu? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | Entity, relation, projection, route contract ne demek? | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | Insert, read, update, delete nasıl yapılır? | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
@@ -42,6 +42,8 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Mevcut SQL veritabanı + ORM uygulamasını nasıl taşırım? | [Geçiş Planlayıcı](docs/migration-planner.md) |
 | Kaynak veritabanı CacheDB dışında değişirse Redis'i nasıl güncel tutarım? | [Outbox ve CDC Apply Runner](docs/outbox-cdc-apply-runner.md) |
 | CacheDB MSSQL veya başka SQL veritabanını destekleyebilir mi? | [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md) |
+| Oracle Database'i güvenli biçimde nasıl kullanırım? | [Oracle Provider](docs/oracle-provider.md) |
+| Oracle Data Guard rol geçişinden sonra toparlanmayı nasıl kanıtlarım? | [Oracle Provider: Yerel fiziksel Data Guard hattı](docs/oracle-provider.md#yerel-fiziksel-data-guard-hattı) |
 | Production'a çıkmadan önce hangi kanıtlar gerekir? | [Production Olgunluğu](docs/production-olgunlugu.md) |
 | Uygulama geçişe hazır olduğunu nasıl kanıtlar? | [Production Sertifikası](docs/production-sertifikasi.md) |
 | Kararlı release ile uygulamaya özgü production sınırı nasıl ayrılır? | [Production Olgunluğu](docs/production-olgunlugu.md) ve [Stable Release Launch Kit](docs/stable-release-launch-kit.md) |
@@ -56,7 +58,7 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 Önce şunları oku:
 
 - [Başlangıç Rehberi](docs/getting-started.md)
-- [PostgreSQL Örneği](../sample-cache-database-postgresql/README.tr.md) veya [MSSQL Örneği](../sample-cache-database-mssql/README.tr.md)
+- [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) örneği
 - [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md)
 - [Spring Boot Starter](docs/spring-boot-starter.md)
 
@@ -115,13 +117,15 @@ kararını kanıtla vermek.
 | [Geçiş Planlayıcı](docs/migration-planner.md) | Mevcut SQL veritabanı sistemlerinden geçiş akışı |
 | [Outbox ve CDC Apply Runner](docs/outbox-cdc-apply-runner.md) | Dış veritabanı değişiklikleri, outbox/CDC event'leri ve cache-only apply davranışı |
 | [Periyodik Warm ve Aktif Veri Seti Uzlaştırması](docs/periodik-warm.md) | Deklaratif periyodik warm, Redis lease, sınırlı bekleme ve artımlı cache temizliği |
-| [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md) | PostgreSQL, MSSQL ve ilerideki SQL dialect'leri için storage provider sınırı |
+| [Veritabanı Sağlayıcı SPI](docs/veritabani-provider-spi.md) | PostgreSQL, MSSQL ve Oracle Database için storage provider sınırı |
+| [Oracle Provider](docs/oracle-provider.md) | Oracle bağımlılık, değer, yazma, outbox, tuning ve kanıt sözleşmesi |
 | [Production Reçeteleri](docs/production-recipes.md) | Production kullanım desenleri, BEST/ACCEPTABLE/ANTI-PATTERN ayrımı |
 | [Mimari](docs/architecture.md) | İç mimari, veri akışı, registry, relation loading ve açık tasarım kararları |
 | [Production Kanıt Rehberi](docs/production-test-report.md) | Tekrarlanabilir test hatları, rapor konumları ve kanıt sınırları |
 | [Production Olgunluğu](docs/production-olgunlugu.md) | Tek güncel olgunluk ve yayına çıkma sözleşmesi |
 | [Production Sertifikası](docs/production-sertifikasi.md) | Uygulamanın rota, veri eşitliği, bellek, failover, canary ve geri dönüş kontrolü |
 | [Production GA Release Runbook](docs/production-ga-release-runbook.md) | Stabil GA release için sert go/no-go akışı |
+| [v0.11.0 Sürüm Notları](docs/releases/v0.11.0.md) | Eşit seviyede Oracle desteği, sağlayıcıya özel şema DDL'i, canlı kanıtlar ve çalıştırılabilir Oracle örneği |
 | [v0.10.1 Sürüm Notları](docs/releases/v0.10.1.md) | Örnek projelerde anonim bağımlılık eşitliği ve kanıt eksikliğinde derlemeyi durduran uygulama sertifikası |
 | [v0.10.0 Sürüm Notları](docs/releases/v0.10.0.md) | Derlenebilir migration projection'ları, toplu SQL Server yazmaları, uygulama sertifikası ve anonim Maven dağıtımı |
 | [v0.9.0 Sürüm Notları](docs/releases/v0.9.0.md) | Derleme zamanı çıkarımı, doğrudan cursor sayfaları, tipli route referansları, route kapasite kanıtı ve açık kalıcılık yardımcıları |

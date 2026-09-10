@@ -1,6 +1,8 @@
 param(
     [string] $CanonicalSample = "./sample-cache-database-postgresql",
     [string] $TargetSample = "./sample-cache-database-mssql",
+    [ValidateSet("mssql", "oracle")]
+    [string] $TargetProvider = "mssql",
     [switch] $Check
 )
 
@@ -19,7 +21,7 @@ function Get-ProviderNeutralJavaFiles {
     param([string] $Root)
 
     Get-ChildItem -LiteralPath (Join-Path $Root "src") -Recurse -File -Filter "*.java" |
-        Where-Object { $_.Name -notmatch "^(Postgresql|Mssql)Sample(Application|IT)\.java$" } |
+        Where-Object { $_.Name -notmatch "^(Postgresql|Mssql|Oracle)Sample(Application|IT)\.java$" } |
         ForEach-Object {
             [pscustomobject]@{
                 RelativePath = $_.FullName.Substring($Root.Length + 1)
@@ -43,6 +45,10 @@ function Get-IntegrationContractBody {
 }
 
 $canonicalFiles = @(Get-ProviderNeutralJavaFiles -Root $canonicalRoot)
+$providerDisplayName = switch ($TargetProvider) {
+    "mssql" { "MSSQL" }
+    "oracle" { "Oracle" }
+}
 $canonicalByPath = @{}
 $differences = [System.Collections.Generic.List[string]]::new()
 foreach ($file in $canonicalFiles) {
@@ -50,7 +56,7 @@ foreach ($file in $canonicalFiles) {
     $targetPath = Join-Path $targetRoot $file.RelativePath
     if ($Check) {
         if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
-            $differences.Add("Missing in MSSQL sample: $($file.RelativePath)")
+            $differences.Add("Missing in $providerDisplayName sample: $($file.RelativePath)")
             continue
         }
         $canonicalHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
@@ -70,7 +76,7 @@ foreach ($file in $canonicalFiles) {
 foreach ($targetFile in @(Get-ProviderNeutralJavaFiles -Root $targetRoot)) {
     if (-not $canonicalByPath.ContainsKey($targetFile.RelativePath)) {
         if ($Check) {
-            $differences.Add("Extra in MSSQL sample: $($targetFile.RelativePath)")
+            $differences.Add("Extra in $providerDisplayName sample: $($targetFile.RelativePath)")
             continue
         }
         $resolvedTarget = [System.IO.Path]::GetFullPath($targetFile.FullName)
@@ -83,7 +89,11 @@ foreach ($targetFile in @(Get-ProviderNeutralJavaFiles -Root $targetRoot)) {
 
 if ($Check) {
     $canonicalIntegrationTest = Join-Path $canonicalRoot "src\test\java\com\example\cachedb\sample\PostgresqlSampleIT.java"
-    $targetIntegrationTest = Join-Path $targetRoot "src\test\java\com\example\cachedb\sample\MssqlSampleIT.java"
+    $targetIntegrationTestName = switch ($TargetProvider) {
+        "mssql" { "MssqlSampleIT.java" }
+        "oracle" { "OracleSampleIT.java" }
+    }
+    $targetIntegrationTest = Join-Path $targetRoot "src\test\java\com\example\cachedb\sample\$targetIntegrationTestName"
     $canonicalContract = Get-IntegrationContractBody -Path $canonicalIntegrationTest
     $targetContract = Get-IntegrationContractBody -Path $targetIntegrationTest
     if ($null -eq $canonicalContract -or $null -eq $targetContract) {
@@ -95,8 +105,8 @@ if ($Check) {
         $differences | ForEach-Object { Write-Error $_ }
         throw "Provider-neutral sample parity failed with $($differences.Count) difference(s)."
     }
-    Write-Host "Verified $($canonicalFiles.Count) provider-neutral Java files and the shared integration contract across PostgreSQL and MSSQL samples."
+    Write-Host "Verified $($canonicalFiles.Count) provider-neutral Java files and the shared integration contract across PostgreSQL and $providerDisplayName samples."
     exit 0
 }
 
-Write-Host "Synchronized $($canonicalFiles.Count) provider-neutral Java files from PostgreSQL to MSSQL sample."
+Write-Host "Synchronized $($canonicalFiles.Count) provider-neutral Java files from PostgreSQL to $providerDisplayName sample."

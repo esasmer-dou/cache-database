@@ -48,7 +48,7 @@ final class MigrationRedisMemoryEstimator {
         ArrayList<String> assumptions = new ArrayList<>();
         ArrayList<String> warnings = new ArrayList<>();
         assumptions.add("This is a sizing estimate, not Redis MEMORY USAGE output. Validate it after staging warm.");
-        assumptions.add("PostgreSQL row sampling is capped at " + SAMPLE_ROW_LIMIT + " rows per selected table to avoid a full payload scan.");
+        assumptions.add("Source-database row sampling is capped at " + SAMPLE_ROW_LIMIT + " rows per selected table to avoid a full payload scan.");
         assumptions.add("Redis object overhead, key names, indexes, projection payloads, page cache, streams, allocator fragmentation, and safety headroom are modeled separately.");
 
         MigrationSchemaDiscovery.Result discoveryResult = safeDiscover(warnings);
@@ -91,10 +91,14 @@ final class MigrationRedisMemoryEstimator {
                 childCountMeasured = estimate.rowCountMeasured();
             }
             if (rootAverageMeasured || childAverageMeasured) {
-                source = databaseKind == DatabaseKind.POSTGRESQL ? "POSTGRESQL_SAMPLE" : "JDBC_SAMPLE";
+                source = switch (databaseKind) {
+                    case POSTGRESQL -> "POSTGRESQL_SAMPLE";
+                    case ORACLE -> "ORACLE_STATISTICS_OR_JDBC_SAMPLE";
+                    default -> "JDBC_SAMPLE";
+                };
             }
         } catch (SQLException exception) {
-            warnings.add("Could not sample PostgreSQL rows for Redis memory estimate: " + exception.getMessage());
+            warnings.add("Could not sample source-database rows for Redis memory estimate: " + exception.getMessage());
         }
 
         long childHotRows = estimateChildHotRows(plan, rootRowCount, childRowCount);
@@ -276,7 +280,7 @@ final class MigrationRedisMemoryEstimator {
             ArrayList<String> warnings
     ) {
         if ("VIEW".equalsIgnoreCase(table.objectType())) {
-            warnings.add("Row count estimate for view " + table.qualifiedTableName() + " is not read from pg_class; planner input is used.");
+            warnings.add("Row count estimate for view " + table.qualifiedTableName() + " is not read from database statistics; planner input is used.");
             return Optional.empty();
         }
         if (databaseKind == DatabaseKind.POSTGRESQL) {
@@ -297,6 +301,28 @@ final class MigrationRedisMemoryEstimator {
                 }
             } catch (SQLException exception) {
                 warnings.add("Could not read pg_class.reltuples for " + table.qualifiedTableName() + ": " + exception.getMessage());
+            }
+            return Optional.empty();
+        }
+        if (databaseKind == DatabaseKind.ORACLE) {
+            String owner = oracleOwner(connection, table, warnings);
+            if (owner.isBlank()) {
+                return Optional.empty();
+            }
+            String sql = "SELECT num_rows FROM all_tables WHERE owner = ? AND table_name = ?";
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.setString(1, owner.toUpperCase(Locale.ROOT));
+                statement.setString(2, table.tableName().toUpperCase(Locale.ROOT));
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (resultSet.next()) {
+                        long value = resultSet.getLong(1);
+                        if (!resultSet.wasNull()) {
+                            return Optional.of(Math.max(0L, value));
+                        }
+                    }
+                }
+            } catch (SQLException exception) {
+                warnings.add("Could not read Oracle NUM_ROWS for " + table.qualifiedTableName() + ": " + exception.getMessage());
             }
             return Optional.empty();
         }
@@ -336,6 +362,27 @@ final class MigrationRedisMemoryEstimator {
                 warnings.add("Could not sample PostgreSQL row size for " + table.qualifiedTableName() + ": " + exception.getMessage());
             }
             return Optional.empty();
+        }
+        if (databaseKind == DatabaseKind.ORACLE && !"VIEW".equalsIgnoreCase(table.objectType())) {
+            String owner = oracleOwner(connection, table, warnings);
+            if (owner.isBlank()) {
+                return Optional.empty();
+            }
+            String sql = "SELECT avg_row_len FROM all_tables WHERE owner = ? AND table_name = ?";
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.setString(1, owner.toUpperCase(Locale.ROOT));
+                statement.setString(2, table.tableName().toUpperCase(Locale.ROOT));
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (resultSet.next()) {
+                        long value = resultSet.getLong(1);
+                        if (!resultSet.wasNull() && value > 0L) {
+                            return Optional.of(value);
+                        }
+                    }
+                }
+            } catch (SQLException exception) {
+                warnings.add("Could not read Oracle AVG_ROW_LEN for " + table.qualifiedTableName() + ": " + exception.getMessage());
+            }
         }
         String sql = "SELECT * FROM " + quotedTableName(table);
         long rowCount = 0L;
@@ -489,10 +536,33 @@ final class MigrationRedisMemoryEstimator {
         return "\"" + safe.replace("\"", "\"\"") + "\"";
     }
 
+    private String oracleOwner(
+            Connection connection,
+            MigrationSchemaDiscovery.TableInfo table,
+            ArrayList<String> warnings
+    ) {
+        if (table.schemaName() != null && !table.schemaName().isBlank()) {
+            return table.schemaName();
+        }
+        try {
+            String schema = connection.getSchema();
+            if (schema != null && !schema.isBlank()) {
+                return schema;
+            }
+        } catch (SQLException exception) {
+            warnings.add("Could not resolve the Oracle owner for " + table.qualifiedTableName() + ": " + exception.getMessage());
+        }
+        warnings.add("Oracle connection did not expose a current schema for " + table.qualifiedTableName() + ".");
+        return "";
+    }
+
     private DatabaseKind databaseKind(String productName) {
         String normalized = productName == null ? "" : productName.toLowerCase(Locale.ROOT);
         if (normalized.contains("postgresql")) {
             return DatabaseKind.POSTGRESQL;
+        }
+        if (normalized.contains("oracle")) {
+            return DatabaseKind.ORACLE;
         }
         if (normalized.contains("h2")) {
             return DatabaseKind.H2;
@@ -595,6 +665,7 @@ final class MigrationRedisMemoryEstimator {
 
     private enum DatabaseKind {
         POSTGRESQL,
+        ORACLE,
         H2,
         OTHER
     }

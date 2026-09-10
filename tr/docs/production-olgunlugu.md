@@ -31,15 +31,17 @@ kapasite, failover, canary veya geri dönüş kanıtı oluşturmaz.
 | Redis koordinasyonu | Çok podlu consumer kimliği, leader lease, pending claim, kesinti sonrası toparlanma, retry ve DLQ kanıtları geçer. |
 | PostgreSQL provider | Write-behind, kaynak rotası, warm, outbox/checkpoint ve sample provider kontrolleri geçer. |
 | SQL Server provider | Version korumalı batch yazma, throughput eşiği, yeniden başlatma ve bağlantı yenileme, lock sınıflandırması, outbox/checkpoint, migration ve çok podlu apply kontrolleri geçer. |
+| Oracle provider | Sürüm kontrollü MERGE batch'i, eski sürüm ve eşzamanlı insert kontrolleri, sınırlı okuma grupları, gecikmeli ağ, throughput eşiği, yeniden başlatma ve bağlantı yenileme, outbox/checkpoint, migration ve çok pod sahiplik kontrolleri geçer. |
+| Oracle topoloji toparlanması | Self-hosted fiziksel Data Guard hattı; redo uygulamayı, planlı switchover'ı, primary kaybını, eski bağlantının reddedilmesini, çok adresli Oracle JDBC servis tanımı üzerinden Hikari toparlanmasını, her geçişten sonra provider davranışını ve eski primary'nin boşluksuz standby olarak yeniden devreye alınmasını kanıtlar. Sonuç RAC, FAN/ONS, FCF, uygulamaya özel RTO/RPO veya sıfır veri kaybı sertifikası değildir. |
 | Okuma performansı | Projection-first, partitioned relation top-N ve ranked-window benchmark eşikleri geçer. |
 | Migration araçları | Şema keşfi derlenebilir projection record ve partitioned relation loader üretir; warm, veri eşitliği, bellek ve rapor testleri geçer. |
 | Operasyon | Yönetim arayüzü isteğe bağlı açılır; metrikler, backlog, retry, DLQ, projection gecikmesi, bellek baskısı ve reconciliation durumu izlenebilir. |
 | Dağıtım | Binary, source, Javadoc, POM, BOM, checksum ve release paketi değişmezdir; anonim Maven erişimi ile GitHub Release kontrolü geçer. |
 | Dokümantasyon | İngilizce ve Türkçe başlangıç sayfaları, sürüm notları, örnekler ve bağlantı kontrolleri geçer. |
 
-Bu kontroller `Framework Readiness`, `Production Evidence`, `Public Maven
-Repository Publish` ve `Production GA Release Readiness` workflow'larıyla
-uygulanır.
+Bu kontroller `Framework Readiness`, `Production Evidence`, elle çalıştırılan
+self-hosted `Oracle Data Guard Evidence`, `Public Maven Repository Publish` ve
+`Production GA Release Readiness` workflow'larıyla uygulanır.
 
 ## Uygulama Production Sertifikası
 
@@ -68,9 +70,11 @@ Kopyalanabilir dizin yapısı ve Maven ayarı için
 
 Aşağıdakiler eksik framework özelliği değil, uygulamanın altyapı sorumluluğudur:
 
-- Library, müşterinin yönetilen Redis failover'ını, SQL Server Always On
-  failover'ını, PostgreSQL HA geçişini, gateway politikasını, VPN hattını veya
-  Kubernetes topolojisini kendi reposundan tetikleyip sertifikalandıramaz.
+- CacheDB, temsilî bir yerel fiziksel Data Guard toparlanmasını kanıtlayabilir.
+  Buna karşılık müşterinin yönetilen Redis failover'ını, SQL Server Always On
+  veya PostgreSQL HA geçişini, Oracle RAC/Data Guard servis topolojisini,
+  gateway politikasını, VPN hattını ya da Kubernetes topolojisini library
+  reposundan sertifikalandıramaz.
 - SQL'e CacheDB dışından yazılıyorsa outbox/CDC ya da ölçülmüş bir
   reconciliation rotası gerekir.
 - Redis'in yazmayı kabul etmesi ile SQL kalıcılığının tamamlanması ayrı ve

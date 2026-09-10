@@ -23,6 +23,7 @@ $requiredArtifacts = @(
     "cachedb-bom/$Version/cachedb-bom-$Version.pom",
     "cachedb-spring-boot-starter-postgres/$Version/cachedb-spring-boot-starter-postgres-$Version.pom",
     "cachedb-spring-boot-starter-mssql/$Version/cachedb-spring-boot-starter-mssql-$Version.pom",
+    "cachedb-spring-boot-starter-oracle/$Version/cachedb-spring-boot-starter-oracle-$Version.pom",
     "cachedb-maven-plugin/$Version/cachedb-maven-plugin-$Version.pom",
     "cachedb-core/$Version/cachedb-core-$Version.jar"
 )

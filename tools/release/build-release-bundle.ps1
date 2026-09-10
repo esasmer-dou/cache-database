@@ -31,6 +31,15 @@ if (-not $SkipBuild) {
     }
 }
 
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Version must be a stable semantic version."
+}
+$resolvedReleaseRoot = [System.IO.Path]::GetFullPath($releaseRoot) + [System.IO.Path]::DirectorySeparatorChar
+foreach ($targetPath in @($stagingRoot, $zipPath)) {
+    if (-not [System.IO.Path]::GetFullPath($targetPath).StartsWith($resolvedReleaseRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Release target escaped the release directory."
+    }
+}
 if (Test-Path $stagingRoot) {
     Remove-Item -Recurse -Force $stagingRoot
 }
@@ -59,6 +68,7 @@ New-Item -ItemType Directory -Path $docsDest -Force | Out-Null
 $docFiles = @(
     "docs\getting-started.md",
     "docs\database-provider-spi.md",
+    "docs\oracle-provider.md",
     "docs\use-case-examples.md",
     "docs\spring-boot-starter.md",
     "docs\scheduled-warm.md",
@@ -77,6 +87,7 @@ $docFiles = @(
     "tr\DOKUMAN_HARITASI.md",
     "tr\docs\getting-started.md",
     "tr\docs\veritabani-provider-spi.md",
+    "tr\docs\oracle-provider.md",
     "tr\docs\use-case-examples.md",
     "tr\docs\spring-boot-starter.md",
     "tr\docs\periodik-warm.md",
@@ -117,7 +128,8 @@ if (Test-Path $localizedReleaseNote) {
 
 $sampleProjects = @(
     "sample-cache-database-postgresql",
-    "sample-cache-database-mssql"
+    "sample-cache-database-mssql",
+    "sample-cache-database-oracle"
 )
 $samplesDest = Join-Path $stagingRoot "samples"
 New-Item -ItemType Directory -Path $samplesDest -Force | Out-Null
@@ -153,10 +165,12 @@ $artifactModules = @(
     "cachedb-storage-jdbc",
     "cachedb-storage-postgres",
     "cachedb-storage-mssql",
+    "cachedb-storage-oracle",
     "cachedb-starter",
     "cachedb-spring-boot-starter",
     "cachedb-spring-boot-starter-postgres",
     "cachedb-spring-boot-starter-mssql",
+    "cachedb-spring-boot-starter-oracle",
     "cachedb-spring-boot-starter-admin",
     "cachedb-spring-boot-test",
     "cachedb-maven-plugin",

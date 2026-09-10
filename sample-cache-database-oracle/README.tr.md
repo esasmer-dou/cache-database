@@ -1,0 +1,878 @@
+# CacheDB Oracle Örneği
+
+[English](README.md) | Türkçe
+
+[![Oracle provider kanıtı](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
+[![CacheDB 0.11.0](https://img.shields.io/badge/CacheDB-0.11.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.11.0)
+
+Bu proje, CacheDB'nin Redis 8 ve Oracle Database ile nasıl kullanılacağını gösteren
+bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
+açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
+kullanır, kalıcı geçmiş Oracle Database'de tutulur, büyüyen listeler ise bütün nesne
+ağacı yerine projection üzerinden okunur.
+
+> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.11.0`
+> paketini kullanır. GitHub token'ı veya yerel CacheDB kaynak kodu gerekmez.
+
+Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
+doğrulamış olacaksın: kalıcı Oracle Database verisini oluşturacak, sınırlı arşiv
+yolunu okuyacak, karşılık gelen Redis projection'ını hazırlayacak, aktif yolu
+çağıracak ve kapsam ile kalıcılık sinyallerini inceleyeceksin. Redis'te kayıt
+bulunmaması arka planda gizli bir Oracle Database sorgusu başlatmaz.
+
+## Buradan Başla
+
+| Hedefin | İlgili bölüm |
+| --- | --- |
+| Örneği çalıştırmak | [Hızlı Başlangıç](#hızlı-başlangıç) |
+| Redis ve Oracle Database davranışını anlamak | [Çalışma Zamanı Sözleşmesi](#çalışma-zamanı-sözleşmesi) |
+| Deklaratif Java API'sini görmek | [Kod Üzerinden Akış](#kod-üzerinden-akış) |
+| Oracle Database'deki mevcut veriyi Redis'e hazırlamak | [Mevcut Veriyi Hazırlama](#mevcut-veriyi-hazırlama) |
+| Cache sınırlarını belirlemek | [Kullanım Senaryosuna Göre Ayar](#kullanım-senaryosuna-göre-ayar) |
+| Tüm yolları denemek | [API Kataloğu](#api-kataloğu) veya [Postman](#postman) |
+| Canlı ortam hazırlığını kanıtlamak | [Production Sertifikası](#production-sertifikası) |
+| Canlı ortam geçişini hazırlamak | [Canlı Ortam Kontrol Listesi](#canlı-ortam-kontrol-listesi) |
+| Başlangıç veya veri yolu sorununu çözmek | [Sorun Giderme](#sorun-giderme) |
+
+## Bu Örnek Ne Öğretiyor?
+
+Örnek, basit bir CRUD uygulamasından daha geniş bir alanı kapsar:
+
+- müşteriler sipariş verir; siparişlerin çok sayıda satırı olabilir
+- ürün uygunluğu katalog ve düşük stok ekranlarını besler
+- gönderiler aktif, istisna, hareket ve arşiv yollarına ayrılır
+- destek talepleri operasyon paneline veri sağlar
+- rapor işleri ve denetim olaylarında anlık iş yükü ile kalıcı geçmiş ayrılır
+
+Ürünün sınırı da aynı açıklıkla gösterilir:
+
+| Sınıflandırma | Anlamı |
+| --- | --- |
+| **BEST** | Sınırlı bir operasyonel yol tanımla, entity veya projection verisini hazırla, ölç ve arşiv/geçmiş okumalarını Oracle Database'de tut. |
+| **ACCEPTABLE** | Redis'teki aktif veri setinin dışında kalan ve seyrek okunan veri için sınırlı bir Oracle Database yolu kullan. |
+| **ANTI-PATTERN** | CacheDB'yi şeffaf bir cache gibi görüp Redis'te bulunmayan her sorgunun otomatik SQL çalıştırmasını ve Redis'i doldurmasını bekleme. |
+
+CacheDB, hangi ekran ve komutların öngörülebilir düşük gecikmeye ihtiyaç
+duyduğunu bilen ekipler için güçlü bir çözümdür. Temel iş yükü bütün veritabanı
+üzerinde sınırsız ve anlık sorgular çalıştırmak olan uygulamalar için uygun
+değildir.
+
+## Mimari
+
+```mermaid
+flowchart LR
+    Client["REST istemcisi"] --> API["Controller"]
+    API --> Service["Uygulama servisi"]
+    Service --> Repo["Üretilen CacheDB repository"]
+    Repo -->|"HotRoute / CacheLookup"| Redis[(Redis 8 aktif veri seti)]
+    Repo -->|"SourceRoute"| Oracle[(Oracle Database kalıcı geçmiş)]
+    Repo -->|"Komut"| Stream["Redis Stream write-behind"]
+    Stream --> Worker["Sınırlı kalıcılık işçisi"]
+    Worker --> Oracle
+    Oracle -->|"WarmRoute"| Warm["Ön yükleme / backfill işi"]
+    Warm --> Redis
+```
+
+Uygulama kodu repository interface'lerine bağımlıdır. Annotation processor;
+implementasyonları, codec'leri, indeksleri, projection binding'lerini ve Spring
+bean'lerini derleme sırasında üretir. Entity keşfi için çalışma zamanı
+reflection'ı kullanılmaz.
+
+## Kısa Sözlük
+
+| Terim | Bu örnekteki anlamı |
+| --- | --- |
+| Entity | SQL kolonlarına ve Redis namespace'ine eşlenen komut/detay modeli |
+| Projection | `OrderSummary` gibi küçük ve ekrana özel okuma modeli |
+| Aktif veri seti | Redis'te bilinçli olarak tutulan sınırlı veri kümesi |
+| Aktif yol (`HotRoute`) | Redis'teki aktif veri setini okuyan repository metodu |
+| Kaynak yolu (`SourceRoute`) | Oracle Database'i açıkça ve sınırlı biçimde okuyan repository metodu |
+| Ön yükleme (`warm/backfill`) | Oracle Database'den Redis'e kontrollü veri hazırlama işi |
+| Route coverage | Gerekli kapsamın ve pencerenin Redis'te hazır olduğunu gösteren kanıt |
+| Write-behind | Redis'in kabul ettiği komutun Oracle Database'e asenkron yazılması |
+| Write receipt | Kimlik, sürüm ve kalıcılık durumunu izlemek için kullanılan komut sonucu |
+
+## Gereksinimler
+
+- JDK 21
+- Maven 3.9+
+- Docker Desktop veya uyumlu bir Docker Engine
+- Hazır yük testi için PowerShell 7+
+
+Yerel araçları kontrol et:
+
+```powershell
+java -version
+mvn -version
+docker version
+docker compose version
+```
+
+## Bağımlılık Modeli
+
+Örnek proje CacheDB'yi Maven artifact'leri üzerinden kullanır. Sample build'i
+framework kaynak kodunu kendi içinde derlemez.
+
+```xml
+<properties>
+    <java.version>21</java.version>
+<cachedb.version>0.11.0</cachedb.version>
+</properties>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-bom</artifactId>
+            <version>${cachedb.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+
+<dependencies>
+    <dependency>
+        <groupId>com.reactor.cachedb</groupId>
+        <artifactId>cachedb-spring-boot-starter-oracle</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>com.reactor.cachedb</groupId>
+        <artifactId>cachedb-annotations</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+</dependencies>
+
+<build>
+    <plugins>
+        <plugin>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <configuration>
+                <release>${java.version}</release>
+                <annotationProcessorPaths>
+                    <path>
+                        <groupId>com.reactor.cachedb</groupId>
+                        <artifactId>cachedb-processor</artifactId>
+                        <version>${cachedb.version}</version>
+                    </path>
+                </annotationProcessorPaths>
+            </configuration>
+        </plugin>
+    </plugins>
+</build>
+```
+
+Yönetim ekranı gerekiyorsa `cachedb-spring-boot-starter-admin` ekle. JPA veya
+başka bir starter uygulama için zaten `DataSource` oluşturuyorsa
+`spring-boot-starter-jdbc` bağımlılığını tekrar eklemen gerekmez. CacheDB'nin
+ihtiyacı; çalışan bir `DataSource`, tek bir veritabanı starter'ı, annotations
+artifact'i ve annotation processor'dır. Oracle starter, desteklenen `ojdbc17`
+çalışma zamanı sürücüsünü zaten getirir. Aynı uygulamaya ikinci bir Oracle JDBC
+sürümü ekleme.
+
+Maven, normal bağımlılıkları ve build plugin'lerini farklı repository
+listelerinden çözümler. Bu nedenle genel kullanıma açık CacheDB deposu iki
+bölümde de tanımlanır:
+
+```xml
+<repositories>
+    <repository>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
+    </repository>
+</repositories>
+
+<pluginRepositories>
+    <pluginRepository>
+        <id>cachedb-public</id>
+        <url>https://esasmer-dou.github.io/cache-database/maven2</url>
+        <releases><enabled>true</enabled></releases>
+        <snapshots><enabled>false</enabled></snapshots>
+    </pluginRepository>
+</pluginRepositories>
+```
+
+`repositories`; BOM, starter ve kütüphaneleri çözümler.
+`pluginRepositories` ise `cachedb-maven-plugin` eklentisini çözümler. Adres
+herkese açıktır; Maven `settings.xml`, kullanıcı adı veya token gerekmez.
+
+## Hızlı Başlangıç
+
+### 1. Yayımlanmış CacheDB paketini çözümle
+
+Sample projesini doğrudan doğrula. Maven; BOM, starter, annotation processor ve
+doctor plugin'ini değişmez `0.11.0` paketinden kimlik bilgisi istemeden çözümler:
+
+```powershell
+mvn -U -DskipTests validate
+```
+
+Build çıktısında `CacheDB doctor` ve
+`OK: CacheDB build contract is consistent` satırları görünmelidir. Build,
+yerel olarak kurulmuş bir CacheDB checkout'una bağımlı olmamalıdır.
+
+### 2. Redis ve Oracle Database'i başlat
+
+```powershell
+docker compose up -d
+docker compose ps
+```
+
+Compose dosyası şu servisleri açar:
+
+| Servis | Adres | Yerel kullanım amacı |
+| --- | --- | --- |
+| Redis 8.2.1 | `127.0.0.1:56381` | Aktif entity, projection, indeks, stream, lease ve telemetry verileri |
+| Oracle Database Free 23 | `127.0.0.1:15212` | Kalıcı doğruluk kaynağı |
+
+Oracle'ın hazır duruma gelmesi Redis'ten daha uzun sürebilir. API'yi başlatmadan
+önce `docker compose ps` çıktısında iki servisin de sağlıklı olduğunu doğrula.
+
+### 3. API'yi demo profiliyle başlat
+
+Yerel şema kurulumu, seed ve ön yükleme endpoint'leri, periyodik warm ve yönetim
+ekranı için `demo` profili zorunludur.
+
+Bu örnekte veritabanı sağlayıcısına özel `schema.sql` dosyasını Spring çalıştırır.
+CacheDB bu betikten sonra başlar ve sonucu `VALIDATE_ONLY` modunda doğrular; DDL
+yönetimi için Spring ile yarışmaz.
+
+```powershell
+$env:SPRING_PROFILES_ACTIVE = "demo"
+mvn spring-boot:run
+```
+
+Bash karşılığı:
+
+```bash
+SPRING_PROFILES_ACTIVE=demo mvn spring-boot:run
+```
+
+### 4. Hazırlık durumunu kontrol et
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8093/actuator/health/readiness
+```
+
+Durum `UP` olmadan ilerleme. Readiness; Redis, Oracle Database ve write-behind
+durumunu birlikte değerlendirir. Liveness ise yalnızca uygulama sürecinin
+çalıştığını gösterir.
+
+### 5. Kalıcı demo verisini oluştur
+
+Seed işlemi sınırlı ve dağıtık bir iş olarak çalışır; `202 Accepted` döner. Tek
+HTTP isteğini açık tutmak yerine işi durum endpoint'inden izle:
+
+```powershell
+$seed = Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8093/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
+
+do {
+    Start-Sleep -Milliseconds 250
+    $seedState = Invoke-RestMethod "http://127.0.0.1:8093/api/warm/jobs/$($seed.jobId)"
+} while ($seedState.status -in @("QUEUED", "RUNNING"))
+
+if ($seedState.status -ne "COMPLETED") {
+    throw ($seedState | ConvertTo-Json -Depth 8)
+}
+```
+
+`COMPLETED`, seed işinin tamamlandığını gösterir. Production geçişinde SQL
+kalıcılığının sağlıklı olduğunu doğrulamak için ayrıca readiness durumunu ve
+write-behind kuyruğunu izlemelisin.
+
+Seed işlemi kalıcı demo kayıtlarını oluşturur; ancak bütün Redis route'larını
+hazır kabul etmez. İlgili warm işi tamamlanıp coverage kaydı oluşmadan hızlı
+erişim listesi bilinçli olarak `503 Service Unavailable` döner. Böylece boş ya
+da eksik bir Redis penceresi, tam iş sonucu sanılmaz.
+
+### 6. Müşteri sipariş projection'ını hazırla
+
+```powershell
+$warm = Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8093/api/warm/orders/customer/1?limit=100&projectionOnly=true"
+
+do {
+    Start-Sleep -Milliseconds 250
+    $warmState = Invoke-RestMethod "http://127.0.0.1:8093/api/warm/jobs/$($warm.jobId)"
+} while ($warmState.status -in @("QUEUED", "RUNNING"))
+
+if ($warmState.status -ne "COMPLETED") {
+    throw ($warmState | ConvertTo-Json -Depth 8)
+}
+```
+
+### 7. Aktif yol ile arşiv yolunu karşılaştır
+
+```powershell
+# Redis projection yolu
+$page = Invoke-RestMethod "http://127.0.0.1:8093/api/customers/1/orders?limit=10"
+$page.items
+
+# nextCursor varsa offset kullanmadan devam et
+if ($page.nextCursor) {
+    Invoke-RestMethod "http://127.0.0.1:8093/api/customers/1/orders?limit=10&after=$($page.nextCursor)"
+}
+
+# Sınırlı Oracle Database yolu
+Invoke-RestMethod "http://127.0.0.1:8093/api/orders/archive?customerId=1&limit=10"
+```
+
+### 8. Operasyon araçlarını aç
+
+- Yönetim ekranı: `http://127.0.0.1:8093/cachedb-admin`
+- Güncel ayarlar: `http://127.0.0.1:8093/api/tuning`
+- Periyodik warm durumu: `http://127.0.0.1:8093/api/warm/schedules`
+
+Oracle Database verisini silmeden yerel servisleri durdur:
+
+```powershell
+docker compose down
+```
+
+`docker compose down -v` komutunu yalnızca yerel Oracle Database volume'unu bilinçli
+olarak silmek istediğinde kullan.
+
+## Çalışma Zamanı Sözleşmesi
+
+| İşlem | Ana veri yolu | Veri Redis'in dışındaysa | Kalıcılık ve güvenlik kuralı |
+| --- | --- | --- | --- |
+| `save`, update, soft delete | Önce Redis, sonra Oracle Database write-behind | Veri kabul politikası izin veriyorsa komut Redis'e girer | `202 Accepted`, SQL commit anlamına gelmez; işlem makbuzunu ve readiness ölçümlerini izle |
+| Entity detayı | Redis entity sorgusu | Açık bir `unavailable/not-found` sonucu döner; kendiliğinden sınırsız SQL çalıştırmaz | Entity yolunu hazırla veya sınırlı source-detail yolu oluştur |
+| Büyüyen liste veya panel | Redis projection | Tam route kapsamı hazır değilse `completeItems()` çağrısı `503 Service Unavailable` döner | Aynı kapsamı hazırlayan warm işini çalıştır, `COMPLETED` durumunu bekle ve geçişten önce coverage doğrula |
+| Arşiv, dışa aktarma, denetim geçmişi | Sınırlı Oracle Database source route | Oracle Database'i doğrudan okur | Satır sınırı, deterministik sıralama, indeks ve timeout kullan |
+| Oracle Database'deki mevcut kayıt | Warm/backfill Oracle Database'den okur ve Redis'i doldurur | Uygulama açılırken otomatik içe aktarma yapılmaz | Önce dry-run, ardından sınırlı warm ve coverage kontrolü yap |
+| CacheDB dışından Oracle Database yazısı | Önce Oracle Database değişir | Bir değişiklik akışı yoksa Redis eski kalabilir | Outbox/CDC kullan; periyodik warm olay aktarımının yerine geçmez |
+
+Aktif veri seti, veritabanının ikinci ve tam kopyası değildir. Redis belleğini;
+entity veri yükleri, projection'lar, indeksler, stream durumu, lease kayıtları ve
+operasyon metadata'sıyla birlikte hesaplamalısın.
+
+## Kod Üzerinden Akış
+
+### 1. Entity: kalıcı veri şekli
+
+[`OrderEntity`](src/main/java/com/example/cachedb/sample/domain/OrderEntity.java),
+SQL kolonlarını, Redis namespace'ini, bölümlenmiş indeksi ve sınırlı ilişkiyi
+tanımlar:
+
+```java
+@CacheEntity(table = "sample_orders", redisNamespace = "sample-orders")
+@CachePartitionedIndex(partitionBy = "customer_id", sortBy = "order_date")
+public class OrderEntity {
+    @CacheId(column = "order_id")
+    public Long orderId;
+
+    @CacheColumn("customer_id")
+    public Long customerId;
+
+    @CacheColumn("order_date")
+    public Long orderDate;
+
+    @CacheRelation(
+            target = OrderLineEntity.class,
+            mappedBy = "orderId",
+            kind = CacheRelation.RelationKind.ONE_TO_MANY,
+            batchLoadOnly = true,
+            maxRowsPerParent = 50,
+            parentBatchSize = 16,
+            orderBy = "lineNumber ASC"
+    )
+    public List<OrderLineEntity> lines;
+}
+```
+
+Veritabanındaki foreign key kalıcı ilişki bütünlüğünü korur.
+`@CacheRelation` ise CacheDB'ye ilişkinin nasıl ve hangi sınırla yükleneceğini
+söyler. Biri olmadan diğeri teknik olarak bulunabilir; canlı ortam modelinde
+çoğunlukla ikisine de ihtiyaç vardır.
+
+### 2. Projection: ekranın ihtiyacı olan şekil
+
+[`OrderSummary`](src/main/java/com/example/cachedb/sample/readmodel/OrderSummary.java),
+`OrderEntity`'den küçüktür ve sipariş satırı veri yüklerini içermez:
+
+```java
+@CacheProjectionRecord(
+        source = OrderEntity.class,
+        id = "orderId",
+        name = "order-summary",
+        rankedBy = {"order_date", "priority_score"},
+        refresh = CacheProjectionRecord.Refresh.ASYNC
+)
+public record OrderSummary(
+        Long orderId,
+        Long customerId,
+        Long orderDate,
+        BigDecimal orderAmount,
+        String currencyCode,
+        String orderType,
+        String status,
+        Integer lineCount,
+        Double priorityScore
+) {
+}
+```
+
+Komut ve seçilmiş detay için entity; liste, zaman çizelgesi, panel, top-N ve
+global sıralı yol için projection kullan.
+
+### 3. Repository: yol sözleşmesi
+
+[`OrderRepository`](src/main/java/com/example/cachedb/sample/repository/OrderRepository.java)
+yolu tanımlar; implementasyonu processor üretir:
+
+```java
+@CacheRepository(entity = OrderEntity.class)
+@CacheRepositoryDefaults(
+        hotPopulation = HotRoute.Population.DECLARED_WARM,
+        sourceMaxRows = 500,
+        sourceTimeoutSeconds = 15
+)
+public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
+
+    @HotRoute(
+            value = "customer-order-timeline",
+            projection = OrderSummary.class,
+            pageSize = 100,
+            hotWindow = 1_000,
+            memoryBudgetBytes = CacheMemoryBudget.MIB_16,
+            coverageScopeParameter = "customerId"
+    )
+    @CacheRouteQuery(
+            predicates = @CachePredicate(field = "customerId"),
+            orderBy = {
+                    @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
+                    @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
+            }
+    )
+    CursorPage<OrderSummary> customerTimeline(long customerId, WindowRequest window);
+
+    @WarmRoute(
+            value = "warm-customer-order-timeline",
+            from = "customerTimeline",
+            maxRows = 1_000
+    )
+    CacheWarmPlan warmCustomerTimeline(
+            long customerId,
+            int maxRows,
+            CacheWarmTarget target
+    );
+}
+```
+
+Yol sözleşmesi; sayfa boyutunu, aktif pencereyi, bellek bütçesini, sıralamayı,
+coverage kapsamını ve warm sınırını tek yerde görünür kılar. Processor; alanla
+aynı adı taşıyan predicate parametresini, tek `WindowRequest` parametresini,
+warm satır sınırını, warm hedefini ve warm coverage kapsamını çıkarır. Birden
+fazla aday varsa sessiz seçim yapmaz; derlemeyi açık bir hatayla durdurur.
+
+### 4. Uygulama servisi: iş akışının yönetimi
+
+[`CustomerApplicationService`](src/main/java/com/example/cachedb/sample/application/customer/CustomerApplicationService.java),
+Redis client'ı veya generated binding sınıfı yerine interface kullanır:
+
+```java
+@Service
+public final class CustomerApplicationService {
+    private final CustomerRepository customers;
+    private final OrderRepository orders;
+
+    public CustomerEntity detail(long customerId, int orderPreview) {
+        return SampleHotLookups.require(
+                "Customer",
+                customerId,
+                customers.detail(customerId, orderPreview)
+        );
+    }
+
+    public CursorPage<OrderSummary> orderTimeline(long customerId, int limit, String after) {
+        return orders.customerTimeline(customerId, WindowRequest.of(limit, after));
+    }
+}
+```
+
+Controller HTTP girdisini doğrular. Uygulama servisi kullanım senaryosunu
+yönetir. Repository interface'i veri yolu sözleşmesini taşır. Generated kod;
+serileştirme, indeks ve veritabanı sağlayıcısı bağlantısını üstlenir.
+
+REST endpoint'i yanıttaki `nextCursor` değerini bir sonraki isteğin isteğe bağlı
+`after` parametresi olarak kabul eder. Cursor bu route'a, müşteri kapsamına ve
+sıralama sözleşmesine bağlıdır; başka müşteri veya route için kullanılamaz.
+Strict bir HOT route doğrudan `CursorPage<T>` dönebilir; generated kod sayfayı
+oluşturmadan önce coverage bilgisinin eksiksiz ve güncel olduğunu doğrular.
+Uygulama coverage kanıtını ayrıca inceleyecekse dönüş tipi `HotWindow<T>` kalmalıdır.
+
+Processor ayrıca reflection kullanmayan bir route companion sınıfı üretir.
+Integration test ve operasyon kodunda route adını string olarak tekrarlamak
+yerine bu referansı kullan:
+
+```java
+cacheDbTestProbe.requireDeclaredWarmRoute(
+        OrderRepositoryCacheDbRoutes.customerTimeline()
+);
+
+RouteCoverage coverage = cacheDbTestProbe.coverage(
+        OrderRepositoryCacheDbRoutes.customerTimeline(),
+        String.valueOf(customerId),
+        Duration.ofMinutes(5)
+);
+```
+
+Repository metodu veya route sözleşmesi değişirse bu kullanım derleme sırasında
+değişmek zorunda kalır. Generated companion `target/generated-sources` altında
+oluşur; bu sınıfı `src/main/java` dizinine kopyalama.
+
+## Mevcut Veriyi Hazırlama
+
+Oracle Database'deki mevcut satırlar uygulama açılırken otomatik olarak Redis'e
+aktarılmaz. Mevcut sistemden geçerken şu sırayı izle:
+
+1. Sınırlı bir `@HotRoute` veya `@CacheLookup` tanımla.
+2. Aynı yol için `@WarmRoute` ekle.
+3. `dryRun=true` çalıştır ve aday satır sayısını incele.
+4. Gerçek warm işini gönder ve `COMPLETED` durumuna kadar izle.
+5. Route coverage ile Oracle Database üyelik/sıralama karşılaştırmasını doğrula.
+6. Trafiği kademeli aç ve Oracle Database geri dönüş yolunu koru.
+
+Dry-run örneği:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8093/api/warm/orders/customer/1?limit=100&projectionOnly=true&dryRun=true"
+```
+
+Liste ve panel için yalnızca projection hazırlamak en doğru seçimdir. Tam entity
+hazırlama, yalnızca seçilmiş detay veya komut yolu bütün aktif veri yüküne ihtiyaç
+duyuyorsa kullanılmalıdır.
+
+Eski tablolarda `entity_version` değeri `NULL` veya `0` ise ilk hazırlama
+sırasında başlangıç Redis sürümü kullanılır. Bu davranış yalnızca geçişi
+kolaylaştırır; değişiklik akışının yerini tutmaz. Geçişten sonra Oracle Database'e
+dışarıdan yazan her uygulama sürümü düzenli artırmalı ve değişikliği outbox/CDC
+ile yayımlamalıdır. Aksi durumda bir sonraki sınırlı uzlaştırma çevrimine kadar
+oluşacak gecikme bilinçli olarak kabul edilmelidir.
+
+### Periyodik warm ve uzlaştırma
+
+[`SampleScheduledWarmPlans`](src/main/java/com/example/cachedb/sample/config/SampleScheduledWarmPlans.java),
+90 günlük sipariş penceresini deklaratif olarak tanımlar. Redis lease sayesinde
+bir döngüyü yalnızca bir pod çalıştırır; diğer pod'lar güvenli biçimde bekler
+veya döngüyü atlar. Uzlaştırma, policy kapsamından çıkan kayıtları temizler.
+
+```java
+@CacheScheduledWarm(
+        name = "sample-active-order-window",
+        fixedDelayString = "${sample.scheduled-warm.orders.fixed-delay:PT15M}",
+        lockAtMostForString = "${sample.scheduled-warm.orders.lock-at-most-for:PT2M}",
+        lockWaitTimeoutString = "${sample.scheduled-warm.orders.lock-wait-timeout:PT20S}",
+        minimumIntervalString = "${sample.scheduled-warm.orders.minimum-interval:PT15M}",
+        reconcileHotSet = true
+)
+public CacheWarmPlan activeOrderWindow() {
+    long cutoff = Instant.now().minus(Duration.ofDays(90)).getEpochSecond();
+    return orders.warmActiveWindow(cutoff, orderWarmMaxRows);
+}
+```
+
+Periyodik warm seçilen aktif pencereyi korur. CacheDB üzerinden gelen yeni
+yazılar normal komut yoluyla hemen işlenir; bir sonraki zamanlanmış döngüyü
+beklemez.
+
+Annotation processor metot imzasını derleme sırasında doğrular ve tipli bir
+Spring task adapter'ı üretir. Runtime, annotation eklenen metotları taramaz ve
+reflection ile çağırmaz.
+
+### Ön yükleme çalıştırma, sorgu niyeti ve kalıcılık
+
+Tipli hedef, entity mi yoksa yalnızca projection mı hazırlanacağını bir kez
+seçer. Generated plan bu kararı taşır; çalıştırma aşamasında yalnızca deneme
+veya uygulama modu seçilir:
+
+```java
+CacheWarmTarget target = projectionOnly
+        ? CacheWarmTarget.PROJECTIONS_ONLY
+        : CacheWarmTarget.ENTITY_AND_PROJECTIONS;
+CacheWarmPlan plan = orders.warmCustomerTimeline(customerId, limit, target);
+CacheWarmExecution execution = cacheDatabase.executeWarm(
+        plan,
+        dryRun ? CacheWarmExecutionMode.DRY_RUN : CacheWarmExecutionMode.APPLY
+);
+CacheWarmSummary summary = execution.summary("customer-orders");
+```
+
+`DRY_RUN` Redis'i değiştirmez. Aynı yol için ayrı entity/projection metotları
+oluşturma ve planın kararını ikinci bir `warmProjections`/`warm` koşuluyla
+uygulama kodunda tekrar etme.
+
+REST endpoint, ön yüklemeyi HTTP isteğini karşılayan iş parçacığında çalıştırmaz.
+Tipli komutu Redis üzerindeki dayanıklı iş kuyruğuna gönderir; `202 Accepted` ve
+işi izleyeceğin `Location` başlığını döndürür:
+
+```java
+public record SampleWarmCommand(Route route, int limit, boolean projectionOnly,
+                                boolean dryRun) {
+}
+
+static final CacheDistributedJobDefinition<SampleWarmCommand> WARM_JOB =
+        CacheDistributedJobDefinition.of("sample.route.warm", SampleWarmCommand.class);
+
+CacheDistributedJobSnapshot job = jobs.submit(WARM_JOB, command);
+// Location: /api/warm/jobs/{jobId}
+```
+
+Handler, `CacheDistributedJobHandler.Typed<SampleWarmCommand>` interface'ini
+uygular ve aynı tanımı döndürür. Sınırlı ilerleme bilgisi
+`CacheDistributedJobProgress` ile yazılır; route metni ve payload tipi tekrar edilmez.
+
+Her pod aynı iş tanımını kaydeder. Redis iş durumunu ve checkpoint bilgisini
+tutar; yarım kalan işi başka bir pod devralabilir. Satır sınırı, tekrarlanabilir
+ön yükleme davranışı ve generated SQL sözleşmesi korunur. Arka plan işi, sorguyu
+sınırsız hâle getirmez.
+
+Sorgu koşullarındaki gruplar da açık bir sözleşmedir. Aynı gruptaki koşullar
+AND, farklı gruplar OR ile birleştirilir. Aktif sipariş penceresi bilinçli
+olarak "son 90 gün OR aktif durum" anlamına geldiği için
+`@CacheRouteQuery`, `0` ve `1` gruplarıyla birlikte
+`explicitDisjunction = true` kullanır. Birden fazla grup kullanıp bu onayı
+vermeyen sorgu derleme sırasında reddedilir. İş kuralı AND ise bütün koşulları
+aynı grupta tut.
+
+Seed ve içe aktarma batch'leri SQL kalıcılık kanıtını korur:
+
+```java
+try (var orders = cacheDatabase.durableBatchWriter(
+        "sample seed/orders", 128, 1_024, Duration.ofSeconds(30),
+        orderRepository::saveAll
+)) {
+    sourceOrders.forEach(orders::add);
+}
+```
+
+Timeout, komutun Redis tarafından kabul edildiğini fakat verilen süre içinde
+SQL kalıcılığının doğrulanamadığını anlatır. Exception, receipt listesini ve
+operasyon adını taşır. Bu nedenle aynı yazıları körlemesine tekrar gönderme;
+önce receipt durumunu incele.
+
+### Üretilen route envanteri
+
+Annotation processor her repository için route (erişim yolu) kataloğu üretir.
+Starter bu katalogları runtime reflection kullanmadan bir araya getirir:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8093/actuator/cachedb
+```
+
+Yanıt; tanımlı repository ve route sayılarını, route türlerini, hızlı erişim
+route'larının doldurma stratejilerini, en fazla 250 route ayrıntısını, en fazla
+100 zamanlanmış ön yükleme ayrıntısını ve kesilme işaretlerini içerir. Micrometer
+tarafında `cachedb.repositories.declared`, `cachedb.routes.declared`,
+`cachedb.routes.hot.population{strategy=...}` ve `cachedb.scheduled.warm.*`
+ölçümleri bulunur. Strateji etiketi dört sabit değerle sınırlıdır; route,
+customer ve tenant adları metric etiketi yapılmaz. Katalog yalnızca derlenen
+yüzeyi kanıtlar; coverage, veri eşitliği, gecikme, bellek ve SQL kalıcılığı ayrı
+production kapılarıdır.
+
+## Kullanım Senaryosuna Göre Ayar
+
+Ayar kararına tablo boyutundan değil, ölçülmüş yol ihtiyacından başla.
+
+| Senaryo | Aktif veri politikası | Okuma modeli | Başlangıç sınırı | Aktif setin dışında |
+| --- | --- | --- | --- | --- |
+| Müşteri sipariş zaman çizelgesi | Son 90 gün **veya** aktif sipariş durumları | Müşteri başına `OrderSummary` | Sayfa `100`, pencere `1.000`, yol bütçesi `16 MiB` | Sınırlı `archive` source route |
+| Ürün kataloğu | Aktif ürünler **veya** stokta/düşük stokta olanlar | `ProductAvailability` | Entity sınırı `25.000`, sayfa `100` | Pasif ürün source route'u |
+| Destek operasyonu | Son 30 günde güncellenen **veya** `OPEN/PENDING/ESCALATED` kayıtlar | Küçük satırlar için entity | Entity sınırı `50.000`, sayfa `50` | Gerektiğinde açık ticket-history SQL yolu |
+| Lojistik kontrol paneli | Son 14 günde güncellenen **veya** aktif/istisna durumları | `ShipmentSummary` | Entity sınırı `150.000`, yol penceresi `2.000-10.000` | Teslim edilmiş gönderi source route'u |
+| Rapor çalıştırma | `QUEUED/RUNNING/FAILED` veya son 24 saat | Küçük rapor işi entity'si | Entity sınırı `5.000`, sayfa `50` | Tamamlanan rapor geçmişi Oracle Database'de |
+| Güvenlik denetimi | Son 24 saatteki önemli olaylar | Küçük ve sınırlı entity listesi | Entity sınırı `2.000`, read admission kapalı | Tam denetim arşivi Oracle Database'de |
+
+Örnek, çözümlenmiş çalışma zamanı ayarlarını API üzerinden gösterir:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8093/api/tuning
+Invoke-RestMethod http://127.0.0.1:8093/api/tuning/profiles
+```
+
+[`SampleCacheDbTuningConfig`](src/main/java/com/example/cachedb/sample/config/SampleCacheDbTuningConfig.java)
+içindeki temel kontroller:
+
+| Kontrol | Örnek değer | Neden var? |
+| --- | ---: | --- |
+| `maxEntityQueryLimit` | `250` | Geniş entity materialization işlemini durdurur |
+| `maxProjectionQueryLimit` | `1.000` | Küçük projection satırları için daha geniş pencereye izin verir |
+| `maxQueryLoadRows` | `1.000` | Kayıtlı source yüklemeyi sınırlar |
+| `queryTimeoutSeconds` | `15` | Source okumaya zaman sınırı koyar |
+| `workerThreads` | `2` | Eş zamanlı SQL flush baskısını sınırlar |
+| `batchSize` / `maxFlushBatchSize` | `128` | Sınırsız batch oluşturmadan SQL round-trip sayısını azaltır |
+| Redis uyarı / kritik eşikleri | `%75` / `%88` | Redis maxmemory değerine ulaşmadan backpressure uygular |
+| Beklenen eviction policy | `noeviction` | Redis'in koordinasyon veya yazma durumunu sessizce atmasını engeller |
+
+Bu değerleri doğrudan canlı ortama kopyalama. Serileştirilmiş veri yükü boyutunu,
+projection/indeks maliyetini, en yüksek eş zamanlı yol trafiğini, SQL flush
+gecikmesini ve yeniden hazırlama/failover sırasında gereken Redis boşluğunu ölç.
+
+## API Kataloğu
+
+| Alan | Örnek endpoint'ler | Veri yolu |
+| --- | --- | --- |
+| Sağlık ve operasyon | `GET /actuator/health/readiness`, `GET /api/tuning`, `GET /api/warm/schedules` | Çalışma zamanı telemetry'si |
+| Demo hazırlığı | `POST /api/demo/seed`, `GET /api/warm/jobs/{jobId}` | Dağıtık arka plan işleri |
+| Müşteri | `POST /api/customers`, `GET /api/customers/{id}`, `GET /api/customers/{id}/orders` | Komut, entity detayı, projection listesi |
+| Sipariş komutları | `POST /api/orders`, `PATCH /api/orders/{id}/status`, `DELETE /api/orders/{id}` | Redis öncelikli write-behind komutları |
+| Sipariş okumaları | `GET /api/orders/{id}`, `GET /api/orders/high-value`, `GET /api/orders/archive` | Entity, ranked projection, Oracle Database source route |
+| Ürün | `GET /api/products/active`, `GET /api/products/low-stock`, `PATCH /api/products/{id}/stock` | Projection okumaları ve komut |
+| Gönderi | `GET /api/shipments/active`, `GET /api/shipments/exceptions`, `GET /api/shipments/archive` | Projection ve Oracle Database source route'ları |
+| Destek | `GET /api/tickets/open`, `POST /api/tickets`, `PATCH /api/tickets/{id}/status` | Sınırlı entity okuması ve komutlar |
+| Raporlama | `GET /api/reports/jobs/live`, `GET /api/reports/audit/security`, `GET /api/reports/audit/archive` | Aktif kayıtlar ve kalıcı arşiv |
+| Paneller | `GET /api/dashboard/commerce`, `GET /api/dashboard/operations` | Ekrana göre şekillendirilmiş Redis verisi |
+| Redis'e hazırlama | `POST /api/warm/customers/active`, `/orders/customer/{id}`, `/orders/{id}/lines`, `/orders/high-value`, `/orders/highlighted`, `/products/active`, `/products/low-stock`, `/tickets/open`, `/shipments/active`, `/shipments/customer/{id}`, `/shipments/exceptions`, `/shipments/{id}/events`, `/reports/live`, `/reports/type/{type}`, `/audit/security` | Sınırlı Oracle Database-Redis işleri; her gönderimden sonra `/api/warm/jobs/{jobId}` durumunu izle |
+
+İstek sınırları doğrulanır. Sınırı aşan değerler sessizce küçültülmek yerine
+`400 Bad Request` döner. Kuyruk doluluğu `429 Too Many Requests`; optimistic
+conflict ve henüz kalıcılaşmamış ana kayıt ise `409 Conflict` üretir.
+
+## Postman
+
+Şu koleksiyonu içe aktar:
+
+```text
+postman/cache-database-oracle-sample.postman_collection.json
+```
+
+Klasörleri şu sırayla çalıştır:
+
+1. Readiness kontrolünü çalıştır, demo seed işini gönder ve `Latest Background
+   Job Status` isteği `COMPLETED` gösterene kadar tekrarla.
+2. Her iş alanı klasöründe hızlı erişim listesinden önce ilgili `Warm ...`
+   isteğini çalıştır.
+3. Her `202 Accepted` yanıtından sonra son iş `COMPLETED` olana kadar durum
+   isteğini tekrarla.
+4. Hızlı erişim route'unu çağır; klasörde karşılığı varsa sınırlı source/arşiv
+   route'u ile sonucu karşılaştır.
+5. Dashboard klasörünü, kullandığı bütün alt route'lar hazırlandıktan sonra çalıştır.
+6. Pencere veya pool değerini değiştirmeden önce tuning ve periyodik warm
+   durumunu incele.
+
+## Yük Testi
+
+Seed ve warm tamamlandıktan sonra:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-load-test.ps1 `
+  -RouteProfile hot-timeline `
+  -Concurrency 8 `
+  -DurationSeconds 20 `
+  -SeedCustomers 20 `
+  -OrdersPerCustomer 40 `
+  -WarmCustomers 20 `
+  -WarmLimit 100 `
+  -MaxP95Millis 250
+```
+
+Bu komut yerel bir regresyon kapısıdır; production kapasite sonucu değildir.
+Production ölçümü gerçek Redis/Oracle Database gecikmesi, Kubernetes kaynak
+sınırları, gerçek payload ve beklenen eş zamanlılıkla yapılmalıdır.
+
+## Oracle Database Canlı Ortam Notları
+
+- Her source route predicate'i ve deterministik sıralama son eki için uygun
+  indeks oluştur.
+- Kimliği uygulama veya Redis komut yolu içinde üret. CacheDB yazıyı kabul
+  ettikten sonra Oracle sequence değerinin kimliği belirlemesine güvenme.
+- Yazma sırasını korumak için sayısal bir sürüm kolonu eşle. Eski sürümler,
+  sürüm kontrollü `MERGE` ve silme ifadeleri tarafından reddedilir.
+- Oracle boş metni `NULL` olarak saklar. Örnek
+  `cachedb.sql.oracle.empty-string-policy=REJECT` ayarını kullanır. Yalnızca iş
+  sözleşmesi boş ve eksik değeri aynı kabul ediyorsa açıkça normalleştir.
+- Bütün pod'lardaki Hikari havuzlarının toplamını Oracle servisinin oturum
+  bütçesinin altında tut. Operasyon, migration ve failover bağlantıları için
+  ayrıca pay bırak.
+- Write-behind batch boyutunu redo üretimi, satır kilidi süresi ve gecikmeli ağ
+  ölçümlerine göre ayarla. Daha büyük batch her zaman daha hızlı değildir.
+- Ön yükleme, arşiv ve geçiş sorgularına süre ve satır sınırı koy.
+- Outbox ve checkpoint tablolarını migration ile kur. Oracle DDL ifadeleri
+  örtük commit yaptığı için çalışma zamanında DDL oluşturma varsayılan olarak
+  kapalıdır.
+- Aynı tablolara başka uygulamalar da yazıyorsa outbox/CDC ekle.
+- RAC, Data Guard veya Application Continuity için platform ekibinin verdiği
+  servis adı tabanlı JDBC adresini kullan. Yeniden bağlanma ve retry davranışını
+  uygulamanın kendi staging topolojisinde kanıtla.
+- Staging testinden önce framework'ün
+  [fiziksel Data Guard kanıt hattını](../tr/docs/oracle-provider.md) çalıştır.
+  Bu hat, gerçek redo uygulamayı ve çok adresli tek servis adlı Oracle JDBC tanımı
+  üzerinden rol geçişini kanıtlar; ardından eski primary'yi yeniden standby yapar
+  ve son boşluksuz/sıfır gecikmeli hazırlığı arar. RAC/SCAN/FAN/FCF, uygulamaya
+  özel ağ testi veya açık bir production RPO kararının yerini tutmaz.
+- Yedekleme, geri yükleme, Redis kaybı/yeniden hazırlama ve uygulamanın geri dönüş yollarını
+  kanıtla.
+- Operasyonel yol Redis'ten çalışsa bile kalıcı doğruluk kaynağının Oracle Database
+  olduğunu koru.
+
+## Production Sertifikası
+
+Framework deposundaki testler CacheDB'nin kendi Docker ve provider davranışını
+kanıtlar. Uygulamanın rotaları ile gerçek staging topolojisi ayrıca
+kanıtlanmalıdır. Rota kapsamı, veri eşitliği, bellek, failover, canary ve geri
+dönüş kanıtlarını `cachedb-certification/` altında topladıktan sonra çalıştır:
+
+```powershell
+mvn verify -Pproduction-certification
+```
+
+Eksik rota, başka commit veya ortama ait kanıt, veri eşitliği sorunu, aşılmış
+bellek bütçesi ya da eksik failover/geri dönüş provası build'i durdurur.
+Paylaşılabilir sonuç `target/cachedb-production-certification.md` altında
+oluşur. Ayrıntılı sözleşme için
+[production sertifikası rehberini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/production-sertifikasi.md)
+kullan. Örnek kanıtları başarılı gibi işaretleme.
+
+## Canlı Ortam Kontrol Listesi
+
+- [ ] Her operasyonel endpoint; komut, aktif entity, projection veya source
+  route olarak sınıflandırıldı.
+- [ ] Her aktif yolun sayfa sınırı, aktif penceresi, bellek bütçesi, sıralaması
+  ve coverage kapsamı tanımlandı.
+- [ ] İlişki yoğun ve global sıralı ekranlar projection kullanıyor.
+- [ ] Warm/backfill sınırlı, kaldığı yerden devam edebilir, izlenebilir ve Redis
+  kaybından sonra test edilmiş durumda.
+- [ ] Source route'ların uygun indeksleri, timeout ve maksimum satır sınırı var.
+- [ ] Çağıran servisler `202 Accepted` kalıcılık anlamını biliyor.
+- [ ] Redis için açık `maxmemory`, `noeviction`, alarm ve kapasite boşluğu var.
+- [ ] Oracle Database oturum ve HikariCP bütçesi pod başına ve toplam replica
+  sayısı için hesaplandı.
+- [ ] Çok pod'lu periyodik warm ve yarım kalan işin başka pod tarafından alınması
+  test edildi.
+- [ ] CacheDB dışındaki veritabanı yazıları outbox/CDC veya açık bir uzlaştırma
+  kararıyla kapsandı.
+- [ ] Yönetim endpoint'leri kapalı veya iç gateway arkasında korunuyor.
+- [ ] Geçiş öncesi veri eşitliği, gecikme, canary, geri dönüş ve recovery kanıtı
+  kaydedildi.
+
+## Sorun Giderme
+
+| Belirti | Olası neden | Çözüm |
+| --- | --- | --- |
+| `/api/demo/seed` veya `/api/warm/**` için `404` | Uygulama `demo` profili olmadan açıldı | `SPRING_PROFILES_ACTIVE=demo` tanımlayıp yeniden başlat |
+| CacheDB artifact'leri için `404` alınıyor | İstenen sürüm yayımlanmamış veya genel Maven deposu eksik | Yayımlanmış kararlı sürümü kullan ve iki repository bölümüne de `https://esasmer-dou.github.io/cache-database/maven2` adresini ekle |
+| Bağımlılıklar çözülüyor ancak `cachedb-maven-plugin` bulunamıyor | `pluginRepositories` tanımı yok | Aynı genel CacheDB adresini `pluginRepositories` altına ekle |
+| `production-certification` başarısız oluyor | Rota kanıtı eksik, eski veya başka commit/ortama ait | Üretilen raporu oku, gerçek staging kanıtını yenile ve profili yeniden çalıştır |
+| Aktif route `503` döndürüyor, arşiv route'u satır getiriyor | Redis route'u hazırlanmadı, coverage süresi doldu veya kapsam farklı | Dry-run yap, aynı route/scope'u hazırla, `COMPLETED` durumunu bekle ve coverage kaydını incele |
+| Detay yolu verinin hazır olmadığını söylüyor | Entity payload'ı aktif setin dışında | O detay kapsamı için entity warm et veya sınırlı source-detail yolu ekle |
+| Ana kaydı yazdıktan sonra `409 Conflict` | Ana kayıt henüz kalıcı değil veya optimistic version değişti | `Retry-After` değerine uy, write-behind durumunu kontrol et, idempotent retry yap |
+| `429 Too Many Requests` | Sınırlı iş kuyruğu veya backpressure koruması devrede | Üretim hızını düşür, Redis ve write-behind telemetry'sini incele |
+| Readiness `DOWN` | Redis, Oracle Database, dead-letter, recovery veya backlog koşulu başarısız | Readiness ayrıntısını ve logları incele; trafiği henüz yönlendirme |
+| Redis bellek uyarısı veriyor | Aktif set, projection/indeks maliyeti veya backlog bütçeyi aştı | Yeni admission'ı yavaşlat, keyspace'i ölç, pencereleri küçült veya kapasite ekle |
+
+## İlgili Dokümanlar
+
+- [Ana CacheDB README](https://github.com/esasmer-dou/cache-database/blob/main/tr/README.md)
+- [Deklaratif repository kullanımı](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/deklaratif-repositoryler.md)
+- [Başlangıç rehberi](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/getting-started.md)
+- [Periyodik warm ve uzlaştırma](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/periodik-warm.md)
+- [Production tuning](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/production-tuning-rehberi.md)
+- [Kullanım senaryosu örnekleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/use-case-examples.md)
+- [Veritabanı provider SPI](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/veritabani-provider-spi.md)
+- [Production reçeteleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/production-recipes.md)

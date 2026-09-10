@@ -58,6 +58,7 @@ Require-Text -RelativePath "README.md" -Patterns @(
     'actions/workflows/production-evidence\.yml',
     'cachedb-spring-boot-starter-postgres',
     'cachedb-spring-boot-starter-mssql',
+    'cachedb-spring-boot-starter-oracle',
     'esasmer-dou\.github\.io/cache-database/maven2',
     'Production Certification',
     '## Ten-Minute Learning Path',
@@ -70,6 +71,7 @@ Require-Text -RelativePath "tr/README.md" -Patterns @(
     'actions/workflows/production-evidence\.yml',
     'cachedb-spring-boot-starter-postgres',
     'cachedb-spring-boot-starter-mssql',
+    'cachedb-spring-boot-starter-oracle',
     '## On Dakikalık Öğrenme Akışı',
     '## Production''a Yakın Kullanım İçin Kısa Kontrol Listesi'
 )
@@ -103,8 +105,9 @@ Require-Text -RelativePath "tr/cachedb-production-tests/README.md" -Patterns @(
 )
 
 $samples = @(
-    @{ Root = 'sample-cache-database-postgresql'; Provider = 'postgres'; Port = '8091'; Database = 'PostgreSQL' },
-    @{ Root = 'sample-cache-database-mssql'; Provider = 'mssql'; Port = '8092'; Database = 'SQL Server' }
+    @{ Root = 'sample-cache-database-postgresql'; Provider = 'postgres'; Port = '8091'; Database = 'PostgreSQL'; Workflow = 'consumer-build' },
+    @{ Root = 'sample-cache-database-mssql'; Provider = 'mssql'; Port = '8092'; Database = 'SQL Server'; Workflow = 'consumer-build' },
+    @{ Root = 'sample-cache-database-oracle'; Provider = 'oracle'; Port = '8093'; Database = 'Oracle Database'; Workflow = 'production-evidence' }
 )
 
 foreach ($sample in $samples) {
@@ -112,6 +115,7 @@ foreach ($sample in $samples) {
     $provider = [string]$sample.Provider
     $port = [string]$sample.Port
     $database = [string]$sample.Database
+    $workflow = [string]$sample.Workflow
 
     Require-Text -RelativePath "$root/pom.xml" -Patterns @(
         '<repositories>',
@@ -122,7 +126,7 @@ foreach ($sample in $samples) {
     )
 
     Require-Text -RelativePath "$root/README.md" -Patterns @(
-        'actions/workflows/consumer-build\.yml',
+        "actions/workflows/$workflow\.yml",
         "cachedb-spring-boot-starter-$provider",
         'SPRING_PROFILES_ACTIVE.*demo',
         "127\.0\.0\.1:$port",
@@ -137,7 +141,7 @@ foreach ($sample in $samples) {
     )
 
     Require-Text -RelativePath "$root/README.tr.md" -Patterns @(
-        'actions/workflows/consumer-build\.yml',
+        "actions/workflows/$workflow\.yml",
         "cachedb-spring-boot-starter-$provider",
         'SPRING_PROFILES_ACTIVE.*demo',
         "127\.0\.0\.1:$port",
@@ -163,6 +167,8 @@ $publicEntryPoints = @(
     'sample-cache-database-postgresql/README.tr.md',
     'sample-cache-database-mssql/README.md',
     'sample-cache-database-mssql/README.tr.md',
+    'sample-cache-database-oracle/README.md',
+    'sample-cache-database-oracle/README.tr.md',
     'DOCUMENTATION_MAP.md',
     'tr/DOKUMAN_HARITASI.md',
     "docs/releases/v$([string]$rootPom.project.version).md",

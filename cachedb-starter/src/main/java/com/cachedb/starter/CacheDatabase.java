@@ -454,7 +454,10 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     public void start() {
         if (config.schemaBootstrap().autoApplyOnStart()
                 && config.schemaBootstrap().mode() != SchemaBootstrapMode.DISABLED) {
-            schemaAdmin.applyConfiguredMode();
+            SchemaBootstrapResult schemaResult = schemaAdmin.applyConfiguredMode();
+            if (!schemaResult.success()) {
+                throw new SchemaBootstrapException(schemaResult);
+            }
         }
         functionLoader.initialize();
         writeBehindWorker.start();

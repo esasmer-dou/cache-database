@@ -1,5 +1,7 @@
 # Spring Boot Starter
 
+Çok tablodan hazırlanan, kimlikle okunan cevap katalogları için [Tanımla Çalışan Katalog Yenileme](snapshot-projectionlar.md) rehberine bakın. Bu geliştirme API'sinde zamanlama, geçici dosya ve sahiplik denetimli yayın framework'e aittir; uygulama planı ve ayarları tanımlar.
+
 Bu proje iki farklı şekilde kullanılabilir:
 
 - `cachedb-examples` içindeki standalone/demo çalışma biçimi
@@ -31,6 +33,30 @@ Release hazırlığı ve production sınırları için ayrıca [Production GA Cr
 
 Bu yol, başlangıç maliyetini düşük tutar ve CacheDB'nin birinci önceliği olan
 düşük çalışma zamanı ek yükü hedefinden ödün vermez.
+
+### Şema Sahipliği ve Başlangıç Sırası
+
+DDL değişikliklerini tek bir bileşen yönetmelidir. Şemayı Spring SQL init,
+Flyway veya Liquibase oluşturuyorsa CacheDB'yi `VALIDATE_ONLY` modunda tut.
+Starter, `CacheDatabase` bean'ini uygulamanın veritabanı hazırlığı tamamlandıktan
+sonra başlatır. Böylece şema doğrulaması ve worker'lar migration betikleriyle
+yarışmaz.
+
+```java
+@Bean
+CacheDatabaseConfigCustomizer schemaOwnership() {
+    return (builder, properties) -> builder.schemaBootstrap(
+            SchemaBootstrapConfig.builder()
+                    .mode(SchemaBootstrapMode.VALIDATE_ONLY)
+                    .autoApplyOnStart(true)
+                    .build()
+    );
+}
+```
+
+`CREATE_IF_MISSING` modunu yalnızca DDL'in tek sahibi CacheDB ise kullan. Bu mod
+çoğunlukla yerel geliştirme ortamına uygundur; başka bir şema yöneticisiyle aynı
+anda çalıştırılmamalıdır.
 
 ### Deklaratif Uygulama Yüzeyi
 
@@ -408,9 +434,10 @@ Notlar:
 
 - `cachedb-spring-boot-starter`, JDBC starter yerine geçmez.
 - Spring tarafında yine bir `DataSource` gerekir.
-- Dependency örnekleri PostgreSQL'i gösterir; çünkü varsayılan provider
-  PostgreSQL'dir. MSSQL seçersen `cachedb-storage-mssql`, Microsoft SQL Server
-  JDBC driver'ı ve `cachedb.sql.provider=mssql` ayarı gerekir.
+- Dependency örnekleri geriye dönük varsayılan olduğu için PostgreSQL'i gösterir.
+  SQL Server için `cachedb-spring-boot-starter-mssql`, Oracle Database için
+  `cachedb-spring-boot-starter-oracle` kullan ve uygun `cachedb.sql.provider`
+  değerini seç.
 - `JedisPooled` bean'i yoksa starter bunu `cachedb.redis.uri` değerinden oluşturur.
 - Eski `cachedb.redis-uri` alias'i geriye uyumluluk için çalışmaya devam eder.
 - `cachedb.profile` şu değerleri kabul eder: `default`, `development`, `production`, `benchmark`, `memory-constrained`, `minimal-overhead`.
@@ -467,6 +494,45 @@ pool kullan ve bu pool'u cluster toplam worker concurrency'sine göre boyutland�
 Uygulamanın ana SQL pool'unu paylaşıyorsan
 `restore-lock-timeout-after-transaction=true` açık kalmalı; böylece CacheDB'nin
 ayarladığı `LOCK_TIMEOUT` başka SQL koduna sızmaz.
+
+### Spring Boot ile Oracle Database
+
+Oracle provider starter, Oracle storage modülünü ve desteklenen `ojdbc17`
+çalışma zamanı sürücüsünü birlikte getirir:
+
+```xml
+<dependency>
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cachedb-spring-boot-starter-oracle</artifactId>
+</dependency>
+```
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:oracle:thin:@//oracle:1521/APP_SERVICE
+    username: app
+    password: ${DB_PASSWORD}
+
+cachedb:
+  enabled: true
+  profile: production
+  sql:
+    provider: oracle
+    oracle:
+      query-timeout-seconds: 10
+      transaction-isolation: read_committed
+      duplicate-race-retries: 2
+      empty-string-policy: reject
+  redis:
+    uri: redis://redis:6379
+```
+
+Oracle komutunda kimlik, Redis kabulünden önce bilinmelidir. Kalıcı yazma
+sıralaması için sayısal sürüm kolonu gerekir. Oracle boş metni `NULL` olarak
+sakladığı için varsayılan davranış boş metni reddeder. Değer, outbox, havuz ve
+HA kanıt sözleşmesinin tamamı için [Oracle Provider](oracle-provider.md)
+belgesini kullan.
 
 ## İlk Çalışan Düz Java Örneği
 

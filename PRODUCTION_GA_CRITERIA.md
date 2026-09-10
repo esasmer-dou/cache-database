@@ -31,14 +31,17 @@ capacity, failover, canary, or rollback evidence.
 | Redis coordination | Multi-pod consumer identity, leader lease, pending claim, outage recovery, retry and DLQ evidence pass. |
 | PostgreSQL provider | Write-behind, source route, warm, outbox/checkpoint and sample-provider evidence pass. |
 | SQL Server provider | Version-guarded batch write, throughput threshold, restart/reconnect, lock classification, outbox/checkpoint, migration and multi-pod apply evidence pass. |
+| Oracle provider | Version-guarded MERGE batching, stale-write and concurrent-insert checks, bounded read chunks, delayed-network behavior, throughput threshold, restart/reconnect, outbox/checkpoint, migration and multi-pod ownership evidence pass. |
+| Oracle topology recovery | The self-hosted physical Data Guard lane proves redo apply, planned switchover, forced primary loss, stale-connection rejection, Hikari recovery through a multi-address Oracle JDBC service-name descriptor, provider behavior after each transition, and reinstatement of the former primary as a no-gap standby with zero reported apply/transport lag. The result does not certify RAC, FAN/ONS, FCF, customer RTO/RPO, or zero data loss. |
 | Read performance | Projection-first, partitioned relation top-N and ranked-window benchmark thresholds pass. |
 | Migration tooling | Discovery produces compile-time projection records and partitioned relation loaders; warm, parity, memory and report tests pass. |
 | Operations | Admin exposure is opt-in; metrics, backlog, retry, DLQ, projection lag, memory pressure and reconciliation state remain observable. |
 | Distribution | Binary, source, Javadoc, POM, BOM, checksums and release bundle are immutable; anonymous Maven resolution and GitHub Release verification pass. |
 | Documentation | English and Turkish entry points, release notes, examples and public-link checks pass. |
 
-The `Framework Readiness`, `Production Evidence`, `Public Maven Repository
-Publish`, and `Production GA Release Readiness` workflows enforce these gates.
+The `Framework Readiness`, `Production Evidence`, manual self-hosted `Oracle
+Data Guard Evidence`, `Public Maven Repository Publish`, and `Production GA
+Release Readiness` workflows enforce these gates.
 
 ## Application Production Certificate
 
@@ -67,8 +70,9 @@ copy-paste layout and Maven configuration.
 
 These are deployment responsibilities, not unfinished framework features:
 
-- CacheDB cannot trigger or certify a customer's managed Redis failover, SQL
-  Server Always On failover, PostgreSQL HA failover, gateway policy, VPN or
+- CacheDB can prove representative local physical Data Guard recovery, but it
+  cannot certify a customer's managed Redis failover, SQL Server Always On,
+  PostgreSQL HA, Oracle RAC/Data Guard service topology, gateway policy, VPN or
   Kubernetes topology from the library repository.
 - External writes to SQL require outbox/CDC or an explicitly measured
   reconciliation route.

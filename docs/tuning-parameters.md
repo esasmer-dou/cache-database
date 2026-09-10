@@ -252,7 +252,7 @@ back to PostgreSQL.
 | `cachedb.config.writeBehind.deadLetterStreamKey` | `cachedb:stream:write-behind:dlq` | Write-behind DLQ stream key. |
 | `cachedb.config.writeBehind.compactionMaxLength` | `0` | Must remain `0`. Durable compaction tokens cannot be trimmed before acknowledgement. |
 | `cachedb.config.writeBehind.retryOverrides` | empty | Per-entity retry overrides. Format below. |
-| `cachedb.config.writeBehind.entityFlushPolicies` | empty | Per-entity PostgreSQL flush policies. Format below. |
+| `cachedb.config.writeBehind.entityFlushPolicies` | empty | Per-entity durable SQL flush policies. Format below. |
 
 ### Resource Limits and Default Cache Policy
 

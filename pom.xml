@@ -6,7 +6,7 @@
 
     <groupId>com.reactor.cachedb</groupId>
     <artifactId>cache-database</artifactId>
-    <version>0.10.1</version>
+    <version>0.11.0</version>
     <packaging>pom</packaging>
 
     <name>cache-database</name>
@@ -54,6 +54,7 @@
         <jedis.version>5.2.0</jedis.version>
         <postgresql.version>42.7.4</postgresql.version>
         <mssql.jdbc.version>12.8.1.jre11</mssql.jdbc.version>
+        <oracle.jdbc.version>23.26.1.0.0</oracle.jdbc.version>
         <spring.boot.version>3.3.5</spring.boot.version>
         <micrometer.version>1.13.6</micrometer.version>
         <maven.source.plugin.version>3.3.1</maven.source.plugin.version>
@@ -80,10 +81,12 @@
         <module>cachedb-storage-jdbc</module>
         <module>cachedb-storage-postgres</module>
         <module>cachedb-storage-mssql</module>
+        <module>cachedb-storage-oracle</module>
         <module>cachedb-starter</module>
         <module>cachedb-spring-boot-starter</module>
         <module>cachedb-spring-boot-starter-postgres</module>
         <module>cachedb-spring-boot-starter-mssql</module>
+        <module>cachedb-spring-boot-starter-oracle</module>
         <module>cachedb-spring-boot-starter-admin</module>
         <module>cachedb-spring-boot-test</module>
         <module>cachedb-bom</module>

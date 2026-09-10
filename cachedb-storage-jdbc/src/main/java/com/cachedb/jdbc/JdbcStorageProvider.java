@@ -11,6 +11,19 @@ public interface JdbcStorageProvider {
 
     JdbcDatabaseDialect dialect();
 
+    default JdbcQueryDialect queryDialect() {
+        return JdbcQueryDialects.standard(
+                id(),
+                Set.of(id()),
+                dialect().maxParametersPerStatement(),
+                "postgres".equalsIgnoreCase(id())
+        );
+    }
+
+    default JdbcSchemaDialect schemaDialect() {
+        return JdbcSchemaDialects.ansi(id());
+    }
+
     WriteBehindFlusherFactory writeBehindFlusherFactory(Map<String, String> options);
 
     default Set<String> supportedOptions() {

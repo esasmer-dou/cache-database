@@ -435,7 +435,9 @@ If the source database can be changed outside CacheDB, do not rely on Redis
 staying fresh by luck. Use a real feed: outbox, Debezium, Kafka, or another CDC
 source. The starter includes a concrete PostgreSQL outbox adapter for the
 default provider path, and the MSSQL provider exposes a matching explicit
-adapter path with SQL Server checkpoint semantics.
+adapter path with SQL Server checkpoint semantics. Oracle applications use
+`OracleOutboxExternalChangeFeedAdapter` and migration-managed checkpoint DDL;
+see [Oracle Provider](oracle-provider.md).
 
 Expected outbox shape:
 
