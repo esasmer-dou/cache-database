@@ -13,12 +13,12 @@ korunur. Yeni uygulama kodunda başlangıç noktası çoğunlukla
 
 ## 1. Provider Starter'ı Ekle
 
-BOM'u bir kez ekle ve yalnızca bir SQL provider starter seç. `0.11.0`, kimlik
+BOM'u bir kez ekle ve yalnızca bir SQL provider starter seç. `0.12.0`, kimlik
 doğrulaması istemeyen CacheDB Maven deposunda değişmez paket olarak yayımlanır.
 
 ```xml
 <properties>
-    <cachedb.version>0.11.0</cachedb.version>
+    <cachedb.version>0.12.0</cachedb.version>
 </properties>
 
 <dependencyManagement>

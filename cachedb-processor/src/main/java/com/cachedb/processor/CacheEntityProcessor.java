@@ -1631,7 +1631,9 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("import java.util.function.Function;\n\n");
         builder.append("public final class ").append(model.bindingName()).append(" {\n");
         builder.append("    public static final EntityMetadata<").append(entityName).append(", ").append(model.idField().typeName()).append("> METADATA = new Metadata();\n");
-        builder.append("    public static final EntityCodec<").append(entityName).append("> CODEC = new Codec();\n\n");
+        builder.append("    public static final EntityCodec<").append(entityName).append("> CODEC = new Codec();\n");
+        builder.append("    public static final com.reactor.cachedb.core.model.SourceMapping<").append(entityName)
+                .append("> SOURCE = com.reactor.cachedb.core.model.SourceMapping.entity(METADATA, CODEC);\n\n");
         for (FieldModel field : model.persistedFields()) {
             if (field.codecTypeName() != null) {
                 builder.append("    private static final ").append(field.codecTypeName()).append(" ")

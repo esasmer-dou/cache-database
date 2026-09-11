@@ -4,7 +4,8 @@ SnapshotPlan, çok sayıda tablodan hazırlanan REST cevapları içindir.
 Uygulama kaynakları, iş kuralını ve ayarları tanımlar.
 JDBC döngüsü, geçici dosya, partileme, kilit ve yayın CacheDB'ye aittir.
 
-Bu API CacheDB 0.11.0 ile kullanılabilir. PostgreSQL, SQL Server ve Oracle desteklenir.
+SnapshotPlan 0.11.0 ile gelir. Kısa kaynak tanımları için 0.12.0 gerekir.
+PostgreSQL, SQL Server ve Oracle desteklenir.
 H2 yalnızca yalıtılmış testlerde kullanılır. Tanınmayan veritabanında yenileme başlamaz.
 
 ## Veritabanı Koşulları
@@ -36,8 +37,11 @@ gerekiyorsa sınırlı bir scalar değere açıkça dönüştürün veya ayrı S
 | REST sınırı | Yetki, veri yaşı ve HTTP sonucu |
 
 SnapshotSource.entity, generated binding kullanır.
-Tekil kimliği olmayan ilişki tablosu için SnapshotSource<Link> tanımlayın; yapay entity kimliği üretmeyin.
-SQL yalnızca güvenilir uygulama tanımıdır. HTTP isteğinden SQL almayın.
+Tekil kimliği olmayan iki kolonlu ilişki için SnapshotRelation kullanın; yapay entity kimliği üretmeyin.
+Ek alanlar için @CacheSourceRecord ile record tanımlayın.
+[Kaynak ve ilişki başvurusu](snapshot-kaynak-basvurusu.md), alanları ve yanlış seçimlerin sonuçlarını açıklar.
+Tablo ve kolon adlarını HTTP isteğinden almayın. Filtre değerleri SQL'e parametre olarak bağlanır.
+Yeni SOURCE alanı için entity'leri yeniden derleyin. Eski metadata/codec ve açık SELECT API'leri korunur.
 Mapping içinde JDBC, Redis veya dış servis çağrısı yapmayın.
 
 ## Planı ve Ayarı Tanımlayın

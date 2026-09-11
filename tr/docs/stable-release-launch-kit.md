@@ -1,5 +1,7 @@
 # Stable Release Launch Kit
 
+Bu sayfa 0.11.0 duyuru metnini geçmiş bir örnek olarak korur. Güncel sürüm için [0.12.0 sürüm notlarını](releases/v0.12.0.md), güncel README'yi ve [kaynak başvurusunu](snapshot-kaynak-basvurusu.md) kullanın. Aşağıdaki geçmiş sürüm numaralarını yeni duyuruya taşımayın.
+
 English version: [../../docs/stable-release-launch-kit.md](../../docs/stable-release-launch-kit.md)
 
 Bu sayfa, beta olmayan bir CacheDB release'ini GitHub Releases veya seçilen

@@ -39,39 +39,31 @@ application's own staging topology.
 
 | Release information | Value |
 | --- | --- |
-| Latest published release | `v0.11.0` |
-| Repository version | `0.11.0` |
+| Latest published release | `v0.12.0` |
+| Repository version | `0.12.0` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23, Oracle 19c physical Data Guard on a licensed self-hosted runner |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
 
-## Current Release: 0.11.0
+## Current Release: 0.12.0
 
-`0.11.0` adds Oracle Database as a first-class provider while preserving the
-existing Redis-first route, projection, warm, and durability contracts.
+`0.12.0` simplifies snapshot sources and relationship mapping without changing
+Redis-first reads, write-behind or catalog publication contracts.
 
-- `cachedb-spring-boot-starter-oracle` provides explicit Oracle selection with
-  JDBC Thin, version-guarded batch `MERGE`, delete, retry, timeout, and empty
-  string controls.
-- Oracle schema discovery, bounded warm, side-by-side comparison, Redis memory
-  estimation, outbox checkpoints, and multi-pod apply coordination are covered
-  by live database tests.
-- JDBC query and schema dialect SPIs now make paging, safe `IN` chunking, type
-  mapping, metadata case rules, and migration DDL provider-specific.
-- Schema bootstrap is fail-fast. A missing table, missing column, unsupported
-  database product, or invalid provider DDL no longer leaves the application
-  running with a hidden schema error.
-- A Java 21 Oracle REST sample includes Docker Compose, schema, seed routes,
-  Postman coverage, tuning guidance, and real Oracle/Redis integration tests.
-- A self-hosted physical Data Guard lane verifies redo apply, planned
-  switchover, forced primary loss, Hikari recovery through an Oracle JDBC
-  multi-address service-name descriptor, provider behavior after both role
-  transitions, and reinstatement of the former primary as a caught-up standby
-  without claiming RAC/SCAN/FAN coverage or zero-RPO.
+- Generated bindings expose `SOURCE`; parameterized filters and SQL subqueries
+  replace repeated metadata, codec and SQL-string assembly.
+- `@CacheSourceRecord` generates direct decoders for scalar records without
+  inventing entity IDs or registering writable repositories.
+- `SnapshotRelation`, immutable lookup helpers and per-root distribution
+  remove hand-written grouping and membership infrastructure.
+- Existing SELECT sources remain supported. Mapping still owns business rules;
+  no implicit SQL fallback or extra per-root queries are introduced.
+- PostgreSQL, SQL Server and Oracle keep transaction-consistent refresh,
+  bounded preparation, renewable leases and atomic publication.
 
-Read the complete [v0.11.0 release notes](docs/releases/v0.11.0.md) before
-upgrading.
+Read the [v0.12.0 release notes](docs/releases/v0.12.0.md) and
+[source reference](docs/snapshot-source-reference.md) before upgrading.
 
 ## Product Positioning: What CacheDB Is And Is Not
 
@@ -121,7 +113,7 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the current release?" | [v0.11.0 Release Notes](docs/releases/v0.11.0.md) |
+| "What changed in the current release?" | [v0.12.0 Release Notes](docs/releases/v0.12.0.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "What is the Oracle provider contract?" | [Oracle Provider](docs/oracle-provider.md) |
@@ -172,13 +164,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.11.0` is an
+Keep `cachedb.version` aligned with the release you use. Version `0.12.0` is an
 immutable release available from the anonymous CacheDB Maven repository and
 the GitHub Release bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.11.0</cachedb.version>
+    <cachedb.version>0.12.0</cachedb.version>
 </properties>
 
 <dependencyManagement>

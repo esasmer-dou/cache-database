@@ -4,7 +4,8 @@ Use SnapshotPlan when a REST response combines several tables and must remain av
 The application declares source mappings, business rules and settings.
 CacheDB owns JDBC iteration, disk spooling, batching, leases and safe publication.
 
-Available since CacheDB 0.11.0. The source runner supports PostgreSQL, SQL Server and Oracle.
+SnapshotPlan is available since 0.11.0. The source DSL below requires 0.12.0.
+The source runner supports PostgreSQL, SQL Server and Oracle.
 H2 is used for isolated tests. Unknown database products fail before source iteration.
 
 ## Database Prerequisites
@@ -35,21 +36,23 @@ and [Oracle read consistency](https://docs.oracle.com/en/database/oracle/oracle-
 @Bean
 SnapshotPlan<CustomerEntity, OrderSummary> customerOrders() {
     var customers = SnapshotSource.entity("customers",
-            CustomerEntityCacheBinding.METADATA, CustomerEntityCacheBinding.CODEC, "");
+            CustomerEntityCacheBinding.SOURCE);
     var orders = SnapshotSource.entity("orders",
-            OrderEntityCacheBinding.METADATA, OrderEntityCacheBinding.CODEC, "status = 'OPEN'");
+            OrderEntityCacheBinding.SOURCE).where(OrderEntityFields.status, "OPEN");
     return new SnapshotPlan<>("customer-orders", customers, row -> row.id.toString(),
             List.of(customers, orders), OrderSummary.class, rows -> {
-                var byCustomer = rows.group(orders, row -> row.customerId,
+                var byCustomer = rows.lists(orders, row -> row.customerId,
                         OrderSummary::fromEntity, Comparator.comparing(OrderSummary::date).reversed());
-                return customer -> byCustomer.getOrDefault(customer.id, List.of());
+                return customer -> byCustomer.get(customer.id);
             });
 }
 ```
 
 The entity fields and DTO factory above are illustrative: use your actual model.
-Generated bindings provide column decoding. Relationship tables without single-column IDs can use typed SnapshotSource<Link> SELECT declarations.
-SQL and predicates must be trusted, static application definitions, never HTTP input.
+Generated bindings provide column decoding. Recompile entities to generate the new SOURCE constant.
+The old metadata/codec factory and explicit SELECT constructors remain supported.
+Use the [source and relationship reference](snapshot-source-reference.md) for records, filters and lookups.
+Identifiers must be trusted, static application definitions, never HTTP input.
 Mapping is pure business logic. Build relationship lookups once. Do not make JDBC, Redis or external calls in mapping.
 
 ```properties

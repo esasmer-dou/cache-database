@@ -32,9 +32,20 @@ final class SnapshotJdbcReader {
             Runnable check)
             throws SQLException {
         check.run();
-        try (PreparedStatement statement =
-                connection.prepareStatement(
-                        table.sql(connection.getMetaData().getDatabaseProductName()))) {
+        String product = connection.getMetaData().getDatabaseProductName();
+        var command = table.command(product);
+        try (PreparedStatement statement = connection.prepareStatement(command.sql())) {
+            for (int i = 0; i < command.parameters().size(); i++) {
+                Object value = command.parameters().get(i);
+                if ("Oracle".equals(product) && value instanceof Boolean flag) value = flag ? 1 : 0;
+                if (value instanceof java.time.Instant instant)
+                    value = java.sql.Timestamp.from(instant);
+                if (value instanceof java.math.BigInteger integer)
+                    value = new java.math.BigDecimal(integer);
+                if (value instanceof java.util.UUID && !"PostgreSQL".equals(product))
+                    value = value.toString();
+                statement.setObject(i + 1, value);
+            }
             statement.setFetchSize(settings.fetchRows());
             statement.setQueryTimeout(
                     (int) Math.max(1, Math.min(30, settings.preparationTimeout().toSeconds())));
@@ -67,7 +78,7 @@ final class SnapshotJdbcReader {
                                 || value instanceof Struct)
                             throw new IllegalArgumentException(
                                     "Snapshot sources require scalar columns; cast or omit"
-                                        + " LOB/structured column: "
+                                            + " LOB/structured column: "
                                             + columns[i]);
                         budget.add(value);
                         row.put(columns[i], value);

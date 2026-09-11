@@ -29,6 +29,138 @@ class SnapshotProvidersIntegrationTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"postgres", "mssql", "oracle"})
+    void bindsScalarFiltersWithoutDriverSpecificApplicationCode(String provider) throws Exception {
+        try (Fixture fixture = new Fixture(provider)) {
+            String flagType =
+                    switch (provider) {
+                        case "postgres" -> "BOOLEAN";
+                        case "mssql" -> "BIT";
+                        default -> "NUMBER(1)";
+                    };
+            fixture.execute("ALTER TABLE " + fixture.child + " ADD active " + flagType);
+            fixture.execute(
+                    "ALTER TABLE "
+                            + fixture.child
+                            + " ADD created_at "
+                            + ("mssql".equals(provider) ? "DATETIME2" : "TIMESTAMP"));
+            fixture.execute(
+                    "ALTER TABLE "
+                            + fixture.child
+                            + " ADD token "
+                            + ("postgres".equals(provider) ? "UUID" : "VARCHAR(36)"));
+            var token = UUID.randomUUID();
+            var instant = java.time.Instant.parse("2026-01-01T12:30:00Z");
+            try (var connection = fixture.source.getConnection();
+                    var statement =
+                            connection.prepareStatement(
+                                    "UPDATE "
+                                            + fixture.child
+                                            + " SET active=?, created_at=?, token=?")) {
+                if ("oracle".equals(provider)) statement.setInt(1, 1);
+                else statement.setBoolean(1, true);
+                statement.setTimestamp(2, java.sql.Timestamp.from(instant));
+                statement.setObject(3, "postgres".equals(provider) ? token : token.toString());
+                statement.executeUpdate();
+            }
+            if ("oracle".equals(provider)) fixture.awaitOracleFixtureVisible();
+            var roots =
+                    SnapshotSource.entity(
+                                    "roots",
+                                    new com.reactor.cachedb.core.model.SourceMapping<String>(
+                                            fixture.child,
+                                            List.of("id", "active", "created_at", "token"),
+                                            row -> {
+                                                assertThat(
+                                                                com.reactor.cachedb.core.model
+                                                                        .SourceValues.read(
+                                                                        row,
+                                                                        "active",
+                                                                        Boolean.class))
+                                                        .isTrue();
+                                                assertThat(
+                                                                com.reactor.cachedb.core.model
+                                                                        .SourceValues.read(
+                                                                        row, "token", UUID.class))
+                                                        .isEqualTo(token);
+                                                return row.get("id").toString();
+                                            }))
+                            .where(
+                                    SnapshotPredicate.eq("active", true)
+                                            .and(SnapshotPredicate.eq("token", token))
+                                            .and(SnapshotPredicate.eq("created_at", instant))
+                                            .and(
+                                                    SnapshotPredicate.eq(
+                                                            "id", java.math.BigInteger.ONE)));
+            var plan =
+                    new SnapshotPlan<>(
+                            "catalog",
+                            roots,
+                            id -> id,
+                            SnapshotPlan.inputs(roots),
+                            String.class,
+                            rows -> id -> List.of(id));
+            try (var jobs = fixture.jobs(plan, SnapshotSettings.defaults())) {
+                assertThat(jobs.refresh("catalog", true).submittedRows()).isEqualTo(1);
+            }
+            fixture.assertPoolReset();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"postgres", "mssql", "oracle"})
+    void declarativeSubqueryAndRelationPublishEquivalentPayload(String provider) throws Exception {
+        try (Fixture fixture = new Fixture(provider)) {
+            var roots =
+                    SnapshotSource.entity(
+                                    "roots",
+                                    new com.reactor.cachedb.core.model.SourceMapping<String>(
+                                            fixture.root,
+                                            List.of("id", "payload"),
+                                            row -> row.get("id").toString()))
+                            .where(SnapshotPredicate.eq("payload", "root"));
+            var links =
+                    SnapshotRelation.strings("links", fixture.child, "id", "payload")
+                            .where(
+                                    SnapshotPredicate.in("id", roots.select("id"))
+                                            .and(SnapshotPredicate.eq("payload", "old")));
+            var plan =
+                    new SnapshotPlan<>(
+                            "catalog",
+                            roots,
+                            id -> id,
+                            SnapshotPlan.inputs(roots, links),
+                            String.class,
+                            rows -> {
+                                var values = rows.lists(links);
+                                var reverse = rows.membership(links.reverse());
+                                assertThat(reverse.containsAll("old", List.of("1"))).isTrue();
+                                return values::get;
+                            });
+            try (var job = fixture.jobs(plan, SnapshotSettings.defaults())) {
+                job.refresh("catalog", true);
+                assertThat(job.repository("catalog").findById("1").orElseThrow().payload())
+                        .isEqualTo("[\"old\"]");
+                fixture.execute("UPDATE " + fixture.child + " SET payload='new'");
+                var emptyPlan =
+                        new SnapshotPlan<>(
+                                "catalog",
+                                roots,
+                                id -> id,
+                                SnapshotPlan.inputs(roots, links),
+                                String.class,
+                                rows -> rows.lists(links)::get);
+                try (var empty = fixture.jobs(emptyPlan, SnapshotSettings.defaults())) {
+                    empty.refresh("catalog", true);
+                    assertThat(empty.repository("catalog").findById("1").orElseThrow().payload())
+                            .isEqualTo("[]");
+                }
+            }
+            fixture.assertPoolReset();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"postgres", "mssql", "oracle"})
     @SuppressWarnings("unchecked")
     void generatedEntitySourcePreservesColumnAliasesAcrossProviders(String provider)
             throws Exception {
@@ -248,18 +380,21 @@ class SnapshotProvidersIntegrationTest {
                     statement.setQueryTimeout(5);
                     for (String table : List.of(root, child)) {
                         try (var rows = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
-                            if (!rows.next()) throw new IllegalStateException("Missing Oracle fixture count");
+                            if (!rows.next())
+                                throw new IllegalStateException("Missing Oracle fixture count");
                         }
                     }
                     return;
                 } catch (java.sql.SQLException failure) {
                     if (failure.getErrorCode() != 1466 || System.nanoTime() >= deadline)
-                        throw new IllegalStateException("Oracle fixture snapshot is not ready", failure);
+                        throw new IllegalStateException(
+                                "Oracle fixture snapshot is not ready", failure);
                     try {
                         Thread.sleep(100);
                     } catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();
-                        throw new IllegalStateException("Interrupted during Oracle fixture setup", interrupted);
+                        throw new IllegalStateException(
+                                "Interrupted during Oracle fixture setup", interrupted);
                     }
                 }
             }

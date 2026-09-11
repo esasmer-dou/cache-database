@@ -12,12 +12,12 @@ New application code should normally start with `@CacheRepository`.
 ## 1. Install The Provider Starter
 
 Import the BOM once and choose exactly one SQL provider starter. The current
-release uses the immutable `0.11.0` package from the anonymous CacheDB Maven
+release uses the immutable `0.12.0` package from the anonymous CacheDB Maven
 repository.
 
 ```xml
 <properties>
-    <cachedb.version>0.11.0</cachedb.version>
+    <cachedb.version>0.12.0</cachedb.version>
 </properties>
 
 <dependencyManagement>

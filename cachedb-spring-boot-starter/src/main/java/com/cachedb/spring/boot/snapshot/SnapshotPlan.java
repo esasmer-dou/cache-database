@@ -12,6 +12,13 @@ public record SnapshotPlan<R, V>(
         List<SnapshotSource<?>> sources,
         Class<V> valueType,
         Function<SnapshotRows, Function<R, Iterable<V>>> projection) {
+    /** Keeps the SQL read set explicit; declarations are never discovered by reflection. */
+    public static List<SnapshotSource<?>> inputs(SnapshotInput... inputs) {
+        List<SnapshotSource<?>> result = new ArrayList<>();
+        for (SnapshotInput input : inputs) result.add(Objects.requireNonNull(input).source());
+        return List.copyOf(result);
+    }
+
     /** Reuses business rules in a separate job; it does not promise cross-plan atomicity. */
     public <U> SnapshotPlan<R, U> map(
             String name, Class<U> type, BiFunction<R, Iterable<V>, Iterable<U>> mapping) {

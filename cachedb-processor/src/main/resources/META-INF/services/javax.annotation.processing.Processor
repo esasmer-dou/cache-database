@@ -2,3 +2,4 @@ com.reactor.cachedb.processor.CacheEntityProcessor
 com.reactor.cachedb.processor.CacheProjectionRecordProcessor
 com.reactor.cachedb.processor.CacheRepositoryProcessor
 com.reactor.cachedb.processor.CacheScheduledWarmProcessor
+com.reactor.cachedb.processor.CacheSourceRecordProcessor

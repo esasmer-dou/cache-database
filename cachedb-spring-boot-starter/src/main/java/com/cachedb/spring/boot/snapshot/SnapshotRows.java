@@ -48,4 +48,32 @@ public final class SnapshotRows {
                 });
         return Collections.unmodifiableMap(result);
     }
+
+    public SnapshotLists<String, String> lists(SnapshotRelation relation) {
+        return lists(relation.source(), relation::from, relation::to, Comparator.naturalOrder());
+    }
+
+    public <T, K, V> SnapshotLists<K, V> lists(
+            SnapshotSource<T> source,
+            Function<T, K> key,
+            Function<T, V> value,
+            Comparator<V> order) {
+        return new SnapshotLists<>(group(source, key, value, order));
+    }
+
+    public SnapshotMembership<String, String> membership(SnapshotRelation relation) {
+        return membership(relation.source(), relation::from, relation::to);
+    }
+
+    public <T, K, V> SnapshotMembership<K, V> membership(
+            SnapshotSource<T> source, Function<T, K> key, Function<T, V> value) {
+        Map<K, Set<V>> result = new HashMap<>();
+        for (T row : get(source)) {
+            K owner = Objects.requireNonNull(key.apply(row), "Null snapshot relation key");
+            V target = Objects.requireNonNull(value.apply(row), "Null snapshot relation target");
+            result.computeIfAbsent(owner, ignored -> new HashSet<>()).add(target);
+        }
+        result.replaceAll((owner, members) -> Set.copyOf(members));
+        return new SnapshotMembership<>(result);
+    }
 }

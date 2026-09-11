@@ -4,6 +4,24 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.12.0 - 2026-09-11
+
+### Added
+
+- generated entity SOURCE mappings and @CacheSourceRecord constructor decoders
+- parameterized equality, AND/OR and nested IN source selections without Java ID-list round trips
+- explicit directional SnapshotRelation sources, sorted lists, membership lookups
+  and per-root DTO distribution with defined null, duplicate and empty-input semantics
+- compiler diagnostics and PostgreSQL, SQL Server, Oracle and H2 coverage for the new source path
+- English and Turkish source/relationship reference with compatibility and migration checks
+
+### Compatibility
+
+- Existing source factories and constructors remain supported. Recompile entity sources
+  to obtain SOURCE constants; align the BOM and annotation processor at 0.12.0.
+- Publication format, leases, preparation budgets, write-behind and read semantics
+  are unchanged. Business eligibility remains explicit application code.
+
 ## 0.11.0 - 2026-09-10
 
 ### Added

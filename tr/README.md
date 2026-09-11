@@ -40,8 +40,8 @@ doğrulanmalıdır.
 
 | Sürüm bilgisi | Değer |
 | --- | --- |
-| Yayımlanmış son sürüm | `v0.11.0` |
-| Repo sürümü | `0.11.0` |
+| Yayımlanmış son sürüm | `v0.12.0` |
+| Repo sürümü | `0.12.0` |
 | Kütüphane bytecode seviyesi | Java 17 |
 | Çalıştırılabilir örnekler | Java 21 |
 | Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 ve lisanslı self-hosted runner üzerinde Oracle 19c fiziksel Data Guard |
@@ -49,33 +49,24 @@ doğrulanmalıdır.
 
 Çok tablodan hazırlanan bir API cevabını yenilemek için [tanımla katalog yenileme rehberini](docs/snapshot-projectionlar.md) kullanın. Kaynak, projection ve ayarları tanımlayın; dosya, partileme, kilit ve güvenli yayını framework yönetsin.
 
-## Güncel Sürüm: 0.11.0
+## Güncel Sürüm: 0.12.0
 
-`0.11.0`, mevcut Redis öncelikli rota, projection, ön yükleme ve kalıcılık
-sözleşmelerini koruyarak Oracle Database desteğini eşit seviyede desteklenen
-bir sağlayıcı olarak ekler.
+`0.12.0`, kaynak ve ilişki tanımlarını sadeleştirir. Redis öncelikli okuma,
+yazma ve güvenli katalog yayını sözleşmeleri değişmez.
 
-- `cachedb-spring-boot-starter-oracle`; Oracle JDBC Thin bağlantısı, sürüm
-  kontrollü toplu `MERGE`, silme, yeniden deneme, zaman aşımı ve boş metin
-  kurallarıyla açık Oracle seçimi sağlar.
-- Oracle şema keşfi, sınırlandırılmış ön yükleme, yan yana karşılaştırma, Redis
-  bellek tahmini, outbox checkpoint'i ve çok pod'lu apply koordinasyonu canlı
-  veritabanı testleriyle doğrulanır.
-- JDBC sorgu ve şema dialect SPI'ları; sayfalama, güvenli `IN` parçalama, veri
-  tipi eşleme, metadata harf kuralları ve migration DDL'ini sağlayıcıya özel
-  hale getirir.
-- Şema hazırlama artık hata durumunda uygulamayı durdurur. Eksik tablo veya
-  kolon, desteklenmeyen veritabanı ve geçersiz DDL artık gizli bir başlangıç
-  hatası olarak kalmaz.
-- Java 21 Oracle REST örneği; Docker Compose, şema, seed route'ları, Postman
-  kapsamı, ayar rehberi ve gerçek Oracle/Redis integration testleri içerir.
-- Self-hosted fiziksel Data Guard hattı; redo uygulamayı, planlı switchover'ı,
-  primary kaybını, Oracle JDBC'nin çok adresli ve tek servis adlı bağlantı tanımı
-  üzerinden Hikari toparlanmasını, iki rol geçişinden sonra provider davranışını
-  ve eski primary'nin güncel standby olarak yeniden devreye alınmasını doğrular.
-  RAC/SCAN/FAN kapsamı veya sıfır veri kaybı iddiasında bulunmaz.
+- Üretilmiş binding'lerdeki `SOURCE`, tablo ve dönüşüm tanımını birleştirir.
+  Parametreli filtreler ve alt sorgular, elle SQL birleştirmenin yerini alır.
+- `@CacheSourceRecord`, ek kimlik veya yazılabilir depo gerektirmeden
+  record alanları için doğrudan dönüşüm kodu üretir.
+- `SnapshotRelation`, liste/üyelik yardımcıları ve köke göre dağıtım,
+  uygulamadaki tekrarlı ilişki hazırlama kodunu azaltır.
+- Eski SELECT kaynakları desteklenir. İş kuralları uygulamada kalır.
+  Gizli SQL fallback veya kök başına ek sorgu oluşmaz.
+- PostgreSQL, SQL Server ve Oracle için tutarlı okuma, kaynak sınırları,
+  yenilenebilir kilit ve atomik yayın korunur.
 
-Yükseltmeden önce [v0.11.0 sürüm notlarını](docs/releases/v0.11.0.md) oku.
+Yükseltmeden önce [v0.12.0 sürüm notlarını](docs/releases/v0.12.0.md) ve
+[kaynak başvurusunu](docs/snapshot-kaynak-basvurusu.md) okuyun.
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -130,7 +121,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
 | "Repository'leri güvenli biçimde nasıl tanımlar ve işletirim?" | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| "Güncel sürümde neler değişti?" | [v0.11.0 Sürüm Notları](docs/releases/v0.11.0.md) |
+| "Güncel sürümde neler değişti?" | [v0.12.0 Sürüm Notları](docs/releases/v0.12.0.md) |
 | "Çalışan REST API örneği nerede?" | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) örneği |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Oracle provider sözleşmesi nedir?" | [Oracle Provider](docs/oracle-provider.md) |
@@ -181,13 +172,13 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut. `0.11.0`, kimlik
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.12.0`, kimlik
 doğrulaması istemeyen CacheDB Maven deposu ve GitHub Release paketi üzerinden
 sunulan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.11.0</cachedb.version>
+    <cachedb.version>0.12.0</cachedb.version>
 </properties>
 
 <dependencyManagement>

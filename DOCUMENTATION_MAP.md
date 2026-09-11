@@ -29,7 +29,8 @@ production tuning should be approached.
 | How do I run a complete REST API sample? | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
 | How do I declare hot, source, warm, and command routes? | [Declarative Repositories](docs/declarative-repositories.md) |
-| What changed in the latest stable release? | [v0.11.0 Release Notes](docs/releases/v0.11.0.md) |
+| What changed in the latest stable release? | [v0.12.0 Release Notes](docs/releases/v0.12.0.md) |
+| How do I simplify snapshot sources and relationships? | [Source reference](docs/snapshot-source-reference.md) |
 | Do I need the Spring Boot JDBC starter? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | What are entity, relation, projection, and route contract? | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | How do insert, read, update, and delete work? | [Use Case Examples](docs/use-case-examples.md) |

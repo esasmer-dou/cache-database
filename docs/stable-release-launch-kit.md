@@ -1,5 +1,7 @@
 # Stable Release Launch Kit
 
+This page keeps the 0.11.0 launch copy as a historical example. For the current release, use [0.12.0 release notes](releases/v0.12.0.md), the current README and [snapshot source reference](snapshot-source-reference.md). Do not reuse the historical version numbers below for a new announcement.
+
 Turkish version: [../tr/docs/stable-release-launch-kit.md](../tr/docs/stable-release-launch-kit.md)
 
 Use this page when publishing a non-beta CacheDB release through GitHub

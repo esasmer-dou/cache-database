@@ -30,7 +30,8 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Çalışan REST API örneği nerede? | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) |
 | Yeni projeye nasıl eklerim? | [Başlangıç Rehberi](docs/getting-started.md) |
 | Hızlı erişim, SQL, warm ve command route'larını nasıl tanımlarım? | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| Güncel kararlı sürümde neler değişti? | [v0.11.0 Sürüm Notları](docs/releases/v0.11.0.md) |
+| Güncel kararlı sürümde neler değişti? | [v0.12.0 Sürüm Notları](docs/releases/v0.12.0.md) |
+| Kaynak ve ilişki tanımları nasıl sadeleşir? | [Kaynak başvurusu](docs/snapshot-kaynak-basvurusu.md) |
 | Spring Boot'ta JDBC dependency gerekiyor mu? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | Entity, relation, projection, route contract ne demek? | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | Insert, read, update, delete nasıl yapılır? | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |

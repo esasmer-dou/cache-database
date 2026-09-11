@@ -102,6 +102,10 @@ $docFiles = @(
 )
 
 $docFiles += @(
+    "docs\snapshot-projections.md",
+    "docs\snapshot-source-reference.md",
+    "tr\docs\snapshot-projectionlar.md",
+    "tr\docs\snapshot-kaynak-basvurusu.md",
     "docs\stable-release-launch-kit.md",
     "tr\docs\stable-release-launch-kit.md"
 )
