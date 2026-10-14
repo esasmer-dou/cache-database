@@ -6,6 +6,8 @@ on:
     paths:
       - "cachedb-spring-boot-starter/**"
       - "cachedb-storage-*/**"
+      - "cachedb-bom/**"
+      - "tools/ci/**"
       - ".github/workflows/snapshot-provider-evidence.yml"
       - "pom.xml"
   push:
@@ -13,6 +15,8 @@ on:
     paths:
       - "cachedb-spring-boot-starter/**"
       - "cachedb-storage-*/**"
+      - "cachedb-bom/**"
+      - "tools/ci/**"
       - ".github/workflows/snapshot-provider-evidence.yml"
       - "pom.xml"
 

@@ -97,11 +97,21 @@ function Wait-TcpPort {
 function Wait-MssqlReady {
     param(
         [string]$Name,
+        [string]$ContainerName,
         [int]$Port
     )
     Wait-TcpPort -Name $Name -Port $Port -TimeoutSeconds 210
-    Write-Host "$Name TCP port is reachable. Waiting for SQL Server startup grace period..."
-    Start-Sleep -Seconds 25
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(210)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $probe = & docker exec $ContainerName /opt/mssql-tools18/bin/sqlcmd `
+            -S localhost -U sa -P $mssqlPassword -C -l 3 -Q "SELECT 1" -b 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "$Name SQL readiness probe passed."
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw "$Name opened TCP but did not accept SQL within the startup deadline: $probe"
 }
 
 function Remove-ContainerIfOwned {
@@ -195,12 +205,17 @@ function Start-Proxy {
 function Wait-File {
     param(
         [string]$Path,
-        [int]$TimeoutSeconds
+        [int]$TimeoutSeconds,
+        [System.Management.Automation.Job]$TestJob
     )
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         if (Test-Path $Path) {
             return
+        }
+        if ($null -ne $TestJob -and $TestJob.State -in @("Completed", "Failed", "Stopped")) {
+            Receive-Job -Job $TestJob -ErrorAction Stop | Out-Host
+            throw "Listener test exited before creating its readiness file. See listener-failover-test.log."
         }
         Start-Sleep -Milliseconds 500
     }
@@ -280,9 +295,9 @@ function Write-Summary {
         "- Stable listener URL: ``jdbc:sqlserver://127.0.0.1:$ListenerPort``",
         "- Initial backend identity: ``$primaryServerName``",
         "- Listener backend switch: ``primary -> secondary``",
-        "- Stale JDBC connection after switch: ``failed as expected``",
-        "- New JDBC connection after switch: ``connected to a different SQL Server backend``",
-        "- Provider evidence after listener switch: ``$(if ($SkipProviderEvidence) { 'skipped' } else { 'passed' })``",
+        "- Stale JDBC connection after switch: ``$(if ($Status -eq 'passed') { 'failed as expected' } else { 'not verified' })``",
+        "- New JDBC connection after switch: ``$(if ($Status -eq 'passed') { 'connected to a different SQL Server backend' } else { 'not verified' })``",
+        "- Provider evidence after listener switch: ``$(if ($Status -ne 'passed') { 'not verified' } elseif ($SkipProviderEvidence) { 'skipped' } else { 'passed' })``",
         "- Started at: ``$($startedAt.ToString("O"))``",
         "- Finished at: ``$($finishedAt.ToString("O"))``",
         "",
@@ -298,7 +313,7 @@ function Write-Summary {
         secondaryPort = $SecondaryPort
         listenerUrl = $listenerUrl
         initialBackendIdentity = $primaryServerName
-        providerEvidenceAfterSwitch = if ($SkipProviderEvidence) { "skipped" } else { "passed" }
+        providerEvidenceAfterSwitch = if ($Status -ne "passed") { "not verified" } elseif ($SkipProviderEvidence) { "skipped" } else { "passed" }
         startedAt = $startedAt.ToString("O")
         finishedAt = $finishedAt.ToString("O")
         scope = "local-docker-mssql-listener-failover-preflight"
@@ -309,10 +324,22 @@ function Write-Summary {
 
 try {
     Invoke-Docker @("version", "--format", "{{.Server.Version}}") | Out-Null
+    $allowedReportsRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target")) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not [System.IO.Path]::GetFullPath($reportsDir).StartsWith($allowedReportsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Listener report directory escaped the workspace target directory."
+    }
     if (Test-Path $reportsDir) {
         Remove-Item -Recurse -Force $reportsDir
     }
     New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+
+    # Build time is not part of the measured JDBC listener recovery deadline.
+    Write-Host "Compiling listener test and resolving dependencies before the failover phase..."
+    & (Effective-MavenExecutable) -B -ntp -pl cachedb-storage-mssql -am test-compile -DskipTests `
+        *> (Join-Path $reportsDir "listener-test-build.log")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Listener test compilation failed. See listener-test-build.log."
+    }
 
     Remove-ContainerIfOwned -Name $proxyName
     Remove-ContainerIfOwned -Name $primaryName
@@ -325,15 +352,15 @@ try {
     Write-Host "Starting local SQL Server primary and secondary containers..."
     Start-SqlServerContainer -Name $primaryName -HostName "cachedb-mssql-primary" -Port $PrimaryPort
     Start-SqlServerContainer -Name $secondaryName -HostName "cachedb-mssql-secondary" -Port $SecondaryPort
-    Wait-MssqlReady -Name "Primary SQL Server" -Port $PrimaryPort
-    Wait-MssqlReady -Name "Secondary SQL Server" -Port $SecondaryPort
+    Wait-MssqlReady -Name "Primary SQL Server" -ContainerName $primaryName -Port $PrimaryPort
+    Wait-MssqlReady -Name "Secondary SQL Server" -ContainerName $secondaryName -Port $SecondaryPort
 
     Write-Host "Starting listener proxy on primary backend..."
     Start-Proxy -BackendName "primary"
 
     $listenerJob = Start-ListenerFailoverTest
     try {
-        Wait-File -Path $readyFile -TimeoutSeconds $ListenerFailoverTimeoutSeconds
+        Wait-File -Path $readyFile -TimeoutSeconds $ListenerFailoverTimeoutSeconds -TestJob $listenerJob
         Write-Host "Listener smoke test reached primary. Switching proxy backend to secondary..."
         Start-Proxy -BackendName "secondary"
         Set-Content -Path $switchFile -Value ([DateTimeOffset]::UtcNow.ToString("O")) -Encoding ASCII
@@ -356,6 +383,16 @@ try {
 
     Write-Summary -Status "passed"
     Write-Host "Local MSSQL listener failover evidence passed."
+} catch {
+    foreach ($logFile in @("listener-test-build.log", "listener-failover-test.log")) {
+        $logPath = Join-Path $reportsDir $logFile
+        if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Tail 80 | Out-Host }
+    }
+    foreach ($container in @($startedContainers)) {
+        & docker logs --tail 120 $container *> (Join-Path $reportsDir "$container.log")
+    }
+    if (Test-Path -LiteralPath $workDir) { Write-Summary -Status "failed" }
+    throw
 } finally {
     if (-not $KeepContainers) {
         foreach ($container in @($startedContainers)) {
