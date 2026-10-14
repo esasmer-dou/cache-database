@@ -1,12 +1,18 @@
 # Production GA Release Runbook
 
-Bu akış CacheDB'nin zorunlu kararlı sürüm sürecidir.
+Bu akış CacheDB'nin tam Production GA onayı için zorunlu sürüm sürecidir.
 framework GA demek, kütüphane release'inin net sınırlar, yeşil CI kanıtı ve
 belgelenmiş bir dağıtım kanalıyla güvenle tüketilebilir olması demektir. Bu,
 her kullanıcının kendi production topolojisinin otomatik olarak sertifikalandığı
 anlamına gelmez.
 
 ## Taviz Verilmeyecek Kural
+
+Numaralandırılmış framework paketleri, tam GA onayı iddia edilmeden dağıtılabilir.
+Bu dağıtım kontrolü için `check-ga-release-readiness.ps1 -EvidenceScope FrameworkPackage`
+kullanılır; eksik topoloji kanıtı sürüm notlarında açıkça belirtilir.
+Varsayılan `ProductionGA` kapsamı daha sıkıdır: aynı commit üzerindeki fiziksel
+Data Guard workflow kanıtı zorunludur. Paket kontrolü bu GA şartını kaldırmaz.
 
 Aşağıdakilerden biri eksikse framework GA release yayınlama veya duyurma:
 

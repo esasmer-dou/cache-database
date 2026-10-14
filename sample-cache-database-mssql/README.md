@@ -24,6 +24,8 @@ miss.
 
 The sample POM aligns the BOM, provider starter, annotation processor and doctor
 plugin at `0.13.0`. Rebuild the sample to regenerate its bindings.
+The POM also sets `jedis.version=5.2.0`; the Spring Boot parent would otherwise
+select an older driver that lacks the required pipeline API.
 
 - Existing REST, archive, projection and warm routes retain their explicit behavior.
 - `hotEntityLimit=0` now disables entity admission; use `-1` only for a deliberate unbounded count policy. The default remains 1,000.
@@ -130,6 +132,7 @@ sources as part of the sample build.
 <properties>
     <java.version>21</java.version>
 <cachedb.version>0.13.0</cachedb.version>
+<jedis.version>5.2.0</jedis.version>
 </properties>
 
 <dependencyManagement>

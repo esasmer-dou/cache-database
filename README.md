@@ -4,7 +4,7 @@ English | [Türkçe](tr/README.md)
 
 [![Latest release](https://img.shields.io/github/v/release/esasmer-dou/cache-database?display_name=tag&sort=semver)](https://github.com/esasmer-dou/cache-database/releases/latest)
 [![Production evidence](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
-[![GA readiness](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml/badge.svg)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml)
+[![Release checks](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml/badge.svg)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0b7285.svg)](LICENSE)
 
 [Why CacheDB](#product-positioning-what-cachedb-is-and-is-not) |
@@ -166,6 +166,7 @@ the GitHub Release bundle.
 ```xml
 <properties>
     <cachedb.version>0.13.0</cachedb.version>
+    <jedis.version>5.2.0</jedis.version>
 </properties>
 
 <dependencyManagement>

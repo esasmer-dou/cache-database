@@ -24,6 +24,8 @@ bulunmaması arka planda gizli bir SQL Server sorgusu başlatmaz.
 
 Örnek POM; BOM, sağlayıcı starter'ı, annotation processor ve doctor plugin'ini
 `0.13.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
+POM ayrıca `jedis.version=5.2.0` ayarını içerir. Bu ayar olmadan Spring Boot parent,
+gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 
 - Mevcut REST, arşiv, projection ve ön yükleme yollarının açık davranışı korunur.
 - `hotEntityLimit=0` artık entity kabulünü kapatır. `-1` değerini yalnızca bilinçli bir sınırsız kayıt politikası için kullanın. Varsayılan 1.000 olarak korunur.
@@ -131,6 +133,7 @@ framework kaynak kodunu kendi içinde derlemez.
 <properties>
     <java.version>21</java.version>
 <cachedb.version>0.13.0</cachedb.version>
+<jedis.version>5.2.0</jedis.version>
 </properties>
 
 <dependencyManagement>

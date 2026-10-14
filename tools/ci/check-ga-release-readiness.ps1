@@ -6,6 +6,8 @@ param(
     [string]$CoverageCsvPath = "docs/ga-migration-coverage.csv",
     [string]$SummaryPath = "target/ga-release-readiness-summary.md",
     [string]$PublicMavenBaseUrl = "https://esasmer-dou.github.io/cache-database/maven2",
+    [ValidateSet("FrameworkPackage", "ProductionGA")]
+    [string]$EvidenceScope = "ProductionGA",
     [switch]$CheckGitHubSecrets,
     [switch]$RequireManagedStagingHa,
     [switch]$RequireApplicationMigrationCoverage,
@@ -17,6 +19,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$readinessLabel = if ($EvidenceScope -eq "ProductionGA") { "Production GA" } else { "Framework Package" }
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $summaryFullPath = if ([System.IO.Path]::IsPathRooted($SummaryPath)) {
@@ -161,7 +164,7 @@ if (-not [string]::IsNullOrWhiteSpace($releaseTagValue)) {
     }
 }
 
-Invoke-ReadinessCheck -Name "Stable GA version and tag" -Check {
+Invoke-ReadinessCheck -Name "Stable release version and tag" -Check {
     if ([string]::IsNullOrWhiteSpace($releaseTagValue)) {
         throw "ReleaseTag is required for GA readiness."
     }
@@ -277,7 +280,7 @@ Invoke-ReadinessCheck -Name "Local Docker HA preflight tooling" -Check {
 }
 
 if ($SkipRemoteWorkflowChecks) {
-    Add-Check -Name "Remote workflow evidence" -Status "SKIP" -Details "Skipped by caller."
+    Add-Check -Name "Remote workflow evidence" -Status "FAIL" -Details "Required workflow and distribution checks cannot be skipped for release approval."
 } else {
     $targetSha = $releaseCommitSha
 
@@ -294,6 +297,15 @@ if ($SkipRemoteWorkflowChecks) {
     Invoke-ReadinessCheck -Name "Snapshot Provider Evidence workflow" -Check {
         $run = Get-LatestSuccessfulRun -WorkflowName "Snapshot Provider Evidence" -HeadBranch $targetRefValue -HeadSha $targetSha
         "Run $($run.databaseId): $($run.url)"
+    }
+
+    if ($EvidenceScope -eq "ProductionGA") {
+        Invoke-ReadinessCheck -Name "Oracle Data Guard Evidence workflow" -Check {
+            $run = Get-LatestSuccessfulRun -WorkflowName "Oracle Data Guard Evidence" -HeadSha $targetSha
+            "Run $($run.databaseId): $($run.url)"
+        }
+    } else {
+        Add-Check -Name "Oracle Data Guard Evidence workflow" -Status "SKIP" -Details "Framework package distribution only. Physical Data Guard evidence is not certified and full Production GA is not approved by this check."
     }
 
     Invoke-ReadinessCheck -Name "Anonymous public Maven repository" -Check {
@@ -336,11 +348,15 @@ if (-not (Test-Path $summaryDirectory)) {
 
 $failedChecks = @($checks | Where-Object { $_.Status -eq "FAIL" })
 $summaryLines = New-Object System.Collections.Generic.List[string]
-$summaryLines.Add("# Production GA Release Readiness")
+$summaryLines.Add("# $readinessLabel Release Readiness")
 $summaryLines.Add("")
 $summaryLines.Add("- Repository: ``$Repository``")
 $summaryLines.Add("- Target ref: ``$targetRefValue``")
 $summaryLines.Add("- Release tag: ``$releaseTagValue``")
+$summaryLines.Add("- Evidence scope: ``$EvidenceScope``")
+if ($EvidenceScope -eq "FrameworkPackage") {
+    $summaryLines.Add("- Full Production GA: ``NOT_APPROVED_BY_THIS_CHECK``; requires all GA gates, including exact-commit physical Data Guard evidence.")
+}
 $summaryLines.Add("- Result: ``$(if ($failedChecks.Count -eq 0) { "PASS" } else { "FAIL" })``")
 $summaryLines.Add("")
 $summaryLines.Add("| Gate | Status | Details |")
@@ -353,14 +369,14 @@ if ($failedChecks.Count -gt 0) {
     $summaryLines.Add("")
     $summaryLines.Add("## Blocking Decision")
     $summaryLines.Add("")
-    $summaryLines.Add("Do not publish or announce a production GA release until every gate above is PASS.")
+    $summaryLines.Add("Do not publish or announce a $readinessLabel release until every mandatory gate above is PASS.")
 }
 
 Set-Content -Path $summaryFullPath -Value ($summaryLines -join [Environment]::NewLine)
 
-Write-Host "GA release readiness summary: $summaryFullPath"
+Write-Host "$readinessLabel release readiness summary: $summaryFullPath"
 if ($failedChecks.Count -gt 0) {
-    throw "Production GA release readiness failed. See $summaryFullPath"
+    throw "$readinessLabel release readiness failed. See $summaryFullPath"
 }
 
-Write-Host "Production GA release readiness passed."
+Write-Host "$readinessLabel release readiness passed."

@@ -11,6 +11,14 @@ on:
         description: Branch or ref that must have green production evidence
         required: true
         default: main
+      evidenceScope:
+        description: Package distribution or full GA approval (requires Data Guard evidence)
+        required: true
+        default: ProductionGA
+        type: choice
+        options:
+          - ProductionGA
+          - FrameworkPackage
       migrationCoverageCsvPath:
         description: Committed CSV path for full production route coverage
         required: true
@@ -45,22 +53,35 @@ jobs:
       - name: Resolve readiness inputs
         id: inputs
         shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TARGET: ${{ github.event.release.target_commitish }}
+          INPUT_TAG: ${{ inputs.releaseTag }}
+          INPUT_TARGET: ${{ inputs.targetRef }}
+          INPUT_COVERAGE: ${{ inputs.migrationCoverageCsvPath }}
+          INPUT_SCOPE: ${{ inputs.evidenceScope }}
+          INPUT_MANAGED_HA: ${{ inputs.requireManagedStagingHa }}
+          INPUT_COVERAGE_REQUIRED: ${{ inputs.requireApplicationMigrationCoverage }}
+          INPUT_CENTRAL: ${{ inputs.requireMavenCentralPublish }}
         run: |
-          if ("${{ github.event_name }}" -eq "release") {
-            "releaseTag=${{ github.event.release.tag_name }}" >> $env:GITHUB_OUTPUT
-            if ([string]::IsNullOrWhiteSpace("${{ github.event.release.target_commitish }}")) {
+          if ($env:EVENT_NAME -eq "release") {
+            "releaseTag=$env:RELEASE_TAG" >> $env:GITHUB_OUTPUT
+            if ([string]::IsNullOrWhiteSpace($env:RELEASE_TARGET)) {
               "targetRef=main" >> $env:GITHUB_OUTPUT
             } else {
-              "targetRef=${{ github.event.release.target_commitish }}" >> $env:GITHUB_OUTPUT
+              "targetRef=$env:RELEASE_TARGET" >> $env:GITHUB_OUTPUT
             }
             "coverageCsv=docs/ga-migration-coverage.csv" >> $env:GITHUB_OUTPUT
+            "evidenceScope=FrameworkPackage" >> $env:GITHUB_OUTPUT
           } else {
-            "releaseTag=${{ inputs.releaseTag }}" >> $env:GITHUB_OUTPUT
-            "targetRef=${{ inputs.targetRef }}" >> $env:GITHUB_OUTPUT
-            "coverageCsv=${{ inputs.migrationCoverageCsvPath }}" >> $env:GITHUB_OUTPUT
-            "requireManagedStagingHa=${{ inputs.requireManagedStagingHa }}" >> $env:GITHUB_OUTPUT
-            "requireApplicationMigrationCoverage=${{ inputs.requireApplicationMigrationCoverage }}" >> $env:GITHUB_OUTPUT
-            "requireMavenCentralPublish=${{ inputs.requireMavenCentralPublish }}" >> $env:GITHUB_OUTPUT
+            "releaseTag=$env:INPUT_TAG" >> $env:GITHUB_OUTPUT
+            "targetRef=$env:INPUT_TARGET" >> $env:GITHUB_OUTPUT
+            "coverageCsv=$env:INPUT_COVERAGE" >> $env:GITHUB_OUTPUT
+            "evidenceScope=$env:INPUT_SCOPE" >> $env:GITHUB_OUTPUT
+            "requireManagedStagingHa=$env:INPUT_MANAGED_HA" >> $env:GITHUB_OUTPUT
+            "requireApplicationMigrationCoverage=$env:INPUT_COVERAGE_REQUIRED" >> $env:GITHUB_OUTPUT
+            "requireMavenCentralPublish=$env:INPUT_CENTRAL" >> $env:GITHUB_OUTPUT
           }
 
       - name: Checkout
@@ -73,6 +94,14 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET_REF: ${{ steps.inputs.outputs.targetRef }}
+          RELEASE_TAG: ${{ steps.inputs.outputs.releaseTag }}
+          COVERAGE_CSV: ${{ steps.inputs.outputs.coverageCsv }}
+          EVIDENCE_SCOPE: ${{ steps.inputs.outputs.evidenceScope }}
+          REQUIRE_MANAGED_HA: ${{ steps.inputs.outputs.requireManagedStagingHa }}
+          REQUIRE_COVERAGE: ${{ steps.inputs.outputs.requireApplicationMigrationCoverage }}
+          REQUIRE_CENTRAL: ${{ steps.inputs.outputs.requireMavenCentralPublish }}
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -86,19 +115,20 @@ jobs:
           STAGING_MSSQL_PASSWORD: ${{ secrets.STAGING_MSSQL_PASSWORD }}
         run: |
           $arguments = @{
-            Repository = "${{ github.repository }}"
-            TargetRef = "${{ steps.inputs.outputs.targetRef }}"
-            ReleaseTag = "${{ steps.inputs.outputs.releaseTag }}"
-            CoverageCsvPath = "${{ steps.inputs.outputs.coverageCsv }}"
+            Repository = $env:REPOSITORY
+            TargetRef = $env:TARGET_REF
+            ReleaseTag = $env:RELEASE_TAG
+            CoverageCsvPath = $env:COVERAGE_CSV
+            EvidenceScope = $env:EVIDENCE_SCOPE
             SummaryPath = "./target/ga-release-readiness-summary.md"
           }
-          if ("${{ steps.inputs.outputs.requireManagedStagingHa }}" -eq "true") {
+          if ($env:REQUIRE_MANAGED_HA -eq "true") {
             $arguments.RequireManagedStagingHa = $true
           }
-          if ("${{ steps.inputs.outputs.requireApplicationMigrationCoverage }}" -eq "true") {
+          if ($env:REQUIRE_COVERAGE -eq "true") {
             $arguments.RequireApplicationMigrationCoverage = $true
           }
-          if ("${{ steps.inputs.outputs.requireMavenCentralPublish }}" -eq "true") {
+          if ($env:REQUIRE_CENTRAL -eq "true") {
             $arguments.RequireMavenCentralPublish = $true
           }
           ./tools/ci/check-ga-release-readiness.ps1 @arguments

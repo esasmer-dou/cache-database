@@ -1,12 +1,18 @@
 # Production GA Release Runbook
 
-This runbook is the mandatory stable release flow.
+This runbook is the mandatory full Production GA release flow.
 CacheDB framework GA means the library release is safe to consume with clear
 boundaries, green CI evidence, and a documented distribution channel. It does
 not mean every consuming application's production topology has already been
 certified.
 
 ## Non-Negotiable Rule
+
+Numbered framework packages may be distributed without claiming full GA approval.
+Use `check-ga-release-readiness.ps1 -EvidenceScope FrameworkPackage` for that
+distribution check and disclose missing topology evidence in the release notes.
+The default `ProductionGA` scope is stricter: exact-commit physical Data Guard
+workflow evidence remains mandatory. A package check does not waive that GA gate.
 
 Do not publish or announce a framework GA release when any of these are still
 missing:

@@ -18,6 +18,7 @@ repository.
 ```xml
 <properties>
     <cachedb.version>0.13.0</cachedb.version>
+    <jedis.version>5.2.0</jedis.version>
 </properties>
 
 <dependencyManagement>

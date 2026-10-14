@@ -16,14 +16,21 @@ decisions:
 
 | Decision | Owner | Required result |
 | --- | --- | --- |
-| Publish a stable CacheDB release | CacheDB maintainers | Every framework gate below passes on the exact immutable tag. |
+| Publish a numbered framework package | CacheDB maintainers | Correctness, provider, performance, documentation and distribution checks pass on the exact commit/tag; any missing topology evidence is disclosed. This is not full GA approval. |
+| Approve a Production GA release | CacheDB maintainers | Every framework gate below passes on the exact immutable tag, including physical Data Guard evidence. |
 | Send an application route to CacheDB | Consuming application team | `cachedb:certify` passes with that application's staging evidence. |
 | Claim a managed Redis or SQL HA topology | Consuming application/platform team | Failover is triggered and verified in the actual staging topology. |
 
 Passing the framework release gate never creates application-specific route,
 capacity, failover, canary, or rollback evidence.
 
-## Stable Framework Release Gates
+## Production GA Framework Gates
+
+`0.13.0` is a numbered framework package release. Its release notes explicitly
+disclose the unavailable new physical Data Guard run. A stable version number or
+a successful `FrameworkPackage` distribution check must not be presented as full
+GA approval. `ProductionGA` remains the default readiness scope and requires the
+exact-commit Data Guard workflow to pass; missing evidence fails that check.
 
 | Gate | Mandatory evidence |
 | --- | --- |
@@ -83,7 +90,7 @@ These are deployment responsibilities, not unfinished framework features:
 
 ## Go/No-Go Rule
 
-**GO for a framework release:** every stable framework release gate passes on
+**GO for a Production GA release:** every Production GA framework gate passes on
 the exact tag and all published artifacts resolve anonymously with matching
 checksums.
 

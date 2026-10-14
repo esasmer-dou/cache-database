@@ -16,14 +16,21 @@ Framework sürümü ile uygulamanın canlıya geçişi iki ayrı karardır:
 
 | Karar | Sorumlu | Gerekli sonuç |
 | --- | --- | --- |
-| Kararlı CacheDB sürümü yayımlamak | CacheDB bakım ekibi | Aşağıdaki framework kontrollerinin tamamı aynı değişmez etiket üzerinde geçmelidir. |
+| Numaralandırılmış framework paketi yayımlamak | CacheDB bakım ekibi | Doğruluk, sağlayıcı, performans, doküman ve dağıtım kontrolleri aynı commit/etiket üzerinde geçer; eksik topoloji kanıtı açıkça belirtilir. Bu sonuç tam GA onayı değildir. |
+| Production GA sürümünü onaylamak | CacheDB bakım ekibi | Fiziksel Data Guard kanıtı dahil, aşağıdaki framework kontrollerinin tamamı aynı değişmez etiket üzerinde geçmelidir. |
 | Bir uygulama rotasını CacheDB'ye geçirmek | Uygulama ekibi | Uygulamanın staging kanıtlarıyla `cachedb:certify` başarılı olmalıdır. |
 | Yönetilen Redis veya SQL HA topolojisi için uygunluk iddiasında bulunmak | Uygulama ve platform ekipleri | Gerçek staging topolojisinde failover tetiklenmeli ve sonuç doğrulanmalıdır. |
 
 Framework kontrollerinin geçmesi, herhangi bir uygulama için kendiliğinden rota,
 kapasite, failover, canary veya geri dönüş kanıtı oluşturmaz.
 
-## Kararlı Framework Sürüm Kontrolleri
+## Production GA Framework Kontrolleri
+
+`0.13.0`, numaralandırılmış bir framework paket sürümüdür. Yeni fiziksel Data Guard
+testinin çalıştırılamadığı, sürüm notlarında açıkça belirtilir. Kararlı sürüm numarası
+veya başarılı `FrameworkPackage` dağıtım kontrolü, tam GA onayı olarak sunulamaz.
+Varsayılan hazırlık kapsamı `ProductionGA` olarak kalır; aynı commit üzerindeki
+Data Guard workflow'u başarılı değilse bu kontrol başarısız olur.
 
 | Kontrol | Zorunlu kanıt |
 | --- | --- |
@@ -85,7 +92,7 @@ Aşağıdakiler eksik framework özelliği değil, uygulamanın altyapı sorumlu
 
 ## Yayına Çıkma Kararı
 
-**Framework sürümü için GO:** bütün framework kontrolleri aynı etiket üzerinde
+**Production GA sürümü için GO:** bütün framework kontrolleri aynı etiket üzerinde
 geçer; yayımlanan artifact'ler anonim olarak indirilebilir ve checksum değerleri
 eşleşir.
 
