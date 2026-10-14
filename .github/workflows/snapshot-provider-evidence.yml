@@ -20,6 +20,42 @@ permissions:
   contents: read
 
 jobs:
+  redis-cluster-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Start isolated Redis and three primary shards
+        run: |
+          docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml up -d redis cluster1 cluster2 cluster3
+          for attempt in $(seq 1 30); do
+            docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml exec -T cluster1 redis-cli -p 7001 ping && break
+            sleep 1
+          done
+          docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml exec -T cluster1 redis-cli -p 7001 --cluster create cluster1:7001 cluster2:7002 cluster3:7003 --cluster-replicas 0 --cluster-yes
+      - name: Verify Cluster routing, publication and envelope retry
+        run: >-
+          mvn -B -ntp -pl cachedb-spring-boot-starter -am test
+          "-Dtest=RedisClusterOperationsTest,RedisAtomicWriteBatchTest,SnapshotIndexDeltaRedisTest"
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Dcachedb.snapshot.redis=true -Dcachedb.redis.cluster=true
+      - name: Upload Cluster results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: redis-cluster-evidence
+          path: |
+            cachedb-storage-redis/target/surefire-reports/
+            cachedb-spring-boot-starter/target/surefire-reports/
+          if-no-files-found: error
+      - name: Stop isolated services
+        if: always()
+        run: docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml down
   snapshot-provider-evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -72,7 +108,7 @@ jobs:
           MAVEN_OPTS: -Xmx512m
         run: >-
           mvn -B -ntp -pl cachedb-spring-boot-starter -am test
-          "-Dtest=Snapshot*Test,CacheScheduledWarmCoordinatorTest"
+          "-Dtest=Snapshot*Test,FrameworkV013ProvidersTest,RedisAtomicWriteBatchTest,CacheScheduledWarmCoordinatorTest,JdbcPooledSequenceIdGeneratorTest,JdbcOutboxPartitionTest"
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dcachedb.snapshot.providers=true -Dcachedb.snapshot.redis=true
           -Dcachedb.test.redis.uri=redis://127.0.0.1:16383 -Dcachedb.test.redis.required=true

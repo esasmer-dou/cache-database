@@ -11,7 +11,54 @@ public record SnapshotPlan<R, V>(
         Function<R, String> id,
         List<SnapshotSource<?>> sources,
         Class<V> valueType,
-        Function<SnapshotRows, Function<R, Iterable<V>>> projection) {
+        Function<SnapshotRows, Function<R, Iterable<V>>> projection,
+        SnapshotIndexSpec<R> indexSpec,
+        SnapshotRootScope rootScope,
+        boolean contentReuse) {
+    public SnapshotPlan(
+            String name,
+            SnapshotSource<R> roots,
+            Function<R, String> id,
+            List<SnapshotSource<?>> sources,
+            Class<V> valueType,
+            Function<SnapshotRows, Function<R, Iterable<V>>> projection) {
+        this(name, roots, id, sources, valueType, projection, null, null, false);
+    }
+
+    public SnapshotPlan<R, V> indexed(SnapshotIndexSpec<R> spec) {
+        return new SnapshotPlan<>(
+                name,
+                roots,
+                id,
+                sources,
+                valueType,
+                projection,
+                Objects.requireNonNull(spec),
+                rootScope,
+                contentReuse);
+    }
+
+    public SnapshotPlan<R, V> scoped(SnapshotRootScope scope) {
+        var plan =
+                new SnapshotPlan<>(
+                        name,
+                        roots,
+                        id,
+                        sources,
+                        valueType,
+                        projection,
+                        indexSpec,
+                        Objects.requireNonNull(scope),
+                        contentReuse);
+        scope.validate(plan);
+        return plan;
+    }
+
+    public SnapshotPlan<R, V> withContentReuse() {
+        return new SnapshotPlan<>(
+                name, roots, id, sources, valueType, projection, indexSpec, rootScope, true);
+    }
+
     /** Keeps the SQL read set explicit; declarations are never discovered by reflection. */
     public static List<SnapshotSource<?>> inputs(SnapshotInput... inputs) {
         List<SnapshotSource<?>> result = new ArrayList<>();
@@ -32,7 +79,10 @@ public record SnapshotPlan<R, V>(
                 rows -> {
                     Function<R, Iterable<V>> base = projection.apply(rows);
                     return root -> mapping.apply(root, base.apply(root));
-                });
+                },
+                indexSpec,
+                rootScope,
+                contentReuse);
     }
 
     public SnapshotPlan {

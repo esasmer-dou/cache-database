@@ -9,12 +9,24 @@ import javax.sql.DataSource;
 final class SnapshotJdbcReader {
     static SnapshotRows read(
             DataSource source, SnapshotPlan<?, ?> plan, SnapshotSettings settings, Runnable check) {
+        return read(source, plan, settings, check, List.of());
+    }
+
+    static SnapshotRows read(
+            DataSource source,
+            SnapshotPlan<?, ?> plan,
+            SnapshotSettings settings,
+            Runnable check,
+            List<String> rootIds) {
         Map<SnapshotSource<?>, List<?>> tables = new LinkedHashMap<>();
         Budget budget = new Budget(settings);
         try (Connection connection = source.getConnection()) {
             try (SnapshotTransaction transaction = SnapshotTransaction.begin(connection)) {
-                for (var table : plan.sources())
-                    tables.put(table, read(connection, table, settings, budget, check));
+                for (var table : plan.sources()) {
+                    SnapshotSource<?> selected =
+                            rootIds.isEmpty() ? table : plan.rootScope().narrow(table, rootIds);
+                    tables.put(table, read(connection, selected, settings, budget, check));
+                }
             }
             return new SnapshotRows(tables);
         } catch (SQLException failure) {
@@ -34,6 +46,9 @@ final class SnapshotJdbcReader {
         check.run();
         String product = connection.getMetaData().getDatabaseProductName();
         var command = table.command(product);
+        if ("Microsoft SQL Server".equals(product) && command.parameters().size() > 2100)
+            throw new IllegalArgumentException(
+                    "SQL Server snapshot parameter limit exceeded (2100)");
         try (PreparedStatement statement = connection.prepareStatement(command.sql())) {
             for (int i = 0; i < command.parameters().size(); i++) {
                 Object value = command.parameters().get(i);
@@ -70,7 +85,16 @@ final class SnapshotJdbcReader {
                                 "Snapshot source row budget exceeded: " + table.name());
                     Map<String, Object> row = new LinkedHashMap<>();
                     for (int i = 0; i < columns.length; i++) {
-                        Object value = result.getObject(i + 1);
+                        Object value =
+                                switch (metadata.getColumnType(i + 1)) {
+                                    // JDBC and vendor type codes use the same standard Java-time
+                                    // decoder.
+                                    case Types.TIMESTAMP_WITH_TIMEZONE, -101, -102, -155 ->
+                                            result.getObject(i + 1, java.time.OffsetDateTime.class);
+                                    case Types.TIMESTAMP -> result.getTimestamp(i + 1);
+                                    case Types.TIME -> result.getTime(i + 1);
+                                    default -> result.getObject(i + 1);
+                                };
                         if (value instanceof Blob
                                 || value instanceof Clob
                                 || value instanceof SQLXML

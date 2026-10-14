@@ -1,12 +1,16 @@
 package com.reactor.cachedb.spring.boot;
 
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
 import com.reactor.cachedb.redis.RedisLeaderLease;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheHotSetReconciliationResult;
 import com.reactor.cachedb.starter.CacheWarmPlan;
 import com.reactor.cachedb.starter.CacheWarmResult;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import redis.clients.jedis.JedisPooled;
 
 import java.time.Clock;
@@ -19,16 +23,17 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.Supplier;
 
 final class CacheScheduledWarmCoordinator implements AutoCloseable {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(CacheScheduledWarmCoordinator.class);
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(CacheScheduledWarmCoordinator.class);
     private static final long CONCURRENT_TRIGGER_TOLERANCE_MILLIS = 1_000L;
 
     private final CacheDatabase cacheDatabase;
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final CacheScheduledWarmRegistry registry;
     private final String instanceId;
     private final String keyPrefix;
@@ -42,8 +47,23 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
             CacheScheduledWarmRegistry registry,
             String lockKeySegment,
             int heartbeatThreads,
-            long shutdownAwaitMillis
-    ) {
+            long shutdownAwaitMillis) {
+        this(
+                cacheDatabase,
+                JedisPooledOperations.of(jedis),
+                registry,
+                lockKeySegment,
+                heartbeatThreads,
+                shutdownAwaitMillis);
+    }
+
+    CacheScheduledWarmCoordinator(
+            CacheDatabase cacheDatabase,
+            RedisClientOperations jedis,
+            CacheScheduledWarmRegistry registry,
+            String lockKeySegment,
+            int heartbeatThreads,
+            long shutdownAwaitMillis) {
         this(
                 cacheDatabase,
                 jedis,
@@ -51,8 +71,7 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
                 lockKeySegment,
                 heartbeatThreads,
                 shutdownAwaitMillis,
-                Clock.systemUTC()
-        );
+                Clock.systemUTC());
     }
 
     CacheScheduledWarmCoordinator(
@@ -62,26 +81,46 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
             String lockKeySegment,
             int heartbeatThreads,
             long shutdownAwaitMillis,
-            Clock clock
-    ) {
+            Clock clock) {
+        this(
+                cacheDatabase,
+                JedisPooledOperations.of(jedis),
+                registry,
+                lockKeySegment,
+                heartbeatThreads,
+                shutdownAwaitMillis,
+                clock);
+    }
+
+    CacheScheduledWarmCoordinator(
+            CacheDatabase cacheDatabase,
+            RedisClientOperations jedis,
+            CacheScheduledWarmRegistry registry,
+            String lockKeySegment,
+            int heartbeatThreads,
+            long shutdownAwaitMillis,
+            Clock clock) {
         this.cacheDatabase = Objects.requireNonNull(cacheDatabase, "cacheDatabase");
         this.jedis = Objects.requireNonNull(jedis, "jedis");
         this.registry = Objects.requireNonNull(registry, "registry");
         this.instanceId = cacheDatabase.instanceId();
-        String segment = normalizeKeySegment(lockKeySegment == null || lockKeySegment.isBlank()
-                ? "coordination:scheduled-warm"
-                : lockKeySegment);
+        String segment =
+                normalizeKeySegment(
+                        lockKeySegment == null || lockKeySegment.isBlank()
+                                ? "coordination:scheduled-warm"
+                                : lockKeySegment);
         this.keyPrefix = cacheDatabase.config().keyspace().keyPrefix() + ":" + segment;
         this.shutdownAwaitMillis = Math.max(0L, shutdownAwaitMillis);
         this.clock = Objects.requireNonNull(clock, "clock");
-        this.heartbeatExecutor = Executors.newScheduledThreadPool(
-                Math.max(1, heartbeatThreads),
-                runnable -> {
-                    Thread thread = new Thread(runnable, "cachedb-scheduled-warm-heartbeat");
-                    thread.setDaemon(true);
-                    return thread;
-                }
-        );
+        this.heartbeatExecutor =
+                Executors.newScheduledThreadPool(
+                        Math.max(1, heartbeatThreads),
+                        runnable -> {
+                            Thread thread =
+                                    new Thread(runnable, "cachedb-scheduled-warm-heartbeat");
+                            thread.setDaemon(true);
+                            return thread;
+                        });
     }
 
     void register(String jobName) {
@@ -92,44 +131,44 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
         Instant triggerStartedAt = clock.instant();
         String jobPrefix = jobPrefix(definition.jobName());
         long lastCompletedAt = readEpochMillis(jobPrefix + ":completed-at");
-        if (alreadyCompletedForCycle(lastCompletedAt, triggerStartedAt, definition.minimumInterval())) {
+        if (alreadyCompletedForCycle(
+                lastCompletedAt, triggerStartedAt, definition.minimumInterval())) {
             registry.skipped(
                     definition.jobName(),
                     instanceId,
                     CacheScheduledWarmState.SKIPPED_NOT_DUE,
-                    "Another instance completed this cluster-wide warm interval"
-            );
+                    "Another instance completed this cluster-wide warm interval");
             return;
         }
 
-        RedisLeaderLease lease = RedisLeaderLease.create(
-                jedis,
-                jobPrefix + ":lock",
-                instanceId + ":" + UUID.randomUUID(),
-                definition.lockAtMostFor().toMillis(),
-                renewalInterval(definition.lockAtMostFor()).toMillis()
-        );
-        boolean acquired = awaitLease(lease, definition.lockWaitTimeout(), definition.lockRetryInterval());
+        RedisLeaderLease lease =
+                RedisLeaderLease.create(
+                        jedis,
+                        jobPrefix + ":lock",
+                        instanceId + ":" + UUID.randomUUID(),
+                        definition.lockAtMostFor().toMillis(),
+                        renewalInterval(definition.lockAtMostFor()).toMillis());
+        boolean acquired =
+                awaitLease(lease, definition.lockWaitTimeout(), definition.lockRetryInterval());
         if (!acquired) {
             lease.close();
             registry.skipped(
                     definition.jobName(),
                     instanceId,
                     CacheScheduledWarmState.SKIPPED_LOCK_TIMEOUT,
-                    "Another instance still owns the warm lease after the bounded wait timeout"
-            );
+                    "Another instance still owns the warm lease after the bounded wait timeout");
             return;
         }
 
         try (lease) {
             lastCompletedAt = readEpochMillis(jobPrefix + ":completed-at");
-            if (alreadyCompletedForCycle(lastCompletedAt, triggerStartedAt, definition.minimumInterval())) {
+            if (alreadyCompletedForCycle(
+                    lastCompletedAt, triggerStartedAt, definition.minimumInterval())) {
                 registry.skipped(
                         definition.jobName(),
                         instanceId,
                         CacheScheduledWarmState.SKIPPED_NOT_DUE,
-                        "The lease owner completed while this instance was waiting"
-                );
+                        "The lease owner completed while this instance was waiting");
                 return;
             }
             executeAsLeaseOwner(definition, planSupplier, jobPrefix, lease);
@@ -140,48 +179,49 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
             CacheScheduledWarmDefinition definition,
             Supplier<CacheWarmPlan> planSupplier,
             String jobPrefix,
-            RedisLeaderLease lease
-    ) {
+            RedisLeaderLease lease) {
         Instant startedAt = clock.instant();
         registry.running(definition.jobName(), instanceId, startedAt);
         AtomicBoolean leaseLost = new AtomicBoolean(false);
         Duration renewalInterval = renewalInterval(definition.lockAtMostFor());
-        ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleAtFixedRate(
-                () -> {
-                    if (!lease.tryAcquireOrRenewLeadership()) {
-                        leaseLost.set(true);
-                    }
-                },
-                renewalInterval.toMillis(),
-                renewalInterval.toMillis(),
-                TimeUnit.MILLISECONDS
-        );
+        ScheduledFuture<?> heartbeat =
+                heartbeatExecutor.scheduleAtFixedRate(
+                        () -> {
+                            if (!lease.tryAcquireOrRenewLeadership()) {
+                                leaseLost.set(true);
+                            }
+                        },
+                        renewalInterval.toMillis(),
+                        renewalInterval.toMillis(),
+                        TimeUnit.MILLISECONDS);
 
         try {
-            CacheWarmPlan plan = Objects.requireNonNull(
-                    planSupplier.get(),
-                    "@CacheScheduledWarm method returned null for " + definition.jobName()
-            );
+            CacheWarmPlan plan =
+                    Objects.requireNonNull(
+                            planSupplier.get(),
+                            "@CacheScheduledWarm method returned null for " + definition.jobName());
             verifyStableEntity(jobPrefix, plan.entityName());
             CacheWarmResult warmResult = executeWarm(definition.mode(), plan);
-            CacheHotSetReconciliationResult reconciliation = definition.reconcileHotSet()
-                    ? reconcile(definition, plan, jobPrefix)
-                    : null;
+            CacheHotSetReconciliationResult reconciliation =
+                    definition.reconcileHotSet() ? reconcile(definition, plan, jobPrefix) : null;
             if (leaseLost.get() || !lease.tryAcquireOrRenewLeadership()) {
-                throw new LeaseLostException("Redis warm lease was lost before completion was committed");
+                throw new LeaseLostException(
+                        "Redis warm lease was lost before completion was committed");
             }
             Instant finishedAt = clock.instant();
-            jedis.set(jobPrefix + ":completed-at", String.valueOf(finishedAt.toEpochMilli()));
+            jedis.commands()
+                    .set(jobPrefix + ":completed-at", String.valueOf(finishedAt.toEpochMilli()));
             registry.completed(
                     definition.jobName(),
                     instanceId,
                     startedAt,
                     finishedAt,
                     warmResult,
-                    reconciliation
-            );
+                    reconciliation);
             LOGGER.info(
-                    "CacheDB scheduled warm completed job={} entity={} loaded={} submitted={} inspected={} evicted={} missing={} invalid={} fullCycle={} durationMs={}",
+                    "CacheDB scheduled warm completed job={} entity={} loaded={} submitted={}"
+                            + " inspected={} evicted={} missing={} invalid={} fullCycle={}"
+                            + " durationMs={}",
                     definition.jobName(),
                     plan.entityName(),
                     warmResult.loadedRows(),
@@ -191,12 +231,12 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
                     reconciliation == null ? 0 : reconciliation.missingRows(),
                     reconciliation == null ? 0 : reconciliation.invalidRows(),
                     reconciliation != null && reconciliation.fullCycleCompleted(),
-                    Math.max(0L, finishedAt.toEpochMilli() - startedAt.toEpochMilli())
-            );
+                    Math.max(0L, finishedAt.toEpochMilli() - startedAt.toEpochMilli()));
         } catch (RuntimeException failure) {
-            CacheScheduledWarmState state = failure instanceof LeaseLostException
-                    ? CacheScheduledWarmState.LEASE_LOST
-                    : CacheScheduledWarmState.FAILED;
+            CacheScheduledWarmState state =
+                    failure instanceof LeaseLostException
+                            ? CacheScheduledWarmState.LEASE_LOST
+                            : CacheScheduledWarmState.FAILED;
             registry.failed(definition.jobName(), instanceId, startedAt, state, failure);
             LOGGER.error("CacheDB scheduled warm failed job={}", definition.jobName(), failure);
         } finally {
@@ -213,43 +253,42 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
     }
 
     private CacheHotSetReconciliationResult reconcile(
-            CacheScheduledWarmDefinition definition,
-            CacheWarmPlan plan,
-            String jobPrefix
-    ) {
+            CacheScheduledWarmDefinition definition, CacheWarmPlan plan, String jobPrefix) {
         if (definition.mode() != CacheScheduledWarmMode.ENTITY_AND_PROJECTIONS) {
             throw new IllegalStateException(
-                    "Hot-set reconciliation requires ENTITY_AND_PROJECTIONS mode for " + definition.jobName()
-            );
+                    "Hot-set reconciliation requires ENTITY_AND_PROJECTIONS mode for "
+                            + definition.jobName());
         }
         String cursorKey = jobPrefix + ":reconcile-cursor";
-        String cursor = jedis.get(cursorKey);
-        CacheHotSetReconciliationResult result = cacheDatabase.reconcileHotSet(
-                plan.entityName(),
-                cursor,
-                definition.reconcileMaxRowsPerRun(),
-                definition.reconcileScanCount()
-        );
-        jedis.set(cursorKey, result.nextCursor());
+        String cursor = jedis.commands().get(cursorKey);
+        CacheHotSetReconciliationResult result =
+                cacheDatabase.reconcileHotSet(
+                        plan.entityName(),
+                        cursor,
+                        definition.reconcileMaxRowsPerRun(),
+                        definition.reconcileScanCount());
+        jedis.commands().set(cursorKey, result.nextCursor());
         return result;
     }
 
     private void verifyStableEntity(String jobPrefix, String entityName) {
         String entityKey = jobPrefix + ":entity";
-        Long inserted = jedis.setnx(entityKey, entityName);
+        Long inserted = jedis.commands().setnx(entityKey, entityName);
         if (inserted != null && inserted == 1L) {
             return;
         }
-        String registeredEntity = jedis.get(entityKey);
+        String registeredEntity = jedis.commands().get(entityKey);
         if (!entityName.equals(registeredEntity)) {
             throw new IllegalStateException(
-                    "Scheduled warm job name is already bound to entity " + registeredEntity
-                            + " and cannot be reused for " + entityName
-            );
+                    "Scheduled warm job name is already bound to entity "
+                            + registeredEntity
+                            + " and cannot be reused for "
+                            + entityName);
         }
     }
 
-    private boolean awaitLease(RedisLeaderLease lease, Duration waitTimeout, Duration retryInterval) {
+    private boolean awaitLease(
+            RedisLeaderLease lease, Duration waitTimeout, Duration retryInterval) {
         long timeoutNanos = Math.max(0L, waitTimeout.toNanos());
         long deadline = System.nanoTime() + timeoutNanos;
         do {
@@ -259,7 +298,8 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
             if (timeoutNanos == 0L || System.nanoTime() >= deadline) {
                 return false;
             }
-            LockSupport.parkNanos(Math.min(retryInterval.toNanos(), Math.max(1L, deadline - System.nanoTime())));
+            LockSupport.parkNanos(
+                    Math.min(retryInterval.toNanos(), Math.max(1L, deadline - System.nanoTime())));
             if (Thread.currentThread().isInterrupted()) {
                 Thread.currentThread().interrupt();
                 return false;
@@ -268,7 +308,8 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
         return false;
     }
 
-    private boolean alreadyCompletedForCycle(long lastCompletedAt, Instant triggerStartedAt, Duration minimumInterval) {
+    private boolean alreadyCompletedForCycle(
+            long lastCompletedAt, Instant triggerStartedAt, Duration minimumInterval) {
         if (lastCompletedAt <= 0L) {
             return false;
         }
@@ -277,18 +318,20 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
             return true;
         }
         long minimumIntervalMillis = Math.max(0L, minimumInterval.toMillis());
-        return minimumIntervalMillis > 0L && triggerEpochMillis - lastCompletedAt < minimumIntervalMillis;
+        return minimumIntervalMillis > 0L
+                && triggerEpochMillis - lastCompletedAt < minimumIntervalMillis;
     }
 
     private long readEpochMillis(String key) {
-        String value = jedis.get(key);
+        String value = jedis.commands().get(key);
         if (value == null || value.isBlank()) {
             return 0L;
         }
         try {
             return Long.parseLong(value);
         } catch (NumberFormatException failure) {
-            throw new IllegalStateException("Invalid scheduled warm timestamp at Redis key " + key, failure);
+            throw new IllegalStateException(
+                    "Invalid scheduled warm timestamp at Redis key " + key, failure);
         }
     }
 
@@ -305,7 +348,10 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
         StringBuilder builder = new StringBuilder(normalized.length());
         for (int index = 0; index < normalized.length(); index++) {
             char current = normalized.charAt(index);
-            if (Character.isLetterOrDigit(current) || current == '-' || current == '_' || current == '.') {
+            if (Character.isLetterOrDigit(current)
+                    || current == '-'
+                    || current == '_'
+                    || current == '.') {
                 builder.append(Character.toLowerCase(current));
             } else {
                 builder.append('-');

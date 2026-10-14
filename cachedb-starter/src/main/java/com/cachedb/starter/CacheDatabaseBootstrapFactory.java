@@ -2,19 +2,17 @@ package com.reactor.cachedb.starter;
 
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfigOverrides;
+
 import redis.clients.jedis.JedisPooled;
 
 import javax.sql.DataSource;
 
 public final class CacheDatabaseBootstrapFactory {
 
-    private CacheDatabaseBootstrapFactory() {
-    }
+    private CacheDatabaseBootstrapFactory() {}
 
     public static CacheDatabaseConfig applyGlobalAndScopedOverrides(
-            CacheDatabaseConfig baseConfig,
-            String scopedPrefix
-    ) {
+            CacheDatabaseConfig baseConfig, String scopedPrefix) {
         CacheDatabaseConfig global = CacheDatabaseConfigOverrides.applySystemProperties(baseConfig);
         return CacheDatabaseConfigOverrides.applySystemProperties(global, scopedPrefix);
     }
@@ -23,19 +21,14 @@ public final class CacheDatabaseBootstrapFactory {
         return RedisConnectionConfig.fromSystemProperties(prefix, defaultUri).createClient();
     }
 
-    /** @deprecated Use the selected provider starter and inject its DataSource. */
+    /**
+     * @deprecated Use the selected provider starter and inject its DataSource.
+     */
     @Deprecated(forRemoval = false)
     public static DataSource postgresDataSource(
-            String prefix,
-            String defaultJdbcUrl,
-            String defaultUsername,
-            String defaultPassword
-    ) {
+            String prefix, String defaultJdbcUrl, String defaultUsername, String defaultPassword) {
         return PostgresConnectionConfig.fromSystemProperties(
-                prefix,
-                defaultJdbcUrl,
-                defaultUsername,
-                defaultPassword
-        ).createDataSource();
+                        prefix, defaultJdbcUrl, defaultUsername, defaultPassword)
+                .createDataSource();
     }
 }

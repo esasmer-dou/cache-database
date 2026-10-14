@@ -21,53 +21,55 @@ import com.reactor.cachedb.core.page.EntityQueryLoader;
 import com.reactor.cachedb.core.page.NoOpEntityByIdLoader;
 import com.reactor.cachedb.core.page.NoOpEntityPageLoader;
 import com.reactor.cachedb.core.page.NoOpEntityQueryLoader;
-import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.projection.EntityProjection;
 import com.reactor.cachedb.core.projection.EntityProjectionBinding;
+import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.queue.AdminReportJobSnapshot;
-import com.reactor.cachedb.core.registry.DefaultEntityRegistry;
-import com.reactor.cachedb.core.registry.EntityBinding;
-import com.reactor.cachedb.core.registry.EntityRegistry;
-import com.reactor.cachedb.core.queue.LatencyMetricSnapshot;
-import com.reactor.cachedb.core.queue.StoragePerformanceSnapshot;
-import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.queue.DeadLetterManagement;
+import com.reactor.cachedb.core.queue.LatencyMetricSnapshot;
 import com.reactor.cachedb.core.queue.ProjectionRefreshFailureEntry;
 import com.reactor.cachedb.core.queue.ProjectionRefreshReplayResult;
 import com.reactor.cachedb.core.queue.ProjectionRefreshSnapshot;
 import com.reactor.cachedb.core.queue.RecoveryCleanupSnapshot;
+import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
+import com.reactor.cachedb.core.queue.StoragePerformanceSnapshot;
 import com.reactor.cachedb.core.queue.WriteBehindFlusher;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
+import com.reactor.cachedb.core.registry.DefaultEntityRegistry;
+import com.reactor.cachedb.core.registry.EntityBinding;
+import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import com.reactor.cachedb.core.relation.RelationBatchLoader;
 import com.reactor.cachedb.jdbc.JdbcEntitySourceLoader;
-import com.reactor.cachedb.jdbc.JdbcStorageProviders;
 import com.reactor.cachedb.jdbc.JdbcSourceSqlRepository;
+import com.reactor.cachedb.jdbc.JdbcStorageProviders;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.ProjectionRefreshDispatcher;
+import com.reactor.cachedb.redis.RedisCacheIdGenerator;
+import com.reactor.cachedb.redis.RedisClientOperations;
+import com.reactor.cachedb.redis.RedisDeadLetterManagement;
+import com.reactor.cachedb.redis.RedisDeadLetterRecoveryWorker;
+import com.reactor.cachedb.redis.RedisDurabilityTracker;
 import com.reactor.cachedb.redis.RedisFunctionArgsMapper;
 import com.reactor.cachedb.redis.RedisFunctionExecutor;
 import com.reactor.cachedb.redis.RedisFunctionLibrarySource;
 import com.reactor.cachedb.redis.RedisFunctionLoader;
-import com.reactor.cachedb.redis.RedisDeadLetterManagement;
-import com.reactor.cachedb.redis.RedisDurabilityTracker;
-import com.reactor.cachedb.redis.RedisDeadLetterRecoveryWorker;
-import com.reactor.cachedb.redis.RedisRecoveryCleanupWorker;
-import com.reactor.cachedb.redis.RedisRouteCoverageStore;
 import com.reactor.cachedb.redis.RedisHotSetManager;
 import com.reactor.cachedb.redis.RedisHotSetReconciliationResult;
 import com.reactor.cachedb.redis.RedisIndexMaintenance;
-import com.reactor.cachedb.redis.RedisCacheIdGenerator;
 import com.reactor.cachedb.redis.RedisKeyStrategy;
 import com.reactor.cachedb.redis.RedisLeaderLease;
+import com.reactor.cachedb.redis.RedisProducerGuard;
 import com.reactor.cachedb.redis.RedisProjectionRefreshQueue;
 import com.reactor.cachedb.redis.RedisProjectionRefreshWorker;
-import com.reactor.cachedb.redis.RedisProducerGuard;
+import com.reactor.cachedb.redis.RedisRecoveryCleanupWorker;
+import com.reactor.cachedb.redis.RedisRouteCoverageStore;
 import com.reactor.cachedb.redis.RedisWriteBehindQueue;
 import com.reactor.cachedb.redis.RedisWriteBehindWorker;
 import com.reactor.cachedb.redis.RedisWriteOperationMapper;
-import com.reactor.cachedb.redis.ProjectionRefreshDispatcher;
+
 import redis.clients.jedis.JedisPooled;
 
-import javax.sql.DataSource;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -77,12 +79,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
+import javax.sql.DataSource;
+
 public final class CacheDatabase implements CacheSession, AutoCloseable {
 
     private final CacheDatabaseConfig config;
     private final DataSource dataSource;
-    private final JedisPooled foregroundJedis;
-    private final JedisPooled backgroundJedis;
+    private final RedisClientOperations foregroundJedis;
+    private final RedisClientOperations backgroundJedis;
     private final java.util.concurrent.CopyOnWriteArrayList<AutoCloseable> ownedResources =
             new java.util.concurrent.CopyOnWriteArrayList<>();
     private final String instanceId;
@@ -119,14 +123,26 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     public static CacheDatabaseBootstrap bootstrap(JedisPooled jedis, DataSource dataSource) {
+        return bootstrap(JedisPooledOperations.of(jedis), dataSource);
+    }
+
+    public static CacheDatabaseBootstrap bootstrap(
+            RedisClientOperations jedis, DataSource dataSource) {
         return CacheDatabaseBootstrap.using(jedis, dataSource);
     }
 
     public static CacheDatabaseBootstrap bootstrap(
-            JedisPooled foregroundJedis,
-            JedisPooled backgroundJedis,
-            DataSource dataSource
-    ) {
+            JedisPooled foregroundJedis, JedisPooled backgroundJedis, DataSource dataSource) {
+        return bootstrap(
+                JedisPooledOperations.of(foregroundJedis),
+                JedisPooledOperations.of(backgroundJedis),
+                dataSource);
+    }
+
+    public static CacheDatabaseBootstrap bootstrap(
+            RedisClientOperations foregroundJedis,
+            RedisClientOperations backgroundJedis,
+            DataSource dataSource) {
         return CacheDatabaseBootstrap.using(foregroundJedis, backgroundJedis, dataSource);
     }
 
@@ -135,14 +151,16 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     public static CacheDatabaseBootstrap bootstrap(
-            String foregroundRedisUri,
-            String backgroundRedisUri,
-            DataSource dataSource
-    ) {
+            String foregroundRedisUri, String backgroundRedisUri, DataSource dataSource) {
         return CacheDatabaseBootstrap.connect(foregroundRedisUri, backgroundRedisUri, dataSource);
     }
 
     public CacheDatabase(JedisPooled jedis, DataSource dataSource, CacheDatabaseConfig config) {
+        this(JedisPooledOperations.of(jedis), dataSource, config);
+    }
+
+    public CacheDatabase(
+            RedisClientOperations jedis, DataSource dataSource, CacheDatabaseConfig config) {
         this(jedis, jedis, dataSource, config);
     }
 
@@ -150,305 +168,341 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             JedisPooled foregroundJedis,
             JedisPooled backgroundJedis,
             DataSource dataSource,
-            CacheDatabaseConfig config
-    ) {
+            CacheDatabaseConfig config) {
+        this(
+                JedisPooledOperations.of(foregroundJedis),
+                JedisPooledOperations.of(backgroundJedis),
+                dataSource,
+                config);
+    }
+
+    public CacheDatabase(
+            RedisClientOperations foregroundJedis,
+            RedisClientOperations backgroundJedis,
+            DataSource dataSource,
+            CacheDatabaseConfig config) {
         this.dataSource = dataSource;
         this.foregroundJedis = foregroundJedis;
         this.backgroundJedis = backgroundJedis;
-        this.instanceId = RuntimeCoordinationSupport.resolveInstanceId(config.runtimeCoordination());
-        RuntimeCoordinationConfig effectiveRuntimeCoordination = RuntimeCoordinationConfig.builder()
-                .instanceId(instanceId)
-                .appendInstanceIdToConsumerNames(config.runtimeCoordination().appendInstanceIdToConsumerNames())
-                .leaderLeaseEnabled(config.runtimeCoordination().leaderLeaseEnabled())
-                .leaderLeaseSegment(config.runtimeCoordination().leaderLeaseSegment())
-                .leaderLeaseTtlMillis(config.runtimeCoordination().leaderLeaseTtlMillis())
-                .leaderLeaseRenewIntervalMillis(config.runtimeCoordination().leaderLeaseRenewIntervalMillis())
-                .build();
+        if (foregroundJedis.clustered() || backgroundJedis.clustered()) {
+            com.reactor.cachedb.redis.ClusterHashTagKeyStrategy.validateTagged(
+                    config.keyspace().keyPrefix());
+            var atomicKeys =
+                    new java.util.ArrayList<String>(config.writeBehind().activeStreamKeys());
+            atomicKeys.add(config.writeBehind().streamKey());
+            atomicKeys.add(config.writeBehind().deadLetterStreamKey());
+            atomicKeys.add(config.keyspace().keyPrefix() + ":cluster-validation");
+            for (var key : atomicKeys)
+                com.reactor.cachedb.redis.ClusterHashTagKeyStrategy.validateTagged(key);
+            if (foregroundJedis.clustered()) foregroundJedis.requireSameSlot(atomicKeys);
+            if (backgroundJedis.clustered()) backgroundJedis.requireSameSlot(atomicKeys);
+        }
+        this.instanceId =
+                RuntimeCoordinationSupport.resolveInstanceId(config.runtimeCoordination());
+        RuntimeCoordinationConfig effectiveRuntimeCoordination =
+                RuntimeCoordinationConfig.builder()
+                        .instanceId(instanceId)
+                        .appendInstanceIdToConsumerNames(
+                                config.runtimeCoordination().appendInstanceIdToConsumerNames())
+                        .leaderLeaseEnabled(config.runtimeCoordination().leaderLeaseEnabled())
+                        .leaderLeaseSegment(config.runtimeCoordination().leaderLeaseSegment())
+                        .leaderLeaseTtlMillis(config.runtimeCoordination().leaderLeaseTtlMillis())
+                        .leaderLeaseRenewIntervalMillis(
+                                config.runtimeCoordination().leaderLeaseRenewIntervalMillis())
+                        .build();
         this.entityRegistry = new DefaultEntityRegistry(config.resourceLimits());
         this.queryEvaluator = new QueryEvaluator();
         this.projectionRefreshDispatcher = null;
         this.adminMonitoringEnabled = config.adminMonitoring().enabled();
-        WriteBehindConfig effectiveWriteBehindConfig = RuntimeCoordinationSupport.withInstanceIdentity(
-                config.writeBehind(),
-                config.runtimeCoordination(),
-                instanceId
-        );
-        DeadLetterRecoveryConfig effectiveDeadLetterRecoveryConfig = RuntimeCoordinationSupport.withInstanceIdentity(
-                config.deadLetterRecovery(),
-                config.runtimeCoordination(),
-                instanceId
-        );
-        ProjectionRefreshConfig effectiveProjectionRefreshConfig = RuntimeCoordinationSupport.withInstanceIdentity(
-                config.projectionRefresh(),
-                config.runtimeCoordination(),
-                instanceId
-        );
-        AdminMonitoringConfig effectiveAdminMonitoringConfig = RuntimeCoordinationSupport.withInstanceIdentity(
-                config.adminMonitoring(),
-                config.runtimeCoordination(),
-                instanceId
-        );
-        this.storagePerformanceCollector = adminMonitoringEnabled
-                ? new StoragePerformanceCollector()
-                : StoragePerformanceCollector.noop();
-        this.storagePerformanceMirror = adminMonitoringEnabled
-                ? new RedisStoragePerformanceMirror(storagePerformanceCollector, backgroundJedis, effectiveAdminMonitoringConfig)
-                : RedisStoragePerformanceMirror.disabled(storagePerformanceCollector, effectiveAdminMonitoringConfig);
+        WriteBehindConfig effectiveWriteBehindConfig =
+                RuntimeCoordinationSupport.withInstanceIdentity(
+                        config.writeBehind(), config.runtimeCoordination(), instanceId);
+        DeadLetterRecoveryConfig effectiveDeadLetterRecoveryConfig =
+                RuntimeCoordinationSupport.withInstanceIdentity(
+                        config.deadLetterRecovery(), config.runtimeCoordination(), instanceId);
+        ProjectionRefreshConfig effectiveProjectionRefreshConfig =
+                RuntimeCoordinationSupport.withInstanceIdentity(
+                        config.projectionRefresh(), config.runtimeCoordination(), instanceId);
+        AdminMonitoringConfig effectiveAdminMonitoringConfig =
+                RuntimeCoordinationSupport.withInstanceIdentity(
+                        config.adminMonitoring(), config.runtimeCoordination(), instanceId);
+        this.storagePerformanceCollector =
+                adminMonitoringEnabled
+                        ? new StoragePerformanceCollector()
+                        : StoragePerformanceCollector.noop();
+        this.storagePerformanceMirror =
+                adminMonitoringEnabled
+                        ? new RedisStoragePerformanceMirror(
+                                storagePerformanceCollector,
+                                backgroundJedis,
+                                effectiveAdminMonitoringConfig)
+                        : RedisStoragePerformanceMirror.disabled(
+                                storagePerformanceCollector, effectiveAdminMonitoringConfig);
 
         RedisWriteOperationMapper mapper = new RedisWriteOperationMapper();
-        RedisKeyStrategy keyStrategy = new RedisKeyStrategy(
-                config.keyspace().keyPrefix(),
-                config.keyspace().entitySegment(),
-                config.keyspace().pageSegment(),
-                config.keyspace().versionSegment(),
-                config.keyspace().tombstoneSegment(),
-                config.keyspace().hotSetSegment(),
-                config.keyspace().indexSegment(),
-                config.keyspace().compactionSegment()
-        );
-        this.routeCoverageStore = new RedisRouteCoverageStore(backgroundJedis, config.keyspace().keyPrefix());
-        this.idGenerator = new RedisCacheIdGenerator(
-                backgroundJedis,
-                config.keyspace().keyPrefix() + ":sequence"
-        );
+        RedisKeyStrategy keyStrategy =
+                new RedisKeyStrategy(
+                        config.keyspace().keyPrefix(),
+                        config.keyspace().entitySegment(),
+                        config.keyspace().pageSegment(),
+                        config.keyspace().versionSegment(),
+                        config.keyspace().tombstoneSegment(),
+                        config.keyspace().hotSetSegment(),
+                        config.keyspace().indexSegment(),
+                        config.keyspace().compactionSegment());
+        this.routeCoverageStore =
+                new RedisRouteCoverageStore(backgroundJedis, config.keyspace().keyPrefix());
+        this.idGenerator =
+                new RedisCacheIdGenerator(
+                        backgroundJedis, config.keyspace().keyPrefix() + ":sequence");
         this.durabilityTracker = new RedisDurabilityTracker(backgroundJedis, keyStrategy);
-        RedisFunctionExecutor functionExecutor = new RedisFunctionExecutor(
-                foregroundJedis,
-                config.redisFunctions(),
-                config.redisGuardrail(),
-                effectiveWriteBehindConfig,
-                new RedisFunctionArgsMapper()
-        );
-        RedisFunctionExecutor backgroundFunctionExecutor = new RedisFunctionExecutor(
-                backgroundJedis,
-                config.redisFunctions(),
-                config.redisGuardrail(),
-                effectiveWriteBehindConfig,
-                new RedisFunctionArgsMapper()
-        );
-        RedisWriteBehindQueue queue = new RedisWriteBehindQueue(
-                foregroundJedis,
-                effectiveWriteBehindConfig.streamKey(),
-                effectiveWriteBehindConfig.compactionStreamKey(),
-                mapper,
-                config.resourceLimits().maxColumnsPerOperation(),
-                effectiveWriteBehindConfig,
-                config.redisGuardrail(),
-                keyStrategy
-        );
-        RedisHotSetManager hotSetManager = new RedisHotSetManager(foregroundJedis, keyStrategy);
-        this.producerGuard = new RedisProducerGuard(
-                backgroundJedis,
-                config.redisGuardrail(),
-                effectiveWriteBehindConfig,
-                keyStrategy,
-                config.adminReportJob().diagnosticsStreamKey(),
-                config.adminReportJob().diagnosticsMaxLength()
-        );
-        this.indexMaintenance = new RedisIndexMaintenance(
-                backgroundJedis,
-                entityRegistry,
-                keyStrategy,
-                config.queryIndex(),
-                config.relations(),
-                queryEvaluator
-        );
-        this.projectionRefreshQueue = effectiveProjectionRefreshConfig.enabled()
-                ? new RedisProjectionRefreshQueue(backgroundJedis, effectiveProjectionRefreshConfig)
-                : null;
-        this.projectionRefreshWorker = effectiveProjectionRefreshConfig.enabled()
-                ? new RedisProjectionRefreshWorker(
+        RedisFunctionExecutor functionExecutor =
+                new RedisFunctionExecutor(
+                        foregroundJedis,
+                        config.redisFunctions(),
+                        config.redisGuardrail(),
+                        effectiveWriteBehindConfig,
+                        new RedisFunctionArgsMapper());
+        RedisFunctionExecutor backgroundFunctionExecutor =
+                new RedisFunctionExecutor(
                         backgroundJedis,
-                        effectiveProjectionRefreshConfig,
-                        projectionRefreshQueue,
+                        config.redisFunctions(),
+                        config.redisGuardrail(),
+                        effectiveWriteBehindConfig,
+                        new RedisFunctionArgsMapper());
+        RedisWriteBehindQueue queue =
+                new RedisWriteBehindQueue(
+                        foregroundJedis,
+                        effectiveWriteBehindConfig.streamKey(),
+                        effectiveWriteBehindConfig.compactionStreamKey(),
+                        mapper,
+                        config.resourceLimits().maxColumnsPerOperation(),
+                        effectiveWriteBehindConfig,
+                        config.redisGuardrail(),
+                        keyStrategy);
+        RedisHotSetManager hotSetManager = new RedisHotSetManager(foregroundJedis, keyStrategy);
+        this.producerGuard =
+                new RedisProducerGuard(
+                        backgroundJedis,
+                        config.redisGuardrail(),
+                        effectiveWriteBehindConfig,
                         keyStrategy,
+                        config.adminReportJob().diagnosticsStreamKey(),
+                        config.adminReportJob().diagnosticsMaxLength());
+        this.indexMaintenance =
+                new RedisIndexMaintenance(
+                        backgroundJedis,
                         entityRegistry,
+                        keyStrategy,
                         config.queryIndex(),
                         config.relations(),
-                        queryEvaluator,
-                        producerGuard
-                )
-                : null;
-        WriteBehindFlusher flusher = createWriteBehindFlusher(
-                dataSource,
-                entityRegistry,
-                effectiveWriteBehindConfig,
-                storagePerformanceCollector,
-                config.writeBehindFlusherFactory()
-        );
-        this.functionLoader = new RedisFunctionLoader(
-                backgroundJedis,
-                config.redisFunctions(),
-                new RedisFunctionLibrarySource()
-        );
+                        queryEvaluator);
+        this.projectionRefreshQueue =
+                effectiveProjectionRefreshConfig.enabled()
+                        ? new RedisProjectionRefreshQueue(
+                                backgroundJedis, effectiveProjectionRefreshConfig)
+                        : null;
+        this.projectionRefreshWorker =
+                effectiveProjectionRefreshConfig.enabled()
+                        ? new RedisProjectionRefreshWorker(
+                                backgroundJedis,
+                                effectiveProjectionRefreshConfig,
+                                projectionRefreshQueue,
+                                keyStrategy,
+                                entityRegistry,
+                                config.queryIndex(),
+                                config.relations(),
+                                queryEvaluator,
+                                producerGuard)
+                        : null;
+        WriteBehindFlusher flusher =
+                createWriteBehindFlusher(
+                        dataSource,
+                        entityRegistry,
+                        effectiveWriteBehindConfig,
+                        storagePerformanceCollector,
+                        config.writeBehindFlusherFactory());
+        this.functionLoader =
+                new RedisFunctionLoader(
+                        backgroundJedis, config.redisFunctions(), new RedisFunctionLibrarySource());
 
-        CacheDatabaseConfig runtimeConfig = config.toBuilder()
-                .writeBehind(effectiveWriteBehindConfig)
-                .deadLetterRecovery(effectiveDeadLetterRecoveryConfig)
-                .projectionRefresh(effectiveProjectionRefreshConfig)
-                .adminMonitoring(effectiveAdminMonitoringConfig)
-                .runtimeCoordination(effectiveRuntimeCoordination)
-                .build();
+        CacheDatabaseConfig runtimeConfig =
+                config.toBuilder()
+                        .writeBehind(effectiveWriteBehindConfig)
+                        .deadLetterRecovery(effectiveDeadLetterRecoveryConfig)
+                        .projectionRefresh(effectiveProjectionRefreshConfig)
+                        .adminMonitoring(effectiveAdminMonitoringConfig)
+                        .runtimeCoordination(effectiveRuntimeCoordination)
+                        .build();
         this.config = runtimeConfig;
-        this.session = new DefaultCacheSession(
-                foregroundJedis,
-                backgroundJedis,
-                runtimeConfig,
-                entityRegistry,
-                queue,
-                keyStrategy,
-                functionExecutor,
-                producerGuard,
-                hotSetManager,
-                queryEvaluator,
-                storagePerformanceCollector,
-                projectionRefreshDispatcher,
-                projectionRefreshQueue
-        );
-        this.writeBehindWorker = new RedisWriteBehindWorker(
-                backgroundJedis,
-                flusher,
-                effectiveWriteBehindConfig,
-                mapper,
-                keyStrategy,
-                backgroundFunctionExecutor
-        );
-        this.deadLetterRecoveryWorker = new RedisDeadLetterRecoveryWorker(
-                backgroundJedis,
-                flusher,
-                effectiveDeadLetterRecoveryConfig,
-                mapper,
-                keyStrategy,
-                effectiveWriteBehindConfig.deadLetterStreamKey()
-        );
-        RedisLeaderLease recoveryCleanupLeaderLease = RuntimeCoordinationSupport.leaderLease(
-                backgroundJedis,
-                config.keyspace().keyPrefix(),
-                config.runtimeCoordination(),
-                instanceId,
-                "recovery-cleanup"
-        );
-        this.recoveryCleanupWorker = new RedisRecoveryCleanupWorker(
-                backgroundJedis,
-                effectiveDeadLetterRecoveryConfig,
-                effectiveWriteBehindConfig.deadLetterStreamKey(),
-                recoveryCleanupLeaderLease
-        );
-        this.deadLetterManagement = new RedisDeadLetterManagement(
-                backgroundJedis,
-                flusher,
-                effectiveDeadLetterRecoveryConfig,
-                mapper,
-                keyStrategy,
-                effectiveWriteBehindConfig.deadLetterStreamKey()
-        );
+        this.session =
+                new DefaultCacheSession(
+                        foregroundJedis,
+                        backgroundJedis,
+                        runtimeConfig,
+                        entityRegistry,
+                        queue,
+                        keyStrategy,
+                        functionExecutor,
+                        producerGuard,
+                        hotSetManager,
+                        queryEvaluator,
+                        storagePerformanceCollector,
+                        projectionRefreshDispatcher,
+                        projectionRefreshQueue);
+        this.writeBehindWorker =
+                new RedisWriteBehindWorker(
+                        backgroundJedis,
+                        flusher,
+                        effectiveWriteBehindConfig,
+                        mapper,
+                        keyStrategy,
+                        backgroundFunctionExecutor);
+        this.deadLetterRecoveryWorker =
+                new RedisDeadLetterRecoveryWorker(
+                        backgroundJedis,
+                        flusher,
+                        effectiveDeadLetterRecoveryConfig,
+                        mapper,
+                        keyStrategy,
+                        effectiveWriteBehindConfig.deadLetterStreamKey());
+        RedisLeaderLease recoveryCleanupLeaderLease =
+                RuntimeCoordinationSupport.leaderLease(
+                        backgroundJedis,
+                        config.keyspace().keyPrefix(),
+                        config.runtimeCoordination(),
+                        instanceId,
+                        "recovery-cleanup");
+        this.recoveryCleanupWorker =
+                new RedisRecoveryCleanupWorker(
+                        backgroundJedis,
+                        effectiveDeadLetterRecoveryConfig,
+                        effectiveWriteBehindConfig.deadLetterStreamKey(),
+                        recoveryCleanupLeaderLease);
+        this.deadLetterManagement =
+                new RedisDeadLetterManagement(
+                        backgroundJedis,
+                        flusher,
+                        effectiveDeadLetterRecoveryConfig,
+                        mapper,
+                        keyStrategy,
+                        effectiveWriteBehindConfig.deadLetterStreamKey());
         if (adminMonitoringEnabled) {
-            RedisLeaderLease adminReportLeaderLease = RuntimeCoordinationSupport.leaderLease(
-                    backgroundJedis,
-                    config.keyspace().keyPrefix(),
-                    config.runtimeCoordination(),
-                    instanceId,
-                    "admin-report-job"
-            );
-            RedisLeaderLease monitoringHistoryLeaderLease = RuntimeCoordinationSupport.leaderLease(
-                    backgroundJedis,
-                    config.keyspace().keyPrefix(),
-                    config.runtimeCoordination(),
-                    instanceId,
-                    "monitoring-history"
-            );
-            RedisLeaderLease alertRouteHistoryLeaderLease = RuntimeCoordinationSupport.leaderLease(
-                    backgroundJedis,
-                    config.keyspace().keyPrefix(),
-                    config.runtimeCoordination(),
-                    instanceId,
-                    "alert-route-history"
-            );
-            RedisLeaderLease performanceHistoryLeaderLease = RuntimeCoordinationSupport.leaderLease(
-                    backgroundJedis,
-                    config.keyspace().keyPrefix(),
-                    config.runtimeCoordination(),
-                    instanceId,
-                    "performance-history"
-            );
-            this.adminIncidentDeliveryManager = new AdminIncidentDeliveryManager(effectiveAdminMonitoringConfig, backgroundJedis);
-            this.adminReportJobWorker = new AdminReportJobWorker(
-                    this::admin,
-                    config.adminReportJob(),
-                    adminReportLeaderLease,
-                    "cachedb-admin-report-job-" + instanceId
-            );
-            this.monitoringHistoryBuffer = new MonitoringHistoryBuffer(
-                    this::admin,
-                    backgroundJedis,
-                    effectiveAdminMonitoringConfig,
-                    monitoringHistoryLeaderLease,
-                    "cachedb-monitoring-history-" + instanceId
-            );
-            this.alertRouteHistoryBuffer = new AlertRouteHistoryBuffer(
-                    this::admin,
-                    backgroundJedis,
-                    effectiveAdminMonitoringConfig,
-                    alertRouteHistoryLeaderLease,
-                    "cachedb-alert-route-history-" + instanceId
-            );
-            this.performanceHistoryBuffer = new PerformanceHistoryBuffer(
-                    this::admin,
-                    backgroundJedis,
-                    effectiveAdminMonitoringConfig,
-                    performanceHistoryLeaderLease,
-                    "cachedb-performance-history-" + instanceId
-            );
+            RedisLeaderLease adminReportLeaderLease =
+                    RuntimeCoordinationSupport.leaderLease(
+                            backgroundJedis,
+                            config.keyspace().keyPrefix(),
+                            config.runtimeCoordination(),
+                            instanceId,
+                            "admin-report-job");
+            RedisLeaderLease monitoringHistoryLeaderLease =
+                    RuntimeCoordinationSupport.leaderLease(
+                            backgroundJedis,
+                            config.keyspace().keyPrefix(),
+                            config.runtimeCoordination(),
+                            instanceId,
+                            "monitoring-history");
+            RedisLeaderLease alertRouteHistoryLeaderLease =
+                    RuntimeCoordinationSupport.leaderLease(
+                            backgroundJedis,
+                            config.keyspace().keyPrefix(),
+                            config.runtimeCoordination(),
+                            instanceId,
+                            "alert-route-history");
+            RedisLeaderLease performanceHistoryLeaderLease =
+                    RuntimeCoordinationSupport.leaderLease(
+                            backgroundJedis,
+                            config.keyspace().keyPrefix(),
+                            config.runtimeCoordination(),
+                            instanceId,
+                            "performance-history");
+            this.adminIncidentDeliveryManager =
+                    new AdminIncidentDeliveryManager(
+                            effectiveAdminMonitoringConfig, backgroundJedis);
+            this.adminReportJobWorker =
+                    new AdminReportJobWorker(
+                            this::admin,
+                            config.adminReportJob(),
+                            adminReportLeaderLease,
+                            "cachedb-admin-report-job-" + instanceId);
+            this.monitoringHistoryBuffer =
+                    new MonitoringHistoryBuffer(
+                            this::admin,
+                            backgroundJedis,
+                            effectiveAdminMonitoringConfig,
+                            monitoringHistoryLeaderLease,
+                            "cachedb-monitoring-history-" + instanceId);
+            this.alertRouteHistoryBuffer =
+                    new AlertRouteHistoryBuffer(
+                            this::admin,
+                            backgroundJedis,
+                            effectiveAdminMonitoringConfig,
+                            alertRouteHistoryLeaderLease,
+                            "cachedb-alert-route-history-" + instanceId);
+            this.performanceHistoryBuffer =
+                    new PerformanceHistoryBuffer(
+                            this::admin,
+                            backgroundJedis,
+                            effectiveAdminMonitoringConfig,
+                            performanceHistoryLeaderLease,
+                            "cachedb-performance-history-" + instanceId);
         } else {
-            this.adminIncidentDeliveryManager = AdminIncidentDeliveryManager.disabled(effectiveAdminMonitoringConfig);
+            this.adminIncidentDeliveryManager =
+                    AdminIncidentDeliveryManager.disabled(effectiveAdminMonitoringConfig);
             this.adminReportJobWorker = AdminReportJobWorker.disabled(config.adminReportJob());
-            this.monitoringHistoryBuffer = MonitoringHistoryBuffer.disabled(effectiveAdminMonitoringConfig);
-            this.alertRouteHistoryBuffer = AlertRouteHistoryBuffer.disabled(effectiveAdminMonitoringConfig);
-            this.performanceHistoryBuffer = PerformanceHistoryBuffer.disabled(effectiveAdminMonitoringConfig);
+            this.monitoringHistoryBuffer =
+                    MonitoringHistoryBuffer.disabled(effectiveAdminMonitoringConfig);
+            this.alertRouteHistoryBuffer =
+                    AlertRouteHistoryBuffer.disabled(effectiveAdminMonitoringConfig);
+            this.performanceHistoryBuffer =
+                    PerformanceHistoryBuffer.disabled(effectiveAdminMonitoringConfig);
         }
-        this.schemaAdmin = new CacheDatabaseSchemaAdmin(dataSource, entityRegistry, config.schemaBootstrap());
-        this.productionReportCatalog = new ProductionReportCatalog(ProductionReportCatalog.defaultRoots(Path.of("").toAbsolutePath()));
-        this.admin = new CacheDatabaseAdmin(
-                deadLetterManagement,
-                backgroundJedis,
-                config.keyspace().keyPrefix(),
-                config.writeBehind().activeStreamKeys(),
-                config.writeBehind().deadLetterStreamKey(),
-                config.deadLetterRecovery().reconciliationStreamKey(),
-                config.deadLetterRecovery().archiveStreamKey(),
-                config.adminReportJob().diagnosticsStreamKey(),
-                config.adminReportJob().diagnosticsMaxLength(),
-                config.adminMonitoring(),
-                config.redisGuardrail(),
-                this::workerSnapshot,
-                this::deadLetterRecoverySnapshot,
-                this::recoveryCleanupSnapshot,
-                this::adminReportJobSnapshot,
-                this::incidentDeliverySnapshot,
-                this::redisGuardrailSnapshot,
-                this::redisRuntimeProfileSnapshot,
-                this::storagePerformanceSnapshot,
-                this::projectionRefreshSnapshot,
-                this::activeRuntimeProfileProperties,
-                this::manualRuntimeProfileOverride,
-                this::setManualRuntimeProfile,
-                this::clearManualRuntimeProfileOverride,
-                indexMaintenance,
-                schemaAdmin,
-                adminIncidentDeliveryManager::enqueue,
-                dataSource,
-                config,
-                entityRegistry,
-                session,
-                productionReportCatalog,
-                this::monitoringHistory,
-                this::alertRouteHistory,
-                this::performanceHistory,
-                this::projectionRefreshFailures,
-                this::replayProjectionRefreshFailure,
-                this::resetAdminTelemetryBuffers,
-                this::resetPerformanceTelemetry
-        );
+        this.schemaAdmin =
+                new CacheDatabaseSchemaAdmin(dataSource, entityRegistry, config.schemaBootstrap());
+        this.productionReportCatalog =
+                new ProductionReportCatalog(
+                        ProductionReportCatalog.defaultRoots(Path.of("").toAbsolutePath()));
+        this.admin =
+                new CacheDatabaseAdmin(
+                        deadLetterManagement,
+                        backgroundJedis,
+                        config.keyspace().keyPrefix(),
+                        config.writeBehind().activeStreamKeys(),
+                        config.writeBehind().deadLetterStreamKey(),
+                        config.deadLetterRecovery().reconciliationStreamKey(),
+                        config.deadLetterRecovery().archiveStreamKey(),
+                        config.adminReportJob().diagnosticsStreamKey(),
+                        config.adminReportJob().diagnosticsMaxLength(),
+                        config.adminMonitoring(),
+                        config.redisGuardrail(),
+                        this::workerSnapshot,
+                        this::deadLetterRecoverySnapshot,
+                        this::recoveryCleanupSnapshot,
+                        this::adminReportJobSnapshot,
+                        this::incidentDeliverySnapshot,
+                        this::redisGuardrailSnapshot,
+                        this::redisRuntimeProfileSnapshot,
+                        this::storagePerformanceSnapshot,
+                        this::projectionRefreshSnapshot,
+                        this::activeRuntimeProfileProperties,
+                        this::manualRuntimeProfileOverride,
+                        this::setManualRuntimeProfile,
+                        this::clearManualRuntimeProfileOverride,
+                        indexMaintenance,
+                        schemaAdmin,
+                        adminIncidentDeliveryManager::enqueue,
+                        dataSource,
+                        config,
+                        entityRegistry,
+                        session,
+                        productionReportCatalog,
+                        this::monitoringHistory,
+                        this::alertRouteHistory,
+                        this::performanceHistory,
+                        this::projectionRefreshFailures,
+                        this::replayProjectionRefreshFailure,
+                        this::resetAdminTelemetryBuffers,
+                        this::resetPerformanceTelemetry);
     }
 
     public void start() {
@@ -476,10 +530,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     public <T, ID> EntityBinding<T, ID> register(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec,
-            CachePolicy cachePolicy
-    ) {
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy cachePolicy) {
         return entityRegistry.register(
                 metadata,
                 codec,
@@ -487,16 +538,14 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 new NoOpRelationBatchLoader<>(),
                 new NoOpEntityPageLoader<>(),
                 new NoOpEntityByIdLoader<>(),
-                new NoOpEntityQueryLoader<>()
-        );
+                new NoOpEntityQueryLoader<>());
     }
 
     public <T, ID> EntityBinding<T, ID> register(
             EntityMetadata<T, ID> metadata,
             EntityCodec<T> codec,
             CachePolicy cachePolicy,
-            RelationBatchLoader<T> relationBatchLoader
-    ) {
+            RelationBatchLoader<T> relationBatchLoader) {
         return entityRegistry.register(
                 metadata,
                 codec,
@@ -504,8 +553,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 relationBatchLoader,
                 new NoOpEntityPageLoader<>(),
                 new NoOpEntityByIdLoader<>(),
-                new NoOpEntityQueryLoader<>()
-        );
+                new NoOpEntityQueryLoader<>());
     }
 
     public <T, ID> EntityBinding<T, ID> register(
@@ -513,8 +561,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             EntityCodec<T> codec,
             CachePolicy cachePolicy,
             RelationBatchLoader<T> relationBatchLoader,
-            EntityPageLoader<T> pageLoader
-    ) {
+            EntityPageLoader<T> pageLoader) {
         return register(
                 metadata,
                 codec,
@@ -522,8 +569,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 relationBatchLoader,
                 pageLoader,
                 new NoOpEntityByIdLoader<>(),
-                new NoOpEntityQueryLoader<>()
-        );
+                new NoOpEntityQueryLoader<>());
     }
 
     public <T, ID> EntityBinding<T, ID> register(
@@ -533,38 +579,33 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             RelationBatchLoader<T> relationBatchLoader,
             EntityPageLoader<T> pageLoader,
             EntityByIdLoader<T, ID> byIdLoader,
-            EntityQueryLoader<T> queryLoader
-    ) {
-        return entityRegistry.register(metadata, codec, cachePolicy, relationBatchLoader, pageLoader, byIdLoader, queryLoader);
+            EntityQueryLoader<T> queryLoader) {
+        return entityRegistry.register(
+                metadata,
+                codec,
+                cachePolicy,
+                relationBatchLoader,
+                pageLoader,
+                byIdLoader,
+                queryLoader);
     }
 
     public <T, ID> EntityBinding<T, ID> registerJdbcBacked(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec
-    ) {
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
         return registerJdbcBacked(metadata, codec, config.resourceLimits().defaultCachePolicy());
     }
 
     public <T, ID> EntityBinding<T, ID> registerJdbcBacked(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec,
-            CachePolicy cachePolicy
-    ) {
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy cachePolicy) {
         return registerJdbcBacked(
-                metadata,
-                codec,
-                cachePolicy,
-                new NoOpRelationBatchLoader<>(),
-                null
-        );
+                metadata, codec, cachePolicy, new NoOpRelationBatchLoader<>(), null);
     }
 
     public <T, ID> EntityBinding<T, ID> registerJdbcBacked(
             EntityMetadata<T, ID> metadata,
             EntityCodec<T> codec,
             CachePolicy cachePolicy,
-            RelationBatchLoader<T> relationBatchLoader
-    ) {
+            RelationBatchLoader<T> relationBatchLoader) {
         return registerJdbcBacked(metadata, codec, cachePolicy, relationBatchLoader, null);
     }
 
@@ -573,15 +614,14 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             EntityCodec<T> codec,
             CachePolicy cachePolicy,
             RelationBatchLoader<T> relationBatchLoader,
-            EntityPageLoader<T> pageLoader
-    ) {
-        JdbcEntitySourceLoader<T, ID> sourceLoader = new JdbcEntitySourceLoader<>(
-                dataSource,
-                metadata,
-                codec,
-                config.readThrough().maxQueryLoadRows(),
-                config.readThrough().queryTimeoutSeconds()
-        );
+            EntityPageLoader<T> pageLoader) {
+        JdbcEntitySourceLoader<T, ID> sourceLoader =
+                new JdbcEntitySourceLoader<>(
+                        dataSource,
+                        metadata,
+                        codec,
+                        config.readThrough().maxQueryLoadRows(),
+                        config.readThrough().queryTimeoutSeconds());
         EntityPageLoader<T> resolvedPageLoader = pageLoader == null ? sourceLoader : pageLoader;
         return register(
                 metadata,
@@ -590,14 +630,11 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 relationBatchLoader == null ? new NoOpRelationBatchLoader<>() : relationBatchLoader,
                 resolvedPageLoader,
                 sourceLoader,
-                sourceLoader
-        );
+                sourceLoader);
     }
 
     public <T, ID> EntityBinding<T, ID> register(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec
-    ) {
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
         return register(
                 metadata,
                 codec,
@@ -605,8 +642,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 new NoOpRelationBatchLoader<>(),
                 new NoOpEntityPageLoader<>(),
                 new NoOpEntityByIdLoader<>(),
-                new NoOpEntityQueryLoader<>()
-        );
+                new NoOpEntityQueryLoader<>());
     }
 
     public <T, ID> EntityBinding<T, ID> register(EntityBinding<T, ID> binding) {
@@ -617,8 +653,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 binding.relationBatchLoader(),
                 binding.pageLoader(),
                 binding.byIdLoader(),
-                binding.queryLoader()
-        );
+                binding.queryLoader());
     }
 
     public CacheWarmResult warm(CacheWarmPlan plan) {
@@ -634,8 +669,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     /**
-     * Executes the plan without asking callers to repeat its entity/projection
-     * admission decision in a second boolean flag.
+     * Executes the plan without asking callers to repeat its entity/projection admission decision
+     * in a second boolean flag.
      */
     public CacheWarmExecution executeWarm(CacheWarmPlan plan, CacheWarmExecutionMode mode) {
         if (plan == null) {
@@ -644,27 +679,29 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         if (mode == null) {
             throw new IllegalArgumentException("mode must not be null");
         }
-        CacheWarmResult result = mode == CacheWarmExecutionMode.DRY_RUN
-                ? dryRun(plan)
-                : plan.projectionsOnly() ? warmProjections(plan) : warm(plan);
+        CacheWarmResult result =
+                mode == CacheWarmExecutionMode.DRY_RUN
+                        ? dryRun(plan)
+                        : plan.projectionsOnly() ? warmProjections(plan) : warm(plan);
         return new CacheWarmExecution(plan, mode, result);
     }
 
     /**
-     * Incrementally evicts Redis entities and projections that no longer satisfy
-     * their registered hot policy. The durable SQL row is never changed.
+     * Incrementally evicts Redis entities and projections that no longer satisfy their registered
+     * hot policy. The durable SQL row is never changed.
      */
     public CacheHotSetReconciliationResult reconcileHotSet(
-            String entityName,
-            String cursor,
-            int maxRows,
-            int scanCount
-    ) {
+            String entityName, String cursor, int maxRows, int scanCount) {
         String normalizedEntityName = entityName == null ? "" : entityName.trim();
-        EntityBinding<?, ?> rawBinding = entityRegistry.find(normalizedEntityName)
-                .orElseThrow(() -> new IllegalStateException(
-                        "No registered CacheDB entity found for hot-set reconciliation: " + normalizedEntityName
-                ));
+        EntityBinding<?, ?> rawBinding =
+                entityRegistry
+                        .find(normalizedEntityName)
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "No registered CacheDB entity found for hot-set"
+                                                        + " reconciliation: "
+                                                        + normalizedEntityName));
         return reconcileHotSet(rawBinding, cursor, maxRows, scanCount);
     }
 
@@ -682,20 +719,18 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private CacheHotSetReconciliationResult reconcileHotSet(
-            EntityBinding<?, ?> rawBinding,
-            String cursor,
-            int maxRows,
-            int scanCount
-    ) {
+            EntityBinding<?, ?> rawBinding, String cursor, int maxRows, int scanCount) {
         EntityBinding binding = rawBinding;
-        EntityRepository repository = repository(binding.metadata(), binding.codec(), binding.cachePolicy());
-        if (!(repository instanceof com.reactor.cachedb.redis.RedisEntityRepository redisRepository)) {
+        EntityRepository repository =
+                repository(binding.metadata(), binding.codec(), binding.cachePolicy());
+        if (!(repository
+                instanceof com.reactor.cachedb.redis.RedisEntityRepository redisRepository)) {
             throw new IllegalStateException(
                     "Hot-set reconciliation requires the Redis entity repository runtime for "
-                            + rawBinding.metadata().entityName()
-            );
+                            + rawBinding.metadata().entityName());
         }
-        RedisHotSetReconciliationResult result = redisRepository.reconcileHotSet(cursor, maxRows, scanCount);
+        RedisHotSetReconciliationResult result =
+                redisRepository.reconcileHotSet(cursor, maxRows, scanCount);
         return new CacheHotSetReconciliationResult(
                 rawBinding.metadata().entityName(),
                 result.nextCursor(),
@@ -703,8 +738,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 result.evictedRows(),
                 result.missingRows(),
                 result.invalidRows(),
-                result.fullCycleCompleted()
-        );
+                result.fullCycleCompleted());
     }
 
     private WriteBehindFlusher createWriteBehindFlusher(
@@ -712,10 +746,10 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             EntityRegistry entityRegistry,
             WriteBehindConfig writeBehindConfig,
             StoragePerformanceCollector performanceCollector,
-            WriteBehindFlusherFactory flusherFactory
-    ) {
+            WriteBehindFlusherFactory flusherFactory) {
         if (flusherFactory != null) {
-            return flusherFactory.create(dataSource, entityRegistry, writeBehindConfig, performanceCollector);
+            return flusherFactory.create(
+                    dataSource, entityRegistry, writeBehindConfig, performanceCollector);
         }
         return JdbcStorageProviders.require("postgres")
                 .writeBehindFlusherFactory(Map.of())
@@ -723,56 +757,57 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     public <T, ID, P> EntityProjectionBinding<T, P, ID> registerProjection(
-            EntityMetadata<T, ID> metadata,
-            EntityProjection<T, P, ID> projection
-    ) {
+            EntityMetadata<T, ID> metadata, EntityProjection<T, P, ID> projection) {
         return entityRegistry.registerProjection(metadata, projection);
     }
 
     @Override
     public <T, ID> EntityRepository<T, ID> repository(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec
-    ) {
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
         return session.repository(metadata, codec);
     }
 
     @Override
     public <T, ID> EntityRepository<T, ID> repository(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec,
-            CachePolicy cachePolicy
-    ) {
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy cachePolicy) {
         return session.repository(metadata, codec, cachePolicy);
     }
 
     @Override
     @SuppressWarnings("unchecked")
     public <T, ID> SourceRepository<T, ID> sourceRepository(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec
-    ) {
-        EntityBinding<?, ?> rawBinding = entityRegistry.find(metadata.entityName())
-                .orElseThrow(() -> new IllegalStateException(
-                        "No registered CacheDB entity found for source reads: " + metadata.entityName()
-                ));
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
+        EntityBinding<?, ?> rawBinding =
+                entityRegistry
+                        .find(metadata.entityName())
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "No registered CacheDB entity found for source"
+                                                        + " reads: "
+                                                        + metadata.entityName()));
         EntityBinding<T, ID> binding = (EntityBinding<T, ID>) rawBinding;
         return new RegisteredSourceRepository<>(
                 metadata.entityName(),
                 binding.byIdLoader(),
                 binding.pageLoader(),
-                binding.queryLoader()
-        );
+                binding.queryLoader());
     }
 
     public <T> com.reactor.cachedb.core.repository.SourceSqlRepository<T> sourceSqlRepository(
-            EntityCodec<T> codec
-    ) {
+            EntityCodec<T> codec) {
         return new JdbcSourceSqlRepository<>(dataSource, codec);
     }
 
     public boolean isDurable(WriteReceipt<?, ?> receipt) {
         return durabilityTracker.isDurable(receipt);
+    }
+
+    public boolean isDurable(com.reactor.cachedb.core.api.CacheWriteBatchReceipt receipt) {
+        java.util.Objects.requireNonNull(receipt, "receipt");
+        if (receipt.dependencies().isEmpty())
+            throw new IllegalArgumentException("Batch receipt has no durability dependencies");
+        return durabilityTracker.areDurableDependencies(receipt.dependencies());
     }
 
     /** Creates a bounded writer that applies backpressure until SQL durability is proven. */
@@ -781,9 +816,10 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             int batchSize,
             int maxPendingReceipts,
             Duration durabilityTimeout,
-            Function<Collection<T>, List<WriteReceipt<T, ID>>> writer
-    ) {
-        if (durabilityTimeout == null || durabilityTimeout.isZero() || durabilityTimeout.isNegative()) {
+            Function<Collection<T>, List<WriteReceipt<T, ID>>> writer) {
+        if (durabilityTimeout == null
+                || durabilityTimeout.isZero()
+                || durabilityTimeout.isNegative()) {
             throw new IllegalArgumentException("durabilityTimeout must be greater than zero");
         }
         return new CacheDurableBatchWriter<>(
@@ -791,12 +827,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 batchSize,
                 maxPendingReceipts,
                 writer,
-                (receipts, resolvedOperation) -> awaitDurableOrThrow(
-                        receipts,
-                        durabilityTimeout,
-                        resolvedOperation
-                )
-        );
+                (receipts, resolvedOperation) ->
+                        awaitDurableOrThrow(receipts, durabilityTimeout, resolvedOperation));
     }
 
     public boolean awaitDurable(WriteReceipt<?, ?> receipt, Duration timeout) {
@@ -804,42 +836,31 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     public <T, ID> WriteReceipt<T, ID> awaitDurableOrThrow(
-            WriteReceipt<T, ID> receipt,
-            Duration timeout
-    ) {
+            WriteReceipt<T, ID> receipt, Duration timeout) {
         requireDurabilityArguments(receipt, timeout);
         if (!awaitDurable(receipt, timeout)) {
-            throw new com.reactor.cachedb.core.repository.WriteDurabilityTimeoutException(receipt, timeout);
+            throw new com.reactor.cachedb.core.repository.WriteDurabilityTimeoutException(
+                    receipt, timeout);
         }
         return receipt;
     }
 
     public boolean awaitDurable(
-            Collection<? extends WriteReceipt<?, ?>> receipts,
-            Duration timeout
-    ) {
+            Collection<? extends WriteReceipt<?, ?>> receipts, Duration timeout) {
         return durabilityTracker.awaitAll(receipts, timeout, Duration.ofMillis(25));
     }
 
     public <C extends Collection<? extends WriteReceipt<?, ?>>> C awaitDurableOrThrow(
-            C receipts,
-            Duration timeout
-    ) {
+            C receipts, Duration timeout) {
         return awaitDurableOrThrow(receipts, timeout, "");
     }
 
     public <C extends Collection<? extends WriteReceipt<?, ?>>> C awaitDurableOrThrow(
-            C receipts,
-            Duration timeout,
-            String operation
-    ) {
+            C receipts, Duration timeout, String operation) {
         requireDurabilityArguments(receipts, timeout);
         if (!awaitDurable(receipts, timeout)) {
             throw new com.reactor.cachedb.core.repository.WriteBatchDurabilityTimeoutException(
-                    receipts,
-                    timeout,
-                    operation
-            );
+                    receipts, timeout, operation);
         }
         return receipts;
     }
@@ -861,21 +882,17 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     public com.reactor.cachedb.core.route.RouteCoverage routeCoverage(
-            String routeName,
-            String scope,
-            Duration maxAge
-    ) {
+            String routeName, String scope, Duration maxAge) {
         return routeCoverageStore.get(routeName, scope, maxAge);
     }
 
     public com.reactor.cachedb.core.route.RouteCoverage routeCoverage(
             com.reactor.cachedb.core.route.RepositoryRouteRef route,
             String scope,
-            Duration maxAge
-    ) {
-        com.reactor.cachedb.core.route.RepositoryRouteRef hotRoute = java.util.Objects
-                .requireNonNull(route, "route")
-                .requireKind(com.reactor.cachedb.core.route.RepositoryRouteKind.HOT);
+            Duration maxAge) {
+        com.reactor.cachedb.core.route.RepositoryRouteRef hotRoute =
+                java.util.Objects.requireNonNull(route, "route")
+                        .requireKind(com.reactor.cachedb.core.route.RepositoryRouteKind.HOT);
         return routeCoverage(hotRoute.routeName(), scope, maxAge);
     }
 
@@ -926,11 +943,13 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return producerGuard.snapshot();
     }
 
-    public com.reactor.cachedb.core.queue.RedisRuntimeProfileSnapshot redisRuntimeProfileSnapshot() {
+    public com.reactor.cachedb.core.queue.RedisRuntimeProfileSnapshot
+            redisRuntimeProfileSnapshot() {
         return producerGuard.runtimeProfileSnapshot();
     }
 
-    public java.util.List<com.reactor.cachedb.core.queue.RedisRuntimeProfileEvent> runtimeProfileEvents() {
+    public java.util.List<com.reactor.cachedb.core.queue.RedisRuntimeProfileEvent>
+            runtimeProfileEvents() {
         return producerGuard.runtimeProfileEvents();
     }
 
@@ -950,7 +969,15 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return dataSource;
     }
 
-    JedisPooled backgroundRedisClient() {
+    RedisClientOperations backgroundRedisClient() {
+        return backgroundJedis;
+    }
+
+    public RedisClientOperations redisOperations() {
+        return foregroundJedis;
+    }
+
+    public RedisClientOperations backgroundRedisOperations() {
         return backgroundJedis;
     }
 
@@ -963,16 +990,24 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     }
 
     public ProjectionRefreshSnapshot projectionRefreshSnapshot() {
-        return projectionRefreshWorker == null ? ProjectionRefreshSnapshot.empty() : projectionRefreshWorker.snapshot();
+        return projectionRefreshWorker == null
+                ? ProjectionRefreshSnapshot.empty()
+                : projectionRefreshWorker.snapshot();
     }
 
     public List<ProjectionRefreshFailureEntry> projectionRefreshFailures(int limit) {
-        return projectionRefreshWorker == null ? List.of() : projectionRefreshWorker.failures(limit);
+        return projectionRefreshWorker == null
+                ? List.of()
+                : projectionRefreshWorker.failures(limit);
     }
 
     public ProjectionRefreshReplayResult replayProjectionRefreshFailure(String entryId) {
         return projectionRefreshWorker == null
-                ? new ProjectionRefreshReplayResult(entryId == null ? "" : entryId, false, "", "Projection refresh worker is not enabled.")
+                ? new ProjectionRefreshReplayResult(
+                        entryId == null ? "" : entryId,
+                        false,
+                        "",
+                        "Projection refresh worker is not enabled.")
                 : projectionRefreshWorker.replayFailure(entryId);
     }
 
@@ -1025,8 +1060,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 monitoringHistoryCleared,
                 alertRouteHistoryCleared,
                 totalOperations(performanceReset),
-                java.time.Instant.now()
-        );
+                java.time.Instant.now());
     }
 
     public PerformanceTelemetryResetSnapshot resetPerformanceTelemetry() {
@@ -1045,8 +1079,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return new PerformanceTelemetryResetSnapshot(
                 totalOperations(performanceReset),
                 performanceHistoryCleared,
-                java.time.Instant.now()
-        );
+                java.time.Instant.now());
     }
 
     private long totalOperations(StoragePerformanceSnapshot snapshot) {
@@ -1061,8 +1094,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 LatencyMetricSnapshot.empty(),
                 LatencyMetricSnapshot.empty(),
                 LatencyMetricSnapshot.empty(),
-                LatencyMetricSnapshot.empty()
-        );
+                LatencyMetricSnapshot.empty());
     }
 
     public CacheDatabaseAdmin admin() {
@@ -1079,6 +1111,31 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
 
     public CacheDatabaseConfig config() {
         return config;
+    }
+
+    public com.reactor.cachedb.core.api.CacheWriteBatch writeBatch() {
+        return writeBatch(java.util.UUID.randomUUID().toString());
+    }
+
+    public com.reactor.cachedb.core.api.CacheWriteBatch writeBatch(String batchId) {
+        var keyspace = config.keyspace();
+        return new com.reactor.cachedb.redis.RedisAtomicWriteBatch(
+                        foregroundJedis,
+                        entityRegistry,
+                        new RedisKeyStrategy(
+                                keyspace.keyPrefix(),
+                                keyspace.entitySegment(),
+                                keyspace.pageSegment(),
+                                keyspace.versionSegment(),
+                                keyspace.tombstoneSegment(),
+                                keyspace.hotSetSegment(),
+                                keyspace.indexSegment(),
+                                keyspace.compactionSegment()),
+                        config.writeBehind(),
+                        config.redisGuardrail(),
+                        producerGuard,
+                        batchId)
+                .withMaxColumnsPerOperation(config.resourceLimits().maxColumnsPerOperation());
     }
 
     public String instanceId() {
@@ -1121,7 +1178,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         }
     }
 
-    private RuntimeException closeResource(AutoCloseable resource, RuntimeException currentFailure) {
+    private RuntimeException closeResource(
+            AutoCloseable resource, RuntimeException currentFailure) {
         if (resource == null) {
             return currentFailure;
         }
@@ -1130,7 +1188,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             return currentFailure;
         } catch (Exception exception) {
             if (currentFailure == null) {
-                return new IllegalStateException("Failed to close a CacheDatabase resource", exception);
+                return new IllegalStateException(
+                        "Failed to close a CacheDatabase resource", exception);
             }
             currentFailure.addSuppressed(exception);
             return currentFailure;

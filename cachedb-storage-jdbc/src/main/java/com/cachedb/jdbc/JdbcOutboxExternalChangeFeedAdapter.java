@@ -5,7 +5,6 @@ import com.reactor.cachedb.core.change.ExternalChangeFeedAdapter;
 import com.reactor.cachedb.core.change.ExternalChangeSink;
 import com.reactor.cachedb.core.change.ExternalChangeType;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -21,11 +20,14 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import javax.sql.DataSource;
+
 public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChangeFeedAdapter {
 
     private final DataSource dataSource;
     private final JdbcOutboxDialect dialect;
     private final String adapterName;
+    private final JdbcOutboxPartition partition;
     private final JdbcOutboxMapping mapping;
     private final int batchSize;
     private final long pollIntervalMillis;
@@ -41,23 +43,28 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
     private JdbcOutboxExternalChangeFeedAdapter(Builder builder) {
         this.dataSource = Objects.requireNonNull(builder.dataSource, "dataSource");
         this.dialect = Objects.requireNonNull(builder.dialect, "dialect");
-        this.adapterName = requireText(builder.adapterName, "adapterName");
-        this.mapping = new JdbcOutboxMapping(
-                builder.outboxTable,
-                builder.checkpointTable,
-                builder.idColumn,
-                builder.entityColumn,
-                builder.entityIdColumn,
-                builder.typeColumn,
-                builder.payloadColumn,
-                builder.versionColumn,
-                builder.occurredAtColumn,
-                builder.sourceColumn
-        );
+        this.partition = builder.partition;
+        String baseName = requireText(builder.adapterName, "adapterName");
+        this.adapterName = partition == null ? baseName : partition.checkpointName(baseName);
+        this.mapping =
+                new JdbcOutboxMapping(
+                        builder.outboxTable,
+                        builder.checkpointTable,
+                        builder.idColumn,
+                        builder.entityColumn,
+                        builder.entityIdColumn,
+                        builder.typeColumn,
+                        builder.payloadColumn,
+                        builder.versionColumn,
+                        builder.occurredAtColumn,
+                        builder.sourceColumn);
         this.batchSize = Math.max(1, builder.batchSize);
         this.pollIntervalMillis = Math.max(50L, builder.pollIntervalMillis);
         this.createCheckpointTable = builder.createCheckpointTable;
-        this.transactionIsolation = builder.transactionIsolation;
+        this.transactionIsolation =
+                partition != null && !builder.transactionIsolationExplicit
+                        ? Connection.TRANSACTION_READ_COMMITTED
+                        : builder.transactionIsolation;
     }
 
     public static Builder builder(DataSource dataSource, JdbcOutboxDialect dialect) {
@@ -70,13 +77,21 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         if (!running.compareAndSet(false, true)) {
             return;
         }
-        worker = new Thread(() -> runLoop(sink), "cachedb-" + dialect.name() + "-outbox-" + adapterName);
+        worker =
+                new Thread(
+                        () -> runLoop(sink),
+                        "cachedb-" + dialect.name() + "-outbox-" + adapterName);
         worker.setDaemon(true);
         worker.start();
     }
 
     public int pollOnce(ExternalChangeSink sink) {
         Objects.requireNonNull(sink, "sink");
+        return pollOnce(sink, 0);
+    }
+
+    private int pollOnce(ExternalChangeSink sink, int attempt) {
+        boolean deliveryStarted = false;
         try {
             initialize();
             try (Connection connection = dataSource.getConnection()) {
@@ -95,6 +110,7 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
                     List<OutboxRow> rows = readBatch(connection, checkpoint);
                     lastAcceptedId = checkpoint;
                     for (OutboxRow row : rows) {
+                        deliveryStarted = true;
                         sink.accept(row.event());
                         lastAcceptedId = row.id();
                         accepted++;
@@ -124,16 +140,38 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
                 return accepted;
             }
         } catch (SQLException exception) {
-            RuntimeException failure = new IllegalStateException(
-                    dialect.name() + " outbox polling failed for adapter " + adapterName,
-                    exception
-            );
+            if (partition != null
+                    && !deliveryStarted
+                    && attempt < 3
+                    && transientTransactionConflict(exception)) {
+                // The failed transaction is closed and no externally visible callback ran.
+                try {
+                    Thread.sleep(Math.min(50L, pollIntervalMillis) * (attempt + 1));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                            "Interrupted during outbox checkpoint retry", interrupted);
+                }
+                return pollOnce(sink, attempt + 1);
+            }
+            RuntimeException failure =
+                    new IllegalStateException(
+                            dialect.name() + " outbox polling failed for adapter " + adapterName,
+                            exception);
             lastFailure.set(failure);
             throw failure;
         } catch (RuntimeException exception) {
             lastFailure.set(exception);
             throw exception;
         }
+    }
+
+    private boolean transientTransactionConflict(SQLException failure) {
+        return "40001".equals(failure.getSQLState())
+                || "40P01".equals(failure.getSQLState())
+                || failure.getErrorCode() == 1205
+                || failure.getErrorCode() == 8177
+                || failure.getErrorCode() == 60;
     }
 
     private void rollbackQuietly(Connection connection, Exception original) {
@@ -144,7 +182,8 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         }
     }
 
-    private void restoreConnection(Connection connection, int previousIsolation, boolean previousAutoCommit)
+    private void restoreConnection(
+            Connection connection, int previousIsolation, boolean previousAutoCommit)
             throws SQLException {
         SQLException failure = null;
         try {
@@ -175,8 +214,9 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
                 return;
             }
             try (Connection connection = dataSource.getConnection();
-                 Statement statement = connection.createStatement()) {
-                statement.executeUpdate(dialect.createCheckpointTableSql(mapping.checkpointTable()));
+                    Statement statement = connection.createStatement()) {
+                statement.executeUpdate(
+                        dialect.createCheckpointTableSql(mapping.checkpointTable()));
             }
             checkpointTableInitialized.set(true);
         }
@@ -230,7 +270,10 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         if (checkpointRowEnsured.get()) {
             return false;
         }
-        try (PreparedStatement statement = connection.prepareStatement(dialect.ensureCheckpointSql(mapping.checkpointTable()))) {
+        try (PreparedStatement statement =
+                connection.prepareStatement(
+                        dialect.ensureCheckpointSql(mapping.checkpointTable()))) {
+            statement.setQueryTimeout(30);
             dialect.bindEnsureCheckpoint(statement, adapterName);
             statement.executeUpdate();
         }
@@ -238,7 +281,10 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
     }
 
     private long readCheckpointForUpdate(Connection connection) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(dialect.readCheckpointForUpdateSql(mapping.checkpointTable()))) {
+        try (PreparedStatement statement =
+                connection.prepareStatement(
+                        dialect.readCheckpointForUpdateSql(mapping.checkpointTable()))) {
+            statement.setQueryTimeout(30);
             statement.setString(1, adapterName);
             try (ResultSet resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
@@ -250,21 +296,25 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
     }
 
     private List<OutboxRow> readBatch(Connection connection, long checkpoint) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(dialect.readBatchSql(mapping, batchSize))) {
+        try (PreparedStatement statement =
+                connection.prepareStatement(dialect.readBatchSql(mapping, batchSize, partition))) {
+            statement.setQueryTimeout(30);
             dialect.bindReadBatch(statement, checkpoint, batchSize);
             try (ResultSet resultSet = statement.executeQuery()) {
                 ArrayList<OutboxRow> rows = new ArrayList<>();
                 while (resultSet.next()) {
                     long id = resultSet.getLong(1);
-                    rows.add(new OutboxRow(id, new ExternalChangeEvent(
-                            resultSet.getString(2),
-                            resultSet.getObject(3),
-                            parseType(resultSet.getString(4)),
-                            parseFlatJsonObject(resultSet.getString(5)),
-                            resultSet.getLong(6),
-                            toInstant(resultSet.getTimestamp(7)),
-                            resultSet.getString(8)
-                    )));
+                    rows.add(
+                            new OutboxRow(
+                                    id,
+                                    new ExternalChangeEvent(
+                                            resultSet.getString(2),
+                                            resultSet.getObject(3),
+                                            parseType(resultSet.getString(4)),
+                                            parseFlatJsonObject(resultSet.getString(5)),
+                                            resultSet.getLong(6),
+                                            toInstant(resultSet.getTimestamp(7)),
+                                            resultSet.getString(8))));
                 }
                 return List.copyOf(rows);
             }
@@ -272,7 +322,10 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
     }
 
     private void writeCheckpoint(Connection connection, long lastEventId) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(dialect.writeCheckpointSql(mapping.checkpointTable()))) {
+        try (PreparedStatement statement =
+                connection.prepareStatement(
+                        dialect.writeCheckpointSql(mapping.checkpointTable()))) {
+            statement.setQueryTimeout(30);
             dialect.bindWriteCheckpoint(statement, adapterName, lastEventId);
             statement.executeUpdate();
         }
@@ -322,6 +375,8 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         private long pollIntervalMillis = 1_000L;
         private boolean createCheckpointTable = true;
         private int transactionIsolation = Connection.TRANSACTION_SERIALIZABLE;
+        private boolean transactionIsolationExplicit;
+        private JdbcOutboxPartition partition;
 
         private Builder(DataSource dataSource, JdbcOutboxDialect dialect) {
             this.dataSource = dataSource;
@@ -331,6 +386,15 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         public Builder adapterName(String adapterName) {
             this.adapterName = adapterName;
             return this;
+        }
+
+        public Builder partition(JdbcOutboxPartition partition) {
+            this.partition = Objects.requireNonNull(partition, "partition");
+            return this;
+        }
+
+        public Builder partition(int count, int index, String column) {
+            return partition(new JdbcOutboxPartition(count, index, column));
         }
 
         public Builder outboxTable(String outboxTable) {
@@ -402,9 +466,11 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
             if (transactionIsolation != Connection.TRANSACTION_READ_COMMITTED
                     && transactionIsolation != Connection.TRANSACTION_REPEATABLE_READ
                     && transactionIsolation != Connection.TRANSACTION_SERIALIZABLE) {
-                throw new IllegalArgumentException("Unsupported JDBC outbox transaction isolation: " + transactionIsolation);
+                throw new IllegalArgumentException(
+                        "Unsupported JDBC outbox transaction isolation: " + transactionIsolation);
             }
             this.transactionIsolation = transactionIsolation;
+            this.transactionIsolationExplicit = true;
             return this;
         }
 
@@ -413,8 +479,7 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         }
     }
 
-    private record OutboxRow(long id, ExternalChangeEvent event) {
-    }
+    private record OutboxRow(long id, ExternalChangeEvent event) {}
 
     private static final class FlatJsonParser {
         private final String value;
@@ -509,15 +574,16 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
                 }
                 if (current == '\\' && index < value.length()) {
                     char escaped = value.charAt(index++);
-                    builder.append(switch (escaped) {
-                        case '"', '\\', '/' -> escaped;
-                        case 'b' -> '\b';
-                        case 'f' -> '\f';
-                        case 'n' -> '\n';
-                        case 'r' -> '\r';
-                        case 't' -> '\t';
-                        default -> escaped;
-                    });
+                    builder.append(
+                            switch (escaped) {
+                                case '"', '\\', '/' -> escaped;
+                                case 'b' -> '\b';
+                                case 'f' -> '\f';
+                                case 'n' -> '\n';
+                                case 'r' -> '\r';
+                                case 't' -> '\t';
+                                default -> escaped;
+                            });
                 } else {
                     builder.append(current);
                 }

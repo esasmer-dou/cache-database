@@ -1,21 +1,26 @@
 package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.config.ProjectionRefreshConfig;
+
+import redis.clients.jedis.AbstractPipeline;
 import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.params.XAddParams;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Objects;
 
 public final class RedisProjectionRefreshQueue {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final ProjectionRefreshConfig config;
 
     public RedisProjectionRefreshQueue(JedisPooled jedis, ProjectionRefreshConfig config) {
+        this(JedisPooledOperations.of(jedis), config);
+    }
+
+    public RedisProjectionRefreshQueue(
+            RedisClientOperations jedis, ProjectionRefreshConfig config) {
         this.jedis = Objects.requireNonNull(jedis, "jedis");
         this.config = Objects.requireNonNull(config, "config");
     }
@@ -28,20 +33,35 @@ public final class RedisProjectionRefreshQueue {
         enqueue("DELETE", entityName, projectionName, id);
     }
 
-    public void enqueueUpsertBatch(String entityName, Collection<String> projectionNames, Collection<?> ids) {
+    public void enqueueUpsertBatch(
+            String entityName, Collection<String> projectionNames, Collection<?> ids) {
         enqueueBatch("UPSERT", entityName, projectionNames, ids);
     }
 
-    public void enqueueDeleteBatch(String entityName, Collection<String> projectionNames, Collection<?> ids) {
+    public void enqueueDeleteBatch(
+            String entityName, Collection<String> projectionNames, Collection<?> ids) {
         enqueueBatch("DELETE", entityName, projectionNames, ids);
     }
 
-    String enqueueRetry(String operation, String entityName, String projectionName, Object id, int attempt, String originalEntryId) {
+    String enqueueRetry(
+            String operation,
+            String entityName,
+            String projectionName,
+            Object id,
+            int attempt,
+            String originalEntryId) {
         return enqueue(operation, entityName, projectionName, id, attempt, originalEntryId, "");
     }
 
-    String enqueueReplay(String operation, String entityName, String projectionName, Object id, String originalEntryId, String replayedFromEntryId) {
-        return enqueue(operation, entityName, projectionName, id, 1, originalEntryId, replayedFromEntryId);
+    String enqueueReplay(
+            String operation,
+            String entityName,
+            String projectionName,
+            Object id,
+            String originalEntryId,
+            String replayedFromEntryId) {
+        return enqueue(
+                operation, entityName, projectionName, id, 1, originalEntryId, replayedFromEntryId);
     }
 
     private void enqueue(String operation, String entityName, String projectionName, Object id) {
@@ -55,8 +75,7 @@ public final class RedisProjectionRefreshQueue {
             Object id,
             int attempt,
             String originalEntryId,
-            String replayedFromEntryId
-    ) {
+            String replayedFromEntryId) {
         LinkedHashMap<String, String> fields = new LinkedHashMap<>();
         fields.put("operation", operation);
         fields.put("entity", entityName);
@@ -69,29 +88,31 @@ public final class RedisProjectionRefreshQueue {
         if (replayedFromEntryId != null && !replayedFromEntryId.isBlank()) {
             fields.put("replayedFromEntryId", replayedFromEntryId);
         }
-        String entryId = jedis.xadd(
-                config.streamKey(),
-                XAddParams.xAddParams(),
-                fields
-        ).toString();
+        String entryId =
+                jedis.commands()
+                        .xadd(config.streamKey(), XAddParams.xAddParams(), fields)
+                        .toString();
         if (config.maxStreamLength() > 0) {
-            jedis.xtrim(config.streamKey(), config.maxStreamLength(), true);
+            jedis.commands().xtrim(config.streamKey(), config.maxStreamLength(), true);
         }
         return entryId;
     }
 
-    private void enqueueBatch(String operation, String entityName, Collection<String> projectionNames, Collection<?> ids) {
+    private void enqueueBatch(
+            String operation,
+            String entityName,
+            Collection<String> projectionNames,
+            Collection<?> ids) {
         if (projectionNames == null || projectionNames.isEmpty() || ids == null || ids.isEmpty()) {
             return;
         }
-        try (Pipeline pipeline = jedis.pipelined()) {
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
             for (Object id : ids) {
                 for (String projectionName : projectionNames) {
                     pipeline.xadd(
                             config.streamKey(),
                             XAddParams.xAddParams(),
-                            newEventFields(operation, entityName, projectionName, id, 1, "", "")
-                    );
+                            newEventFields(operation, entityName, projectionName, id, 1, "", ""));
                 }
             }
             if (config.maxStreamLength() > 0) {
@@ -108,8 +129,7 @@ public final class RedisProjectionRefreshQueue {
             Object id,
             int attempt,
             String originalEntryId,
-            String replayedFromEntryId
-    ) {
+            String replayedFromEntryId) {
         LinkedHashMap<String, String> fields = new LinkedHashMap<>();
         fields.put("operation", operation);
         fields.put("entity", entityName);

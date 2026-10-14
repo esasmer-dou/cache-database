@@ -6,22 +6,22 @@ import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.model.RelationDefinition;
 import com.reactor.cachedb.core.plan.FetchPlan;
+import com.reactor.cachedb.core.projection.ProjectionEntityMetadata;
 import com.reactor.cachedb.core.query.HardLimitQueryClass;
 import com.reactor.cachedb.core.query.PartitionedQuerySpec;
 import com.reactor.cachedb.core.query.QueryCardinalityEstimate;
-import com.reactor.cachedb.core.query.QueryFilter;
-import com.reactor.cachedb.core.query.QueryGroup;
-import com.reactor.cachedb.core.query.QueryGroupOperator;
-import com.reactor.cachedb.core.query.QueryNode;
-import com.reactor.cachedb.core.query.QueryOperator;
 import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.query.QueryExplainPlan;
 import com.reactor.cachedb.core.query.QueryExplainRelationState;
 import com.reactor.cachedb.core.query.QueryExplainStep;
+import com.reactor.cachedb.core.query.QueryFilter;
+import com.reactor.cachedb.core.query.QueryGroup;
+import com.reactor.cachedb.core.query.QueryGroupOperator;
 import com.reactor.cachedb.core.query.QueryHistogramBucket;
-import com.reactor.cachedb.core.query.QuerySpec;
+import com.reactor.cachedb.core.query.QueryNode;
+import com.reactor.cachedb.core.query.QueryOperator;
 import com.reactor.cachedb.core.query.QuerySort;
-import com.reactor.cachedb.core.projection.ProjectionEntityMetadata;
+import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.core.queue.QueryIndexRebuildResult;
 import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
@@ -29,8 +29,9 @@ import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import com.reactor.cachedb.core.route.RouteCacheContext;
 import com.reactor.cachedb.core.route.RouteCacheContract;
 import com.reactor.cachedb.core.route.RouteCacheStrictMode;
+
+import redis.clients.jedis.AbstractPipeline;
 import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.Response;
 import redis.clients.jedis.params.SetParams;
 import redis.clients.jedis.resps.Tuple;
@@ -54,7 +55,7 @@ public final class RedisQueryIndexManager<T, ID> {
 
     private static final String NULL_SENTINEL = "__NULL__";
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final EntityMetadata<T, ID> metadata;
     private final EntityCodec<T> codec;
     private final RedisKeyStrategy keyStrategy;
@@ -76,8 +77,29 @@ public final class RedisQueryIndexManager<T, ID> {
             QueryIndexConfig config,
             RelationConfig relationConfig,
             QueryEvaluator queryEvaluator,
-            RedisProducerGuard producerGuard
-    ) {
+            RedisProducerGuard producerGuard) {
+        this(
+                JedisPooledOperations.of(jedis),
+                metadata,
+                codec,
+                keyStrategy,
+                entityRegistry,
+                config,
+                relationConfig,
+                queryEvaluator,
+                producerGuard);
+    }
+
+    public RedisQueryIndexManager(
+            RedisClientOperations jedis,
+            EntityMetadata<T, ID> metadata,
+            EntityCodec<T> codec,
+            RedisKeyStrategy keyStrategy,
+            EntityRegistry entityRegistry,
+            QueryIndexConfig config,
+            RelationConfig relationConfig,
+            QueryEvaluator queryEvaluator,
+            RedisProducerGuard producerGuard) {
         this.jedis = jedis;
         this.metadata = metadata;
         this.codec = codec;
@@ -135,23 +157,25 @@ public final class RedisQueryIndexManager<T, ID> {
                     !indexFeaturesDegraded(),
                     true,
                     Instant.now(),
-                    "Skipped automatic rebuild because cooldown is active"
-            );
+                    "Skipped automatic rebuild because cooldown is active");
         }
 
         long clearedKeyCount = clearIndexKeys(lockKey);
         long rebuiltEntityCount = 0L;
         String cursor = "0";
         do {
-            redis.clients.jedis.resps.ScanResult<String> scan = jedis.scan(cursor, new redis.clients.jedis.params.ScanParams()
-                    .match(keyStrategy.entityPattern(namespace))
-                    .count(Math.max(64, config.plannerStatisticsSampleSize() * 4)));
+            redis.clients.jedis.resps.ScanResult<String> scan =
+                    jedis.scan(
+                            cursor,
+                            new redis.clients.jedis.params.ScanParams()
+                                    .match(keyStrategy.entityPattern(namespace))
+                                    .count(Math.max(64, config.plannerStatisticsSampleSize() * 4)));
             for (String entityKey : scan.getResult()) {
                 String id = entityKey.substring(entityKey.lastIndexOf(':') + 1);
-                if (jedis.exists(keyStrategy.tombstoneKey(namespace, id))) {
+                if (jedis.commands().exists(keyStrategy.tombstoneKey(namespace, id))) {
                     continue;
                 }
-                String payload = jedis.get(entityKey);
+                String payload = jedis.commands().get(entityKey);
                 if (payload == null || payload.isBlank()) {
                     continue;
                 }
@@ -161,7 +185,7 @@ public final class RedisQueryIndexManager<T, ID> {
             }
             cursor = scan.getCursor();
         } while (!"0".equals(cursor));
-        jedis.del(keyStrategy.indexDegradedKey(namespace));
+        jedis.commands().del(keyStrategy.indexDegradedKey(namespace));
         invalidatePlannerStatistics();
         return new QueryIndexRebuildResult(
                 metadata.entityName(),
@@ -171,8 +195,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 true,
                 automatic,
                 Instant.now(),
-                note == null ? "" : note
-        );
+                note == null ? "" : note);
     }
 
     private void reindexEntity(T entity, boolean respectShedding) {
@@ -186,14 +209,17 @@ public final class RedisQueryIndexManager<T, ID> {
         removeById(id);
         String idValue = String.valueOf(id);
         Map<String, String> metaValues = new LinkedHashMap<>();
-        try (Pipeline pipeline = jedis.pipelined()) {
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
             pipeline.sadd(keyStrategy.indexAllKey(metadata.redisNamespace()), idValue);
             for (String column : metadata.columns()) {
                 Object value = columns.get(column);
                 String serialized = serializeValue(value);
                 metaValues.put(column, serialized);
                 if (config.exactIndexEnabled()) {
-                    pipeline.sadd(keyStrategy.indexExactKey(metadata.redisNamespace(), column, encodeKeyPart(serialized)), idValue);
+                    pipeline.sadd(
+                            keyStrategy.indexExactKey(
+                                    metadata.redisNamespace(), column, encodeKeyPart(serialized)),
+                            idValue);
                 }
                 if (value instanceof String stringValue) {
                     indexStringValue(pipeline, idValue, column, stringValue);
@@ -201,7 +227,10 @@ public final class RedisQueryIndexManager<T, ID> {
                 if (config.rangeIndexEnabled()) {
                     Double score = RedisScoreSupport.toScore(metadata.columnTypes(), column, value);
                     if (score != null) {
-                        pipeline.zadd(keyStrategy.indexSortKey(metadata.redisNamespace(), column), score, idValue);
+                        pipeline.zadd(
+                                keyStrategy.indexSortKey(metadata.redisNamespace(), column),
+                                score,
+                                idValue);
                     }
                 }
             }
@@ -234,19 +263,21 @@ public final class RedisQueryIndexManager<T, ID> {
         invalidatePlannerStatistics();
         ArrayList<String> idValues = new ArrayList<>(candidates.size());
         ArrayList<Map<String, Object>> entityColumns = new ArrayList<>(candidates.size());
-        ArrayList<Response<Map<String, String>>> priorMetaResponses = new ArrayList<>(candidates.size());
+        ArrayList<Response<Map<String, String>>> priorMetaResponses =
+                new ArrayList<>(candidates.size());
         String namespace = metadata.redisNamespace();
-        try (Pipeline readPipeline = jedis.pipelined()) {
+        try (AbstractPipeline readPipeline = jedis.pipeline()) {
             for (T entity : candidates) {
                 ID id = metadata.idAccessor().apply(entity);
                 idValues.add(String.valueOf(id));
                 entityColumns.add(codec.toColumns(entity));
-                priorMetaResponses.add(readPipeline.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
+                priorMetaResponses.add(
+                        readPipeline.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
             }
             readPipeline.sync();
         }
 
-        try (Pipeline writePipeline = jedis.pipelined()) {
+        try (AbstractPipeline writePipeline = jedis.pipeline()) {
             for (int index = 0; index < candidates.size(); index++) {
                 String idValue = idValues.get(index);
                 Map<String, String> priorMetaValues = priorMetaResponses.get(index).get();
@@ -255,12 +286,19 @@ public final class RedisQueryIndexManager<T, ID> {
                     for (Map.Entry<String, String> entry : priorMetaValues.entrySet()) {
                         if (config.exactIndexEnabled()) {
                             writePipeline.srem(
-                                    keyStrategy.indexExactKey(namespace, entry.getKey(), encodeKeyPart(entry.getValue())),
-                                    idValue
-                            );
+                                    keyStrategy.indexExactKey(
+                                            namespace,
+                                            entry.getKey(),
+                                            encodeKeyPart(entry.getValue())),
+                                    idValue);
                         }
-                        removeStringValueIndex(writePipeline, idValue, entry.getKey(), decodeValue(entry.getValue()));
-                        writePipeline.zrem(keyStrategy.indexSortKey(namespace, entry.getKey()), idValue);
+                        removeStringValueIndex(
+                                writePipeline,
+                                idValue,
+                                entry.getKey(),
+                                decodeValue(entry.getValue()));
+                        writePipeline.zrem(
+                                keyStrategy.indexSortKey(namespace, entry.getKey()), idValue);
                     }
                     removePartitionedSortIndexes(writePipeline, idValue, priorMetaValues);
                     writePipeline.del(metaKey);
@@ -282,15 +320,20 @@ public final class RedisQueryIndexManager<T, ID> {
                     String serialized = serializeValue(value);
                     metaValues.put(column, serialized);
                     if (config.exactIndexEnabled()) {
-                        writePipeline.sadd(keyStrategy.indexExactKey(namespace, column, encodeKeyPart(serialized)), idValue);
+                        writePipeline.sadd(
+                                keyStrategy.indexExactKey(
+                                        namespace, column, encodeKeyPart(serialized)),
+                                idValue);
                     }
                     if (value instanceof String stringValue) {
                         indexStringValue(writePipeline, idValue, column, stringValue);
                     }
                     if (config.rangeIndexEnabled()) {
-                        Double score = RedisScoreSupport.toScore(metadata.columnTypes(), column, value);
+                        Double score =
+                                RedisScoreSupport.toScore(metadata.columnTypes(), column, value);
                         if (score != null) {
-                            writePipeline.zadd(keyStrategy.indexSortKey(namespace, column), score, idValue);
+                            writePipeline.zadd(
+                                    keyStrategy.indexSortKey(namespace, column), score, idValue);
                         }
                     }
                 }
@@ -317,19 +360,21 @@ public final class RedisQueryIndexManager<T, ID> {
         invalidatePlannerStatistics();
         ArrayList<String> idValues = new ArrayList<>(candidates.size());
         ArrayList<Map<String, Object>> entityColumns = new ArrayList<>(candidates.size());
-        ArrayList<Response<Map<String, String>>> priorMetaResponses = new ArrayList<>(candidates.size());
+        ArrayList<Response<Map<String, String>>> priorMetaResponses =
+                new ArrayList<>(candidates.size());
         String namespace = metadata.redisNamespace();
-        try (Pipeline readPipeline = jedis.pipelined()) {
+        try (AbstractPipeline readPipeline = jedis.pipeline()) {
             for (T entity : candidates) {
                 ID id = metadata.idAccessor().apply(entity);
                 idValues.add(String.valueOf(id));
                 entityColumns.add(codec.toColumns(entity));
-                priorMetaResponses.add(readPipeline.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
+                priorMetaResponses.add(
+                        readPipeline.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
             }
             readPipeline.sync();
         }
 
-        try (Pipeline writePipeline = jedis.pipelined()) {
+        try (AbstractPipeline writePipeline = jedis.pipeline()) {
             for (int index = 0; index < candidates.size(); index++) {
                 String idValue = idValues.get(index);
                 Map<String, String> priorMetaValues = priorMetaResponses.get(index).get();
@@ -360,8 +405,8 @@ public final class RedisQueryIndexManager<T, ID> {
         invalidatePlannerStatistics();
         String idValue = String.valueOf(id);
         String metaKey = keyStrategy.indexMetaKey(metadata.redisNamespace(), idValue);
-        Map<String, String> metaValues = jedis.hgetAll(metaKey);
-        try (Pipeline pipeline = jedis.pipelined()) {
+        Map<String, String> metaValues = jedis.commands().hgetAll(metaKey);
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
             if (metaValues != null && !metaValues.isEmpty()) {
                 for (Map.Entry<String, String> entry : metaValues.entrySet()) {
                     if (config.exactIndexEnabled()) {
@@ -369,19 +414,21 @@ public final class RedisQueryIndexManager<T, ID> {
                                 keyStrategy.indexExactKey(
                                         metadata.redisNamespace(),
                                         entry.getKey(),
-                                        encodeKeyPart(entry.getValue())
-                                ),
-                                idValue
-                        );
+                                        encodeKeyPart(entry.getValue())),
+                                idValue);
                     }
-                    removeStringValueIndex(pipeline, idValue, entry.getKey(), decodeValue(entry.getValue()));
-                    pipeline.zrem(keyStrategy.indexSortKey(metadata.redisNamespace(), entry.getKey()), idValue);
+                    removeStringValueIndex(
+                            pipeline, idValue, entry.getKey(), decodeValue(entry.getValue()));
+                    pipeline.zrem(
+                            keyStrategy.indexSortKey(metadata.redisNamespace(), entry.getKey()),
+                            idValue);
                 }
                 removePartitionedSortIndexes(pipeline, idValue, metaValues);
                 pipeline.del(metaKey);
             } else {
                 for (String column : metadata.columns()) {
-                    pipeline.zrem(keyStrategy.indexSortKey(metadata.redisNamespace(), column), idValue);
+                    pipeline.zrem(
+                            keyStrategy.indexSortKey(metadata.redisNamespace(), column), idValue);
                 }
             }
             pipeline.srem(keyStrategy.indexAllKey(metadata.redisNamespace()), idValue);
@@ -404,10 +451,12 @@ public final class RedisQueryIndexManager<T, ID> {
             return;
         }
         throw new IllegalStateException(
-                "Route " + contract.routeName()
-                        + " cannot fall back to a Redis full-scan because " + reason
-                        + ". Rebuild query indexes, use a registered projection route, or lower the route contract before serving production traffic."
-        );
+                "Route "
+                        + contract.routeName()
+                        + " cannot fall back to a Redis full-scan because "
+                        + reason
+                        + ". Rebuild query indexes, use a registered projection route, or lower the"
+                        + " route contract before serving production traffic.");
     }
 
     public void warm(QuerySpec querySpec) {
@@ -458,7 +507,8 @@ public final class RedisQueryIndexManager<T, ID> {
         }
 
         QuerySort sort = querySpec.sorts().get(0);
-        LinkedHashSet<String> eligibleIds = new LinkedHashSet<>(resolveIndexedAndResidualCandidates(querySpec));
+        LinkedHashSet<String> eligibleIds =
+                new LinkedHashSet<>(resolveIndexedAndResidualCandidates(querySpec));
         if (eligibleIds.isEmpty()) {
             return List.of();
         }
@@ -469,9 +519,10 @@ public final class RedisQueryIndexManager<T, ID> {
         int chunkSize = Math.max(querySpec.limit() * 4, 64);
         String sortKey = keyStrategy.indexSortKey(metadata.redisNamespace(), sort.column());
         while (ordered.size() < targetCount) {
-            List<String> batch = sort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
-                    ? jedis.zrevrange(sortKey, rank, rank + chunkSize - 1)
-                    : jedis.zrange(sortKey, rank, rank + chunkSize - 1);
+            List<String> batch =
+                    sort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
+                            ? jedis.commands().zrevrange(sortKey, rank, rank + chunkSize - 1)
+                            : jedis.commands().zrange(sortKey, rank, rank + chunkSize - 1);
             if (batch == null || batch.isEmpty()) {
                 break;
             }
@@ -501,7 +552,8 @@ public final class RedisQueryIndexManager<T, ID> {
         if (querySpec.sorts().size() == 1) {
             return resolveSortedIds(querySpec);
         }
-        List<String> partitionedExactSorted = resolvePrimarySortedIdsFromPartitionedExactSort(querySpec);
+        List<String> partitionedExactSorted =
+                resolvePrimarySortedIdsFromPartitionedExactSort(querySpec);
         if (partitionedExactSorted != null) {
             return partitionedExactSorted;
         }
@@ -514,7 +566,8 @@ public final class RedisQueryIndexManager<T, ID> {
         }
 
         QuerySort primarySort = querySpec.sorts().get(0);
-        LinkedHashSet<String> eligibleIds = new LinkedHashSet<>(resolveIndexedAndResidualCandidates(querySpec));
+        LinkedHashSet<String> eligibleIds =
+                new LinkedHashSet<>(resolveIndexedAndResidualCandidates(querySpec));
         if (eligibleIds.isEmpty()) {
             return List.of();
         }
@@ -524,15 +577,22 @@ public final class RedisQueryIndexManager<T, ID> {
             return List.of();
         }
 
-        ArrayList<String> ordered = new ArrayList<>(Math.min(targetCount + Math.max(querySpec.limit(), 16), eligibleIds.size()));
+        ArrayList<String> ordered =
+                new ArrayList<>(
+                        Math.min(
+                                targetCount + Math.max(querySpec.limit(), 16), eligibleIds.size()));
         String sortKey = keyStrategy.indexSortKey(metadata.redisNamespace(), primarySort.column());
         int rank = 0;
         int chunkSize = Math.max(querySpec.limit() * 4, 64);
         Double boundaryScore = null;
         while (true) {
-            List<Tuple> batch = primarySort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
-                    ? jedis.zrevrangeWithScores(sortKey, rank, rank + chunkSize - 1)
-                    : jedis.zrangeWithScores(sortKey, rank, rank + chunkSize - 1);
+            List<Tuple> batch =
+                    primarySort.direction()
+                                    == com.reactor.cachedb.core.query.QuerySortDirection.DESC
+                            ? jedis.commands()
+                                    .zrevrangeWithScores(sortKey, rank, rank + chunkSize - 1)
+                            : jedis.commands()
+                                    .zrangeWithScores(sortKey, rank, rank + chunkSize - 1);
             if (batch == null || batch.isEmpty()) {
                 break;
             }
@@ -545,7 +605,9 @@ public final class RedisQueryIndexManager<T, ID> {
                 }
 
                 double score = tuple.getScore();
-                if (boundaryScore != null && Double.compare(score, boundaryScore) != 0 && ordered.size() >= targetCount) {
+                if (boundaryScore != null
+                        && Double.compare(score, boundaryScore) != 0
+                        && ordered.size() >= targetCount) {
                     completedBoundaryCoverage = true;
                     break;
                 }
@@ -578,9 +640,12 @@ public final class RedisQueryIndexManager<T, ID> {
         int chunkSize = Math.max(querySpec.limit() * 4, 64);
         String sortKey = keyStrategy.indexSortKey(metadata.redisNamespace(), sort.column());
         while (ordered.size() < targetCount) {
-            List<Tuple> batch = sort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
-                    ? jedis.zrevrangeWithScores(sortKey, rank, rank + chunkSize - 1)
-                    : jedis.zrangeWithScores(sortKey, rank, rank + chunkSize - 1);
+            List<Tuple> batch =
+                    sort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
+                            ? jedis.commands()
+                                    .zrevrangeWithScores(sortKey, rank, rank + chunkSize - 1)
+                            : jedis.commands()
+                                    .zrangeWithScores(sortKey, rank, rank + chunkSize - 1);
             if (batch == null || batch.isEmpty()) {
                 break;
             }
@@ -614,9 +679,13 @@ public final class RedisQueryIndexManager<T, ID> {
         int chunkSize = Math.max(querySpec.limit() * 4, 64);
         Double boundaryScore = null;
         while (true) {
-            List<Tuple> batch = primarySort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
-                    ? jedis.zrevrangeWithScores(sortKey, rank, rank + chunkSize - 1)
-                    : jedis.zrangeWithScores(sortKey, rank, rank + chunkSize - 1);
+            List<Tuple> batch =
+                    primarySort.direction()
+                                    == com.reactor.cachedb.core.query.QuerySortDirection.DESC
+                            ? jedis.commands()
+                                    .zrevrangeWithScores(sortKey, rank, rank + chunkSize - 1)
+                            : jedis.commands()
+                                    .zrangeWithScores(sortKey, rank, rank + chunkSize - 1);
             if (batch == null || batch.isEmpty()) {
                 break;
             }
@@ -624,9 +693,8 @@ public final class RedisQueryIndexManager<T, ID> {
             boolean completedBoundaryCoverage = false;
             BatchFilterResult filtered = filterOrderedBatch(batch, querySpec.rootGroup(), plan);
             List<String> matchedIds = filtered.matchedIds();
-            Set<String> matchedIdSet = matchedIds.isEmpty()
-                    ? Set.of()
-                    : new LinkedHashSet<>(matchedIds);
+            Set<String> matchedIdSet =
+                    matchedIds.isEmpty() ? Set.of() : new LinkedHashSet<>(matchedIds);
             for (Tuple tuple : batch) {
                 String id = tuple.getElement();
                 if (!matchedIdSet.contains(id)) {
@@ -634,7 +702,9 @@ public final class RedisQueryIndexManager<T, ID> {
                 }
 
                 double score = tuple.getScore();
-                if (boundaryScore != null && Double.compare(score, boundaryScore) != 0 && ordered.size() >= targetCount) {
+                if (boundaryScore != null
+                        && Double.compare(score, boundaryScore) != 0
+                        && ordered.size() >= targetCount) {
                     completedBoundaryCoverage = true;
                     break;
                 }
@@ -696,8 +766,16 @@ public final class RedisQueryIndexManager<T, ID> {
             return List.of();
         }
         return plan.sort().direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
-                ? jedis.zrevrange(plan.sortKey(), querySpec.offset(), querySpec.offset() + querySpec.limit() - 1)
-                : jedis.zrange(plan.sortKey(), querySpec.offset(), querySpec.offset() + querySpec.limit() - 1);
+                ? jedis.commands()
+                        .zrevrange(
+                                plan.sortKey(),
+                                querySpec.offset(),
+                                querySpec.offset() + querySpec.limit() - 1)
+                : jedis.commands()
+                        .zrange(
+                                plan.sortKey(),
+                                querySpec.offset(),
+                                querySpec.offset() + querySpec.limit() - 1);
     }
 
     private List<String> resolvePrimarySortedIdsFromPartitionedExactSort(QuerySpec querySpec) {
@@ -715,9 +793,13 @@ public final class RedisQueryIndexManager<T, ID> {
         int chunkSize = Math.max(querySpec.limit() * 4, 64);
         Double boundaryScore = null;
         while (true) {
-            List<Tuple> batch = plan.sort().direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
-                    ? jedis.zrevrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1)
-                    : jedis.zrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1);
+            List<Tuple> batch =
+                    plan.sort().direction()
+                                    == com.reactor.cachedb.core.query.QuerySortDirection.DESC
+                            ? jedis.commands()
+                                    .zrevrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1)
+                            : jedis.commands()
+                                    .zrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1);
             if (batch == null || batch.isEmpty()) {
                 break;
             }
@@ -725,7 +807,9 @@ public final class RedisQueryIndexManager<T, ID> {
             boolean completedBoundaryCoverage = false;
             for (Tuple tuple : batch) {
                 double score = tuple.getScore();
-                if (boundaryScore != null && Double.compare(score, boundaryScore) != 0 && ordered.size() >= targetCount) {
+                if (boundaryScore != null
+                        && Double.compare(score, boundaryScore) != 0
+                        && ordered.size() >= targetCount) {
                     completedBoundaryCoverage = true;
                     break;
                 }
@@ -769,100 +853,113 @@ public final class RedisQueryIndexManager<T, ID> {
                         metadata.redisNamespace(),
                         filter.column(),
                         encodeKeyPart(serializeValue(filter.value())),
-                        primarySort.column()
-                )
-        );
+                        primarySort.column()));
     }
 
-    public <K> Map<K, List<String>> resolvePartitionedIds(PartitionedQuerySpec<K> partitionedQuery) {
+    public <K> Map<K, List<String>> resolvePartitionedIds(
+            PartitionedQuerySpec<K> partitionedQuery) {
         if (partitionedQuery == null || partitionedQuery.partitionValues().isEmpty()) {
             return Map.of();
         }
         QuerySort primarySort = partitionedQuery.sorts().get(0);
         if (!supportsPartitionedPair(partitionedQuery.partitionColumn(), primarySort.column())) {
             throw new IllegalStateException(
-                    "No partitioned sorted index is declared for " + metadata.entityName()
-                            + " on " + partitionedQuery.partitionColumn()
-                            + " ordered by " + primarySort.column()
-            );
+                    "No partitioned sorted index is declared for "
+                            + metadata.entityName()
+                            + " on "
+                            + partitionedQuery.partitionColumn()
+                            + " ordered by "
+                            + primarySort.column());
         }
-        LinkedHashMap<K, String> sortKeys = new LinkedHashMap<>(partitionedQuery.partitionValues().size());
+        LinkedHashMap<K, String> sortKeys =
+                new LinkedHashMap<>(partitionedQuery.partitionValues().size());
         for (K partitionValue : partitionedQuery.partitionValues()) {
-            sortKeys.put(partitionValue, keyStrategy.indexPartitionSortKey(
-                    metadata.redisNamespace(),
-                    partitionedQuery.partitionColumn(),
-                    encodeKeyPart(serializeValue(partitionValue)),
-                    primarySort.column()
-            ));
+            sortKeys.put(
+                    partitionValue,
+                    keyStrategy.indexPartitionSortKey(
+                            metadata.redisNamespace(),
+                            partitionedQuery.partitionColumn(),
+                            encodeKeyPart(serializeValue(partitionValue)),
+                            primarySort.column()));
         }
         return partitionedQuery.sorts().size() == 1
-                ? resolveSingleSortPartitionedIds(sortKeys, primarySort, partitionedQuery.limitPerPartition())
-                : resolveMultiSortPartitionedIds(sortKeys, primarySort, partitionedQuery.limitPerPartition());
+                ? resolveSingleSortPartitionedIds(
+                        sortKeys, primarySort, partitionedQuery.limitPerPartition())
+                : resolveMultiSortPartitionedIds(
+                        sortKeys, primarySort, partitionedQuery.limitPerPartition());
     }
 
     private <K> Map<K, List<String>> resolveSingleSortPartitionedIds(
-            Map<K, String> sortKeys,
-            QuerySort primarySort,
-            int limit
-    ) {
+            Map<K, String> sortKeys, QuerySort primarySort, int limit) {
         LinkedHashMap<K, Response<List<String>>> responses = new LinkedHashMap<>(sortKeys.size());
-        try (Pipeline pipeline = jedis.pipelined()) {
-            sortKeys.forEach((partition, sortKey) -> responses.put(
-                    partition,
-                    primarySort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
-                            ? pipeline.zrevrange(sortKey, 0, limit - 1L)
-                            : pipeline.zrange(sortKey, 0, limit - 1L)
-            ));
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
+            sortKeys.forEach(
+                    (partition, sortKey) ->
+                            responses.put(
+                                    partition,
+                                    primarySort.direction()
+                                                    == com.reactor.cachedb.core.query
+                                                            .QuerySortDirection.DESC
+                                            ? pipeline.zrevrange(sortKey, 0, limit - 1L)
+                                            : pipeline.zrange(sortKey, 0, limit - 1L)));
             pipeline.sync();
         }
         LinkedHashMap<K, List<String>> resolved = new LinkedHashMap<>(responses.size());
-        responses.forEach((partition, response) -> resolved.put(partition, List.copyOf(response.get())));
+        responses.forEach(
+                (partition, response) -> resolved.put(partition, List.copyOf(response.get())));
         return Collections.unmodifiableMap(resolved);
     }
 
     private <K> Map<K, List<String>> resolveMultiSortPartitionedIds(
-            Map<K, String> sortKeys,
-            QuerySort primarySort,
-            int limit
-    ) {
-        LinkedHashMap<K, Response<List<Tuple>>> headResponses = new LinkedHashMap<>(sortKeys.size());
-        try (Pipeline pipeline = jedis.pipelined()) {
-            sortKeys.forEach((partition, sortKey) -> headResponses.put(
-                    partition,
-                    primarySort.direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC
-                            ? pipeline.zrevrangeWithScores(sortKey, 0, limit - 1L)
-                            : pipeline.zrangeWithScores(sortKey, 0, limit - 1L)
-            ));
+            Map<K, String> sortKeys, QuerySort primarySort, int limit) {
+        LinkedHashMap<K, Response<List<Tuple>>> headResponses =
+                new LinkedHashMap<>(sortKeys.size());
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
+            sortKeys.forEach(
+                    (partition, sortKey) ->
+                            headResponses.put(
+                                    partition,
+                                    primarySort.direction()
+                                                    == com.reactor.cachedb.core.query
+                                                            .QuerySortDirection.DESC
+                                            ? pipeline.zrevrangeWithScores(sortKey, 0, limit - 1L)
+                                            : pipeline.zrangeWithScores(sortKey, 0, limit - 1L)));
             pipeline.sync();
         }
 
         LinkedHashMap<K, List<Tuple>> heads = new LinkedHashMap<>(headResponses.size());
-        headResponses.forEach((partition, response) -> heads.put(partition, List.copyOf(response.get())));
+        headResponses.forEach(
+                (partition, response) -> heads.put(partition, List.copyOf(response.get())));
         LinkedHashMap<K, Response<List<String>>> boundaryResponses = new LinkedHashMap<>();
-        try (Pipeline pipeline = jedis.pipelined()) {
-            heads.forEach((partition, tuples) -> {
-                if (tuples.size() >= limit) {
-                    double boundaryScore = tuples.get(tuples.size() - 1).getScore();
-                    boundaryResponses.put(
-                            partition,
-                            pipeline.zrangeByScore(sortKeys.get(partition), boundaryScore, boundaryScore)
-                    );
-                }
-            });
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
+            heads.forEach(
+                    (partition, tuples) -> {
+                        if (tuples.size() >= limit) {
+                            double boundaryScore = tuples.get(tuples.size() - 1).getScore();
+                            boundaryResponses.put(
+                                    partition,
+                                    pipeline.zrangeByScore(
+                                            sortKeys.get(partition), boundaryScore, boundaryScore));
+                        }
+                    });
             pipeline.sync();
         }
 
         LinkedHashMap<K, List<String>> resolved = new LinkedHashMap<>(heads.size());
-        heads.forEach((partition, tuples) -> {
-            LinkedHashSet<String> candidates = tuples.stream()
-                    .map(Tuple::getElement)
-                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-            Response<List<String>> boundary = boundaryResponses.get(partition);
-            if (boundary != null) {
-                candidates.addAll(boundary.get());
-            }
-            resolved.put(partition, List.copyOf(candidates));
-        });
+        heads.forEach(
+                (partition, tuples) -> {
+                    LinkedHashSet<String> candidates =
+                            tuples.stream()
+                                    .map(Tuple::getElement)
+                                    .collect(
+                                            java.util.stream.Collectors.toCollection(
+                                                    LinkedHashSet::new));
+                    Response<List<String>> boundary = boundaryResponses.get(partition);
+                    if (boundary != null) {
+                        candidates.addAll(boundary.get());
+                    }
+                    resolved.put(partition, List.copyOf(candidates));
+                });
         return Collections.unmodifiableMap(resolved);
     }
 
@@ -925,7 +1022,8 @@ public final class RedisQueryIndexManager<T, ID> {
         return baseLimit;
     }
 
-    private List<String> orderCandidateIdsByScores(Collection<String> candidateIds, List<QuerySort> sorts) {
+    private List<String> orderCandidateIdsByScores(
+            Collection<String> candidateIds, List<QuerySort> sorts) {
         ArrayList<String> orderedIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
         if (orderedIds.size() <= 1) {
             return List.copyOf(orderedIds);
@@ -936,9 +1034,10 @@ public final class RedisQueryIndexManager<T, ID> {
         return List.copyOf(orderedIds);
     }
 
-    private LinkedHashMap<String, double[]> loadCandidateScores(List<String> orderedIds, List<QuerySort> sorts) {
+    private LinkedHashMap<String, double[]> loadCandidateScores(
+            List<String> orderedIds, List<QuerySort> sorts) {
         ArrayList<List<Response<Double>>> responses = new ArrayList<>(sorts.size());
-        try (Pipeline pipeline = jedis.pipelined()) {
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
             for (QuerySort sort : sorts) {
                 ArrayList<Response<Double>> scoreResponses = new ArrayList<>(orderedIds.size());
                 String sortKey = keyStrategy.indexSortKey(metadata.redisNamespace(), sort.column());
@@ -959,23 +1058,21 @@ public final class RedisQueryIndexManager<T, ID> {
             List<Response<Double>> scoreResponses = responses.get(sortIndex);
             for (int idIndex = 0; idIndex < orderedIds.size(); idIndex++) {
                 Double score = scoreResponses.get(idIndex).get();
-                scoresById.get(orderedIds.get(idIndex))[sortIndex] = score == null ? missingSortScore(sort) : score;
+                scoresById.get(orderedIds.get(idIndex))[sortIndex] =
+                        score == null ? missingSortScore(sort) : score;
             }
         }
         return scoresById;
     }
 
     private int compareCandidateScores(
-            String left,
-            String right,
-            Map<String, double[]> scoresById,
-            List<QuerySort> sorts
-    ) {
+            String left, String right, Map<String, double[]> scoresById, List<QuerySort> sorts) {
         double[] leftScores = scoresById.get(left);
         double[] rightScores = scoresById.get(right);
         for (int index = 0; index < sorts.size(); index++) {
             int result = Double.compare(leftScores[index], rightScores[index]);
-            if (sorts.get(index).direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC) {
+            if (sorts.get(index).direction()
+                    == com.reactor.cachedb.core.query.QuerySortDirection.DESC) {
                 result = -result;
             }
             if (result != 0) {
@@ -991,7 +1088,8 @@ public final class RedisQueryIndexManager<T, ID> {
                 : Double.POSITIVE_INFINITY;
     }
 
-    private BatchFilterResult filterOrderedBatch(List<Tuple> batch, QueryNode filterNode, LazySortedScanPlan plan) {
+    private BatchFilterResult filterOrderedBatch(
+            List<Tuple> batch, QueryNode filterNode, LazySortedScanPlan plan) {
         if (batch.isEmpty()) {
             return new BatchFilterResult(List.of(), false);
         }
@@ -1000,14 +1098,16 @@ public final class RedisQueryIndexManager<T, ID> {
             boolean stopScanning = false;
             for (Tuple tuple : batch) {
                 double score = tuple.getScore();
-                if (plan.scoreRange() != null && plan.scoreRange().canStop(score, plan.direction())) {
+                if (plan.scoreRange() != null
+                        && plan.scoreRange().canStop(score, plan.direction())) {
                     stopScanning = true;
                     break;
                 }
                 if (plan.scoreRange() != null && !plan.scoreRange().matches(score)) {
                     continue;
                 }
-                if (plan.membershipIds() != null && !plan.membershipIds().contains(tuple.getElement())) {
+                if (plan.membershipIds() != null
+                        && !plan.membershipIds().contains(tuple.getElement())) {
                     continue;
                 }
                 matches.add(tuple.getElement());
@@ -1016,12 +1116,14 @@ public final class RedisQueryIndexManager<T, ID> {
         }
 
         List<String> orderedIds = batch.stream().map(Tuple::getElement).toList();
-        List<String> keys = orderedIds.stream()
-                .map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id))
-                .toList();
-        List<String> tombstoneKeys = orderedIds.stream()
-                .map(id -> keyStrategy.tombstoneKey(metadata.redisNamespace(), id))
-                .toList();
+        List<String> keys =
+                orderedIds.stream()
+                        .map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id))
+                        .toList();
+        List<String> tombstoneKeys =
+                orderedIds.stream()
+                        .map(id -> keyStrategy.tombstoneKey(metadata.redisNamespace(), id))
+                        .toList();
         List<List<String>> values = mgetBatchEntityAndTombstones(keys, tombstoneKeys);
         List<String> payloads = values.get(0);
         List<String> tombstones = values.get(1);
@@ -1029,7 +1131,8 @@ public final class RedisQueryIndexManager<T, ID> {
         boolean stopScanning = false;
         for (int index = 0; index < orderedIds.size(); index++) {
             Tuple tuple = batch.get(index);
-            if (plan.scoreRange() != null && plan.scoreRange().canStop(tuple.getScore(), plan.direction())) {
+            if (plan.scoreRange() != null
+                    && plan.scoreRange().canStop(tuple.getScore(), plan.direction())) {
                 stopScanning = true;
                 break;
             }
@@ -1046,7 +1149,8 @@ public final class RedisQueryIndexManager<T, ID> {
         return new BatchFilterResult(List.copyOf(matches), stopScanning);
     }
 
-    private List<List<String>> mgetBatchEntityAndTombstones(List<String> keys, List<String> tombstoneKeys) {
+    private List<List<String>> mgetBatchEntityAndTombstones(
+            List<String> keys, List<String> tombstoneKeys) {
         if (keys.isEmpty()) {
             return List.of(List.of(), List.of());
         }
@@ -1067,8 +1171,12 @@ public final class RedisQueryIndexManager<T, ID> {
             if (filter.column().contains(".")) {
                 return new LazySortedScanPlan(null, null, primarySort.direction(), true);
             }
-            if (filter.column().equals(primarySort.column()) && isRangeOperator(filter.operator()) && supportsScoreOrdering(filter.column())) {
-                Double score = RedisScoreSupport.toScore(metadata.columnTypes(), filter.column(), filter.value());
+            if (filter.column().equals(primarySort.column())
+                    && isRangeOperator(filter.operator())
+                    && supportsScoreOrdering(filter.column())) {
+                Double score =
+                        RedisScoreSupport.toScore(
+                                metadata.columnTypes(), filter.column(), filter.value());
                 if (score == null) {
                     return new LazySortedScanPlan(null, null, primarySort.direction(), true);
                 }
@@ -1092,14 +1200,30 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private ScoreRange mergeScoreRange(ScoreRange current, QueryOperator operator, double score) {
-        ScoreRange base = current == null
-                ? new ScoreRange(Double.NEGATIVE_INFINITY, true, Double.POSITIVE_INFINITY, true)
-                : current;
+        ScoreRange base =
+                current == null
+                        ? new ScoreRange(
+                                Double.NEGATIVE_INFINITY, true, Double.POSITIVE_INFINITY, true)
+                        : current;
         return switch (operator) {
-            case GT -> new ScoreRange(Math.max(base.min(), score), false, base.max(), base.maxInclusive());
-            case GTE -> new ScoreRange(Math.max(base.min(), score), base.min() == score ? base.minInclusive() : true, base.max(), base.maxInclusive());
-            case LT -> new ScoreRange(base.min(), base.minInclusive(), Math.min(base.max(), score), false);
-            case LTE -> new ScoreRange(base.min(), base.minInclusive(), Math.min(base.max(), score), base.max() == score ? base.maxInclusive() : true);
+            case GT ->
+                    new ScoreRange(
+                            Math.max(base.min(), score), false, base.max(), base.maxInclusive());
+            case GTE ->
+                    new ScoreRange(
+                            Math.max(base.min(), score),
+                            base.min() == score ? base.minInclusive() : true,
+                            base.max(),
+                            base.maxInclusive());
+            case LT ->
+                    new ScoreRange(
+                            base.min(), base.minInclusive(), Math.min(base.max(), score), false);
+            case LTE ->
+                    new ScoreRange(
+                            base.min(),
+                            base.minInclusive(),
+                            Math.min(base.max(), score),
+                            base.max() == score ? base.maxInclusive() : true);
             default -> base;
         };
     }
@@ -1110,15 +1234,20 @@ public final class RedisQueryIndexManager<T, ID> {
         List<String> warnings = collectExplainWarnings(relationStates);
         if (shouldBypassIndexes(querySpec)) {
             List<String> candidates = scanAllEntityIds();
-            List<QueryExplainStep> steps = List.of(new QueryExplainStep(
-                    "FILTER",
-                    querySpec.rootGroup().nodes().isEmpty() ? "<none>" : describeNode(querySpec.rootGroup()),
-                    "DEGRADED_FULL_SCAN",
-                    false,
-                    candidates.size(),
-                    Math.max(1, candidates.size()),
-                    "Query index features are shed or marked degraded; repository falls back to entity key scan and residual evaluation"
-            ));
+            List<QueryExplainStep> steps =
+                    List.of(
+                            new QueryExplainStep(
+                                    "FILTER",
+                                    querySpec.rootGroup().nodes().isEmpty()
+                                            ? "<none>"
+                                            : describeNode(querySpec.rootGroup()),
+                                    "DEGRADED_FULL_SCAN",
+                                    false,
+                                    candidates.size(),
+                                    Math.max(1, candidates.size()),
+                                    "Query index features are shed or marked degraded; repository"
+                                            + " falls back to entity key scan and residual"
+                                            + " evaluation"));
             return new QueryExplainPlan(
                     metadata.entityName(),
                     querySpec.filters().size(),
@@ -1129,13 +1258,16 @@ public final class RedisQueryIndexManager<T, ID> {
                     candidates.size(),
                     Math.max(1, candidates.size() + querySpec.sorts().size()),
                     "DEGRADED_FULL_SCAN",
-                    querySpec.sorts().isEmpty() ? "NONE" : (querySpec.sorts().size() > 1 ? "IN_MEMORY_MULTI_SORT" : "IN_MEMORY_SORT"),
+                    querySpec.sorts().isEmpty()
+                            ? "NONE"
+                            : (querySpec.sorts().size() > 1
+                                    ? "IN_MEMORY_MULTI_SORT"
+                                    : "IN_MEMORY_SORT"),
                     0,
                     List.copyOf(querySpec.fetchPlan().includes()),
                     steps,
                     relationStates,
-                    warnings
-            );
+                    warnings);
         }
         warm(querySpec);
         List<QueryExplainStep> steps = new ArrayList<>();
@@ -1145,48 +1277,63 @@ public final class RedisQueryIndexManager<T, ID> {
         SortPlan sortPlan = chooseSortPlan(querySpec);
 
         if (querySpec.rootGroup().nodes().isEmpty()) {
-            steps.add(new QueryExplainStep(
-                    "FILTER",
-                    "<none>",
-                    "FULL_SET_SCAN",
-                    false,
-                    Math.toIntExact(jedis.scard(keyStrategy.indexAllKey(metadata.redisNamespace()))),
-                    Math.toIntExact(jedis.scard(keyStrategy.indexAllKey(metadata.redisNamespace()))),
-                    "No filters were supplied; candidate set starts from the full entity index"
-            ));
+            steps.add(
+                    new QueryExplainStep(
+                            "FILTER",
+                            "<none>",
+                            "FULL_SET_SCAN",
+                            false,
+                            Math.toIntExact(
+                                    jedis.commands()
+                                            .scard(
+                                                    keyStrategy.indexAllKey(
+                                                            metadata.redisNamespace()))),
+                            Math.toIntExact(
+                                    jedis.commands()
+                                            .scard(
+                                                    keyStrategy.indexAllKey(
+                                                            metadata.redisNamespace()))),
+                            "No filters were supplied; candidate set starts from the full entity"
+                                    + " index"));
             fullyIndexed = false;
         }
 
         appendExplainSteps(querySpec.rootGroup(), steps, candidates);
 
         if (!querySpec.sorts().isEmpty()) {
-            steps.add(new QueryExplainStep(
-                    "SORT",
-                    querySpec.sorts().stream().map(this::describeSort).collect(java.util.stream.Collectors.joining(", ")),
-                    sortPlan.strategy(),
-                    sortPlan.usesSortedIndex(),
-                    candidates == null ? 0 : candidates.size(),
-                    sortPlan.estimatedCost(),
-                    sortPlan.usesSortedIndex()
-                            ? "Redis sorted index scan will page through the sort zset instead of sorting materialized entities"
-                            : querySpec.sorts().size() > 1
-                            ? "Multiple sort keys require an in-memory comparator after candidate materialization"
-                            : "Current implementation materializes matched entities and sorts them in memory"
-            ));
+            steps.add(
+                    new QueryExplainStep(
+                            "SORT",
+                            querySpec.sorts().stream()
+                                    .map(this::describeSort)
+                                    .collect(java.util.stream.Collectors.joining(", ")),
+                            sortPlan.strategy(),
+                            sortPlan.usesSortedIndex(),
+                            candidates == null ? 0 : candidates.size(),
+                            sortPlan.estimatedCost(),
+                            sortPlan.usesSortedIndex()
+                                    ? "Redis sorted index scan will page through the sort zset"
+                                            + " instead of sorting materialized entities"
+                                    : querySpec.sorts().size() > 1
+                                            ? "Multiple sort keys require an in-memory comparator"
+                                                    + " after candidate materialization"
+                                            : "Current implementation materializes matched entities"
+                                                    + " and sorts them in memory"));
         }
 
         if (!querySpec.fetchPlan().includes().isEmpty()) {
             for (String relationName : querySpec.fetchPlan().includes()) {
-                QueryExplainRelationState relationState = describeFetchRelationState(relationName, querySpec.fetchPlan());
-                steps.add(new QueryExplainStep(
-                        "FETCH",
-                        relationState.relationName(),
-                        relationState.status(),
-                        relationState.indexed(),
-                        candidates == null ? 0 : candidates.size(),
-                        Math.max(1, candidates == null ? 0 : candidates.size()),
-                        relationState.detail()
-                ));
+                QueryExplainRelationState relationState =
+                        describeFetchRelationState(relationName, querySpec.fetchPlan());
+                steps.add(
+                        new QueryExplainStep(
+                                "FETCH",
+                                relationState.relationName(),
+                                relationState.status(),
+                                relationState.indexed(),
+                                candidates == null ? 0 : candidates.size(),
+                                Math.max(1, candidates == null ? 0 : candidates.size()),
+                                relationState.detail()));
             }
         }
 
@@ -1206,8 +1353,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 List.copyOf(querySpec.fetchPlan().includes()),
                 List.copyOf(steps),
                 relationStates,
-                warnings
-        );
+                warnings);
     }
 
     public boolean fullyIndexed(QueryFilter filter) {
@@ -1215,7 +1361,10 @@ public final class RedisQueryIndexManager<T, ID> {
             return false;
         }
         if (filter.column().contains(".")) {
-            return metadata.relations().stream().anyMatch(candidate -> candidate.name().equals(filter.column().split("\\.", 2)[0]));
+            return metadata.relations().stream()
+                    .anyMatch(
+                            candidate ->
+                                    candidate.name().equals(filter.column().split("\\.", 2)[0]));
         }
         return switch (filter.operator()) {
             case EQ, IN -> config.exactIndexEnabled();
@@ -1258,7 +1407,8 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public boolean resolvesCompleteSortOrder(QuerySpec querySpec, int candidateCount) {
-        return canUseCandidateScoreSort(querySpec) && candidateCount <= maxCandidateScoreSortSize(querySpec);
+        return canUseCandidateScoreSort(querySpec)
+                && candidateCount <= maxCandidateScoreSortSize(querySpec);
     }
 
     public SortPlan chooseSortPlan(QuerySpec querySpec) {
@@ -1267,19 +1417,27 @@ public final class RedisQueryIndexManager<T, ID> {
             return new SortPlan("NONE", 0, false);
         }
         if (shouldBypassIndexes(querySpec)) {
-            return new SortPlan(querySpec.sorts().size() > 1 ? "IN_MEMORY_MULTI_SORT" : "IN_MEMORY_SORT", estimateSortCost(querySpec), false);
+            return new SortPlan(
+                    querySpec.sorts().size() > 1 ? "IN_MEMORY_MULTI_SORT" : "IN_MEMORY_SORT",
+                    estimateSortCost(querySpec),
+                    false);
         }
-        PartitionedExactSortPlan partitionedExactSortPlan = buildPartitionedExactSortPlan(querySpec);
+        PartitionedExactSortPlan partitionedExactSortPlan =
+                buildPartitionedExactSortPlan(querySpec);
         if (partitionedExactSortPlan != null) {
             return new SortPlan(
-                    querySpec.sorts().size() == 1 ? "PARTITIONED_SORTED_INDEX_SCAN" : "PARTITIONED_PRIMARY_SORT_WITH_TIEBREAK",
+                    querySpec.sorts().size() == 1
+                            ? "PARTITIONED_SORTED_INDEX_SCAN"
+                            : "PARTITIONED_PRIMARY_SORT_WITH_TIEBREAK",
                     Math.max(1L, estimateSortCost(querySpec) / 3L),
-                    true
-            );
+                    true);
         }
         int sortablePrefixLength = sortablePrefixLength(querySpec.sorts());
         if (sortablePrefixLength == 0) {
-            return new SortPlan(querySpec.sorts().size() > 1 ? "IN_MEMORY_MULTI_SORT" : "IN_MEMORY_SORT", estimateSortCost(querySpec), false);
+            return new SortPlan(
+                    querySpec.sorts().size() > 1 ? "IN_MEMORY_MULTI_SORT" : "IN_MEMORY_SORT",
+                    estimateSortCost(querySpec),
+                    false);
         }
         if (querySpec.sorts().size() == 1) {
             return new SortPlan("SORTED_INDEX_SCAN", estimateSortCost(querySpec) / 2L + 1L, true);
@@ -1297,7 +1455,9 @@ public final class RedisQueryIndexManager<T, ID> {
         }
         int count = 0;
         for (QuerySort sort : sorts) {
-            if (!metadata.columns().contains(sort.column()) || !config.rangeIndexEnabled() || !supportsScoreOrdering(sort.column())) {
+            if (!metadata.columns().contains(sort.column())
+                    || !config.rangeIndexEnabled()
+                    || !supportsScoreOrdering(sort.column())) {
                 break;
             }
             count++;
@@ -1340,7 +1500,10 @@ public final class RedisQueryIndexManager<T, ID> {
     private List<String> resolveIndexedAndResidualCandidates(QuerySpec querySpec) {
         Set<String> candidates = resolveIndexedCandidates(querySpec.rootGroup()).candidates();
         if (candidates == null) {
-            candidates = boundedSetMembers(keyStrategy.indexAllKey(metadata.redisNamespace()), "full entity index");
+            candidates =
+                    boundedSetMembers(
+                            keyStrategy.indexAllKey(metadata.redisNamespace()),
+                            "full entity index");
         }
 
         if (!fullyIndexed(querySpec.rootGroup()) && !candidates.isEmpty()) {
@@ -1432,22 +1595,32 @@ public final class RedisQueryIndexManager<T, ID> {
         QueryCardinalityEstimate estimate = estimateFilter(filter);
         if (filter.column().contains(".")) {
             int hopCount = filter.column().split("\\.").length - 1;
-            return "Relation filter delegates to target entity indexes before mapping owner ids, selectivity="
+            return "Relation filter delegates to target entity indexes before mapping owner ids,"
+                    + " selectivity="
                     + estimate.selectivityRatio()
-                    + ", sample=" + estimate.sampledCardinality()
-                    + ", hops=" + Math.max(1, hopCount);
+                    + ", sample="
+                    + estimate.sampledCardinality()
+                    + ", hops="
+                    + Math.max(1, hopCount);
         }
         if (isRangeOperator(filter.operator())) {
             if (!estimate.histogram().isEmpty()) {
-                return "Redis range estimate " + estimate.estimatedCardinality()
-                        + " selectivity=" + estimate.selectivityRatio()
-                        + " sample=" + estimate.sampledCardinality()
-                        + " with histogram buckets " + estimate.histogram();
+                return "Redis range estimate "
+                        + estimate.estimatedCardinality()
+                        + " selectivity="
+                        + estimate.selectivityRatio()
+                        + " sample="
+                        + estimate.sampledCardinality()
+                        + " with histogram buckets "
+                        + estimate.histogram();
             }
         }
-        return "Redis index produced " + indexedMatches.size()
-                + " direct candidate ids, selectivity=" + estimate.selectivityRatio()
-                + ", sample=" + estimate.sampledCardinality();
+        return "Redis index produced "
+                + indexedMatches.size()
+                + " direct candidate ids, selectivity="
+                + estimate.selectivityRatio()
+                + ", sample="
+                + estimate.sampledCardinality();
     }
 
     private String describeSort(QuerySort sort) {
@@ -1455,9 +1628,16 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private String sortStrategy(List<QuerySort> sorts) {
-        boolean indexedSorts = sorts.stream()
-                .allMatch(sort -> metadata.columns().contains(sort.column()) && config.rangeIndexEnabled() && supportsScoreOrdering(sort.column()));
-        return indexedSorts && sorts.size() == 1 ? "SORTED_INDEX_SCAN" : indexedSorts ? "IN_MEMORY_SORT_WITH_RANGE_INDEX_AVAILABLE" : "IN_MEMORY_SORT";
+        boolean indexedSorts =
+                sorts.stream()
+                        .allMatch(
+                                sort ->
+                                        metadata.columns().contains(sort.column())
+                                                && config.rangeIndexEnabled()
+                                                && supportsScoreOrdering(sort.column()));
+        return indexedSorts && sorts.size() == 1
+                ? "SORTED_INDEX_SCAN"
+                : indexedSorts ? "IN_MEMORY_SORT_WITH_RANGE_INDEX_AVAILABLE" : "IN_MEMORY_SORT";
     }
 
     private Set<String> membersForExact(String column, Object value) {
@@ -1465,9 +1645,9 @@ public final class RedisQueryIndexManager<T, ID> {
             return null;
         }
         return boundedSetMembers(
-                keyStrategy.indexExactKey(metadata.redisNamespace(), column, encodeKeyPart(serializeValue(value))),
-                "exact index " + column
-        );
+                keyStrategy.indexExactKey(
+                        metadata.redisNamespace(), column, encodeKeyPart(serializeValue(value))),
+                "exact index " + column);
     }
 
     private Set<String> membersForIn(String column, List<Object> values) {
@@ -1483,7 +1663,8 @@ public final class RedisQueryIndexManager<T, ID> {
         if (!config.rangeIndexEnabled()) {
             return null;
         }
-        Double score = RedisScoreSupport.toScore(metadata.columnTypes(), filter.column(), filter.value());
+        Double score =
+                RedisScoreSupport.toScore(metadata.columnTypes(), filter.column(), filter.value());
         if (score == null) {
             return null;
         }
@@ -1500,9 +1681,9 @@ public final class RedisQueryIndexManager<T, ID> {
             }
         }
         String indexKey = keyStrategy.indexSortKey(metadata.redisNamespace(), filter.column());
-        long cardinality = jedis.zcount(indexKey, min, max);
+        long cardinality = jedis.commands().zcount(indexKey, min, max);
         enforceCandidateLimit(cardinality, "range index " + filter.column());
-        return new LinkedHashSet<>(jedis.zrangeByScore(indexKey, min, max));
+        return new LinkedHashSet<>(jedis.commands().zrangeByScore(indexKey, min, max));
     }
 
     private Set<String> membersForPrefix(String column, Object value) {
@@ -1513,10 +1694,8 @@ public final class RedisQueryIndexManager<T, ID> {
                 keyStrategy.indexPrefixKey(
                         metadata.redisNamespace(),
                         column,
-                        encodeKeyPart(normalizeText(String.valueOf(value)))
-                ),
-                "prefix index " + column
-        );
+                        encodeKeyPart(normalizeText(String.valueOf(value)))),
+                "prefix index " + column);
     }
 
     private Set<String> membersForContains(String column, Object value) {
@@ -1530,11 +1709,15 @@ public final class RedisQueryIndexManager<T, ID> {
 
         LinkedHashSet<String> candidates = null;
         for (String token : tokens) {
-            LinkedHashSet<String> tokenMatches = boundedSetMembers(
-                    keyStrategy.indexTokenKey(metadata.redisNamespace(), column, encodeKeyPart(token)),
-                    "text token index " + column
-            );
-            candidates = candidates == null ? tokenMatches : new LinkedHashSet<>(intersect(candidates, tokenMatches));
+            LinkedHashSet<String> tokenMatches =
+                    boundedSetMembers(
+                            keyStrategy.indexTokenKey(
+                                    metadata.redisNamespace(), column, encodeKeyPart(token)),
+                            "text token index " + column);
+            candidates =
+                    candidates == null
+                            ? tokenMatches
+                            : new LinkedHashSet<>(intersect(candidates, tokenMatches));
             if (candidates.isEmpty()) {
                 return candidates;
             }
@@ -1542,11 +1725,13 @@ public final class RedisQueryIndexManager<T, ID> {
         return candidates;
     }
 
-    private LinkedHashSet<String> filterResidualCandidates(Collection<String> candidateIds, QueryNode residualNode) {
+    private LinkedHashSet<String> filterResidualCandidates(
+            Collection<String> candidateIds, QueryNode residualNode) {
         List<String> orderedIds = new ArrayList<>(candidateIds);
-        List<String> keys = orderedIds.stream()
-                .map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id))
-                .toList();
+        List<String> keys =
+                orderedIds.stream()
+                        .map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id))
+                        .toList();
         List<String> payloads = jedis.mget(keys.toArray(String[]::new));
         LinkedHashSet<String> matches = new LinkedHashSet<>();
         int index = 0;
@@ -1565,34 +1750,49 @@ public final class RedisQueryIndexManager<T, ID> {
         return matches;
     }
 
-    private void appendExplainSteps(QueryNode node, List<QueryExplainStep> steps, Set<String> currentCandidates) {
+    private void appendExplainSteps(
+            QueryNode node, List<QueryExplainStep> steps, Set<String> currentCandidates) {
         if (node instanceof QueryFilter filter) {
             Set<String> indexedMatches = resolveIndexedMatches(filter);
-            int candidateCount = indexedMatches == null
-                    ? currentCandidates == null ? Math.toIntExact(jedis.scard(keyStrategy.indexAllKey(metadata.redisNamespace()))) : currentCandidates.size()
-                    : currentCandidates == null ? indexedMatches.size() : intersect(new LinkedHashSet<>(currentCandidates), new LinkedHashSet<>(indexedMatches)).size();
-            steps.add(new QueryExplainStep(
-                    "FILTER",
-                    describeFilter(filter),
-                    filterStrategy(filter, indexedMatches != null),
-                    fullyIndexed(filter),
-                    candidateCount,
-                    estimateFilterCost(filter, indexedMatches),
-                    filterDetail(filter, indexedMatches)
-            ));
+            int candidateCount =
+                    indexedMatches == null
+                            ? currentCandidates == null
+                                    ? Math.toIntExact(
+                                            jedis.commands()
+                                                    .scard(
+                                                            keyStrategy.indexAllKey(
+                                                                    metadata.redisNamespace())))
+                                    : currentCandidates.size()
+                            : currentCandidates == null
+                                    ? indexedMatches.size()
+                                    : intersect(
+                                                    new LinkedHashSet<>(currentCandidates),
+                                                    new LinkedHashSet<>(indexedMatches))
+                                            .size();
+            steps.add(
+                    new QueryExplainStep(
+                            "FILTER",
+                            describeFilter(filter),
+                            filterStrategy(filter, indexedMatches != null),
+                            fullyIndexed(filter),
+                            candidateCount,
+                            estimateFilterCost(filter, indexedMatches),
+                            filterDetail(filter, indexedMatches)));
             return;
         }
 
         QueryGroup group = (QueryGroup) node;
-        steps.add(new QueryExplainStep(
-                "GROUP",
-            group.nodes().stream().map(this::describeNode).collect(Collectors.joining(" " + group.operator().name() + " ")),
-            group.operator().name() + "_GROUP",
-            fullyIndexed(group),
-            currentCandidates == null ? 0 : currentCandidates.size(),
-            Math.max(1, currentCandidates == null ? 0 : currentCandidates.size()),
-            "Compound query group with " + group.nodes().size() + " child nodes"
-        ));
+        steps.add(
+                new QueryExplainStep(
+                        "GROUP",
+                        group.nodes().stream()
+                                .map(this::describeNode)
+                                .collect(Collectors.joining(" " + group.operator().name() + " ")),
+                        group.operator().name() + "_GROUP",
+                        fullyIndexed(group),
+                        currentCandidates == null ? 0 : currentCandidates.size(),
+                        Math.max(1, currentCandidates == null ? 0 : currentCandidates.size()),
+                        "Compound query group with " + group.nodes().size() + " child nodes"));
         for (QueryNode child : group.nodes()) {
             appendExplainSteps(child, steps, currentCandidates);
         }
@@ -1603,7 +1803,11 @@ public final class RedisQueryIndexManager<T, ID> {
             return describeFilter(filter);
         }
         QueryGroup group = (QueryGroup) node;
-        return "(" + group.nodes().stream().map(this::describeNode).collect(Collectors.joining(" " + group.operator().name() + " ")) + ")";
+        return "("
+                + group.nodes().stream()
+                        .map(this::describeNode)
+                        .collect(Collectors.joining(" " + group.operator().name() + " "))
+                + ")";
     }
 
     private List<QueryExplainRelationState> collectRelationStates(QuerySpec querySpec) {
@@ -1626,8 +1830,15 @@ public final class RedisQueryIndexManager<T, ID> {
             if (relationState == null) {
                 continue;
             }
-            if (!"RESOLVED".equals(relationState.status()) && !"NO_MATCHES".equals(relationState.status()) && !"BATCH_PRELOAD".equals(relationState.status())) {
-                warnings.add(relationState.usage() + ":" + relationState.relationName() + ":" + relationState.status());
+            if (!"RESOLVED".equals(relationState.status())
+                    && !"NO_MATCHES".equals(relationState.status())
+                    && !"BATCH_PRELOAD".equals(relationState.status())) {
+                warnings.add(
+                        relationState.usage()
+                                + ":"
+                                + relationState.relationName()
+                                + ":"
+                                + relationState.status());
             }
         }
         return List.copyOf(warnings);
@@ -1639,20 +1850,23 @@ public final class RedisQueryIndexManager<T, ID> {
             return null;
         }
 
-        RelationDefinition relation = metadata.relations().stream()
-                .filter(candidate -> candidate.name().equals(parts[0]))
-                .findFirst()
-                .orElse(null);
+        RelationDefinition relation =
+                metadata.relations().stream()
+                        .filter(candidate -> candidate.name().equals(parts[0]))
+                        .findFirst()
+                        .orElse(null);
         if (relation == null) {
             return null;
         }
 
-        EntityBinding<?, ?> targetBinding = entityRegistry.find(relation.targetEntity()).orElse(null);
+        EntityBinding<?, ?> targetBinding =
+                entityRegistry.find(relation.targetEntity()).orElse(null);
         if (targetBinding == null) {
             return null;
         }
 
-        QueryFilter delegatedFilter = new QueryFilter(parts[1], filter.operator(), filter.value(), filter.values());
+        QueryFilter delegatedFilter =
+                new QueryFilter(parts[1], filter.operator(), filter.value(), filter.values());
         Set<String> targetIds = resolveTargetIds(targetBinding, delegatedFilter);
         if (targetIds == null || targetIds.isEmpty()) {
             return new LinkedHashSet<>();
@@ -1676,14 +1890,14 @@ public final class RedisQueryIndexManager<T, ID> {
                     false,
                     false,
                     0,
-                    "Relation filter path must be in the form relation.column"
-            );
+                    "Relation filter path must be in the form relation.column");
         }
 
-        RelationDefinition relation = metadata.relations().stream()
-                .filter(candidate -> candidate.name().equals(parts[0]))
-                .findFirst()
-                .orElse(null);
+        RelationDefinition relation =
+                metadata.relations().stream()
+                        .filter(candidate -> candidate.name().equals(parts[0]))
+                        .findFirst()
+                        .orElse(null);
         if (relation == null) {
             return new QueryExplainRelationState(
                     parts[0],
@@ -1695,11 +1909,11 @@ public final class RedisQueryIndexManager<T, ID> {
                     false,
                     false,
                     0,
-                    "No declared relation matches filter path " + filter.column()
-            );
+                    "No declared relation matches filter path " + filter.column());
         }
 
-        EntityBinding<?, ?> targetBinding = entityRegistry.find(relation.targetEntity()).orElse(null);
+        EntityBinding<?, ?> targetBinding =
+                entityRegistry.find(relation.targetEntity()).orElse(null);
         if (targetBinding == null) {
             return new QueryExplainRelationState(
                     relation.name(),
@@ -1711,8 +1925,7 @@ public final class RedisQueryIndexManager<T, ID> {
                     relation.batchLoadOnly(),
                     false,
                     0,
-                    "Target entity binding " + relation.targetEntity() + " is not registered"
-            );
+                    "Target entity binding " + relation.targetEntity() + " is not registered");
         }
 
         String mappedByColumn = relationMappedByColumn(targetBinding, relation);
@@ -1727,18 +1940,23 @@ public final class RedisQueryIndexManager<T, ID> {
                     relation.batchLoadOnly(),
                     false,
                     0,
-                    "Target metadata for " + relation.targetEntity() + " does not expose mappedBy column " + relation.mappedBy()
-            );
+                    "Target metadata for "
+                            + relation.targetEntity()
+                            + " does not expose mappedBy column "
+                            + relation.mappedBy());
         }
 
-        QueryFilter delegatedFilter = new QueryFilter(parts[1], filter.operator(), filter.value(), filter.values());
+        QueryFilter delegatedFilter =
+                new QueryFilter(parts[1], filter.operator(), filter.value(), filter.values());
         Set<String> targetIds = resolveTargetIds(targetBinding, delegatedFilter);
-        Set<String> sourceIds = targetIds == null || targetIds.isEmpty()
-                ? new LinkedHashSet<>()
-                : mapTargetIdsToSourceIds(targetBinding, relation, targetIds);
-        String mappedByDetail = mappedByColumn.equals(relation.mappedBy())
-                ? mappedByColumn
-                : relation.mappedBy() + " -> " + mappedByColumn;
+        Set<String> sourceIds =
+                targetIds == null || targetIds.isEmpty()
+                        ? new LinkedHashSet<>()
+                        : mapTargetIdsToSourceIds(targetBinding, relation, targetIds);
+        String mappedByDetail =
+                mappedByColumn.equals(relation.mappedBy())
+                        ? mappedByColumn
+                        : relation.mappedBy() + " -> " + mappedByColumn;
         return new QueryExplainRelationState(
                 relation.name(),
                 "FILTER",
@@ -1749,11 +1967,18 @@ public final class RedisQueryIndexManager<T, ID> {
                 relation.batchLoadOnly(),
                 true,
                 sourceIds.size(),
-                "Delegated filter " + parts[1] + " on " + relation.targetEntity() + ", mappedBy=" + mappedByDetail + ", targetMatches=" + (targetIds == null ? 0 : targetIds.size())
-        );
+                "Delegated filter "
+                        + parts[1]
+                        + " on "
+                        + relation.targetEntity()
+                        + ", mappedBy="
+                        + mappedByDetail
+                        + ", targetMatches="
+                        + (targetIds == null ? 0 : targetIds.size()));
     }
 
-    private QueryExplainRelationState describeFetchRelationState(String relationName, FetchPlan fetchPlan) {
+    private QueryExplainRelationState describeFetchRelationState(
+            String relationName, FetchPlan fetchPlan) {
         int requestedDepth = FetchPlan.relationDepth(relationName);
         if (relationConfigMaxFetchDepthExceeded(requestedDepth)) {
             return new QueryExplainRelationState(
@@ -1766,14 +1991,17 @@ public final class RedisQueryIndexManager<T, ID> {
                     false,
                     false,
                     0,
-                    "Fetch path depth " + requestedDepth + " exceeds configured maxFetchDepth=" + configuredRelationMaxDepth()
-            );
+                    "Fetch path depth "
+                            + requestedDepth
+                            + " exceeds configured maxFetchDepth="
+                            + configuredRelationMaxDepth());
         }
         String topLevelRelationName = topLevelRelationName(relationName);
-        RelationDefinition relation = metadata.relations().stream()
-                .filter(candidate -> candidate.name().equals(topLevelRelationName))
-                .findFirst()
-                .orElse(null);
+        RelationDefinition relation =
+                metadata.relations().stream()
+                        .filter(candidate -> candidate.name().equals(topLevelRelationName))
+                        .findFirst()
+                        .orElse(null);
         if (relation == null) {
             return new QueryExplainRelationState(
                     relationName,
@@ -1785,8 +2013,7 @@ public final class RedisQueryIndexManager<T, ID> {
                     false,
                     false,
                     0,
-                "Requested fetch relation is not declared in metadata"
-            );
+                    "Requested fetch relation is not declared in metadata");
         }
         EntityBinding<?, ?> sourceBinding = entityRegistry.find(metadata.entityName()).orElse(null);
         if (sourceBinding == null) {
@@ -1800,10 +2027,12 @@ public final class RedisQueryIndexManager<T, ID> {
                     relation.batchLoadOnly(),
                     false,
                     0,
-                    "Source entity binding " + metadata.entityName() + " is not registered, so fetch path cannot be verified"
-            );
+                    "Source entity binding "
+                            + metadata.entityName()
+                            + " is not registered, so fetch path cannot be verified");
         }
-        if (sourceBinding.relationBatchLoader() == null || sourceBinding.relationBatchLoader() instanceof NoOpRelationBatchLoader) {
+        if (sourceBinding.relationBatchLoader() == null
+                || sourceBinding.relationBatchLoader() instanceof NoOpRelationBatchLoader) {
             return new QueryExplainRelationState(
                     relationName,
                     "FETCH",
@@ -1814,10 +2043,13 @@ public final class RedisQueryIndexManager<T, ID> {
                     relation.batchLoadOnly(),
                     false,
                     0,
-                    "Fetch plan requests " + relation.name() + " but no concrete RelationBatchLoader is registered for " + metadata.entityName()
-            );
+                    "Fetch plan requests "
+                            + relation.name()
+                            + " but no concrete RelationBatchLoader is registered for "
+                            + metadata.entityName());
         }
-        EntityBinding<?, ?> targetBinding = entityRegistry.find(relation.targetEntity()).orElse(null);
+        EntityBinding<?, ?> targetBinding =
+                entityRegistry.find(relation.targetEntity()).orElse(null);
         if (targetBinding == null) {
             return new QueryExplainRelationState(
                     relationName,
@@ -1829,8 +2061,9 @@ public final class RedisQueryIndexManager<T, ID> {
                     relation.batchLoadOnly(),
                     false,
                     0,
-                    "A batch loader is registered, but target entity binding " + relation.targetEntity() + " is missing so mappedBy validation could not be confirmed"
-            );
+                    "A batch loader is registered, but target entity binding "
+                            + relation.targetEntity()
+                            + " is missing so mappedBy validation could not be confirmed");
         }
         String mappedByColumn = relationMappedByColumn(targetBinding, relation);
         if (mappedByColumn == null) {
@@ -1844,8 +2077,10 @@ public final class RedisQueryIndexManager<T, ID> {
                     relation.batchLoadOnly(),
                     false,
                     0,
-                    "A batch loader is registered, but target metadata for " + relation.targetEntity() + " does not expose mappedBy column " + relation.mappedBy()
-            );
+                    "A batch loader is registered, but target metadata for "
+                            + relation.targetEntity()
+                            + " does not expose mappedBy column "
+                            + relation.mappedBy());
         }
         return new QueryExplainRelationState(
                 relationName,
@@ -1857,9 +2092,11 @@ public final class RedisQueryIndexManager<T, ID> {
                 relation.batchLoadOnly(),
                 true,
                 0,
-                "Fetch plan will use the registered batch loader path for " + relation.kind() + " via mappedBy=" + mappedByColumn
-                        + (requestedDepth > 1 ? " (requested depth=" + requestedDepth + ")" : "")
-        );
+                "Fetch plan will use the registered batch loader path for "
+                        + relation.kind()
+                        + " via mappedBy="
+                        + mappedByColumn
+                        + (requestedDepth > 1 ? " (requested depth=" + requestedDepth + ")" : ""));
     }
 
     private boolean relationConfigMaxFetchDepthExceeded(int requestedDepth) {
@@ -1876,29 +2113,37 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private Set<String> resolveTargetIds(EntityBinding<?, ?> targetBinding, QueryFilter delegatedFilter) {
-        RedisQueryIndexManager targetManager = new RedisQueryIndexManager(
-                jedis,
-                targetBinding.metadata(),
-                targetBinding.codec(),
-                keyStrategy,
-                entityRegistry,
-                config,
-                relationConfig,
-                queryEvaluator,
-                producerGuard
-        );
-        return new LinkedHashSet<>(targetManager.resolveCandidateIds(
-                QuerySpec.builder().filter(delegatedFilter).build()
-        ));
+    private Set<String> resolveTargetIds(
+            EntityBinding<?, ?> targetBinding, QueryFilter delegatedFilter) {
+        RedisQueryIndexManager targetManager =
+                new RedisQueryIndexManager(
+                        jedis,
+                        targetBinding.metadata(),
+                        targetBinding.codec(),
+                        keyStrategy,
+                        entityRegistry,
+                        config,
+                        relationConfig,
+                        queryEvaluator,
+                        producerGuard);
+        return new LinkedHashSet<>(
+                targetManager.resolveCandidateIds(
+                        QuerySpec.builder().filter(delegatedFilter).build()));
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private Set<String> mapTargetIdsToSourceIds(EntityBinding<?, ?> targetBinding, RelationDefinition relation, Collection<String> targetIds) {
+    private Set<String> mapTargetIdsToSourceIds(
+            EntityBinding<?, ?> targetBinding,
+            RelationDefinition relation,
+            Collection<String> targetIds) {
         EntityBinding rawBinding = targetBinding;
-        List<String> keys = targetIds.stream()
-                .map(id -> keyStrategy.entityKey(rawBinding.metadata().redisNamespace(), id))
-                .toList();
+        List<String> keys =
+                targetIds.stream()
+                        .map(
+                                id ->
+                                        keyStrategy.entityKey(
+                                                rawBinding.metadata().redisNamespace(), id))
+                        .toList();
         List<String> payloads = jedis.mget(keys.toArray(String[]::new));
         LinkedHashSet<String> mappedIds = new LinkedHashSet<>();
         String mappedByColumn = relationMappedByColumn(targetBinding, relation);
@@ -1920,7 +2165,8 @@ public final class RedisQueryIndexManager<T, ID> {
         return mappedIds;
     }
 
-    private String relationMappedByColumn(EntityBinding<?, ?> targetBinding, RelationDefinition relation) {
+    private String relationMappedByColumn(
+            EntityBinding<?, ?> targetBinding, RelationDefinition relation) {
         if (targetBinding.metadata().columns().contains(relation.mappedBy())) {
             return relation.mappedBy();
         }
@@ -1932,10 +2178,10 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private Set<String> subtractAll(Set<String> excluded) {
-        LinkedHashSet<String> allIds = boundedSetMembers(
-                keyStrategy.indexAllKey(metadata.redisNamespace()),
-                "not-equal full entity index"
-        );
+        LinkedHashSet<String> allIds =
+                boundedSetMembers(
+                        keyStrategy.indexAllKey(metadata.redisNamespace()),
+                        "not-equal full entity index");
         allIds.removeAll(excluded);
         return allIds;
     }
@@ -1962,7 +2208,8 @@ public final class RedisQueryIndexManager<T, ID> {
                 .encodeToString(value.getBytes(StandardCharsets.UTF_8));
     }
 
-    private void indexStringValue(Pipeline pipeline, String idValue, String column, String rawValue) {
+    private void indexStringValue(
+            AbstractPipeline pipeline, String idValue, String column, String rawValue) {
         String normalized = normalizeText(rawValue);
         if (normalized.isBlank()) {
             return;
@@ -1972,23 +2219,26 @@ public final class RedisQueryIndexManager<T, ID> {
             int prefixLength = Math.min(config.prefixMaxLength(), normalized.length());
             for (int index = 1; index <= prefixLength; index++) {
                 pipeline.sadd(
-                        keyStrategy.indexPrefixKey(metadata.redisNamespace(), column, encodeKeyPart(normalized.substring(0, index))),
-                        idValue
-                );
+                        keyStrategy.indexPrefixKey(
+                                metadata.redisNamespace(),
+                                column,
+                                encodeKeyPart(normalized.substring(0, index))),
+                        idValue);
             }
         }
 
         if (config.textIndexEnabled()) {
             for (String token : tokenize(rawValue)) {
                 pipeline.sadd(
-                        keyStrategy.indexTokenKey(metadata.redisNamespace(), column, encodeKeyPart(token)),
-                        idValue
-                );
+                        keyStrategy.indexTokenKey(
+                                metadata.redisNamespace(), column, encodeKeyPart(token)),
+                        idValue);
             }
         }
     }
 
-    private void removeStringValueIndex(Pipeline pipeline, String idValue, String column, String rawValue) {
+    private void removeStringValueIndex(
+            AbstractPipeline pipeline, String idValue, String column, String rawValue) {
         if (rawValue == null) {
             return;
         }
@@ -1997,22 +2247,25 @@ public final class RedisQueryIndexManager<T, ID> {
             int prefixLength = Math.min(config.prefixMaxLength(), normalized.length());
             for (int index = 1; index <= prefixLength; index++) {
                 pipeline.srem(
-                        keyStrategy.indexPrefixKey(metadata.redisNamespace(), column, encodeKeyPart(normalized.substring(0, index))),
-                        idValue
-                );
+                        keyStrategy.indexPrefixKey(
+                                metadata.redisNamespace(),
+                                column,
+                                encodeKeyPart(normalized.substring(0, index))),
+                        idValue);
             }
         }
         if (config.textIndexEnabled()) {
             for (String token : tokenize(rawValue)) {
                 pipeline.srem(
-                        keyStrategy.indexTokenKey(metadata.redisNamespace(), column, encodeKeyPart(token)),
-                        idValue
-                );
+                        keyStrategy.indexTokenKey(
+                                metadata.redisNamespace(), column, encodeKeyPart(token)),
+                        idValue);
             }
         }
     }
 
-    private void upsertPartitionedSortIndexes(Pipeline pipeline, String idValue, Map<String, Object> columns) {
+    private void upsertPartitionedSortIndexes(
+            AbstractPipeline pipeline, String idValue, Map<String, Object> columns) {
         if (!supportsPartitionedExactSortIndexes() || columns == null || columns.isEmpty()) {
             return;
         }
@@ -2023,21 +2276,29 @@ public final class RedisQueryIndexManager<T, ID> {
             }
             String encodedExactValue = encodeKeyPart(serializeValue(exactValue));
             for (String sortColumn : partitionedSortColumns(exactColumn)) {
-                Double score = RedisScoreSupport.toScore(metadata.columnTypes(), sortColumn, columns.get(sortColumn));
+                Double score =
+                        RedisScoreSupport.toScore(
+                                metadata.columnTypes(), sortColumn, columns.get(sortColumn));
                 if (score == null) {
                     continue;
                 }
                 pipeline.zadd(
-                        keyStrategy.indexPartitionSortKey(metadata.redisNamespace(), exactColumn, encodedExactValue, sortColumn),
+                        keyStrategy.indexPartitionSortKey(
+                                metadata.redisNamespace(),
+                                exactColumn,
+                                encodedExactValue,
+                                sortColumn),
                         score,
-                        idValue
-                );
+                        idValue);
             }
         }
     }
 
-    private void removePartitionedSortIndexes(Pipeline pipeline, String idValue, Map<String, String> priorMetaValues) {
-        if (!supportsPartitionedExactSortIndexes() || priorMetaValues == null || priorMetaValues.isEmpty()) {
+    private void removePartitionedSortIndexes(
+            AbstractPipeline pipeline, String idValue, Map<String, String> priorMetaValues) {
+        if (!supportsPartitionedExactSortIndexes()
+                || priorMetaValues == null
+                || priorMetaValues.isEmpty()) {
             return;
         }
         for (String exactColumn : partitionedExactSortColumns()) {
@@ -2048,15 +2309,19 @@ public final class RedisQueryIndexManager<T, ID> {
             String encodedExactValue = encodeKeyPart(serializedExactValue);
             for (String sortColumn : partitionedSortColumns(exactColumn)) {
                 pipeline.zrem(
-                        keyStrategy.indexPartitionSortKey(metadata.redisNamespace(), exactColumn, encodedExactValue, sortColumn),
-                        idValue
-                );
+                        keyStrategy.indexPartitionSortKey(
+                                metadata.redisNamespace(),
+                                exactColumn,
+                                encodedExactValue,
+                                sortColumn),
+                        idValue);
             }
         }
     }
 
     private boolean supportsPartitionedExactSortIndexes() {
-        return (metadata instanceof ProjectionEntityMetadata<?, ?> || !metadata.partitionedSortIndexes().isEmpty())
+        return (metadata instanceof ProjectionEntityMetadata<?, ?>
+                        || !metadata.partitionedSortIndexes().isEmpty())
                 && config.exactIndexEnabled()
                 && config.rangeIndexEnabled();
     }
@@ -2086,7 +2351,10 @@ public final class RedisQueryIndexManager<T, ID> {
             return List.of();
         }
         if (!(metadata instanceof ProjectionEntityMetadata<?, ?>)) {
-            return metadata.partitionedSortIndexes().getOrDefault(partitionColumn, List.of()).stream()
+            return metadata
+                    .partitionedSortIndexes()
+                    .getOrDefault(partitionColumn, List.of())
+                    .stream()
                     .filter(this::supportsScoreOrdering)
                     .toList();
         }
@@ -2117,9 +2385,10 @@ public final class RedisQueryIndexManager<T, ID> {
             if (part.length() < config.textTokenMinLength()) {
                 continue;
             }
-            String token = part.length() > config.textTokenMaxLength()
-                    ? part.substring(0, config.textTokenMaxLength())
-                    : part;
+            String token =
+                    part.length() > config.textTokenMaxLength()
+                            ? part.substring(0, config.textTokenMaxLength())
+                            : part;
             tokens.add(token);
             if (tokens.size() >= config.textMaxTokensPerValue()) {
                 break;
@@ -2150,30 +2419,48 @@ public final class RedisQueryIndexManager<T, ID> {
             return false;
         }
         return switch (declaredType) {
-            case "int", "java.lang.Integer",
-                 "long", "java.lang.Long",
-                 "double", "java.lang.Double",
-                 "float", "java.lang.Float",
-                 "short", "java.lang.Short",
-                 "byte", "java.lang.Byte",
-                 "java.time.Instant",
-                 "java.time.LocalDate",
-                 "java.time.LocalDateTime",
-                 "java.time.OffsetDateTime" -> true;
+            case "int",
+                            "java.lang.Integer",
+                            "long",
+                            "java.lang.Long",
+                            "double",
+                            "java.lang.Double",
+                            "float",
+                            "java.lang.Float",
+                            "short",
+                            "java.lang.Short",
+                            "byte",
+                            "java.lang.Byte",
+                            "java.time.Instant",
+                            "java.time.LocalDate",
+                            "java.time.LocalDateTime",
+                            "java.time.OffsetDateTime" ->
+                    true;
             default -> false;
         };
     }
 
     private QueryCardinalityEstimate estimateFilter(QueryFilter filter) {
-        long fullSetCardinality = Math.max(1, jedis.scard(keyStrategy.indexAllKey(metadata.redisNamespace())));
+        long fullSetCardinality =
+                Math.max(
+                        1,
+                        jedis.commands().scard(keyStrategy.indexAllKey(metadata.redisNamespace())));
         if (!config.plannerStatisticsEnabled()) {
-            return new QueryCardinalityEstimate(describeFilter(filter), fullSetCardinality, fullSetCardinality, fullSetCardinality, 1.0d, List.of());
+            return new QueryCardinalityEstimate(
+                    describeFilter(filter),
+                    fullSetCardinality,
+                    fullSetCardinality,
+                    fullSetCardinality,
+                    1.0d,
+                    List.of());
         }
 
         String cacheKey = metadata.redisNamespace() + "|" + describeFilter(filter);
         CachedEstimate cachedEstimate = cardinalityCache.get(cacheKey);
         long now = System.currentTimeMillis();
-        if (cachedEstimate != null && now - cachedEstimate.createdAtEpochMillis() <= config.plannerStatisticsTtlMillis()) {
+        if (cachedEstimate != null
+                && now - cachedEstimate.createdAtEpochMillis()
+                        <= config.plannerStatisticsTtlMillis()) {
             return cachedEstimate.estimate();
         }
 
@@ -2196,46 +2483,112 @@ public final class RedisQueryIndexManager<T, ID> {
     private QueryCardinalityEstimate computeEstimate(QueryFilter filter, long fullSetCardinality) {
         if (filter.column().contains(".")) {
             Set<String> relationMatches = resolveRelationMatches(filter);
-            long estimatedCardinality = relationMatches == null ? fullSetCardinality : relationMatches.size();
-            estimatedCardinality = applyLearnedAdjustment(describeFilter(filter), estimatedCardinality, fullSetCardinality);
-            double selectivityRatio = Math.min(1.0d, Math.max(0.0d, fullSetCardinality == 0 ? 0.0d : (double) estimatedCardinality / fullSetCardinality));
+            long estimatedCardinality =
+                    relationMatches == null ? fullSetCardinality : relationMatches.size();
+            estimatedCardinality =
+                    applyLearnedAdjustment(
+                            describeFilter(filter), estimatedCardinality, fullSetCardinality);
+            double selectivityRatio =
+                    Math.min(
+                            1.0d,
+                            Math.max(
+                                    0.0d,
+                                    fullSetCardinality == 0
+                                            ? 0.0d
+                                            : (double) estimatedCardinality / fullSetCardinality));
             return new QueryCardinalityEstimate(
                     describeFilter(filter),
                     estimatedCardinality,
-                    Math.max(1L, Math.round(Math.max(1.0d, estimatedCardinality * Math.max(0.05d, selectivityRatio)))),
+                    Math.max(
+                            1L,
+                            Math.round(
+                                    Math.max(
+                                            1.0d,
+                                            estimatedCardinality
+                                                    * Math.max(0.05d, selectivityRatio)))),
                     estimatedCardinality,
                     selectivityRatio,
-                    List.of()
-            );
+                    List.of());
         }
-        long estimatedCardinality = switch (filter.operator()) {
-            case EQ -> cardinalityOfSet(keyStrategy.indexExactKey(metadata.redisNamespace(), filter.column(), encodeKeyPart(serializeValue(filter.value()))));
-            case IN -> filter.values().stream()
-                    .mapToLong(value -> cardinalityOfSet(keyStrategy.indexExactKey(metadata.redisNamespace(), filter.column(), encodeKeyPart(serializeValue(value)))))
-                    .sum();
-            case GT, GTE, LT, LTE -> cardinalityOfRange(filter);
-            case NE -> Math.max(0L, fullSetCardinality - cardinalityOfSet(keyStrategy.indexExactKey(metadata.redisNamespace(), filter.column(), encodeKeyPart(serializeValue(filter.value())))));
-            case CONTAINS -> cardinalityOfContains(filter);
-            case STARTS_WITH -> cardinalityOfSet(keyStrategy.indexPrefixKey(metadata.redisNamespace(), filter.column(), encodeKeyPart(normalizeText(String.valueOf(filter.value())))));
-        };
+        long estimatedCardinality =
+                switch (filter.operator()) {
+                    case EQ ->
+                            cardinalityOfSet(
+                                    keyStrategy.indexExactKey(
+                                            metadata.redisNamespace(),
+                                            filter.column(),
+                                            encodeKeyPart(serializeValue(filter.value()))));
+                    case IN ->
+                            filter.values().stream()
+                                    .mapToLong(
+                                            value ->
+                                                    cardinalityOfSet(
+                                                            keyStrategy.indexExactKey(
+                                                                    metadata.redisNamespace(),
+                                                                    filter.column(),
+                                                                    encodeKeyPart(
+                                                                            serializeValue(
+                                                                                    value)))))
+                                    .sum();
+                    case GT, GTE, LT, LTE -> cardinalityOfRange(filter);
+                    case NE ->
+                            Math.max(
+                                    0L,
+                                    fullSetCardinality
+                                            - cardinalityOfSet(
+                                                    keyStrategy.indexExactKey(
+                                                            metadata.redisNamespace(),
+                                                            filter.column(),
+                                                            encodeKeyPart(
+                                                                    serializeValue(
+                                                                            filter.value())))));
+                    case CONTAINS -> cardinalityOfContains(filter);
+                    case STARTS_WITH ->
+                            cardinalityOfSet(
+                                    keyStrategy.indexPrefixKey(
+                                            metadata.redisNamespace(),
+                                            filter.column(),
+                                            encodeKeyPart(
+                                                    normalizeText(
+                                                            String.valueOf(filter.value())))));
+                };
         estimatedCardinality = Math.min(fullSetCardinality, Math.max(0L, estimatedCardinality));
-        estimatedCardinality = applyLearnedAdjustment(describeFilter(filter), estimatedCardinality, fullSetCardinality);
+        estimatedCardinality =
+                applyLearnedAdjustment(
+                        describeFilter(filter), estimatedCardinality, fullSetCardinality);
 
-        List<QueryHistogramBucket> histogram = isRangeOperator(filter.operator()) ? histogramForColumn(filter.column()) : List.of();
+        List<QueryHistogramBucket> histogram =
+                isRangeOperator(filter.operator())
+                        ? histogramForColumn(filter.column())
+                        : List.of();
         long sampledCardinality = determineSampledCardinality(filter, fullSetCardinality);
-        double selectivityRatio = Math.min(1.0d, Math.max(0.0d, fullSetCardinality == 0 ? 0.0d : (double) estimatedCardinality / fullSetCardinality));
+        double selectivityRatio =
+                Math.min(
+                        1.0d,
+                        Math.max(
+                                0.0d,
+                                fullSetCardinality == 0
+                                        ? 0.0d
+                                        : (double) estimatedCardinality / fullSetCardinality));
         return new QueryCardinalityEstimate(
                 describeFilter(filter),
                 estimatedCardinality,
-                Math.max(1L, Math.round(Math.max(1.0d, estimatedCardinality * Math.max(0.05d, selectivityRatio)))),
+                Math.max(
+                        1L,
+                        Math.round(
+                                Math.max(
+                                        1.0d,
+                                        estimatedCardinality * Math.max(0.05d, selectivityRatio)))),
                 sampledCardinality,
                 selectivityRatio,
-                histogram
-        );
+                histogram);
     }
 
     private long estimateNodeCardinality(QueryNode node) {
-        long fullSetCardinality = Math.max(1, jedis.scard(keyStrategy.indexAllKey(metadata.redisNamespace())));
+        long fullSetCardinality =
+                Math.max(
+                        1,
+                        jedis.commands().scard(keyStrategy.indexAllKey(metadata.redisNamespace())));
         if (node instanceof QueryFilter filter) {
             return estimateFilter(filter).estimatedCardinality();
         }
@@ -2252,7 +2605,8 @@ public final class RedisQueryIndexManager<T, ID> {
         for (QueryNode child : group.nodes()) {
             long childEstimate = estimateNodeCardinality(child);
             minChild = Math.min(minChild, childEstimate);
-            combinedRatio *= Math.min(1.0d, Math.max(0.0d, (double) childEstimate / fullSetCardinality));
+            combinedRatio *=
+                    Math.min(1.0d, Math.max(0.0d, (double) childEstimate / fullSetCardinality));
         }
         long independenceEstimate = Math.round(fullSetCardinality * combinedRatio);
         long estimated = Math.min(minChild, Math.max(0L, independenceEstimate));
@@ -2265,7 +2619,11 @@ public final class RedisQueryIndexManager<T, ID> {
         for (QueryNode child : group.nodes()) {
             long childEstimate = estimateNodeCardinality(child);
             maxChild = Math.max(maxChild, childEstimate);
-            nonMatchRatio *= (1.0d - Math.min(1.0d, Math.max(0.0d, (double) childEstimate / fullSetCardinality)));
+            nonMatchRatio *=
+                    (1.0d
+                            - Math.min(
+                                    1.0d,
+                                    Math.max(0.0d, (double) childEstimate / fullSetCardinality)));
         }
         long unionEstimate = Math.round(fullSetCardinality * (1.0d - nonMatchRatio));
         long estimated = Math.min(fullSetCardinality, Math.max(maxChild, unionEstimate));
@@ -2279,7 +2637,9 @@ public final class RedisQueryIndexManager<T, ID> {
         String cacheKey = metadata.redisNamespace() + "|" + column;
         CachedHistogram cachedHistogram = histogramCache.get(cacheKey);
         long now = System.currentTimeMillis();
-        if (cachedHistogram != null && now - cachedHistogram.createdAtEpochMillis() <= config.plannerStatisticsTtlMillis()) {
+        if (cachedHistogram != null
+                && now - cachedHistogram.createdAtEpochMillis()
+                        <= config.plannerStatisticsTtlMillis()) {
             return cachedHistogram.buckets();
         }
 
@@ -2292,19 +2652,22 @@ public final class RedisQueryIndexManager<T, ID> {
         }
 
         String sortKey = keyStrategy.indexSortKey(metadata.redisNamespace(), column);
-        long cardinality = jedis.zcard(sortKey);
+        long cardinality = jedis.commands().zcard(sortKey);
         if (cardinality == 0) {
             return List.of();
         }
         int bucketCount = Math.max(1, Math.min(config.rangeHistogramBuckets(), (int) cardinality));
         ArrayList<Double> boundaries = new ArrayList<>(bucketCount + 1);
         for (int index = 0; index <= bucketCount; index++) {
-            long rank = Math.min(cardinality - 1, Math.round((double) index * (cardinality - 1) / bucketCount));
-            List<String> ids = jedis.zrange(sortKey, rank, rank);
+            long rank =
+                    Math.min(
+                            cardinality - 1,
+                            Math.round((double) index * (cardinality - 1) / bucketCount));
+            List<String> ids = jedis.commands().zrange(sortKey, rank, rank);
             if (ids.isEmpty()) {
                 continue;
             }
-            Double score = jedis.zscore(sortKey, ids.get(0));
+            Double score = jedis.commands().zscore(sortKey, ids.get(0));
             if (score != null) {
                 boundaries.add(score);
             }
@@ -2319,7 +2682,7 @@ public final class RedisQueryIndexManager<T, ID> {
             double upper = boundaries.get(index + 1);
             boolean lastBucket = index == boundaries.size() - 2;
             String max = lastBucket ? String.valueOf(upper) : "(" + upper;
-            long count = jedis.zcount(sortKey, String.valueOf(lower), max);
+            long count = jedis.commands().zcount(sortKey, String.valueOf(lower), max);
             buckets.add(new QueryHistogramBucket(lower, upper, count));
         }
         List<QueryHistogramBucket> immutableBuckets = List.copyOf(buckets);
@@ -2335,11 +2698,19 @@ public final class RedisQueryIndexManager<T, ID> {
         if (tokens.isEmpty()) {
             return 0L;
         }
-        long fullSet = Math.max(1, jedis.scard(keyStrategy.indexAllKey(metadata.redisNamespace())));
+        long fullSet =
+                Math.max(
+                        1,
+                        jedis.commands().scard(keyStrategy.indexAllKey(metadata.redisNamespace())));
         long minCount = Long.MAX_VALUE;
         double productRatio = 1.0d;
         for (String token : tokens) {
-            long cardinality = cardinalityOfSet(keyStrategy.indexTokenKey(metadata.redisNamespace(), filter.column(), encodeKeyPart(token)));
+            long cardinality =
+                    cardinalityOfSet(
+                            keyStrategy.indexTokenKey(
+                                    metadata.redisNamespace(),
+                                    filter.column(),
+                                    encodeKeyPart(token)));
             minCount = Math.min(minCount, cardinality);
             productRatio *= Math.min(1.0d, Math.max(0.0d, (double) cardinality / fullSet));
         }
@@ -2353,12 +2724,15 @@ public final class RedisQueryIndexManager<T, ID> {
     private long determineSampledCardinality(QueryFilter filter, long fullSetCardinality) {
         if (isRangeOperator(filter.operator())) {
             String sortKey = keyStrategy.indexSortKey(metadata.redisNamespace(), filter.column());
-            return Math.min(jedis.zcard(sortKey), Math.max(1, config.plannerStatisticsSampleSize()));
+            return Math.min(
+                    jedis.commands().zcard(sortKey),
+                    Math.max(1, config.plannerStatisticsSampleSize()));
         }
         return Math.min(fullSetCardinality, Math.max(1, config.plannerStatisticsSampleSize()));
     }
 
-    private long applyLearnedAdjustment(String expression, long estimatedCardinality, long fullSetCardinality) {
+    private long applyLearnedAdjustment(
+            String expression, long estimatedCardinality, long fullSetCardinality) {
         if (!config.learnedStatisticsEnabled()) {
             return estimatedCardinality;
         }
@@ -2367,7 +2741,10 @@ public final class RedisQueryIndexManager<T, ID> {
             return estimatedCardinality;
         }
         double weight = Math.max(0.0d, Math.min(1.0d, config.learnedStatisticsWeight()));
-        long blended = Math.round((estimatedCardinality * (1.0d - weight)) + (learnedStats.averageCardinality() * weight));
+        long blended =
+                Math.round(
+                        (estimatedCardinality * (1.0d - weight))
+                                + (learnedStats.averageCardinality() * weight));
         return Math.max(0L, Math.min(fullSetCardinality, blended));
     }
 
@@ -2375,7 +2752,8 @@ public final class RedisQueryIndexManager<T, ID> {
         String cacheKey = metadata.redisNamespace() + "|learned|" + expression;
         CachedLearnedStats cached = learnedStatsCache.get(cacheKey);
         long now = System.currentTimeMillis();
-        if (cached != null && now - cached.createdAtEpochMillis() <= config.plannerStatisticsTtlMillis()) {
+        if (cached != null
+                && now - cached.createdAtEpochMillis() <= config.plannerStatisticsTtlMillis()) {
             return cached.stats();
         }
 
@@ -2387,10 +2765,10 @@ public final class RedisQueryIndexManager<T, ID> {
         if (fields == null || fields.isEmpty()) {
             return null;
         }
-        LearnedStats learnedStats = new LearnedStats(
-                parseLong(fields.get("averageCardinality"), 0L),
-                parseLong(fields.get("sampleCount"), 0L)
-        );
+        LearnedStats learnedStats =
+                new LearnedStats(
+                        parseLong(fields.get("averageCardinality"), 0L),
+                        parseLong(fields.get("sampleCount"), 0L));
         learnedStatsCache.put(cacheKey, new CachedLearnedStats(learnedStats, now));
         return learnedStats;
     }
@@ -2404,18 +2782,23 @@ public final class RedisQueryIndexManager<T, ID> {
         long sampleCount = current == null ? 0L : current.sampleCount();
         long averageCardinality = current == null ? 0L : current.averageCardinality();
         long newSampleCount = sampleCount + 1L;
-        long newAverage = sampleCount == 0L
-                ? actualCardinality
-                : Math.round(((double) averageCardinality * sampleCount + actualCardinality) / newSampleCount);
+        long newAverage =
+                sampleCount == 0L
+                        ? actualCardinality
+                        : Math.round(
+                                ((double) averageCardinality * sampleCount + actualCardinality)
+                                        / newSampleCount);
         LearnedStats learnedStats = new LearnedStats(newAverage, newSampleCount);
-        learnedStatsCache.put(cacheKey, new CachedLearnedStats(learnedStats, System.currentTimeMillis()));
+        learnedStatsCache.put(
+                cacheKey, new CachedLearnedStats(learnedStats, System.currentTimeMillis()));
         if (config.plannerStatisticsPersisted()) {
             storeLearnedStatsSafely(expression, learnedStats);
         }
     }
 
     private long cardinalityOfRange(QueryFilter filter) {
-        Double score = RedisScoreSupport.toScore(metadata.columnTypes(), filter.column(), filter.value());
+        Double score =
+                RedisScoreSupport.toScore(metadata.columnTypes(), filter.column(), filter.value());
         if (score == null) {
             return 0L;
         }
@@ -2432,51 +2815,62 @@ public final class RedisQueryIndexManager<T, ID> {
                 return 0L;
             }
         }
-        return jedis.zcount(sortKey, min, max);
+        return jedis.commands().zcount(sortKey, min, max);
     }
 
     private long cardinalityOfSet(String key) {
-        return jedis.scard(key);
+        return jedis.commands().scard(key);
     }
 
     private boolean shouldShedIndexWrites() {
-        return producerGuard != null && producerGuard.shouldShedQueryIndexWrites(metadata.redisNamespace());
+        return producerGuard != null
+                && producerGuard.shouldShedQueryIndexWrites(metadata.redisNamespace());
     }
 
     private boolean shouldShedPlannerLearning() {
-        return producerGuard != null && producerGuard.shouldShedPlannerLearning(metadata.redisNamespace(), List.of());
+        return producerGuard != null
+                && producerGuard.shouldShedPlannerLearning(metadata.redisNamespace(), List.of());
     }
 
     private boolean shouldBypassIndexes() {
-        return (producerGuard != null && producerGuard.shouldShedQueryIndexReads(metadata.redisNamespace(), List.of())) || indexFeaturesDegraded();
+        return (producerGuard != null
+                        && producerGuard.shouldShedQueryIndexReads(
+                                metadata.redisNamespace(), List.of()))
+                || indexFeaturesDegraded();
     }
 
     private boolean shouldBypassIndexes(QuerySpec querySpec) {
-        return (producerGuard != null && producerGuard.shouldShedQueryIndexReads(metadata.redisNamespace(), classifyQueryClasses(querySpec)))
+        return (producerGuard != null
+                        && producerGuard.shouldShedQueryIndexReads(
+                                metadata.redisNamespace(), classifyQueryClasses(querySpec)))
                 || indexFeaturesDegraded();
     }
 
     private boolean shouldShedPlannerLearning(QuerySpec querySpec) {
-        return producerGuard != null && producerGuard.shouldShedPlannerLearning(metadata.redisNamespace(), classifyQueryClasses(querySpec));
+        return producerGuard != null
+                && producerGuard.shouldShedPlannerLearning(
+                        metadata.redisNamespace(), classifyQueryClasses(querySpec));
     }
 
     private boolean indexFeaturesDegraded() {
-        return jedis.exists(keyStrategy.indexDegradedKey(metadata.redisNamespace()));
+        return jedis.commands().exists(keyStrategy.indexDegradedKey(metadata.redisNamespace()));
     }
 
     private void markIndexFeaturesDegraded() {
-        jedis.set(keyStrategy.indexDegradedKey(metadata.redisNamespace()), "1");
+        jedis.commands().set(keyStrategy.indexDegradedKey(metadata.redisNamespace()), "1");
     }
 
     private void maybeRecoverDegradedIndexes(Collection<HardLimitQueryClass> queryClasses) {
         if (!indexFeaturesDegraded()) {
             return;
         }
-        if (producerGuard == null || !producerGuard.shouldAutoRecoverDegradedIndexes(metadata.redisNamespace())) {
+        if (producerGuard == null
+                || !producerGuard.shouldAutoRecoverDegradedIndexes(metadata.redisNamespace())) {
             return;
         }
         if (producerGuard.shouldShedQueryIndexWrites(metadata.redisNamespace())
-                || producerGuard.shouldShedQueryIndexReads(metadata.redisNamespace(), queryClasses)) {
+                || producerGuard.shouldShedQueryIndexReads(
+                        metadata.redisNamespace(), queryClasses)) {
             return;
         }
         rebuildFromEntityStore(true, "automatic-recovery");
@@ -2506,25 +2900,29 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private boolean acquireRebuildSlot(String lockKey) {
-        return jedis.set(
-                lockKey,
-                String.valueOf(System.currentTimeMillis()),
-                SetParams.setParams().nx().px(30_000L)
-        ) != null;
+        return jedis.commands()
+                        .set(
+                                lockKey,
+                                String.valueOf(System.currentTimeMillis()),
+                                SetParams.setParams().nx().px(30_000L))
+                != null;
     }
 
     private long clearIndexKeys(String lockKey) {
         long clearedCount = 0L;
         String cursor = "0";
         do {
-            redis.clients.jedis.resps.ScanResult<String> scan = jedis.scan(cursor, new redis.clients.jedis.params.ScanParams()
-                    .match(keyStrategy.indexPattern(metadata.redisNamespace()))
-                    .count(256));
+            redis.clients.jedis.resps.ScanResult<String> scan =
+                    jedis.scan(
+                            cursor,
+                            new redis.clients.jedis.params.ScanParams()
+                                    .match(keyStrategy.indexPattern(metadata.redisNamespace()))
+                                    .count(256));
             for (String key : scan.getResult()) {
                 if (lockKey.equals(key)) {
                     continue;
                 }
-                clearedCount += jedis.del(key);
+                clearedCount += jedis.commands().del(key);
             }
             cursor = scan.getCursor();
         } while (!"0".equals(cursor));
@@ -2536,9 +2934,12 @@ public final class RedisQueryIndexManager<T, ID> {
         String cursor = "0";
         String prefix = keyStrategy.entityPattern(metadata.redisNamespace()).replace("*", "");
         do {
-            redis.clients.jedis.resps.ScanResult<String> scan = jedis.scan(cursor, new redis.clients.jedis.params.ScanParams()
-                    .match(keyStrategy.entityPattern(metadata.redisNamespace()))
-                    .count(Math.max(64, config.plannerStatisticsSampleSize() * 4)));
+            redis.clients.jedis.resps.ScanResult<String> scan =
+                    jedis.scan(
+                            cursor,
+                            new redis.clients.jedis.params.ScanParams()
+                                    .match(keyStrategy.entityPattern(metadata.redisNamespace()))
+                                    .count(Math.max(64, config.plannerStatisticsSampleSize() * 4)));
             for (String key : scan.getResult()) {
                 if (key.startsWith(prefix)) {
                     ids.add(key.substring(prefix.length()));
@@ -2551,8 +2952,8 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private LinkedHashSet<String> boundedSetMembers(String key, String shape) {
-        enforceCandidateLimit(jedis.scard(key), shape);
-        return new LinkedHashSet<>(jedis.smembers(key));
+        enforceCandidateLimit(jedis.commands().scard(key), shape);
+        return new LinkedHashSet<>(jedis.commands().smembers(key));
     }
 
     private void enforceCandidateLimit(Collection<String> candidates, String shape) {
@@ -2562,12 +2963,16 @@ public final class RedisQueryIndexManager<T, ID> {
     private void enforceCandidateLimit(long candidateCount, String shape) {
         if (candidateCount > config.maxMaterializedCandidateIds()) {
             throw new IllegalStateException(
-                    "Query candidate materialization rejected for " + metadata.entityName()
-                            + ": shape=" + shape
-                            + ", candidates=" + candidateCount
-                            + ", maxMaterializedCandidateIds=" + config.maxMaterializedCandidateIds()
-                            + ". Use a sorted-window route, a projection, or a narrower indexed predicate."
-            );
+                    "Query candidate materialization rejected for "
+                            + metadata.entityName()
+                            + ": shape="
+                            + shape
+                            + ", candidates="
+                            + candidateCount
+                            + ", maxMaterializedCandidateIds="
+                            + config.maxMaterializedCandidateIds()
+                            + ". Use a sorted-window route, a projection, or a narrower indexed"
+                            + " predicate.");
         }
     }
 
@@ -2584,7 +2989,7 @@ public final class RedisQueryIndexManager<T, ID> {
         learnedStatsCache.clear();
         if (config.plannerStatisticsPersisted()) {
             try {
-                jedis.incr(keyStrategy.indexPlannerEpochKey(metadata.redisNamespace()));
+                jedis.commands().incr(keyStrategy.indexPlannerEpochKey(metadata.redisNamespace()));
             } catch (RuntimeException exception) {
                 markIndexFeaturesDegradedSafely();
             }
@@ -2592,23 +2997,24 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private QueryCardinalityEstimate loadEstimateFromRedis(QueryFilter filter) {
-        Map<String, String> fields = jedis.hgetAll(plannerEstimateRedisKey(filter));
+        Map<String, String> fields = jedis.commands().hgetAll(plannerEstimateRedisKey(filter));
         if (fields == null || fields.isEmpty()) {
             return null;
         }
         long estimatedCardinality = parseLong(fields.get("estimatedCardinality"), 0L);
-        long estimatedCost = parseLong(fields.get("estimatedCost"), Math.max(1L, estimatedCardinality));
-        List<QueryHistogramBucket> histogram = isRangeOperator(filter.operator())
-                ? loadHistogramFromRedis(filter.column())
-                : List.of();
+        long estimatedCost =
+                parseLong(fields.get("estimatedCost"), Math.max(1L, estimatedCardinality));
+        List<QueryHistogramBucket> histogram =
+                isRangeOperator(filter.operator())
+                        ? loadHistogramFromRedis(filter.column())
+                        : List.of();
         return new QueryCardinalityEstimate(
                 fields.getOrDefault("expression", describeFilter(filter)),
                 estimatedCardinality,
                 estimatedCost,
                 parseLong(fields.get("sampledCardinality"), estimatedCardinality),
                 parseDouble(fields.get("selectivityRatio"), 1.0d),
-                histogram
-        );
+                histogram);
     }
 
     private QueryCardinalityEstimate loadEstimateFromRedisSafely(QueryFilter filter) {
@@ -2622,14 +3028,17 @@ public final class RedisQueryIndexManager<T, ID> {
 
     private void storeEstimateInRedis(QueryFilter filter, QueryCardinalityEstimate estimate) {
         String key = plannerEstimateRedisKey(filter);
-        jedis.hset(key, Map.of(
-                "expression", estimate.expression(),
-                "estimatedCardinality", String.valueOf(estimate.estimatedCardinality()),
-                "estimatedCost", String.valueOf(estimate.estimatedCost()),
-                "sampledCardinality", String.valueOf(estimate.sampledCardinality()),
-                "selectivityRatio", String.valueOf(estimate.selectivityRatio())
-        ));
-        jedis.pexpire(key, config.plannerStatisticsTtlMillis());
+        jedis.commands()
+                .hset(
+                        key,
+                        Map.of(
+                                "expression", estimate.expression(),
+                                "estimatedCardinality",
+                                        String.valueOf(estimate.estimatedCardinality()),
+                                "estimatedCost", String.valueOf(estimate.estimatedCost()),
+                                "sampledCardinality", String.valueOf(estimate.sampledCardinality()),
+                                "selectivityRatio", String.valueOf(estimate.selectivityRatio())));
+        jedis.commands().pexpire(key, config.plannerStatisticsTtlMillis());
     }
 
     private void storeEstimateInRedisSafely(QueryFilter filter, QueryCardinalityEstimate estimate) {
@@ -2641,7 +3050,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private List<QueryHistogramBucket> loadHistogramFromRedis(String column) {
-        String payload = jedis.get(plannerHistogramRedisKey(column));
+        String payload = jedis.commands().get(plannerHistogramRedisKey(column));
         if (payload == null || payload.isBlank()) {
             return List.of();
         }
@@ -2654,11 +3063,11 @@ public final class RedisQueryIndexManager<T, ID> {
             if (parts.length != 3) {
                 continue;
             }
-            buckets.add(new QueryHistogramBucket(
-                    Double.parseDouble(parts[0]),
-                    Double.parseDouble(parts[1]),
-                    Long.parseLong(parts[2])
-            ));
+            buckets.add(
+                    new QueryHistogramBucket(
+                            Double.parseDouble(parts[0]),
+                            Double.parseDouble(parts[1]),
+                            Long.parseLong(parts[2])));
         }
         return List.copyOf(buckets);
     }
@@ -2673,12 +3082,19 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private void storeHistogramInRedis(String column, List<QueryHistogramBucket> buckets) {
-        String payload = buckets.stream()
-                .map(bucket -> bucket.lowerBoundInclusive() + ":" + bucket.upperBoundExclusive() + ":" + bucket.count())
-                .collect(Collectors.joining("|"));
+        String payload =
+                buckets.stream()
+                        .map(
+                                bucket ->
+                                        bucket.lowerBoundInclusive()
+                                                + ":"
+                                                + bucket.upperBoundExclusive()
+                                                + ":"
+                                                + bucket.count())
+                        .collect(Collectors.joining("|"));
         String key = plannerHistogramRedisKey(column);
-        jedis.set(key, payload);
-        jedis.pexpire(key, config.plannerStatisticsTtlMillis());
+        jedis.commands().set(key, payload);
+        jedis.commands().pexpire(key, config.plannerStatisticsTtlMillis());
     }
 
     private void storeHistogramInRedisSafely(String column, List<QueryHistogramBucket> buckets) {
@@ -2691,7 +3107,7 @@ public final class RedisQueryIndexManager<T, ID> {
 
     private Map<String, String> loadLearnedStatsFieldsSafely(String expression) {
         try {
-            return jedis.hgetAll(plannerLearnedRedisKey(expression));
+            return jedis.commands().hgetAll(plannerLearnedRedisKey(expression));
         } catch (RuntimeException exception) {
             markIndexFeaturesDegradedSafely();
             return Map.of();
@@ -2701,11 +3117,14 @@ public final class RedisQueryIndexManager<T, ID> {
     private void storeLearnedStatsSafely(String expression, LearnedStats learnedStats) {
         try {
             String key = plannerLearnedRedisKey(expression);
-            jedis.hset(key, Map.of(
-                    "averageCardinality", String.valueOf(learnedStats.averageCardinality()),
-                    "sampleCount", String.valueOf(learnedStats.sampleCount())
-            ));
-            jedis.pexpire(key, config.plannerStatisticsTtlMillis());
+            jedis.commands()
+                    .hset(
+                            key,
+                            Map.of(
+                                    "averageCardinality",
+                                            String.valueOf(learnedStats.averageCardinality()),
+                                    "sampleCount", String.valueOf(learnedStats.sampleCount())));
+            jedis.commands().pexpire(key, config.plannerStatisticsTtlMillis());
         } catch (RuntimeException exception) {
             markIndexFeaturesDegradedSafely();
         }
@@ -2715,33 +3134,30 @@ public final class RedisQueryIndexManager<T, ID> {
         try {
             markIndexFeaturesDegraded();
         } catch (RuntimeException ignored) {
-            // Index degradation is advisory; never fail the main repository path on fallback marking.
+            // Index degradation is advisory; never fail the main repository path on fallback
+            // marking.
         }
     }
 
     private String plannerEstimateRedisKey(QueryFilter filter) {
         return keyStrategy.indexPlannerEstimateKey(
                 metadata.redisNamespace(),
-                encodeKeyPart(currentPlannerEpoch() + "|" + describeFilter(filter))
-        );
+                encodeKeyPart(currentPlannerEpoch() + "|" + describeFilter(filter)));
     }
 
     private String plannerHistogramRedisKey(String column) {
         return keyStrategy.indexPlannerHistogramKey(
-                metadata.redisNamespace(),
-                encodeKeyPart(currentPlannerEpoch() + "|" + column)
-        );
+                metadata.redisNamespace(), encodeKeyPart(currentPlannerEpoch() + "|" + column));
     }
 
     private String plannerLearnedRedisKey(String expression) {
         return keyStrategy.indexPlannerLearnedKey(
-                metadata.redisNamespace(),
-                encodeKeyPart(currentPlannerEpoch() + "|" + expression)
-        );
+                metadata.redisNamespace(), encodeKeyPart(currentPlannerEpoch() + "|" + expression));
     }
 
     private String currentPlannerEpoch() {
-        String epoch = jedis.get(keyStrategy.indexPlannerEpochKey(metadata.redisNamespace()));
+        String epoch =
+                jedis.commands().get(keyStrategy.indexPlannerEpochKey(metadata.redisNamespace()));
         return epoch == null || epoch.isBlank() ? "0" : epoch;
     }
 
@@ -2776,7 +3192,9 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private long estimatePlanCost(QuerySpec querySpec, int candidateCount, SortPlan sortPlan) {
-        return Math.max(1, candidateCount) + sortPlan.estimatedCost() + Math.max(0, querySpec.fetchPlan().includes().size());
+        return Math.max(1, candidateCount)
+                + sortPlan.estimatedCost()
+                + Math.max(0, querySpec.fetchPlan().includes().size());
     }
 
     private String plannerStrategy(QuerySpec querySpec, SortPlan sortPlan, boolean fullyIndexed) {
@@ -2789,53 +3207,30 @@ public final class RedisQueryIndexManager<T, ID> {
         return "COST_BASED_AND_INDEX_PLAN:" + sortPlan.strategy();
     }
 
-    private record Resolution(
-            Set<String> candidates,
-            boolean fullyIndexed
-    ) {
-    }
+    private record Resolution(Set<String> candidates, boolean fullyIndexed) {}
 
-    private record ResolutionWithNode(
-            QueryNode node,
-            Resolution resolution
-    ) {
-    }
+    private record ResolutionWithNode(QueryNode node, Resolution resolution) {}
 
-    private record BatchFilterResult(
-            List<String> matchedIds,
-            boolean stopScanning
-    ) {
-    }
+    private record BatchFilterResult(List<String> matchedIds, boolean stopScanning) {}
 
     private record LazySortedScanPlan(
             Set<String> membershipIds,
             ScoreRange scoreRange,
             com.reactor.cachedb.core.query.QuerySortDirection direction,
-            boolean requiresDecode
-    ) {
-    }
+            boolean requiresDecode) {}
 
     private record PartitionedExactSortPlan(
-            String exactColumn,
-            Object exactValue,
-            QuerySort sort,
-            String sortKey
-    ) {
-    }
+            String exactColumn, Object exactValue, QuerySort sort, String sortKey) {}
 
-    private record ScoreRange(
-            double min,
-            boolean minInclusive,
-            double max,
-            boolean maxInclusive
-    ) {
+    private record ScoreRange(double min, boolean minInclusive, double max, boolean maxInclusive) {
         private boolean matches(double score) {
             boolean lower = minInclusive ? score >= min : score > min;
             boolean upper = maxInclusive ? score <= max : score < max;
             return lower && upper;
         }
 
-        private boolean canStop(double score, com.reactor.cachedb.core.query.QuerySortDirection direction) {
+        private boolean canStop(
+                double score, com.reactor.cachedb.core.query.QuerySortDirection direction) {
             if (direction == com.reactor.cachedb.core.query.QuerySortDirection.DESC) {
                 return minInclusive ? score < min : score <= min;
             }
@@ -2843,34 +3238,13 @@ public final class RedisQueryIndexManager<T, ID> {
         }
     }
 
-    public record SortPlan(
-            String strategy,
-            long estimatedCost,
-            boolean usesSortedIndex
-    ) {
-    }
+    public record SortPlan(String strategy, long estimatedCost, boolean usesSortedIndex) {}
 
-    private record CachedEstimate(
-            QueryCardinalityEstimate estimate,
-            long createdAtEpochMillis
-    ) {
-    }
+    private record CachedEstimate(QueryCardinalityEstimate estimate, long createdAtEpochMillis) {}
 
-    private record CachedHistogram(
-            List<QueryHistogramBucket> buckets,
-            long createdAtEpochMillis
-    ) {
-    }
+    private record CachedHistogram(List<QueryHistogramBucket> buckets, long createdAtEpochMillis) {}
 
-    private record CachedLearnedStats(
-            LearnedStats stats,
-            long createdAtEpochMillis
-    ) {
-    }
+    private record CachedLearnedStats(LearnedStats stats, long createdAtEpochMillis) {}
 
-    private record LearnedStats(
-            long averageCardinality,
-            long sampleCount
-    ) {
-    }
+    private record LearnedStats(long averageCardinality, long sampleCount) {}
 }

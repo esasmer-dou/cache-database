@@ -4,15 +4,15 @@ import com.reactor.cachedb.core.api.ProjectionRepository;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.guardrail.ReadShapeGuardrails;
 import com.reactor.cachedb.core.projection.EntityProjection;
-import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QueryEvaluator;
-import com.reactor.cachedb.core.query.QueryOperator;
+import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySortDirection;
 import com.reactor.cachedb.core.query.QuerySpec;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.route.RouteCacheContext;
 import com.reactor.cachedb.core.route.RouteCacheContract;
+
 import redis.clients.jedis.resps.Tuple;
 
 import java.util.ArrayList;
@@ -40,7 +40,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     private final Function<QuerySpec, List<P>> queryWarmupLoader;
     private final StoragePerformanceCollector performanceCollector;
     private final ReadShapeGuardrailConfig readShapeGuardrailConfig;
-    private final ProjectionQueryCache<P> queryCache = new ProjectionQueryCache<>(HOT_QUERY_CACHE_LIMIT, HOT_QUERY_CACHE_TTL_MILLIS);
+    private final ProjectionQueryCache<P> queryCache =
+            new ProjectionQueryCache<>(HOT_QUERY_CACHE_LIMIT, HOT_QUERY_CACHE_TTL_MILLIS);
 
     public RedisProjectionRepository(
             RedisProjectionRuntime<P, ID> readRuntime,
@@ -50,13 +51,14 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             Function<Collection<String>, Map<String, P>> missingByRawIdsLoader,
             Function<QuerySpec, List<P>> queryWarmupLoader,
             StoragePerformanceCollector performanceCollector,
-            ReadShapeGuardrailConfig readShapeGuardrailConfig
-    ) {
+            ReadShapeGuardrailConfig readShapeGuardrailConfig) {
         this.readRuntime = Objects.requireNonNull(readRuntime, "readRuntime");
         this.refreshRuntime = Objects.requireNonNull(refreshRuntime, "refreshRuntime");
         this.queryEvaluator = Objects.requireNonNull(queryEvaluator, "queryEvaluator");
-        this.missingByRawIdLoader = Objects.requireNonNull(missingByRawIdLoader, "missingByRawIdLoader");
-        this.missingByRawIdsLoader = Objects.requireNonNull(missingByRawIdsLoader, "missingByRawIdsLoader");
+        this.missingByRawIdLoader =
+                Objects.requireNonNull(missingByRawIdLoader, "missingByRawIdLoader");
+        this.missingByRawIdsLoader =
+                Objects.requireNonNull(missingByRawIdsLoader, "missingByRawIdsLoader");
         this.queryWarmupLoader = Objects.requireNonNull(queryWarmupLoader, "queryWarmupLoader");
         this.performanceCollector = performanceCollector;
         this.readShapeGuardrailConfig = readShapeGuardrailConfig;
@@ -69,7 +71,10 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         long startedAt = System.nanoTime();
         try {
             String rawId = String.valueOf(id);
-            List<String> values = readRuntime.jedis().mget(readRuntime.payloadKey(id), readRuntime.tombstoneKey(id));
+            List<String> values =
+                    readRuntime
+                            .jedis()
+                            .mget(readRuntime.payloadKey(id), readRuntime.tombstoneKey(id));
             if (values.get(1) != null) {
                 return Optional.empty();
             }
@@ -117,10 +122,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
                 validateProjectionRouteContract("Projection query", querySpec.limit());
             }
             ReadShapeGuardrails.validateProjectionQuery(
-                    readRuntime.binding().projection().name(),
-                    querySpec,
-                    readShapeGuardrailConfig
-            );
+                    readRuntime.binding().projection().name(), querySpec, readShapeGuardrailConfig);
             String hotQueryCacheKey = hotQueryCacheKey(querySpec);
             if (hotQueryCacheKey != null) {
                 List<P> cached = queryCache.get(hotQueryCacheKey);
@@ -135,20 +137,36 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
                 cacheHotQuery(hotQueryCacheKey, result);
                 return result;
             }
-            boolean sortedIndexScan = readRuntime.queryIndexManager().supportsSortedIndexScan(querySpec);
-            boolean primarySortedScan = !sortedIndexScan && readRuntime.queryIndexManager().shouldUsePrimarySortedScan(querySpec);
-            List<String> candidateIds = sortedIndexScan
-                    ? readRuntime.queryIndexManager().resolveSortedIds(querySpec)
-                    : (primarySortedScan
-                    ? readRuntime.queryIndexManager().resolvePrimarySortedIds(querySpec)
-                    : readRuntime.queryIndexManager().resolveCandidateIds(querySpec));
-            boolean completeSortOrderResolved = primarySortedScan
-                    && readRuntime.queryIndexManager().resolvesCompleteSortOrder(querySpec, candidateIds.size());
-            boolean requiresResidualEvaluation = !readRuntime.queryIndexManager().fullyIndexed(querySpec.rootGroup());
-            boolean requiresInMemorySort = !querySpec.sorts().isEmpty() && !sortedIndexScan && !completeSortOrderResolved;
+            boolean sortedIndexScan =
+                    readRuntime.queryIndexManager().supportsSortedIndexScan(querySpec);
+            boolean primarySortedScan =
+                    !sortedIndexScan
+                            && readRuntime
+                                    .queryIndexManager()
+                                    .shouldUsePrimarySortedScan(querySpec);
+            List<String> candidateIds =
+                    sortedIndexScan
+                            ? readRuntime.queryIndexManager().resolveSortedIds(querySpec)
+                            : (primarySortedScan
+                                    ? readRuntime
+                                            .queryIndexManager()
+                                            .resolvePrimarySortedIds(querySpec)
+                                    : readRuntime
+                                            .queryIndexManager()
+                                            .resolveCandidateIds(querySpec));
+            boolean completeSortOrderResolved =
+                    primarySortedScan
+                            && readRuntime
+                                    .queryIndexManager()
+                                    .resolvesCompleteSortOrder(querySpec, candidateIds.size());
+            boolean requiresResidualEvaluation =
+                    !readRuntime.queryIndexManager().fullyIndexed(querySpec.rootGroup());
+            boolean requiresInMemorySort =
+                    !querySpec.sorts().isEmpty() && !sortedIndexScan && !completeSortOrderResolved;
 
             if (candidateIds.isEmpty()) {
-                List<P> warmed = Optional.ofNullable(queryWarmupLoader.apply(querySpec)).orElseGet(List::of);
+                List<P> warmed =
+                        Optional.ofNullable(queryWarmupLoader.apply(querySpec)).orElseGet(List::of);
                 warmProjections(warmed);
                 List<P> result = List.copyOf(warmed);
                 cacheHotQuery(hotQueryCacheKey, result);
@@ -156,7 +174,12 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             }
 
             if (!requiresResidualEvaluation && !requiresInMemorySort) {
-                List<String> payloadIds = windowResolvedCandidateIds(querySpec, candidateIds, sortedIndexScan, completeSortOrderResolved);
+                List<String> payloadIds =
+                        windowResolvedCandidateIds(
+                                querySpec,
+                                candidateIds,
+                                sortedIndexScan,
+                                completeSortOrderResolved);
                 LinkedHashMap<String, P> resolved = loadProjectionMap(payloadIds);
                 readRuntime.queryIndexManager().observe(querySpec, resolved.size());
                 List<P> ordered = new ArrayList<>(resolved.values());
@@ -181,12 +204,14 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     }
 
     private void cacheHotQuery(String key, List<P> result) {
-        // Redis is the shared cache. Pod-local query results cannot be invalidated reliably across replicas.
+        // Redis is the shared cache. Pod-local query results cannot be invalidated reliably across
+        // replicas.
     }
 
     private void validateProjectionRouteContract(String shape, int requestedRows) {
         RouteCacheContract contract = RouteCacheContext.currentContract();
-        ReadShapeGuardrails.validateRouteContract(contract, "projection:" + readRuntime.binding().projection().name());
+        ReadShapeGuardrails.validateRouteContract(
+                contract, "projection:" + readRuntime.binding().projection().name());
         ReadShapeGuardrails.validateRouteReadSize(contract, shape, requestedRows);
     }
 
@@ -210,9 +235,16 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         int chunkSize = Math.max(Math.max(querySpec.limit(), 1) * 4, 64);
         boolean stopScanning = false;
         while (!stopScanning && matched.size() < targetCount) {
-            List<Tuple> batch = plan.sort().direction() == QuerySortDirection.DESC
-                    ? readRuntime.jedis().zrevrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1)
-                    : readRuntime.jedis().zrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1);
+            List<Tuple> batch =
+                    plan.sort().direction() == QuerySortDirection.DESC
+                            ? readRuntime
+                                    .jedis()
+                                    .commands()
+                                    .zrevrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1)
+                            : readRuntime
+                                    .jedis()
+                                    .commands()
+                                    .zrangeWithScores(plan.sortKey(), rank, rank + chunkSize - 1);
             if (batch == null || batch.isEmpty()) {
                 break;
             }
@@ -238,7 +270,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
                     if (projection == null) {
                         continue;
                     }
-                    Map<String, Object> columns = plan.projection().columnExtractor().apply(projection);
+                    Map<String, Object> columns =
+                            plan.projection().columnExtractor().apply(projection);
                     if (queryEvaluator.matches(columns, querySpec.rootGroup())) {
                         matched.add(projection);
                         if (matched.size() >= targetCount) {
@@ -252,7 +285,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         }
 
         if (matched.isEmpty()) {
-            List<P> warmed = Optional.ofNullable(queryWarmupLoader.apply(querySpec)).orElseGet(List::of);
+            List<P> warmed =
+                    Optional.ofNullable(queryWarmupLoader.apply(querySpec)).orElseGet(List::of);
             warmProjections(warmed);
             return Optional.of(List.copyOf(warmed));
         }
@@ -272,13 +306,16 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             return null;
         }
         Set<String> availableColumns = projectionAvailableColumns(projection);
-        boolean filtersSupported = querySpec.filters().stream()
-                .allMatch(filter -> availableColumns.contains(filter.column()));
+        boolean filtersSupported =
+                querySpec.filters().stream()
+                        .allMatch(filter -> availableColumns.contains(filter.column()));
         if (!filtersSupported) {
             return null;
         }
-        boolean sortsSupported = querySpec.sorts().stream()
-                .allMatch(candidateSort -> availableColumns.contains(candidateSort.column()));
+        boolean sortsSupported =
+                querySpec.sorts().stream()
+                        .allMatch(
+                                candidateSort -> availableColumns.contains(candidateSort.column()));
         if (!sortsSupported) {
             return null;
         }
@@ -286,8 +323,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
                 projection,
                 sort,
                 readRuntime.sortedIndexKey(sort.column()),
-                scoreRangeForRankedProjection(querySpec.filters(), sort.column())
-        );
+                scoreRangeForRankedProjection(querySpec.filters(), sort.column()));
     }
 
     private Set<String> projectionAvailableColumns(EntityProjection<?, P, ID> projection) {
@@ -296,7 +332,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         return columns;
     }
 
-    private ScoreRange scoreRangeForRankedProjection(List<QueryFilter> filters, String rankedColumn) {
+    private ScoreRange scoreRangeForRankedProjection(
+            List<QueryFilter> filters, String rankedColumn) {
         double min = Double.NEGATIVE_INFINITY;
         boolean minInclusive = true;
         double max = Double.POSITIVE_INFINITY;
@@ -306,7 +343,9 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             if (!rankedColumn.equals(filter.column())) {
                 continue;
             }
-            Double score = RedisScoreSupport.toScore(readRuntime.metadata().columnTypes(), rankedColumn, filter.value());
+            Double score =
+                    RedisScoreSupport.toScore(
+                            readRuntime.metadata().columnTypes(), rankedColumn, filter.value());
             if (score == null) {
                 continue;
             }
@@ -346,8 +385,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
                     maxInclusive = true;
                     constrained = true;
                 }
-                default -> {
-                }
+                default -> {}
             }
         }
         if (!constrained) {
@@ -356,11 +394,14 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         return new ScoreRange(min, minInclusive, max, maxInclusive);
     }
 
-    private List<P> queryViaProjectionPayload(QuerySpec querySpec, List<String> candidateIds, boolean sortedIndexScan) {
+    private List<P> queryViaProjectionPayload(
+            QuerySpec querySpec, List<String> candidateIds, boolean sortedIndexScan) {
         LinkedHashMap<String, P> resolved = loadProjectionMap(candidateIds);
         ArrayList<P> projections = new ArrayList<>(resolved.size());
-        Map<P, Map<String, Object>> resolvedColumns = new IdentityHashMap<>(Math.max(16, resolved.size()));
-        boolean requiresResidualEvaluation = !readRuntime.queryIndexManager().fullyIndexed(querySpec.rootGroup());
+        Map<P, Map<String, Object>> resolvedColumns =
+                new IdentityHashMap<>(Math.max(16, resolved.size()));
+        boolean requiresResidualEvaluation =
+                !readRuntime.queryIndexManager().fullyIndexed(querySpec.rootGroup());
         for (String candidateId : candidateIds) {
             P projection = resolved.get(candidateId);
             if (projection == null) {
@@ -380,12 +421,18 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         readRuntime.queryIndexManager().observe(querySpec, projections.size());
 
         if (!querySpec.sorts().isEmpty() && !sortedIndexScan) {
-            Map<P, Map<String, Object>> sortColumns = new IdentityHashMap<>(Math.max(projections.size(), resolvedColumns.size()));
+            Map<P, Map<String, Object>> sortColumns =
+                    new IdentityHashMap<>(Math.max(projections.size(), resolvedColumns.size()));
             sortColumns.putAll(resolvedColumns);
             for (P projection : projections) {
                 sortColumns.computeIfAbsent(projection, readRuntime.codec()::toColumns);
             }
-            projections.sort((left, right) -> compareBySorts(sortColumns.get(left), sortColumns.get(right), querySpec.sorts()));
+            projections.sort(
+                    (left, right) ->
+                            compareBySorts(
+                                    sortColumns.get(left),
+                                    sortColumns.get(right),
+                                    querySpec.sorts()));
         }
 
         if (sortedIndexScan) {
@@ -401,12 +448,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         if (rawIds.isEmpty()) {
             return new LinkedHashMap<>();
         }
-        List<String> payloadKeys = rawIds.stream()
-                .map(this::projectionPayloadKey)
-                .toList();
-        List<String> tombstoneKeys = rawIds.stream()
-                .map(this::projectionTombstoneKey)
-                .toList();
+        List<String> payloadKeys = rawIds.stream().map(this::projectionPayloadKey).toList();
+        List<String> tombstoneKeys = rawIds.stream().map(this::projectionTombstoneKey).toList();
         List<String> values = mgetPayloadAndTombstones(payloadKeys, tombstoneKeys);
         LinkedHashMap<String, P> resolved = new LinkedHashMap<>();
         ArrayList<String> missingIds = new ArrayList<>();
@@ -416,14 +459,16 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             }
             String encodedProjection = values.get(index);
             if (encodedProjection != null) {
-                resolved.put(rawIds.get(index), readRuntime.codec().fromRedisValue(encodedProjection));
+                resolved.put(
+                        rawIds.get(index), readRuntime.codec().fromRedisValue(encodedProjection));
             } else {
                 missingIds.add(rawIds.get(index));
             }
         }
 
         if (!missingIds.isEmpty()) {
-            Map<String, P> warmed = Optional.ofNullable(missingByRawIdsLoader.apply(missingIds)).orElseGet(Map::of);
+            Map<String, P> warmed =
+                    Optional.ofNullable(missingByRawIdsLoader.apply(missingIds)).orElseGet(Map::of);
             warmProjections(warmed.values());
             resolved.putAll(warmed);
         }
@@ -442,8 +487,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             QuerySpec querySpec,
             List<String> candidateIds,
             boolean sortedIndexScan,
-            boolean completeSortOrderResolved
-    ) {
+            boolean completeSortOrderResolved) {
         if (candidateIds.isEmpty()) {
             return List.of();
         }
@@ -463,7 +507,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         return readRuntime.tombstoneKey(rawId);
     }
 
-    private List<String> mgetPayloadAndTombstones(List<String> payloadKeys, List<String> tombstoneKeys) {
+    private List<String> mgetPayloadAndTombstones(
+            List<String> payloadKeys, List<String> tombstoneKeys) {
         int payloadCount = payloadKeys.size();
         String[] lookupKeys = new String[payloadCount + tombstoneKeys.size()];
         for (int index = 0; index < payloadCount; index++) {
@@ -492,7 +537,10 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         }
     }
 
-    private int compareBySorts(Map<String, Object> leftColumns, Map<String, Object> rightColumns, List<QuerySort> sorts) {
+    private int compareBySorts(
+            Map<String, Object> leftColumns,
+            Map<String, Object> rightColumns,
+            List<QuerySort> sorts) {
         for (QuerySort sort : sorts) {
             int result = queryEvaluator.comparator(sort).compare(leftColumns, rightColumns);
             if (result != 0) {
@@ -519,8 +567,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
                 EntityProjection<?, P, ID> projection,
                 QuerySort sort,
                 String sortKey,
-                ScoreRange scoreRange
-        ) {
+                ScoreRange scoreRange) {
             this.projection = projection;
             this.sort = sort;
             this.sortKey = sortKey;
@@ -544,12 +591,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         }
     }
 
-    private record ScoreRange(
-            double min,
-            boolean minInclusive,
-            double max,
-            boolean maxInclusive
-    ) {
+    private record ScoreRange(double min, boolean minInclusive, double max, boolean maxInclusive) {
         private boolean matches(double score) {
             boolean lower = minInclusive ? score >= min : score > min;
             boolean upper = maxInclusive ? score <= max : score < max;
@@ -567,7 +609,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     private static final class ProjectionQueryCache<P> {
         private final int maxEntries;
         private final long ttlMillis;
-        private final LinkedHashMap<String, CachedQueryResult<P>> entries = new LinkedHashMap<>(32, 0.75f, true);
+        private final LinkedHashMap<String, CachedQueryResult<P>> entries =
+                new LinkedHashMap<>(32, 0.75f, true);
 
         private ProjectionQueryCache(int maxEntries, long ttlMillis) {
             this.maxEntries = Math.max(1, maxEntries);
@@ -582,7 +625,10 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
 
         private synchronized void put(String key, List<P> result) {
             pruneExpired(System.currentTimeMillis());
-            entries.put(key, new CachedQueryResult<>(List.copyOf(result), System.currentTimeMillis() + ttlMillis));
+            entries.put(
+                    key,
+                    new CachedQueryResult<>(
+                            List.copyOf(result), System.currentTimeMillis() + ttlMillis));
             while (entries.size() > maxEntries) {
                 String eldestKey = entries.keySet().iterator().next();
                 entries.remove(eldestKey);
@@ -598,6 +644,5 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         }
     }
 
-    private record CachedQueryResult<P>(List<P> result, long expiresAtEpochMillis) {
-    }
+    private record CachedQueryResult<P>(List<P> result, long expiresAtEpochMillis) {}
 }

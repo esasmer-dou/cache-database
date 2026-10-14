@@ -4,13 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reactor.cachedb.spring.boot.CacheDatabaseSpringBootAutoConfiguration;
 import com.reactor.cachedb.starter.CacheDatabase;
 
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
-
-import redis.clients.jedis.JedisPooled;
 
 import java.time.Clock;
 import java.util.*;
@@ -29,8 +26,6 @@ public class CacheSnapshotAutoConfiguration {
     SnapshotJobs snapshotJobs(
             DataSource source,
             CacheDatabase database,
-            @Qualifier("cacheDbBackgroundJedisPooled") JedisPooled redis,
-            @Qualifier("cacheDbJedisPooled") JedisPooled readRedis,
             ObjectMapper mapper,
             SnapshotProperties properties,
             List<SnapshotPlan<?, ?>> plans) {
@@ -42,8 +37,8 @@ public class CacheSnapshotAutoConfiguration {
                         "Snapshot configuration references an unknown plan: " + name);
         return new SnapshotJobs(
                 source,
-                redis,
-                readRedis,
+                database.backgroundRedisOperations(),
+                database.redisOperations(),
                 mapper,
                 Clock.systemUTC(),
                 database.config().keyspace().keyPrefix(),

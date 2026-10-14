@@ -1,0 +1,61 @@
+services:
+  cluster1:
+    image: redis:8-alpine
+    command: ["redis-server", "--port", "7001", "--cluster-enabled", "yes", "--cluster-config-file", "nodes.conf", "--cluster-node-timeout", "2000"]
+    ports: ["127.0.0.1:17001:7001"]
+  cluster2:
+    image: redis:8-alpine
+    command: ["redis-server", "--port", "7002", "--cluster-enabled", "yes", "--cluster-config-file", "nodes.conf", "--cluster-node-timeout", "2000"]
+    ports: ["127.0.0.1:17002:7002"]
+  cluster3:
+    image: redis:8-alpine
+    command: ["redis-server", "--port", "7003", "--cluster-enabled", "yes", "--cluster-config-file", "nodes.conf", "--cluster-node-timeout", "2000"]
+    ports: ["127.0.0.1:17003:7003"]
+  redis:
+    image: redis:8-alpine
+    container_name: cachedb-v013-redis-20261014
+    ports: ["127.0.0.1:16383:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  postgres:
+    image: postgres:16-alpine
+    container_name: cachedb-v013-postgres-20261014
+    environment:
+      POSTGRES_PASSWORD: LocalFixture_7p92_test
+    ports: ["127.0.0.1:15435:5432"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-CU18-ubuntu-22.04
+    container_name: cachedb-v013-mssql-20261014
+    environment:
+      ACCEPT_EULA: Y
+      MSSQL_SA_PASSWORD: CacheDbSnapshot123
+      MSSQL_PID: Developer
+    mem_limit: 3g
+    ports: ["127.0.0.1:14331:1433"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P CacheDbSnapshot123 -C -Q 'SELECT 1' -b"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+  oracle:
+    image: gvenzl/oracle-free:23.9-slim@sha256:202889b03adeb66f0b87713f5cf01a06af2cfeb0c25e9ba31a74f5cd24172e31
+    container_name: cachedb-v013-oracle-20261014
+    environment:
+      ORACLE_PASSWORD: CacheDbOracle123
+      APP_USER: cachedb
+      APP_USER_PASSWORD: CacheDbOracle123
+    mem_limit: 3g
+    ports: ["127.0.0.1:15211:1521"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 40

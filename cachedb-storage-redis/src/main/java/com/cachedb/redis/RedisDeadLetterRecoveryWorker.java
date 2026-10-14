@@ -7,9 +7,10 @@ import com.reactor.cachedb.core.queue.FailureClassifyingFlusher;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.queue.WorkerErrorCapture;
 import com.reactor.cachedb.core.queue.WorkerErrorDetails;
-import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.queue.WriteBehindFailureRecord;
 import com.reactor.cachedb.core.queue.WriteBehindFlusher;
+import com.reactor.cachedb.core.queue.WriteFailureDetails;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.StreamEntryID;
 import redis.clients.jedis.exceptions.JedisDataException;
@@ -34,7 +35,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final WriteBehindFlusher flusher;
     private final DeadLetterRecoveryConfig config;
     private final WriteBehindConfigAdapter configAdapter;
@@ -60,15 +61,31 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
             DeadLetterRecoveryConfig config,
             RedisWriteOperationMapper mapper,
             RedisKeyStrategy keyStrategy,
-            String deadLetterStreamKey
-    ) {
+            String deadLetterStreamKey) {
+        this(
+                JedisPooledOperations.of(jedis),
+                flusher,
+                config,
+                mapper,
+                keyStrategy,
+                deadLetterStreamKey);
+    }
+
+    public RedisDeadLetterRecoveryWorker(
+            RedisClientOperations jedis,
+            WriteBehindFlusher flusher,
+            DeadLetterRecoveryConfig config,
+            RedisWriteOperationMapper mapper,
+            RedisKeyStrategy keyStrategy,
+            String deadLetterStreamKey) {
         this.jedis = jedis;
         this.flusher = flusher;
         this.config = config;
         this.mapper = mapper;
         this.keyStrategy = keyStrategy;
         this.configAdapter = new WriteBehindConfigAdapter(deadLetterStreamKey);
-        this.executorService = Executors.newFixedThreadPool(config.workerThreads(), threadFactory(config));
+        this.executorService =
+                Executors.newFixedThreadPool(config.workerThreads(), threadFactory(config));
     }
 
     public void start() {
@@ -87,7 +104,12 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
             return;
         }
         try {
-            jedis.xgroupCreate(configAdapter.deadLetterStreamKey(), config.consumerGroup(), new StreamEntryID("0-0"), true);
+            jedis.commands()
+                    .xgroupCreate(
+                            configAdapter.deadLetterStreamKey(),
+                            config.consumerGroup(),
+                            new StreamEntryID("0-0"),
+                            true);
         } catch (JedisDataException exception) {
             if (!exception.getMessage().contains("BUSYGROUP")) {
                 throw exception;
@@ -96,12 +118,14 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
     }
 
     private void runLoop(String consumerName) {
-        XReadGroupParams params = new XReadGroupParams()
-                .count(config.claimBatchSize())
-                .block((int) config.blockTimeoutMillis());
+        XReadGroupParams params =
+                new XReadGroupParams()
+                        .count(config.claimBatchSize())
+                        .block((int) config.blockTimeoutMillis());
         while (running.get() && !Thread.currentThread().isInterrupted()) {
             try {
-                List<Entry<String, List<StreamEntry>>> responses = claimAbandonedEntries(consumerName);
+                List<Entry<String, List<StreamEntry>>> responses =
+                        claimAbandonedEntries(consumerName);
                 if (!hasEntries(responses)) {
                     responses = readNewEntries(consumerName, params);
                 }
@@ -130,14 +154,15 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
     private List<Entry<String, List<StreamEntry>>> claimAbandonedEntries(String consumerName) {
         Entry<StreamEntryID, List<StreamEntry>> claimed;
         try {
-            claimed = jedis.xautoclaim(
-                    configAdapter.deadLetterStreamKey(),
-                    config.consumerGroup(),
-                    consumerName,
-                    config.claimIdleMillis(),
-                    new StreamEntryID("0-0"),
-                    new XAutoClaimParams().count(config.claimBatchSize())
-            );
+            claimed =
+                    jedis.commands()
+                            .xautoclaim(
+                                    configAdapter.deadLetterStreamKey(),
+                                    config.consumerGroup(),
+                                    consumerName,
+                                    config.claimIdleMillis(),
+                                    new StreamEntryID("0-0"),
+                                    new XAutoClaimParams().count(config.claimBatchSize()));
         } catch (JedisDataException exception) {
             if (isMissingConsumerGroup(exception)) {
                 ensureConsumerGroup();
@@ -145,24 +170,28 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
             }
             throw exception;
         }
-        List<Entry<String, List<StreamEntry>>> responses = List.of(Map.entry(
-                configAdapter.deadLetterStreamKey(),
-                claimed == null ? List.of() : claimed.getValue()
-        ));
+        List<Entry<String, List<StreamEntry>>> responses =
+                List.of(
+                        Map.entry(
+                                configAdapter.deadLetterStreamKey(),
+                                claimed == null ? List.of() : claimed.getValue()));
         if (hasEntries(responses)) {
             claimedCount.addAndGet(responses.get(0).getValue().size());
         }
         return responses;
     }
 
-    private List<Entry<String, List<StreamEntry>>> readNewEntries(String consumerName, XReadGroupParams params) {
+    private List<Entry<String, List<StreamEntry>>> readNewEntries(
+            String consumerName, XReadGroupParams params) {
         try {
-            return jedis.xreadGroup(
-                    config.consumerGroup(),
-                    consumerName,
-                    params,
-                    Map.of(configAdapter.deadLetterStreamKey(), StreamEntryID.UNRECEIVED_ENTRY)
-            );
+            return jedis.commands()
+                    .xreadGroup(
+                            config.consumerGroup(),
+                            consumerName,
+                            params,
+                            Map.of(
+                                    configAdapter.deadLetterStreamKey(),
+                                    StreamEntryID.UNRECEIVED_ENTRY));
         } catch (JedisDataException exception) {
             if (isMissingConsumerGroup(exception)) {
                 ensureConsumerGroup();
@@ -183,17 +212,22 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
             return;
         }
 
-        WriteRetryPolicy retryPolicy = RedisRetryPolicyResolver.resolve(
-                config.maxReplayRetries(),
-                config.replayBackoffMillis(),
-                config.retryOverrides(),
-                operation
-        );
+        WriteRetryPolicy retryPolicy =
+                RedisRetryPolicyResolver.resolve(
+                        config.maxReplayRetries(),
+                        config.replayBackoffMillis(),
+                        config.retryOverrides(),
+                        operation);
 
         int attempts = 0;
         while (attempts <= retryPolicy.maxRetries()) {
             try {
                 flusher.flush(operation);
+                if (operation.atomicBatch()) {
+                    var durability = new RedisDurabilityTracker(jedis, keyStrategy);
+                    for (var member : operation.batchOperations())
+                        durability.advance(member.redisNamespace(), member.id(), member.version());
+                }
                 publishReconciliation("REPLAYED", failureRecord, null, attempts);
                 resolveDeadLetter(entry, "REPLAYED", "");
                 replayedCount.incrementAndGet();
@@ -203,7 +237,11 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
                 attempts++;
                 if (attempts > retryPolicy.maxRetries()) {
                     publishReconciliation("FAILED", failureRecord, exception, attempts);
-                    jedis.xack(configAdapter.deadLetterStreamKey(), config.consumerGroup(), entry.getID());
+                    jedis.commands()
+                            .xack(
+                                    configAdapter.deadLetterStreamKey(),
+                                    config.consumerGroup(),
+                                    entry.getID());
                     failedCount.incrementAndGet();
                     return;
                 }
@@ -212,7 +250,8 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
         }
     }
 
-    private WriteBehindFailureRecord toFailureRecord(Map<String, String> fields, QueuedWriteOperation operation) {
+    private WriteBehindFailureRecord toFailureRecord(
+            Map<String, String> fields, QueuedWriteOperation operation) {
         return new WriteBehindFailureRecord(
                 operation,
                 fields.getOrDefault("deadLetterReason", ""),
@@ -222,21 +261,19 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
                         fields.get("deadLetterSqlState"),
                         fields.get("deadLetterVendorCode"),
                         fields.get("deadLetterRetryable"),
-                        fields.getOrDefault("deadLetterRootType", fields.getOrDefault("deadLetterReason", "")),
-                        fields.getOrDefault("deadLetterMessage", "")
-                ),
+                        fields.getOrDefault(
+                                "deadLetterRootType", fields.getOrDefault("deadLetterReason", "")),
+                        fields.getOrDefault("deadLetterMessage", "")),
                 Instant.now(),
                 parseInt(fields.get("deadLetterAttempts")),
-                Map.copyOf(fields)
-        );
+                Map.copyOf(fields));
     }
 
     private void publishReconciliation(
             String status,
             WriteBehindFailureRecord failureRecord,
             Exception replayException,
-            int replayAttempts
-    ) {
+            int replayAttempts) {
         LinkedHashMap<String, String> fields = new LinkedHashMap<>();
         fields.put("status", status);
         fields.put("entity", failureRecord.operation().entityName());
@@ -247,16 +284,22 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
         fields.put("deadLetterErrorMessage", failureRecord.errorMessage());
         fields.put("deadLetterFailureCategory", failureRecord.failureDetails().category().name());
         fields.put("deadLetterSqlState", failureRecord.failureDetails().sqlState());
-        fields.put("deadLetterRetryable", String.valueOf(failureRecord.failureDetails().retryable()));
-        fields.put("deadLetterVendorCode", String.valueOf(failureRecord.failureDetails().vendorCode()));
+        fields.put(
+                "deadLetterRetryable", String.valueOf(failureRecord.failureDetails().retryable()));
+        fields.put(
+                "deadLetterVendorCode",
+                String.valueOf(failureRecord.failureDetails().vendorCode()));
         fields.put("deadLetterRootType", failureRecord.failureDetails().errorType());
         fields.put("deadLetterAttempts", String.valueOf(failureRecord.attempts()));
         fields.put("replayAttempts", String.valueOf(replayAttempts));
         fields.put("reconciledAt", Instant.now().toString());
         if (replayException != null) {
-            WriteFailureDetails replayFailure = FailureClassifyingFlusher.classify(flusher, replayException);
+            WriteFailureDetails replayFailure =
+                    FailureClassifyingFlusher.classify(flusher, replayException);
             fields.put("replayErrorType", replayException.getClass().getName());
-            fields.put("replayErrorMessage", replayException.getMessage() == null ? "" : replayException.getMessage());
+            fields.put(
+                    "replayErrorMessage",
+                    replayException.getMessage() == null ? "" : replayException.getMessage());
             fields.put("replayFailureCategory", replayFailure.category().name());
             fields.put("replaySqlState", replayFailure.sqlState());
             fields.put("replayRetryable", String.valueOf(replayFailure.retryable()));
@@ -267,13 +310,18 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
     }
 
     private void resolveDeadLetter(StreamEntry entry, String status, String note) {
-        RedisRecoveryStreams.archiveResolved(jedis, config, entry.getFields(), entry.getID().toString(), status, note);
-        jedis.xack(configAdapter.deadLetterStreamKey(), config.consumerGroup(), entry.getID());
-        jedis.xdel(configAdapter.deadLetterStreamKey(), entry.getID());
+        RedisRecoveryStreams.archiveResolved(
+                jedis, config, entry.getFields(), entry.getID().toString(), status, note);
+        jedis.commands()
+                .xack(configAdapter.deadLetterStreamKey(), config.consumerGroup(), entry.getID());
+        jedis.commands().xdel(configAdapter.deadLetterStreamKey(), entry.getID());
     }
 
     private boolean isStale(QueuedWriteOperation operation) {
-        String currentVersion = jedis.get(keyStrategy.versionKey(operation.redisNamespace(), operation.id()));
+        if (operation.atomicBatch()) return false;
+        String currentVersion =
+                jedis.commands()
+                        .get(keyStrategy.versionKey(operation.redisNamespace(), operation.id()));
         if (currentVersion == null || currentVersion.isBlank()) {
             return false;
         }
@@ -333,7 +381,10 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
     private ThreadFactory threadFactory(DeadLetterRecoveryConfig config) {
         AtomicInteger counter = new AtomicInteger();
         return runnable -> {
-            Thread thread = new Thread(runnable, config.consumerNamePrefix() + "-thread-" + counter.incrementAndGet());
+            Thread thread =
+                    new Thread(
+                            runnable,
+                            config.consumerNamePrefix() + "-thread-" + counter.incrementAndGet());
             thread.setDaemon(config.daemonThreads());
             return thread;
         };
@@ -362,10 +413,8 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
                 lastErrorRootType.get(),
                 lastErrorRootMessage.get(),
                 lastErrorOrigin.get(),
-                lastErrorStackTrace.get()
-        );
+                lastErrorStackTrace.get());
     }
 
-    private record WriteBehindConfigAdapter(String deadLetterStreamKey) {
-    }
+    private record WriteBehindConfigAdapter(String deadLetterStreamKey) {}
 }

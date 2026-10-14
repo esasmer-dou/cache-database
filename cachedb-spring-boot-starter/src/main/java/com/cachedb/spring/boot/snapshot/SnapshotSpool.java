@@ -15,7 +15,7 @@ import java.util.function.Function;
 
 /** Preparation is disk-backed. Only one published batch is materialized as strings. */
 final class SnapshotSpool implements AutoCloseable {
-    record Entry(String id, long offset, int bytes) {}
+    record Entry(String id, long offset, int bytes, String partition, double score) {}
 
     private final Path path;
     private final FileChannel channel;
@@ -71,7 +71,7 @@ final class SnapshotSpool implements AutoCloseable {
         for (R root : rows.get(plan.roots())) {
             check.run();
             String id = Objects.requireNonNull(plan.id().apply(root), "Null snapshot root id");
-            if (id.isBlank() || id.length() > 512 || !ids.add(id))
+            if (id.isBlank() || id.length() > 512 || id.indexOf('\n') >= 0 || !ids.add(id))
                 throw new IllegalStateException("Invalid or duplicate snapshot root identity");
             long start = bytes;
             try (JsonGenerator json = mapper.getFactory().createGenerator(counted)) {
@@ -88,7 +88,16 @@ final class SnapshotSpool implements AutoCloseable {
             long length = bytes - start;
             if (length > Integer.MAX_VALUE - 8L)
                 throw new IllegalStateException("Snapshot response exceeds Java String capacity");
-            entries.add(new Entry(id, start, (int) length));
+            String partition =
+                    plan.indexSpec() == null
+                            ? null
+                            : SnapshotIndexSpec.partition(
+                                    plan.indexSpec().partitionBy().apply(root));
+            double score =
+                    plan.indexSpec() == null ? 0 : plan.indexSpec().scoreBy().applyAsDouble(root);
+            if (!Double.isFinite(score))
+                throw new IllegalArgumentException("Snapshot score must be finite");
+            entries.add(new Entry(id, start, (int) length, partition, score));
         }
         counted.flush();
     }

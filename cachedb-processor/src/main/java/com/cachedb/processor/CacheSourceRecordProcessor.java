@@ -24,12 +24,21 @@ public final class CacheSourceRecordProcessor extends AbstractProcessor {
                     Map.entry("long", "java.lang.Long"),
                     Map.entry("java.lang.Double", "java.lang.Double"),
                     Map.entry("double", "java.lang.Double"),
+                    Map.entry("java.lang.Float", "java.lang.Float"),
+                    Map.entry("float", "java.lang.Float"),
+                    Map.entry("java.lang.Short", "java.lang.Short"),
+                    Map.entry("short", "java.lang.Short"),
+                    Map.entry("java.lang.Byte", "java.lang.Byte"),
+                    Map.entry("byte", "java.lang.Byte"),
                     Map.entry("java.lang.Boolean", "java.lang.Boolean"),
                     Map.entry("boolean", "java.lang.Boolean"),
                     Map.entry("java.math.BigDecimal", "java.math.BigDecimal"),
+                    Map.entry("java.math.BigInteger", "java.math.BigInteger"),
                     Map.entry("java.time.LocalDateTime", "java.time.LocalDateTime"),
                     Map.entry("java.time.LocalDate", "java.time.LocalDate"),
                     Map.entry("java.time.Instant", "java.time.Instant"),
+                    Map.entry("java.time.OffsetDateTime", "java.time.OffsetDateTime"),
+                    Map.entry("java.time.LocalTime", "java.time.LocalTime"),
                     Map.entry("java.util.UUID", "java.util.UUID"));
 
     @Override
@@ -79,6 +88,9 @@ public final class CacheSourceRecordProcessor extends AbstractProcessor {
                 throw new IllegalArgumentException("Invalid or duplicate source column: " + column);
             String type = field.asType().toString();
             String boxed = TYPES.get(type);
+            Element typeElement = processingEnv.getTypeUtils().asElement(field.asType());
+            boolean enumType = typeElement != null && typeElement.getKind() == ElementKind.ENUM;
+            if (enumType) boxed = type;
             if (boxed == null)
                 throw new IllegalArgumentException("Unsupported source component type: " + type);
             columns.add(column);
@@ -88,8 +100,14 @@ public final class CacheSourceRecordProcessor extends AbstractProcessor {
                             + "\", "
                             + boxed
                             + ".class)";
-            if (type.equals("boolean")) read = "Boolean.TRUE.equals(" + read + ")";
-            else if (field.asType().getKind().isPrimitive())
+            if (enumType)
+                read =
+                        "com.reactor.cachedb.core.model.SourceValues.readEnum(row, \""
+                                + column
+                                + "\", "
+                                + type
+                                + "::valueOf)";
+            if (field.asType().getKind().isPrimitive())
                 read =
                         "java.util.Objects.requireNonNull("
                                 + read

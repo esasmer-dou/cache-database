@@ -2,20 +2,20 @@ package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.model.WriteDependency;
 import com.reactor.cachedb.core.model.WriteReceipt;
+
 import redis.clients.jedis.JedisPooled;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.ArrayList;
 import java.util.Objects;
 
-/**
- * Shared, monotonic SQL-durability markers written by write-behind workers.
- */
+/** Shared, monotonic SQL-durability markers written by write-behind workers. */
 public final class RedisDurabilityTracker {
 
-    private static final String ADVANCE_SCRIPT = """
+    private static final String ADVANCE_SCRIPT =
+            """
             local current = tonumber(redis.call('GET', KEYS[1]) or '0')
             local candidate = tonumber(ARGV[1])
             if candidate > current then
@@ -25,10 +25,14 @@ public final class RedisDurabilityTracker {
             return current
             """;
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final RedisKeyStrategy keyStrategy;
 
     public RedisDurabilityTracker(JedisPooled jedis, RedisKeyStrategy keyStrategy) {
+        this(JedisPooledOperations.of(jedis), keyStrategy);
+    }
+
+    public RedisDurabilityTracker(RedisClientOperations jedis, RedisKeyStrategy keyStrategy) {
         this.jedis = Objects.requireNonNull(jedis, "jedis");
         this.keyStrategy = Objects.requireNonNull(keyStrategy, "keyStrategy");
     }
@@ -37,12 +41,14 @@ public final class RedisDurabilityTracker {
         if (version <= 0) {
             throw new IllegalArgumentException("version must be greater than zero");
         }
-        Object result = jedis.eval(
-                ADVANCE_SCRIPT,
-                List.of(keyStrategy.durabilityKey(namespace, id)),
-                List.of(String.valueOf(version))
-        );
-        return result instanceof Number number ? number.longValue() : Long.parseLong(String.valueOf(result));
+        Object result =
+                jedis.eval(
+                        ADVANCE_SCRIPT,
+                        List.of(keyStrategy.durabilityKey(namespace, id)),
+                        List.of(String.valueOf(version)));
+        return result instanceof Number number
+                ? number.longValue()
+                : Long.parseLong(String.valueOf(result));
     }
 
     public void advanceBatch(String namespace, List<?> ids, List<Long> versions) {
@@ -62,7 +68,8 @@ public final class RedisDurabilityTracker {
             keys.add(keyStrategy.durabilityKey(namespace, ids.get(index)));
             args.add(String.valueOf(version));
         }
-        jedis.eval("""
+        jedis.eval(
+                """
                 for i = 1, #KEYS do
                     local current = tonumber(redis.call('GET', KEYS[i]) or '0')
                     local candidate = tonumber(ARGV[i])
@@ -71,7 +78,9 @@ public final class RedisDurabilityTracker {
                     end
                 end
                 return #KEYS
-                """, keys, args);
+                """,
+                keys,
+                args);
     }
 
     public boolean isDurable(WriteDependency dependency) {
@@ -110,7 +119,25 @@ public final class RedisDurabilityTracker {
     }
 
     public long durableVersion(String namespace, Object id) {
-        return parseVersion(jedis.get(keyStrategy.durabilityKey(namespace, id)));
+        return parseVersion(jedis.commands().get(keyStrategy.durabilityKey(namespace, id)));
+    }
+
+    public boolean areDurableDependencies(Collection<WriteDependency> dependencies) {
+        Objects.requireNonNull(dependencies, "dependencies");
+        if (dependencies.isEmpty() || dependencies.size() > 1_000)
+            throw new IllegalArgumentException("Expected 1..1000 durability dependencies");
+        var ordered = List.copyOf(dependencies);
+        String[] keys =
+                ordered.stream()
+                        .map(
+                                dependency ->
+                                        keyStrategy.durabilityKey(
+                                                dependency.redisNamespace(), dependency.id()))
+                        .toArray(String[]::new);
+        var versions = jedis.mget(keys);
+        for (int i = 0; i < ordered.size(); i++)
+            if (parseVersion(versions.get(i)) < ordered.get(i).version()) return false;
+        return true;
     }
 
     public boolean await(WriteReceipt<?, ?> receipt, Duration timeout, Duration pollInterval) {
@@ -138,8 +165,7 @@ public final class RedisDurabilityTracker {
     public boolean awaitAll(
             Collection<? extends WriteReceipt<?, ?>> receipts,
             Duration timeout,
-            Duration pollInterval
-    ) {
+            Duration pollInterval) {
         Duration effectiveTimeout = timeout == null ? Duration.ofSeconds(30) : timeout;
         Duration effectivePoll = pollInterval == null ? Duration.ofMillis(25) : pollInterval;
         if (effectiveTimeout.isNegative() || effectiveTimeout.isZero()) {

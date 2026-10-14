@@ -42,22 +42,31 @@ class SnapshotContractTest {
     }
 
     @Test
-    void readRetriesAgainstNewGenerationWhenCleanupRaces() {
+    void pointerAndPayloadAreReadAtomicallyWhenCleanupRaces() {
         var redis = org.mockito.Mockito.mock(redis.clients.jedis.JedisPooled.class);
-        String old = "00000000-0000-0000-0000-000000000001";
         String fresh = "00000000-0000-0000-0000-000000000002";
-        org.mockito.Mockito.when(redis.get("test:active"))
-                .thenReturn(old + ":1000", fresh + ":2000", fresh + ":2000");
-        org.mockito.Mockito.when(redis.hget("test:data:" + fresh, "root")).thenReturn("[]");
+        org.mockito.Mockito.when(
+                        redis.eval(
+                                org.mockito.ArgumentMatchers.anyString(),
+                                org.mockito.ArgumentMatchers.eq(List.of("test:active")),
+                                org.mockito.ArgumentMatchers.eq(List.of("test", "root"))))
+                .thenReturn(List.of(fresh, "2000", "[]"));
         var result = new RedisSnapshotRepository(redis, "test").findById("root").orElseThrow();
         assertThat(result.generation()).isEqualTo(fresh);
         assertThat(result.refreshedAt()).isEqualTo(2000);
+        org.mockito.Mockito.verify(redis, org.mockito.Mockito.never())
+                .get(org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test
     void corruptGenerationIsRejectedAsInvalidCacheData() {
         var redis = org.mockito.Mockito.mock(redis.clients.jedis.JedisPooled.class);
-        org.mockito.Mockito.when(redis.get("test:active")).thenReturn("corrupt");
+        org.mockito.Mockito.when(
+                        redis.eval(
+                                org.mockito.ArgumentMatchers.anyString(),
+                                org.mockito.ArgumentMatchers.anyList(),
+                                org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(List.of("corrupt", "1000", "[]"));
         assertThatThrownBy(() -> new RedisSnapshotRepository(redis, "test").findById("root"))
                 .isInstanceOf(IllegalArgumentException.class);
     }

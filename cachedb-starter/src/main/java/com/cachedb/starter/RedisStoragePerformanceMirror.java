@@ -5,6 +5,9 @@ import com.reactor.cachedb.core.queue.CacheAdmissionMetricSnapshot;
 import com.reactor.cachedb.core.queue.LatencyMetricSnapshot;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.queue.StoragePerformanceSnapshot;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
+
 import redis.clients.jedis.JedisPooled;
 
 import java.nio.charset.StandardCharsets;
@@ -21,13 +24,24 @@ final class RedisStoragePerformanceMirror {
     private static final String FIELD_SEPARATOR = ".";
 
     private final StoragePerformanceCollector collector;
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final boolean enabled;
     private final String snapshotKey;
     private final long ttlSeconds;
-    private final AtomicReference<StoragePerformanceSnapshot> lastSnapshot = new AtomicReference<>(emptySnapshot());
+    private final AtomicReference<StoragePerformanceSnapshot> lastSnapshot =
+            new AtomicReference<>(emptySnapshot());
 
-    RedisStoragePerformanceMirror(StoragePerformanceCollector collector, JedisPooled jedis, AdminMonitoringConfig config) {
+    RedisStoragePerformanceMirror(
+            StoragePerformanceCollector collector,
+            JedisPooled jedis,
+            AdminMonitoringConfig config) {
+        this(collector, JedisPooledOperations.of(jedis), config);
+    }
+
+    RedisStoragePerformanceMirror(
+            StoragePerformanceCollector collector,
+            RedisClientOperations jedis,
+            AdminMonitoringConfig config) {
         this(collector, jedis, config, true);
     }
 
@@ -35,8 +49,15 @@ final class RedisStoragePerformanceMirror {
             StoragePerformanceCollector collector,
             JedisPooled jedis,
             AdminMonitoringConfig config,
-            boolean enabled
-    ) {
+            boolean enabled) {
+        this(collector, JedisPooledOperations.of(jedis), config, enabled);
+    }
+
+    private RedisStoragePerformanceMirror(
+            StoragePerformanceCollector collector,
+            RedisClientOperations jedis,
+            AdminMonitoringConfig config,
+            boolean enabled) {
         this.collector = collector;
         this.jedis = jedis;
         this.enabled = enabled;
@@ -44,8 +65,10 @@ final class RedisStoragePerformanceMirror {
         this.ttlSeconds = config.telemetryTtlSeconds();
     }
 
-    static RedisStoragePerformanceMirror disabled(StoragePerformanceCollector collector, AdminMonitoringConfig config) {
-        return new RedisStoragePerformanceMirror(collector, null, config, false);
+    static RedisStoragePerformanceMirror disabled(
+            StoragePerformanceCollector collector, AdminMonitoringConfig config) {
+        return new RedisStoragePerformanceMirror(
+                collector, (RedisClientOperations) null, config, false);
     }
 
     StoragePerformanceSnapshot snapshot() {
@@ -67,9 +90,10 @@ final class RedisStoragePerformanceMirror {
         collector.reset();
         if (enabled) {
             try {
-                jedis.del(snapshotKey);
+                jedis.commands().del(snapshotKey);
             } catch (RuntimeException ignored) {
-                // Telemetry reset should not fail hard when Redis telemetry storage is temporarily unavailable.
+                // Telemetry reset should not fail hard when Redis telemetry storage is temporarily
+                // unavailable.
             }
         }
         lastSnapshot.set(emptySnapshot());
@@ -101,24 +125,32 @@ final class RedisStoragePerformanceMirror {
     private void writeSnapshot(StoragePerformanceSnapshot snapshot) {
         Map<String, String> fields = encodeSnapshot(snapshot);
         if (fields.isEmpty()) {
-            jedis.del(snapshotKey);
+            jedis.commands().del(snapshotKey);
             return;
         }
-        jedis.del(snapshotKey);
-        jedis.hset(snapshotKey, fields);
+        jedis.commands().del(snapshotKey);
+        jedis.commands().hset(snapshotKey, fields);
         RedisTelemetrySupport.expireIfNeeded(jedis, snapshotKey, ttlSeconds);
     }
 
     private StoragePerformanceSnapshot readSnapshot(StoragePerformanceSnapshot fallback) {
-        Map<String, String> fields = jedis.hgetAll(snapshotKey);
+        Map<String, String> fields = jedis.commands().hgetAll(snapshotKey);
         if (fields == null || fields.isEmpty()) {
             return fallback;
         }
 
         LinkedHashMap<String, MetricBuilder> aggregateBuilders = new LinkedHashMap<>();
-        LinkedHashMap<String, LinkedHashMap<String, MetricBuilder>> breakdownBuilders = new LinkedHashMap<>();
+        LinkedHashMap<String, LinkedHashMap<String, MetricBuilder>> breakdownBuilders =
+                new LinkedHashMap<>();
         LinkedHashMap<String, AdmissionMetricBuilder> admissionBuilders = new LinkedHashMap<>();
-        fields.forEach((field, value) -> decodeField(field, value, aggregateBuilders, breakdownBuilders, admissionBuilders));
+        fields.forEach(
+                (field, value) ->
+                        decodeField(
+                                field,
+                                value,
+                                aggregateBuilders,
+                                breakdownBuilders,
+                                admissionBuilders));
 
         return new StoragePerformanceSnapshot(
                 snapshot(aggregateBuilders.get("redisRead")),
@@ -129,8 +161,7 @@ final class RedisStoragePerformanceMirror {
                 snapshotBreakdown(breakdownBuilders.get("redisWrite")),
                 snapshotBreakdown(breakdownBuilders.get("postgresRead")),
                 snapshotBreakdown(breakdownBuilders.get("postgresWrite")),
-                snapshotAdmission(admissionBuilders)
-        );
+                snapshotAdmission(admissionBuilders));
     }
 
     private void decodeField(
@@ -138,8 +169,7 @@ final class RedisStoragePerformanceMirror {
             String value,
             Map<String, MetricBuilder> aggregates,
             Map<String, LinkedHashMap<String, MetricBuilder>> breakdowns,
-            Map<String, AdmissionMetricBuilder> admissions
-    ) {
+            Map<String, AdmissionMetricBuilder> admissions) {
         if (field.startsWith(AGGREGATE_PREFIX)) {
             String remainder = field.substring(AGGREGATE_PREFIX.length());
             int split = remainder.lastIndexOf(FIELD_SEPARATOR);
@@ -163,12 +193,14 @@ final class RedisStoragePerformanceMirror {
         String kind = parts[0];
         String tag = decodeTag(parts[1]);
         String metric = parts[2];
-        breakdowns.computeIfAbsent(kind, ignored -> new LinkedHashMap<>())
+        breakdowns
+                .computeIfAbsent(kind, ignored -> new LinkedHashMap<>())
                 .computeIfAbsent(tag, ignored -> new MetricBuilder())
                 .apply(metric, value);
     }
 
-    private void decodeAdmissionField(String field, String value, Map<String, AdmissionMetricBuilder> admissions) {
+    private void decodeAdmissionField(
+            String field, String value, Map<String, AdmissionMetricBuilder> admissions) {
         if (!field.startsWith(ADMISSION_PREFIX)) {
             return;
         }
@@ -179,7 +211,9 @@ final class RedisStoragePerformanceMirror {
         }
         String tag = decodeTag(parts[0]);
         String metric = parts[1];
-        admissions.computeIfAbsent(tag, ignored -> new AdmissionMetricBuilder()).apply(metric, value);
+        admissions
+                .computeIfAbsent(tag, ignored -> new AdmissionMetricBuilder())
+                .apply(metric, value);
     }
 
     private Map<String, String> encodeSnapshot(StoragePerformanceSnapshot snapshot) {
@@ -209,34 +243,49 @@ final class RedisStoragePerformanceMirror {
                 LatencyMetricSnapshot.empty(),
                 LatencyMetricSnapshot.empty(),
                 LatencyMetricSnapshot.empty(),
-                LatencyMetricSnapshot.empty()
-        );
+                LatencyMetricSnapshot.empty());
     }
 
-    private void encodeBreakdown(Map<String, String> fields, String kind, Map<String, LatencyMetricSnapshot> breakdown) {
+    private void encodeBreakdown(
+            Map<String, String> fields, String kind, Map<String, LatencyMetricSnapshot> breakdown) {
         if (breakdown == null || breakdown.isEmpty()) {
             return;
         }
-        breakdown.forEach((tag, metric) -> encodeMetric(fields, BREAKDOWN_PREFIX + kind + FIELD_SEPARATOR + encodeTag(tag) + FIELD_SEPARATOR, "", metric));
+        breakdown.forEach(
+                (tag, metric) ->
+                        encodeMetric(
+                                fields,
+                                BREAKDOWN_PREFIX
+                                        + kind
+                                        + FIELD_SEPARATOR
+                                        + encodeTag(tag)
+                                        + FIELD_SEPARATOR,
+                                "",
+                                metric));
     }
 
-    private void encodeAdmission(Map<String, String> fields, Map<String, CacheAdmissionMetricSnapshot> breakdown) {
+    private void encodeAdmission(
+            Map<String, String> fields, Map<String, CacheAdmissionMetricSnapshot> breakdown) {
         if (breakdown == null || breakdown.isEmpty()) {
             return;
         }
-        breakdown.forEach((tag, metric) -> {
-            if (metric == null) {
-                return;
-            }
-            String base = ADMISSION_PREFIX + encodeTag(tag) + FIELD_SEPARATOR;
-            fields.put(base + "admittedCount", String.valueOf(metric.admittedCount()));
-            fields.put(base + "rejectedCount", String.valueOf(metric.rejectedCount()));
-            fields.put(base + "evictedCount", String.valueOf(metric.evictedCount()));
-            fields.put(base + "lastObservedAtEpochMillis", String.valueOf(metric.lastObservedAtEpochMillis()));
-        });
+        breakdown.forEach(
+                (tag, metric) -> {
+                    if (metric == null) {
+                        return;
+                    }
+                    String base = ADMISSION_PREFIX + encodeTag(tag) + FIELD_SEPARATOR;
+                    fields.put(base + "admittedCount", String.valueOf(metric.admittedCount()));
+                    fields.put(base + "rejectedCount", String.valueOf(metric.rejectedCount()));
+                    fields.put(base + "evictedCount", String.valueOf(metric.evictedCount()));
+                    fields.put(
+                            base + "lastObservedAtEpochMillis",
+                            String.valueOf(metric.lastObservedAtEpochMillis()));
+                });
     }
 
-    private void encodeMetric(Map<String, String> fields, String prefix, String kind, LatencyMetricSnapshot metric) {
+    private void encodeMetric(
+            Map<String, String> fields, String prefix, String kind, LatencyMetricSnapshot metric) {
         if (metric == null || metric.operationCount() <= 0L) {
             return;
         }
@@ -247,10 +296,13 @@ final class RedisStoragePerformanceMirror {
         fields.put(base + "p99Micros", String.valueOf(metric.p99Micros()));
         fields.put(base + "maxMicros", String.valueOf(metric.maxMicros()));
         fields.put(base + "lastMicros", String.valueOf(metric.lastMicros()));
-        fields.put(base + "lastObservedAtEpochMillis", String.valueOf(metric.lastObservedAtEpochMillis()));
+        fields.put(
+                base + "lastObservedAtEpochMillis",
+                String.valueOf(metric.lastObservedAtEpochMillis()));
     }
 
-    private Map<String, LatencyMetricSnapshot> snapshotBreakdown(Map<String, MetricBuilder> builders) {
+    private Map<String, LatencyMetricSnapshot> snapshotBreakdown(
+            Map<String, MetricBuilder> builders) {
         if (builders == null || builders.isEmpty()) {
             return Map.of();
         }
@@ -265,7 +317,8 @@ final class RedisStoragePerformanceMirror {
         return builder == null ? LatencyMetricSnapshot.empty() : builder.build();
     }
 
-    private Map<String, CacheAdmissionMetricSnapshot> snapshotAdmission(Map<String, AdmissionMetricBuilder> builders) {
+    private Map<String, CacheAdmissionMetricSnapshot> snapshotAdmission(
+            Map<String, AdmissionMetricBuilder> builders) {
         if (builders == null || builders.isEmpty()) {
             return Map.of();
         }
@@ -277,7 +330,9 @@ final class RedisStoragePerformanceMirror {
     }
 
     private String encodeTag(String tag) {
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(tag.getBytes(StandardCharsets.UTF_8));
+        return Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(tag.getBytes(StandardCharsets.UTF_8));
     }
 
     private String decodeTag(String encodedTag) {
@@ -307,8 +362,7 @@ final class RedisStoragePerformanceMirror {
                 case "maxMicros" -> maxMicros = value;
                 case "lastMicros" -> lastMicros = value;
                 case "lastObservedAtEpochMillis" -> lastObservedAtEpochMillis = value;
-                default -> {
-                }
+                default -> {}
             }
         }
 
@@ -323,8 +377,7 @@ final class RedisStoragePerformanceMirror {
                     p99Micros,
                     maxMicros,
                     lastMicros,
-                    lastObservedAtEpochMillis
-            );
+                    lastObservedAtEpochMillis);
         }
 
         private long parseLong(String rawValue) {
@@ -352,18 +405,13 @@ final class RedisStoragePerformanceMirror {
                 case "rejectedCount" -> rejectedCount = value;
                 case "evictedCount" -> evictedCount = value;
                 case "lastObservedAtEpochMillis" -> lastObservedAtEpochMillis = value;
-                default -> {
-                }
+                default -> {}
             }
         }
 
         CacheAdmissionMetricSnapshot build() {
             return new CacheAdmissionMetricSnapshot(
-                    admittedCount,
-                    rejectedCount,
-                    evictedCount,
-                    lastObservedAtEpochMillis
-            );
+                    admittedCount, rejectedCount, evictedCount, lastObservedAtEpochMillis);
         }
 
         private long parseLong(String rawValue) {

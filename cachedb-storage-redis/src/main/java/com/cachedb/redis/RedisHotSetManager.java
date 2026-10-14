@@ -1,13 +1,15 @@
 package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.cache.CachePolicy;
+
 import redis.clients.jedis.JedisPooled;
 
 import java.util.List;
 
 public final class RedisHotSetManager {
 
-    private static final String RECORD_ACCESS_SCRIPT = """
+    private static final String RECORD_ACCESS_SCRIPT =
+            """
             redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
             if ARGV[4] ~= '1' then
                 return {}
@@ -23,29 +25,34 @@ public final class RedisHotSetManager {
             return evicted
             """;
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final RedisKeyStrategy keyStrategy;
 
     public RedisHotSetManager(JedisPooled jedis, RedisKeyStrategy keyStrategy) {
+        this(JedisPooledOperations.of(jedis), keyStrategy);
+    }
+
+    public RedisHotSetManager(RedisClientOperations jedis, RedisKeyStrategy keyStrategy) {
         this.jedis = jedis;
         this.keyStrategy = keyStrategy;
     }
 
     public <ID> List<String> recordAccess(String namespace, ID id, CachePolicy cachePolicy) {
-        if (cachePolicy.hotEntityLimit() <= 0) {
+        if (cachePolicy.hotEntityLimit() == CachePolicy.DISABLED) {
             return List.of();
         }
 
-        Object result = jedis.eval(
-                RECORD_ACCESS_SCRIPT,
-                List.of(keyStrategy.hotSetKey(namespace)),
-                List.of(
-                        String.valueOf(System.currentTimeMillis()),
-                        String.valueOf(id),
-                        String.valueOf(cachePolicy.hotEntityLimit()),
-                        cachePolicy.lruEvictionEnabled() ? "1" : "0"
-                )
-        );
+        Object result =
+                jedis.eval(
+                        RECORD_ACCESS_SCRIPT,
+                        List.of(keyStrategy.hotSetKey(namespace)),
+                        List.of(
+                                String.valueOf(System.currentTimeMillis()),
+                                String.valueOf(id),
+                                String.valueOf(cachePolicy.hotEntityLimit()),
+                                cachePolicy.lruEvictionEnabled() && cachePolicy.hotEntityLimit() > 0
+                                        ? "1"
+                                        : "0"));
         if (!(result instanceof List<?> values) || values.isEmpty()) {
             return List.of();
         }
@@ -53,6 +60,6 @@ public final class RedisHotSetManager {
     }
 
     public <ID> void remove(String namespace, ID id) {
-        jedis.zrem(keyStrategy.hotSetKey(namespace), String.valueOf(id));
+        jedis.commands().zrem(keyStrategy.hotSetKey(namespace), String.valueOf(id));
     }
 }

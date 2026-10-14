@@ -14,28 +14,31 @@ import com.reactor.cachedb.core.page.NoOpEntityPageLoader;
 import com.reactor.cachedb.core.page.NoOpEntityQueryLoader;
 import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
+import com.reactor.cachedb.core.queue.WriteBehindQueue;
 import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import com.reactor.cachedb.core.relation.RelationBatchLoader;
+import com.reactor.cachedb.redis.JedisPooledOperations;
 import com.reactor.cachedb.redis.ProjectionRefreshDispatcher;
-import com.reactor.cachedb.redis.RedisProjectionRefreshQueue;
+import com.reactor.cachedb.redis.RedisClientOperations;
 import com.reactor.cachedb.redis.RedisEntityRepository;
 import com.reactor.cachedb.redis.RedisFunctionExecutor;
 import com.reactor.cachedb.redis.RedisHotSetManager;
 import com.reactor.cachedb.redis.RedisKeyStrategy;
 import com.reactor.cachedb.redis.RedisPageCacheManager;
 import com.reactor.cachedb.redis.RedisProducerGuard;
+import com.reactor.cachedb.redis.RedisProjectionRefreshQueue;
 import com.reactor.cachedb.redis.RedisQueryIndexManager;
-import com.reactor.cachedb.core.queue.WriteBehindQueue;
+
 import redis.clients.jedis.JedisPooled;
 
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class DefaultCacheSession implements CacheSession {
 
-    private final JedisPooled foregroundJedis;
-    private final JedisPooled backgroundJedis;
+    private final RedisClientOperations foregroundJedis;
+    private final RedisClientOperations backgroundJedis;
     private final CacheDatabaseConfig config;
     private final EntityRegistry entityRegistry;
     private final WriteBehindQueue writeBehindQueue;
@@ -47,7 +50,8 @@ public final class DefaultCacheSession implements CacheSession {
     private final StoragePerformanceCollector performanceCollector;
     private final ProjectionRefreshDispatcher projectionRefreshDispatcher;
     private final RedisProjectionRefreshQueue projectionRefreshQueue;
-    private final ConcurrentHashMap<RepositoryKey, EntityRepository<?, ?>> repositories = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<RepositoryKey, EntityRepository<?, ?>> repositories =
+            new ConcurrentHashMap<>();
 
     public DefaultCacheSession(
             JedisPooled foregroundJedis,
@@ -62,8 +66,37 @@ public final class DefaultCacheSession implements CacheSession {
             QueryEvaluator queryEvaluator,
             StoragePerformanceCollector performanceCollector,
             ProjectionRefreshDispatcher projectionRefreshDispatcher,
-            RedisProjectionRefreshQueue projectionRefreshQueue
-    ) {
+            RedisProjectionRefreshQueue projectionRefreshQueue) {
+        this(
+                JedisPooledOperations.of(foregroundJedis),
+                JedisPooledOperations.of(backgroundJedis),
+                config,
+                entityRegistry,
+                writeBehindQueue,
+                redisKeyStrategy,
+                functionExecutor,
+                producerGuard,
+                hotSetManager,
+                queryEvaluator,
+                performanceCollector,
+                projectionRefreshDispatcher,
+                projectionRefreshQueue);
+    }
+
+    public DefaultCacheSession(
+            RedisClientOperations foregroundJedis,
+            RedisClientOperations backgroundJedis,
+            CacheDatabaseConfig config,
+            EntityRegistry entityRegistry,
+            WriteBehindQueue writeBehindQueue,
+            RedisKeyStrategy redisKeyStrategy,
+            RedisFunctionExecutor functionExecutor,
+            RedisProducerGuard producerGuard,
+            RedisHotSetManager hotSetManager,
+            QueryEvaluator queryEvaluator,
+            StoragePerformanceCollector performanceCollector,
+            ProjectionRefreshDispatcher projectionRefreshDispatcher,
+            RedisProjectionRefreshQueue projectionRefreshQueue) {
         this.foregroundJedis = foregroundJedis;
         this.backgroundJedis = backgroundJedis;
         this.config = config;
@@ -82,52 +115,51 @@ public final class DefaultCacheSession implements CacheSession {
     @Override
     @SuppressWarnings("unchecked")
     public <T, ID> EntityRepository<T, ID> repository(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec
-    ) {
-        EntityBinding<T, ID> binding = resolveBinding(metadata, codec, config.resourceLimits().defaultCachePolicy());
-        CachePolicy resolvedCachePolicy = binding.cachePolicy() == null
-                ? config.resourceLimits().defaultCachePolicy()
-                : binding.cachePolicy();
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
+        EntityBinding<T, ID> binding =
+                resolveBinding(metadata, codec, config.resourceLimits().defaultCachePolicy());
+        CachePolicy resolvedCachePolicy =
+                binding.cachePolicy() == null
+                        ? config.resourceLimits().defaultCachePolicy()
+                        : binding.cachePolicy();
         return repository(metadata, codec, resolvedCachePolicy);
     }
 
     @Override
     public <T, ID> EntityRepository<T, ID> repository(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec,
-            CachePolicy cachePolicy
-    ) {
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy cachePolicy) {
         CachePolicy defaultPolicy = config.resourceLimits().defaultCachePolicy();
-        EntityBinding<T, ID> binding = resolveBinding(metadata, codec, cachePolicy == null ? defaultPolicy : cachePolicy);
-        RelationBatchLoader<T> relationBatchLoader = binding.relationBatchLoader() == null
-                ? new NoOpRelationBatchLoader<>()
-                : binding.relationBatchLoader();
-        EntityPageLoader<T> pageLoader = binding.pageLoader() == null
-                ? new NoOpEntityPageLoader<>()
-                : binding.pageLoader();
-        EntityByIdLoader<T, ID> byIdLoader = binding.byIdLoader() == null
-                ? new NoOpEntityByIdLoader<>()
-                : binding.byIdLoader();
-        EntityQueryLoader<T> queryLoader = binding.queryLoader() == null
-                ? new NoOpEntityQueryLoader<>()
-                : binding.queryLoader();
-        CachePolicy resolvedCachePolicy = cachePolicy != null
-                ? cachePolicy
-                : (binding.cachePolicy() == null ? defaultPolicy : binding.cachePolicy());
+        EntityBinding<T, ID> binding =
+                resolveBinding(metadata, codec, cachePolicy == null ? defaultPolicy : cachePolicy);
+        RelationBatchLoader<T> relationBatchLoader =
+                binding.relationBatchLoader() == null
+                        ? new NoOpRelationBatchLoader<>()
+                        : binding.relationBatchLoader();
+        EntityPageLoader<T> pageLoader =
+                binding.pageLoader() == null ? new NoOpEntityPageLoader<>() : binding.pageLoader();
+        EntityByIdLoader<T, ID> byIdLoader =
+                binding.byIdLoader() == null ? new NoOpEntityByIdLoader<>() : binding.byIdLoader();
+        EntityQueryLoader<T> queryLoader =
+                binding.queryLoader() == null
+                        ? new NoOpEntityQueryLoader<>()
+                        : binding.queryLoader();
+        CachePolicy resolvedCachePolicy =
+                cachePolicy != null
+                        ? cachePolicy
+                        : (binding.cachePolicy() == null ? defaultPolicy : binding.cachePolicy());
         RepositoryKey repositoryKey = new RepositoryKey(metadata.entityName(), resolvedCachePolicy);
-        return (EntityRepository<T, ID>) repositories.computeIfAbsent(
-                repositoryKey,
-                ignored -> createRepository(
-                        metadata,
-                        codec,
-                        resolvedCachePolicy,
-                        relationBatchLoader,
-                        pageLoader,
-                        byIdLoader,
-                        queryLoader
-                )
-        );
+        return (EntityRepository<T, ID>)
+                repositories.computeIfAbsent(
+                        repositoryKey,
+                        ignored ->
+                                createRepository(
+                                        metadata,
+                                        codec,
+                                        resolvedCachePolicy,
+                                        relationBatchLoader,
+                                        pageLoader,
+                                        byIdLoader,
+                                        queryLoader));
     }
 
     private <T, ID> EntityRepository<T, ID> createRepository(
@@ -137,19 +169,18 @@ public final class DefaultCacheSession implements CacheSession {
             RelationBatchLoader<T> relationBatchLoader,
             EntityPageLoader<T> pageLoader,
             EntityByIdLoader<T, ID> byIdLoader,
-            EntityQueryLoader<T> queryLoader
-    ) {
-        RedisQueryIndexManager<T, ID> queryIndexManager = new RedisQueryIndexManager<>(
-                foregroundJedis,
-                metadata,
-                codec,
-                redisKeyStrategy,
-                entityRegistry,
-                config.queryIndex(),
-                config.relations(),
-                queryEvaluator,
-                producerGuard
-        );
+            EntityQueryLoader<T> queryLoader) {
+        RedisQueryIndexManager<T, ID> queryIndexManager =
+                new RedisQueryIndexManager<>(
+                        foregroundJedis,
+                        metadata,
+                        codec,
+                        redisKeyStrategy,
+                        entityRegistry,
+                        config.queryIndex(),
+                        config.relations(),
+                        queryEvaluator,
+                        producerGuard);
         return new RedisEntityRepository<>(
                 foregroundJedis,
                 metadata,
@@ -184,33 +215,30 @@ public final class DefaultCacheSession implements CacheSession {
                         queryIndexManager,
                         producerGuard,
                         config.readShapeGuardrail(),
-                        performanceCollector
-                ),
+                        performanceCollector),
                 queryEvaluator,
                 queryIndexManager,
                 performanceCollector,
                 backgroundJedis,
                 projectionRefreshDispatcher,
-                projectionRefreshQueue
-        );
+                projectionRefreshQueue);
     }
 
-    private record RepositoryKey(String entityName, CachePolicy cachePolicy) {
-    }
+    private record RepositoryKey(String entityName, CachePolicy cachePolicy) {}
 
     @SuppressWarnings("unchecked")
     private <T, ID> EntityBinding<T, ID> resolveBinding(
-            EntityMetadata<T, ID> metadata,
-            EntityCodec<T> codec,
-            CachePolicy cachePolicy
-    ) {
-        return (EntityBinding<T, ID>) entityRegistry.find(metadata.entityName())
-                .orElseGet(() -> entityRegistry.register(
-                        metadata,
-                        codec,
-                        cachePolicy,
-                        new NoOpRelationBatchLoader<>(),
-                        new NoOpEntityPageLoader<>()
-                ));
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy cachePolicy) {
+        return (EntityBinding<T, ID>)
+                entityRegistry
+                        .find(metadata.entityName())
+                        .orElseGet(
+                                () ->
+                                        entityRegistry.register(
+                                                metadata,
+                                                codec,
+                                                cachePolicy,
+                                                new NoOpRelationBatchLoader<>(),
+                                                new NoOpEntityPageLoader<>()));
     }
 }

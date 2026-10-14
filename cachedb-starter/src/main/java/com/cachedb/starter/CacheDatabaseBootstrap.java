@@ -3,25 +3,30 @@ package com.reactor.cachedb.starter;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.KeyspaceConfig;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
+
 import redis.clients.jedis.JedisPooled;
 
-import javax.sql.DataSource;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 
+import javax.sql.DataSource;
+
 public final class CacheDatabaseBootstrap {
 
     private final DataSource dataSource;
-    private JedisPooled foregroundJedis;
-    private JedisPooled backgroundJedis;
+    private RedisClientOperations foregroundJedis;
+    private RedisClientOperations backgroundJedis;
     private String foregroundRedisUri;
     private String backgroundRedisUri;
     private CacheDatabaseConfig config = CacheDatabaseConfig.defaults();
     private final ArrayList<Consumer<CacheDatabase>> registrations = new ArrayList<>();
-    private final ArrayList<Consumer<CacheDatabaseConfig.Builder>> configCustomizers = new ArrayList<>();
+    private final ArrayList<Consumer<CacheDatabaseConfig.Builder>> configCustomizers =
+            new ArrayList<>();
     private final ArrayList<CacheWarmPlan> warmOnStartPlans = new ArrayList<>();
 
     private CacheDatabaseBootstrap(DataSource dataSource) {
@@ -33,14 +38,25 @@ public final class CacheDatabaseBootstrap {
     }
 
     public static CacheDatabaseBootstrap using(JedisPooled jedis, DataSource dataSource) {
+        return using(JedisPooledOperations.of(jedis), dataSource);
+    }
+
+    public static CacheDatabaseBootstrap using(RedisClientOperations jedis, DataSource dataSource) {
         return using(dataSource).redis(jedis);
     }
 
     public static CacheDatabaseBootstrap using(
-            JedisPooled foregroundJedis,
-            JedisPooled backgroundJedis,
-            DataSource dataSource
-    ) {
+            JedisPooled foregroundJedis, JedisPooled backgroundJedis, DataSource dataSource) {
+        return using(
+                JedisPooledOperations.of(foregroundJedis),
+                JedisPooledOperations.of(backgroundJedis),
+                dataSource);
+    }
+
+    public static CacheDatabaseBootstrap using(
+            RedisClientOperations foregroundJedis,
+            RedisClientOperations backgroundJedis,
+            DataSource dataSource) {
         return using(dataSource).redis(foregroundJedis, backgroundJedis);
     }
 
@@ -48,15 +64,27 @@ public final class CacheDatabaseBootstrap {
         return using(dataSource).redis(redisUri);
     }
 
-    public static CacheDatabaseBootstrap connect(String foregroundRedisUri, String backgroundRedisUri, DataSource dataSource) {
+    public static CacheDatabaseBootstrap connect(
+            String foregroundRedisUri, String backgroundRedisUri, DataSource dataSource) {
         return using(dataSource).redis(foregroundRedisUri, backgroundRedisUri);
     }
 
     public CacheDatabaseBootstrap redis(JedisPooled jedis) {
+        return redis(JedisPooledOperations.of(jedis));
+    }
+
+    public CacheDatabaseBootstrap redis(RedisClientOperations jedis) {
         return redis(jedis, jedis);
     }
 
     public CacheDatabaseBootstrap redis(JedisPooled foregroundJedis, JedisPooled backgroundJedis) {
+        return redis(
+                JedisPooledOperations.of(foregroundJedis),
+                JedisPooledOperations.of(backgroundJedis));
+    }
+
+    public CacheDatabaseBootstrap redis(
+            RedisClientOperations foregroundJedis, RedisClientOperations backgroundJedis) {
         this.foregroundJedis = Objects.requireNonNull(foregroundJedis, "foregroundJedis");
         this.backgroundJedis = Objects.requireNonNull(backgroundJedis, "backgroundJedis");
         this.foregroundRedisUri = null;
@@ -124,10 +152,12 @@ public final class CacheDatabaseBootstrap {
 
     public CacheDatabaseBootstrap keyPrefix(String keyPrefix) {
         String normalizedKeyPrefix = requireText(keyPrefix, "keyPrefix");
-        return customize(builder -> {
-            KeyspaceConfig baseKeyspace = config.keyspace();
-            builder.keyspace(baseKeyspace.toBuilder().keyPrefix(normalizedKeyPrefix).build());
-        });
+        return customize(
+                builder -> {
+                    KeyspaceConfig baseKeyspace = config.keyspace();
+                    builder.keyspace(
+                            baseKeyspace.toBuilder().keyPrefix(normalizedKeyPrefix).build());
+                });
     }
 
     public CacheDatabaseBootstrap register(Consumer<CacheDatabase> registration) {
@@ -152,23 +182,29 @@ public final class CacheDatabaseBootstrap {
 
     public CacheDatabase build() {
         CacheDatabaseConfig resolvedConfig = previewConfig();
-        JedisPooled resolvedForeground = foregroundJedis;
-        JedisPooled resolvedBackground = backgroundJedis;
+        RedisClientOperations resolvedForeground = foregroundJedis;
+        RedisClientOperations resolvedBackground = backgroundJedis;
         boolean createdForeground = false;
         boolean createdBackground = false;
 
         if (resolvedForeground == null) {
-            resolvedForeground = new JedisPooled(requireText(foregroundRedisUri, "foregroundRedisUri"));
+            resolvedForeground =
+                    JedisPooledOperations.of(
+                            new JedisPooled(requireText(foregroundRedisUri, "foregroundRedisUri")));
             createdForeground = true;
         }
         if (resolvedBackground == null) {
-            resolvedBackground = new JedisPooled(requireText(backgroundRedisUri, "backgroundRedisUri"));
+            resolvedBackground =
+                    JedisPooledOperations.of(
+                            new JedisPooled(requireText(backgroundRedisUri, "backgroundRedisUri")));
             createdBackground = true;
         }
 
         CacheDatabase cacheDatabase = null;
         try {
-            cacheDatabase = new CacheDatabase(resolvedForeground, resolvedBackground, dataSource, resolvedConfig);
+            cacheDatabase =
+                    new CacheDatabase(
+                            resolvedForeground, resolvedBackground, dataSource, resolvedConfig);
             if (createdForeground) {
                 cacheDatabase.ownResource(resolvedForeground);
             }
@@ -222,13 +258,28 @@ public final class CacheDatabaseBootstrap {
     }
 
     private static void closeIfCreated(boolean created, JedisPooled jedis) {
+        closeIfCreated(created, JedisPooledOperations.of(jedis));
+    }
+
+    private static void closeIfCreated(boolean created, RedisClientOperations jedis) {
         if (!created || jedis == null) {
             return;
         }
         jedis.close();
     }
 
-    private static void closeIfCreated(boolean created, JedisPooled jedis, JedisPooled alreadyClosedGuard) {
+    private static void closeIfCreated(
+            boolean created, JedisPooled jedis, JedisPooled alreadyClosedGuard) {
+        closeIfCreated(
+                created,
+                JedisPooledOperations.of(jedis),
+                JedisPooledOperations.of(alreadyClosedGuard));
+    }
+
+    private static void closeIfCreated(
+            boolean created,
+            RedisClientOperations jedis,
+            RedisClientOperations alreadyClosedGuard) {
         if (!created || jedis == null || jedis == alreadyClosedGuard) {
             return;
         }
@@ -237,7 +288,8 @@ public final class CacheDatabaseBootstrap {
 
     private static String requireText(String value, String fieldName) {
         if (value == null || value.isBlank()) {
-            throw new IllegalStateException(fieldName + " must be configured before building CacheDatabase");
+            throw new IllegalStateException(
+                    fieldName + " must be configured before building CacheDatabase");
         }
         return value;
     }

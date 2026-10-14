@@ -5,17 +5,18 @@ import com.reactor.cachedb.core.config.QueryIndexConfig;
 import com.reactor.cachedb.core.config.RelationConfig;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
+import com.reactor.cachedb.core.projection.EntityProjectionBinding;
+import com.reactor.cachedb.core.projection.ProjectionEntityCodec;
+import com.reactor.cachedb.core.projection.ProjectionEntityMetadata;
+import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.queue.ProjectionRefreshFailureEntry;
 import com.reactor.cachedb.core.queue.ProjectionRefreshReplayResult;
 import com.reactor.cachedb.core.queue.ProjectionRefreshSnapshot;
 import com.reactor.cachedb.core.queue.WorkerErrorCapture;
 import com.reactor.cachedb.core.queue.WorkerErrorDetails;
-import com.reactor.cachedb.core.projection.EntityProjectionBinding;
-import com.reactor.cachedb.core.projection.ProjectionEntityCodec;
-import com.reactor.cachedb.core.projection.ProjectionEntityMetadata;
-import com.reactor.cachedb.core.query.QueryEvaluator;
 import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.StreamEntryID;
 import redis.clients.jedis.exceptions.JedisDataException;
@@ -40,7 +41,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class RedisProjectionRefreshWorker implements AutoCloseable {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final ProjectionRefreshConfig config;
     private final RedisProjectionRefreshQueue queue;
     private final RedisKeyStrategy keyStrategy;
@@ -75,8 +76,29 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             QueryIndexConfig queryIndexConfig,
             RelationConfig relationConfig,
             QueryEvaluator queryEvaluator,
-            RedisProducerGuard producerGuard
-    ) {
+            RedisProducerGuard producerGuard) {
+        this(
+                JedisPooledOperations.of(jedis),
+                config,
+                queue,
+                keyStrategy,
+                entityRegistry,
+                queryIndexConfig,
+                relationConfig,
+                queryEvaluator,
+                producerGuard);
+    }
+
+    public RedisProjectionRefreshWorker(
+            RedisClientOperations jedis,
+            ProjectionRefreshConfig config,
+            RedisProjectionRefreshQueue queue,
+            RedisKeyStrategy keyStrategy,
+            EntityRegistry entityRegistry,
+            QueryIndexConfig queryIndexConfig,
+            RelationConfig relationConfig,
+            QueryEvaluator queryEvaluator,
+            RedisProducerGuard producerGuard) {
         this.jedis = jedis;
         this.config = config;
         this.queue = queue;
@@ -86,11 +108,14 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
         this.relationConfig = relationConfig;
         this.queryEvaluator = queryEvaluator;
         this.producerGuard = producerGuard;
-        this.executorService = Executors.newSingleThreadExecutor(runnable -> {
-            Thread thread = new Thread(runnable, config.consumerNamePrefix() + "-0");
-            thread.setDaemon(config.daemonThreads());
-            return thread;
-        });
+        this.executorService =
+                Executors.newSingleThreadExecutor(
+                        runnable -> {
+                            Thread thread =
+                                    new Thread(runnable, config.consumerNamePrefix() + "-0");
+                            thread.setDaemon(config.daemonThreads());
+                            return thread;
+                        });
     }
 
     public void start() {
@@ -123,8 +148,7 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
                 lastErrorRootType.get(),
                 lastErrorRootMessage.get(),
                 lastErrorOrigin.get(),
-                lastPoisonEntryId.get()
-        );
+                lastPoisonEntryId.get());
     }
 
     public List<ProjectionRefreshFailureEntry> failures(int limit) {
@@ -132,25 +156,43 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             return List.of();
         }
         int safeLimit = Math.max(1, limit);
-        return jedis.xrevrange(config.deadLetterStreamKey(), "+", "-", safeLimit).stream()
+        return jedis
+                .commands()
+                .xrevrange(config.deadLetterStreamKey(), "+", "-", safeLimit)
+                .stream()
                 .map(this::toFailureEntry)
                 .toList();
     }
 
     public ProjectionRefreshReplayResult replayFailure(String entryId) {
         if (!config.deadLetterEnabled()) {
-            return new ProjectionRefreshReplayResult(defaultString(entryId), false, "", "Projection refresh dead-letter queue is disabled.");
+            return new ProjectionRefreshReplayResult(
+                    defaultString(entryId),
+                    false,
+                    "",
+                    "Projection refresh dead-letter queue is disabled.");
         }
         if (queue == null) {
-            return new ProjectionRefreshReplayResult(defaultString(entryId), false, "", "Projection refresh queue is not available.");
+            return new ProjectionRefreshReplayResult(
+                    defaultString(entryId),
+                    false,
+                    "",
+                    "Projection refresh queue is not available.");
         }
         String trimmedEntryId = defaultString(entryId).trim();
         if (trimmedEntryId.isEmpty()) {
-            return new ProjectionRefreshReplayResult("", false, "", "Projection refresh replay requires a dead-letter entry id.");
+            return new ProjectionRefreshReplayResult(
+                    "", false, "", "Projection refresh replay requires a dead-letter entry id.");
         }
-        List<StreamEntry> entries = jedis.xrange(config.deadLetterStreamKey(), trimmedEntryId, trimmedEntryId, 1);
+        List<StreamEntry> entries =
+                jedis.commands()
+                        .xrange(config.deadLetterStreamKey(), trimmedEntryId, trimmedEntryId, 1);
         if (entries == null || entries.isEmpty()) {
-            return new ProjectionRefreshReplayResult(trimmedEntryId, false, "", "Projection refresh dead-letter entry was not found.");
+            return new ProjectionRefreshReplayResult(
+                    trimmedEntryId,
+                    false,
+                    "",
+                    "Projection refresh dead-letter entry was not found.");
         }
         StreamEntry entry = entries.get(0);
         String operation = entry.getFields().get("operation");
@@ -158,20 +200,25 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
         String projectionName = entry.getFields().get("projection");
         String rawId = entry.getFields().get("id");
         if (operation == null || entityName == null || projectionName == null || rawId == null) {
-            return new ProjectionRefreshReplayResult(trimmedEntryId, false, "", "Projection refresh dead-letter entry is missing required fields.");
+            return new ProjectionRefreshReplayResult(
+                    trimmedEntryId,
+                    false,
+                    "",
+                    "Projection refresh dead-letter entry is missing required fields.");
         }
         String originalEntryId = defaultString(entry.getFields().get("originalEntryId"));
-        String enqueuedEntryId = queue.enqueueReplay(
-                operation,
-                entityName,
-                projectionName,
-                rawId,
-                originalEntryId.isBlank() ? trimmedEntryId : originalEntryId,
-                trimmedEntryId
-        );
-        jedis.xdel(config.deadLetterStreamKey(), entry.getID());
+        String enqueuedEntryId =
+                queue.enqueueReplay(
+                        operation,
+                        entityName,
+                        projectionName,
+                        rawId,
+                        originalEntryId.isBlank() ? trimmedEntryId : originalEntryId,
+                        trimmedEntryId);
+        jedis.commands().xdel(config.deadLetterStreamKey(), entry.getID());
         replayedCount.incrementAndGet();
-        return new ProjectionRefreshReplayResult(trimmedEntryId, true, enqueuedEntryId, "Projection refresh entry was re-enqueued.");
+        return new ProjectionRefreshReplayResult(
+                trimmedEntryId, true, enqueuedEntryId, "Projection refresh entry was re-enqueued.");
     }
 
     private void ensureConsumerGroup() {
@@ -179,7 +226,12 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             return;
         }
         try {
-            jedis.xgroupCreate(config.streamKey(), config.consumerGroup(), new StreamEntryID("0-0"), true);
+            jedis.commands()
+                    .xgroupCreate(
+                            config.streamKey(),
+                            config.consumerGroup(),
+                            new StreamEntryID("0-0"),
+                            true);
         } catch (JedisDataException exception) {
             if (!exception.getMessage().contains("BUSYGROUP")) {
                 throw exception;
@@ -189,17 +241,19 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
 
     private void runLoop() {
         String consumerName = config.consumerNamePrefix() + "-0";
-        XReadGroupParams params = new XReadGroupParams()
-                .count(config.batchSize())
-                .block((int) config.blockTimeoutMillis());
+        XReadGroupParams params =
+                new XReadGroupParams()
+                        .count(config.batchSize())
+                        .block((int) config.blockTimeoutMillis());
         while (running.get() && !Thread.currentThread().isInterrupted()) {
             try {
-                List<Entry<String, List<StreamEntry>>> responses = jedis.xreadGroup(
-                        config.consumerGroup(),
-                        consumerName,
-                        params,
-                        Map.of(config.streamKey(), StreamEntryID.UNRECEIVED_ENTRY)
-                );
+                List<Entry<String, List<StreamEntry>>> responses =
+                        jedis.commands()
+                                .xreadGroup(
+                                        config.consumerGroup(),
+                                        consumerName,
+                                        params,
+                                        Map.of(config.streamKey(), StreamEntryID.UNRECEIVED_ENTRY));
                 if (!hasEntries(responses) && config.recoverPendingEntries()) {
                     responses = claimAbandonedEntries(consumerName);
                 }
@@ -218,14 +272,16 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
 
     private List<Entry<String, List<StreamEntry>>> claimAbandonedEntries(String consumerName) {
         try {
-            var response = jedis.xautoclaim(
-                    config.streamKey(),
-                    config.consumerGroup(),
-                    consumerName,
-                    config.claimIdleMillis(),
-                    StreamEntryID.MINIMUM_ID,
-                    XAutoClaimParams.xAutoClaimParams().count(config.claimBatchSize())
-            );
+            var response =
+                    jedis.commands()
+                            .xautoclaim(
+                                    config.streamKey(),
+                                    config.consumerGroup(),
+                                    consumerName,
+                                    config.claimIdleMillis(),
+                                    StreamEntryID.MINIMUM_ID,
+                                    XAutoClaimParams.xAutoClaimParams()
+                                            .count(config.claimBatchSize()));
             List<StreamEntry> entries = response.getValue();
             if (entries == null || entries.isEmpty()) {
                 return List.of();
@@ -248,7 +304,11 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             }
         }
         if (!ackIds.isEmpty()) {
-            jedis.xack(config.streamKey(), config.consumerGroup(), ackIds.toArray(StreamEntryID[]::new));
+            jedis.commands()
+                    .xack(
+                            config.streamKey(),
+                            config.consumerGroup(),
+                            ackIds.toArray(StreamEntryID[]::new));
         }
     }
 
@@ -258,12 +318,24 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             String projectionName = entry.getFields().get("projection");
             String rawId = entry.getFields().get("id");
             String operation = entry.getFields().get("operation");
-            if (entityName == null || projectionName == null || rawId == null || operation == null) {
-                return handleProcessingFailure(entry, new IllegalStateException("Projection refresh entry is missing required fields."));
+            if (entityName == null
+                    || projectionName == null
+                    || rawId == null
+                    || operation == null) {
+                return handleProcessingFailure(
+                        entry,
+                        new IllegalStateException(
+                                "Projection refresh entry is missing required fields."));
             }
             ProjectionHandler<?, ?> rawHandler = handler(entityName, projectionName);
             if (rawHandler == null) {
-                return handleProcessingFailure(entry, new IllegalStateException("Projection refresh handler not found for " + entityName + "#" + projectionName));
+                return handleProcessingFailure(
+                        entry,
+                        new IllegalStateException(
+                                "Projection refresh handler not found for "
+                                        + entityName
+                                        + "#"
+                                        + projectionName));
             }
             return processWithHandler(entry, rawHandler, rawId, operation);
         } catch (RuntimeException exception) {
@@ -272,17 +344,18 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
     }
 
     @SuppressWarnings("unchecked")
-    private <T, ID> boolean processWithHandler(StreamEntry entry, ProjectionHandler<?, ?> rawHandler, String rawId, String operation) {
+    private <T, ID> boolean processWithHandler(
+            StreamEntry entry, ProjectionHandler<?, ?> rawHandler, String rawId, String operation) {
         ProjectionHandler<T, ID> handler = (ProjectionHandler<T, ID>) rawHandler;
         if ("DELETE".equalsIgnoreCase(operation)) {
             handler.runtime().delete(handler.parseId(rawId));
             markProcessed();
             return true;
         }
-        List<String> values = jedis.mget(
-                keyStrategy.entityKey(handler.baseMetadata().redisNamespace(), rawId),
-                keyStrategy.tombstoneKey(handler.baseMetadata().redisNamespace(), rawId)
-        );
+        List<String> values =
+                jedis.mget(
+                        keyStrategy.entityKey(handler.baseMetadata().redisNamespace(), rawId),
+                        keyStrategy.tombstoneKey(handler.baseMetadata().redisNamespace(), rawId));
         if (values.get(1) != null || values.get(0) == null) {
             handler.runtime().delete(handler.parseId(rawId));
             markProcessed();
@@ -306,41 +379,50 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
     }
 
     private ProjectionHandler<?, ?> handler(String entityName, String projectionName) {
-        return handlers.computeIfAbsent(entityName + "#" + projectionName, ignored -> createHandler(entityName, projectionName));
+        return handlers.computeIfAbsent(
+                entityName + "#" + projectionName,
+                ignored -> createHandler(entityName, projectionName));
     }
 
     @SuppressWarnings("unchecked")
-    private <T, ID, P> ProjectionHandler<T, ID> createHandler(String entityName, String projectionName) {
+    private <T, ID, P> ProjectionHandler<T, ID> createHandler(
+            String entityName, String projectionName) {
         Optional<EntityBinding<?, ?>> entityBindingOptional = entityRegistry.find(entityName);
-        Optional<EntityProjectionBinding<?, ?, ?>> projectionBindingOptional = entityRegistry.findProjection(entityName, projectionName);
+        Optional<EntityProjectionBinding<?, ?, ?>> projectionBindingOptional =
+                entityRegistry.findProjection(entityName, projectionName);
         if (entityBindingOptional.isEmpty() || projectionBindingOptional.isEmpty()) {
             return null;
         }
         EntityBinding<T, ID> entityBinding = (EntityBinding<T, ID>) entityBindingOptional.get();
-        EntityProjectionBinding<T, P, ID> projectionBinding = (EntityProjectionBinding<T, P, ID>) projectionBindingOptional.get();
-        ProjectionEntityMetadata<P, ID> projectionMetadata = new ProjectionEntityMetadata<>(entityBinding.metadata(), projectionBinding.projection());
-        ProjectionEntityCodec<P, ID> projectionCodec = new ProjectionEntityCodec<>(projectionBinding.projection());
-        RedisQueryIndexManager<P, ID> queryIndexManager = new RedisQueryIndexManager<>(
-                jedis,
-                projectionMetadata,
-                projectionCodec,
-                keyStrategy,
-                entityRegistry,
-                queryIndexConfig,
-                relationConfig,
-                queryEvaluator,
-                producerGuard
-        );
-        RedisProjectionRuntime<P, ID> runtime = new RedisProjectionRuntime<>(
-                jedis,
-                projectionMetadata,
-                projectionCodec,
-                keyStrategy,
-                entityBinding.cachePolicy(),
-                queryIndexManager,
-                projectionBinding
-        );
-        return new ProjectionHandler<>(entityBinding.metadata(), entityBinding.codec(), projectionBinding, runtime);
+        EntityProjectionBinding<T, P, ID> projectionBinding =
+                (EntityProjectionBinding<T, P, ID>) projectionBindingOptional.get();
+        ProjectionEntityMetadata<P, ID> projectionMetadata =
+                new ProjectionEntityMetadata<>(
+                        entityBinding.metadata(), projectionBinding.projection());
+        ProjectionEntityCodec<P, ID> projectionCodec =
+                new ProjectionEntityCodec<>(projectionBinding.projection());
+        RedisQueryIndexManager<P, ID> queryIndexManager =
+                new RedisQueryIndexManager<>(
+                        jedis,
+                        projectionMetadata,
+                        projectionCodec,
+                        keyStrategy,
+                        entityRegistry,
+                        queryIndexConfig,
+                        relationConfig,
+                        queryEvaluator,
+                        producerGuard);
+        RedisProjectionRuntime<P, ID> runtime =
+                new RedisProjectionRuntime<>(
+                        jedis,
+                        projectionMetadata,
+                        projectionCodec,
+                        keyStrategy,
+                        entityBinding.cachePolicy(),
+                        queryIndexManager,
+                        projectionBinding);
+        return new ProjectionHandler<>(
+                entityBinding.metadata(), entityBinding.codec(), projectionBinding, runtime);
     }
 
     private boolean handleProcessingFailure(StreamEntry entry, RuntimeException exception) {
@@ -373,8 +455,7 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
                 projectionName,
                 rawId,
                 nextAttempt,
-                originalEntryId.isBlank() ? entry.getID().toString() : originalEntryId
-        );
+                originalEntryId.isBlank() ? entry.getID().toString() : originalEntryId);
         retriedCount.incrementAndGet();
         return true;
     }
@@ -388,17 +469,23 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
         fields.put("id", defaultString(entry.getFields().get("id")));
         fields.put("attempt", String.valueOf(Math.max(1, attempt)));
         fields.put("failedAtEpochMillis", String.valueOf(System.currentTimeMillis()));
-        fields.put("originalEntryId", defaultString(entry.getFields().get("originalEntryId")).isBlank()
-                ? entry.getID().toString()
-                : defaultString(entry.getFields().get("originalEntryId")));
+        fields.put(
+                "originalEntryId",
+                defaultString(entry.getFields().get("originalEntryId")).isBlank()
+                        ? entry.getID().toString()
+                        : defaultString(entry.getFields().get("originalEntryId")));
         fields.put("errorType", defaultString(error.errorType()));
         fields.put("errorMessage", defaultString(error.errorMessage()));
         fields.put("errorRootType", defaultString(error.rootErrorType()));
         fields.put("errorRootMessage", defaultString(error.rootErrorMessage()));
         fields.put("errorOrigin", defaultString(error.origin()));
-        String deadLetterEntryId = jedis.xadd(config.deadLetterStreamKey(), XAddParams.xAddParams(), fields).toString();
+        String deadLetterEntryId =
+                jedis.commands()
+                        .xadd(config.deadLetterStreamKey(), XAddParams.xAddParams(), fields)
+                        .toString();
         if (config.deadLetterMaxLength() > 0) {
-            jedis.xtrim(config.deadLetterStreamKey(), config.deadLetterMaxLength(), true);
+            jedis.commands()
+                    .xtrim(config.deadLetterStreamKey(), config.deadLetterMaxLength(), true);
         }
         failedCount.incrementAndGet();
         lastPoisonEntryId.set(deadLetterEntryId);
@@ -420,8 +507,7 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
                 defaultString(fields.get("errorMessage")),
                 defaultString(fields.get("errorRootType")),
                 defaultString(fields.get("errorRootMessage")),
-                defaultString(fields.get("errorOrigin"))
-        );
+                defaultString(fields.get("errorOrigin")));
     }
 
     private void markProcessed() {
@@ -444,7 +530,7 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             return 0L;
         }
         try {
-            return jedis.xlen(streamKey);
+            return jedis.commands().xlen(streamKey);
         } catch (RuntimeException exception) {
             return 0L;
         }
@@ -455,13 +541,14 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             return 0L;
         }
         try {
-            return jedis.xpending(config.streamKey(), config.consumerGroup()).getTotal();
+            return jedis.commands().xpending(config.streamKey(), config.consumerGroup()).getTotal();
         } catch (RuntimeException exception) {
             return 0L;
         }
     }
 
-    private long lagEstimateMillis(long streamLength, long deadLetterStreamLength, long pendingCount) {
+    private long lagEstimateMillis(
+            long streamLength, long deadLetterStreamLength, long pendingCount) {
         if (streamLength <= 0L && deadLetterStreamLength <= 0L && pendingCount <= 0L) {
             return 0L;
         }
@@ -533,8 +620,7 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             EntityMetadata<T, ID> baseMetadata,
             EntityCodec<T> codec,
             EntityProjectionBinding<T, ?, ID> binding,
-            RedisProjectionRuntime<?, ID> runtime
-    ) {
+            RedisProjectionRuntime<?, ID> runtime) {
         @SuppressWarnings("unchecked")
         ID parseId(String rawId) {
             Object parsed = rawId;

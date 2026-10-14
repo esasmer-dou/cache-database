@@ -1,34 +1,49 @@
 package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.config.WriteBehindConfig;
+
 import redis.clients.jedis.JedisPooled;
 
 import java.util.Map;
 
 public final class RedisBacklogEstimator {
 
-    private RedisBacklogEstimator() {
+    private RedisBacklogEstimator() {}
+
+    public static long estimateWriteBehindBacklog(
+            JedisPooled jedis, RedisKeyStrategy keyStrategy, WriteBehindConfig writeBehindConfig) {
+        return estimateWriteBehindBacklog(
+                JedisPooledOperations.of(jedis), keyStrategy, writeBehindConfig);
     }
 
     public static long estimateWriteBehindBacklog(
-            JedisPooled jedis,
+            RedisClientOperations jedis,
             RedisKeyStrategy keyStrategy,
-            WriteBehindConfig writeBehindConfig
-    ) {
+            WriteBehindConfig writeBehindConfig) {
         return estimateWriteBehindBacklog(
                 jedis,
                 keyStrategy,
                 writeBehindConfig.activeStreamKeys(),
-                writeBehindConfig.durableCompactionEnabled()
-        );
+                writeBehindConfig.durableCompactionEnabled());
     }
 
     public static long estimateWriteBehindBacklog(
             JedisPooled jedis,
             RedisKeyStrategy keyStrategy,
             java.util.List<String> activeStreamKeys,
-            boolean durableCompactionEnabled
-    ) {
+            boolean durableCompactionEnabled) {
+        return estimateWriteBehindBacklog(
+                JedisPooledOperations.of(jedis),
+                keyStrategy,
+                activeStreamKeys,
+                durableCompactionEnabled);
+    }
+
+    public static long estimateWriteBehindBacklog(
+            RedisClientOperations jedis,
+            RedisKeyStrategy keyStrategy,
+            java.util.List<String> activeStreamKeys,
+            boolean durableCompactionEnabled) {
         if (durableCompactionEnabled) {
             long pendingCount = pendingCount(jedis, keyStrategy);
             if (pendingCount > 0L) {
@@ -48,20 +63,33 @@ public final class RedisBacklogEstimator {
     }
 
     public static long pendingCount(JedisPooled jedis, RedisKeyStrategy keyStrategy) {
+        return pendingCount(JedisPooledOperations.of(jedis), keyStrategy);
+    }
+
+    public static long pendingCount(RedisClientOperations jedis, RedisKeyStrategy keyStrategy) {
         return parseLong(safeStats(jedis, keyStrategy).get("pendingCount"));
     }
 
     private static Map<String, String> safeStats(JedisPooled jedis, RedisKeyStrategy keyStrategy) {
+        return safeStats(JedisPooledOperations.of(jedis), keyStrategy);
+    }
+
+    private static Map<String, String> safeStats(
+            RedisClientOperations jedis, RedisKeyStrategy keyStrategy) {
         try {
-            return jedis.hgetAll(keyStrategy.compactionStatsKey());
+            return jedis.commands().hgetAll(keyStrategy.compactionStatsKey());
         } catch (RuntimeException exception) {
             return Map.of();
         }
     }
 
     private static long safeStreamLength(JedisPooled jedis, String streamKey) {
+        return safeStreamLength(JedisPooledOperations.of(jedis), streamKey);
+    }
+
+    private static long safeStreamLength(RedisClientOperations jedis, String streamKey) {
         try {
-            return jedis.xlen(streamKey);
+            return jedis.commands().xlen(streamKey);
         } catch (RuntimeException exception) {
             return 0L;
         }

@@ -39,31 +39,26 @@ application's own staging topology.
 
 | Release information | Value |
 | --- | --- |
-| Latest published release | `v0.12.0` |
-| Repository version | `0.12.0` |
+| Latest published release | [GitHub release](https://github.com/esasmer-dou/cache-database/releases/latest) |
+| Repository version | `0.13.0` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local evidence topology | Redis 8.2.1, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23, Oracle 19c physical Data Guard on a licensed self-hosted runner |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
 
-## Current Release: 0.12.0
+## Current Release: 0.13.0
 
-`0.12.0` simplifies snapshot sources and relationship mapping without changing
-Redis-first reads, write-behind or catalog publication contracts.
+`0.13.0` adds typed source scalars/relations, indexed and incremental snapshots,
+explicit count-policy limits, partitioned outbox consumption, atomic write envelopes,
+pooled sequence IDs and Redis Cluster adapters. All reactor modules use this version
+without a SNAPSHOT suffix. See the [v0.13.0 release notes](docs/releases/v0.13.0.md)
+and [bounded runtime operations](docs/bounded-runtime-operations.md) for contracts
+and upgrade precautions.
 
-- Generated bindings expose `SOURCE`; parameterized filters and SQL subqueries
-  replace repeated metadata, codec and SQL-string assembly.
-- `@CacheSourceRecord` generates direct decoders for scalar records without
-  inventing entity IDs or registering writable repositories.
-- `SnapshotRelation`, immutable lookup helpers and per-root distribution
-  remove hand-written grouping and membership infrastructure.
-- Existing SELECT sources remain supported. Mapping still owns business rules;
-  no implicit SQL fallback or extra per-root queries are introduced.
-- PostgreSQL, SQL Server and Oracle keep transaction-consistent refresh,
-  bounded preparation, renewable leases and atomic publication.
-
-Read the [v0.12.0 release notes](docs/releases/v0.12.0.md) and
-[source reference](docs/snapshot-source-reference.md) before upgrading.
+Keep the BOM, annotation processor and provider starter at `0.13.0`. Recompile
+generated bindings and review nullable booleans, zero count limits, snapshot
+storage and atomic-batch constraints before upgrading. A framework package
+does not certify an application's production routes or Oracle HA topology.
 
 ## Product Positioning: What CacheDB Is And Is Not
 
@@ -113,7 +108,7 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the current release?" | [v0.12.0 Release Notes](docs/releases/v0.12.0.md) |
+| "What changed in the current release?" | [v0.13.0 Release Notes](docs/releases/v0.13.0.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "What is the Oracle provider contract?" | [Oracle Provider](docs/oracle-provider.md) |
@@ -164,13 +159,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.12.0` is an
+Keep `cachedb.version` aligned with the release you use. Version `0.13.0` is an
 immutable release available from the anonymous CacheDB Maven repository and
 the GitHub Release bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.12.0</cachedb.version>
+    <cachedb.version>0.13.0</cachedb.version>
 </properties>
 
 <dependencyManagement>

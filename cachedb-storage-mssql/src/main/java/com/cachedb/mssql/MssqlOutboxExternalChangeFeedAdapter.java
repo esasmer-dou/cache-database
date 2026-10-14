@@ -4,8 +4,9 @@ import com.reactor.cachedb.core.change.ExternalChangeFeedAdapter;
 import com.reactor.cachedb.core.change.ExternalChangeSink;
 import com.reactor.cachedb.jdbc.JdbcOutboxExternalChangeFeedAdapter;
 
-import javax.sql.DataSource;
 import java.sql.SQLException;
+
+import javax.sql.DataSource;
 
 public final class MssqlOutboxExternalChangeFeedAdapter implements ExternalChangeFeedAdapter {
 
@@ -45,7 +46,9 @@ public final class MssqlOutboxExternalChangeFeedAdapter implements ExternalChang
         private final JdbcOutboxExternalChangeFeedAdapter.Builder delegate;
 
         private Builder(DataSource dataSource) {
-            this.delegate = JdbcOutboxExternalChangeFeedAdapter.builder(dataSource, new MssqlOutboxDialect());
+            this.delegate =
+                    JdbcOutboxExternalChangeFeedAdapter.builder(
+                            dataSource, new MssqlOutboxDialect());
         }
 
         public Builder adapterName(String adapterName) {
@@ -105,6 +108,11 @@ public final class MssqlOutboxExternalChangeFeedAdapter implements ExternalChang
 
         public Builder batchSize(int batchSize) {
             delegate.batchSize(batchSize);
+            return this;
+        }
+
+        public Builder partition(int count, int index, String column) {
+            delegate.partition(count, index, column);
             return this;
         }
 

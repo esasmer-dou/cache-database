@@ -1,21 +1,20 @@
 package com.reactor.cachedb.postgres;
 
-import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.config.EntityFlushPolicy;
 import com.reactor.cachedb.core.config.PersistenceSemantics;
+import com.reactor.cachedb.core.config.WriteBehindConfig;
+import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.queue.FailureClassifyingFlusher;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
-import com.reactor.cachedb.core.queue.WriteBehindFlusher;
 import com.reactor.cachedb.core.registry.EntityRegistry;
-import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
 import com.reactor.cachedb.jdbc.VersionGuardedWriteSupport;
+
 import org.postgresql.copy.CopyManager;
 import org.postgresql.core.BaseConnection;
 
-import javax.sql.DataSource;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
@@ -24,10 +23,11 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.StringJoiner;
+
+import javax.sql.DataSource;
 
 public final class PostgresWriteBehindFlusher implements FailureClassifyingFlusher {
 
@@ -42,7 +42,8 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         this(dataSource, entityRegistry, WriteBehindConfig.defaults(), null);
     }
 
-    public PostgresWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry, WriteBehindConfig config) {
+    public PostgresWriteBehindFlusher(
+            DataSource dataSource, EntityRegistry entityRegistry, WriteBehindConfig config) {
         this(dataSource, entityRegistry, config, null);
     }
 
@@ -50,8 +51,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             DataSource dataSource,
             EntityRegistry entityRegistry,
             WriteBehindConfig config,
-            StoragePerformanceCollector performanceCollector
-    ) {
+            StoragePerformanceCollector performanceCollector) {
         this.dataSource = dataSource;
         this.entityRegistry = entityRegistry;
         this.failureClassifier = new PostgresFailureClassifier();
@@ -62,6 +62,10 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
 
     @Override
     public void flush(QueuedWriteOperation operation) throws SQLException {
+        if (operation.atomicBatch()) {
+            flushAtomicBatch(operation.batchOperations());
+            return;
+        }
         long startedAt = System.nanoTime();
         try {
             try (Connection connection = dataSource.getConnection()) {
@@ -88,13 +92,38 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         }
     }
 
+    @Override
+    public void flushAtomicBatch(List<QueuedWriteOperation> operations) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            boolean autoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try {
+                for (var operation : operations) {
+                    if (operation.type() == OperationType.DELETE) delete(connection, operation);
+                    else upsert(connection, operation);
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException failure) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollback) {
+                    failure.addSuppressed(rollback);
+                }
+                throw failure;
+            } finally {
+                connection.setAutoCommit(autoCommit);
+            }
+        }
+    }
+
     private void flushBatchInternal(List<QueuedWriteOperation> operations) throws SQLException {
         if (operations.isEmpty()) {
             return;
         }
-        List<QueuedWriteOperation> batchOperations = config.entityFlushPolicies().isEmpty()
-                ? operations
-                : normalizeOperations(operations);
+        List<QueuedWriteOperation> batchOperations =
+                config.entityFlushPolicies().isEmpty()
+                        ? operations
+                        : normalizeOperations(operations);
         if (batchOperations.size() == 1) {
             flush(batchOperations.get(0));
             return;
@@ -105,12 +134,16 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             connection.setAutoCommit(false);
             try {
                 if (config.entityFlushPolicies().isEmpty()) {
-                    LinkedHashMap<StatementKey, List<QueuedWriteOperation>> groups = new LinkedHashMap<>();
+                    LinkedHashMap<StatementKey, List<QueuedWriteOperation>> groups =
+                            new LinkedHashMap<>();
                     for (QueuedWriteOperation operation : batchOperations) {
-                        groups.computeIfAbsent(StatementKey.of(operation), ignored -> new ArrayList<>()).add(operation);
+                        groups.computeIfAbsent(
+                                        StatementKey.of(operation), ignored -> new ArrayList<>())
+                                .add(operation);
                     }
                     FlushExecutionPolicy defaultPolicy = defaultFlushExecutionPolicy();
-                    for (Map.Entry<StatementKey, List<QueuedWriteOperation>> group : groups.entrySet()) {
+                    for (Map.Entry<StatementKey, List<QueuedWriteOperation>> group :
+                            groups.entrySet()) {
                         if (group.getKey().delete()) {
                             flushDeleteBatch(connection, group.getValue(), defaultPolicy);
                         } else {
@@ -118,15 +151,23 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                         }
                     }
                 } else {
-                    LinkedHashMap<ExecutionKey, List<QueuedWriteOperation>> groups = new LinkedHashMap<>();
+                    LinkedHashMap<ExecutionKey, List<QueuedWriteOperation>> groups =
+                            new LinkedHashMap<>();
                     for (QueuedWriteOperation operation : batchOperations) {
-                        groups.computeIfAbsent(ExecutionKey.of(operation, resolveFlushExecutionPolicy(operation)), ignored -> new ArrayList<>()).add(operation);
+                        groups.computeIfAbsent(
+                                        ExecutionKey.of(
+                                                operation, resolveFlushExecutionPolicy(operation)),
+                                        ignored -> new ArrayList<>())
+                                .add(operation);
                     }
-                    for (Map.Entry<ExecutionKey, List<QueuedWriteOperation>> group : groups.entrySet()) {
+                    for (Map.Entry<ExecutionKey, List<QueuedWriteOperation>> group :
+                            groups.entrySet()) {
                         if (group.getKey().statementKey().delete()) {
-                            flushDeleteBatch(connection, group.getValue(), group.getKey().flushPolicy());
+                            flushDeleteBatch(
+                                    connection, group.getValue(), group.getKey().flushPolicy());
                         } else {
-                            flushUpsertBatch(connection, group.getValue(), group.getKey().flushPolicy());
+                            flushUpsertBatch(
+                                    connection, group.getValue(), group.getKey().flushPolicy());
                         }
                     }
                 }
@@ -163,24 +204,32 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
     private void delete(Connection connection, QueuedWriteOperation operation) throws SQLException {
         String sql = dialect.deleteSql(operation);
         try (PreparedStatement statement = prepareStatement(connection, sql)) {
-            statement.setObject(1, JdbcWriteBehindSupport.convertValue(operation.id(), columnType(operation, operation.idColumn())));
+            statement.setObject(
+                    1,
+                    JdbcWriteBehindSupport.convertValue(
+                            operation.id(), columnType(operation, operation.idColumn())));
             statement.setLong(2, operation.version());
             VersionGuardedWriteSupport.verifySingleOutcome(
                     connection,
                     entityRegistry,
                     operation,
                     statement.executeUpdate(),
-                    config.statementTimeoutSeconds()
-            );
+                    config.statementTimeoutSeconds());
         }
     }
 
-    private void flushDeleteBatch(Connection connection, List<QueuedWriteOperation> operations, FlushExecutionPolicy flushPolicy) throws SQLException {
+    private void flushDeleteBatch(
+            Connection connection,
+            List<QueuedWriteOperation> operations,
+            FlushExecutionPolicy flushPolicy)
+            throws SQLException {
         int maxBatchSize = effectiveMaxBatchSize(flushPolicy, operations.size());
         for (int start = 0; start < operations.size(); start += maxBatchSize) {
             int end = Math.min(operations.size(), start + maxBatchSize);
             List<QueuedWriteOperation> chunk = operations.subList(start, end);
-            if (flushPolicy.preferCopy() && config.postgresCopyBulkLoadEnabled() && chunk.size() >= flushPolicy.copyThreshold()) {
+            if (flushPolicy.preferCopy()
+                    && config.postgresCopyBulkLoadEnabled()
+                    && chunk.size() >= flushPolicy.copyThreshold()) {
                 flushDeleteCopy(connection, chunk);
                 continue;
             }
@@ -192,7 +241,10 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             String sql = dialect.deleteSql(template);
             try (PreparedStatement statement = prepareStatement(connection, sql)) {
                 for (QueuedWriteOperation operation : chunk) {
-                    statement.setObject(1, JdbcWriteBehindSupport.convertValue(operation.id(), columnType(operation, operation.idColumn())));
+                    statement.setObject(
+                            1,
+                            JdbcWriteBehindSupport.convertValue(
+                                    operation.id(), columnType(operation, operation.idColumn())));
                     statement.setLong(2, operation.version());
                     statement.addBatch();
                 }
@@ -201,8 +253,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                         entityRegistry,
                         chunk,
                         statement.executeBatch(),
-                        config.statementTimeoutSeconds()
-                );
+                        config.statementTimeoutSeconds());
             }
         }
     }
@@ -218,18 +269,24 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                     entityRegistry,
                     operation,
                     statement.executeUpdate(),
-                    config.statementTimeoutSeconds()
-            );
+                    config.statementTimeoutSeconds());
         }
     }
 
-    private void flushUpsertBatch(Connection connection, List<QueuedWriteOperation> operations, FlushExecutionPolicy flushPolicy) throws SQLException {
+    private void flushUpsertBatch(
+            Connection connection,
+            List<QueuedWriteOperation> operations,
+            FlushExecutionPolicy flushPolicy)
+            throws SQLException {
         int maxBatchSize = effectiveMaxBatchSize(flushPolicy, operations.size());
         for (int start = 0; start < operations.size(); start += maxBatchSize) {
             int end = Math.min(operations.size(), start + maxBatchSize);
             List<QueuedWriteOperation> chunk = operations.subList(start, end);
-            for (List<QueuedWriteOperation> distinctChunk : partitionDistinctIdentityBatches(chunk, flushPolicy.statementRowLimit())) {
-                if (flushPolicy.preferCopy() && config.postgresCopyBulkLoadEnabled() && distinctChunk.size() >= flushPolicy.copyThreshold()) {
+            for (List<QueuedWriteOperation> distinctChunk :
+                    partitionDistinctIdentityBatches(chunk, flushPolicy.statementRowLimit())) {
+                if (flushPolicy.preferCopy()
+                        && config.postgresCopyBulkLoadEnabled()
+                        && distinctChunk.size() >= flushPolicy.copyThreshold()) {
                     flushUpsertCopy(connection, distinctChunk);
                     continue;
                 }
@@ -242,7 +299,8 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         }
     }
 
-    private void flushUpsertPreparedBatch(Connection connection, List<QueuedWriteOperation> operations) throws SQLException {
+    private void flushUpsertPreparedBatch(
+            Connection connection, List<QueuedWriteOperation> operations) throws SQLException {
         QueuedWriteOperation template = operations.get(0);
         List<Map.Entry<String, String>> entries = new ArrayList<>(template.columns().entrySet());
         String sql = upsertSql(template, entries);
@@ -256,12 +314,13 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                     entityRegistry,
                     operations,
                     statement.executeBatch(),
-                    config.statementTimeoutSeconds()
-            );
+                    config.statementTimeoutSeconds());
         }
     }
 
-    private void flushDeleteMultiRow(Connection connection, List<QueuedWriteOperation> operations, int rowLimitOverride) throws SQLException {
+    private void flushDeleteMultiRow(
+            Connection connection, List<QueuedWriteOperation> operations, int rowLimitOverride)
+            throws SQLException {
         int rowLimit = Math.max(1, rowLimitOverride);
         for (int start = 0; start < operations.size(); start += rowLimit) {
             int end = Math.min(operations.size(), start + rowLimit);
@@ -271,7 +330,10 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             try (PreparedStatement statement = prepareStatement(connection, sql)) {
                 int parameterIndex = 1;
                 for (QueuedWriteOperation operation : chunk) {
-                    statement.setObject(parameterIndex++, JdbcWriteBehindSupport.convertValue(operation.id(), columnType(operation, operation.idColumn())));
+                    statement.setObject(
+                            parameterIndex++,
+                            JdbcWriteBehindSupport.convertValue(
+                                    operation.id(), columnType(operation, operation.idColumn())));
                     statement.setLong(parameterIndex++, operation.version());
                 }
                 VersionGuardedWriteSupport.verifyAggregateOutcome(
@@ -279,19 +341,21 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                         entityRegistry,
                         chunk,
                         statement.executeUpdate(),
-                        config.statementTimeoutSeconds()
-                );
+                        config.statementTimeoutSeconds());
             }
         }
     }
 
-    private void flushUpsertMultiRow(Connection connection, List<QueuedWriteOperation> operations, int rowLimitOverride) throws SQLException {
+    private void flushUpsertMultiRow(
+            Connection connection, List<QueuedWriteOperation> operations, int rowLimitOverride)
+            throws SQLException {
         int rowLimit = Math.max(1, rowLimitOverride);
         for (int start = 0; start < operations.size(); start += rowLimit) {
             int end = Math.min(operations.size(), start + rowLimit);
             List<QueuedWriteOperation> chunk = operations.subList(start, end);
             QueuedWriteOperation template = chunk.get(0);
-            List<Map.Entry<String, String>> entries = new ArrayList<>(template.columns().entrySet());
+            List<Map.Entry<String, String>> entries =
+                    new ArrayList<>(template.columns().entrySet());
             String sql = upsertMultiRowSql(template, entries, chunk.size());
             try (PreparedStatement statement = prepareStatement(connection, sql)) {
                 int parameterIndex = 1;
@@ -300,8 +364,9 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                     for (int valueIndex = 0; valueIndex < values.size(); valueIndex++) {
                         statement.setObject(
                                 parameterIndex++,
-                                JdbcWriteBehindSupport.convertValue(values.get(valueIndex), columnType(operation, entries.get(valueIndex).getKey()))
-                        );
+                                JdbcWriteBehindSupport.convertValue(
+                                        values.get(valueIndex),
+                                        columnType(operation, entries.get(valueIndex).getKey())));
                     }
                 }
                 VersionGuardedWriteSupport.verifyAggregateOutcome(
@@ -309,21 +374,31 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                         entityRegistry,
                         chunk,
                         statement.executeUpdate(),
-                        config.statementTimeoutSeconds()
-                );
+                        config.statementTimeoutSeconds());
             }
         }
     }
 
-    static List<List<QueuedWriteOperation>> partitionDistinctIdentityBatches(List<QueuedWriteOperation> operations, int rowLimitOverride) {
-        return JdbcWriteBehindSupport.partitionDistinctIdentityBatches(operations, rowLimitOverride);
+    static List<List<QueuedWriteOperation>> partitionDistinctIdentityBatches(
+            List<QueuedWriteOperation> operations, int rowLimitOverride) {
+        return JdbcWriteBehindSupport.partitionDistinctIdentityBatches(
+                operations, rowLimitOverride);
     }
 
-    private void flushDeleteCopy(Connection connection, List<QueuedWriteOperation> operations) throws SQLException {
+    private void flushDeleteCopy(Connection connection, List<QueuedWriteOperation> operations)
+            throws SQLException {
         QueuedWriteOperation template = operations.get(0);
         String stagingTable = tempTableName("delete_stage");
-        try (PreparedStatement createStatement = prepareStatement(connection,
-                "CREATE TEMP TABLE " + stagingTable + " (" + template.idColumn() + " TEXT, " + template.versionColumn() + " BIGINT) ON COMMIT DROP")) {
+        try (PreparedStatement createStatement =
+                prepareStatement(
+                        connection,
+                        "CREATE TEMP TABLE "
+                                + stagingTable
+                                + " ("
+                                + template.idColumn()
+                                + " TEXT, "
+                                + template.versionColumn()
+                                + " BIGINT) ON COMMIT DROP")) {
             createStatement.executeUpdate();
         }
         copyCsv(
@@ -331,30 +406,55 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                 stagingTable,
                 List.of(template.idColumn(), template.versionColumn()),
                 operations.stream()
-                        .map(operation -> List.of(operation.id(), String.valueOf(operation.version())))
-                        .toList()
-        );
-        try (PreparedStatement statement = prepareStatement(connection,
-                "DELETE FROM " + template.tableName() + " target USING " + stagingTable + " staged "
-                        + "WHERE target." + template.idColumn() + " = CAST(staged." + template.idColumn() + " AS "
-                        + sqlCastType(template, template.idColumn()) + ") "
-                        + "AND (target." + template.versionColumn() + " IS NULL OR target." + template.versionColumn()
-                        + " <= staged." + template.versionColumn() + ")")) {
+                        .map(
+                                operation ->
+                                        List.of(
+                                                operation.id(),
+                                                String.valueOf(operation.version())))
+                        .toList());
+        try (PreparedStatement statement =
+                prepareStatement(
+                        connection,
+                        "DELETE FROM "
+                                + template.tableName()
+                                + " target USING "
+                                + stagingTable
+                                + " staged "
+                                + "WHERE target."
+                                + template.idColumn()
+                                + " = CAST(staged."
+                                + template.idColumn()
+                                + " AS "
+                                + sqlCastType(template, template.idColumn())
+                                + ") "
+                                + "AND (target."
+                                + template.versionColumn()
+                                + " IS NULL OR target."
+                                + template.versionColumn()
+                                + " <= staged."
+                                + template.versionColumn()
+                                + ")")) {
             VersionGuardedWriteSupport.verifyAggregateOutcome(
                     connection,
                     entityRegistry,
                     operations,
                     statement.executeUpdate(),
-                    config.statementTimeoutSeconds()
-            );
+                    config.statementTimeoutSeconds());
         }
     }
 
-    private void flushUpsertCopy(Connection connection, List<QueuedWriteOperation> operations) throws SQLException {
+    private void flushUpsertCopy(Connection connection, List<QueuedWriteOperation> operations)
+            throws SQLException {
         QueuedWriteOperation template = operations.get(0);
         String stagingTable = tempTableName("upsert_stage");
-        try (PreparedStatement createStatement = prepareStatement(connection,
-                "CREATE TEMP TABLE " + stagingTable + " (LIKE " + template.tableName() + " INCLUDING DEFAULTS) ON COMMIT DROP")) {
+        try (PreparedStatement createStatement =
+                prepareStatement(
+                        connection,
+                        "CREATE TEMP TABLE "
+                                + stagingTable
+                                + " (LIKE "
+                                + template.tableName()
+                                + " INCLUDING DEFAULTS) ON COMMIT DROP")) {
             createStatement.executeUpdate();
         }
         List<String> columns = new ArrayList<>(template.columns().keySet());
@@ -363,9 +463,12 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                 stagingTable,
                 columns,
                 operations.stream()
-                        .map(operation -> columns.stream().map(column -> operation.columns().get(column)).toList())
-                        .toList()
-        );
+                        .map(
+                                operation ->
+                                        columns.stream()
+                                                .map(column -> operation.columns().get(column))
+                                                .toList())
+                        .toList());
         StringJoiner insertColumns = new StringJoiner(", ");
         StringJoiner updateSet = new StringJoiner(", ");
         for (String column : columns) {
@@ -374,44 +477,61 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                 updateSet.add(column + " = EXCLUDED." + column);
             }
         }
-        String sql = "INSERT INTO " + template.tableName() + " (" + insertColumns + ") SELECT " + insertColumns + " FROM " + stagingTable
-                + " ON CONFLICT (" + template.idColumn() + ") DO UPDATE SET " + updateSet
-                + " WHERE " + template.tableName() + "." + template.versionColumn() + " IS NULL OR EXCLUDED."
-                + template.versionColumn() + " > " + template.tableName() + "." + template.versionColumn();
+        String sql =
+                "INSERT INTO "
+                        + template.tableName()
+                        + " ("
+                        + insertColumns
+                        + ") SELECT "
+                        + insertColumns
+                        + " FROM "
+                        + stagingTable
+                        + " ON CONFLICT ("
+                        + template.idColumn()
+                        + ") DO UPDATE SET "
+                        + updateSet
+                        + " WHERE "
+                        + template.tableName()
+                        + "."
+                        + template.versionColumn()
+                        + " IS NULL OR EXCLUDED."
+                        + template.versionColumn()
+                        + " > "
+                        + template.tableName()
+                        + "."
+                        + template.versionColumn();
         try (PreparedStatement statement = prepareStatement(connection, sql)) {
             VersionGuardedWriteSupport.verifyAggregateOutcome(
                     connection,
                     entityRegistry,
                     operations,
                     statement.executeUpdate(),
-                    config.statementTimeoutSeconds()
-            );
+                    config.statementTimeoutSeconds());
         }
     }
 
-    private String upsertSql(QueuedWriteOperation operation, List<Map.Entry<String, String>> entries) {
+    private String upsertSql(
+            QueuedWriteOperation operation, List<Map.Entry<String, String>> entries) {
         return dialect.upsertSql(operation, entries);
     }
 
-    private PreparedStatement prepareStatement(Connection connection, String sql) throws SQLException {
+    private PreparedStatement prepareStatement(Connection connection, String sql)
+            throws SQLException {
         PreparedStatement statement = connection.prepareStatement(sql);
         statement.setQueryTimeout(config.statementTimeoutSeconds());
         return statement;
     }
 
     private String upsertMultiRowSql(
-            QueuedWriteOperation operation,
-            List<Map.Entry<String, String>> entries,
-            int rowCount
-    ) {
+            QueuedWriteOperation operation, List<Map.Entry<String, String>> entries, int rowCount) {
         return dialect.upsertMultiRowSql(operation, entries, rowCount);
     }
 
     private void bindUpsert(
             PreparedStatement statement,
             QueuedWriteOperation operation,
-            List<Map.Entry<String, String>> entries
-    ) throws SQLException {
+            List<Map.Entry<String, String>> entries)
+            throws SQLException {
         JdbcWriteBehindSupport.bindUpsert(statement, operation, entityRegistry, entries);
     }
 
@@ -419,7 +539,8 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         return JdbcWriteBehindSupport.columnValue(operation, columnName);
     }
 
-    static List<String> orderedColumnValues(QueuedWriteOperation operation, List<Map.Entry<String, String>> entries) {
+    static List<String> orderedColumnValues(
+            QueuedWriteOperation operation, List<Map.Entry<String, String>> entries) {
         return JdbcWriteBehindSupport.orderedColumnValues(operation, entries);
     }
 
@@ -435,8 +556,8 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             Connection connection,
             String stagingTable,
             List<String> columns,
-            List<List<String>> rows
-    ) throws SQLException {
+            List<List<String>> rows)
+            throws SQLException {
         if (rows.isEmpty()) {
             return;
         }
@@ -451,10 +572,16 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             }
             csv.append('\n');
         }
-        String copySql = "COPY " + stagingTable + " (" + String.join(", ", columns)
-                + ") FROM STDIN WITH (FORMAT csv, NULL '\\N')";
+        String copySql =
+                "COPY "
+                        + stagingTable
+                        + " ("
+                        + String.join(", ", columns)
+                        + ") FROM STDIN WITH (FORMAT csv, NULL '\\N')";
         try {
-            copyManager.copyIn(copySql, new ByteArrayInputStream(csv.toString().getBytes(StandardCharsets.UTF_8)));
+            copyManager.copyIn(
+                    copySql,
+                    new ByteArrayInputStream(csv.toString().getBytes(StandardCharsets.UTF_8)));
         } catch (Exception exception) {
             if (exception instanceof SQLException sqlException) {
                 throw sqlException;
@@ -468,11 +595,12 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             builder.append("\\N");
             return;
         }
-        boolean quote = value.contains(",")
-                || value.contains("\"")
-                || value.contains("\n")
-                || value.contains("\r")
-                || "\\N".equals(value);
+        boolean quote =
+                value.contains(",")
+                        || value.contains("\"")
+                        || value.contains("\n")
+                        || value.contains("\r")
+                        || "\\N".equals(value);
         if (!quote) {
             builder.append(value);
             return;
@@ -514,14 +642,16 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         if (compacted.isEmpty()) {
             return operations;
         }
-        ArrayList<QueuedWriteOperation> normalized = new ArrayList<>(passthrough.size() + compacted.size());
+        ArrayList<QueuedWriteOperation> normalized =
+                new ArrayList<>(passthrough.size() + compacted.size());
         normalized.addAll(passthrough);
         normalized.addAll(compacted.values());
         return normalized;
     }
 
     private int effectiveMaxBatchSize(FlushExecutionPolicy flushPolicy, int availableSize) {
-        int configured = flushPolicy.maxBatchSize() > 0 ? flushPolicy.maxBatchSize() : availableSize;
+        int configured =
+                flushPolicy.maxBatchSize() > 0 ? flushPolicy.maxBatchSize() : availableSize;
         return Math.max(1, configured);
     }
 
@@ -533,15 +663,15 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                 config.postgresMultiRowFlushEnabled(),
                 config.maxFlushBatchSize(),
                 config.postgresMultiRowStatementRowLimit(),
-                config.postgresCopyThreshold()
-        );
+                config.postgresCopyThreshold());
     }
 
     private FlushExecutionPolicy resolveFlushExecutionPolicy(QueuedWriteOperation operation) {
-        EntityFlushPolicy matchedPolicy = config.entityFlushPolicies().stream()
-                .filter(policy -> policy.matches(operation))
-                .max(Comparator.comparingInt(EntityFlushPolicy::specificity))
-                .orElse(null);
+        EntityFlushPolicy matchedPolicy =
+                config.entityFlushPolicies().stream()
+                        .filter(policy -> policy.matches(operation))
+                        .max(Comparator.comparingInt(EntityFlushPolicy::specificity))
+                        .orElse(null);
         if (matchedPolicy == null) {
             return defaultFlushExecutionPolicy();
         }
@@ -550,10 +680,15 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                 matchedPolicy.effectivePersistenceSemantics(),
                 matchedPolicy.preferCopy(),
                 matchedPolicy.preferMultiRow(),
-                matchedPolicy.maxBatchSize() > 0 ? matchedPolicy.maxBatchSize() : config.maxFlushBatchSize(),
-                matchedPolicy.statementRowLimit() > 0 ? matchedPolicy.statementRowLimit() : config.postgresMultiRowStatementRowLimit(),
-                matchedPolicy.copyThreshold() > 0 ? matchedPolicy.copyThreshold() : config.postgresCopyThreshold()
-        );
+                matchedPolicy.maxBatchSize() > 0
+                        ? matchedPolicy.maxBatchSize()
+                        : config.maxFlushBatchSize(),
+                matchedPolicy.statementRowLimit() > 0
+                        ? matchedPolicy.statementRowLimit()
+                        : config.postgresMultiRowStatementRowLimit(),
+                matchedPolicy.copyThreshold() > 0
+                        ? matchedPolicy.copyThreshold()
+                        : config.postgresCopyThreshold());
     }
 
     @Override
@@ -588,8 +723,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             String idColumn,
             String versionColumn,
             List<String> columns,
-            boolean delete
-    ) {
+            boolean delete) {
         private static StatementKey of(QueuedWriteOperation operation) {
             return new StatementKey(
                     operation.type(),
@@ -598,16 +732,13 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
                     operation.idColumn(),
                     operation.versionColumn(),
                     List.copyOf(operation.columns().keySet()),
-                    operation.type() == OperationType.DELETE
-            );
+                    operation.type() == OperationType.DELETE);
         }
     }
 
-    private record ExecutionKey(
-            StatementKey statementKey,
-            FlushExecutionPolicy flushPolicy
-    ) {
-        private static ExecutionKey of(QueuedWriteOperation operation, FlushExecutionPolicy flushPolicy) {
+    private record ExecutionKey(StatementKey statementKey, FlushExecutionPolicy flushPolicy) {
+        private static ExecutionKey of(
+                QueuedWriteOperation operation, FlushExecutionPolicy flushPolicy) {
             return new ExecutionKey(StatementKey.of(operation), flushPolicy);
         }
     }
@@ -619,9 +750,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             boolean preferMultiRow,
             int maxBatchSize,
             int statementRowLimit,
-            int copyThreshold
-    ) {
-    }
+            int copyThreshold) {}
 
     private record EntityOperationKey(String tableName, String id) {
         private static EntityOperationKey of(QueuedWriteOperation operation) {

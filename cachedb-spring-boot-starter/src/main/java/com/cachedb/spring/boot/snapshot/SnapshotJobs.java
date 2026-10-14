@@ -1,6 +1,8 @@
 package com.reactor.cachedb.spring.boot.snapshot;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,34 +29,43 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
     private static final String RELEASE =
             "if redis.call('GET',KEYS[1]) == ARGV[1] then return redis.call('DEL',KEYS[1]) end"
                     + " return 0";
-    private static final String STAGE =
-            """
-            if redis.call('GET',KEYS[1]) ~= ARGV[1] then return 0 end
-            for i=3,#ARGV,2 do redis.call('HSET',KEYS[2],ARGV[i],ARGV[i+1]) end
-            redis.call('PEXPIRE',KEYS[2],ARGV[2])
-            return (#ARGV-2)/2
-            """;
     private static final String COMMIT =
             """
-            if redis.call('GET',KEYS[1]) ~= ARGV[1] then return {0,''} end
-            if redis.call('HLEN',KEYS[2]) ~= tonumber(ARGV[5]) then return {0,''} end
-            local previous=redis.call('GET',KEYS[3]) or ''
-            redis.call('SET',KEYS[3],ARGV[2],'PX',ARGV[3])
-            redis.call('PEXPIRE',KEYS[2],ARGV[3])
-            redis.call('SET',KEYS[4],ARGV[4])
-            return {1,previous}
-            """;
+if redis.call('GET',KEYS[1]) ~= ARGV[1] then return {0,''} end
+if redis.call('HLEN',KEYS[2]) ~= tonumber(ARGV[5]) then return {0,''} end
+if ARGV[6] == '1' and redis.call('HLEN',KEYS[5]) ~= tonumber(ARGV[5]) then return {0,''} end
+local previous=redis.call('GET',KEYS[3]) or ''
+redis.call('SET',KEYS[3],ARGV[2],'PX',ARGV[3])
+redis.call('PEXPIRE',KEYS[2],ARGV[3])
+redis.call('SET',KEYS[4],ARGV[4])
+return {1,previous}
+""";
     private static final String CLEAN =
             """
             local active=redis.call('GET',KEYS[1]) or ''
             if string.sub(active,1,string.len(ARGV[1])+1) ~= ARGV[1]..':' then
+              for i=3,#KEYS do redis.call('UNLINK',KEYS[i]) end
               return redis.call('UNLINK',KEYS[2])
             end
             return 0
             """;
+    private static final String CLEAN_CONTENT =
+            """
+local active=redis.call('GET',KEYS[1]) or ''
+local gen=string.match(active,'^([^:]+):') or ''
+if gen == ARGV[2] then return 0 end
+local staging=redis.call('GET',KEYS[2]) or ''
+for i=3,#ARGV do
+  if redis.call('SISMEMBER',ARGV[1]..':digests:'..gen,ARGV[i]) == 0
+     and (staging == ARGV[2] or redis.call('SISMEMBER',ARGV[1]..':digests:'..staging,ARGV[i]) == 0) then
+    redis.call('UNLINK',ARGV[1]..':content:'..ARGV[i])
+  end
+end
+return 1
+""";
     private final DataSource dataSource;
-    private final JedisPooled redis;
-    private final JedisPooled readRedis;
+    private final RedisClientOperations redis;
+    private final RedisClientOperations readRedis;
     private final ObjectMapper mapper;
     private final Clock clock;
     private final Map<String, Job> jobs = new LinkedHashMap<>();
@@ -72,6 +83,17 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
             String namespace,
             List<SnapshotPlan<?, ?>> plans,
             Map<String, SnapshotSettings> settings) {
+        this(source, JedisPooledOperations.of(redis), mapper, clock, namespace, plans, settings);
+    }
+
+    public SnapshotJobs(
+            DataSource source,
+            RedisClientOperations redis,
+            ObjectMapper mapper,
+            Clock clock,
+            String namespace,
+            List<SnapshotPlan<?, ?>> plans,
+            Map<String, SnapshotSettings> settings) {
         this(source, redis, redis, mapper, clock, namespace, plans, settings);
     }
 
@@ -84,13 +106,35 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
             String namespace,
             List<SnapshotPlan<?, ?>> plans,
             Map<String, SnapshotSettings> settings) {
+        this(
+                source,
+                JedisPooledOperations.of(redis),
+                JedisPooledOperations.of(readRedis),
+                mapper,
+                clock,
+                namespace,
+                plans,
+                settings);
+    }
+
+    public SnapshotJobs(
+            DataSource source,
+            RedisClientOperations redis,
+            RedisClientOperations readRedis,
+            ObjectMapper mapper,
+            Clock clock,
+            String namespace,
+            List<SnapshotPlan<?, ?>> plans,
+            Map<String, SnapshotSettings> settings) {
         this.dataSource = Objects.requireNonNull(source);
         this.redis = Objects.requireNonNull(redis);
         this.readRedis = Objects.requireNonNull(readRedis);
         this.mapper = Objects.requireNonNull(mapper);
         this.clock = Objects.requireNonNull(clock);
-        if (namespace == null || !namespace.matches("[A-Za-z0-9:_-]{1,100}"))
+        if (namespace == null || !namespace.matches("[A-Za-z0-9:_{}-]{1,210}"))
             throw new IllegalArgumentException("Invalid snapshot namespace");
+        if (namespace.contains("{"))
+            com.reactor.cachedb.redis.ClusterHashTagKeyStrategy.validateTagged(namespace);
         for (var plan : plans) {
             Job job =
                     new Job(
@@ -115,7 +159,13 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
     }
 
     public SnapshotRepository repository(String name) {
-        return new RedisSnapshotRepository(readRedis, job(name).prefix);
+        Job job = job(name);
+        return new RedisSnapshotRepository(
+                readRedis,
+                job.prefix,
+                job.plan.indexSpec() != null,
+                ids -> refreshRoots(name, ids),
+                job.settings.batchTargetSize().toBytes());
     }
 
     public SnapshotSettings settings(String name) {
@@ -123,6 +173,25 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
     }
 
     public SnapshotRefreshResult refresh(String name, boolean manual) {
+        return refresh(name, manual, List.of());
+    }
+
+    @Override
+    public SnapshotRefreshResult refreshRoots(String name, Collection<String> rootIds) {
+        Job job = job(name);
+        if (job.plan.rootScope() == null)
+            throw new IllegalStateException("Partial refresh requires an explicit root scope");
+        job.plan.rootScope().validate(job.plan);
+        List<String> ids = List.copyOf(new LinkedHashSet<>(Objects.requireNonNull(rootIds)));
+        if (ids.isEmpty() || ids.size() > job.settings.batchRows())
+            throw new IllegalArgumentException("Partial refresh root count must be 1..batchRows");
+        for (String id : ids)
+            if (id.isBlank() || id.length() > 512 || id.indexOf('\n') >= 0)
+                throw new IllegalArgumentException("Invalid partial refresh root id");
+        return refresh(name, true, ids);
+    }
+
+    private SnapshotRefreshResult refresh(String name, boolean manual, List<String> rootIds) {
         Job job = job(name);
         synchronized (job) {
             if (closed) throw new IllegalStateException("Snapshot jobs are closed");
@@ -139,15 +208,19 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
             acquired =
                     "OK"
                             .equals(
-                                    redis.set(
-                                            lock,
-                                            owner,
-                                            SetParams.setParams()
-                                                    .nx()
-                                                    .px(job.settings.leaseDuration().toMillis())));
+                                    redis.commands()
+                                            .set(
+                                                    lock,
+                                                    owner,
+                                                    SetParams.setParams()
+                                                            .nx()
+                                                            .px(
+                                                                    job.settings
+                                                                            .leaseDuration()
+                                                                            .toMillis())));
             if (!acquired) return SnapshotRefreshResult.skipped("BUSY");
             if (!manual && !due(job)) return SnapshotRefreshResult.skipped("NOT_DUE");
-            return execute(job, lock, owner, generation, started);
+            return execute(job, lock, owner, generation, started, rootIds);
         } catch (RuntimeException failure) {
             LOG.error("Snapshot refresh failed: job={}", name, failure);
             throw failure;
@@ -169,7 +242,12 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
     }
 
     private SnapshotRefreshResult execute(
-            Job job, String lock, String owner, String generation, long started) {
+            Job job,
+            String lock,
+            String owner,
+            String generation,
+            long started,
+            List<String> rootIds) {
         AtomicBoolean lost = new AtomicBoolean();
         Thread worker = Thread.currentThread();
         Object guard = new Object();
@@ -219,6 +297,11 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
                 };
         long sourceAt = clock.millis();
         try (var spool = new SnapshotSpool(job.settings.directory())) {
+            String expectedActive =
+                    rootIds.isEmpty() ? null : redis.commands().get(job.prefix + ":active");
+            if (!rootIds.isEmpty() && expectedActive == null)
+                throw new IllegalStateException(
+                        "First complete snapshot is required before partial refresh");
             Runnable prepareCheck =
                     () -> {
                         check.run();
@@ -226,7 +309,32 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
                                 >= job.settings.preparationTimeout().toNanos())
                             throw new IllegalStateException("Snapshot preparation timed out");
                     };
-            prepare(job, spool, prepareCheck);
+            prepareTyped(job.plan, job.settings, spool, prepareCheck, rootIds);
+            if (!rootIds.isEmpty()) {
+                if (spool.bytes() > job.settings.batchTargetSize().toBytes())
+                    throw new IllegalStateException(
+                            "Partial refresh exceeds atomic batch byte budget");
+                var delta =
+                        SnapshotDelta.batch(
+                                job.prefix,
+                                lock,
+                                owner,
+                                expectedActive,
+                                sourceAt,
+                                job.plan.contentReuse(),
+                                rootIds,
+                                spool,
+                                check);
+                check.run();
+                Object applied = redis.eval(SnapshotDelta.APPLY, delta.keys(), delta.arguments());
+                if (!Long.valueOf(rootIds.size()).equals(applied))
+                    throw new IllegalStateException("Partial refresh ownership or generation lost");
+                return new SnapshotRefreshResult(
+                        "COMPLETED",
+                        rootIds.size(),
+                        spool.entries().size(),
+                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
+            }
             int submitted = publish(job, spool, lock, owner, generation, check);
             check.run();
             var reply =
@@ -237,13 +345,15 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
                                             lock,
                                             job.prefix + ":data:" + generation,
                                             job.prefix + ":active",
-                                            job.prefix + ":completed-at"),
+                                            job.prefix + ":completed-at",
+                                            job.prefix + ":meta:" + generation),
                                     List.of(
                                             owner,
                                             generation + ":" + sourceAt,
                                             Long.toString(job.settings.retention().toMillis()),
                                             Long.toString(clock.millis()),
-                                            Integer.toString(spool.entries().size())));
+                                            Integer.toString(spool.entries().size()),
+                                            job.plan.indexSpec() == null ? "0" : "1"));
             if (!Long.valueOf(1).equals(reply.get(0)))
                 throw new IllegalStateException("Snapshot publication ownership lost");
             String previous = (String) reply.get(1);
@@ -269,14 +379,18 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
     }
 
     private <R, V> void prepareTyped(
-            SnapshotPlan<R, V> plan, SnapshotSettings settings, SnapshotSpool spool, Runnable check)
+            SnapshotPlan<R, V> plan,
+            SnapshotSettings settings,
+            SnapshotSpool spool,
+            Runnable check,
+            List<String> rootIds)
             throws IOException {
-        SnapshotRows rows = SnapshotJdbcReader.read(dataSource, plan, settings, check);
+        SnapshotRows rows = SnapshotJdbcReader.read(dataSource, plan, settings, check, rootIds);
         spool.prepare(plan, rows, mapper, check);
     }
 
     private void prepare(Job job, SnapshotSpool spool, Runnable check) throws IOException {
-        prepareTyped(job.plan, job.settings, spool, check);
+        prepareTyped(job.plan, job.settings, spool, check, List.of());
     }
 
     private int publish(
@@ -308,24 +422,18 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
                     warningCount);
         while (submitted < spool.entries().size()) {
             check.run();
-            List<String> args = new ArrayList<>();
-            args.add(owner);
-            args.add(Long.toString(job.settings.retention().toMillis()));
             int count = 0;
             long bytes = 0;
             while (submitted + count < spool.entries().size() && count < job.settings.batchRows()) {
                 var entry = spool.entries().get(submitted + count);
                 if (count > 0 && entry.bytes() > job.settings.batchTargetSize().toBytes() - bytes)
                     break;
-                args.add(entry.id());
-                args.add(spool.read(entry, check));
                 bytes += entry.bytes();
                 count++;
                 if (bytes >= job.settings.batchTargetSize().toBytes()) break;
             }
             check.run();
-            Object accepted =
-                    redis.eval(STAGE, List.of(lock, job.prefix + ":data:" + generation), args);
+            Object accepted = stage(job, spool, lock, owner, generation, submitted, count, check);
             if (!Long.valueOf(count).equals(accepted))
                 throw new IllegalStateException("Snapshot stage ownership lost");
             submitted += count;
@@ -334,17 +442,93 @@ public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, A
     }
 
     private boolean due(Job job) {
-        String completed = redis.get(job.prefix + ":completed-at");
+        String completed = redis.commands().get(job.prefix + ":completed-at");
         if (completed == null) return true;
         long age = clock.millis() - Long.parseLong(completed);
         return age < 0 || age >= job.settings.interval().toMillis();
     }
 
+    private Object stage(
+            Job job,
+            SnapshotSpool spool,
+            String lock,
+            String owner,
+            String generation,
+            int start,
+            int count,
+            Runnable check) {
+        var batch =
+                SnapshotPublication.batch(
+                        job.prefix,
+                        generation,
+                        lock,
+                        owner,
+                        Math.addExact(
+                                job.settings.retention().toMillis(),
+                                job.settings.timeout().toMillis()),
+                        job.plan.contentReuse(),
+                        spool.entries().subList(start, start + count),
+                        entry -> {
+                            try {
+                                return spool.read(entry, check);
+                            } catch (IOException failure) {
+                                throw new UncheckedIOException(failure);
+                            }
+                        });
+        return redis.eval(SnapshotPublication.STAGE, batch.keys(), batch.arguments());
+    }
+
     private void clean(Job job, String generation) {
         try {
+            String indexCursor = "0";
+            do {
+                var indexes =
+                        redis.commands()
+                                .sscan(
+                                        job.prefix + ":keys:" + generation,
+                                        indexCursor,
+                                        new redis.clients.jedis.params.ScanParams().count(200));
+                indexCursor = indexes.getCursor();
+                if (!indexes.getResult().isEmpty()) {
+                    var keys = new ArrayList<String>();
+                    keys.add(job.prefix + ":active");
+                    keys.addAll(indexes.getResult());
+                    redis.eval(
+                            "local active=redis.call('GET',KEYS[1]) or ''; if"
+                                + " string.sub(active,1,string.len(ARGV[1])+1) == ARGV[1]..':' then"
+                                + " return 0 end; for i=2,#KEYS do redis.call('UNLINK',KEYS[i])"
+                                + " end; return 1",
+                            keys,
+                            List.of(generation));
+                }
+            } while (!indexCursor.equals("0"));
+            if ("content".equals(redis.commands().get(job.prefix + ":format:" + generation))) {
+                String cursor = "0";
+                do {
+                    var result =
+                            redis.commands()
+                                    .sscan(
+                                            job.prefix + ":digests:" + generation,
+                                            cursor,
+                                            new redis.clients.jedis.params.ScanParams().count(200));
+                    cursor = result.getCursor();
+                    List<String> args = new ArrayList<>(List.of(job.prefix, generation));
+                    args.addAll(result.getResult());
+                    redis.eval(
+                            CLEAN_CONTENT,
+                            List.of(job.prefix + ":active", job.prefix + ":staging"),
+                            args);
+                } while (!cursor.equals("0"));
+            }
             redis.eval(
                     CLEAN,
-                    List.of(job.prefix + ":active", job.prefix + ":data:" + generation),
+                    List.of(
+                            job.prefix + ":active", job.prefix + ":data:" + generation,
+                            job.prefix + ":keys:" + generation, job.prefix + ":meta:" + generation,
+                            job.prefix + ":format:" + generation,
+                                    job.prefix + ":times:" + generation,
+                            job.prefix + ":revision:" + generation,
+                                    job.prefix + ":digests:" + generation),
                     List.of(generation));
         } catch (RuntimeException failure) {
             LOG.warn("Snapshot cleanup deferred to TTL: job={}", job.plan.name());

@@ -9,15 +9,13 @@ import com.reactor.cachedb.core.route.RouteCacheStrictMode;
 
 public final class ReadShapeGuardrails {
 
-    private ReadShapeGuardrails() {
-    }
+    private ReadShapeGuardrails() {}
 
     public static void validatePageRequest(
             String surfaceName,
             PageWindow pageWindow,
             CachePolicy cachePolicy,
-            ReadShapeGuardrailConfig config
-    ) {
+            ReadShapeGuardrailConfig config) {
         if (!enabled(config) || !config.rejectPageRequestOverLimit() || pageWindow == null) {
             return;
         }
@@ -28,8 +26,8 @@ public final class ReadShapeGuardrails {
                     surfaceName,
                     pageWindow.pageSize(),
                     limit.rows(),
-                    "Use a smaller page, a bounded projection window, or a ProjectionRepository read-model for large lists."
-            );
+                    "Use a smaller page, a bounded projection window, or a ProjectionRepository"
+                            + " read-model for large lists.");
         }
     }
 
@@ -37,8 +35,7 @@ public final class ReadShapeGuardrails {
             String surfaceName,
             int loadedRowCount,
             CachePolicy cachePolicy,
-            ReadShapeGuardrailConfig config
-    ) {
+            ReadShapeGuardrailConfig config) {
         if (!enabled(config) || !config.rejectLoadedPageOverLimit()) {
             return;
         }
@@ -49,16 +46,14 @@ public final class ReadShapeGuardrails {
                     surfaceName,
                     loadedRowCount,
                     limit.rows(),
-                    "The page loader returned more rows than the Redis hot window can safely keep. Use a projection/read-model window."
-            );
+                    "The page loader returned more rows than the Redis hot window can safely keep."
+                            + " Use a projection/read-model window.");
         }
     }
 
     public static boolean shouldCacheLoadedPage(
-            int loadedRowCount,
-            CachePolicy cachePolicy,
-            ReadShapeGuardrailConfig config
-    ) {
+            int loadedRowCount, CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
+        if (cachePolicy != null && !cachePolicy.admissionEnabled()) return false;
         if (!enabled(config) || !config.skipLoadedPageCacheOverLimit()) {
             return true;
         }
@@ -70,8 +65,7 @@ public final class ReadShapeGuardrails {
             String surfaceName,
             QuerySpec querySpec,
             CachePolicy cachePolicy,
-            ReadShapeGuardrailConfig config
-    ) {
+            ReadShapeGuardrailConfig config) {
         if (!enabled(config) || !config.rejectEntityQueryOverLimit() || querySpec == null) {
             return;
         }
@@ -83,16 +77,13 @@ public final class ReadShapeGuardrails {
                     surfaceName,
                     requestedRows,
                     limit.rows(),
-                    "Large full-entity lists must use summary projections/read-models instead of broad entity hydration."
-            );
+                    "Large full-entity lists must use summary projections/read-models instead of"
+                            + " broad entity hydration.");
         }
     }
 
     public static void validateProjectionQuery(
-            String surfaceName,
-            QuerySpec querySpec,
-            ReadShapeGuardrailConfig config
-    ) {
+            String surfaceName, QuerySpec querySpec, ReadShapeGuardrailConfig config) {
         if (!enabled(config) || !config.rejectProjectionQueryOverLimit() || querySpec == null) {
             return;
         }
@@ -104,19 +95,21 @@ public final class ReadShapeGuardrails {
                     surfaceName,
                     requestedRows,
                     limit.rows(),
-                    "Use an explicit bounded projection window or split the result into smaller windows."
-            );
+                    "Use an explicit bounded projection window or split the result into smaller"
+                            + " windows.");
         }
     }
 
-    public static void validateRouteContract(RouteCacheContract contract, String resolvedRouteLabel) {
+    public static void validateRouteContract(
+            RouteCacheContract contract, String resolvedRouteLabel) {
         if (contract == null) {
             return;
         }
         contract.validateResolvedRoute(resolvedRouteLabel);
     }
 
-    public static void validateRouteReadSize(RouteCacheContract contract, String shape, int requestedRows) {
+    public static void validateRouteReadSize(
+            RouteCacheContract contract, String shape, int requestedRows) {
         if (contract == null
                 || contract.strictMode() != RouteCacheStrictMode.FAIL_FAST
                 || requestedRows <= 0
@@ -124,14 +117,19 @@ public final class ReadShapeGuardrails {
             return;
         }
         throw new IllegalArgumentException(
-                safeSurface(shape) + " for route " + safeSurface(contract.routeName())
-                        + " requested " + requestedRows
-                        + " rows but maxColdReadSize is " + contract.maxColdReadSize()
-                        + ". Use a projection/read-model route, lower the page size, or widen the explicit route contract."
-        );
+                safeSurface(shape)
+                        + " for route "
+                        + safeSurface(contract.routeName())
+                        + " requested "
+                        + requestedRows
+                        + " rows but maxColdReadSize is "
+                        + contract.maxColdReadSize()
+                        + ". Use a projection/read-model route, lower the page size, or widen the"
+                        + " explicit route contract.");
     }
 
-    public static int effectivePageRequestLimit(CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
+    public static int effectivePageRequestLimit(
+            CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
         if (!enabled(config)) {
             return 0;
         }
@@ -139,7 +137,8 @@ public final class ReadShapeGuardrails {
         return limit.active() ? limit.rows() : 0;
     }
 
-    public static int effectiveLoadedPageLimit(CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
+    public static int effectiveLoadedPageLimit(
+            CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
         if (!enabled(config)) {
             return 0;
         }
@@ -147,7 +146,8 @@ public final class ReadShapeGuardrails {
         return limit.active() ? limit.rows() : 0;
     }
 
-    public static int effectiveEntityQueryLimit(CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
+    public static int effectiveEntityQueryLimit(
+            CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
         if (!enabled(config)) {
             return 0;
         }
@@ -160,7 +160,8 @@ public final class ReadShapeGuardrails {
     }
 
     private static int logicalQueryLimit(QuerySpec querySpec) {
-        RouteCacheContract contract = com.reactor.cachedb.core.route.RouteCacheContext.currentContract();
+        RouteCacheContract contract =
+                com.reactor.cachedb.core.route.RouteCacheContext.currentContract();
         if (contract != null && querySpec.limit() == contract.pageSize() + 1) {
             return contract.pageSize();
         }
@@ -171,7 +172,8 @@ public final class ReadShapeGuardrails {
         return cachePolicy == null ? 0 : Math.max(0, cachePolicy.pageSize());
     }
 
-    private static Limit pageRequestLimit(CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
+    private static Limit pageRequestLimit(
+            CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
         Limit limit = Limit.unbounded();
         limit = capIfPositive(limit, config.maxPageRequestSize());
         limit = capIfPositive(limit, configuredPageSize(cachePolicy));
@@ -182,7 +184,8 @@ public final class ReadShapeGuardrails {
         return capIfPositive(pageRequestLimit(cachePolicy, config), config.maxLoadedPageSize());
     }
 
-    private static Limit entityQueryLimit(CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
+    private static Limit entityQueryLimit(
+            CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
         Limit limit = Limit.unbounded();
         limit = capIfPositive(limit, config.maxEntityQueryLimit());
         limit = capIfPositive(limit, configuredPageSize(cachePolicy));
@@ -197,8 +200,9 @@ public final class ReadShapeGuardrails {
         return candidate > 0 ? limit.cap(candidate) : limit;
     }
 
-    private static Limit capWithHotWindow(Limit limit, CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
-        if (cachePolicy == null || cachePolicy.hotEntityLimit() <= 0) {
+    private static Limit capWithHotWindow(
+            Limit limit, CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
+        if (cachePolicy == null || cachePolicy.hotEntityLimit() == CachePolicy.UNBOUNDED) {
             return limit;
         }
         int headroom = Math.max(0, config.hotSetHeadroom());
@@ -219,16 +223,17 @@ public final class ReadShapeGuardrails {
     }
 
     private static IllegalArgumentException oversized(
-            String shape,
-            String surfaceName,
-            int requested,
-            int limit,
-            String action
-    ) {
+            String shape, String surfaceName, int requested, int limit, String action) {
         return new IllegalArgumentException(
-                shape + " for " + safeSurface(surfaceName) + " requested " + requested
-                        + " rows but the configured safe limit is " + limit + ". " + action
-        );
+                shape
+                        + " for "
+                        + safeSurface(surfaceName)
+                        + " requested "
+                        + requested
+                        + " rows but the configured safe limit is "
+                        + limit
+                        + ". "
+                        + action);
     }
 
     private static String safeSurface(String surfaceName) {

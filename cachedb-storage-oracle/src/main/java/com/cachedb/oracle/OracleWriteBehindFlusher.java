@@ -11,7 +11,6 @@ import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
 import com.reactor.cachedb.jdbc.VersionGuardedWriteSupport;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -19,6 +18,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import javax.sql.DataSource;
 
 public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher {
     private static final int ORA_UNIQUE_CONSTRAINT = 1;
@@ -32,14 +33,16 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
     private final int transactionBatchSize;
 
     public OracleWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry) {
-        this(dataSource, entityRegistry, WriteBehindConfig.defaults(), null, OracleWriteBehindOptions.defaults());
+        this(
+                dataSource,
+                entityRegistry,
+                WriteBehindConfig.defaults(),
+                null,
+                OracleWriteBehindOptions.defaults());
     }
 
     public OracleWriteBehindFlusher(
-            DataSource dataSource,
-            EntityRegistry entityRegistry,
-            WriteBehindConfig config
-    ) {
+            DataSource dataSource, EntityRegistry entityRegistry, WriteBehindConfig config) {
         this(dataSource, entityRegistry, config, null, OracleWriteBehindOptions.defaults());
     }
 
@@ -47,8 +50,7 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
             DataSource dataSource,
             EntityRegistry entityRegistry,
             WriteBehindConfig config,
-            OracleWriteBehindOptions options
-    ) {
+            OracleWriteBehindOptions options) {
         this(dataSource, entityRegistry, config, null, options);
     }
 
@@ -57,8 +59,7 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
             EntityRegistry entityRegistry,
             WriteBehindConfig config,
             StoragePerformanceCollector performanceCollector,
-            OracleWriteBehindOptions options
-    ) {
+            OracleWriteBehindOptions options) {
         this.dataSource = java.util.Objects.requireNonNull(dataSource, "dataSource");
         this.entityRegistry = java.util.Objects.requireNonNull(entityRegistry, "entityRegistry");
         this.performanceCollector = performanceCollector;
@@ -68,13 +69,19 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
     }
 
     public static WriteBehindFlusherFactory factory(OracleWriteBehindOptions options) {
-        OracleWriteBehindOptions resolved = options == null ? OracleWriteBehindOptions.defaults() : options;
+        OracleWriteBehindOptions resolved =
+                options == null ? OracleWriteBehindOptions.defaults() : options;
         return (dataSource, entityRegistry, config, collector) ->
-                new OracleWriteBehindFlusher(dataSource, entityRegistry, config, collector, resolved);
+                new OracleWriteBehindFlusher(
+                        dataSource, entityRegistry, config, collector, resolved);
     }
 
     @Override
     public void flush(QueuedWriteOperation operation) throws SQLException {
+        if (operation.atomicBatch()) {
+            flushAtomicBatch(operation.batchOperations());
+            return;
+        }
         long startedAt = System.nanoTime();
         try {
             executeWithDuplicateRecovery(List.of(operation), options.duplicateRaceRetries());
@@ -89,7 +96,8 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
         try {
             for (int start = 0; start < operations.size(); start += transactionBatchSize) {
                 int end = Math.min(operations.size(), start + transactionBatchSize);
-                executeWithDuplicateRecovery(operations.subList(start, end), options.duplicateRaceRetries());
+                executeWithDuplicateRecovery(
+                        operations.subList(start, end), options.duplicateRaceRetries());
             }
         } finally {
             if (!operations.isEmpty()) {
@@ -98,8 +106,8 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
         }
     }
 
-    private void executeWithDuplicateRecovery(List<QueuedWriteOperation> operations, int retriesRemaining)
-            throws SQLException {
+    private void executeWithDuplicateRecovery(
+            List<QueuedWriteOperation> operations, int retriesRemaining) throws SQLException {
         if (operations.isEmpty()) {
             return;
         }
@@ -134,13 +142,35 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
         }
     }
 
-    private void executeInTransaction(Connection connection, List<QueuedWriteOperation> operations) throws SQLException {
+    @Override
+    public void flushAtomicBatch(List<QueuedWriteOperation> operations) throws SQLException {
+        // No per-row duplicate recovery: an atomic group must be retried as one unit.
+        try (Connection connection = dataSource.getConnection()) {
+            executeInTransaction(connection, operations, true);
+        }
+    }
+
+    private void executeInTransaction(Connection connection, List<QueuedWriteOperation> operations)
+            throws SQLException {
+        executeInTransaction(connection, operations, false);
+    }
+
+    private void executeInTransaction(
+            Connection connection, List<QueuedWriteOperation> operations, boolean preserveOrder)
+            throws SQLException {
         boolean previousAutoCommit = connection.getAutoCommit();
         int previousIsolation = connection.getTransactionIsolation();
         Exception primaryFailure = null;
         connection.setAutoCommit(false);
         try {
             connection.setTransactionIsolation(options.transactionIsolation());
+            if (preserveOrder) {
+                for (var operation : operations)
+                    executeGroup(
+                            connection, StatementKey.of(operation, dialect), List.of(operation));
+                connection.commit();
+                return;
+            }
             LinkedHashMap<StatementKey, List<QueuedWriteOperation>> groups = new LinkedHashMap<>();
             for (QueuedWriteOperation operation : operations) {
                 StatementKey key = StatementKey.of(operation, dialect);
@@ -171,10 +201,8 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
     }
 
     private void executeGroup(
-            Connection connection,
-            StatementKey key,
-            List<QueuedWriteOperation> operations
-    ) throws SQLException {
+            Connection connection, StatementKey key, List<QueuedWriteOperation> operations)
+            throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(key.sql())) {
             statement.setQueryTimeout(options.queryTimeoutSeconds());
             for (QueuedWriteOperation operation : operations) {
@@ -193,27 +221,26 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
                     entityRegistry,
                     operations,
                     outcomes,
-                    options.queryTimeoutSeconds()
-            );
+                    options.queryTimeoutSeconds());
         }
     }
 
-    private void bindDelete(PreparedStatement statement, QueuedWriteOperation operation) throws SQLException {
+    private void bindDelete(PreparedStatement statement, QueuedWriteOperation operation)
+            throws SQLException {
         OracleValueBinder.bind(
                 statement,
                 1,
                 operation.id(),
                 columnType(operation, operation.idColumn()),
-                options.emptyStringPolicy()
-        );
+                options.emptyStringPolicy());
         statement.setLong(2, operation.version());
     }
 
     private void bindUpsert(
             PreparedStatement statement,
             QueuedWriteOperation operation,
-            List<Map.Entry<String, String>> entries
-    ) throws SQLException {
+            List<Map.Entry<String, String>> entries)
+            throws SQLException {
         int parameterIndex = 1;
         for (Map.Entry<String, String> entry : entries) {
             OracleValueBinder.bind(
@@ -221,8 +248,7 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
                     parameterIndex++,
                     entry.getValue(),
                     columnType(operation, entry.getKey()),
-                    options.emptyStringPolicy()
-            );
+                    options.emptyStringPolicy());
         }
     }
 
@@ -237,15 +263,12 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
     private Long currentVersion(QueuedWriteOperation operation) throws SQLException {
         try (Connection connection = dataSource.getConnection()) {
             return VersionGuardedWriteSupport.currentVersion(
-                    connection,
-                    entityRegistry,
-                    operation,
-                    options.queryTimeoutSeconds()
-            );
+                    connection, entityRegistry, operation, options.queryTimeoutSeconds());
         }
     }
 
-    private void restoreConnection(Connection connection, int previousIsolation, boolean previousAutoCommit)
+    private void restoreConnection(
+            Connection connection, int previousIsolation, boolean previousAutoCommit)
             throws SQLException {
         SQLException failure = null;
         try {
@@ -287,8 +310,7 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
         String normalized = observationTag == null ? "" : observationTag.trim();
         performanceCollector.recordSqlWrite(
                 normalized.isBlank() ? "oracle:write-behind" : providerTag(normalized),
-                elapsedMicros
-        );
+                elapsedMicros);
     }
 
     private String providerTag(String tag) {
@@ -298,7 +320,8 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
     private String dominantObservationTag(List<QueuedWriteOperation> operations) {
         LinkedHashMap<String, Integer> counts = new LinkedHashMap<>();
         for (QueuedWriteOperation operation : operations) {
-            String tag = operation.observationTag() == null ? "" : operation.observationTag().trim();
+            String tag =
+                    operation.observationTag() == null ? "" : operation.observationTag().trim();
             counts.merge(tag, 1, Integer::sum);
         }
         String dominant = "";
@@ -318,11 +341,13 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
     }
 
     private record StatementKey(OperationType type, String sql) {
-        private static StatementKey of(QueuedWriteOperation operation, OracleDatabaseDialect dialect) {
+        private static StatementKey of(
+                QueuedWriteOperation operation, OracleDatabaseDialect dialect) {
             if (operation.type() == OperationType.DELETE) {
                 return new StatementKey(operation.type(), dialect.deleteSql(operation));
             }
-            List<Map.Entry<String, String>> entries = new ArrayList<>(operation.columns().entrySet());
+            List<Map.Entry<String, String>> entries =
+                    new ArrayList<>(operation.columns().entrySet());
             return new StatementKey(operation.type(), dialect.upsertSql(operation, entries));
         }
     }

@@ -1,5 +1,8 @@
 package com.reactor.cachedb.starter;
 
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
+
 import redis.clients.jedis.JedisPooled;
 
 import java.time.Instant;
@@ -12,10 +15,14 @@ final class RedisMigrationWarmCheckpointStore implements MigrationWarmCheckpoint
 
     private static final long CHECKPOINT_TTL_SECONDS = 86_400L;
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final String keyPrefix;
 
     RedisMigrationWarmCheckpointStore(JedisPooled jedis, String keyPrefix) {
+        this(JedisPooledOperations.of(jedis), keyPrefix);
+    }
+
+    RedisMigrationWarmCheckpointStore(RedisClientOperations jedis, String keyPrefix) {
         this.jedis = Objects.requireNonNull(jedis, "jedis");
         this.keyPrefix = keyPrefix == null || keyPrefix.isBlank() ? "cachedb" : keyPrefix.trim();
     }
@@ -26,19 +33,19 @@ final class RedisMigrationWarmCheckpointStore implements MigrationWarmCheckpoint
         if (normalizedJobId.isBlank()) {
             return Optional.empty();
         }
-        Map<String, String> fields = jedis.hgetAll(key(normalizedJobId));
+        Map<String, String> fields = jedis.commands().hgetAll(key(normalizedJobId));
         if (fields == null || fields.isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(new MigrationWarmRunner.Checkpoint(
-                normalizedJobId,
-                fields.getOrDefault("phase", ""),
-                parseLong(fields.get("childRowsRead")),
-                parseLong(fields.get("childRowsHydrated")),
-                parseLong(fields.get("rootRowsRead")),
-                parseLong(fields.get("rootRowsHydrated")),
-                parseInstant(fields.get("updatedAt"))
-        ));
+        return Optional.of(
+                new MigrationWarmRunner.Checkpoint(
+                        normalizedJobId,
+                        fields.getOrDefault("phase", ""),
+                        parseLong(fields.get("childRowsRead")),
+                        parseLong(fields.get("childRowsHydrated")),
+                        parseLong(fields.get("rootRowsRead")),
+                        parseLong(fields.get("rootRowsHydrated")),
+                        parseInstant(fields.get("updatedAt"))));
     }
 
     @Override
@@ -47,22 +54,24 @@ final class RedisMigrationWarmCheckpointStore implements MigrationWarmCheckpoint
             return;
         }
         String key = key(checkpoint.jobId());
-        jedis.hset(key, Map.of(
-                "phase", checkpoint.phase(),
-                "childRowsRead", String.valueOf(checkpoint.childRowsRead()),
-                "childRowsHydrated", String.valueOf(checkpoint.childRowsHydrated()),
-                "rootRowsRead", String.valueOf(checkpoint.rootRowsRead()),
-                "rootRowsHydrated", String.valueOf(checkpoint.rootRowsHydrated()),
-                "updatedAt", checkpoint.updatedAt().toString()
-        ));
-        jedis.expire(key, CHECKPOINT_TTL_SECONDS);
+        jedis.commands()
+                .hset(
+                        key,
+                        Map.of(
+                                "phase", checkpoint.phase(),
+                                "childRowsRead", String.valueOf(checkpoint.childRowsRead()),
+                                "childRowsHydrated", String.valueOf(checkpoint.childRowsHydrated()),
+                                "rootRowsRead", String.valueOf(checkpoint.rootRowsRead()),
+                                "rootRowsHydrated", String.valueOf(checkpoint.rootRowsHydrated()),
+                                "updatedAt", checkpoint.updatedAt().toString()));
+        jedis.commands().expire(key, CHECKPOINT_TTL_SECONDS);
     }
 
     @Override
     public void clear(String jobId) {
         String normalizedJobId = normalizeJobId(jobId);
         if (!normalizedJobId.isBlank()) {
-            jedis.del(key(normalizedJobId));
+            jedis.commands().del(key(normalizedJobId));
         }
     }
 

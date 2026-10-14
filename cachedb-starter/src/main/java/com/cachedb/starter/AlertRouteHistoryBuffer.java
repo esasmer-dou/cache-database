@@ -1,7 +1,10 @@
 package com.reactor.cachedb.starter;
 
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
 import com.reactor.cachedb.redis.RedisLeaderLease;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.XAddParams;
 import redis.clients.jedis.resps.StreamEntry;
@@ -19,7 +22,7 @@ import java.util.function.Supplier;
 final class AlertRouteHistoryBuffer implements AutoCloseable {
 
     private final Supplier<CacheDatabaseAdmin> adminSupplier;
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final boolean enabled;
     private final long sampleIntervalMillis;
     private final int maxSamples;
@@ -29,8 +32,24 @@ final class AlertRouteHistoryBuffer implements AutoCloseable {
     private final String threadName;
     private ScheduledExecutorService executor;
 
-    AlertRouteHistoryBuffer(Supplier<CacheDatabaseAdmin> adminSupplier, JedisPooled jedis, AdminMonitoringConfig config) {
-        this(adminSupplier, jedis, config, RedisLeaderLease.disabled(), "cachedb-alert-route-history", true);
+    AlertRouteHistoryBuffer(
+            Supplier<CacheDatabaseAdmin> adminSupplier,
+            JedisPooled jedis,
+            AdminMonitoringConfig config) {
+        this(adminSupplier, JedisPooledOperations.of(jedis), config);
+    }
+
+    AlertRouteHistoryBuffer(
+            Supplier<CacheDatabaseAdmin> adminSupplier,
+            RedisClientOperations jedis,
+            AdminMonitoringConfig config) {
+        this(
+                adminSupplier,
+                jedis,
+                config,
+                RedisLeaderLease.disabled(),
+                "cachedb-alert-route-history",
+                true);
     }
 
     AlertRouteHistoryBuffer(
@@ -38,8 +57,16 @@ final class AlertRouteHistoryBuffer implements AutoCloseable {
             JedisPooled jedis,
             AdminMonitoringConfig config,
             RedisLeaderLease leaderLease,
-            String threadName
-    ) {
+            String threadName) {
+        this(adminSupplier, JedisPooledOperations.of(jedis), config, leaderLease, threadName);
+    }
+
+    AlertRouteHistoryBuffer(
+            Supplier<CacheDatabaseAdmin> adminSupplier,
+            RedisClientOperations jedis,
+            AdminMonitoringConfig config,
+            RedisLeaderLease leaderLease,
+            String threadName) {
         this(adminSupplier, jedis, config, leaderLease, threadName, true);
     }
 
@@ -49,50 +76,78 @@ final class AlertRouteHistoryBuffer implements AutoCloseable {
             AdminMonitoringConfig config,
             RedisLeaderLease leaderLease,
             String threadName,
-            boolean enabled
-    ) {
+            boolean enabled) {
+        this(
+                adminSupplier,
+                JedisPooledOperations.of(jedis),
+                config,
+                leaderLease,
+                threadName,
+                enabled);
+    }
+
+    private AlertRouteHistoryBuffer(
+            Supplier<CacheDatabaseAdmin> adminSupplier,
+            RedisClientOperations jedis,
+            AdminMonitoringConfig config,
+            RedisLeaderLease leaderLease,
+            String threadName,
+            boolean enabled) {
         this.adminSupplier = adminSupplier;
         this.jedis = jedis;
         this.enabled = enabled;
-        this.sampleIntervalMillis = Math.max(config.historyMinSampleIntervalMillis(), config.historySampleIntervalMillis());
-        this.maxSamples = Math.max(
-                config.alertRouteHistoryMinSamples(),
-                config.historyMaxSamples() * Math.max(1, config.alertRouteHistorySampleMultiplier())
-        );
+        this.sampleIntervalMillis =
+                Math.max(
+                        config.historyMinSampleIntervalMillis(),
+                        config.historySampleIntervalMillis());
+        this.maxSamples =
+                Math.max(
+                        config.alertRouteHistoryMinSamples(),
+                        config.historyMaxSamples()
+                                * Math.max(1, config.alertRouteHistorySampleMultiplier()));
         this.streamKey = config.alertRouteHistoryStreamKey();
         this.ttlSeconds = config.telemetryTtlSeconds();
         this.leaderLease = leaderLease == null ? RedisLeaderLease.disabled() : leaderLease;
-        this.threadName = threadName == null || threadName.isBlank() ? "cachedb-alert-route-history" : threadName;
+        this.threadName =
+                threadName == null || threadName.isBlank()
+                        ? "cachedb-alert-route-history"
+                        : threadName;
     }
 
     static AlertRouteHistoryBuffer disabled(AdminMonitoringConfig config) {
         return new AlertRouteHistoryBuffer(
                 () -> null,
-                null,
+                (RedisClientOperations) null,
                 config,
                 RedisLeaderLease.disabled(),
                 "cachedb-alert-route-history",
-                false
-        );
+                false);
     }
 
     void start() {
         if (!enabled || executor != null) {
             return;
         }
-        executor = Executors.newSingleThreadScheduledExecutor(new AlertRouteHistoryThreadFactory(threadName));
+        executor =
+                Executors.newSingleThreadScheduledExecutor(
+                        new AlertRouteHistoryThreadFactory(threadName));
         recordNow();
-        executor.scheduleAtFixedRate(this::recordNowSafe, sampleIntervalMillis, sampleIntervalMillis, TimeUnit.MILLISECONDS);
+        executor.scheduleAtFixedRate(
+                this::recordNowSafe,
+                sampleIntervalMillis,
+                sampleIntervalMillis,
+                TimeUnit.MILLISECONDS);
     }
 
     List<AlertRouteHistoryPoint> history(int limit) {
         if (!enabled) {
             return List.of();
         }
-        if (jedis.xlen(streamKey) == 0L) {
+        if (jedis.commands().xlen(streamKey) == 0L) {
             recordNowSafe();
         }
-        List<StreamEntry> entries = jedis.xrevrange(streamKey, "+", "-", Math.max(1, limit));
+        List<StreamEntry> entries =
+                jedis.commands().xrevrange(streamKey, "+", "-", Math.max(1, limit));
         ArrayList<AlertRouteHistoryPoint> snapshot = new ArrayList<>(entries.size());
         for (StreamEntry entry : entries) {
             snapshot.add(toPoint(entry));
@@ -118,16 +173,16 @@ final class AlertRouteHistoryBuffer implements AutoCloseable {
         CacheDatabaseAdmin admin = adminSupplier.get();
         List<AlertRouteSnapshot> routes = admin.alertRoutes();
         for (AlertRouteSnapshot route : routes) {
-            AlertRouteHistoryPoint point = new AlertRouteHistoryPoint(
-                    java.time.Instant.now(),
-                    route.routeName(),
-                    route.status(),
-                    route.escalationLevel(),
-                    route.deliveredCount(),
-                    route.failedCount(),
-                    route.droppedCount(),
-                    route.lastErrorType()
-            );
+            AlertRouteHistoryPoint point =
+                    new AlertRouteHistoryPoint(
+                            java.time.Instant.now(),
+                            route.routeName(),
+                            route.status(),
+                            route.escalationLevel(),
+                            route.deliveredCount(),
+                            route.failedCount(),
+                            route.droppedCount(),
+                            route.lastErrorType());
             LinkedHashMap<String, String> fields = new LinkedHashMap<>();
             fields.put("recordedAt", point.recordedAt().toString());
             fields.put("routeName", point.routeName());
@@ -137,10 +192,10 @@ final class AlertRouteHistoryBuffer implements AutoCloseable {
             fields.put("failedCount", String.valueOf(point.failedCount()));
             fields.put("droppedCount", String.valueOf(point.droppedCount()));
             fields.put("lastErrorType", point.lastErrorType() == null ? "" : point.lastErrorType());
-            jedis.xadd(streamKey, XAddParams.xAddParams(), fields);
+            jedis.commands().xadd(streamKey, XAddParams.xAddParams(), fields);
         }
         if (maxSamples > 0) {
-            jedis.xtrim(streamKey, maxSamples, true);
+            jedis.commands().xtrim(streamKey, maxSamples, true);
         }
         RedisTelemetrySupport.expireIfNeeded(jedis, streamKey, ttlSeconds);
     }
@@ -155,15 +210,16 @@ final class AlertRouteHistoryBuffer implements AutoCloseable {
 
     private AlertRouteHistoryPoint toPoint(StreamEntry entry) {
         return new AlertRouteHistoryPoint(
-                java.time.Instant.parse(entry.getFields().getOrDefault("recordedAt", java.time.Instant.EPOCH.toString())),
+                java.time.Instant.parse(
+                        entry.getFields()
+                                .getOrDefault("recordedAt", java.time.Instant.EPOCH.toString())),
                 entry.getFields().getOrDefault("routeName", ""),
                 entry.getFields().getOrDefault("status", ""),
                 entry.getFields().getOrDefault("escalationLevel", ""),
                 parseLong(entry, "deliveredCount"),
                 parseLong(entry, "failedCount"),
                 parseLong(entry, "droppedCount"),
-                blankToNull(entry.getFields().get("lastErrorType"))
-        );
+                blankToNull(entry.getFields().get("lastErrorType")));
     }
 
     private long parseLong(StreamEntry entry, String field) {

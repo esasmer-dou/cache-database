@@ -3,7 +3,10 @@ package com.reactor.cachedb.starter;
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.queue.ReconciliationHealth;
 import com.reactor.cachedb.core.queue.ReconciliationMetrics;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
 import com.reactor.cachedb.redis.RedisLeaderLease;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.XAddParams;
 import redis.clients.jedis.resps.StreamEntry;
@@ -22,7 +25,7 @@ import java.util.function.Supplier;
 final class MonitoringHistoryBuffer implements AutoCloseable {
 
     private final Supplier<CacheDatabaseAdmin> adminSupplier;
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final boolean enabled;
     private final long sampleIntervalMillis;
     private final int maxSamples;
@@ -32,8 +35,24 @@ final class MonitoringHistoryBuffer implements AutoCloseable {
     private final String threadName;
     private ScheduledExecutorService executor;
 
-    MonitoringHistoryBuffer(Supplier<CacheDatabaseAdmin> adminSupplier, JedisPooled jedis, AdminMonitoringConfig config) {
-        this(adminSupplier, jedis, config, RedisLeaderLease.disabled(), "cachedb-monitoring-history", true);
+    MonitoringHistoryBuffer(
+            Supplier<CacheDatabaseAdmin> adminSupplier,
+            JedisPooled jedis,
+            AdminMonitoringConfig config) {
+        this(adminSupplier, JedisPooledOperations.of(jedis), config);
+    }
+
+    MonitoringHistoryBuffer(
+            Supplier<CacheDatabaseAdmin> adminSupplier,
+            RedisClientOperations jedis,
+            AdminMonitoringConfig config) {
+        this(
+                adminSupplier,
+                jedis,
+                config,
+                RedisLeaderLease.disabled(),
+                "cachedb-monitoring-history",
+                true);
     }
 
     MonitoringHistoryBuffer(
@@ -41,8 +60,16 @@ final class MonitoringHistoryBuffer implements AutoCloseable {
             JedisPooled jedis,
             AdminMonitoringConfig config,
             RedisLeaderLease leaderLease,
-            String threadName
-    ) {
+            String threadName) {
+        this(adminSupplier, JedisPooledOperations.of(jedis), config, leaderLease, threadName);
+    }
+
+    MonitoringHistoryBuffer(
+            Supplier<CacheDatabaseAdmin> adminSupplier,
+            RedisClientOperations jedis,
+            AdminMonitoringConfig config,
+            RedisLeaderLease leaderLease,
+            String threadName) {
         this(adminSupplier, jedis, config, leaderLease, threadName, true);
     }
 
@@ -52,47 +79,74 @@ final class MonitoringHistoryBuffer implements AutoCloseable {
             AdminMonitoringConfig config,
             RedisLeaderLease leaderLease,
             String threadName,
-            boolean enabled
-    ) {
+            boolean enabled) {
+        this(
+                adminSupplier,
+                JedisPooledOperations.of(jedis),
+                config,
+                leaderLease,
+                threadName,
+                enabled);
+    }
+
+    private MonitoringHistoryBuffer(
+            Supplier<CacheDatabaseAdmin> adminSupplier,
+            RedisClientOperations jedis,
+            AdminMonitoringConfig config,
+            RedisLeaderLease leaderLease,
+            String threadName,
+            boolean enabled) {
         this.adminSupplier = adminSupplier;
         this.jedis = jedis;
         this.enabled = enabled;
-        this.sampleIntervalMillis = Math.max(config.historyMinSampleIntervalMillis(), config.historySampleIntervalMillis());
+        this.sampleIntervalMillis =
+                Math.max(
+                        config.historyMinSampleIntervalMillis(),
+                        config.historySampleIntervalMillis());
         this.maxSamples = Math.max(config.historyMinSamples(), config.historyMaxSamples());
         this.streamKey = config.monitoringHistoryStreamKey();
         this.ttlSeconds = config.telemetryTtlSeconds();
         this.leaderLease = leaderLease == null ? RedisLeaderLease.disabled() : leaderLease;
-        this.threadName = threadName == null || threadName.isBlank() ? "cachedb-monitoring-history" : threadName;
+        this.threadName =
+                threadName == null || threadName.isBlank()
+                        ? "cachedb-monitoring-history"
+                        : threadName;
     }
 
     static MonitoringHistoryBuffer disabled(AdminMonitoringConfig config) {
         return new MonitoringHistoryBuffer(
                 () -> null,
-                null,
+                (RedisClientOperations) null,
                 config,
                 RedisLeaderLease.disabled(),
                 "cachedb-monitoring-history",
-                false
-        );
+                false);
     }
 
     void start() {
         if (!enabled || executor != null) {
             return;
         }
-        executor = Executors.newSingleThreadScheduledExecutor(new MonitoringHistoryThreadFactory(threadName));
+        executor =
+                Executors.newSingleThreadScheduledExecutor(
+                        new MonitoringHistoryThreadFactory(threadName));
         recordNow();
-        executor.scheduleAtFixedRate(this::recordNowSafe, sampleIntervalMillis, sampleIntervalMillis, TimeUnit.MILLISECONDS);
+        executor.scheduleAtFixedRate(
+                this::recordNowSafe,
+                sampleIntervalMillis,
+                sampleIntervalMillis,
+                TimeUnit.MILLISECONDS);
     }
 
     List<MonitoringHistoryPoint> history(int limit) {
         if (!enabled) {
             return List.of();
         }
-        if (jedis.xlen(streamKey) == 0L) {
+        if (jedis.commands().xlen(streamKey) == 0L) {
             recordNowSafe();
         }
-        List<StreamEntry> entries = jedis.xrevrange(streamKey, "+", "-", Math.max(1, limit));
+        List<StreamEntry> entries =
+                jedis.commands().xrevrange(streamKey, "+", "-", Math.max(1, limit));
         ArrayList<MonitoringHistoryPoint> snapshot = new ArrayList<>(entries.size());
         for (StreamEntry entry : entries) {
             snapshot.add(toPoint(entry));
@@ -118,15 +172,15 @@ final class MonitoringHistoryBuffer implements AutoCloseable {
         CacheDatabaseAdmin admin = adminSupplier.get();
         ReconciliationHealth health = admin.health();
         ReconciliationMetrics metrics = health.metrics();
-        MonitoringHistoryPoint point = new MonitoringHistoryPoint(
-                Instant.now(),
-                metrics.writeBehindStreamLength(),
-                metrics.deadLetterStreamLength(),
-                metrics.redisGuardrailSnapshot().usedMemoryBytes(),
-                metrics.redisGuardrailSnapshot().compactionPendingCount(),
-                metrics.redisRuntimeProfileSnapshot().activeProfile(),
-                health.status().name()
-        );
+        MonitoringHistoryPoint point =
+                new MonitoringHistoryPoint(
+                        Instant.now(),
+                        metrics.writeBehindStreamLength(),
+                        metrics.deadLetterStreamLength(),
+                        metrics.redisGuardrailSnapshot().usedMemoryBytes(),
+                        metrics.redisGuardrailSnapshot().compactionPendingCount(),
+                        metrics.redisRuntimeProfileSnapshot().activeProfile(),
+                        health.status().name());
         LinkedHashMap<String, String> fields = new LinkedHashMap<>();
         fields.put("recordedAt", point.recordedAt().toString());
         fields.put("writeBehindBacklog", String.valueOf(point.writeBehindBacklog()));
@@ -135,9 +189,9 @@ final class MonitoringHistoryBuffer implements AutoCloseable {
         fields.put("compactionPendingCount", String.valueOf(point.compactionPendingCount()));
         fields.put("runtimeProfile", point.runtimeProfile());
         fields.put("healthStatus", point.healthStatus());
-        jedis.xadd(streamKey, XAddParams.xAddParams(), fields);
+        jedis.commands().xadd(streamKey, XAddParams.xAddParams(), fields);
         if (maxSamples > 0) {
-            jedis.xtrim(streamKey, maxSamples, true);
+            jedis.commands().xtrim(streamKey, maxSamples, true);
         }
         RedisTelemetrySupport.expireIfNeeded(jedis, streamKey, ttlSeconds);
     }
@@ -152,14 +206,14 @@ final class MonitoringHistoryBuffer implements AutoCloseable {
 
     private MonitoringHistoryPoint toPoint(StreamEntry entry) {
         return new MonitoringHistoryPoint(
-                Instant.parse(entry.getFields().getOrDefault("recordedAt", Instant.EPOCH.toString())),
+                Instant.parse(
+                        entry.getFields().getOrDefault("recordedAt", Instant.EPOCH.toString())),
                 parseLong(entry, "writeBehindBacklog"),
                 parseLong(entry, "deadLetterBacklog"),
                 parseLong(entry, "redisUsedMemoryBytes"),
                 parseLong(entry, "compactionPendingCount"),
                 entry.getFields().getOrDefault("runtimeProfile", ""),
-                entry.getFields().getOrDefault("healthStatus", "")
-        );
+                entry.getFields().getOrDefault("healthStatus", ""));
     }
 
     private long parseLong(StreamEntry entry, String field) {

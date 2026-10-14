@@ -36,6 +36,21 @@ public final class SnapshotRelation implements SnapshotInput {
         return new SnapshotRelation(SnapshotSource.entity(name, mapping), from, to, false);
     }
 
+    public static TypedSnapshotRelation<Long, Long> longs(
+            String name, String table, String from, String to) {
+        return of(name, table, from, Long.class, to, Long.class);
+    }
+
+    public static TypedSnapshotRelation<java.util.UUID, java.util.UUID> uuids(
+            String name, String table, String from, String to) {
+        return of(name, table, from, java.util.UUID.class, to, java.util.UUID.class);
+    }
+
+    public static <F, T> TypedSnapshotRelation<F, T> of(
+            String name, String table, String from, Class<F> fromType, String to, Class<T> toType) {
+        return TypedSnapshotRelation.of(name, table, from, fromType, to, toType);
+    }
+
     public SnapshotRelation where(SnapshotPredicate predicate) {
         return new SnapshotRelation(source.where(predicate), fromColumn, toColumn, reversed);
     }

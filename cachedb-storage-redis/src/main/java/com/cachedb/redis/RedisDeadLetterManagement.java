@@ -4,17 +4,18 @@ import com.reactor.cachedb.core.config.DeadLetterRecoveryConfig;
 import com.reactor.cachedb.core.queue.DeadLetterActionResult;
 import com.reactor.cachedb.core.queue.DeadLetterArchiveRecord;
 import com.reactor.cachedb.core.queue.DeadLetterEntry;
-import com.reactor.cachedb.core.queue.DeadLetterQuery;
 import com.reactor.cachedb.core.queue.DeadLetterManagement;
+import com.reactor.cachedb.core.queue.DeadLetterQuery;
 import com.reactor.cachedb.core.queue.DeadLetterReplayPreview;
 import com.reactor.cachedb.core.queue.FailureClassifyingFlusher;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.queue.ReconciliationQuery;
 import com.reactor.cachedb.core.queue.ReconciliationRecord;
 import com.reactor.cachedb.core.queue.StreamPage;
-import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.queue.WriteBehindFailureRecord;
 import com.reactor.cachedb.core.queue.WriteBehindFlusher;
+import com.reactor.cachedb.core.queue.WriteFailureDetails;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.StreamEntryID;
 import redis.clients.jedis.resps.StreamEntry;
@@ -29,7 +30,7 @@ import java.util.Optional;
 
 public final class RedisDeadLetterManagement implements DeadLetterManagement {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final WriteBehindFlusher flusher;
     private final DeadLetterRecoveryConfig config;
     private final RedisWriteOperationMapper mapper;
@@ -42,8 +43,23 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
             DeadLetterRecoveryConfig config,
             RedisWriteOperationMapper mapper,
             RedisKeyStrategy keyStrategy,
-            String deadLetterStreamKey
-    ) {
+            String deadLetterStreamKey) {
+        this(
+                JedisPooledOperations.of(jedis),
+                flusher,
+                config,
+                mapper,
+                keyStrategy,
+                deadLetterStreamKey);
+    }
+
+    public RedisDeadLetterManagement(
+            RedisClientOperations jedis,
+            WriteBehindFlusher flusher,
+            DeadLetterRecoveryConfig config,
+            RedisWriteOperationMapper mapper,
+            RedisKeyStrategy keyStrategy,
+            String deadLetterStreamKey) {
         this.jedis = jedis;
         this.flusher = flusher;
         this.config = config;
@@ -59,8 +75,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
                 query.cursor(),
                 query.limit(),
                 this::toDeadLetterEntry,
-                entry -> matchesDeadLetter(entry, query)
-        );
+                entry -> matchesDeadLetter(entry, query));
     }
 
     @Override
@@ -70,8 +85,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
                 query.cursor(),
                 query.limit(),
                 this::toReconciliationRecord,
-                entry -> matchesReconciliation(entry, query)
-        );
+                entry -> matchesReconciliation(entry, query));
     }
 
     @Override
@@ -81,14 +95,16 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
                 query.cursor(),
                 query.limit(),
                 this::toArchiveRecord,
-                entry -> matchesArchive(entry, query)
-        );
+                entry -> matchesArchive(entry, query));
     }
 
     @Override
     public Optional<DeadLetterEntry> getDeadLetter(String entryId) {
         StreamEntryID streamEntryID = new StreamEntryID(entryId);
-        return jedis.xrange(deadLetterStreamKey, streamEntryID, streamEntryID, 1).stream()
+        return jedis
+                .commands()
+                .xrange(deadLetterStreamKey, streamEntryID, streamEntryID, 1)
+                .stream()
                 .findFirst()
                 .map(this::toDeadLetterEntry);
     }
@@ -97,7 +113,8 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
     public DeadLetterReplayPreview dryRunReplay(String entryId) {
         Optional<DeadLetterEntry> candidate = getDeadLetter(entryId);
         if (candidate.isEmpty()) {
-            return new DeadLetterReplayPreview(entryId, false, false, false, "NOT_FOUND", "Dead-letter entry not found");
+            return new DeadLetterReplayPreview(
+                    entryId, false, false, false, "NOT_FOUND", "Dead-letter entry not found");
         }
 
         DeadLetterEntry deadLetterEntry = candidate.get();
@@ -108,11 +125,11 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
                     false,
                     true,
                     "MANUAL_REPLAY_STALE",
-                    "Current Redis version is newer than dead-letter version"
-            );
+                    "Current Redis version is newer than dead-letter version");
         }
 
-        return new DeadLetterReplayPreview(entryId, true, true, false, "MANUAL_REPLAYED", "Replay is eligible");
+        return new DeadLetterReplayPreview(
+                entryId, true, true, false, "MANUAL_REPLAYED", "Replay is eligible");
     }
 
     @Override
@@ -156,18 +173,24 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
 
     private DeadLetterEntry requireEntry(String entryId) {
         return getDeadLetter(entryId)
-                .orElseThrow(() -> new IllegalArgumentException("Dead-letter entry not found: " + entryId));
+                .orElseThrow(
+                        () ->
+                                new IllegalArgumentException(
+                                        "Dead-letter entry not found: " + entryId));
     }
 
     private void resolveDeadLetter(DeadLetterEntry entry, String status, String note) {
         StreamEntryID streamEntryID = new StreamEntryID(entry.entryId());
-        RedisRecoveryStreams.archiveResolved(jedis, config, entry.fields(), entry.entryId(), status, note);
-        jedis.xack(deadLetterStreamKey, config.consumerGroup(), streamEntryID);
-        jedis.xdel(deadLetterStreamKey, streamEntryID);
+        RedisRecoveryStreams.archiveResolved(
+                jedis, config, entry.fields(), entry.entryId(), status, note);
+        jedis.commands().xack(deadLetterStreamKey, config.consumerGroup(), streamEntryID);
+        jedis.commands().xdel(deadLetterStreamKey, streamEntryID);
     }
 
     private boolean isStale(QueuedWriteOperation operation) {
-        String currentVersion = jedis.get(keyStrategy.versionKey(operation.redisNamespace(), operation.id()));
+        String currentVersion =
+                jedis.commands()
+                        .get(keyStrategy.versionKey(operation.redisNamespace(), operation.id()));
         if (currentVersion == null || currentVersion.isBlank()) {
             return false;
         }
@@ -187,13 +210,12 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
                         fields.get("deadLetterSqlState"),
                         fields.get("deadLetterVendorCode"),
                         fields.get("deadLetterRetryable"),
-                        fields.getOrDefault("deadLetterRootType", fields.getOrDefault("deadLetterReason", "")),
-                        fields.getOrDefault("deadLetterMessage", "")
-                ),
+                        fields.getOrDefault(
+                                "deadLetterRootType", fields.getOrDefault("deadLetterReason", "")),
+                        fields.getOrDefault("deadLetterMessage", "")),
                 parseInt(fields.get("deadLetterAttempts")),
                 parseInstant(fields.get("createdAt")),
-                fields
-        );
+                fields);
     }
 
     private ReconciliationRecord toReconciliationRecord(StreamEntry entry) {
@@ -211,11 +233,10 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
                         fields.get("replaySqlState"),
                         fields.get("replayVendorCode"),
                         fields.get("replayRetryable"),
-                        fields.getOrDefault("replayRootType", fields.getOrDefault("replayErrorType", "")),
-                        fields.getOrDefault("replayErrorMessage", "")
-                ),
-                fields
-        );
+                        fields.getOrDefault(
+                                "replayRootType", fields.getOrDefault("replayErrorType", "")),
+                        fields.getOrDefault("replayErrorMessage", "")),
+                fields);
     }
 
     private WriteBehindFailureRecord toFailureRecord(DeadLetterEntry entry) {
@@ -226,8 +247,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
                 entry.failureDetails(),
                 Instant.now(),
                 entry.deadLetterAttempts(),
-                entry.fields()
-        );
+                entry.fields());
     }
 
     private void publishReconciliation(
@@ -235,8 +255,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
             WriteBehindFailureRecord failureRecord,
             Exception replayException,
             int replayAttempts,
-            String note
-    ) {
+            String note) {
         LinkedHashMap<String, String> fields = new LinkedHashMap<>();
         fields.put("status", status);
         fields.put("entity", failureRecord.operation().entityName());
@@ -247,17 +266,23 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
         fields.put("deadLetterErrorMessage", failureRecord.errorMessage());
         fields.put("deadLetterFailureCategory", failureRecord.failureDetails().category().name());
         fields.put("deadLetterSqlState", failureRecord.failureDetails().sqlState());
-        fields.put("deadLetterRetryable", String.valueOf(failureRecord.failureDetails().retryable()));
-        fields.put("deadLetterVendorCode", String.valueOf(failureRecord.failureDetails().vendorCode()));
+        fields.put(
+                "deadLetterRetryable", String.valueOf(failureRecord.failureDetails().retryable()));
+        fields.put(
+                "deadLetterVendorCode",
+                String.valueOf(failureRecord.failureDetails().vendorCode()));
         fields.put("deadLetterRootType", failureRecord.failureDetails().errorType());
         fields.put("deadLetterAttempts", String.valueOf(failureRecord.attempts()));
         fields.put("replayAttempts", String.valueOf(replayAttempts));
         fields.put("reconciledAt", Instant.now().toString());
         fields.put("note", note == null ? "" : note);
         if (replayException != null) {
-            WriteFailureDetails replayFailure = FailureClassifyingFlusher.classify(flusher, replayException);
+            WriteFailureDetails replayFailure =
+                    FailureClassifyingFlusher.classify(flusher, replayException);
             fields.put("replayErrorType", replayException.getClass().getName());
-            fields.put("replayErrorMessage", replayException.getMessage() == null ? "" : replayException.getMessage());
+            fields.put(
+                    "replayErrorMessage",
+                    replayException.getMessage() == null ? "" : replayException.getMessage());
             fields.put("replayFailureCategory", replayFailure.category().name());
             fields.put("replaySqlState", replayFailure.sqlState());
             fields.put("replayRetryable", String.valueOf(replayFailure.retryable()));
@@ -272,11 +297,10 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
             String cursor,
             int limit,
             java.util.function.Function<StreamEntry, T> mapperFunction,
-            java.util.function.Predicate<T> predicate
-    ) {
+            java.util.function.Predicate<T> predicate) {
         String end = cursor == null || cursor.isBlank() ? "+" : "(" + cursor;
         int batchSize = Math.max(limit * 3, limit + 1);
-        List<StreamEntry> entries = jedis.xrevrange(streamKey, end, "-", batchSize);
+        List<StreamEntry> entries = jedis.commands().xrevrange(streamKey, end, "-", batchSize);
         List<T> items = new ArrayList<>(limit);
         String nextCursor = null;
         boolean hasMore = false;
@@ -347,8 +371,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
                 fields.getOrDefault("id", ""),
                 parseLong(fields.get("version")),
                 parseInstant(fields.get("archivedAt")),
-                fields
-        );
+                fields);
     }
 
     private int parseInt(String value) {

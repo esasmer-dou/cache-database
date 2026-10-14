@@ -1,5 +1,8 @@
 package com.reactor.cachedb.starter;
 
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.resps.ScanResult;
@@ -18,10 +21,14 @@ final class MigrationRedisMemoryCalibration {
     private static final int DEFAULT_SCAN_COUNT = 500;
     private static final int DEFAULT_MAX_KEYS = 50_000;
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final String keyPrefix;
 
     MigrationRedisMemoryCalibration(JedisPooled jedis, String keyPrefix) {
+        this(JedisPooledOperations.of(jedis), keyPrefix);
+    }
+
+    MigrationRedisMemoryCalibration(RedisClientOperations jedis, String keyPrefix) {
         this.jedis = Objects.requireNonNull(jedis, "jedis");
         this.keyPrefix = keyPrefix == null || keyPrefix.isBlank() ? "cachedb" : keyPrefix.trim();
     }
@@ -33,9 +40,7 @@ final class MigrationRedisMemoryCalibration {
         long sampledKeys = 0L;
         boolean truncated = false;
         String cursor = ScanParams.SCAN_POINTER_START;
-        ScanParams params = new ScanParams()
-                .match(keyPrefix + ":*")
-                .count(DEFAULT_SCAN_COUNT);
+        ScanParams params = new ScanParams().match(keyPrefix + ":*").count(DEFAULT_SCAN_COUNT);
         try {
             do {
                 ScanResult<String> result = jedis.scan(cursor, params);
@@ -63,20 +68,29 @@ final class MigrationRedisMemoryCalibration {
 
         long estimatedTotalBytes = estimate == null ? 0L : estimate.estimatedTotalBytes();
         long deltaBytes = actualTotalBytes - estimatedTotalBytes;
-        double actualToEstimateRatio = estimatedTotalBytes <= 0L
-                ? (actualTotalBytes <= 0L ? 1.0d : 999.0d)
-                : actualTotalBytes / (double) estimatedTotalBytes;
+        double actualToEstimateRatio =
+                estimatedTotalBytes <= 0L
+                        ? (actualTotalBytes <= 0L ? 1.0d : 999.0d)
+                        : actualTotalBytes / (double) estimatedTotalBytes;
         if (truncated) {
-            warnings.add("Redis key scan was truncated at " + DEFAULT_MAX_KEYS + " keys; actual memory may be higher.");
+            warnings.add(
+                    "Redis key scan was truncated at "
+                            + DEFAULT_MAX_KEYS
+                            + " keys; actual memory may be higher.");
         }
         if (actualTotalBytes == 0L) {
-            warnings.add("No Redis keys under prefix " + keyPrefix + " reported MEMORY USAGE. Run warm execution before trusting calibration.");
+            warnings.add(
+                    "No Redis keys under prefix "
+                            + keyPrefix
+                            + " reported MEMORY USAGE. Run warm execution before trusting"
+                            + " calibration.");
         }
 
-        List<Component> sortedComponents = components.values().stream()
-                .map(MutableComponent::snapshot)
-                .sorted(Comparator.comparing(Component::actualBytes).reversed())
-                .toList();
+        List<Component> sortedComponents =
+                components.values().stream()
+                        .map(MutableComponent::snapshot)
+                        .sorted(Comparator.comparing(Component::actualBytes).reversed())
+                        .toList();
         return new Result(
                 keyPrefix,
                 estimatedTotalBytes,
@@ -87,17 +101,18 @@ final class MigrationRedisMemoryCalibration {
                 truncated,
                 sortedComponents,
                 List.copyOf(warnings),
-                Instant.now()
-        );
+                Instant.now());
     }
 
     private long memoryUsage(String key, ArrayList<String> warnings) {
         try {
-            Long usage = jedis.memoryUsage(key);
+            Long usage = jedis.commands().memoryUsage(key);
             return usage == null ? 0L : Math.max(0L, usage);
         } catch (RuntimeException exception) {
             if (warnings.isEmpty()) {
-                warnings.add("Redis MEMORY USAGE is unavailable or failed for at least one key: " + exception.getMessage());
+                warnings.add(
+                        "Redis MEMORY USAGE is unavailable or failed for at least one key: "
+                                + exception.getMessage());
             }
             return 0L;
         }
@@ -124,7 +139,9 @@ final class MigrationRedisMemoryCalibration {
         if (normalized.contains(":page:")) {
             return "PAGE_CACHE";
         }
-        if (normalized.contains(":stream") || normalized.contains(":write") || normalized.contains(":projection-refresh")) {
+        if (normalized.contains(":stream")
+                || normalized.contains(":write")
+                || normalized.contains(":projection-refresh")) {
             return "STREAM_OPS";
         }
         if (normalized.contains(":compaction:")) {
@@ -150,18 +167,14 @@ final class MigrationRedisMemoryCalibration {
             boolean truncated,
             List<Component> components,
             List<String> warnings,
-            Instant calibratedAt
-    ) {
-    }
+            Instant calibratedAt) {}
 
     record Component(
             String code,
             long keyCount,
             long actualBytes,
             String largestKey,
-            long largestKeyBytes
-    ) {
-    }
+            long largestKeyBytes) {}
 
     private static final class MutableComponent {
         private final String code;
@@ -176,7 +189,8 @@ final class MigrationRedisMemoryCalibration {
 
         private void add(String key, long bytes) {
             keyCount++;
-            actualBytes = Long.MAX_VALUE - actualBytes < bytes ? Long.MAX_VALUE : actualBytes + bytes;
+            actualBytes =
+                    Long.MAX_VALUE - actualBytes < bytes ? Long.MAX_VALUE : actualBytes + bytes;
             if (bytes > largestKeyBytes) {
                 largestKey = key;
                 largestKeyBytes = bytes;

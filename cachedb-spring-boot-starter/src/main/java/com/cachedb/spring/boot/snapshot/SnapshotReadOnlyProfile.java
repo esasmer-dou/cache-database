@@ -67,7 +67,7 @@ public final class SnapshotReadOnlyProfile {
      */
     public static CachePolicy policy() {
         return CachePolicy.builder()
-                .hotEntityLimit(0)
+                .hotEntityLimit(CachePolicy.UNBOUNDED)
                 .lruEvictionEnabled(false)
                 .entityTtlSeconds(RETENTION_SECONDS)
                 .build();

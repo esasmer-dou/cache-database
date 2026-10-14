@@ -1,21 +1,32 @@
 package com.reactor.cachedb.spring.boot;
 
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
 import com.reactor.cachedb.starter.CacheDatabase;
+
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
+
 import redis.clients.jedis.JedisPooled;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
+
+import javax.sql.DataSource;
 
 /** Readiness signal for Redis, durable SQL, and the write-behind worker. */
 public final class CacheDatabaseHealthIndicator implements HealthIndicator {
 
     private final CacheDatabase cacheDatabase;
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final DataSource dataSource;
 
-    public CacheDatabaseHealthIndicator(CacheDatabase cacheDatabase, JedisPooled jedis, DataSource dataSource) {
+    public CacheDatabaseHealthIndicator(
+            CacheDatabase cacheDatabase, JedisPooled jedis, DataSource dataSource) {
+        this(cacheDatabase, JedisPooledOperations.of(jedis), dataSource);
+    }
+
+    public CacheDatabaseHealthIndicator(
+            CacheDatabase cacheDatabase, RedisClientOperations jedis, DataSource dataSource) {
         this.cacheDatabase = cacheDatabase;
         this.jedis = jedis;
         this.dataSource = dataSource;
@@ -25,13 +36,21 @@ public final class CacheDatabaseHealthIndicator implements HealthIndicator {
     public Health health() {
         Health.Builder health = Health.up().withDetail("instanceId", cacheDatabase.instanceId());
         try {
-            health.withDetail("redis", jedis.ping());
+            health.withDetail(
+                    "redis",
+                    jedis.ping(
+                            jedis.clustered()
+                                    ? cacheDatabase.config().keyspace().keyPrefix() + ":health"
+                                    : "health"));
         } catch (RuntimeException exception) {
             return Health.down(exception).withDetail("dependency", "redis").build();
         }
         try (Connection connection = dataSource.getConnection()) {
             if (!connection.isValid(1)) {
-                return Health.down().withDetail("dependency", "sql").withDetail("reason", "validation-failed").build();
+                return Health.down()
+                        .withDetail("dependency", "sql")
+                        .withDetail("reason", "validation-failed")
+                        .build();
             }
             health.withDetail("sql", "UP");
         } catch (Exception exception) {
@@ -39,20 +58,22 @@ public final class CacheDatabaseHealthIndicator implements HealthIndicator {
         }
 
         var worker = cacheDatabase.workerSnapshot();
-        long backlogHardLimit = cacheDatabase.config().redisGuardrail().writeBehindBacklogHardLimit();
-        boolean backlogSaturated = backlogHardLimit > 0
-                && worker.lastObservedBacklog() >= backlogHardLimit;
-        boolean historicalAttention = worker.lastErrorType() != null
-                || worker.deadLetterCount() > 0
-                || worker.pendingRecoveryCount() > 0;
+        long backlogHardLimit =
+                cacheDatabase.config().redisGuardrail().writeBehindBacklogHardLimit();
+        boolean backlogSaturated =
+                backlogHardLimit > 0 && worker.lastObservedBacklog() >= backlogHardLimit;
+        boolean historicalAttention =
+                worker.lastErrorType() != null
+                        || worker.deadLetterCount() > 0
+                        || worker.pendingRecoveryCount() > 0;
         health.withDetail("writeBehindBacklog", worker.lastObservedBacklog())
                 .withDetail("writeBehindBacklogHardLimit", backlogHardLimit)
                 .withDetail("flushedWrites", worker.flushedCount())
                 .withDetail("deadLetters", worker.deadLetterCount())
                 .withDetail("pendingRecovery", worker.pendingRecoveryCount())
-                .withDetail("writeBehindStatus", backlogSaturated
-                        ? "SATURATED"
-                        : historicalAttention ? "ATTENTION" : "UP");
+                .withDetail(
+                        "writeBehindStatus",
+                        backlogSaturated ? "SATURATED" : historicalAttention ? "ATTENTION" : "UP");
         if (worker.lastErrorType() != null) {
             health.withDetail("lastWriteBehindError", worker.lastErrorType());
         }

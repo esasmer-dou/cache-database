@@ -7,4 +7,8 @@ public interface SnapshotOperations {
     SnapshotSettings settings(String name);
 
     SnapshotRefreshResult refresh(String name, boolean manual);
+
+    default SnapshotRefreshResult refreshRoots(String name, java.util.Collection<String> rootIds) {
+        throw new UnsupportedOperationException("Partial root refresh is unavailable");
+    }
 }

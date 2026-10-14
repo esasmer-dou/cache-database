@@ -1,6 +1,7 @@
 package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.repository.CacheIdGenerator;
+
 import redis.clients.jedis.JedisPooled;
 
 import java.security.SecureRandom;
@@ -13,7 +14,7 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
     private static final char[] CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ".toCharArray();
     private static final String SAFE_NAME = "[A-Za-z0-9_.:-]+";
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final String keyPrefix;
     private final ConcurrentHashMap<String, SequenceBlock> sequences = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
@@ -22,6 +23,10 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
     private long lastTimestamp = -1L;
 
     public RedisCacheIdGenerator(JedisPooled jedis, String keyPrefix) {
+        this(JedisPooledOperations.of(jedis), keyPrefix);
+    }
+
+    public RedisCacheIdGenerator(RedisClientOperations jedis, String keyPrefix) {
         this.jedis = Objects.requireNonNull(jedis, "jedis");
         if (keyPrefix == null || !keyPrefix.matches(SAFE_NAME)) {
             throw new IllegalArgumentException("Invalid CacheDB id key prefix: " + keyPrefix);
@@ -57,7 +62,8 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
         if (allocationSize <= 0 || allocationSize > 10_000) {
             throw new IllegalArgumentException("allocationSize must be between 1 and 10000");
         }
-        return sequences.computeIfAbsent(sequenceName, ignored -> new SequenceBlock())
+        return sequences
+                .computeIfAbsent(sequenceName, ignored -> new SequenceBlock())
                 .next(jedis, keyPrefix + ":" + sequenceName, allocationSize);
     }
 
@@ -100,7 +106,7 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
         private final AtomicLong next = new AtomicLong(1L);
         private volatile long end;
 
-        long next(JedisPooled jedis, String key, int allocationSize) {
+        long next(RedisClientOperations jedis, String key, int allocationSize) {
             while (true) {
                 long candidate = next.getAndIncrement();
                 if (candidate <= end) {
@@ -110,7 +116,7 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
                     if (next.get() - 1L <= end) {
                         continue;
                     }
-                    long allocatedEnd = jedis.incrBy(key, allocationSize);
+                    long allocatedEnd = jedis.commands().incrBy(key, allocationSize);
                     long allocatedStart = allocatedEnd - allocationSize + 1L;
                     next.set(allocatedStart + 1L);
                     end = allocatedEnd;

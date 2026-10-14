@@ -89,7 +89,9 @@ enabled=false disables scheduling, not authorized manual execution.
 A concurrent attempt returns BUSY rather than queuing. A scheduled attempt within the interval returns NOT_DUE.
 Secure manual endpoints and use bounded execution with finite HTTP timeouts.
 
-This is ID-addressed snapshot storage, not arbitrary ProjectionRepository.query or implicit SQL fallback.
+By default this is ID-addressed snapshot storage, not arbitrary ProjectionRepository.query or implicit SQL fallback.
+Since 0.13 an explicit `SnapshotIndexSpec` also enables partitioned cursor windows;
+see the indexed/partial refresh section below.
 plan.map(name, type, mapper) reuses business rules in another plan. Separate plans read separate SQL snapshots and publish independently.
 
 For a dedicated SELECT-only application, call SnapshotReadOnlyProfile.configure(builder, keyPrefix) from a CacheDatabaseConfigCustomizer.
@@ -110,12 +112,39 @@ Every stage and final publication checks ownership inside Redis Lua.
 A paused former owner cannot overwrite its successor.
 Failures before commit preserve the previous catalog. Deleted roots disappear after successful publication.
 An uncertain commit reply is reported as an error, but cleanup never deletes the active generation.
-Readers retry once if cleanup races their read. Separate reads can observe different generations.
+Pointer, index and payload reads execute in one Redis operation, so cleanup cannot race
+inside a read. Separate reads can still observe different generations.
 
 These checks assume the same authoritative Redis primary.
 They do not prevent asynchronous Redis failover data loss or split-brain writes.
 Use a dedicated allocation and consider noeviction: arbitrary eviction makes a complete catalog unavailable.
-Keys use a common hash tag, but auto-configuration uses JedisPooled, not a Redis Cluster client.
+Keys use a common hash tag. The default auto-configuration uses JedisPooled;
+an explicit JedisClusterOperations/CacheDatabase configuration is also supported.
+
+## Indexed and Partial Refresh (0.13)
+
+```java
+var indexed = plan.indexed(SnapshotIndexSpec.of(root -> root.customerId.toString(),
+        root -> -root.orderDate.toEpochMilli()));
+var reusable = indexed.withContentReuse();
+var first = jobs.repository("order-timeline").findPage("42", WindowRequest.first(50));
+```
+
+The declared plan must be registered before refreshing; the snippet assumes order
+roots and Instant orderDate. A successful full preparation is required before reads
+or incremental commands can use a generation. Indexes are on roots, not arbitrary
+fields inside each root's JSON array. The page contains SnapshotValue objects.
+
+For incremental updates, attach an explicit SnapshotRootScope for every input, then
+call `jobs.refreshRoots("order-timeline", List.of("9001"))`. The command reads only
+the declared scope on one consistent SQL connection and changes selected roots and
+their indexes together. Missing roots are deleted. Untouched roots keep their age;
+the entire catalog's retention is not extended. Full and delta updates invalidate
+prior pagination cursors. Content reuse shares unchanged JSON between full generations;
+it does not avoid reading SQL or eliminate overlap for changed payloads.
+
+See [bounded runtime operations](bounded-runtime-operations.md) for a complete scope
+example, count/byte limits, typed keys, batch writes, sequence and Cluster configuration.
 
 ## Resource Settings
 

@@ -6,26 +6,29 @@ import com.reactor.cachedb.core.config.IncidentDeliveryDlqConfig;
 import com.reactor.cachedb.core.config.ProjectionRefreshConfig;
 import com.reactor.cachedb.core.config.RuntimeCoordinationConfig;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
 import com.reactor.cachedb.redis.RedisLeaderLease;
+
 import redis.clients.jedis.JedisPooled;
 
 import java.util.UUID;
 
 final class RuntimeCoordinationSupport {
 
-    private RuntimeCoordinationSupport() {
-    }
+    private RuntimeCoordinationSupport() {}
 
     static String resolveInstanceId(RuntimeCoordinationConfig config) {
         if (config != null && config.instanceId() != null && !config.instanceId().isBlank()) {
             return sanitize(config.instanceId());
         }
-        for (String candidate : new String[] {
-                System.getenv("CACHE_DB_INSTANCE_ID"),
-                System.getenv("HOSTNAME"),
-                System.getenv("POD_NAME"),
-                System.getenv("COMPUTERNAME")
-        }) {
+        for (String candidate :
+                new String[] {
+                    System.getenv("CACHE_DB_INSTANCE_ID"),
+                    System.getenv("HOSTNAME"),
+                    System.getenv("POD_NAME"),
+                    System.getenv("COMPUTERNAME")
+                }) {
             if (candidate != null && !candidate.isBlank()) {
                 return sanitize(candidate);
             }
@@ -34,10 +37,7 @@ final class RuntimeCoordinationSupport {
     }
 
     static WriteBehindConfig withInstanceIdentity(
-            WriteBehindConfig config,
-            RuntimeCoordinationConfig coordination,
-            String instanceId
-    ) {
+            WriteBehindConfig config, RuntimeCoordinationConfig coordination, String instanceId) {
         return WriteBehindConfig.builder()
                 .enabled(config.enabled())
                 .workerThreads(config.workerThreads())
@@ -66,10 +66,13 @@ final class RuntimeCoordinationSupport {
                 .retryBackoffMillis(config.retryBackoffMillis())
                 .streamKey(config.streamKey())
                 .consumerGroup(config.consumerGroup())
-                .consumerNamePrefix(consumerNamePrefix(config.consumerNamePrefix(), coordination, instanceId))
+                .consumerNamePrefix(
+                        consumerNamePrefix(config.consumerNamePrefix(), coordination, instanceId))
                 .compactionStreamKey(config.compactionStreamKey())
                 .compactionConsumerGroup(config.compactionConsumerGroup())
-                .compactionConsumerNamePrefix(consumerNamePrefix(config.compactionConsumerNamePrefix(), coordination, instanceId))
+                .compactionConsumerNamePrefix(
+                        consumerNamePrefix(
+                                config.compactionConsumerNamePrefix(), coordination, instanceId))
                 .compactionShardCount(config.compactionShardCount())
                 .autoCreateConsumerGroup(config.autoCreateConsumerGroup())
                 .shutdownAwaitMillis(config.shutdownAwaitMillis())
@@ -88,15 +91,15 @@ final class RuntimeCoordinationSupport {
     static DeadLetterRecoveryConfig withInstanceIdentity(
             DeadLetterRecoveryConfig config,
             RuntimeCoordinationConfig coordination,
-            String instanceId
-    ) {
+            String instanceId) {
         return DeadLetterRecoveryConfig.builder()
                 .enabled(config.enabled())
                 .workerThreads(config.workerThreads())
                 .blockTimeoutMillis(config.blockTimeoutMillis())
                 .idleSleepMillis(config.idleSleepMillis())
                 .consumerGroup(config.consumerGroup())
-                .consumerNamePrefix(consumerNamePrefix(config.consumerNamePrefix(), coordination, instanceId))
+                .consumerNamePrefix(
+                        consumerNamePrefix(config.consumerNamePrefix(), coordination, instanceId))
                 .autoCreateConsumerGroup(config.autoCreateConsumerGroup())
                 .shutdownAwaitMillis(config.shutdownAwaitMillis())
                 .daemonThreads(config.daemonThreads())
@@ -123,13 +126,13 @@ final class RuntimeCoordinationSupport {
     static ProjectionRefreshConfig withInstanceIdentity(
             ProjectionRefreshConfig config,
             RuntimeCoordinationConfig coordination,
-            String instanceId
-    ) {
+            String instanceId) {
         return ProjectionRefreshConfig.builder()
                 .enabled(config.enabled())
                 .streamKey(config.streamKey())
                 .consumerGroup(config.consumerGroup())
-                .consumerNamePrefix(consumerNamePrefix(config.consumerNamePrefix(), coordination, instanceId))
+                .consumerNamePrefix(
+                        consumerNamePrefix(config.consumerNamePrefix(), coordination, instanceId))
                 .batchSize(config.batchSize())
                 .blockTimeoutMillis(config.blockTimeoutMillis())
                 .idleSleepMillis(config.idleSleepMillis())
@@ -152,25 +155,29 @@ final class RuntimeCoordinationSupport {
     static AdminMonitoringConfig withInstanceIdentity(
             AdminMonitoringConfig config,
             RuntimeCoordinationConfig coordination,
-            String instanceId
-    ) {
+            String instanceId) {
         IncidentDeliveryDlqConfig incidentDeliveryDlq = config.incidentDeliveryDlq();
-        IncidentDeliveryDlqConfig effectiveDlq = IncidentDeliveryDlqConfig.builder()
-                .enabled(incidentDeliveryDlq.enabled())
-                .streamKey(incidentDeliveryDlq.streamKey())
-                .recoveryStreamKey(incidentDeliveryDlq.recoveryStreamKey())
-                .consumerGroup(incidentDeliveryDlq.consumerGroup())
-                .consumerNamePrefix(consumerNamePrefix(incidentDeliveryDlq.consumerNamePrefix(), coordination, instanceId))
-                .workerThreads(incidentDeliveryDlq.workerThreads())
-                .batchSize(incidentDeliveryDlq.batchSize())
-                .blockTimeoutMillis(incidentDeliveryDlq.blockTimeoutMillis())
-                .maxReplayAttempts(incidentDeliveryDlq.maxReplayAttempts())
-                .autoCreateConsumerGroup(incidentDeliveryDlq.autoCreateConsumerGroup())
-                .claimAbandonedEntries(incidentDeliveryDlq.claimAbandonedEntries())
-                .claimIdleMillis(incidentDeliveryDlq.claimIdleMillis())
-                .claimBatchSize(incidentDeliveryDlq.claimBatchSize())
-                .idleSleepMillis(incidentDeliveryDlq.idleSleepMillis())
-                .build();
+        IncidentDeliveryDlqConfig effectiveDlq =
+                IncidentDeliveryDlqConfig.builder()
+                        .enabled(incidentDeliveryDlq.enabled())
+                        .streamKey(incidentDeliveryDlq.streamKey())
+                        .recoveryStreamKey(incidentDeliveryDlq.recoveryStreamKey())
+                        .consumerGroup(incidentDeliveryDlq.consumerGroup())
+                        .consumerNamePrefix(
+                                consumerNamePrefix(
+                                        incidentDeliveryDlq.consumerNamePrefix(),
+                                        coordination,
+                                        instanceId))
+                        .workerThreads(incidentDeliveryDlq.workerThreads())
+                        .batchSize(incidentDeliveryDlq.batchSize())
+                        .blockTimeoutMillis(incidentDeliveryDlq.blockTimeoutMillis())
+                        .maxReplayAttempts(incidentDeliveryDlq.maxReplayAttempts())
+                        .autoCreateConsumerGroup(incidentDeliveryDlq.autoCreateConsumerGroup())
+                        .claimAbandonedEntries(incidentDeliveryDlq.claimAbandonedEntries())
+                        .claimIdleMillis(incidentDeliveryDlq.claimIdleMillis())
+                        .claimBatchSize(incidentDeliveryDlq.claimBatchSize())
+                        .idleSleepMillis(incidentDeliveryDlq.idleSleepMillis())
+                        .build();
         return AdminMonitoringConfig.builder()
                 .enabled(config.enabled())
                 .writeBehindWarnThreshold(config.writeBehindWarnThreshold())
@@ -209,27 +216,40 @@ final class RuntimeCoordinationSupport {
             String keyPrefix,
             RuntimeCoordinationConfig coordination,
             String instanceId,
-            String role
-    ) {
+            String role) {
+        return leaderLease(
+                JedisPooledOperations.of(jedis), keyPrefix, coordination, instanceId, role);
+    }
+
+    static RedisLeaderLease leaderLease(
+            RedisClientOperations jedis,
+            String keyPrefix,
+            RuntimeCoordinationConfig coordination,
+            String instanceId,
+            String role) {
         if (coordination == null || !coordination.leaderLeaseEnabled()) {
             return RedisLeaderLease.disabled();
         }
         String keyspacePrefix = keyPrefix == null || keyPrefix.isBlank() ? "cachedb" : keyPrefix;
-        String segment = coordination.leaderLeaseSegment() == null || coordination.leaderLeaseSegment().isBlank()
-                ? "coordination:leader"
-                : coordination.leaderLeaseSegment();
+        String segment =
+                coordination.leaderLeaseSegment() == null
+                                || coordination.leaderLeaseSegment().isBlank()
+                        ? "coordination:leader"
+                        : coordination.leaderLeaseSegment();
         String leaseKey = keyspacePrefix + ":" + segment + ":" + sanitize(role);
         return RedisLeaderLease.create(
                 jedis,
                 leaseKey,
                 instanceId,
                 coordination.leaderLeaseTtlMillis(),
-                coordination.leaderLeaseRenewIntervalMillis()
-        );
+                coordination.leaderLeaseRenewIntervalMillis());
     }
 
-    static String consumerNamePrefix(String basePrefix, RuntimeCoordinationConfig coordination, String instanceId) {
-        String normalizedPrefix = sanitize(basePrefix == null || basePrefix.isBlank() ? "cachedb-worker" : basePrefix);
+    static String consumerNamePrefix(
+            String basePrefix, RuntimeCoordinationConfig coordination, String instanceId) {
+        String normalizedPrefix =
+                sanitize(
+                        basePrefix == null || basePrefix.isBlank() ? "cachedb-worker" : basePrefix);
         if (coordination == null || !coordination.appendInstanceIdToConsumerNames()) {
             return normalizedPrefix;
         }
@@ -248,7 +268,10 @@ final class RuntimeCoordinationSupport {
         StringBuilder builder = new StringBuilder(normalized.length());
         for (int index = 0; index < normalized.length(); index++) {
             char current = normalized.charAt(index);
-            if (Character.isLetterOrDigit(current) || current == '-' || current == '_' || current == '.') {
+            if (Character.isLetterOrDigit(current)
+                    || current == '-'
+                    || current == '_'
+                    || current == '.') {
                 builder.append(Character.toLowerCase(current));
             } else {
                 builder.append('-');

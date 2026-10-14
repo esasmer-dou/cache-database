@@ -5,21 +5,23 @@ import redis.clients.jedis.params.SetParams;
 
 public final class RedisLeaderLease implements AutoCloseable {
 
-    private static final String RENEW_SCRIPT = """
+    private static final String RENEW_SCRIPT =
+            """
             if redis.call('GET', KEYS[1]) == ARGV[1] then
                 return redis.call('PEXPIRE', KEYS[1], ARGV[2])
             end
             return 0
             """;
 
-    private static final String RELEASE_SCRIPT = """
+    private static final String RELEASE_SCRIPT =
+            """
             if redis.call('GET', KEYS[1]) == ARGV[1] then
                 return redis.call('DEL', KEYS[1])
             end
             return 0
             """;
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final boolean enabled;
     private final String leaseKey;
     private final String ownerId;
@@ -34,8 +36,23 @@ public final class RedisLeaderLease implements AutoCloseable {
             String leaseKey,
             String ownerId,
             long ttlMillis,
-            long renewIntervalMillis
-    ) {
+            long renewIntervalMillis) {
+        this(
+                JedisPooledOperations.of(jedis),
+                enabled,
+                leaseKey,
+                ownerId,
+                ttlMillis,
+                renewIntervalMillis);
+    }
+
+    private RedisLeaderLease(
+            RedisClientOperations jedis,
+            boolean enabled,
+            String leaseKey,
+            String ownerId,
+            long ttlMillis,
+            long renewIntervalMillis) {
         this.jedis = jedis;
         this.enabled = enabled;
         this.leaseKey = leaseKey;
@@ -45,7 +62,7 @@ public final class RedisLeaderLease implements AutoCloseable {
     }
 
     public static RedisLeaderLease disabled() {
-        return new RedisLeaderLease(null, false, "", "", 0L, 0L);
+        return new RedisLeaderLease((RedisClientOperations) null, false, "", "", 0L, 0L);
     }
 
     public static RedisLeaderLease create(
@@ -53,25 +70,35 @@ public final class RedisLeaderLease implements AutoCloseable {
             String leaseKey,
             String ownerId,
             long ttlMillis,
-            long renewIntervalMillis
-    ) {
-        boolean enabled = jedis != null
-                && leaseKey != null
-                && !leaseKey.isBlank()
-                && ownerId != null
-                && !ownerId.isBlank()
-                && ttlMillis > 0L;
-        long safeRenewInterval = renewIntervalMillis > 0L
-                ? Math.min(renewIntervalMillis, Math.max(250L, ttlMillis / 2))
-                : Math.max(250L, ttlMillis / 2);
+            long renewIntervalMillis) {
+        return create(
+                JedisPooledOperations.of(jedis), leaseKey, ownerId, ttlMillis, renewIntervalMillis);
+    }
+
+    public static RedisLeaderLease create(
+            RedisClientOperations jedis,
+            String leaseKey,
+            String ownerId,
+            long ttlMillis,
+            long renewIntervalMillis) {
+        boolean enabled =
+                jedis != null
+                        && leaseKey != null
+                        && !leaseKey.isBlank()
+                        && ownerId != null
+                        && !ownerId.isBlank()
+                        && ttlMillis > 0L;
+        long safeRenewInterval =
+                renewIntervalMillis > 0L
+                        ? Math.min(renewIntervalMillis, Math.max(250L, ttlMillis / 2))
+                        : Math.max(250L, ttlMillis / 2);
         return new RedisLeaderLease(
                 jedis,
                 enabled,
                 leaseKey == null ? "" : leaseKey,
                 ownerId == null ? "" : ownerId,
                 ttlMillis,
-                safeRenewInterval
-        );
+                safeRenewInterval);
     }
 
     public synchronized boolean tryAcquireOrRenewLeadership() {
@@ -126,7 +153,8 @@ public final class RedisLeaderLease implements AutoCloseable {
     }
 
     private boolean acquire(long now) {
-        String response = jedis.set(leaseKey, ownerId, SetParams.setParams().nx().px(ttlMillis));
+        String response =
+                jedis.commands().set(leaseKey, ownerId, SetParams.setParams().nx().px(ttlMillis));
         leader = "OK".equalsIgnoreCase(response);
         if (leader) {
             lastLeaseRefreshAt = now;

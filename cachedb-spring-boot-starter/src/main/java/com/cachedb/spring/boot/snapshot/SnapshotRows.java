@@ -53,6 +53,19 @@ public final class SnapshotRows {
         return lists(relation.source(), relation::from, relation::to, Comparator.naturalOrder());
     }
 
+    public <F, T> SnapshotLists<F, T> lists(TypedSnapshotRelation<F, T> relation) {
+        return lists(relation.source(), relation::from, relation::to, null);
+    }
+
+    public <F, T> SnapshotLists<F, T> lists(
+            TypedSnapshotRelation<F, T> relation, Comparator<T> order) {
+        return lists(relation.source(), relation::from, relation::to, order);
+    }
+
+    public <F, T> SnapshotMembership<F, T> membership(TypedSnapshotRelation<F, T> relation) {
+        return membership(relation.source(), relation::from, relation::to);
+    }
+
     public <T, K, V> SnapshotLists<K, V> lists(
             SnapshotSource<T> source,
             Function<T, K> key,

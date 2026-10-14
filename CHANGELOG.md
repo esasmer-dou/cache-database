@@ -4,6 +4,28 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.13.0 - 2026-10-14
+
+### Added
+
+- generated decoding for additional scalar types and typed Long/UUID snapshot relations
+- bound comparison, range, null and literal-list snapshot predicates
+- bounded, indexed snapshot pagination, selected-root refresh and immutable payload reuse
+- partitioned outbox consumption with independent checkpoints and per-entity ordering
+- atomic Redis write envelopes and one-transaction SQL flushing across supported providers
+- pooled allocation of actual SQL sequence values and explicit same-slot Redis Cluster adapters
+- English and Turkish API examples, limits and upgrade guidance
+
+### Compatibility
+
+- Existing public constructors and methods remain available; regenerate source bindings.
+- Primitive boolean SQL NULL now fails. Use Boolean for nullable columns.
+- A zero hotEntityLimit disables admission; use -1 for unbounded count. The default stays 1,000.
+- Snapshot and queue records gain components. Review consumer serialization and record patterns.
+- Redis batch acceptance is not SQL commit; prepare a separate snapshot namespace before upgrading storage.
+- All reactor modules and runnable samples use 0.13.0 without SNAPSHOT.
+- Package publication is distinct from production certification; see the release notes for evidence boundaries.
+
 ## 0.12.0 - 2026-09-11
 
 ### Added

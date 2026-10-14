@@ -35,8 +35,12 @@ nedeniyle ağ turu sayısı sorgu sayısından fazla olabilir.
 | withoutPerSourceLimit | Tek kaynağın satır sınırını kaldırır | Toplam bütçeler devam eder |
 
 Ardışık where çağrıları AND ile birleşir. Alternatif koşullar için or kullanın.
-eq(field, null), IS NULL anlamına gelir. Desteklenen koşullar eşitlik, alt sorgulu IN,
-AND ve OR'dur. Sistem serbest iş ifadelerini SQL'e çevirmeye çalışmaz.
+eq(field, null), IS NULL anlamına gelir. 0.13 ile ne, gt, gte, lt, lte, between,
+isNull, isNotNull ve inValues koşulları da kullanılabilir. Metin kolon adı veya
+üretilmiş CacheField kullanıldığında değerler SQL'e parametre olarak bağlanır.
+Boş inValues listesi reddedilir. Oracle listeleri 900 değerlik parçalara böler.
+SQL Server'ın toplam 2.100 parametre sınırı çalıştırmadan önce denetlenir.
+Sistem serbest iş ifadelerini SQL'e çevirmeye çalışmaz.
 Kolonlar eşlemeye karşı doğrulanır. Üretilmiş alanlar yazım ve tip kontrolüne
 yardım eder; tablolar arasındaki ilişkinin iş açısından doğruluğunu kanıtlamaz.
 Kaynak kapsamını ve indeksleri kontrol edin.
@@ -65,12 +69,20 @@ Factory adı ortaktır; record yazılabilir entity'ye dönüşmez.
 
 Desteklenen alanlar: String, UUID, int/Integer, long/Long, double/Double,
 boolean/Boolean, BigDecimal, LocalDate, LocalDateTime ve Instant.
+0.13 ile OffsetDateTime, LocalTime, BigInteger, float/Float, short/Short,
+byte/Byte ve Java enum tipleri de desteklenir. Enum dönüşümü derleyicinin ürettiği
+State::valueOf çağrısıyla yapılır; reflection kullanılmaz.
 CacheColumn yoksa alan adı gerçek kolon adı olarak kullanılır.
 İç içe veya generic record, desteklenmeyen tip, güvensiz ad ve tekrar eden kolon
 derleme hatasıdır. Dönüşüm reflection değil, doğrudan constructor çağrısı kullanır.
-Eksik kolon hatadır. Boxed tipte null korunur. Sayısal primitive alan null olamaz.
-Primitive boolean için null false olur. Tam sayı taşması ve 0/1 dışındaki sayısal
+Eksik kolon hatadır. Boxed tipte null korunur. Hiçbir primitive alan null olamaz;
+0.13 ile boolean da bu kurala uyar. Tam sayı taşması ve 0/1 dışındaki sayısal
 boolean değerler reddedilir. Yokluk sıfırdan farklıysa boxed tip seçin.
+Float taşması ve sıfıra yuvarlanarak kaybolan değer reddedilir; olağan kayan noktalı
+yuvarlama devam eder. Timestamp/Instant, OffsetDateTime'a UTC ile çevrilir.
+Saat dilimi olmayan bir kolondan özgün offset bilgisi çıkarılamaz.
+LocalTime, JDBC Time kabul eder. Oracle'da bağımsız TIME kolonu yerine kullandığınız
+saklama biçimini açık bir skaler SELECT ile uyarlayın.
 
 ## 3. İlişkileri Bir Kez Hazırlayın
 
@@ -86,7 +98,13 @@ Buradaki items, ilk bölümdeki iki kolonlu ilişkidir.
 Yön order_id alanından product_id alanına doğrudur.
 String ilişki yardımcısı yalnızca bu iki kolonu okur.
 reverse aynı kaynağı kullanır; yeni SQL çalıştırmaz.
-Farklı kimlik tipleri veya ek alanlar için record kaynağı kullanın.
+0.13 ile sayısal kimlikler için SnapshotRelation.longs(...), UUID için
+SnapshotRelation.uuids(...) kullanılabilir. Farklı uç tipleri için
+SnapshotRelation.of(..., Long.class, ..., UUID.class) seçin.
+Tipli listeler, Comparator verilmezse kaynak sırasını korur; String yardımcılarının
+metin sıralamasıyla aynı davranış olduğu varsayılmamalıdır.
+UUID nesnesi, standart UUID metni veya 16 byte'lık gösterim kabul edilir.
+Ek alanlar için record kaynağı kullanın.
 rows.lists(source, key, value, comparator) ve rows.membership(source, key, value)
 bu kayıtlarla da çalışır.
 
@@ -131,3 +149,22 @@ Başarısız hazırlık başarılı kataloğu değiştirmemelidir.
 Yeni yardımcılar gizli SQL fallback, GET'te warm veya sınırsız retry eklemez.
 Bağlantı ve socket sürelerini sonlu tutun; iş süresini, satır ve byte sayılarını izleyin.
 İndeksleri, heap'i, diski ve Redis'te eski/yeni katalogların birlikte tutulma maliyetini planlayın.
+
+## 5. Filtre ve Tip Örnekleri (0.13)
+
+```java
+var orders = SnapshotSource.entity("orders", OrderEntityCacheBinding.SOURCE)
+        .where(SnapshotPredicate.gte("order_date", Instant.parse("2026-01-01T00:00:00Z"))
+                .and(SnapshotPredicate.inValues("status", List.of("OPEN", "PENDING")))
+                .and(SnapshotPredicate.isNull("deleted_at")));
+var links = SnapshotRelation.longs("items", "order_items", "order_id", "product_id")
+        .where(SnapshotPredicate.in("order_id", orders.select("order_id")));
+// Eşleme hazırlığında bir kez oluşturulur; bu çağrılar SQL çalıştırmaz.
+var itemsByOrder = rows.lists(links, Comparator.naturalOrder());
+var ordersByItem = rows.membership(links.reverse());
+```
+
+Kolon adlarını kendi üretilmiş eşlemenize göre seçin. Enum değerleri sıra numarasıyla
+değil adıyla bağlanır. Bilinmeyen enum adı ve tam sayı alana gelen kesirli değer hata verir.
+İndeksli/artımlı katalog, limitler, atomik yazım ve Cluster ayarları için
+[sınırlı çalışma rehberini](sinirli-calisma-islemleri.md) okuyun.

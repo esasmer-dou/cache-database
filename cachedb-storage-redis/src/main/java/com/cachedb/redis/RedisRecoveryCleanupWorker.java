@@ -4,6 +4,7 @@ import com.reactor.cachedb.core.config.DeadLetterRecoveryConfig;
 import com.reactor.cachedb.core.queue.RecoveryCleanupSnapshot;
 import com.reactor.cachedb.core.queue.WorkerErrorCapture;
 import com.reactor.cachedb.core.queue.WorkerErrorDetails;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.StreamEntryID;
 import redis.clients.jedis.resps.StreamEntry;
@@ -15,7 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class RedisRecoveryCleanupWorker implements AutoCloseable {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final DeadLetterRecoveryConfig config;
     private final String deadLetterStreamKey;
     private final RedisLeaderLease leaderLease;
@@ -34,7 +35,15 @@ public final class RedisRecoveryCleanupWorker implements AutoCloseable {
     private final AtomicReference<String> lastErrorStackTrace = new AtomicReference<>();
     private Thread workerThread;
 
-    public RedisRecoveryCleanupWorker(JedisPooled jedis, DeadLetterRecoveryConfig config, String deadLetterStreamKey) {
+    public RedisRecoveryCleanupWorker(
+            JedisPooled jedis, DeadLetterRecoveryConfig config, String deadLetterStreamKey) {
+        this(JedisPooledOperations.of(jedis), config, deadLetterStreamKey);
+    }
+
+    public RedisRecoveryCleanupWorker(
+            RedisClientOperations jedis,
+            DeadLetterRecoveryConfig config,
+            String deadLetterStreamKey) {
         this(jedis, config, deadLetterStreamKey, RedisLeaderLease.disabled());
     }
 
@@ -42,8 +51,15 @@ public final class RedisRecoveryCleanupWorker implements AutoCloseable {
             JedisPooled jedis,
             DeadLetterRecoveryConfig config,
             String deadLetterStreamKey,
-            RedisLeaderLease leaderLease
-    ) {
+            RedisLeaderLease leaderLease) {
+        this(JedisPooledOperations.of(jedis), config, deadLetterStreamKey, leaderLease);
+    }
+
+    public RedisRecoveryCleanupWorker(
+            RedisClientOperations jedis,
+            DeadLetterRecoveryConfig config,
+            String deadLetterStreamKey,
+            RedisLeaderLease leaderLease) {
         this.jedis = jedis;
         this.config = config;
         this.deadLetterStreamKey = deadLetterStreamKey;
@@ -66,9 +82,14 @@ public final class RedisRecoveryCleanupWorker implements AutoCloseable {
                     sleepQuietly(config.cleanupIntervalMillis());
                     continue;
                 }
-                prunedDeadLetterCount.addAndGet(cleanupStream(deadLetterStreamKey, config.deadLetterRetentionMillis()));
-                prunedReconciliationCount.addAndGet(cleanupStream(config.reconciliationStreamKey(), config.reconciliationRetentionMillis()));
-                prunedArchiveCount.addAndGet(cleanupStream(config.archiveStreamKey(), config.archiveRetentionMillis()));
+                prunedDeadLetterCount.addAndGet(
+                        cleanupStream(deadLetterStreamKey, config.deadLetterRetentionMillis()));
+                prunedReconciliationCount.addAndGet(
+                        cleanupStream(
+                                config.reconciliationStreamKey(),
+                                config.reconciliationRetentionMillis()));
+                prunedArchiveCount.addAndGet(
+                        cleanupStream(config.archiveStreamKey(), config.archiveRetentionMillis()));
                 runCount.incrementAndGet();
                 lastRunAtEpochMillis.set(System.currentTimeMillis());
                 Thread.sleep(config.cleanupIntervalMillis());
@@ -94,14 +115,14 @@ public final class RedisRecoveryCleanupWorker implements AutoCloseable {
         long deleted = 0L;
 
         while (running.get()) {
-            List<StreamEntry> expiredEntries = jedis.xrange(streamKey, "-", maxId, config.cleanupBatchSize());
+            List<StreamEntry> expiredEntries =
+                    jedis.commands().xrange(streamKey, "-", maxId, config.cleanupBatchSize());
             if (expiredEntries == null || expiredEntries.isEmpty()) {
                 return deleted;
             }
-            StreamEntryID[] ids = expiredEntries.stream()
-                    .map(StreamEntry::getID)
-                    .toArray(StreamEntryID[]::new);
-            deleted += jedis.xdel(streamKey, ids);
+            StreamEntryID[] ids =
+                    expiredEntries.stream().map(StreamEntry::getID).toArray(StreamEntryID[]::new);
+            deleted += jedis.commands().xdel(streamKey, ids);
             if (expiredEntries.size() < config.cleanupBatchSize()) {
                 return deleted;
             }
@@ -162,7 +183,6 @@ public final class RedisRecoveryCleanupWorker implements AutoCloseable {
                 lastErrorRootType.get(),
                 lastErrorRootMessage.get(),
                 lastErrorOrigin.get(),
-                lastErrorStackTrace.get()
-        );
+                lastErrorStackTrace.get());
     }
 }

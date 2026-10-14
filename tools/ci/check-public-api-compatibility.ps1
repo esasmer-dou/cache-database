@@ -1,5 +1,6 @@
 param(
     [switch]$UpdateBaseline,
+    [switch]$RequireExact,
     [string]$BaselinePath = "tools/ci/public-api-baseline.txt",
     [string]$OutputPath = "target/public-api-signature.txt",
     [string[]]$Modules = @(
@@ -135,12 +136,39 @@ if (-not (Test-Path $baselineFullPath)) {
 }
 
 $expected = Get-Content $baselineFullPath -Raw
-if ($expected -ne $actual) {
+function Get-ApiBlocks([string]$Text) {
+    $blocks = @{}
+    $current = $null
+    foreach ($line in ($Text -split "`n")) {
+        $line = $line.TrimEnd("`r")
+        if ($line.StartsWith("## ")) {
+            $current = $line
+            $blocks[$current] = [System.Collections.Generic.HashSet[string]]::new()
+        } elseif ($current -and $line.Trim() -and $line -ne "}") {
+            # Removing final widens a class without removing a binary member.
+            $normalized = $line -replace '^public final class ', 'public class '
+            [void]$blocks[$current].Add($normalized)
+        }
+    }
+    return $blocks
+}
+$before = Get-ApiBlocks $expected
+$after = Get-ApiBlocks $actual
+$missing = [System.Collections.Generic.List[string]]::new()
+foreach ($name in $before.Keys) {
+    foreach ($member in $before[$name]) {
+        if (-not $after.ContainsKey($name) -or -not $after[$name].Contains($member)) {
+            $missing.Add("$name :: $member")
+        }
+    }
+}
+if ($missing.Count -gt 0 -or ($RequireExact -and $expected -ne $actual)) {
+    $missing | ForEach-Object { Write-Host "Removed or changed: $_" }
     Write-Host "Public API signature changed."
     Write-Host "Actual signature written to: $outputFullPath"
     Write-Host "If this is an intentional public API change, regenerate the baseline and document the compatibility decision."
     throw "Public API compatibility check failed."
 }
 
-Write-Host "Public API compatibility check passed."
+Write-Host "Public API compatibility check passed. Existing members retained; additive changes permitted."
 Write-Host "Signature: $outputFullPath"

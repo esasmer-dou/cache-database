@@ -1,36 +1,38 @@
 package com.reactor.cachedb.starter;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
-import com.reactor.cachedb.core.config.IncidentEmailConfig;
-import com.reactor.cachedb.core.config.IncidentDeliveryDlqConfig;
 import com.reactor.cachedb.core.config.AdminReportJobConfig;
+import com.reactor.cachedb.core.config.IncidentDeliveryDlqConfig;
+import com.reactor.cachedb.core.config.IncidentEmailConfig;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 class AdminMonitoringOverheadTest {
 
     @Test
     void disabledSupportBundleShouldNotSpawnBackgroundThreads() {
-        AdminMonitoringConfig monitoringConfig = AdminMonitoringConfig.builder()
-                .enabled(false)
-                .build();
-        AdminReportJobConfig reportConfig = AdminReportJobConfig.builder()
-                .enabled(true)
-                .build();
+        AdminMonitoringConfig monitoringConfig =
+                AdminMonitoringConfig.builder().enabled(false).build();
+        AdminReportJobConfig reportConfig = AdminReportJobConfig.builder().enabled(true).build();
 
         Set<String> before = cachedbThreadNames();
-        MonitoringHistoryBuffer monitoringHistoryBuffer = MonitoringHistoryBuffer.disabled(monitoringConfig);
-        AlertRouteHistoryBuffer alertRouteHistoryBuffer = AlertRouteHistoryBuffer.disabled(monitoringConfig);
-        PerformanceHistoryBuffer performanceHistoryBuffer = PerformanceHistoryBuffer.disabled(monitoringConfig);
+        MonitoringHistoryBuffer monitoringHistoryBuffer =
+                MonitoringHistoryBuffer.disabled(monitoringConfig);
+        AlertRouteHistoryBuffer alertRouteHistoryBuffer =
+                AlertRouteHistoryBuffer.disabled(monitoringConfig);
+        PerformanceHistoryBuffer performanceHistoryBuffer =
+                PerformanceHistoryBuffer.disabled(monitoringConfig);
         AdminReportJobWorker adminReportJobWorker = AdminReportJobWorker.disabled(reportConfig);
-        AdminIncidentDeliveryManager adminIncidentDeliveryManager = AdminIncidentDeliveryManager.disabled(monitoringConfig);
+        AdminIncidentDeliveryManager adminIncidentDeliveryManager =
+                AdminIncidentDeliveryManager.disabled(monitoringConfig);
         try {
             monitoringHistoryBuffer.start();
             alertRouteHistoryBuffer.start();
@@ -38,10 +40,17 @@ class AdminMonitoringOverheadTest {
             adminReportJobWorker.start();
             adminIncidentDeliveryManager.start();
             Set<String> after = cachedbThreadNames();
-            System.out.println("admin-monitoring-benchmark disabledThreadDelta=" + (after.size() - before.size())
-                    + " before=" + before.size()
-                    + " after=" + after.size());
-            assertEquals(before, after, "Disabled admin monitoring should not create background threads");
+            System.out.println(
+                    "admin-monitoring-benchmark disabledThreadDelta="
+                            + (after.size() - before.size())
+                            + " before="
+                            + before.size()
+                            + " after="
+                            + after.size());
+            assertEquals(
+                    before,
+                    after,
+                    "Disabled admin monitoring should not create background threads");
         } finally {
             adminIncidentDeliveryManager.close();
             adminReportJobWorker.close();
@@ -70,27 +79,36 @@ class AdminMonitoringOverheadTest {
     }
 
     @Test
-    void enabledIncidentDeliveryStillSpawnsThreadsWhenExplicitlyTurnedOn() throws InterruptedException {
-        AdminMonitoringConfig monitoringConfig = AdminMonitoringConfig.builder()
-                .enabled(true)
-                .incidentEmail(IncidentEmailConfig.builder()
+    void enabledIncidentDeliveryStillSpawnsThreadsWhenExplicitlyTurnedOn()
+            throws InterruptedException {
+        AdminMonitoringConfig monitoringConfig =
+                AdminMonitoringConfig.builder()
                         .enabled(true)
-                        .addToAddress("ops@example.local")
-                        .build())
-                .incidentDeliveryDlq(IncidentDeliveryDlqConfig.builder()
-                        .enabled(false)
-                        .build())
-                .build();
+                        .incidentEmail(
+                                IncidentEmailConfig.builder()
+                                        .enabled(true)
+                                        .addToAddress("ops@example.local")
+                                        .build())
+                        .incidentDeliveryDlq(
+                                IncidentDeliveryDlqConfig.builder().enabled(false).build())
+                        .build();
         Set<String> before = cachedbThreadNames();
-        AdminIncidentDeliveryManager manager = new AdminIncidentDeliveryManager(monitoringConfig, null);
+        AdminIncidentDeliveryManager manager =
+                new AdminIncidentDeliveryManager(
+                        monitoringConfig, (redis.clients.jedis.JedisPooled) null);
         try {
             manager.start();
             Thread.sleep(150L);
             Set<String> after = cachedbThreadNames();
-            System.out.println("admin-monitoring-benchmark enabledIncidentThreadDelta=" + (after.size() - before.size())
-                    + " before=" + before.size()
-                    + " after=" + after.size());
-            assertTrue(after.stream().anyMatch(name -> name.startsWith("cachedb-incident-delivery")));
+            System.out.println(
+                    "admin-monitoring-benchmark enabledIncidentThreadDelta="
+                            + (after.size() - before.size())
+                            + " before="
+                            + before.size()
+                            + " after="
+                            + after.size());
+            assertTrue(
+                    after.stream().anyMatch(name -> name.startsWith("cachedb-incident-delivery")));
             assertTrue(after.size() >= before.size());
         } finally {
             manager.close();
@@ -116,10 +134,16 @@ class AdminMonitoringOverheadTest {
         }
         long activeFootprint = Math.max(0L, usedMemory() - baseline);
 
-        System.out.println("admin-monitoring-benchmark noopCollectorBytes=" + noopFootprint
-                + " activeCollectorBytes=" + activeFootprint
-                + " activeMinusNoopBytes=" + Math.max(0L, activeFootprint - noopFootprint));
-        assertTrue(activeFootprint > noopFootprint, "Active collector should retain more heap than the no-op collector");
+        System.out.println(
+                "admin-monitoring-benchmark noopCollectorBytes="
+                        + noopFootprint
+                        + " activeCollectorBytes="
+                        + activeFootprint
+                        + " activeMinusNoopBytes="
+                        + Math.max(0L, activeFootprint - noopFootprint));
+        assertTrue(
+                activeFootprint > noopFootprint,
+                "Active collector should retain more heap than the no-op collector");
     }
 
     private Set<String> cachedbThreadNames() {

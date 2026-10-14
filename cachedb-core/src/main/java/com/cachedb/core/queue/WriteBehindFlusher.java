@@ -6,6 +6,11 @@ import java.util.List;
 public interface WriteBehindFlusher {
     void flush(QueuedWriteOperation operation) throws SQLException;
 
+    default void flushAtomicBatch(List<QueuedWriteOperation> operations) throws SQLException {
+        throw new UnsupportedOperationException(
+                "This storage provider has no atomic batch support");
+    }
+
     default void flushBatch(List<QueuedWriteOperation> operations) throws SQLException {
         for (QueuedWriteOperation operation : operations) {
             flush(operation);

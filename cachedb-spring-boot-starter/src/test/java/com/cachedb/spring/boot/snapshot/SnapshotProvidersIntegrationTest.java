@@ -318,6 +318,10 @@ class SnapshotProvidersIntegrationTest {
                     case "mssql" ->
                             "jdbc:sqlserver://127.0.0.1:14331;databaseName=cachedb_snapshot;encrypt=false";
                     case "oracle" -> "jdbc:oracle:thin:@//127.0.0.1:15211/FREEPDB1";
+                    case "h2" ->
+                            "jdbc:h2:mem:"
+                                    + UUID.randomUUID()
+                                    + ";DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE";
                     default -> throw new IllegalArgumentException(provider);
                 });
     }
@@ -328,11 +332,12 @@ class SnapshotProvidersIntegrationTest {
                 switch (provider) {
                     case "postgres" -> "LocalFixture_7p92_test";
                     case "mssql" -> "CacheDbSnapshot123";
+                    case "h2" -> "";
                     default -> "CacheDbOracle123";
                 });
     }
 
-    private final class Fixture implements AutoCloseable {
+    final class Fixture implements AutoCloseable {
         final String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         final String root = "snap_r_" + suffix;
         final String child = "snap_c_" + suffix;
@@ -352,6 +357,7 @@ class SnapshotProvidersIntegrationTest {
                             switch (provider) {
                                 case "postgres" -> "postgres";
                                 case "mssql" -> "sa";
+                                case "h2" -> "sa";
                                 default -> "cachedb";
                             }));
             config.setPassword(password(provider));
@@ -371,14 +377,16 @@ class SnapshotProvidersIntegrationTest {
 
         // Readiness belongs to disposable DDL setup, never to production refresh retry policy.
         // Poll the actual snapshot visibility instead of assuming a fixed sleep is sufficient.
-        private void awaitOracleFixtureVisible() {
+        void awaitOracleFixtureVisible(String... extraTables) {
             long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(15);
             while (true) {
                 try (var connection = source.getConnection();
                         var transaction = SnapshotTransaction.begin(connection);
                         var statement = connection.createStatement()) {
                     statement.setQueryTimeout(5);
-                    for (String table : List.of(root, child)) {
+                    var tables = new ArrayList<>(List.of(root, child));
+                    tables.addAll(List.of(extraTables));
+                    for (String table : tables) {
                         try (var rows = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
                             if (!rows.next())
                                 throw new IllegalStateException("Missing Oracle fixture count");

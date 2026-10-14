@@ -2,6 +2,7 @@ package com.reactor.cachedb.spring.boot.snapshot;
 
 import com.reactor.cachedb.core.query.CacheField;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -26,6 +27,11 @@ public final class SnapshotPredicate {
 
     public static SnapshotPredicate eq(String column, Object value) {
         SnapshotSource.quote(column);
+        validateScalar(value);
+        return comparison(column, value, " = ?", " IS NULL");
+    }
+
+    private static void validateScalar(Object value) {
         if (value != null
                 && !(value instanceof String
                         || value instanceof Byte
@@ -43,16 +49,130 @@ public final class SnapshotPredicate {
                         || value instanceof java.time.LocalTime
                         || value instanceof java.time.Instant
                         || value instanceof java.time.OffsetDateTime
-                        || value instanceof java.time.OffsetTime))
+                        || value instanceof java.time.OffsetTime
+                        || value instanceof Enum<?>))
             throw new IllegalArgumentException("Predicate values must be immutable scalars");
+        if (value instanceof Float f && !Float.isFinite(f)
+                || value instanceof Double d && !Double.isFinite(d))
+            throw new IllegalArgumentException("Predicate numbers must be finite");
+    }
+
+    private static SnapshotPredicate comparison(
+            String column, Object value, String operator, String nullOperator) {
+        SnapshotSource.quote(column);
+        validateScalar(value);
+        if (nullOperator == null) Objects.requireNonNull(value, "Comparison value");
         return new SnapshotPredicate(
                 (product, parameters) -> {
                     String name = SnapshotSource.column(column, product);
-                    if (value == null) return name + " IS NULL";
-                    parameters.add(value);
-                    return name + " = ?";
+                    if (value == null) return name + nullOperator;
+                    parameters.add(value instanceof Enum<?> e ? e.name() : value);
+                    return name + operator;
                 },
                 Set.of(column));
+    }
+
+    public static SnapshotPredicate ne(String column, Object value) {
+        return comparison(column, value, " <> ?", " IS NOT NULL");
+    }
+
+    public static <E, V> SnapshotPredicate ne(CacheField<E, V> column, V value) {
+        return ne(column.columnName(), value);
+    }
+
+    public static SnapshotPredicate gt(String column, Object value) {
+        return comparison(column, value, " > ?", null);
+    }
+
+    public static <E, V> SnapshotPredicate gt(CacheField<E, V> column, V value) {
+        return gt(column.columnName(), value);
+    }
+
+    public static SnapshotPredicate gte(String column, Object value) {
+        return comparison(column, value, " >= ?", null);
+    }
+
+    public static <E, V> SnapshotPredicate gte(CacheField<E, V> column, V value) {
+        return gte(column.columnName(), value);
+    }
+
+    public static SnapshotPredicate lt(String column, Object value) {
+        return comparison(column, value, " < ?", null);
+    }
+
+    public static <E, V> SnapshotPredicate lt(CacheField<E, V> column, V value) {
+        return lt(column.columnName(), value);
+    }
+
+    public static SnapshotPredicate lte(String column, Object value) {
+        return comparison(column, value, " <= ?", null);
+    }
+
+    public static <E, V> SnapshotPredicate lte(CacheField<E, V> column, V value) {
+        return lte(column.columnName(), value);
+    }
+
+    public static SnapshotPredicate isNull(String column) {
+        return eq(column, null);
+    }
+
+    public static <E, V> SnapshotPredicate isNull(CacheField<E, V> column) {
+        return isNull(column.columnName());
+    }
+
+    public static SnapshotPredicate isNotNull(String column) {
+        return ne(column, null);
+    }
+
+    public static <E, V> SnapshotPredicate isNotNull(CacheField<E, V> column) {
+        return isNotNull(column.columnName());
+    }
+
+    public static SnapshotPredicate between(String column, Object lower, Object upper) {
+        SnapshotSource.quote(column);
+        validateScalar(Objects.requireNonNull(lower, "lowerInclusive"));
+        validateScalar(Objects.requireNonNull(upper, "upperInclusive"));
+        return new SnapshotPredicate(
+                (product, parameters) -> {
+                    parameters.add(lower instanceof Enum<?> e ? e.name() : lower);
+                    parameters.add(upper instanceof Enum<?> e ? e.name() : upper);
+                    return SnapshotSource.column(column, product) + " BETWEEN ? AND ?";
+                },
+                Set.of(column));
+    }
+
+    public static <E, V> SnapshotPredicate between(CacheField<E, V> column, V lower, V upper) {
+        return between(column.columnName(), lower, upper);
+    }
+
+    public static SnapshotPredicate inValues(String column, Collection<?> values) {
+        SnapshotSource.quote(column);
+        List<?> copy = List.copyOf(Objects.requireNonNull(values, "values"));
+        if (copy.isEmpty()) throw new IllegalArgumentException("IN values must not be empty");
+        copy.forEach(SnapshotPredicate::validateScalar);
+        return new SnapshotPredicate(
+                (product, parameters) -> {
+                    int chunk = "Oracle".equals(product) ? 900 : copy.size();
+                    StringBuilder sql = new StringBuilder("(");
+                    for (int start = 0; start < copy.size(); start += chunk) {
+                        if (start > 0) sql.append(" OR ");
+                        sql.append(SnapshotSource.column(column, product)).append(" IN (");
+                        int end = Math.min(copy.size(), start + chunk);
+                        for (int i = start; i < end; i++) {
+                            if (i > start) sql.append(", ");
+                            sql.append('?');
+                            Object value = copy.get(i);
+                            parameters.add(value instanceof Enum<?> e ? e.name() : value);
+                        }
+                        sql.append(')');
+                    }
+                    return sql.append(')').toString();
+                },
+                Set.of(column));
+    }
+
+    public static <E, V> SnapshotPredicate inValues(CacheField<E, V> column, Collection<V> values) {
+        return inValues(column.columnName(), values);
     }
 
     public static SnapshotPredicate in(String column, SnapshotSelection selection) {

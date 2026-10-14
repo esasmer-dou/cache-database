@@ -4,9 +4,10 @@ import com.reactor.cachedb.core.change.ExternalChangeFeedAdapter;
 import com.reactor.cachedb.core.change.ExternalChangeSink;
 import com.reactor.cachedb.jdbc.JdbcOutboxExternalChangeFeedAdapter;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
+
+import javax.sql.DataSource;
 
 public final class OracleOutboxExternalChangeFeedAdapter implements ExternalChangeFeedAdapter {
     private final JdbcOutboxExternalChangeFeedAdapter delegate;
@@ -49,12 +50,11 @@ public final class OracleOutboxExternalChangeFeedAdapter implements ExternalChan
         private final JdbcOutboxExternalChangeFeedAdapter.Builder delegate;
 
         private Builder(DataSource dataSource, int lockWaitSeconds) {
-            this.delegate = JdbcOutboxExternalChangeFeedAdapter.builder(
-                            dataSource,
-                            new OracleOutboxDialect(lockWaitSeconds)
-                    )
-                    .transactionIsolation(Connection.TRANSACTION_READ_COMMITTED)
-                    .createCheckpointTable(false);
+            this.delegate =
+                    JdbcOutboxExternalChangeFeedAdapter.builder(
+                                    dataSource, new OracleOutboxDialect(lockWaitSeconds))
+                            .transactionIsolation(Connection.TRANSACTION_READ_COMMITTED)
+                            .createCheckpointTable(false);
         }
 
         public Builder adapterName(String adapterName) {
@@ -114,6 +114,11 @@ public final class OracleOutboxExternalChangeFeedAdapter implements ExternalChan
 
         public Builder batchSize(int batchSize) {
             delegate.batchSize(batchSize);
+            return this;
+        }
+
+        public Builder partition(int count, int index, String column) {
+            delegate.partition(count, index, column);
             return this;
         }
 

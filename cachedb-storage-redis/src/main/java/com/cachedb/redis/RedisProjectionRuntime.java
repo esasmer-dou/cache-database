@@ -4,15 +4,16 @@ import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.model.EntityCodec;
 import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.projection.EntityProjectionBinding;
+
+import redis.clients.jedis.AbstractPipeline;
 import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.Pipeline;
 
 import java.util.ArrayList;
 import java.util.Collection;
 
 final class RedisProjectionRuntime<P, ID> {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final EntityMetadata<P, ID> metadata;
     private final EntityCodec<P> codec;
     private final RedisKeyStrategy keyStrategy;
@@ -28,8 +29,25 @@ final class RedisProjectionRuntime<P, ID> {
             RedisKeyStrategy keyStrategy,
             CachePolicy cachePolicy,
             RedisQueryIndexManager<P, ID> queryIndexManager,
-            EntityProjectionBinding<?, P, ID> binding
-    ) {
+            EntityProjectionBinding<?, P, ID> binding) {
+        this(
+                JedisPooledOperations.of(jedis),
+                metadata,
+                codec,
+                keyStrategy,
+                cachePolicy,
+                queryIndexManager,
+                binding);
+    }
+
+    RedisProjectionRuntime(
+            RedisClientOperations jedis,
+            EntityMetadata<P, ID> metadata,
+            EntityCodec<P> codec,
+            RedisKeyStrategy keyStrategy,
+            CachePolicy cachePolicy,
+            RedisQueryIndexManager<P, ID> queryIndexManager,
+            EntityProjectionBinding<?, P, ID> binding) {
         this.jedis = jedis;
         this.metadata = metadata;
         this.codec = codec;
@@ -43,7 +61,7 @@ final class RedisProjectionRuntime<P, ID> {
         return metadata;
     }
 
-    JedisPooled jedis() {
+    RedisClientOperations jedis() {
         return jedis;
     }
 
@@ -85,11 +103,15 @@ final class RedisProjectionRuntime<P, ID> {
         String encoded = codec.toRedisValue(projection);
         long ttlSeconds = cachePolicy.entityTtlSeconds();
         if (ttlSeconds > 0) {
-            jedis.setex(payloadKey, Math.toIntExact(Math.min(Integer.MAX_VALUE, ttlSeconds)), encoded);
+            jedis.commands()
+                    .setex(
+                            payloadKey,
+                            Math.toIntExact(Math.min(Integer.MAX_VALUE, ttlSeconds)),
+                            encoded);
         } else {
-            jedis.set(payloadKey, encoded);
+            jedis.commands().set(payloadKey, encoded);
         }
-        jedis.del(tombstoneKey(id));
+        jedis.commands().del(tombstoneKey(id));
         queryIndexManager.reindex(projection);
         invalidateQueryCache();
     }
@@ -108,10 +130,9 @@ final class RedisProjectionRuntime<P, ID> {
             return;
         }
         long ttlSeconds = cachePolicy.entityTtlSeconds();
-        int effectiveTtlSeconds = ttlSeconds > 0
-                ? Math.toIntExact(Math.min(Integer.MAX_VALUE, ttlSeconds))
-                : 0;
-        try (Pipeline pipeline = jedis.pipelined()) {
+        int effectiveTtlSeconds =
+                ttlSeconds > 0 ? Math.toIntExact(Math.min(Integer.MAX_VALUE, ttlSeconds)) : 0;
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
             for (P projection : candidates) {
                 ID id = metadata.idAccessor().apply(projection);
                 String payloadKey = payloadKey(id);
@@ -143,10 +164,9 @@ final class RedisProjectionRuntime<P, ID> {
             return;
         }
         long ttlSeconds = cachePolicy.entityTtlSeconds();
-        int effectiveTtlSeconds = ttlSeconds > 0
-                ? Math.toIntExact(Math.min(Integer.MAX_VALUE, ttlSeconds))
-                : 0;
-        try (Pipeline pipeline = jedis.pipelined()) {
+        int effectiveTtlSeconds =
+                ttlSeconds > 0 ? Math.toIntExact(Math.min(Integer.MAX_VALUE, ttlSeconds)) : 0;
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
             for (P projection : candidates) {
                 ID id = metadata.idAccessor().apply(projection);
                 String payloadKey = payloadKey(id);
@@ -165,7 +185,7 @@ final class RedisProjectionRuntime<P, ID> {
     }
 
     void delete(ID id) {
-        jedis.del(payloadKey(id), tombstoneKey(id));
+        jedis.commands().del(payloadKey(id), tombstoneKey(id));
         queryIndexManager.removeById(id);
         invalidateQueryCache();
     }

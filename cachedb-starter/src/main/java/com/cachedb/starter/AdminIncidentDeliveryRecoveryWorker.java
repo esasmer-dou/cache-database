@@ -7,11 +7,14 @@ import com.reactor.cachedb.core.queue.IncidentChannelSnapshot;
 import com.reactor.cachedb.core.queue.IncidentDeliveryRecoverySnapshot;
 import com.reactor.cachedb.core.queue.WorkerErrorCapture;
 import com.reactor.cachedb.core.queue.WorkerErrorDetails;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.StreamEntryID;
 import redis.clients.jedis.exceptions.JedisDataException;
-import redis.clients.jedis.params.XAutoClaimParams;
 import redis.clients.jedis.params.XAddParams;
+import redis.clients.jedis.params.XAutoClaimParams;
 import redis.clients.jedis.params.XReadGroupParams;
 import redis.clients.jedis.resps.StreamEntry;
 
@@ -31,7 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final AdminIncidentDeliveryManager deliveryManager;
     private final IncidentDeliveryDlqConfig config;
     private final ExecutorService executorService;
@@ -51,15 +54,20 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
     AdminIncidentDeliveryRecoveryWorker(
             JedisPooled jedis,
             AdminIncidentDeliveryManager deliveryManager,
-            IncidentDeliveryDlqConfig config
-    ) {
+            IncidentDeliveryDlqConfig config) {
+        this(JedisPooledOperations.of(jedis), deliveryManager, config);
+    }
+
+    AdminIncidentDeliveryRecoveryWorker(
+            RedisClientOperations jedis,
+            AdminIncidentDeliveryManager deliveryManager,
+            IncidentDeliveryDlqConfig config) {
         this.jedis = jedis;
         this.deliveryManager = deliveryManager;
         this.config = config;
-        this.executorService = Executors.newFixedThreadPool(
-                Math.max(1, config.workerThreads()),
-                threadFactory(config)
-        );
+        this.executorService =
+                Executors.newFixedThreadPool(
+                        Math.max(1, config.workerThreads()), threadFactory(config));
     }
 
     void start() {
@@ -85,8 +93,7 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
                 lastErrorRootType.get(),
                 lastErrorRootMessage.get(),
                 lastErrorOrigin.get(),
-                lastErrorStackTrace.get()
-        );
+                lastErrorStackTrace.get());
     }
 
     private void ensureConsumerGroup() {
@@ -94,7 +101,12 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
             return;
         }
         try {
-            jedis.xgroupCreate(config.streamKey(), config.consumerGroup(), new StreamEntryID("0-0"), true);
+            jedis.commands()
+                    .xgroupCreate(
+                            config.streamKey(),
+                            config.consumerGroup(),
+                            new StreamEntryID("0-0"),
+                            true);
         } catch (JedisDataException exception) {
             if (!exception.getMessage().contains("BUSYGROUP")) {
                 throw exception;
@@ -103,21 +115,26 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
     }
 
     private void runLoop(String consumerName) {
-        XReadGroupParams params = new XReadGroupParams()
-                .count(Math.max(1, config.batchSize()))
-                .block((int) Math.max(1L, config.blockTimeoutMillis()));
+        XReadGroupParams params =
+                new XReadGroupParams()
+                        .count(Math.max(1, config.batchSize()))
+                        .block((int) Math.max(1L, config.blockTimeoutMillis()));
         while (running.get() && !Thread.currentThread().isInterrupted()) {
             try {
-                List<Entry<String, List<StreamEntry>>> responses = config.claimAbandonedEntries()
-                        ? claimAbandonedEntries(consumerName)
-                        : List.of();
+                List<Entry<String, List<StreamEntry>>> responses =
+                        config.claimAbandonedEntries()
+                                ? claimAbandonedEntries(consumerName)
+                                : List.of();
                 if (!hasEntries(responses)) {
-                    responses = jedis.xreadGroup(
-                            config.consumerGroup(),
-                            consumerName,
-                            params,
-                            Map.of(config.streamKey(), StreamEntryID.UNRECEIVED_ENTRY)
-                    );
+                    responses =
+                            jedis.commands()
+                                    .xreadGroup(
+                                            config.consumerGroup(),
+                                            consumerName,
+                                            params,
+                                            Map.of(
+                                                    config.streamKey(),
+                                                    StreamEntryID.UNRECEIVED_ENTRY));
                 }
                 if (!hasEntries(responses)) {
                     sleepQuietly(config.idleSleepMillis());
@@ -135,18 +152,20 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
     }
 
     private List<Entry<String, List<StreamEntry>>> claimAbandonedEntries(String consumerName) {
-        Entry<StreamEntryID, List<StreamEntry>> claimed = jedis.xautoclaim(
-                config.streamKey(),
-                config.consumerGroup(),
-                consumerName,
-                config.claimIdleMillis(),
-                new StreamEntryID("0-0"),
-                new XAutoClaimParams().count(Math.max(1, config.claimBatchSize()))
-        );
-        List<Entry<String, List<StreamEntry>>> responses = List.of(Map.entry(
-                config.streamKey(),
-                claimed == null ? List.of() : claimed.getValue()
-        ));
+        Entry<StreamEntryID, List<StreamEntry>> claimed =
+                jedis.commands()
+                        .xautoclaim(
+                                config.streamKey(),
+                                config.consumerGroup(),
+                                consumerName,
+                                config.claimIdleMillis(),
+                                new StreamEntryID("0-0"),
+                                new XAutoClaimParams().count(Math.max(1, config.claimBatchSize())));
+        List<Entry<String, List<StreamEntry>>> responses =
+                List.of(
+                        Map.entry(
+                                config.streamKey(),
+                                claimed == null ? List.of() : claimed.getValue()));
         if (hasEntries(responses)) {
             claimedCount.addAndGet(responses.get(0).getValue().size());
         }
@@ -172,16 +191,16 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
             return;
         }
 
-        IncidentChannelSnapshot failedSnapshot = new IncidentChannelSnapshot(
-                channel,
-                0L,
-                0L,
-                0L,
-                0L,
-                System.currentTimeMillis(),
-                fields.getOrDefault("lastErrorType", ""),
-                fields.getOrDefault("lastErrorMessage", "")
-        );
+        IncidentChannelSnapshot failedSnapshot =
+                new IncidentChannelSnapshot(
+                        channel,
+                        0L,
+                        0L,
+                        0L,
+                        0L,
+                        System.currentTimeMillis(),
+                        fields.getOrDefault("lastErrorType", ""),
+                        fields.getOrDefault("lastErrorMessage", ""));
         deliveryManager.deadLetter(failedSnapshot, record, attempts + 1);
         ackAndDelete(entry.getID());
         deadLetterCount.incrementAndGet();
@@ -192,8 +211,7 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
             String channel,
             AdminIncidentRecord record,
             int attempts,
-            Map<String, String> fields
-    ) {
+            Map<String, String> fields) {
         LinkedHashMap<String, String> payload = new LinkedHashMap<>();
         payload.put("status", status);
         payload.put("channel", channel);
@@ -208,9 +226,10 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
         payload.put("lastErrorType", fields.getOrDefault("lastErrorType", ""));
         payload.put("lastErrorMessage", fields.getOrDefault("lastErrorMessage", ""));
         for (Map.Entry<String, String> entry : record.fields().entrySet()) {
-            payload.put("field." + entry.getKey(), entry.getValue() == null ? "" : entry.getValue());
+            payload.put(
+                    "field." + entry.getKey(), entry.getValue() == null ? "" : entry.getValue());
         }
-        jedis.xadd(config.recoveryStreamKey(), XAddParams.xAddParams(), payload);
+        jedis.commands().xadd(config.recoveryStreamKey(), XAddParams.xAddParams(), payload);
     }
 
     private AdminIncidentRecord toIncidentRecord(Map<String, String> fields) {
@@ -224,16 +243,16 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
                 fields.getOrDefault("entryId", ""),
                 fields.getOrDefault("code", ""),
                 fields.getOrDefault("description", ""),
-                AdminIncidentSeverity.valueOf(fields.getOrDefault("severity", AdminIncidentSeverity.WARNING.name())),
+                AdminIncidentSeverity.valueOf(
+                        fields.getOrDefault("severity", AdminIncidentSeverity.WARNING.name())),
                 fields.getOrDefault("source", ""),
                 Instant.parse(fields.getOrDefault("recordedAt", Instant.now().toString())),
-                Map.copyOf(recordFields)
-        );
+                Map.copyOf(recordFields));
     }
 
     private void ackAndDelete(StreamEntryID id) {
-        jedis.xack(config.streamKey(), config.consumerGroup(), id);
-        jedis.xdel(config.streamKey(), id);
+        jedis.commands().xack(config.streamKey(), config.consumerGroup(), id);
+        jedis.commands().xdel(config.streamKey(), id);
     }
 
     private boolean hasEntries(List<Entry<String, List<StreamEntry>>> responses) {
@@ -295,7 +314,10 @@ final class AdminIncidentDeliveryRecoveryWorker implements AutoCloseable {
     private ThreadFactory threadFactory(IncidentDeliveryDlqConfig config) {
         AtomicInteger counter = new AtomicInteger();
         return runnable -> {
-            Thread thread = new Thread(runnable, config.consumerNamePrefix() + "-recovery-" + counter.incrementAndGet());
+            Thread thread =
+                    new Thread(
+                            runnable,
+                            config.consumerNamePrefix() + "-recovery-" + counter.incrementAndGet());
             thread.setDaemon(true);
             return thread;
         };

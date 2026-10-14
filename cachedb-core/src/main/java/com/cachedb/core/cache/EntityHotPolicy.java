@@ -25,8 +25,14 @@ public record EntityHotPolicy(
         boolean evictWhenRejected,
         CacheAdmissionPredicate customPredicate,
         EntityHotPolicyCompositeOperator compositeOperator,
-        List<EntityHotPolicy> children
-) {
+        List<EntityHotPolicy> children) {
+    public static final int UNBOUNDED = CachePolicy.UNBOUNDED;
+    public static final int DISABLED = CachePolicy.DISABLED;
+
+    public static EntityHotPolicy disabled() {
+        return customPredicate(columns -> false);
+    }
+
     public EntityHotPolicy(
             EntityHotPolicyMode mode,
             String timeColumn,
@@ -37,8 +43,7 @@ public record EntityHotPolicy(
             boolean admitOnRead,
             boolean admitOnWarm,
             boolean evictWhenRejected,
-            CacheAdmissionPredicate customPredicate
-    ) {
+            CacheAdmissionPredicate customPredicate) {
         this(
                 mode,
                 timeColumn,
@@ -51,8 +56,7 @@ public record EntityHotPolicy(
                 evictWhenRejected,
                 customPredicate,
                 EntityHotPolicyCompositeOperator.ALL,
-                List.of()
-        );
+                List.of());
     }
 
     public EntityHotPolicy {
@@ -60,12 +64,12 @@ public record EntityHotPolicy(
         timeColumn = blankToNull(timeColumn);
         stateColumn = blankToNull(stateColumn);
         stateValues = stateValues == null ? List.of() : List.copyOf(stateValues);
-        compositeOperator = compositeOperator == null ? EntityHotPolicyCompositeOperator.ALL : compositeOperator;
-        children = children == null
-                ? List.of()
-                : children.stream()
-                .filter(Objects::nonNull)
-                .toList();
+        compositeOperator =
+                compositeOperator == null
+                        ? EntityHotPolicyCompositeOperator.ALL
+                        : compositeOperator;
+        children =
+                children == null ? List.of() : children.stream().filter(Objects::nonNull).toList();
     }
 
     public static EntityHotPolicy countWindow() {
@@ -119,7 +123,8 @@ public record EntityHotPolicy(
         return shouldAdmit(columns, source, Instant.now());
     }
 
-    public boolean shouldAdmit(Map<String, Object> columns, CacheAdmissionSource source, Instant now) {
+    public boolean shouldAdmit(
+            Map<String, Object> columns, CacheAdmissionSource source, Instant now) {
         if (!sourceAllowed(source)) {
             return false;
         }
@@ -129,11 +134,13 @@ public record EntityHotPolicy(
             case TIME_WINDOW -> withinTimeWindow(safeColumns, now == null ? Instant.now() : now);
             case STATE_WINDOW -> withinStateWindow(safeColumns);
             case CUSTOM_PREDICATE -> customPredicate != null && customPredicate.admit(safeColumns);
-            case COMPOSITE -> withinCompositePolicy(safeColumns, source, now == null ? Instant.now() : now);
+            case COMPOSITE ->
+                    withinCompositePolicy(safeColumns, source, now == null ? Instant.now() : now);
         };
     }
 
-    private boolean withinCompositePolicy(Map<String, Object> columns, CacheAdmissionSource source, Instant now) {
+    private boolean withinCompositePolicy(
+            Map<String, Object> columns, CacheAdmissionSource source, Instant now) {
         if (children.isEmpty()) {
             return false;
         }
@@ -228,7 +235,9 @@ public record EntityHotPolicy(
         }
         if (value instanceof Number number) {
             long epoch = number.longValue();
-            return epoch > 9_999_999_999L ? Instant.ofEpochMilli(epoch) : Instant.ofEpochSecond(epoch);
+            return epoch > 9_999_999_999L
+                    ? Instant.ofEpochMilli(epoch)
+                    : Instant.ofEpochSecond(epoch);
         }
         String raw = String.valueOf(value).trim();
         if (raw.isEmpty()) {
@@ -268,7 +277,8 @@ public record EntityHotPolicy(
         private boolean admitOnWarm = true;
         private boolean evictWhenRejected = true;
         private CacheAdmissionPredicate customPredicate;
-        private EntityHotPolicyCompositeOperator compositeOperator = EntityHotPolicyCompositeOperator.ALL;
+        private EntityHotPolicyCompositeOperator compositeOperator =
+                EntityHotPolicyCompositeOperator.ALL;
         private List<EntityHotPolicy> children = List.of();
 
         public Builder mode(EntityHotPolicyMode mode) {
@@ -297,15 +307,19 @@ public record EntityHotPolicy(
         }
 
         public Builder stateValues(Collection<String> stateValues) {
-            this.stateValues = stateValues == null ? List.of() : stateValues.stream()
-                    .filter(value -> value != null && !value.isBlank())
-                    .map(String::trim)
-                    .toList();
+            this.stateValues =
+                    stateValues == null
+                            ? List.of()
+                            : stateValues.stream()
+                                    .filter(value -> value != null && !value.isBlank())
+                                    .map(String::trim)
+                                    .toList();
             return this;
         }
 
         public Builder stateValues(String... stateValues) {
-            return stateValues(stateValues == null ? List.of() : java.util.Arrays.asList(stateValues));
+            return stateValues(
+                    stateValues == null ? List.of() : java.util.Arrays.asList(stateValues));
         }
 
         public Builder admitOnWrite(boolean admitOnWrite) {
@@ -339,11 +353,10 @@ public record EntityHotPolicy(
         }
 
         public Builder children(Collection<EntityHotPolicy> children) {
-            this.children = children == null
-                    ? List.of()
-                    : children.stream()
-                    .filter(Objects::nonNull)
-                    .toList();
+            this.children =
+                    children == null
+                            ? List.of()
+                            : children.stream().filter(Objects::nonNull).toList();
             return this;
         }
 
@@ -382,8 +395,7 @@ public record EntityHotPolicy(
                     evictWhenRejected,
                     customPredicate,
                     compositeOperator,
-                    children
-            );
+                    children);
         }
     }
 }

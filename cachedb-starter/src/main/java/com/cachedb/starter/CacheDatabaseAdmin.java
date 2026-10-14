@@ -1,23 +1,18 @@
 package com.reactor.cachedb.starter;
 
+import com.reactor.cachedb.core.api.CacheSession;
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
-import com.reactor.cachedb.core.api.CacheSession;
 import com.reactor.cachedb.core.page.NoOpEntityPageLoader;
-import com.reactor.cachedb.core.queue.AdminDiagnosticsRecord;
 import com.reactor.cachedb.core.queue.AdminAlertRule;
+import com.reactor.cachedb.core.queue.AdminDiagnosticsRecord;
+import com.reactor.cachedb.core.queue.AdminExportFormat;
+import com.reactor.cachedb.core.queue.AdminExportResult;
 import com.reactor.cachedb.core.queue.AdminHealthStatus;
 import com.reactor.cachedb.core.queue.AdminIncident;
 import com.reactor.cachedb.core.queue.AdminIncidentRecord;
 import com.reactor.cachedb.core.queue.AdminIncidentSeverity;
-import com.reactor.cachedb.core.queue.AdminExportFormat;
-import com.reactor.cachedb.core.queue.AdminExportResult;
-import com.reactor.cachedb.core.queue.IncidentDeliverySnapshot;
-import com.reactor.cachedb.core.queue.PlannerStatisticsSnapshot;
-import com.reactor.cachedb.core.queue.ProjectionRefreshFailureEntry;
-import com.reactor.cachedb.core.queue.ProjectionRefreshReplayResult;
-import com.reactor.cachedb.core.queue.ProjectionRefreshSnapshot;
 import com.reactor.cachedb.core.queue.AdminReportJobSnapshot;
 import com.reactor.cachedb.core.queue.BulkDeadLetterActionResult;
 import com.reactor.cachedb.core.queue.DeadLetterActionResult;
@@ -25,23 +20,34 @@ import com.reactor.cachedb.core.queue.DeadLetterArchiveRecord;
 import com.reactor.cachedb.core.queue.DeadLetterEntry;
 import com.reactor.cachedb.core.queue.DeadLetterManagement;
 import com.reactor.cachedb.core.queue.DeadLetterQuery;
-import com.reactor.cachedb.core.queue.DeadLetterReplayPreview;
 import com.reactor.cachedb.core.queue.DeadLetterRecoverySnapshot;
-import com.reactor.cachedb.core.queue.ReconciliationQuery;
+import com.reactor.cachedb.core.queue.DeadLetterReplayPreview;
+import com.reactor.cachedb.core.queue.IncidentDeliverySnapshot;
+import com.reactor.cachedb.core.queue.PlannerStatisticsSnapshot;
+import com.reactor.cachedb.core.queue.ProjectionRefreshFailureEntry;
+import com.reactor.cachedb.core.queue.ProjectionRefreshReplayResult;
+import com.reactor.cachedb.core.queue.ProjectionRefreshSnapshot;
+import com.reactor.cachedb.core.queue.QueryIndexRebuildResult;
 import com.reactor.cachedb.core.queue.ReconciliationHealth;
 import com.reactor.cachedb.core.queue.ReconciliationMetrics;
+import com.reactor.cachedb.core.queue.ReconciliationQuery;
 import com.reactor.cachedb.core.queue.ReconciliationRecord;
+import com.reactor.cachedb.core.queue.RecoveryCleanupSnapshot;
 import com.reactor.cachedb.core.queue.RedisGuardrailSnapshot;
 import com.reactor.cachedb.core.queue.RedisRuntimeProfileSnapshot;
-import com.reactor.cachedb.core.queue.RecoveryCleanupSnapshot;
 import com.reactor.cachedb.core.queue.RuntimeProfileChurnRecord;
 import com.reactor.cachedb.core.queue.SchemaMigrationPlan;
 import com.reactor.cachedb.core.queue.SchemaMigrationStep;
 import com.reactor.cachedb.core.queue.StoragePerformanceSnapshot;
 import com.reactor.cachedb.core.queue.StreamPage;
-import com.reactor.cachedb.core.queue.QueryIndexRebuildResult;
 import com.reactor.cachedb.core.queue.WriteBehindWorkerSnapshot;
+import com.reactor.cachedb.core.registry.EntityBinding;
+import com.reactor.cachedb.core.registry.EntityRegistry;
+import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
 import com.reactor.cachedb.redis.RedisIndexMaintenance;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.XAddParams;
 import redis.clients.jedis.resps.StreamEntry;
@@ -49,7 +55,6 @@ import redis.clients.jedis.resps.StreamEntry;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import javax.sql.DataSource;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -66,9 +71,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import com.reactor.cachedb.core.registry.EntityBinding;
-import com.reactor.cachedb.core.registry.EntityRegistry;
-import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
+
+import javax.sql.DataSource;
 
 public final class CacheDatabaseAdmin {
 
@@ -78,7 +82,7 @@ public final class CacheDatabaseAdmin {
     private static final int ADMIN_METRICS_SCAN_STEPS = 1;
 
     private final DeadLetterManagement deadLetterManagement;
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final String keyPrefix;
     private final List<String> writeBehindStreamKeys;
     private final String deadLetterStreamKey;
@@ -115,34 +119,51 @@ public final class CacheDatabaseAdmin {
     private final MigrationWarmRunner migrationWarmRunner;
     private final MigrationComparisonRunner migrationComparisonRunner;
     private volatile MigrationPlannerDemoSupport migrationPlannerDemoSupport;
-    private final java.util.function.IntFunction<List<MonitoringHistoryPoint>> monitoringHistorySupplier;
-    private final java.util.function.IntFunction<List<AlertRouteHistoryPoint>> alertRouteHistorySupplier;
-    private final java.util.function.IntFunction<List<PerformanceHistoryPoint>> performanceHistorySupplier;
-    private final java.util.function.IntFunction<List<ProjectionRefreshFailureEntry>> projectionRefreshFailureSupplier;
+    private final java.util.function.IntFunction<List<MonitoringHistoryPoint>>
+            monitoringHistorySupplier;
+    private final java.util.function.IntFunction<List<AlertRouteHistoryPoint>>
+            alertRouteHistorySupplier;
+    private final java.util.function.IntFunction<List<PerformanceHistoryPoint>>
+            performanceHistorySupplier;
+    private final java.util.function.IntFunction<List<ProjectionRefreshFailureEntry>>
+            projectionRefreshFailureSupplier;
     private final Function<String, ProjectionRefreshReplayResult> projectionRefreshReplayFunction;
     private final java.util.function.Supplier<AdminTelemetryResetSnapshot> telemetryResetSupplier;
-    private final java.util.function.Supplier<PerformanceTelemetryResetSnapshot> performanceResetSupplier;
-    private final AtomicReference<List<AdminIncidentRecord>> lastIncidentHistory = new AtomicReference<>(List.of());
-    private final AtomicReference<List<FailingSignalSnapshot>> lastFailingSignals = new AtomicReference<>(List.of());
-    private final AtomicReference<ReconciliationMetrics> lastMetricsSnapshot = new AtomicReference<>();
+    private final java.util.function.Supplier<PerformanceTelemetryResetSnapshot>
+            performanceResetSupplier;
+    private final AtomicReference<List<AdminIncidentRecord>> lastIncidentHistory =
+            new AtomicReference<>(List.of());
+    private final AtomicReference<List<FailingSignalSnapshot>> lastFailingSignals =
+            new AtomicReference<>(List.of());
+    private final AtomicReference<ReconciliationMetrics> lastMetricsSnapshot =
+            new AtomicReference<>();
     private final AtomicLong lastMetricsSampleAtEpochMillis = new AtomicLong();
-    private final AtomicReference<List<AdminIncident>> lastIncidentsSnapshot = new AtomicReference<>();
+    private final AtomicReference<List<AdminIncident>> lastIncidentsSnapshot =
+            new AtomicReference<>();
     private final AtomicLong lastIncidentsSampleAtEpochMillis = new AtomicLong();
-    private final AtomicReference<List<String>> lastDegradedQueryIndexesSnapshot = new AtomicReference<>();
+    private final AtomicReference<List<String>> lastDegradedQueryIndexesSnapshot =
+            new AtomicReference<>();
     private final AtomicLong lastDegradedQueryIndexesSampleAtEpochMillis = new AtomicLong();
-    private final AtomicReference<List<AdminDiagnosticsRecord>> lastDiagnosticsSnapshot = new AtomicReference<>(List.of());
+    private final AtomicReference<List<AdminDiagnosticsRecord>> lastDiagnosticsSnapshot =
+            new AtomicReference<>(List.of());
     private final AtomicLong lastDiagnosticsSampleAtEpochMillis = new AtomicLong();
-    private final AtomicReference<List<RuntimeProfileChurnRecord>> lastRuntimeProfileChurnSnapshot = new AtomicReference<>(List.of());
+    private final AtomicReference<List<RuntimeProfileChurnRecord>> lastRuntimeProfileChurnSnapshot =
+            new AtomicReference<>(List.of());
     private final AtomicLong lastRuntimeProfileChurnSampleAtEpochMillis = new AtomicLong();
-    private final AtomicReference<SchemaStatusSnapshot> lastSchemaStatusSnapshot = new AtomicReference<>();
+    private final AtomicReference<SchemaStatusSnapshot> lastSchemaStatusSnapshot =
+            new AtomicReference<>();
     private final AtomicLong lastSchemaStatusSampleAtEpochMillis = new AtomicLong();
-    private final AtomicReference<List<MonitoringServiceSnapshot>> lastMonitoringServicesSnapshot = new AtomicReference<>();
+    private final AtomicReference<List<MonitoringServiceSnapshot>> lastMonitoringServicesSnapshot =
+            new AtomicReference<>();
     private final AtomicLong lastMonitoringServicesSampleAtEpochMillis = new AtomicLong();
-    private final AtomicReference<List<BackgroundWorkerErrorSnapshot>> lastBackgroundWorkerErrorsSnapshot = new AtomicReference<>();
+    private final AtomicReference<List<BackgroundWorkerErrorSnapshot>>
+            lastBackgroundWorkerErrorsSnapshot = new AtomicReference<>();
     private final AtomicLong lastBackgroundWorkerErrorsSampleAtEpochMillis = new AtomicLong();
-    private final AtomicReference<MonitoringTriageSnapshot> lastTriageSnapshot = new AtomicReference<>();
+    private final AtomicReference<MonitoringTriageSnapshot> lastTriageSnapshot =
+            new AtomicReference<>();
     private final AtomicLong lastTriageSampleAtEpochMillis = new AtomicLong();
-    private final AtomicReference<List<AlertRouteSnapshot>> lastAlertRoutesSnapshot = new AtomicReference<>();
+    private final AtomicReference<List<AlertRouteSnapshot>> lastAlertRoutesSnapshot =
+            new AtomicReference<>();
     private final AtomicLong lastAlertRoutesSampleAtEpochMillis = new AtomicLong();
     private final Map<String, IncrementalKeyScan> plannerKeyScans = new ConcurrentHashMap<>();
 
@@ -181,12 +202,99 @@ public final class CacheDatabaseAdmin {
             ProductionReportCatalog productionReportCatalog,
             java.util.function.IntFunction<List<MonitoringHistoryPoint>> monitoringHistorySupplier,
             java.util.function.IntFunction<List<AlertRouteHistoryPoint>> alertRouteHistorySupplier,
-            java.util.function.IntFunction<List<PerformanceHistoryPoint>> performanceHistorySupplier,
-            java.util.function.IntFunction<List<ProjectionRefreshFailureEntry>> projectionRefreshFailureSupplier,
+            java.util.function.IntFunction<List<PerformanceHistoryPoint>>
+                    performanceHistorySupplier,
+            java.util.function.IntFunction<List<ProjectionRefreshFailureEntry>>
+                    projectionRefreshFailureSupplier,
             Function<String, ProjectionRefreshReplayResult> projectionRefreshReplayFunction,
             java.util.function.Supplier<AdminTelemetryResetSnapshot> telemetryResetSupplier,
-            java.util.function.Supplier<PerformanceTelemetryResetSnapshot> performanceResetSupplier
-    ) {
+            java.util.function.Supplier<PerformanceTelemetryResetSnapshot>
+                    performanceResetSupplier) {
+        this(
+                deadLetterManagement,
+                JedisPooledOperations.of(jedis),
+                keyPrefix,
+                writeBehindStreamKeys,
+                deadLetterStreamKey,
+                reconciliationStreamKey,
+                archiveStreamKey,
+                diagnosticsStreamKey,
+                diagnosticsMaxLength,
+                monitoringConfig,
+                redisGuardrailConfig,
+                writeBehindSnapshotSupplier,
+                deadLetterRecoverySnapshotSupplier,
+                recoveryCleanupSnapshotSupplier,
+                adminReportJobSnapshotSupplier,
+                incidentDeliverySnapshotSupplier,
+                redisGuardrailSnapshotSupplier,
+                redisRuntimeProfileSnapshotSupplier,
+                storagePerformanceSnapshotSupplier,
+                projectionRefreshSnapshotSupplier,
+                runtimeProfilePropertySupplier,
+                manualRuntimeProfileOverrideSupplier,
+                runtimeProfileOverrideSetter,
+                runtimeProfileOverrideClearer,
+                indexMaintenance,
+                schemaAdmin,
+                incidentNotifier,
+                dataSource,
+                cacheDatabaseConfig,
+                entityRegistry,
+                cacheSession,
+                productionReportCatalog,
+                monitoringHistorySupplier,
+                alertRouteHistorySupplier,
+                performanceHistorySupplier,
+                projectionRefreshFailureSupplier,
+                projectionRefreshReplayFunction,
+                telemetryResetSupplier,
+                performanceResetSupplier);
+    }
+
+    public CacheDatabaseAdmin(
+            DeadLetterManagement deadLetterManagement,
+            RedisClientOperations jedis,
+            String keyPrefix,
+            List<String> writeBehindStreamKeys,
+            String deadLetterStreamKey,
+            String reconciliationStreamKey,
+            String archiveStreamKey,
+            String diagnosticsStreamKey,
+            long diagnosticsMaxLength,
+            AdminMonitoringConfig monitoringConfig,
+            RedisGuardrailConfig redisGuardrailConfig,
+            Supplier<WriteBehindWorkerSnapshot> writeBehindSnapshotSupplier,
+            Supplier<DeadLetterRecoverySnapshot> deadLetterRecoverySnapshotSupplier,
+            Supplier<RecoveryCleanupSnapshot> recoveryCleanupSnapshotSupplier,
+            Supplier<AdminReportJobSnapshot> adminReportJobSnapshotSupplier,
+            Supplier<IncidentDeliverySnapshot> incidentDeliverySnapshotSupplier,
+            Supplier<RedisGuardrailSnapshot> redisGuardrailSnapshotSupplier,
+            Supplier<RedisRuntimeProfileSnapshot> redisRuntimeProfileSnapshotSupplier,
+            Supplier<StoragePerformanceSnapshot> storagePerformanceSnapshotSupplier,
+            Supplier<ProjectionRefreshSnapshot> projectionRefreshSnapshotSupplier,
+            Supplier<Map<String, String>> runtimeProfilePropertySupplier,
+            Supplier<String> manualRuntimeProfileOverrideSupplier,
+            Consumer<String> runtimeProfileOverrideSetter,
+            Runnable runtimeProfileOverrideClearer,
+            RedisIndexMaintenance indexMaintenance,
+            CacheDatabaseSchemaAdmin schemaAdmin,
+            Consumer<AdminIncidentRecord> incidentNotifier,
+            DataSource dataSource,
+            CacheDatabaseConfig cacheDatabaseConfig,
+            EntityRegistry entityRegistry,
+            CacheSession cacheSession,
+            ProductionReportCatalog productionReportCatalog,
+            java.util.function.IntFunction<List<MonitoringHistoryPoint>> monitoringHistorySupplier,
+            java.util.function.IntFunction<List<AlertRouteHistoryPoint>> alertRouteHistorySupplier,
+            java.util.function.IntFunction<List<PerformanceHistoryPoint>>
+                    performanceHistorySupplier,
+            java.util.function.IntFunction<List<ProjectionRefreshFailureEntry>>
+                    projectionRefreshFailureSupplier,
+            Function<String, ProjectionRefreshReplayResult> projectionRefreshReplayFunction,
+            java.util.function.Supplier<AdminTelemetryResetSnapshot> telemetryResetSupplier,
+            java.util.function.Supplier<PerformanceTelemetryResetSnapshot>
+                    performanceResetSupplier) {
         this.deadLetterManagement = deadLetterManagement;
         this.jedis = jedis;
         this.keyPrefix = keyPrefix;
@@ -219,20 +327,23 @@ public final class CacheDatabaseAdmin {
         this.productionReportCatalog = productionReportCatalog;
         this.migrationPlanner = new MigrationPlanner();
         this.migrationSchemaDiscovery = new MigrationSchemaDiscovery(dataSource, entityRegistry);
-        this.migrationRedisMemoryEstimator = new MigrationRedisMemoryEstimator(dataSource, this.migrationSchemaDiscovery);
-        this.migrationRedisMemoryCalibration = new MigrationRedisMemoryCalibration(jedis, keyPrefix);
-        this.migrationWarmRunner = new MigrationWarmRunner(
-                dataSource,
-                MigrationWarmRunner.using(entityRegistry, cacheSession),
-                new RedisMigrationWarmCheckpointStore(jedis, keyPrefix)
-        );
-        this.migrationScaffoldGenerator = new MigrationScaffoldGenerator(this.migrationSchemaDiscovery);
-        this.migrationComparisonRunner = new MigrationComparisonRunner(
-                dataSource,
-                this.migrationSchemaDiscovery,
-                this.migrationWarmRunner,
-                MigrationComparisonRunner.using(entityRegistry, cacheSession)
-        );
+        this.migrationRedisMemoryEstimator =
+                new MigrationRedisMemoryEstimator(dataSource, this.migrationSchemaDiscovery);
+        this.migrationRedisMemoryCalibration =
+                new MigrationRedisMemoryCalibration(jedis, keyPrefix);
+        this.migrationWarmRunner =
+                new MigrationWarmRunner(
+                        dataSource,
+                        MigrationWarmRunner.using(entityRegistry, cacheSession),
+                        new RedisMigrationWarmCheckpointStore(jedis, keyPrefix));
+        this.migrationScaffoldGenerator =
+                new MigrationScaffoldGenerator(this.migrationSchemaDiscovery);
+        this.migrationComparisonRunner =
+                new MigrationComparisonRunner(
+                        dataSource,
+                        this.migrationSchemaDiscovery,
+                        this.migrationWarmRunner,
+                        MigrationComparisonRunner.using(entityRegistry, cacheSession));
         this.migrationPlannerDemoSupport = null;
         this.monitoringHistorySupplier = monitoringHistorySupplier;
         this.alertRouteHistorySupplier = alertRouteHistorySupplier;
@@ -293,18 +404,17 @@ public final class CacheDatabaseAdmin {
                 "dead-letters." + format.fileExtension(),
                 format,
                 format.contentType(),
-                renderDeadLetters(items, query, format)
-        );
+                renderDeadLetters(items, query, format));
     }
 
-    public AdminExportResult exportReconciliation(ReconciliationQuery query, AdminExportFormat format) {
+    public AdminExportResult exportReconciliation(
+            ReconciliationQuery query, AdminExportFormat format) {
         List<ReconciliationRecord> items = collectReconciliation(query);
         return new AdminExportResult(
                 "reconciliation." + format.fileExtension(),
                 format,
                 format.contentType(),
-                renderReconciliation(items, query, format)
-        );
+                renderReconciliation(items, query, format));
     }
 
     public AdminExportResult exportArchive(ReconciliationQuery query, AdminExportFormat format) {
@@ -313,8 +423,7 @@ public final class CacheDatabaseAdmin {
                 "archive." + format.fileExtension(),
                 format,
                 format.contentType(),
-                renderArchive(items, query, format)
-        );
+                renderArchive(items, query, format));
     }
 
     public ReconciliationMetrics metrics() {
@@ -349,8 +458,7 @@ public final class CacheDatabaseAdmin {
             AtomicReference<T> reference,
             AtomicLong sampledAtEpochMillis,
             long ttlMillis,
-            Supplier<T> supplier
-    ) {
+            Supplier<T> supplier) {
         long now = System.currentTimeMillis();
         T cached = reference.get();
         if (cached != null && (now - sampledAtEpochMillis.get()) < ttlMillis) {
@@ -405,8 +513,7 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.queryIndex().plannerStatisticsPersisted(),
                 cacheDatabaseConfig.keyspace().keyPrefix(),
                 Instant.now(),
-                cacheDatabaseConfig.writeBehind().activeStreamKeys()
-        );
+                cacheDatabaseConfig.writeBehind().activeStreamKeys());
     }
 
     public SchemaStatusSnapshot schemaStatus() {
@@ -414,8 +521,7 @@ public final class CacheDatabaseAdmin {
                 lastSchemaStatusSnapshot,
                 lastSchemaStatusSampleAtEpochMillis,
                 5_000L,
-                this::collectSchemaStatus
-        );
+                this::collectSchemaStatus);
     }
 
     private SchemaStatusSnapshot collectSchemaStatus() {
@@ -445,24 +551,23 @@ public final class CacheDatabaseAdmin {
                 createTableSteps,
                 addColumnSteps,
                 schemaAdmin.exportDdl().size(),
-                Instant.now()
-        );
+                Instant.now());
     }
 
     public ApiProductSnapshot apiProduct() {
         ArrayList<ApiEntitySnapshot> entities = new ArrayList<>();
         for (EntityBinding<?, ?> binding : entityRegistry.all()) {
-            entities.add(new ApiEntitySnapshot(
-                    binding.metadata().entityName(),
-                    binding.metadata().tableName(),
-                    binding.metadata().columns().size(),
-                    binding.cachePolicy().hotEntityLimit(),
-                    binding.cachePolicy().pageSize(),
-                    binding.cachePolicy().entityTtlSeconds(),
-                    binding.cachePolicy().pageTtlSeconds(),
-                    !(binding.relationBatchLoader() instanceof NoOpRelationBatchLoader<?>),
-                    !(binding.pageLoader() instanceof NoOpEntityPageLoader<?>)
-            ));
+            entities.add(
+                    new ApiEntitySnapshot(
+                            binding.metadata().entityName(),
+                            binding.metadata().tableName(),
+                            binding.metadata().columns().size(),
+                            binding.cachePolicy().hotEntityLimit(),
+                            binding.cachePolicy().pageSize(),
+                            binding.cachePolicy().entityTtlSeconds(),
+                            binding.cachePolicy().pageTtlSeconds(),
+                            !(binding.relationBatchLoader() instanceof NoOpRelationBatchLoader<?>),
+                            !(binding.pageLoader() instanceof NoOpEntityPageLoader<?>)));
         }
         entities.sort(java.util.Comparator.comparing(ApiEntitySnapshot::entityName));
         return new ApiProductSnapshot(
@@ -470,8 +575,7 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.resourceLimits().maxRegisteredEntities(),
                 cacheDatabaseConfig.resourceLimits().maxColumnsPerOperation(),
                 Instant.now(),
-                List.copyOf(entities)
-        );
+                List.copyOf(entities));
     }
 
     public List<ProductionReportSnapshot> productionReports() {
@@ -486,11 +590,13 @@ public final class CacheDatabaseAdmin {
         return migrationPlanner.plan(request);
     }
 
-    MigrationRedisMemoryEstimator.Result estimateMigrationRedisMemory(MigrationPlanner.Result plan) {
+    MigrationRedisMemoryEstimator.Result estimateMigrationRedisMemory(
+            MigrationPlanner.Result plan) {
         return migrationRedisMemoryEstimator.estimate(plan);
     }
 
-    MigrationRedisMemoryCalibration.Result calibrateMigrationRedisMemory(MigrationRedisMemoryEstimator.Result estimate) {
+    MigrationRedisMemoryCalibration.Result calibrateMigrationRedisMemory(
+            MigrationRedisMemoryEstimator.Result estimate) {
         return migrationRedisMemoryCalibration.calibrate(estimate);
     }
 
@@ -512,30 +618,36 @@ public final class CacheDatabaseAdmin {
                     120,
                     12,
                     1500,
-                    MigrationPlanner.Request.defaults()
-            );
+                    MigrationPlanner.Request.defaults());
         }
         return support.descriptor();
     }
 
-    public MigrationPlannerDemoSupport.BootstrapResult bootstrapMigrationPlannerDemo(MigrationPlannerDemoSupport.BootstrapRequest request) {
+    public MigrationPlannerDemoSupport.BootstrapResult bootstrapMigrationPlannerDemo(
+            MigrationPlannerDemoSupport.BootstrapRequest request) {
         MigrationPlannerDemoSupport support = migrationPlannerDemoSupport;
         if (support == null) {
-            throw new IllegalStateException("Migration planner demo bootstrap is not configured for this runtime.");
+            throw new IllegalStateException(
+                    "Migration planner demo bootstrap is not configured for this runtime.");
         }
         MigrationPlannerDemoSupport.BootstrapResult result = support.bootstrap(request.normalize());
         persistDiagnostics(
                 "migration-demo-bootstrap",
-                "root=" + result.rootSurface()
-                        + ", child=" + result.childSurface()
-                        + ", customers=" + result.customerCount()
-                        + ", orders=" + result.orderCount()
-                        + ", hotCustomerOrders=" + result.hottestCustomerOrderCount()
-        );
+                "root="
+                        + result.rootSurface()
+                        + ", child="
+                        + result.childSurface()
+                        + ", customers="
+                        + result.customerCount()
+                        + ", orders="
+                        + result.orderCount()
+                        + ", hotCustomerOrders="
+                        + result.hottestCustomerOrderCount());
         return result;
     }
 
-    public MigrationScaffoldGenerator.Result generateMigrationScaffold(MigrationScaffoldGenerator.Request request) {
+    public MigrationScaffoldGenerator.Result generateMigrationScaffold(
+            MigrationScaffoldGenerator.Request request) {
         return migrationScaffoldGenerator.generate(request);
     }
 
@@ -543,26 +655,38 @@ public final class CacheDatabaseAdmin {
         MigrationWarmRunner.Result result = migrationWarmRunner.execute(request);
         persistDiagnostics(
                 "migration-warm",
-                "child=" + result.childEntityName()
-                        + ", childRows=" + result.childRowsHydrated()
-                        + ", root=" + result.rootEntityName()
-                        + ", rootRows=" + result.rootRowsHydrated()
-                        + ", dryRun=" + result.dryRun()
-        );
+                "child="
+                        + result.childEntityName()
+                        + ", childRows="
+                        + result.childRowsHydrated()
+                        + ", root="
+                        + result.rootEntityName()
+                        + ", rootRows="
+                        + result.rootRowsHydrated()
+                        + ", dryRun="
+                        + result.dryRun());
         return result;
     }
 
-    public MigrationComparisonRunner.Result compareMigration(MigrationComparisonRunner.Request request) {
+    public MigrationComparisonRunner.Result compareMigration(
+            MigrationComparisonRunner.Request request) {
         MigrationComparisonRunner.Result result = migrationComparisonRunner.execute(request);
         persistDiagnostics(
                 "migration-compare",
-                "route=" + result.cacheRouteLabel()
-                        + ", readiness=" + result.assessment().readiness().name()
-                        + ", baselineP95Ns=" + result.baselineMetrics().p95LatencyNanos()
-                        + ", cacheP95Ns=" + result.cacheMetrics().p95LatencyNanos()
-                        + ", exactMatches=" + result.sampleComparisons().stream().filter(MigrationComparisonRunner.SampleComparison::exactMatch).count()
-                        + "/" + result.sampleComparisons().size()
-        );
+                "route="
+                        + result.cacheRouteLabel()
+                        + ", readiness="
+                        + result.assessment().readiness().name()
+                        + ", baselineP95Ns="
+                        + result.baselineMetrics().p95LatencyNanos()
+                        + ", cacheP95Ns="
+                        + result.cacheMetrics().p95LatencyNanos()
+                        + ", exactMatches="
+                        + result.sampleComparisons().stream()
+                                .filter(MigrationComparisonRunner.SampleComparison::exactMatch)
+                                .count()
+                        + "/"
+                        + result.sampleComparisons().size());
         return result;
     }
 
@@ -570,148 +694,513 @@ public final class CacheDatabaseAdmin {
         ArrayList<EffectiveTuningEntry> items = new ArrayList<>();
         Set<String> modeledProperties = new TreeSet<>();
 
-        addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.enabled",
-                cacheDatabaseConfig.writeBehind().enabled(), "Enables the write-behind pipeline.");
-        addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.workerThreads",
-                cacheDatabaseConfig.writeBehind().workerThreads(), "Write-behind worker thread count.");
-        addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.batchSize",
-                cacheDatabaseConfig.writeBehind().batchSize(), "Base Redis stream read batch size.");
-        addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.maxFlushBatchSize",
-                cacheDatabaseConfig.writeBehind().maxFlushBatchSize(), "Maximum durable SQL flush batch size.");
-        addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.postgresCopyThreshold",
-                cacheDatabaseConfig.writeBehind().postgresCopyThreshold(), "Row threshold before COPY bulk path.");
-        addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.statementTimeoutSeconds",
-                cacheDatabaseConfig.writeBehind().statementTimeoutSeconds(), "JDBC statement timeout for write-behind and stale checks.");
-        addTuning(items, modeledProperties, "write-behind", "cachedb.config.writeBehind.compactionShardCount",
-                cacheDatabaseConfig.writeBehind().compactionShardCount(), "Compaction shard count.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.enabled",
-                cacheDatabaseConfig.redisGuardrail().enabled(), "Enables Redis guardrails.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.usedMemoryWarnBytes",
-                cacheDatabaseConfig.redisGuardrail().usedMemoryWarnBytes(), "Warning threshold for Redis used memory.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.usedMemoryCriticalBytes",
-                cacheDatabaseConfig.redisGuardrail().usedMemoryCriticalBytes(), "Critical threshold for Redis used memory.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.usedMemoryWarnMaxmemoryPercent",
-                cacheDatabaseConfig.redisGuardrail().usedMemoryWarnMaxmemoryPercent(), "Warning threshold as percentage of Redis maxmemory.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.usedMemoryCriticalMaxmemoryPercent",
-                cacheDatabaseConfig.redisGuardrail().usedMemoryCriticalMaxmemoryPercent(), "Critical threshold as percentage of Redis maxmemory.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.expectedMaxmemoryPolicy",
-                cacheDatabaseConfig.redisGuardrail().expectedMaxmemoryPolicy(), "Expected Redis maxmemory-policy for CacheDB-owned Redis.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.warnOnUnexpectedMaxmemoryPolicy",
-                cacheDatabaseConfig.redisGuardrail().warnOnUnexpectedMaxmemoryPolicy(), "Warns when Redis maxmemory-policy differs from the expected policy.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.warnOnMissingMaxmemory",
-                cacheDatabaseConfig.redisGuardrail().warnOnMissingMaxmemory(), "Warns when Redis maxmemory is not configured.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.writeBehindBacklogWarnThreshold",
-                cacheDatabaseConfig.redisGuardrail().writeBehindBacklogWarnThreshold(), "Warning threshold for write-behind backlog.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.writeBehindBacklogCriticalThreshold",
-                cacheDatabaseConfig.redisGuardrail().writeBehindBacklogCriticalThreshold(), "Critical threshold for write-behind backlog.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.rejectWritesOnHardLimit",
-                cacheDatabaseConfig.redisGuardrail().rejectWritesOnHardLimit(), "Rejects writes when hard limits are exceeded.");
-        addTuning(items, modeledProperties, "guardrail", "cachedb.config.redisGuardrail.automaticRuntimeProfileSwitchingEnabled",
-                cacheDatabaseConfig.redisGuardrail().automaticRuntimeProfileSwitchingEnabled(), "Enables automatic runtime profile switching.");
-        addTuning(items, modeledProperties, "dead-letter", "cachedb.config.deadLetterRecovery.enabled",
-                cacheDatabaseConfig.deadLetterRecovery().enabled(), "Enables the DLQ recovery worker.");
-        addTuning(items, modeledProperties, "dead-letter", "cachedb.config.deadLetterRecovery.workerThreads",
-                cacheDatabaseConfig.deadLetterRecovery().workerThreads(), "DLQ recovery worker count.");
-        addTuning(items, modeledProperties, "dead-letter", "cachedb.config.deadLetterRecovery.maxReplayRetries",
-                cacheDatabaseConfig.deadLetterRecovery().maxReplayRetries(), "Maximum replay retries for DLQ entries.");
-        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.exactIndexEnabled",
-                cacheDatabaseConfig.queryIndex().exactIndexEnabled(), "Enables exact-match indexes.");
-        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.rangeIndexEnabled",
-                cacheDatabaseConfig.queryIndex().rangeIndexEnabled(), "Enables range indexes.");
-        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.prefixIndexEnabled",
-                cacheDatabaseConfig.queryIndex().prefixIndexEnabled(), "Enables opt-in prefix indexes.");
-        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.textIndexEnabled",
-                cacheDatabaseConfig.queryIndex().textIndexEnabled(), "Enables opt-in token indexes.");
-        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.maxMaterializedCandidateIds",
-                cacheDatabaseConfig.queryIndex().maxMaterializedCandidateIds(), "Rejects broad query shapes before large candidate materialization.");
-        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.learnedStatisticsEnabled",
-                cacheDatabaseConfig.queryIndex().learnedStatisticsEnabled(), "Enables learned planner statistics.");
-        addTuning(items, modeledProperties, "query-index", "cachedb.config.queryIndex.plannerStatisticsPersisted",
-                cacheDatabaseConfig.queryIndex().plannerStatisticsPersisted(), "Persists planner statistics in Redis.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit",
-                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotEntityLimit(), "Default hot-entity limit.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.pageSize",
-                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().pageSize(), "Default page size.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.entityTtlSeconds",
-                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().entityTtlSeconds(), "Default entity TTL in seconds.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.pageTtlSeconds",
-                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().pageTtlSeconds(), "Default page TTL in seconds.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode",
-                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().mode(), "Entity hot admission mode.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.timeColumn",
-                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().timeColumn(), "Business-time column for TIME_WINDOW admission.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds",
-                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().hotForSeconds(), "Business-time hot window in seconds.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateColumn",
-                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().stateColumn(), "State column for STATE_WINDOW admission.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateValues",
-                String.join(",", cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().stateValues()), "Comma-separated hot states for STATE_WINDOW admission.");
-        addTuning(items, modeledProperties, "cache", "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead",
-                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().admitOnRead(), "Allows read-through rows to enter the entity cache.");
-        addTuning(items, modeledProperties, "page-cache", "cachedb.config.pageCache.readThroughEnabled",
-                cacheDatabaseConfig.pageCache().readThroughEnabled(), "Enables page-cache read-through.");
-        addTuning(items, modeledProperties, "page-cache", "cachedb.config.pageCache.evictionBatchSize",
-                cacheDatabaseConfig.pageCache().evictionBatchSize(), "Page-cache eviction batch size.");
-        addTuning(items, modeledProperties, "read-through", "cachedb.config.readThrough.maxQueryLoadRows",
-                cacheDatabaseConfig.readThrough().maxQueryLoadRows(), "Maximum rows accepted from one SQL query loader call.");
-        addTuning(items, modeledProperties, "read-through", "cachedb.config.readThrough.queryTimeoutSeconds",
-                cacheDatabaseConfig.readThrough().queryTimeoutSeconds(), "JDBC timeout for read-through SQL statements.");
-        addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.enabled",
-                cacheDatabaseConfig.readShapeGuardrail().enabled(), "Enables read-shape safety guardrails.");
-        addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.maxEntityQueryLimit",
-                cacheDatabaseConfig.readShapeGuardrail().maxEntityQueryLimit(), "Maximum full-entity query limit. 0 derives it from page size and hot window.");
-        addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.maxProjectionQueryLimit",
-                cacheDatabaseConfig.readShapeGuardrail().maxProjectionQueryLimit(), "Maximum projection query limit.");
-        addTuning(items, modeledProperties, "read-shape", "cachedb.config.readShapeGuardrail.hotSetHeadroom",
-                cacheDatabaseConfig.readShapeGuardrail().hotSetHeadroom(), "Hot-window headroom kept outside one page/result.");
-        addTuning(items, modeledProperties, "keyspace", "cachedb.config.keyspace.keyPrefix",
-                cacheDatabaseConfig.keyspace().keyPrefix(), "Global Redis key prefix.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.writeBehindWarnThreshold",
-                cacheDatabaseConfig.adminMonitoring().writeBehindWarnThreshold(), "Warning threshold for write-behind incidents.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.writeBehindCriticalThreshold",
-                cacheDatabaseConfig.adminMonitoring().writeBehindCriticalThreshold(), "Critical threshold for write-behind incidents.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.historySampleIntervalMillis",
-                cacheDatabaseConfig.adminMonitoring().historySampleIntervalMillis(), "Monitoring history sample interval.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.historyMaxSamples",
-                cacheDatabaseConfig.adminMonitoring().historyMaxSamples(), "Monitoring history retention.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.telemetryTtlSeconds",
-                cacheDatabaseConfig.adminMonitoring().telemetryTtlSeconds(), "TTL for Redis-backed admin telemetry streams and snapshots.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.monitoringHistoryStreamKey",
-                cacheDatabaseConfig.adminMonitoring().monitoringHistoryStreamKey(), "Redis stream key for monitoring history samples.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.alertRouteHistoryStreamKey",
-                cacheDatabaseConfig.adminMonitoring().alertRouteHistoryStreamKey(), "Redis stream key for alert route history samples.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.performanceHistoryStreamKey",
-                cacheDatabaseConfig.adminMonitoring().performanceHistoryStreamKey(), "Redis stream key for performance history samples.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.performanceSnapshotKey",
-                cacheDatabaseConfig.adminMonitoring().performanceSnapshotKey(), "Redis hash key for the current storage-performance snapshot.");
-        addTuning(items, modeledProperties, "admin-monitoring", "cachedb.config.adminMonitoring.incidentTtlSeconds",
-                cacheDatabaseConfig.adminMonitoring().incidentTtlSeconds(), "TTL for incident stream entries and cooldown keys.");
-        addTuning(items, modeledProperties, "admin-reporting", "cachedb.config.adminReportJob.diagnosticsTtlSeconds",
-                cacheDatabaseConfig.adminReportJob().diagnosticsTtlSeconds(), "TTL for diagnostics stream entries.");
-        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.enabled",
-                cacheDatabaseConfig.adminHttp().enabled(), "Enables the admin HTTP server.");
-        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.host",
-                cacheDatabaseConfig.adminHttp().host(), "Admin HTTP bind host.");
-        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.port",
-                cacheDatabaseConfig.adminHttp().port(), "Admin HTTP port.");
-        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.dashboardEnabled",
-                cacheDatabaseConfig.adminHttp().dashboardEnabled(), "Enables the built-in admin dashboard.");
-        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.requestQueueCapacity",
-                cacheDatabaseConfig.adminHttp().requestQueueCapacity(), "Bounded native admin HTTP request queue capacity.");
-        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.backgroundWorkerThreads",
-                cacheDatabaseConfig.adminHttp().backgroundWorkerThreads(), "Admin warm and comparison worker count.");
-        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.backgroundQueueCapacity",
-                cacheDatabaseConfig.adminHttp().backgroundQueueCapacity(), "Bounded admin background job queue capacity.");
-        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.maxRequestBodyBytes",
-                cacheDatabaseConfig.adminHttp().maxRequestBodyBytes(), "Maximum accepted admin request body size.");
-        addTuning(items, modeledProperties, "admin-http", "cachedb.config.adminHttp.jobStatusTtlSeconds",
-                cacheDatabaseConfig.adminHttp().jobStatusTtlSeconds(), "Redis retention for cross-pod admin job status.");
-        addTuning(items, modeledProperties, "schema", "cachedb.config.schemaBootstrap.mode",
-                cacheDatabaseConfig.schemaBootstrap().mode().name(), "Schema bootstrap mode.");
-        addTuning(items, modeledProperties, "schema", "cachedb.config.schemaBootstrap.autoApplyOnStart",
-                cacheDatabaseConfig.schemaBootstrap().autoApplyOnStart(), "Applies schema bootstrap on start.");
-        addTuning(items, modeledProperties, "schema", "cachedb.config.schemaBootstrap.schemaName",
-                defaultString(cacheDatabaseConfig.schemaBootstrap().schemaName()), "Target durable SQL schema.");
+        addTuning(
+                items,
+                modeledProperties,
+                "write-behind",
+                "cachedb.config.writeBehind.enabled",
+                cacheDatabaseConfig.writeBehind().enabled(),
+                "Enables the write-behind pipeline.");
+        addTuning(
+                items,
+                modeledProperties,
+                "write-behind",
+                "cachedb.config.writeBehind.workerThreads",
+                cacheDatabaseConfig.writeBehind().workerThreads(),
+                "Write-behind worker thread count.");
+        addTuning(
+                items,
+                modeledProperties,
+                "write-behind",
+                "cachedb.config.writeBehind.batchSize",
+                cacheDatabaseConfig.writeBehind().batchSize(),
+                "Base Redis stream read batch size.");
+        addTuning(
+                items,
+                modeledProperties,
+                "write-behind",
+                "cachedb.config.writeBehind.maxFlushBatchSize",
+                cacheDatabaseConfig.writeBehind().maxFlushBatchSize(),
+                "Maximum durable SQL flush batch size.");
+        addTuning(
+                items,
+                modeledProperties,
+                "write-behind",
+                "cachedb.config.writeBehind.postgresCopyThreshold",
+                cacheDatabaseConfig.writeBehind().postgresCopyThreshold(),
+                "Row threshold before COPY bulk path.");
+        addTuning(
+                items,
+                modeledProperties,
+                "write-behind",
+                "cachedb.config.writeBehind.statementTimeoutSeconds",
+                cacheDatabaseConfig.writeBehind().statementTimeoutSeconds(),
+                "JDBC statement timeout for write-behind and stale checks.");
+        addTuning(
+                items,
+                modeledProperties,
+                "write-behind",
+                "cachedb.config.writeBehind.compactionShardCount",
+                cacheDatabaseConfig.writeBehind().compactionShardCount(),
+                "Compaction shard count.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.enabled",
+                cacheDatabaseConfig.redisGuardrail().enabled(),
+                "Enables Redis guardrails.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.usedMemoryWarnBytes",
+                cacheDatabaseConfig.redisGuardrail().usedMemoryWarnBytes(),
+                "Warning threshold for Redis used memory.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.usedMemoryCriticalBytes",
+                cacheDatabaseConfig.redisGuardrail().usedMemoryCriticalBytes(),
+                "Critical threshold for Redis used memory.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.usedMemoryWarnMaxmemoryPercent",
+                cacheDatabaseConfig.redisGuardrail().usedMemoryWarnMaxmemoryPercent(),
+                "Warning threshold as percentage of Redis maxmemory.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.usedMemoryCriticalMaxmemoryPercent",
+                cacheDatabaseConfig.redisGuardrail().usedMemoryCriticalMaxmemoryPercent(),
+                "Critical threshold as percentage of Redis maxmemory.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.expectedMaxmemoryPolicy",
+                cacheDatabaseConfig.redisGuardrail().expectedMaxmemoryPolicy(),
+                "Expected Redis maxmemory-policy for CacheDB-owned Redis.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.warnOnUnexpectedMaxmemoryPolicy",
+                cacheDatabaseConfig.redisGuardrail().warnOnUnexpectedMaxmemoryPolicy(),
+                "Warns when Redis maxmemory-policy differs from the expected policy.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.warnOnMissingMaxmemory",
+                cacheDatabaseConfig.redisGuardrail().warnOnMissingMaxmemory(),
+                "Warns when Redis maxmemory is not configured.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.writeBehindBacklogWarnThreshold",
+                cacheDatabaseConfig.redisGuardrail().writeBehindBacklogWarnThreshold(),
+                "Warning threshold for write-behind backlog.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.writeBehindBacklogCriticalThreshold",
+                cacheDatabaseConfig.redisGuardrail().writeBehindBacklogCriticalThreshold(),
+                "Critical threshold for write-behind backlog.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.rejectWritesOnHardLimit",
+                cacheDatabaseConfig.redisGuardrail().rejectWritesOnHardLimit(),
+                "Rejects writes when hard limits are exceeded.");
+        addTuning(
+                items,
+                modeledProperties,
+                "guardrail",
+                "cachedb.config.redisGuardrail.automaticRuntimeProfileSwitchingEnabled",
+                cacheDatabaseConfig.redisGuardrail().automaticRuntimeProfileSwitchingEnabled(),
+                "Enables automatic runtime profile switching.");
+        addTuning(
+                items,
+                modeledProperties,
+                "dead-letter",
+                "cachedb.config.deadLetterRecovery.enabled",
+                cacheDatabaseConfig.deadLetterRecovery().enabled(),
+                "Enables the DLQ recovery worker.");
+        addTuning(
+                items,
+                modeledProperties,
+                "dead-letter",
+                "cachedb.config.deadLetterRecovery.workerThreads",
+                cacheDatabaseConfig.deadLetterRecovery().workerThreads(),
+                "DLQ recovery worker count.");
+        addTuning(
+                items,
+                modeledProperties,
+                "dead-letter",
+                "cachedb.config.deadLetterRecovery.maxReplayRetries",
+                cacheDatabaseConfig.deadLetterRecovery().maxReplayRetries(),
+                "Maximum replay retries for DLQ entries.");
+        addTuning(
+                items,
+                modeledProperties,
+                "query-index",
+                "cachedb.config.queryIndex.exactIndexEnabled",
+                cacheDatabaseConfig.queryIndex().exactIndexEnabled(),
+                "Enables exact-match indexes.");
+        addTuning(
+                items,
+                modeledProperties,
+                "query-index",
+                "cachedb.config.queryIndex.rangeIndexEnabled",
+                cacheDatabaseConfig.queryIndex().rangeIndexEnabled(),
+                "Enables range indexes.");
+        addTuning(
+                items,
+                modeledProperties,
+                "query-index",
+                "cachedb.config.queryIndex.prefixIndexEnabled",
+                cacheDatabaseConfig.queryIndex().prefixIndexEnabled(),
+                "Enables opt-in prefix indexes.");
+        addTuning(
+                items,
+                modeledProperties,
+                "query-index",
+                "cachedb.config.queryIndex.textIndexEnabled",
+                cacheDatabaseConfig.queryIndex().textIndexEnabled(),
+                "Enables opt-in token indexes.");
+        addTuning(
+                items,
+                modeledProperties,
+                "query-index",
+                "cachedb.config.queryIndex.maxMaterializedCandidateIds",
+                cacheDatabaseConfig.queryIndex().maxMaterializedCandidateIds(),
+                "Rejects broad query shapes before large candidate materialization.");
+        addTuning(
+                items,
+                modeledProperties,
+                "query-index",
+                "cachedb.config.queryIndex.learnedStatisticsEnabled",
+                cacheDatabaseConfig.queryIndex().learnedStatisticsEnabled(),
+                "Enables learned planner statistics.");
+        addTuning(
+                items,
+                modeledProperties,
+                "query-index",
+                "cachedb.config.queryIndex.plannerStatisticsPersisted",
+                cacheDatabaseConfig.queryIndex().plannerStatisticsPersisted(),
+                "Persists planner statistics in Redis.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.hotEntityLimit",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotEntityLimit(),
+                "Default hot-entity limit.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.pageSize",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().pageSize(),
+                "Default page size.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.entityTtlSeconds",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().entityTtlSeconds(),
+                "Default entity TTL in seconds.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.pageTtlSeconds",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().pageTtlSeconds(),
+                "Default page TTL in seconds.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.mode",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().mode(),
+                "Entity hot admission mode.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.timeColumn",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().timeColumn(),
+                "Business-time column for TIME_WINDOW admission.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.hotForSeconds",
+                cacheDatabaseConfig
+                        .resourceLimits()
+                        .defaultCachePolicy()
+                        .hotPolicy()
+                        .hotForSeconds(),
+                "Business-time hot window in seconds.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateColumn",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().stateColumn(),
+                "State column for STATE_WINDOW admission.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.stateValues",
+                String.join(
+                        ",",
+                        cacheDatabaseConfig
+                                .resourceLimits()
+                                .defaultCachePolicy()
+                                .hotPolicy()
+                                .stateValues()),
+                "Comma-separated hot states for STATE_WINDOW admission.");
+        addTuning(
+                items,
+                modeledProperties,
+                "cache",
+                "cachedb.config.resourceLimits.defaultCachePolicy.hotPolicy.admitOnRead",
+                cacheDatabaseConfig.resourceLimits().defaultCachePolicy().hotPolicy().admitOnRead(),
+                "Allows read-through rows to enter the entity cache.");
+        addTuning(
+                items,
+                modeledProperties,
+                "page-cache",
+                "cachedb.config.pageCache.readThroughEnabled",
+                cacheDatabaseConfig.pageCache().readThroughEnabled(),
+                "Enables page-cache read-through.");
+        addTuning(
+                items,
+                modeledProperties,
+                "page-cache",
+                "cachedb.config.pageCache.evictionBatchSize",
+                cacheDatabaseConfig.pageCache().evictionBatchSize(),
+                "Page-cache eviction batch size.");
+        addTuning(
+                items,
+                modeledProperties,
+                "read-through",
+                "cachedb.config.readThrough.maxQueryLoadRows",
+                cacheDatabaseConfig.readThrough().maxQueryLoadRows(),
+                "Maximum rows accepted from one SQL query loader call.");
+        addTuning(
+                items,
+                modeledProperties,
+                "read-through",
+                "cachedb.config.readThrough.queryTimeoutSeconds",
+                cacheDatabaseConfig.readThrough().queryTimeoutSeconds(),
+                "JDBC timeout for read-through SQL statements.");
+        addTuning(
+                items,
+                modeledProperties,
+                "read-shape",
+                "cachedb.config.readShapeGuardrail.enabled",
+                cacheDatabaseConfig.readShapeGuardrail().enabled(),
+                "Enables read-shape safety guardrails.");
+        addTuning(
+                items,
+                modeledProperties,
+                "read-shape",
+                "cachedb.config.readShapeGuardrail.maxEntityQueryLimit",
+                cacheDatabaseConfig.readShapeGuardrail().maxEntityQueryLimit(),
+                "Maximum full-entity query limit. 0 derives it from page size and hot window.");
+        addTuning(
+                items,
+                modeledProperties,
+                "read-shape",
+                "cachedb.config.readShapeGuardrail.maxProjectionQueryLimit",
+                cacheDatabaseConfig.readShapeGuardrail().maxProjectionQueryLimit(),
+                "Maximum projection query limit.");
+        addTuning(
+                items,
+                modeledProperties,
+                "read-shape",
+                "cachedb.config.readShapeGuardrail.hotSetHeadroom",
+                cacheDatabaseConfig.readShapeGuardrail().hotSetHeadroom(),
+                "Hot-window headroom kept outside one page/result.");
+        addTuning(
+                items,
+                modeledProperties,
+                "keyspace",
+                "cachedb.config.keyspace.keyPrefix",
+                cacheDatabaseConfig.keyspace().keyPrefix(),
+                "Global Redis key prefix.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.writeBehindWarnThreshold",
+                cacheDatabaseConfig.adminMonitoring().writeBehindWarnThreshold(),
+                "Warning threshold for write-behind incidents.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.writeBehindCriticalThreshold",
+                cacheDatabaseConfig.adminMonitoring().writeBehindCriticalThreshold(),
+                "Critical threshold for write-behind incidents.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.historySampleIntervalMillis",
+                cacheDatabaseConfig.adminMonitoring().historySampleIntervalMillis(),
+                "Monitoring history sample interval.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.historyMaxSamples",
+                cacheDatabaseConfig.adminMonitoring().historyMaxSamples(),
+                "Monitoring history retention.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.telemetryTtlSeconds",
+                cacheDatabaseConfig.adminMonitoring().telemetryTtlSeconds(),
+                "TTL for Redis-backed admin telemetry streams and snapshots.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.monitoringHistoryStreamKey",
+                cacheDatabaseConfig.adminMonitoring().monitoringHistoryStreamKey(),
+                "Redis stream key for monitoring history samples.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.alertRouteHistoryStreamKey",
+                cacheDatabaseConfig.adminMonitoring().alertRouteHistoryStreamKey(),
+                "Redis stream key for alert route history samples.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.performanceHistoryStreamKey",
+                cacheDatabaseConfig.adminMonitoring().performanceHistoryStreamKey(),
+                "Redis stream key for performance history samples.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.performanceSnapshotKey",
+                cacheDatabaseConfig.adminMonitoring().performanceSnapshotKey(),
+                "Redis hash key for the current storage-performance snapshot.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-monitoring",
+                "cachedb.config.adminMonitoring.incidentTtlSeconds",
+                cacheDatabaseConfig.adminMonitoring().incidentTtlSeconds(),
+                "TTL for incident stream entries and cooldown keys.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-reporting",
+                "cachedb.config.adminReportJob.diagnosticsTtlSeconds",
+                cacheDatabaseConfig.adminReportJob().diagnosticsTtlSeconds(),
+                "TTL for diagnostics stream entries.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-http",
+                "cachedb.config.adminHttp.enabled",
+                cacheDatabaseConfig.adminHttp().enabled(),
+                "Enables the admin HTTP server.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-http",
+                "cachedb.config.adminHttp.host",
+                cacheDatabaseConfig.adminHttp().host(),
+                "Admin HTTP bind host.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-http",
+                "cachedb.config.adminHttp.port",
+                cacheDatabaseConfig.adminHttp().port(),
+                "Admin HTTP port.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-http",
+                "cachedb.config.adminHttp.dashboardEnabled",
+                cacheDatabaseConfig.adminHttp().dashboardEnabled(),
+                "Enables the built-in admin dashboard.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-http",
+                "cachedb.config.adminHttp.requestQueueCapacity",
+                cacheDatabaseConfig.adminHttp().requestQueueCapacity(),
+                "Bounded native admin HTTP request queue capacity.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-http",
+                "cachedb.config.adminHttp.backgroundWorkerThreads",
+                cacheDatabaseConfig.adminHttp().backgroundWorkerThreads(),
+                "Admin warm and comparison worker count.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-http",
+                "cachedb.config.adminHttp.backgroundQueueCapacity",
+                cacheDatabaseConfig.adminHttp().backgroundQueueCapacity(),
+                "Bounded admin background job queue capacity.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-http",
+                "cachedb.config.adminHttp.maxRequestBodyBytes",
+                cacheDatabaseConfig.adminHttp().maxRequestBodyBytes(),
+                "Maximum accepted admin request body size.");
+        addTuning(
+                items,
+                modeledProperties,
+                "admin-http",
+                "cachedb.config.adminHttp.jobStatusTtlSeconds",
+                cacheDatabaseConfig.adminHttp().jobStatusTtlSeconds(),
+                "Redis retention for cross-pod admin job status.");
+        addTuning(
+                items,
+                modeledProperties,
+                "schema",
+                "cachedb.config.schemaBootstrap.mode",
+                cacheDatabaseConfig.schemaBootstrap().mode().name(),
+                "Schema bootstrap mode.");
+        addTuning(
+                items,
+                modeledProperties,
+                "schema",
+                "cachedb.config.schemaBootstrap.autoApplyOnStart",
+                cacheDatabaseConfig.schemaBootstrap().autoApplyOnStart(),
+                "Applies schema bootstrap on start.");
+        addTuning(
+                items,
+                modeledProperties,
+                "schema",
+                "cachedb.config.schemaBootstrap.schemaName",
+                defaultString(cacheDatabaseConfig.schemaBootstrap().schemaName()),
+                "Target durable SQL schema.");
 
         int explicitOverrideCount = 0;
         TreeSet<String> propertyNames = new TreeSet<>();
@@ -723,63 +1212,105 @@ public final class CacheDatabaseAdmin {
         for (String propertyName : propertyNames) {
             explicitOverrideCount++;
             if (!modeledProperties.contains(propertyName)) {
-                items.add(new EffectiveTuningEntry(
-                        "explicit-property",
-                        propertyName,
-                        defaultString(System.getProperty(propertyName)),
-                        "explicit override",
-                        "Explicit JVM/system property override."
-                ));
+                items.add(
+                        new EffectiveTuningEntry(
+                                "explicit-property",
+                                propertyName,
+                                defaultString(System.getProperty(propertyName)),
+                                "explicit override",
+                                "Explicit JVM/system property override."));
             }
         }
 
-        items.sort(Comparator
-                .comparing(EffectiveTuningEntry::group)
-                .thenComparing(EffectiveTuningEntry::property));
+        items.sort(
+                Comparator.comparing(EffectiveTuningEntry::group)
+                        .thenComparing(EffectiveTuningEntry::property));
 
         return new EffectiveTuningSnapshot(
-                Instant.now(),
-                explicitOverrideCount,
-                items.size(),
-                List.copyOf(items)
-        );
+                Instant.now(), explicitOverrideCount, items.size(), List.copyOf(items));
     }
 
     public RuntimeProfileDetailsSnapshot runtimeProfileDetails() {
         RedisRuntimeProfileSnapshot snapshot = redisRuntimeProfileSnapshotSupplier.get();
         Map<String, String> values = runtimeProfilePropertySupplier.get();
         ArrayList<RuntimeProfilePropertySnapshot> properties = new ArrayList<>();
-        properties.add(runtimeProfileProperty(values, "hotEntityLimitFactor", "ratio",
-                "Hot entity limit multiplier applied to cache policies under the active runtime profile."));
-        properties.add(runtimeProfileProperty(values, "pageSizeFactor", "ratio",
-                "Page size multiplier applied to cache policies under the active runtime profile."));
-        properties.add(runtimeProfileProperty(values, "entityTtlCapSeconds", "seconds",
-                "Upper TTL cap for entity entries while this runtime profile is active."));
-        properties.add(runtimeProfileProperty(values, "pageTtlCapSeconds", "seconds",
-                "Upper TTL cap for page entries while this runtime profile is active."));
-        properties.add(runtimeProfileProperty(values, "highSleepMillisBonus", "milliseconds",
-                "Extra producer delay added during WARN pressure."));
-        properties.add(runtimeProfileProperty(values, "criticalSleepMillisBonus", "milliseconds",
-                "Extra producer delay added during CRITICAL pressure."));
-        properties.add(runtimeProfileProperty(values, "effectiveHighSleepMillis", "milliseconds",
-                "Effective producer delay currently used for WARN pressure."));
-        properties.add(runtimeProfileProperty(values, "effectiveCriticalSleepMillis", "milliseconds",
-                "Effective producer delay currently used for CRITICAL pressure."));
-        properties.add(runtimeProfileProperty(values, "automaticSwitchingEnabled", "flag",
-                "Whether the runtime profile is allowed to switch automatically under pressure."));
+        properties.add(
+                runtimeProfileProperty(
+                        values,
+                        "hotEntityLimitFactor",
+                        "ratio",
+                        "Hot entity limit multiplier applied to cache policies under the active"
+                                + " runtime profile."));
+        properties.add(
+                runtimeProfileProperty(
+                        values,
+                        "pageSizeFactor",
+                        "ratio",
+                        "Page size multiplier applied to cache policies under the active runtime"
+                                + " profile."));
+        properties.add(
+                runtimeProfileProperty(
+                        values,
+                        "entityTtlCapSeconds",
+                        "seconds",
+                        "Upper TTL cap for entity entries while this runtime profile is active."));
+        properties.add(
+                runtimeProfileProperty(
+                        values,
+                        "pageTtlCapSeconds",
+                        "seconds",
+                        "Upper TTL cap for page entries while this runtime profile is active."));
+        properties.add(
+                runtimeProfileProperty(
+                        values,
+                        "highSleepMillisBonus",
+                        "milliseconds",
+                        "Extra producer delay added during WARN pressure."));
+        properties.add(
+                runtimeProfileProperty(
+                        values,
+                        "criticalSleepMillisBonus",
+                        "milliseconds",
+                        "Extra producer delay added during CRITICAL pressure."));
+        properties.add(
+                runtimeProfileProperty(
+                        values,
+                        "effectiveHighSleepMillis",
+                        "milliseconds",
+                        "Effective producer delay currently used for WARN pressure."));
+        properties.add(
+                runtimeProfileProperty(
+                        values,
+                        "effectiveCriticalSleepMillis",
+                        "milliseconds",
+                        "Effective producer delay currently used for CRITICAL pressure."));
+        properties.add(
+                runtimeProfileProperty(
+                        values,
+                        "automaticSwitchingEnabled",
+                        "flag",
+                        "Whether the runtime profile is allowed to switch automatically under"
+                                + " pressure."));
         return new RuntimeProfileDetailsSnapshot(
                 defaultString(values.getOrDefault("profile", snapshot.activeProfile())),
-                defaultString(values.getOrDefault("mode", manualRuntimeProfileOverrideSupplier.get() == null ? "AUTO" : "MANUAL")),
-                Boolean.parseBoolean(values.getOrDefault(
-                        "automaticSwitchingEnabled",
-                        String.valueOf(cacheDatabaseConfig.redisGuardrail().automaticRuntimeProfileSwitchingEnabled())
-                )),
+                defaultString(
+                        values.getOrDefault(
+                                "mode",
+                                manualRuntimeProfileOverrideSupplier.get() == null
+                                        ? "AUTO"
+                                        : "MANUAL")),
+                Boolean.parseBoolean(
+                        values.getOrDefault(
+                                "automaticSwitchingEnabled",
+                                String.valueOf(
+                                        cacheDatabaseConfig
+                                                .redisGuardrail()
+                                                .automaticRuntimeProfileSwitchingEnabled()))),
                 defaultString(manualRuntimeProfileOverrideSupplier.get()),
                 defaultString(snapshot.lastObservedPressureLevel()),
                 snapshot.switchCount(),
                 snapshot.lastSwitchedAtEpochMillis(),
-                List.copyOf(properties)
-        );
+                List.copyOf(properties));
     }
 
     public RuntimeProfileDetailsSnapshot setRuntimeProfile(String profileName) {
@@ -805,14 +1336,20 @@ public final class CacheDatabaseAdmin {
     }
 
     public AdminTelemetryResetSnapshot resetTelemetry() {
-        long diagnosticsEntriesCleared = RedisTelemetrySupport.streamLengthSafely(jedis, diagnosticsStreamKey);
-        long incidentEntriesCleared = RedisTelemetrySupport.streamLengthSafely(jedis, monitoringConfig.incidentStreamKey());
+        long diagnosticsEntriesCleared =
+                RedisTelemetrySupport.streamLengthSafely(jedis, diagnosticsStreamKey);
+        long incidentEntriesCleared =
+                RedisTelemetrySupport.streamLengthSafely(
+                        jedis, monitoringConfig.incidentStreamKey());
         RedisTelemetrySupport.deleteKeySafely(jedis, diagnosticsStreamKey);
         RedisTelemetrySupport.deleteKeySafely(jedis, monitoringConfig.incidentStreamKey());
         try {
-            deleteKeysByScan(monitoringConfig.incidentStreamKey() + ":cooldown:*", ADMIN_KEY_SCAN_CAP);
+            deleteKeysByScan(
+                    monitoringConfig.incidentStreamKey() + ":cooldown:*", ADMIN_KEY_SCAN_CAP);
         } catch (RuntimeException ignored) {
-            // Best-effort cleanup; telemetry reset should not fail only because cooldown keys could not be scanned.
+            // Best-effort cleanup; telemetry reset should not fail only because cooldown keys could
+            // not
+            // be scanned.
         }
         AdminTelemetryResetSnapshot bufferReset;
         try {
@@ -835,8 +1372,7 @@ public final class CacheDatabaseAdmin {
                 bufferReset.monitoringHistorySamplesCleared(),
                 bufferReset.alertRouteHistorySamplesCleared(),
                 bufferReset.storagePerformanceOperationsCleared(),
-                Instant.now()
-        );
+                Instant.now());
     }
 
     public AdminTelemetryResetSnapshot resetTelemetryBuffersOnly() {
@@ -847,8 +1383,7 @@ public final class CacheDatabaseAdmin {
                 bufferReset.monitoringHistorySamplesCleared(),
                 bufferReset.alertRouteHistorySamplesCleared(),
                 bufferReset.storagePerformanceOperationsCleared(),
-                Instant.now()
-        );
+                Instant.now());
     }
 
     public PerformanceTelemetryResetSnapshot resetPerformanceTelemetry() {
@@ -870,7 +1405,8 @@ public final class CacheDatabaseAdmin {
         if (metrics.writeBehindStreamLength() >= monitoringConfig.writeBehindCriticalThreshold()) {
             issues.add("Write-behind backlog is above critical threshold");
             status = AdminHealthStatus.DOWN;
-        } else if (metrics.writeBehindStreamLength() >= monitoringConfig.writeBehindWarnThreshold()) {
+        } else if (metrics.writeBehindStreamLength()
+                >= monitoringConfig.writeBehindWarnThreshold()) {
             issues.add("Write-behind backlog is above warning threshold");
             status = elevate(status, AdminHealthStatus.DEGRADED);
         }
@@ -883,30 +1419,36 @@ public final class CacheDatabaseAdmin {
             status = elevate(status, AdminHealthStatus.DEGRADED);
         }
 
-        if (metrics.deadLetterRecoverySnapshot().failedCount() >= monitoringConfig.recoveryFailedCriticalThreshold()) {
+        if (metrics.deadLetterRecoverySnapshot().failedCount()
+                >= monitoringConfig.recoveryFailedCriticalThreshold()) {
             issues.add("Recovery worker failures are above critical threshold");
             status = AdminHealthStatus.DOWN;
-        } else if (metrics.deadLetterRecoverySnapshot().failedCount() >= monitoringConfig.recoveryFailedWarnThreshold()) {
+        } else if (metrics.deadLetterRecoverySnapshot().failedCount()
+                >= monitoringConfig.recoveryFailedWarnThreshold()) {
             issues.add("Recovery worker failures are above warning threshold");
             status = elevate(status, AdminHealthStatus.DEGRADED);
         }
 
         if (redisGuardrailConfig.usedMemoryCriticalBytes() > 0
-                && metrics.redisGuardrailSnapshot().usedMemoryBytes() >= redisGuardrailConfig.usedMemoryCriticalBytes()) {
+                && metrics.redisGuardrailSnapshot().usedMemoryBytes()
+                        >= redisGuardrailConfig.usedMemoryCriticalBytes()) {
             issues.add("Redis used memory is above critical threshold");
             status = AdminHealthStatus.DOWN;
         } else if (redisGuardrailConfig.usedMemoryWarnBytes() > 0
-                && metrics.redisGuardrailSnapshot().usedMemoryBytes() >= redisGuardrailConfig.usedMemoryWarnBytes()) {
+                && metrics.redisGuardrailSnapshot().usedMemoryBytes()
+                        >= redisGuardrailConfig.usedMemoryWarnBytes()) {
             issues.add("Redis used memory is above warning threshold");
             status = elevate(status, AdminHealthStatus.DEGRADED);
         }
 
         if (redisGuardrailConfig.compactionPendingCriticalThreshold() > 0
-                && metrics.redisGuardrailSnapshot().compactionPendingCount() >= redisGuardrailConfig.compactionPendingCriticalThreshold()) {
+                && metrics.redisGuardrailSnapshot().compactionPendingCount()
+                        >= redisGuardrailConfig.compactionPendingCriticalThreshold()) {
             issues.add("Compaction pending count is above critical threshold");
             status = AdminHealthStatus.DOWN;
         } else if (redisGuardrailConfig.compactionPendingWarnThreshold() > 0
-                && metrics.redisGuardrailSnapshot().compactionPendingCount() >= redisGuardrailConfig.compactionPendingWarnThreshold()) {
+                && metrics.redisGuardrailSnapshot().compactionPendingCount()
+                        >= redisGuardrailConfig.compactionPendingWarnThreshold()) {
             issues.add("Compaction pending count is above warning threshold");
             status = elevate(status, AdminHealthStatus.DEGRADED);
         }
@@ -916,11 +1458,13 @@ public final class CacheDatabaseAdmin {
         }
 
         if (cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold() > 0
-                && metrics.projectionRefreshSnapshot().deadLetterStreamLength() >= cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold()) {
+                && metrics.projectionRefreshSnapshot().deadLetterStreamLength()
+                        >= cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold()) {
             issues.add("Projection refresh dead-letter backlog is above critical threshold");
             status = elevate(status, AdminHealthStatus.DEGRADED);
         } else if (cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold() > 0
-                && metrics.projectionRefreshSnapshot().deadLetterStreamLength() >= cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold()) {
+                && metrics.projectionRefreshSnapshot().deadLetterStreamLength()
+                        >= cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold()) {
             issues.add("Projection refresh dead-letter backlog is above warning threshold");
             status = elevate(status, AdminHealthStatus.DEGRADED);
         }
@@ -956,34 +1500,65 @@ public final class CacheDatabaseAdmin {
         fields.put("note", note == null ? "" : note);
         fields.put("status", currentHealth.status().name());
         fields.put("recordedAt", Instant.now().toString());
-        fields.put("writeBehindStreamLength", String.valueOf(currentHealth.metrics().writeBehindStreamLength()));
-        fields.put("deadLetterStreamLength", String.valueOf(currentHealth.metrics().deadLetterStreamLength()));
-        fields.put("reconciliationStreamLength", String.valueOf(currentHealth.metrics().reconciliationStreamLength()));
-        fields.put("archiveStreamLength", String.valueOf(currentHealth.metrics().archiveStreamLength()));
-        fields.put("cleanupRunCount", String.valueOf(currentHealth.metrics().recoveryCleanupSnapshot().runCount()));
-        fields.put("reportRunCount", String.valueOf(currentHealth.metrics().adminReportJobSnapshot().runCount()));
-        fields.put("runtimeProfile", currentHealth.metrics().redisRuntimeProfileSnapshot().activeProfile());
-        fields.put("runtimePressureLevel", currentHealth.metrics().redisRuntimeProfileSnapshot().lastObservedPressureLevel());
-        fields.put("runtimeProfileSwitchCount", String.valueOf(currentHealth.metrics().redisRuntimeProfileSnapshot().switchCount()));
-        fields.put("runtimeProfileLastSwitchedAt", String.valueOf(currentHealth.metrics().redisRuntimeProfileSnapshot().lastSwitchedAtEpochMillis()));
+        fields.put(
+                "writeBehindStreamLength",
+                String.valueOf(currentHealth.metrics().writeBehindStreamLength()));
+        fields.put(
+                "deadLetterStreamLength",
+                String.valueOf(currentHealth.metrics().deadLetterStreamLength()));
+        fields.put(
+                "reconciliationStreamLength",
+                String.valueOf(currentHealth.metrics().reconciliationStreamLength()));
+        fields.put(
+                "archiveStreamLength",
+                String.valueOf(currentHealth.metrics().archiveStreamLength()));
+        fields.put(
+                "cleanupRunCount",
+                String.valueOf(currentHealth.metrics().recoveryCleanupSnapshot().runCount()));
+        fields.put(
+                "reportRunCount",
+                String.valueOf(currentHealth.metrics().adminReportJobSnapshot().runCount()));
+        fields.put(
+                "runtimeProfile",
+                currentHealth.metrics().redisRuntimeProfileSnapshot().activeProfile());
+        fields.put(
+                "runtimePressureLevel",
+                currentHealth.metrics().redisRuntimeProfileSnapshot().lastObservedPressureLevel());
+        fields.put(
+                "runtimeProfileSwitchCount",
+                String.valueOf(
+                        currentHealth.metrics().redisRuntimeProfileSnapshot().switchCount()));
+        fields.put(
+                "runtimeProfileLastSwitchedAt",
+                String.valueOf(
+                        currentHealth
+                                .metrics()
+                                .redisRuntimeProfileSnapshot()
+                                .lastSwitchedAtEpochMillis()));
         String entryId = "unpersisted:" + System.currentTimeMillis();
         try {
-            entryId = jedis.xadd(diagnosticsStreamKey, XAddParams.xAddParams(), fields).toString();
+            entryId =
+                    jedis.commands()
+                            .xadd(diagnosticsStreamKey, XAddParams.xAddParams(), fields)
+                            .toString();
             if (diagnosticsMaxLength > 0) {
-                jedis.xtrim(diagnosticsStreamKey, diagnosticsMaxLength, true);
+                jedis.commands().xtrim(diagnosticsStreamKey, diagnosticsMaxLength, true);
             }
-            RedisTelemetrySupport.expireIfNeeded(jedis, diagnosticsStreamKey, cacheDatabaseConfig.adminReportJob().diagnosticsTtlSeconds());
+            RedisTelemetrySupport.expireIfNeeded(
+                    jedis,
+                    diagnosticsStreamKey,
+                    cacheDatabaseConfig.adminReportJob().diagnosticsTtlSeconds());
         } catch (RuntimeException ignored) {
             fields.put("persistenceWarning", "Diagnostics could not be written to Redis.");
         }
-        AdminDiagnosticsRecord record = new AdminDiagnosticsRecord(
-                entryId,
-                fields.get("source"),
-                fields.get("note"),
-                currentHealth.status(),
-                Instant.parse(fields.get("recordedAt")),
-                Map.copyOf(fields)
-        );
+        AdminDiagnosticsRecord record =
+                new AdminDiagnosticsRecord(
+                        entryId,
+                        fields.get("source"),
+                        fields.get("note"),
+                        currentHealth.status(),
+                        Instant.parse(fields.get("recordedAt")),
+                        Map.copyOf(fields));
         rememberDiagnosticsRecord(record);
         invalidateMetricsSnapshot();
         return record;
@@ -1010,14 +1585,22 @@ public final class CacheDatabaseAdmin {
 
     public List<AdminDiagnosticsRecord> diagnostics(int limit) {
         int maxItems = Math.max(1, limit);
-        List<AdminDiagnosticsRecord> snapshot = cachedSnapshot(
-                lastDiagnosticsSnapshot,
-                lastDiagnosticsSampleAtEpochMillis,
-                1_500L,
-                () -> jedis.xrevrange(diagnosticsStreamKey, "+", "-", Math.max(20, maxItems)).stream()
-                        .map(this::toDiagnosticsRecord)
-                        .toList()
-        );
+        List<AdminDiagnosticsRecord> snapshot =
+                cachedSnapshot(
+                        lastDiagnosticsSnapshot,
+                        lastDiagnosticsSampleAtEpochMillis,
+                        1_500L,
+                        () ->
+                                jedis
+                                        .commands()
+                                        .xrevrange(
+                                                diagnosticsStreamKey,
+                                                "+",
+                                                "-",
+                                                Math.max(20, maxItems))
+                                        .stream()
+                                        .map(this::toDiagnosticsRecord)
+                                        .toList());
         if (snapshot.size() <= maxItems) {
             return snapshot;
         }
@@ -1026,16 +1609,29 @@ public final class CacheDatabaseAdmin {
 
     public List<RuntimeProfileChurnRecord> runtimeProfileChurn(int limit) {
         int maxItems = Math.max(1, limit);
-        List<RuntimeProfileChurnRecord> snapshot = cachedSnapshot(
-                lastRuntimeProfileChurnSnapshot,
-                lastRuntimeProfileChurnSampleAtEpochMillis,
-                1_500L,
-                () -> jedis.xrevrange(diagnosticsStreamKey, "+", "-", Math.max(20, maxItems * 5)).stream()
-                        .filter(entry -> "RUNTIME_PROFILE_SWITCH".equals(entry.getFields().get("eventType")))
-                        .limit(maxItems)
-                        .map(this::toRuntimeProfileChurnRecord)
-                        .toList()
-        );
+        List<RuntimeProfileChurnRecord> snapshot =
+                cachedSnapshot(
+                        lastRuntimeProfileChurnSnapshot,
+                        lastRuntimeProfileChurnSampleAtEpochMillis,
+                        1_500L,
+                        () ->
+                                jedis
+                                        .commands()
+                                        .xrevrange(
+                                                diagnosticsStreamKey,
+                                                "+",
+                                                "-",
+                                                Math.max(20, maxItems * 5))
+                                        .stream()
+                                        .filter(
+                                                entry ->
+                                                        "RUNTIME_PROFILE_SWITCH"
+                                                                .equals(
+                                                                        entry.getFields()
+                                                                                .get("eventType")))
+                                        .limit(maxItems)
+                                        .map(this::toRuntimeProfileChurnRecord)
+                                        .toList());
         if (snapshot.size() <= maxItems) {
             return snapshot;
         }
@@ -1044,13 +1640,21 @@ public final class CacheDatabaseAdmin {
 
     public QueryIndexRebuildResult rebuildQueryIndexes(String entityName, String note) {
         QueryIndexRebuildResult result = indexMaintenance.rebuildEntity(entityName, note);
-        persistDiagnostics("query-index-rebuild", "entity=" + entityName + ", rebuilt=" + result.rebuiltEntityCount() + ", note=" + note);
+        persistDiagnostics(
+                "query-index-rebuild",
+                "entity="
+                        + entityName
+                        + ", rebuilt="
+                        + result.rebuiltEntityCount()
+                        + ", note="
+                        + note);
         return result;
     }
 
     public List<QueryIndexRebuildResult> rebuildAllQueryIndexes(String note) {
         List<QueryIndexRebuildResult> results = indexMaintenance.rebuildAll(note);
-        persistDiagnostics("query-index-rebuild", "all-entities rebuilt=" + results.size() + ", note=" + note);
+        persistDiagnostics(
+                "query-index-rebuild", "all-entities rebuilt=" + results.size() + ", note=" + note);
         return results;
     }
 
@@ -1059,8 +1663,7 @@ public final class CacheDatabaseAdmin {
                 lastDegradedQueryIndexesSnapshot,
                 lastDegradedQueryIndexesSampleAtEpochMillis,
                 2_000L,
-                () -> List.copyOf(indexMaintenance.degradedEntities())
-        );
+                () -> List.copyOf(indexMaintenance.degradedEntities()));
     }
 
     public SchemaMigrationPlan schemaMigrationPlan() {
@@ -1090,137 +1693,195 @@ public final class CacheDatabaseAdmin {
                 lastMonitoringServicesSnapshot,
                 lastMonitoringServicesSampleAtEpochMillis,
                 1_500L,
-                this::collectMonitoringServices
-        );
+                this::collectMonitoringServices);
     }
 
     private List<MonitoringServiceSnapshot> collectMonitoringServices() {
         ReconciliationHealth health = health();
         ReconciliationMetrics metrics = health.metrics();
         ArrayList<MonitoringServiceSnapshot> services = new ArrayList<>();
-        String writeBehindError = workerErrorSummary(
-                metrics.writeBehindWorkerSnapshot().lastErrorType(),
-                metrics.writeBehindWorkerSnapshot().lastErrorOrigin()
-        );
-        services.add(new MonitoringServiceSnapshot(
-                "write-behind",
-                serviceStatus(
-                        metrics.redisGuardrailSnapshot().hardRejectedWriteCount() > 0,
-                        metrics.writeBehindStreamLength() >= monitoringConfig.writeBehindWarnThreshold()
-                                || recentError(metrics.writeBehindWorkerSnapshot().lastErrorAtEpochMillis())
-                ),
-                "backlog=" + metrics.writeBehindStreamLength(),
-                "flushed=" + metrics.writeBehindWorkerSnapshot().flushedCount()
-                        + ", deadLetter=" + metrics.writeBehindWorkerSnapshot().deadLetterCount()
-                        + writeBehindError
-        ));
-        String recoveryError = workerErrorSummary(
-                metrics.deadLetterRecoverySnapshot().lastErrorType(),
-                metrics.deadLetterRecoverySnapshot().lastErrorOrigin()
-        );
-        services.add(new MonitoringServiceSnapshot(
-                "recovery",
-                serviceStatus(
-                        metrics.deadLetterRecoverySnapshot().failedCount() >= monitoringConfig.recoveryFailedCriticalThreshold(),
-                        metrics.deadLetterStreamLength() >= monitoringConfig.deadLetterWarnThreshold()
-                                || recentError(metrics.deadLetterRecoverySnapshot().lastErrorAtEpochMillis())
-                ),
-                "deadLetter=" + metrics.deadLetterStreamLength(),
-                "replayed=" + metrics.deadLetterRecoverySnapshot().replayedCount()
-                        + ", failed=" + metrics.deadLetterRecoverySnapshot().failedCount()
-                        + recoveryError
-        ));
-        services.add(new MonitoringServiceSnapshot(
-                "redis-guardrail",
-                serviceStatus(
-                        redisGuardrailConfig.usedMemoryCriticalBytes() > 0
-                                && metrics.redisGuardrailSnapshot().usedMemoryBytes() >= redisGuardrailConfig.usedMemoryCriticalBytes(),
-                        redisGuardrailConfig.usedMemoryWarnBytes() > 0
-                                && metrics.redisGuardrailSnapshot().usedMemoryBytes() >= redisGuardrailConfig.usedMemoryWarnBytes()
-                ),
-                "memory=" + metrics.redisGuardrailSnapshot().usedMemoryBytes(),
-                "pending=" + metrics.redisGuardrailSnapshot().compactionPendingCount()
-                        + ", profile=" + metrics.redisRuntimeProfileSnapshot().activeProfile()
-        ));
+        String writeBehindError =
+                workerErrorSummary(
+                        metrics.writeBehindWorkerSnapshot().lastErrorType(),
+                        metrics.writeBehindWorkerSnapshot().lastErrorOrigin());
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "write-behind",
+                        serviceStatus(
+                                metrics.redisGuardrailSnapshot().hardRejectedWriteCount() > 0,
+                                metrics.writeBehindStreamLength()
+                                                >= monitoringConfig.writeBehindWarnThreshold()
+                                        || recentError(
+                                                metrics.writeBehindWorkerSnapshot()
+                                                        .lastErrorAtEpochMillis())),
+                        "backlog=" + metrics.writeBehindStreamLength(),
+                        "flushed="
+                                + metrics.writeBehindWorkerSnapshot().flushedCount()
+                                + ", deadLetter="
+                                + metrics.writeBehindWorkerSnapshot().deadLetterCount()
+                                + writeBehindError));
+        String recoveryError =
+                workerErrorSummary(
+                        metrics.deadLetterRecoverySnapshot().lastErrorType(),
+                        metrics.deadLetterRecoverySnapshot().lastErrorOrigin());
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "recovery",
+                        serviceStatus(
+                                metrics.deadLetterRecoverySnapshot().failedCount()
+                                        >= monitoringConfig.recoveryFailedCriticalThreshold(),
+                                metrics.deadLetterStreamLength()
+                                                >= monitoringConfig.deadLetterWarnThreshold()
+                                        || recentError(
+                                                metrics.deadLetterRecoverySnapshot()
+                                                        .lastErrorAtEpochMillis())),
+                        "deadLetter=" + metrics.deadLetterStreamLength(),
+                        "replayed="
+                                + metrics.deadLetterRecoverySnapshot().replayedCount()
+                                + ", failed="
+                                + metrics.deadLetterRecoverySnapshot().failedCount()
+                                + recoveryError));
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "redis-guardrail",
+                        serviceStatus(
+                                redisGuardrailConfig.usedMemoryCriticalBytes() > 0
+                                        && metrics.redisGuardrailSnapshot().usedMemoryBytes()
+                                                >= redisGuardrailConfig.usedMemoryCriticalBytes(),
+                                redisGuardrailConfig.usedMemoryWarnBytes() > 0
+                                        && metrics.redisGuardrailSnapshot().usedMemoryBytes()
+                                                >= redisGuardrailConfig.usedMemoryWarnBytes()),
+                        "memory=" + metrics.redisGuardrailSnapshot().usedMemoryBytes(),
+                        "pending="
+                                + metrics.redisGuardrailSnapshot().compactionPendingCount()
+                                + ", profile="
+                                + metrics.redisRuntimeProfileSnapshot().activeProfile()));
         List<String> degradedIndexes = degradedQueryIndexes();
-        services.add(new MonitoringServiceSnapshot(
-                "query-layer",
-                serviceStatus(false, !degradedIndexes.isEmpty()),
-                "degradedIndexes=" + degradedIndexes.size(),
-                degradedIndexes.isEmpty() ? "planner healthy" : String.join(", ", degradedIndexes.stream().limit(3).toList())
-        ));
-        String cleanupError = workerErrorSummary(
-                metrics.recoveryCleanupSnapshot().lastErrorType(),
-                metrics.recoveryCleanupSnapshot().lastErrorOrigin()
-        );
-        services.add(new MonitoringServiceSnapshot(
-                "cleanup",
-                serviceStatus(false, recentError(metrics.recoveryCleanupSnapshot().lastErrorAtEpochMillis())),
-                "runs=" + metrics.recoveryCleanupSnapshot().runCount(),
-                "prunedDeadLetters=" + metrics.recoveryCleanupSnapshot().prunedDeadLetterCount()
-                        + ", prunedArchive=" + metrics.recoveryCleanupSnapshot().prunedArchiveCount()
-                        + cleanupError
-        ));
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "query-layer",
+                        serviceStatus(false, !degradedIndexes.isEmpty()),
+                        "degradedIndexes=" + degradedIndexes.size(),
+                        degradedIndexes.isEmpty()
+                                ? "planner healthy"
+                                : String.join(", ", degradedIndexes.stream().limit(3).toList())));
+        String cleanupError =
+                workerErrorSummary(
+                        metrics.recoveryCleanupSnapshot().lastErrorType(),
+                        metrics.recoveryCleanupSnapshot().lastErrorOrigin());
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "cleanup",
+                        serviceStatus(
+                                false,
+                                recentError(
+                                        metrics.recoveryCleanupSnapshot()
+                                                .lastErrorAtEpochMillis())),
+                        "runs=" + metrics.recoveryCleanupSnapshot().runCount(),
+                        "prunedDeadLetters="
+                                + metrics.recoveryCleanupSnapshot().prunedDeadLetterCount()
+                                + ", prunedArchive="
+                                + metrics.recoveryCleanupSnapshot().prunedArchiveCount()
+                                + cleanupError));
         SchemaStatusSnapshot schemaStatus = schemaStatus();
-        services.add(new MonitoringServiceSnapshot(
-                "schema",
-                serviceStatus(!schemaStatus.validationSucceeded(), schemaStatus.migrationStepCount() > 0),
-                "migrationSteps=" + schemaStatus.migrationStepCount(),
-                "validatedTables=" + schemaStatus.validatedTableCount()
-                        + ", issues=" + schemaStatus.validationIssueCount()
-        ));
-        services.add(new MonitoringServiceSnapshot(
-                "incident-delivery",
-                serviceStatus(totalIncidentDeliveryDropped(metrics) > 0, totalIncidentDeliveryFailed(metrics) > 0),
-                "enqueued=" + metrics.incidentDeliverySnapshot().enqueuedCount(),
-                "delivered=" + totalIncidentDeliveryDelivered(metrics)
-                        + ", failed=" + totalIncidentDeliveryFailed(metrics)
-        ));
-        String deliveryRecoveryError = workerErrorSummary(
-                metrics.incidentDeliverySnapshot().recovery().lastErrorType(),
-                metrics.incidentDeliverySnapshot().recovery().lastErrorOrigin()
-        );
-        services.add(new MonitoringServiceSnapshot(
-                "incident-delivery-recovery",
-                serviceStatus(false, recentError(metrics.incidentDeliverySnapshot().recovery().lastErrorAtEpochMillis())),
-                "replayed=" + metrics.incidentDeliverySnapshot().recovery().replayedCount(),
-                "failedReplay=" + metrics.incidentDeliverySnapshot().recovery().failedReplayCount()
-                        + ", deadLetter=" + metrics.incidentDeliverySnapshot().recovery().deadLetterCount()
-                        + deliveryRecoveryError
-        ));
-        String adminReportError = workerErrorSummary(
-                metrics.adminReportJobSnapshot().lastErrorType(),
-                metrics.adminReportJobSnapshot().lastErrorOrigin()
-        );
-        services.add(new MonitoringServiceSnapshot(
-                "admin-report-job",
-                serviceStatus(false, recentError(metrics.adminReportJobSnapshot().lastErrorAtEpochMillis())),
-                "runs=" + metrics.adminReportJobSnapshot().runCount(),
-                "writtenFiles=" + metrics.adminReportJobSnapshot().writtenFileCount()
-                        + adminReportError
-        ));
-        String projectionRefreshError = workerErrorSummary(
-                metrics.projectionRefreshSnapshot().lastErrorType(),
-                metrics.projectionRefreshSnapshot().lastErrorOrigin()
-        );
-        services.add(new MonitoringServiceSnapshot(
-                "projection-refresh",
-                serviceStatus(
-                        cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold() > 0
-                                && metrics.projectionRefreshSnapshot().deadLetterStreamLength() >= cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold(),
-                        (cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold() > 0
-                                && metrics.projectionRefreshSnapshot().deadLetterStreamLength() >= cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold())
-                                || recentError(metrics.projectionRefreshSnapshot().lastErrorAtEpochMillis())
-                ),
-                "stream=" + metrics.projectionRefreshSnapshot().streamLength()
-                        + ", pending=" + metrics.projectionRefreshSnapshot().pendingCount()
-                        + ", lagMs=" + metrics.projectionRefreshSnapshot().lagEstimateMillis(),
-                "processed=" + metrics.projectionRefreshSnapshot().processedCount()
-                        + ", retried=" + metrics.projectionRefreshSnapshot().retriedCount()
-                        + ", dlq=" + metrics.projectionRefreshSnapshot().deadLetterStreamLength()
-                        + ", replayed=" + metrics.projectionRefreshSnapshot().replayedCount()
-                        + projectionRefreshError
-        ));
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "schema",
+                        serviceStatus(
+                                !schemaStatus.validationSucceeded(),
+                                schemaStatus.migrationStepCount() > 0),
+                        "migrationSteps=" + schemaStatus.migrationStepCount(),
+                        "validatedTables="
+                                + schemaStatus.validatedTableCount()
+                                + ", issues="
+                                + schemaStatus.validationIssueCount()));
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "incident-delivery",
+                        serviceStatus(
+                                totalIncidentDeliveryDropped(metrics) > 0,
+                                totalIncidentDeliveryFailed(metrics) > 0),
+                        "enqueued=" + metrics.incidentDeliverySnapshot().enqueuedCount(),
+                        "delivered="
+                                + totalIncidentDeliveryDelivered(metrics)
+                                + ", failed="
+                                + totalIncidentDeliveryFailed(metrics)));
+        String deliveryRecoveryError =
+                workerErrorSummary(
+                        metrics.incidentDeliverySnapshot().recovery().lastErrorType(),
+                        metrics.incidentDeliverySnapshot().recovery().lastErrorOrigin());
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "incident-delivery-recovery",
+                        serviceStatus(
+                                false,
+                                recentError(
+                                        metrics.incidentDeliverySnapshot()
+                                                .recovery()
+                                                .lastErrorAtEpochMillis())),
+                        "replayed=" + metrics.incidentDeliverySnapshot().recovery().replayedCount(),
+                        "failedReplay="
+                                + metrics.incidentDeliverySnapshot().recovery().failedReplayCount()
+                                + ", deadLetter="
+                                + metrics.incidentDeliverySnapshot().recovery().deadLetterCount()
+                                + deliveryRecoveryError));
+        String adminReportError =
+                workerErrorSummary(
+                        metrics.adminReportJobSnapshot().lastErrorType(),
+                        metrics.adminReportJobSnapshot().lastErrorOrigin());
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "admin-report-job",
+                        serviceStatus(
+                                false,
+                                recentError(
+                                        metrics.adminReportJobSnapshot().lastErrorAtEpochMillis())),
+                        "runs=" + metrics.adminReportJobSnapshot().runCount(),
+                        "writtenFiles="
+                                + metrics.adminReportJobSnapshot().writtenFileCount()
+                                + adminReportError));
+        String projectionRefreshError =
+                workerErrorSummary(
+                        metrics.projectionRefreshSnapshot().lastErrorType(),
+                        metrics.projectionRefreshSnapshot().lastErrorOrigin());
+        services.add(
+                new MonitoringServiceSnapshot(
+                        "projection-refresh",
+                        serviceStatus(
+                                cacheDatabaseConfig
+                                                        .projectionRefresh()
+                                                        .deadLetterCriticalThreshold()
+                                                > 0
+                                        && metrics.projectionRefreshSnapshot()
+                                                        .deadLetterStreamLength()
+                                                >= cacheDatabaseConfig
+                                                        .projectionRefresh()
+                                                        .deadLetterCriticalThreshold(),
+                                (cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold()
+                                                        > 0
+                                                && metrics.projectionRefreshSnapshot()
+                                                                .deadLetterStreamLength()
+                                                        >= cacheDatabaseConfig
+                                                                .projectionRefresh()
+                                                                .deadLetterWarnThreshold())
+                                        || recentError(
+                                                metrics.projectionRefreshSnapshot()
+                                                        .lastErrorAtEpochMillis())),
+                        "stream="
+                                + metrics.projectionRefreshSnapshot().streamLength()
+                                + ", pending="
+                                + metrics.projectionRefreshSnapshot().pendingCount()
+                                + ", lagMs="
+                                + metrics.projectionRefreshSnapshot().lagEstimateMillis(),
+                        "processed="
+                                + metrics.projectionRefreshSnapshot().processedCount()
+                                + ", retried="
+                                + metrics.projectionRefreshSnapshot().retriedCount()
+                                + ", dlq="
+                                + metrics.projectionRefreshSnapshot().deadLetterStreamLength()
+                                + ", replayed="
+                                + metrics.projectionRefreshSnapshot().replayedCount()
+                                + projectionRefreshError));
         return List.copyOf(services);
     }
 
@@ -1229,8 +1890,7 @@ public final class CacheDatabaseAdmin {
                 lastBackgroundWorkerErrorsSnapshot,
                 lastBackgroundWorkerErrorsSampleAtEpochMillis,
                 1_500L,
-                this::collectBackgroundWorkerErrors
-        );
+                this::collectBackgroundWorkerErrors);
     }
 
     private List<BackgroundWorkerErrorSnapshot> collectBackgroundWorkerErrors() {
@@ -1246,8 +1906,7 @@ public final class CacheDatabaseAdmin {
                 metrics.writeBehindWorkerSnapshot().lastErrorMessage(),
                 metrics.writeBehindWorkerSnapshot().lastErrorRootMessage(),
                 metrics.writeBehindWorkerSnapshot().lastErrorOrigin(),
-                metrics.writeBehindWorkerSnapshot().lastErrorStackTrace()
-        );
+                metrics.writeBehindWorkerSnapshot().lastErrorStackTrace());
         addBackgroundWorkerError(
                 items,
                 "dead-letter-recovery-worker",
@@ -1258,8 +1917,7 @@ public final class CacheDatabaseAdmin {
                 metrics.deadLetterRecoverySnapshot().lastErrorMessage(),
                 metrics.deadLetterRecoverySnapshot().lastErrorRootMessage(),
                 metrics.deadLetterRecoverySnapshot().lastErrorOrigin(),
-                metrics.deadLetterRecoverySnapshot().lastErrorStackTrace()
-        );
+                metrics.deadLetterRecoverySnapshot().lastErrorStackTrace());
         addBackgroundWorkerError(
                 items,
                 "recovery-cleanup-worker",
@@ -1270,8 +1928,7 @@ public final class CacheDatabaseAdmin {
                 metrics.recoveryCleanupSnapshot().lastErrorMessage(),
                 metrics.recoveryCleanupSnapshot().lastErrorRootMessage(),
                 metrics.recoveryCleanupSnapshot().lastErrorOrigin(),
-                metrics.recoveryCleanupSnapshot().lastErrorStackTrace()
-        );
+                metrics.recoveryCleanupSnapshot().lastErrorStackTrace());
         addBackgroundWorkerError(
                 items,
                 "incident-delivery-recovery-worker",
@@ -1282,8 +1939,7 @@ public final class CacheDatabaseAdmin {
                 metrics.incidentDeliverySnapshot().recovery().lastErrorMessage(),
                 metrics.incidentDeliverySnapshot().recovery().lastErrorRootMessage(),
                 metrics.incidentDeliverySnapshot().recovery().lastErrorOrigin(),
-                metrics.incidentDeliverySnapshot().recovery().lastErrorStackTrace()
-        );
+                metrics.incidentDeliverySnapshot().recovery().lastErrorStackTrace());
         addBackgroundWorkerError(
                 items,
                 "admin-report-job",
@@ -1294,8 +1950,7 @@ public final class CacheDatabaseAdmin {
                 metrics.adminReportJobSnapshot().lastErrorMessage(),
                 metrics.adminReportJobSnapshot().lastErrorRootMessage(),
                 metrics.adminReportJobSnapshot().lastErrorOrigin(),
-                metrics.adminReportJobSnapshot().lastErrorStackTrace()
-        );
+                metrics.adminReportJobSnapshot().lastErrorStackTrace());
         addBackgroundWorkerError(
                 items,
                 "projection-refresh-worker",
@@ -1306,19 +1961,16 @@ public final class CacheDatabaseAdmin {
                 metrics.projectionRefreshSnapshot().lastErrorMessage(),
                 metrics.projectionRefreshSnapshot().lastErrorRootMessage(),
                 metrics.projectionRefreshSnapshot().lastErrorOrigin(),
-                ""
-        );
-        items.sort(Comparator.comparingLong(BackgroundWorkerErrorSnapshot::lastErrorAtEpochMillis).reversed());
+                "");
+        items.sort(
+                Comparator.comparingLong(BackgroundWorkerErrorSnapshot::lastErrorAtEpochMillis)
+                        .reversed());
         return List.copyOf(items);
     }
 
     public MonitoringTriageSnapshot triage() {
         return cachedSnapshot(
-                lastTriageSnapshot,
-                lastTriageSampleAtEpochMillis,
-                1_500L,
-                this::collectTriage
-        );
+                lastTriageSnapshot, lastTriageSampleAtEpochMillis, 1_500L, this::collectTriage);
     }
 
     private MonitoringTriageSnapshot collectTriage() {
@@ -1331,37 +1983,59 @@ public final class CacheDatabaseAdmin {
         if (metrics.redisGuardrailSnapshot().hardRejectedWriteCount() > 0) {
             primaryBottleneck = "producer-guardrail";
             suspectedCause = "Redis hard limit is rejecting producer writes.";
-            evidence.add("hardRejectedWriteCount=" + metrics.redisGuardrailSnapshot().hardRejectedWriteCount());
-        } else if (metrics.writeBehindStreamLength() >= monitoringConfig.writeBehindCriticalThreshold()) {
+            evidence.add(
+                    "hardRejectedWriteCount="
+                            + metrics.redisGuardrailSnapshot().hardRejectedWriteCount());
+        } else if (metrics.writeBehindStreamLength()
+                >= monitoringConfig.writeBehindCriticalThreshold()) {
             primaryBottleneck = "write-behind";
             suspectedCause = "Write-behind backlog is above the critical threshold.";
             evidence.add("writeBehindBacklog=" + metrics.writeBehindStreamLength());
-            evidence.add("lastObservedBacklog=" + metrics.writeBehindWorkerSnapshot().lastObservedBacklog());
-        } else if (metrics.writeBehindStreamLength() >= monitoringConfig.writeBehindWarnThreshold()) {
+            evidence.add(
+                    "lastObservedBacklog="
+                            + metrics.writeBehindWorkerSnapshot().lastObservedBacklog());
+        } else if (metrics.writeBehindStreamLength()
+                >= monitoringConfig.writeBehindWarnThreshold()) {
             primaryBottleneck = "write-behind";
             suspectedCause = "Write-behind backlog is above the warning threshold.";
             evidence.add("writeBehindBacklog=" + metrics.writeBehindStreamLength());
-            evidence.add("lastObservedBacklog=" + metrics.writeBehindWorkerSnapshot().lastObservedBacklog());
+            evidence.add(
+                    "lastObservedBacklog="
+                            + metrics.writeBehindWorkerSnapshot().lastObservedBacklog());
         } else if (metrics.deadLetterStreamLength() >= monitoringConfig.deadLetterWarnThreshold()) {
             primaryBottleneck = "recovery";
-            suspectedCause = "Dead-letter backlog suggests recovery throughput or replay correctness pressure.";
+            suspectedCause =
+                    "Dead-letter backlog suggests recovery throughput or replay correctness"
+                            + " pressure.";
             evidence.add("deadLetterBacklog=" + metrics.deadLetterStreamLength());
-            evidence.add("recoveryFailedCount=" + metrics.deadLetterRecoverySnapshot().failedCount());
+            evidence.add(
+                    "recoveryFailedCount=" + metrics.deadLetterRecoverySnapshot().failedCount());
         } else if (redisGuardrailConfig.usedMemoryWarnBytes() > 0
-                && metrics.redisGuardrailSnapshot().usedMemoryBytes() >= redisGuardrailConfig.usedMemoryWarnBytes()) {
+                && metrics.redisGuardrailSnapshot().usedMemoryBytes()
+                        >= redisGuardrailConfig.usedMemoryWarnBytes()) {
             primaryBottleneck = "redis-memory";
             suspectedCause = "Redis memory is near the configured guardrail threshold.";
             evidence.add("usedMemoryBytes=" + metrics.redisGuardrailSnapshot().usedMemoryBytes());
-            evidence.add("compactionPendingCount=" + metrics.redisGuardrailSnapshot().compactionPendingCount());
+            evidence.add(
+                    "compactionPendingCount="
+                            + metrics.redisGuardrailSnapshot().compactionPendingCount());
         } else if (cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold() > 0
-                && metrics.projectionRefreshSnapshot().deadLetterStreamLength() >= cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold()) {
+                && metrics.projectionRefreshSnapshot().deadLetterStreamLength()
+                        >= cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold()) {
             primaryBottleneck = "projection-refresh";
-            suspectedCause = "Projection refresh dead-letter backlog suggests stale read models or poisoned refresh events.";
-            evidence.add("projectionRefreshDlq=" + metrics.projectionRefreshSnapshot().deadLetterStreamLength());
-            evidence.add("projectionRefreshFailed=" + metrics.projectionRefreshSnapshot().failedCount());
+            suspectedCause =
+                    "Projection refresh dead-letter backlog suggests stale read models or poisoned"
+                            + " refresh events.";
+            evidence.add(
+                    "projectionRefreshDlq="
+                            + metrics.projectionRefreshSnapshot().deadLetterStreamLength());
+            evidence.add(
+                    "projectionRefreshFailed=" + metrics.projectionRefreshSnapshot().failedCount());
         } else if (!degradedQueryIndexes().isEmpty()) {
             primaryBottleneck = "query-index";
-            suspectedCause = "Query index maintenance is degraded and the system may be falling back to scans.";
+            suspectedCause =
+                    "Query index maintenance is degraded and the system may be falling back to"
+                            + " scans.";
             evidence.add("degradedIndexes=" + degradedQueryIndexes().size());
             evidence.add("runtimeProfile=" + metrics.redisRuntimeProfileSnapshot().activeProfile());
         } else if (recentError(metrics.writeBehindWorkerSnapshot().lastErrorAtEpochMillis())
@@ -1370,12 +2044,22 @@ public final class CacheDatabaseAdmin {
                 || recentError(metrics.projectionRefreshSnapshot().lastErrorAtEpochMillis())) {
             primaryBottleneck = "worker-errors";
             suspectedCause = inferredWorkerErrorCause(metrics);
-            evidence.add("writeBehindLastError=" + metrics.writeBehindWorkerSnapshot().lastErrorType());
-            evidence.add("writeBehindLastErrorMessage=" + metrics.writeBehindWorkerSnapshot().lastErrorMessage());
-            evidence.add("recoveryLastError=" + metrics.deadLetterRecoverySnapshot().lastErrorType());
-            evidence.add("recoveryLastErrorMessage=" + metrics.deadLetterRecoverySnapshot().lastErrorMessage());
-            evidence.add("projectionRefreshLastError=" + metrics.projectionRefreshSnapshot().lastErrorType());
-            evidence.add("projectionRefreshLastErrorMessage=" + metrics.projectionRefreshSnapshot().lastErrorMessage());
+            evidence.add(
+                    "writeBehindLastError=" + metrics.writeBehindWorkerSnapshot().lastErrorType());
+            evidence.add(
+                    "writeBehindLastErrorMessage="
+                            + metrics.writeBehindWorkerSnapshot().lastErrorMessage());
+            evidence.add(
+                    "recoveryLastError=" + metrics.deadLetterRecoverySnapshot().lastErrorType());
+            evidence.add(
+                    "recoveryLastErrorMessage="
+                            + metrics.deadLetterRecoverySnapshot().lastErrorMessage());
+            evidence.add(
+                    "projectionRefreshLastError="
+                            + metrics.projectionRefreshSnapshot().lastErrorType());
+            evidence.add(
+                    "projectionRefreshLastErrorMessage="
+                            + metrics.projectionRefreshSnapshot().lastErrorMessage());
         } else {
             evidence.add("health=" + health.status().name());
             evidence.add("runtimeProfile=" + metrics.redisRuntimeProfileSnapshot().activeProfile());
@@ -1390,22 +2074,27 @@ public final class CacheDatabaseAdmin {
                 primaryBottleneck,
                 suspectedCause,
                 List.copyOf(evidence),
-                Instant.now()
-        );
+                Instant.now());
     }
 
     private String inferredWorkerErrorCause(ReconciliationMetrics metrics) {
-        String writeBehindMessage = metrics.writeBehindWorkerSnapshot().lastErrorMessage() == null
-                ? ""
-                : metrics.writeBehindWorkerSnapshot().lastErrorMessage();
-        if (writeBehindMessage.contains("ON CONFLICT DO UPDATE command cannot affect row a second time")) {
-            return "Write-behind batch sent the same entity id to the durable SQL provider more than once in a single bulk upsert statement.";
+        String writeBehindMessage =
+                metrics.writeBehindWorkerSnapshot().lastErrorMessage() == null
+                        ? ""
+                        : metrics.writeBehindWorkerSnapshot().lastErrorMessage();
+        if (writeBehindMessage.contains(
+                "ON CONFLICT DO UPDATE command cannot affect row a second time")) {
+            return "Write-behind batch sent the same entity id to the durable SQL provider more"
+                    + " than once in a single bulk upsert statement.";
         }
-        String projectionRefreshMessage = defaultString(metrics.projectionRefreshSnapshot().lastErrorMessage());
+        String projectionRefreshMessage =
+                defaultString(metrics.projectionRefreshSnapshot().lastErrorMessage());
         if (!projectionRefreshMessage.isBlank()) {
-            return "Projection refresh worker observed a recent error and read-model updates may be lagging behind writes.";
+            return "Projection refresh worker observed a recent error and read-model updates may be"
+                    + " lagging behind writes.";
         }
-        return "A recent worker error was observed even though backlog thresholds are not yet critical.";
+        return "A recent worker error was observed even though backlog thresholds are not yet"
+                + " critical.";
     }
 
     private void addBackgroundWorkerError(
@@ -1418,25 +2107,24 @@ public final class CacheDatabaseAdmin {
             String errorMessage,
             String rootErrorMessage,
             String origin,
-            String stackTrace
-    ) {
+            String stackTrace) {
         if (lastErrorAtEpochMillis <= 0) {
             return;
         }
         boolean recent = recentError(lastErrorAtEpochMillis);
-        items.add(new BackgroundWorkerErrorSnapshot(
-                workerName,
-                serviceName,
-                recent ? AdminHealthStatus.DEGRADED.name() : AdminHealthStatus.UP.name(),
-                recent,
-                lastErrorAtEpochMillis,
-                defaultString(errorType),
-                defaultString(rootErrorType),
-                defaultString(errorMessage),
-                defaultString(rootErrorMessage),
-                defaultString(origin),
-                defaultString(stackTrace)
-        ));
+        items.add(
+                new BackgroundWorkerErrorSnapshot(
+                        workerName,
+                        serviceName,
+                        recent ? AdminHealthStatus.DEGRADED.name() : AdminHealthStatus.UP.name(),
+                        recent,
+                        lastErrorAtEpochMillis,
+                        defaultString(errorType),
+                        defaultString(rootErrorType),
+                        defaultString(errorMessage),
+                        defaultString(rootErrorMessage),
+                        defaultString(origin),
+                        defaultString(stackTrace)));
     }
 
     private String workerErrorSummary(String errorType, String origin) {
@@ -1456,97 +2144,118 @@ public final class CacheDatabaseAdmin {
                 lastAlertRoutesSnapshot,
                 lastAlertRoutesSampleAtEpochMillis,
                 1_500L,
-                this::collectAlertRoutes
-        );
+                this::collectAlertRoutes);
     }
 
     private List<AlertRouteSnapshot> collectAlertRoutes() {
         ReconciliationMetrics metrics = metrics();
-        java.util.Map<String, com.reactor.cachedb.core.queue.IncidentChannelSnapshot> channelMap = new java.util.LinkedHashMap<>();
-        for (com.reactor.cachedb.core.queue.IncidentChannelSnapshot channel : metrics.incidentDeliverySnapshot().channels()) {
+        java.util.Map<String, com.reactor.cachedb.core.queue.IncidentChannelSnapshot> channelMap =
+                new java.util.LinkedHashMap<>();
+        for (com.reactor.cachedb.core.queue.IncidentChannelSnapshot channel :
+                metrics.incidentDeliverySnapshot().channels()) {
             channelMap.put(channel.channelName(), channel);
         }
         ArrayList<AlertRouteSnapshot> routes = new ArrayList<>();
-        com.reactor.cachedb.core.queue.IncidentChannelSnapshot webhookChannel = channelMap.get("webhook");
-        routes.add(new AlertRouteSnapshot(
-                "webhook",
-                monitoringConfig.incidentWebhook().enabled(),
-                defaultString(monitoringConfig.incidentWebhook().endpointUrl()),
-                "http-webhook",
-                "Immediate notify on persisted incidents",
-                escalationLevel(webhookChannel, monitoringConfig.incidentWebhook().enabled()),
-                "Persisted incident stream",
-                "retries=" + monitoringConfig.incidentWebhook().maxRetries()
-                        + ", backoffMs=" + monitoringConfig.incidentWebhook().retryBackoffMillis(),
-                monitoringConfig.incidentDeliveryDlq().enabled() ? "delivery-dlq" : "none",
-                channelStatus(webhookChannel),
-                webhookChannel == null ? 0L : webhookChannel.deliveredCount(),
-                webhookChannel == null ? 0L : webhookChannel.failedCount(),
-                webhookChannel == null ? 0L : webhookChannel.droppedCount(),
-                webhookChannel == null ? 0L : webhookChannel.lastDeliveredAtEpochMillis(),
-                webhookChannel == null ? 0L : webhookChannel.lastErrorAtEpochMillis(),
-                webhookChannel == null ? "" : defaultString(webhookChannel.lastErrorType())
-        ));
-        com.reactor.cachedb.core.queue.IncidentChannelSnapshot queueChannel = channelMap.get("queue");
-        routes.add(new AlertRouteSnapshot(
-                "queue",
-                monitoringConfig.incidentQueue().enabled(),
-                defaultString(monitoringConfig.incidentQueue().streamKey()),
-                "redis-stream",
-                "Queue downstream incident processors",
-                escalationLevel(queueChannel, monitoringConfig.incidentQueue().enabled()),
-                "Persisted incident stream",
-                "retries=" + monitoringConfig.incidentQueue().maxRetries()
-                        + ", backoffMs=" + monitoringConfig.incidentQueue().retryBackoffMillis(),
-                "none",
-                channelStatus(queueChannel),
-                queueChannel == null ? 0L : queueChannel.deliveredCount(),
-                queueChannel == null ? 0L : queueChannel.failedCount(),
-                queueChannel == null ? 0L : queueChannel.droppedCount(),
-                queueChannel == null ? 0L : queueChannel.lastDeliveredAtEpochMillis(),
-                queueChannel == null ? 0L : queueChannel.lastErrorAtEpochMillis(),
-                queueChannel == null ? "" : defaultString(queueChannel.lastErrorType())
-        ));
+        com.reactor.cachedb.core.queue.IncidentChannelSnapshot webhookChannel =
+                channelMap.get("webhook");
+        routes.add(
+                new AlertRouteSnapshot(
+                        "webhook",
+                        monitoringConfig.incidentWebhook().enabled(),
+                        defaultString(monitoringConfig.incidentWebhook().endpointUrl()),
+                        "http-webhook",
+                        "Immediate notify on persisted incidents",
+                        escalationLevel(
+                                webhookChannel, monitoringConfig.incidentWebhook().enabled()),
+                        "Persisted incident stream",
+                        "retries="
+                                + monitoringConfig.incidentWebhook().maxRetries()
+                                + ", backoffMs="
+                                + monitoringConfig.incidentWebhook().retryBackoffMillis(),
+                        monitoringConfig.incidentDeliveryDlq().enabled() ? "delivery-dlq" : "none",
+                        channelStatus(webhookChannel),
+                        webhookChannel == null ? 0L : webhookChannel.deliveredCount(),
+                        webhookChannel == null ? 0L : webhookChannel.failedCount(),
+                        webhookChannel == null ? 0L : webhookChannel.droppedCount(),
+                        webhookChannel == null ? 0L : webhookChannel.lastDeliveredAtEpochMillis(),
+                        webhookChannel == null ? 0L : webhookChannel.lastErrorAtEpochMillis(),
+                        webhookChannel == null
+                                ? ""
+                                : defaultString(webhookChannel.lastErrorType())));
+        com.reactor.cachedb.core.queue.IncidentChannelSnapshot queueChannel =
+                channelMap.get("queue");
+        routes.add(
+                new AlertRouteSnapshot(
+                        "queue",
+                        monitoringConfig.incidentQueue().enabled(),
+                        defaultString(monitoringConfig.incidentQueue().streamKey()),
+                        "redis-stream",
+                        "Queue downstream incident processors",
+                        escalationLevel(queueChannel, monitoringConfig.incidentQueue().enabled()),
+                        "Persisted incident stream",
+                        "retries="
+                                + monitoringConfig.incidentQueue().maxRetries()
+                                + ", backoffMs="
+                                + monitoringConfig.incidentQueue().retryBackoffMillis(),
+                        "none",
+                        channelStatus(queueChannel),
+                        queueChannel == null ? 0L : queueChannel.deliveredCount(),
+                        queueChannel == null ? 0L : queueChannel.failedCount(),
+                        queueChannel == null ? 0L : queueChannel.droppedCount(),
+                        queueChannel == null ? 0L : queueChannel.lastDeliveredAtEpochMillis(),
+                        queueChannel == null ? 0L : queueChannel.lastErrorAtEpochMillis(),
+                        queueChannel == null ? "" : defaultString(queueChannel.lastErrorType())));
         com.reactor.cachedb.core.queue.IncidentChannelSnapshot smtpChannel = channelMap.get("smtp");
-        routes.add(new AlertRouteSnapshot(
-                "smtp",
-                monitoringConfig.incidentEmail().enabled(),
-                defaultString(monitoringConfig.incidentEmail().smtpHost())
-                        + (monitoringConfig.incidentEmail().smtpPort() > 0 ? ":" + monitoringConfig.incidentEmail().smtpPort() : ""),
-                "smtp-email",
-                "Operator-facing email notifications",
-                escalationLevel(smtpChannel, monitoringConfig.incidentEmail().enabled()),
-                "Persisted incident stream",
-                "retries=" + monitoringConfig.incidentEmail().maxRetries()
-                        + ", backoffMs=" + monitoringConfig.incidentEmail().retryBackoffMillis(),
-                monitoringConfig.incidentDeliveryDlq().enabled() ? "delivery-dlq" : "none",
-                channelStatus(smtpChannel),
-                smtpChannel == null ? 0L : smtpChannel.deliveredCount(),
-                smtpChannel == null ? 0L : smtpChannel.failedCount(),
-                smtpChannel == null ? 0L : smtpChannel.droppedCount(),
-                smtpChannel == null ? 0L : smtpChannel.lastDeliveredAtEpochMillis(),
-                smtpChannel == null ? 0L : smtpChannel.lastErrorAtEpochMillis(),
-                smtpChannel == null ? "" : defaultString(smtpChannel.lastErrorType())
-        ));
-        routes.add(new AlertRouteSnapshot(
-                "delivery-dlq",
-                monitoringConfig.incidentDeliveryDlq().enabled(),
-                defaultString(monitoringConfig.incidentDeliveryDlq().streamKey()),
-                "redis-stream-dlq",
-                "Recovery path when alert delivery itself fails",
-                metrics.incidentDeliverySnapshot().recovery().failedReplayCount() > 0 ? "WARNING" : "INFO",
-                "Alert delivery failures only",
-                "replayAttempts=" + monitoringConfig.incidentDeliveryDlq().maxReplayAttempts()
-                        + ", claimIdleMs=" + monitoringConfig.incidentDeliveryDlq().claimIdleMillis(),
-                defaultString(monitoringConfig.incidentDeliveryDlq().recoveryStreamKey()),
-                metrics.incidentDeliverySnapshot().recovery().failedReplayCount() > 0 ? AdminHealthStatus.DEGRADED.name() : AdminHealthStatus.UP.name(),
-                metrics.incidentDeliverySnapshot().recovery().replayedCount(),
-                metrics.incidentDeliverySnapshot().recovery().failedReplayCount(),
-                0L,
-                0L,
-                metrics.incidentDeliverySnapshot().recovery().lastErrorAtEpochMillis(),
-                defaultString(metrics.incidentDeliverySnapshot().recovery().lastErrorType())
-        ));
+        routes.add(
+                new AlertRouteSnapshot(
+                        "smtp",
+                        monitoringConfig.incidentEmail().enabled(),
+                        defaultString(monitoringConfig.incidentEmail().smtpHost())
+                                + (monitoringConfig.incidentEmail().smtpPort() > 0
+                                        ? ":" + monitoringConfig.incidentEmail().smtpPort()
+                                        : ""),
+                        "smtp-email",
+                        "Operator-facing email notifications",
+                        escalationLevel(smtpChannel, monitoringConfig.incidentEmail().enabled()),
+                        "Persisted incident stream",
+                        "retries="
+                                + monitoringConfig.incidentEmail().maxRetries()
+                                + ", backoffMs="
+                                + monitoringConfig.incidentEmail().retryBackoffMillis(),
+                        monitoringConfig.incidentDeliveryDlq().enabled() ? "delivery-dlq" : "none",
+                        channelStatus(smtpChannel),
+                        smtpChannel == null ? 0L : smtpChannel.deliveredCount(),
+                        smtpChannel == null ? 0L : smtpChannel.failedCount(),
+                        smtpChannel == null ? 0L : smtpChannel.droppedCount(),
+                        smtpChannel == null ? 0L : smtpChannel.lastDeliveredAtEpochMillis(),
+                        smtpChannel == null ? 0L : smtpChannel.lastErrorAtEpochMillis(),
+                        smtpChannel == null ? "" : defaultString(smtpChannel.lastErrorType())));
+        routes.add(
+                new AlertRouteSnapshot(
+                        "delivery-dlq",
+                        monitoringConfig.incidentDeliveryDlq().enabled(),
+                        defaultString(monitoringConfig.incidentDeliveryDlq().streamKey()),
+                        "redis-stream-dlq",
+                        "Recovery path when alert delivery itself fails",
+                        metrics.incidentDeliverySnapshot().recovery().failedReplayCount() > 0
+                                ? "WARNING"
+                                : "INFO",
+                        "Alert delivery failures only",
+                        "replayAttempts="
+                                + monitoringConfig.incidentDeliveryDlq().maxReplayAttempts()
+                                + ", claimIdleMs="
+                                + monitoringConfig.incidentDeliveryDlq().claimIdleMillis(),
+                        defaultString(monitoringConfig.incidentDeliveryDlq().recoveryStreamKey()),
+                        metrics.incidentDeliverySnapshot().recovery().failedReplayCount() > 0
+                                ? AdminHealthStatus.DEGRADED.name()
+                                : AdminHealthStatus.UP.name(),
+                        metrics.incidentDeliverySnapshot().recovery().replayedCount(),
+                        metrics.incidentDeliverySnapshot().recovery().failedReplayCount(),
+                        0L,
+                        0L,
+                        metrics.incidentDeliverySnapshot().recovery().lastErrorAtEpochMillis(),
+                        defaultString(
+                                metrics.incidentDeliverySnapshot().recovery().lastErrorType())));
         return List.copyOf(routes);
     }
 
@@ -1556,38 +2265,37 @@ public final class CacheDatabaseAdmin {
                         "WRITE_BEHIND_BACKLOG",
                         "Write-behind backlog triage",
                         "Backlog crosses warning/critical thresholds",
-                        "Inspect /api/metrics and worker snapshot, then confirm drain slope and runtime profile.",
-                        "/api/metrics"
-                ),
+                        "Inspect /api/metrics and worker snapshot, then confirm drain slope and"
+                                + " runtime profile.",
+                        "/api/metrics"),
                 new RunbookSnapshot(
                         "DEAD_LETTER_BACKLOG",
                         "Dead-letter recovery triage",
                         "Dead-letter stream grows or replay failures increase",
-                        "Review /api/incidents, then inspect reconciliation and delivery recovery snapshots.",
-                        "/api/incidents"
-                ),
+                        "Review /api/incidents, then inspect reconciliation and delivery recovery"
+                                + " snapshots.",
+                        "/api/incidents"),
                 new RunbookSnapshot(
                         "REDIS_MEMORY_PRESSURE",
                         "Redis memory pressure triage",
                         "Redis used memory or compaction pending rises into warn/critical band",
-                        "Inspect /api/metrics and runtime profile churn, confirm whether shedding/profile switch occurred.",
-                        "/api/profile-churn"
-                ),
+                        "Inspect /api/metrics and runtime profile churn, confirm whether"
+                                + " shedding/profile switch occurred.",
+                        "/api/profile-churn"),
                 new RunbookSnapshot(
                         "QUERY_INDEX_DEGRADED",
                         "Query index degradation triage",
                         "Explain/debug path falls back to full scans or degraded indexes appear",
-                        "Inspect degraded entities and trigger targeted rebuild only after confirming current pressure level.",
-                        "/api/query-index/rebuild"
-                ),
+                        "Inspect degraded entities and trigger targeted rebuild only after"
+                                + " confirming current pressure level.",
+                        "/api/query-index/rebuild"),
                 new RunbookSnapshot(
                         "SCHEMA_MIGRATION",
                         "Schema lifecycle triage",
                         "Schema validation fails or migration history shows failed apply",
-                        "Inspect schema status, plan, and DDL before applying additional migration steps.",
-                        "/api/schema/status"
-                )
-        );
+                        "Inspect schema status, plan, and DDL before applying additional migration"
+                                + " steps.",
+                        "/api/schema/status"));
     }
 
     public String exportPrometheusAlertRules() {
@@ -1595,43 +2303,66 @@ public final class CacheDatabaseAdmin {
         builder.append("groups:\n");
         builder.append("  - name: cachedb.rules\n");
         builder.append("    rules:\n");
-        appendAlertRule(builder, "CacheDbWriteBehindBacklogWarning",
-                "cachedb_write_behind_stream_length >= " + monitoringConfig.writeBehindWarnThreshold(),
+        appendAlertRule(
+                builder,
+                "CacheDbWriteBehindBacklogWarning",
+                "cachedb_write_behind_stream_length >= "
+                        + monitoringConfig.writeBehindWarnThreshold(),
                 "warning",
                 "Write-behind backlog is above warning threshold");
-        appendAlertRule(builder, "CacheDbWriteBehindBacklogCritical",
-                "cachedb_write_behind_stream_length >= " + monitoringConfig.writeBehindCriticalThreshold(),
+        appendAlertRule(
+                builder,
+                "CacheDbWriteBehindBacklogCritical",
+                "cachedb_write_behind_stream_length >= "
+                        + monitoringConfig.writeBehindCriticalThreshold(),
                 "critical",
                 "Write-behind backlog is above critical threshold");
-        appendAlertRule(builder, "CacheDbDeadLetterCritical",
-                "cachedb_dead_letter_stream_length >= " + monitoringConfig.deadLetterCriticalThreshold(),
+        appendAlertRule(
+                builder,
+                "CacheDbDeadLetterCritical",
+                "cachedb_dead_letter_stream_length >= "
+                        + monitoringConfig.deadLetterCriticalThreshold(),
                 "critical",
                 "Dead-letter backlog is above critical threshold");
         if (redisGuardrailConfig.usedMemoryWarnBytes() > 0) {
-            appendAlertRule(builder, "CacheDbRedisMemoryWarning",
-                    "cachedb_redis_used_memory_bytes >= " + redisGuardrailConfig.usedMemoryWarnBytes(),
+            appendAlertRule(
+                    builder,
+                    "CacheDbRedisMemoryWarning",
+                    "cachedb_redis_used_memory_bytes >= "
+                            + redisGuardrailConfig.usedMemoryWarnBytes(),
                     "warning",
                     "Redis memory is above warning threshold");
         }
         if (redisGuardrailConfig.usedMemoryCriticalBytes() > 0) {
-            appendAlertRule(builder, "CacheDbRedisMemoryCritical",
-                    "cachedb_redis_used_memory_bytes >= " + redisGuardrailConfig.usedMemoryCriticalBytes(),
+            appendAlertRule(
+                    builder,
+                    "CacheDbRedisMemoryCritical",
+                    "cachedb_redis_used_memory_bytes >= "
+                            + redisGuardrailConfig.usedMemoryCriticalBytes(),
                     "critical",
                     "Redis memory is above critical threshold");
         }
-        appendAlertRule(builder, "CacheDbHardRejectedWrites",
+        appendAlertRule(
+                builder,
+                "CacheDbHardRejectedWrites",
                 "cachedb_redis_hard_rejected_writes_total > 0",
                 "critical",
                 "Redis hard limit rejected writes");
         if (cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold() > 0) {
-            appendAlertRule(builder, "CacheDbProjectionRefreshDlqWarning",
-                    "cachedb_projection_refresh_dead_letter_stream_length >= " + cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold(),
+            appendAlertRule(
+                    builder,
+                    "CacheDbProjectionRefreshDlqWarning",
+                    "cachedb_projection_refresh_dead_letter_stream_length >= "
+                            + cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold(),
                     "warning",
                     "Projection refresh dead-letter backlog is above warning threshold");
         }
         if (cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold() > 0) {
-            appendAlertRule(builder, "CacheDbProjectionRefreshDlqCritical",
-                    "cachedb_projection_refresh_dead_letter_stream_length >= " + cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold(),
+            appendAlertRule(
+                    builder,
+                    "CacheDbProjectionRefreshDlqCritical",
+                    "cachedb_projection_refresh_dead_letter_stream_length >= "
+                            + cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold(),
                     "critical",
                     "Projection refresh dead-letter backlog is above critical threshold");
         }
@@ -1640,16 +2371,51 @@ public final class CacheDatabaseAdmin {
 
     public List<AdminAlertRule> alertRules() {
         return List.of(
-                new AdminAlertRule("WRITE_BEHIND_BACKLOG", "Write-behind backlog threshold", AdminIncidentSeverity.WARNING, AdminIncidentSeverity.CRITICAL),
-                new AdminAlertRule("DEAD_LETTER_BACKLOG", "Dead-letter backlog threshold", AdminIncidentSeverity.WARNING, AdminIncidentSeverity.CRITICAL),
-                new AdminAlertRule("RECOVERY_FAILURES", "Recovery failure threshold", AdminIncidentSeverity.WARNING, AdminIncidentSeverity.CRITICAL),
-                new AdminAlertRule("REDIS_MEMORY_PRESSURE", "Redis used memory threshold", AdminIncidentSeverity.WARNING, AdminIncidentSeverity.CRITICAL),
-                new AdminAlertRule("COMPACTION_PENDING_BACKLOG", "Compaction pending threshold", AdminIncidentSeverity.WARNING, AdminIncidentSeverity.CRITICAL),
-                new AdminAlertRule("REDIS_HARD_REJECTIONS", "Redis hard limit rejected writes", AdminIncidentSeverity.CRITICAL, AdminIncidentSeverity.CRITICAL),
-                new AdminAlertRule("RECENT_WORKER_ERROR", "Recent worker error detected", AdminIncidentSeverity.WARNING, AdminIncidentSeverity.CRITICAL),
-                new AdminAlertRule("PROJECTION_REFRESH_DLQ", "Projection refresh dead-letter backlog", AdminIncidentSeverity.WARNING, AdminIncidentSeverity.CRITICAL),
-                new AdminAlertRule("PROJECTION_REFRESH_RECENT_ERROR", "Projection refresh worker error detected", AdminIncidentSeverity.WARNING, AdminIncidentSeverity.CRITICAL)
-        );
+                new AdminAlertRule(
+                        "WRITE_BEHIND_BACKLOG",
+                        "Write-behind backlog threshold",
+                        AdminIncidentSeverity.WARNING,
+                        AdminIncidentSeverity.CRITICAL),
+                new AdminAlertRule(
+                        "DEAD_LETTER_BACKLOG",
+                        "Dead-letter backlog threshold",
+                        AdminIncidentSeverity.WARNING,
+                        AdminIncidentSeverity.CRITICAL),
+                new AdminAlertRule(
+                        "RECOVERY_FAILURES",
+                        "Recovery failure threshold",
+                        AdminIncidentSeverity.WARNING,
+                        AdminIncidentSeverity.CRITICAL),
+                new AdminAlertRule(
+                        "REDIS_MEMORY_PRESSURE",
+                        "Redis used memory threshold",
+                        AdminIncidentSeverity.WARNING,
+                        AdminIncidentSeverity.CRITICAL),
+                new AdminAlertRule(
+                        "COMPACTION_PENDING_BACKLOG",
+                        "Compaction pending threshold",
+                        AdminIncidentSeverity.WARNING,
+                        AdminIncidentSeverity.CRITICAL),
+                new AdminAlertRule(
+                        "REDIS_HARD_REJECTIONS",
+                        "Redis hard limit rejected writes",
+                        AdminIncidentSeverity.CRITICAL,
+                        AdminIncidentSeverity.CRITICAL),
+                new AdminAlertRule(
+                        "RECENT_WORKER_ERROR",
+                        "Recent worker error detected",
+                        AdminIncidentSeverity.WARNING,
+                        AdminIncidentSeverity.CRITICAL),
+                new AdminAlertRule(
+                        "PROJECTION_REFRESH_DLQ",
+                        "Projection refresh dead-letter backlog",
+                        AdminIncidentSeverity.WARNING,
+                        AdminIncidentSeverity.CRITICAL),
+                new AdminAlertRule(
+                        "PROJECTION_REFRESH_RECENT_ERROR",
+                        "Projection refresh worker error detected",
+                        AdminIncidentSeverity.WARNING,
+                        AdminIncidentSeverity.CRITICAL));
     }
 
     public List<AdminIncident> incidents() {
@@ -1657,8 +2423,7 @@ public final class CacheDatabaseAdmin {
                 lastIncidentsSnapshot,
                 lastIncidentsSampleAtEpochMillis,
                 1_500L,
-                this::collectIncidents
-        );
+                this::collectIncidents);
     }
 
     private List<AdminIncident> collectIncidents() {
@@ -1670,64 +2435,192 @@ public final class CacheDatabaseAdmin {
         Instant now = Instant.now();
 
         if (metrics.writeBehindStreamLength() >= monitoringConfig.writeBehindCriticalThreshold()) {
-            incidents.add(incident("WRITE_BEHIND_BACKLOG", "Write-behind backlog exceeded critical threshold", AdminIncidentSeverity.CRITICAL, now, Map.of("value", String.valueOf(metrics.writeBehindStreamLength()))));
-        } else if (metrics.writeBehindStreamLength() >= monitoringConfig.writeBehindWarnThreshold()) {
-            incidents.add(incident("WRITE_BEHIND_BACKLOG", "Write-behind backlog exceeded warning threshold", AdminIncidentSeverity.WARNING, now, Map.of("value", String.valueOf(metrics.writeBehindStreamLength()))));
+            incidents.add(
+                    incident(
+                            "WRITE_BEHIND_BACKLOG",
+                            "Write-behind backlog exceeded critical threshold",
+                            AdminIncidentSeverity.CRITICAL,
+                            now,
+                            Map.of("value", String.valueOf(metrics.writeBehindStreamLength()))));
+        } else if (metrics.writeBehindStreamLength()
+                >= monitoringConfig.writeBehindWarnThreshold()) {
+            incidents.add(
+                    incident(
+                            "WRITE_BEHIND_BACKLOG",
+                            "Write-behind backlog exceeded warning threshold",
+                            AdminIncidentSeverity.WARNING,
+                            now,
+                            Map.of("value", String.valueOf(metrics.writeBehindStreamLength()))));
         }
 
         if (metrics.deadLetterStreamLength() >= monitoringConfig.deadLetterCriticalThreshold()) {
-            incidents.add(incident("DEAD_LETTER_BACKLOG", "Dead-letter backlog exceeded critical threshold", AdminIncidentSeverity.CRITICAL, now, Map.of("value", String.valueOf(metrics.deadLetterStreamLength()))));
+            incidents.add(
+                    incident(
+                            "DEAD_LETTER_BACKLOG",
+                            "Dead-letter backlog exceeded critical threshold",
+                            AdminIncidentSeverity.CRITICAL,
+                            now,
+                            Map.of("value", String.valueOf(metrics.deadLetterStreamLength()))));
         } else if (metrics.deadLetterStreamLength() >= monitoringConfig.deadLetterWarnThreshold()) {
-            incidents.add(incident("DEAD_LETTER_BACKLOG", "Dead-letter backlog exceeded warning threshold", AdminIncidentSeverity.WARNING, now, Map.of("value", String.valueOf(metrics.deadLetterStreamLength()))));
+            incidents.add(
+                    incident(
+                            "DEAD_LETTER_BACKLOG",
+                            "Dead-letter backlog exceeded warning threshold",
+                            AdminIncidentSeverity.WARNING,
+                            now,
+                            Map.of("value", String.valueOf(metrics.deadLetterStreamLength()))));
         }
 
-        if (metrics.deadLetterRecoverySnapshot().failedCount() >= monitoringConfig.recoveryFailedCriticalThreshold()) {
-            incidents.add(incident("RECOVERY_FAILURES", "Recovery failure count exceeded critical threshold", AdminIncidentSeverity.CRITICAL, now, Map.of("value", String.valueOf(metrics.deadLetterRecoverySnapshot().failedCount()))));
-        } else if (metrics.deadLetterRecoverySnapshot().failedCount() >= monitoringConfig.recoveryFailedWarnThreshold()) {
-            incidents.add(incident("RECOVERY_FAILURES", "Recovery failure count exceeded warning threshold", AdminIncidentSeverity.WARNING, now, Map.of("value", String.valueOf(metrics.deadLetterRecoverySnapshot().failedCount()))));
+        if (metrics.deadLetterRecoverySnapshot().failedCount()
+                >= monitoringConfig.recoveryFailedCriticalThreshold()) {
+            incidents.add(
+                    incident(
+                            "RECOVERY_FAILURES",
+                            "Recovery failure count exceeded critical threshold",
+                            AdminIncidentSeverity.CRITICAL,
+                            now,
+                            Map.of(
+                                    "value",
+                                    String.valueOf(
+                                            metrics.deadLetterRecoverySnapshot().failedCount()))));
+        } else if (metrics.deadLetterRecoverySnapshot().failedCount()
+                >= monitoringConfig.recoveryFailedWarnThreshold()) {
+            incidents.add(
+                    incident(
+                            "RECOVERY_FAILURES",
+                            "Recovery failure count exceeded warning threshold",
+                            AdminIncidentSeverity.WARNING,
+                            now,
+                            Map.of(
+                                    "value",
+                                    String.valueOf(
+                                            metrics.deadLetterRecoverySnapshot().failedCount()))));
         }
 
         if (redisGuardrailConfig.usedMemoryCriticalBytes() > 0
-                && metrics.redisGuardrailSnapshot().usedMemoryBytes() >= redisGuardrailConfig.usedMemoryCriticalBytes()) {
-            incidents.add(incident("REDIS_MEMORY_PRESSURE", "Redis used memory exceeded critical threshold", AdminIncidentSeverity.CRITICAL, now, Map.of("value", String.valueOf(metrics.redisGuardrailSnapshot().usedMemoryBytes()))));
+                && metrics.redisGuardrailSnapshot().usedMemoryBytes()
+                        >= redisGuardrailConfig.usedMemoryCriticalBytes()) {
+            incidents.add(
+                    incident(
+                            "REDIS_MEMORY_PRESSURE",
+                            "Redis used memory exceeded critical threshold",
+                            AdminIncidentSeverity.CRITICAL,
+                            now,
+                            Map.of(
+                                    "value",
+                                    String.valueOf(
+                                            metrics.redisGuardrailSnapshot().usedMemoryBytes()))));
         } else if (redisGuardrailConfig.usedMemoryWarnBytes() > 0
-                && metrics.redisGuardrailSnapshot().usedMemoryBytes() >= redisGuardrailConfig.usedMemoryWarnBytes()) {
-            incidents.add(incident("REDIS_MEMORY_PRESSURE", "Redis used memory exceeded warning threshold", AdminIncidentSeverity.WARNING, now, Map.of("value", String.valueOf(metrics.redisGuardrailSnapshot().usedMemoryBytes()))));
+                && metrics.redisGuardrailSnapshot().usedMemoryBytes()
+                        >= redisGuardrailConfig.usedMemoryWarnBytes()) {
+            incidents.add(
+                    incident(
+                            "REDIS_MEMORY_PRESSURE",
+                            "Redis used memory exceeded warning threshold",
+                            AdminIncidentSeverity.WARNING,
+                            now,
+                            Map.of(
+                                    "value",
+                                    String.valueOf(
+                                            metrics.redisGuardrailSnapshot().usedMemoryBytes()))));
         }
 
         if (redisGuardrailConfig.compactionPendingCriticalThreshold() > 0
-                && metrics.redisGuardrailSnapshot().compactionPendingCount() >= redisGuardrailConfig.compactionPendingCriticalThreshold()) {
-            incidents.add(incident("COMPACTION_PENDING_BACKLOG", "Compaction pending count exceeded critical threshold", AdminIncidentSeverity.CRITICAL, now, Map.of("value", String.valueOf(metrics.redisGuardrailSnapshot().compactionPendingCount()))));
+                && metrics.redisGuardrailSnapshot().compactionPendingCount()
+                        >= redisGuardrailConfig.compactionPendingCriticalThreshold()) {
+            incidents.add(
+                    incident(
+                            "COMPACTION_PENDING_BACKLOG",
+                            "Compaction pending count exceeded critical threshold",
+                            AdminIncidentSeverity.CRITICAL,
+                            now,
+                            Map.of(
+                                    "value",
+                                    String.valueOf(
+                                            metrics.redisGuardrailSnapshot()
+                                                    .compactionPendingCount()))));
         } else if (redisGuardrailConfig.compactionPendingWarnThreshold() > 0
-                && metrics.redisGuardrailSnapshot().compactionPendingCount() >= redisGuardrailConfig.compactionPendingWarnThreshold()) {
-            incidents.add(incident("COMPACTION_PENDING_BACKLOG", "Compaction pending count exceeded warning threshold", AdminIncidentSeverity.WARNING, now, Map.of("value", String.valueOf(metrics.redisGuardrailSnapshot().compactionPendingCount()))));
+                && metrics.redisGuardrailSnapshot().compactionPendingCount()
+                        >= redisGuardrailConfig.compactionPendingWarnThreshold()) {
+            incidents.add(
+                    incident(
+                            "COMPACTION_PENDING_BACKLOG",
+                            "Compaction pending count exceeded warning threshold",
+                            AdminIncidentSeverity.WARNING,
+                            now,
+                            Map.of(
+                                    "value",
+                                    String.valueOf(
+                                            metrics.redisGuardrailSnapshot()
+                                                    .compactionPendingCount()))));
         }
         if (metrics.redisGuardrailSnapshot().hardRejectedWriteCount() > 0) {
-            incidents.add(incident("REDIS_HARD_REJECTIONS", "Redis hard limit rejected producer writes", AdminIncidentSeverity.CRITICAL, now, Map.of("value", String.valueOf(metrics.redisGuardrailSnapshot().hardRejectedWriteCount()))));
+            incidents.add(
+                    incident(
+                            "REDIS_HARD_REJECTIONS",
+                            "Redis hard limit rejected producer writes",
+                            AdminIncidentSeverity.CRITICAL,
+                            now,
+                            Map.of(
+                                    "value",
+                                    String.valueOf(
+                                            metrics.redisGuardrailSnapshot()
+                                                    .hardRejectedWriteCount()))));
         }
 
         if (cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold() > 0
-                && metrics.projectionRefreshSnapshot().deadLetterStreamLength() >= cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold()) {
-            incidents.add(incident("PROJECTION_REFRESH_DLQ", "Projection refresh dead-letter backlog exceeded critical threshold", AdminIncidentSeverity.CRITICAL, now, Map.of("value", String.valueOf(metrics.projectionRefreshSnapshot().deadLetterStreamLength()))));
+                && metrics.projectionRefreshSnapshot().deadLetterStreamLength()
+                        >= cacheDatabaseConfig.projectionRefresh().deadLetterCriticalThreshold()) {
+            incidents.add(
+                    incident(
+                            "PROJECTION_REFRESH_DLQ",
+                            "Projection refresh dead-letter backlog exceeded critical threshold",
+                            AdminIncidentSeverity.CRITICAL,
+                            now,
+                            Map.of(
+                                    "value",
+                                    String.valueOf(
+                                            metrics.projectionRefreshSnapshot()
+                                                    .deadLetterStreamLength()))));
         } else if (cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold() > 0
-                && metrics.projectionRefreshSnapshot().deadLetterStreamLength() >= cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold()) {
-            incidents.add(incident("PROJECTION_REFRESH_DLQ", "Projection refresh dead-letter backlog exceeded warning threshold", AdminIncidentSeverity.WARNING, now, Map.of("value", String.valueOf(metrics.projectionRefreshSnapshot().deadLetterStreamLength()))));
+                && metrics.projectionRefreshSnapshot().deadLetterStreamLength()
+                        >= cacheDatabaseConfig.projectionRefresh().deadLetterWarnThreshold()) {
+            incidents.add(
+                    incident(
+                            "PROJECTION_REFRESH_DLQ",
+                            "Projection refresh dead-letter backlog exceeded warning threshold",
+                            AdminIncidentSeverity.WARNING,
+                            now,
+                            Map.of(
+                                    "value",
+                                    String.valueOf(
+                                            metrics.projectionRefreshSnapshot()
+                                                    .deadLetterStreamLength()))));
         }
 
         if (recentError(metrics.writeBehindWorkerSnapshot().lastErrorAtEpochMillis())
                 || recentError(metrics.deadLetterRecoverySnapshot().lastErrorAtEpochMillis())
                 || recentError(metrics.recoveryCleanupSnapshot().lastErrorAtEpochMillis())
                 || recentError(metrics.adminReportJobSnapshot().lastErrorAtEpochMillis())) {
-            incidents.add(incident("RECENT_WORKER_ERROR", "At least one background worker reported a recent error", AdminIncidentSeverity.WARNING, now, Map.of()));
+            incidents.add(
+                    incident(
+                            "RECENT_WORKER_ERROR",
+                            "At least one background worker reported a recent error",
+                            AdminIncidentSeverity.WARNING,
+                            now,
+                            Map.of()));
         }
         if (recentError(metrics.projectionRefreshSnapshot().lastErrorAtEpochMillis())) {
-            incidents.add(incident(
-                    "PROJECTION_REFRESH_RECENT_ERROR",
-                    "Projection refresh worker reported a recent error",
-                    AdminIncidentSeverity.WARNING,
-                    now,
-                    Map.of("type", defaultString(metrics.projectionRefreshSnapshot().lastErrorType()))
-            ));
+            incidents.add(
+                    incident(
+                            "PROJECTION_REFRESH_RECENT_ERROR",
+                            "Projection refresh worker reported a recent error",
+                            AdminIncidentSeverity.WARNING,
+                            now,
+                            Map.of(
+                                    "type",
+                                    defaultString(
+                                            metrics.projectionRefreshSnapshot().lastErrorType()))));
         }
 
         return List.copyOf(incidents);
@@ -1736,9 +2629,13 @@ public final class CacheDatabaseAdmin {
     public List<AdminIncidentRecord> incidentHistory(int limit) {
         int safeLimit = Math.max(1, limit);
         try {
-            List<AdminIncidentRecord> fresh = jedis.xrevrange(monitoringConfig.incidentStreamKey(), "+", "-", safeLimit).stream()
-                    .map(this::toIncidentRecord)
-                    .toList();
+            List<AdminIncidentRecord> fresh =
+                    jedis
+                            .commands()
+                            .xrevrange(monitoringConfig.incidentStreamKey(), "+", "-", safeLimit)
+                            .stream()
+                            .map(this::toIncidentRecord)
+                            .toList();
             lastIncidentHistory.set(fresh);
             return fresh;
         } catch (RuntimeException exception) {
@@ -1746,9 +2643,7 @@ public final class CacheDatabaseAdmin {
             if (cached == null || cached.isEmpty()) {
                 return List.of();
             }
-            return cached.stream()
-                    .limit(safeLimit)
-                    .toList();
+            return cached.stream().limit(safeLimit).toList();
         }
     }
 
@@ -1772,13 +2667,14 @@ public final class CacheDatabaseAdmin {
             }
         }
         return buckets.entrySet().stream()
-                .map(entry -> new IncidentSeverityTrendPoint(
-                        Instant.ofEpochMilli(entry.getKey()),
-                        entry.getValue().info,
-                        entry.getValue().warning,
-                        entry.getValue().critical,
-                        entry.getValue().total
-                ))
+                .map(
+                        entry ->
+                                new IncidentSeverityTrendPoint(
+                                        Instant.ofEpochMilli(entry.getKey()),
+                                        entry.getValue().info,
+                                        entry.getValue().warning,
+                                        entry.getValue().critical,
+                                        entry.getValue().total))
                 .toList();
     }
 
@@ -1787,14 +2683,16 @@ public final class CacheDatabaseAdmin {
         try {
             LinkedHashMap<String, SignalAggregate> aggregates = new LinkedHashMap<>();
             for (AdminIncident incident : incidents()) {
-                SignalAggregate aggregate = aggregates.computeIfAbsent(incident.code(), SignalAggregate::new);
+                SignalAggregate aggregate =
+                        aggregates.computeIfAbsent(incident.code(), SignalAggregate::new);
                 aggregate.description = incident.description();
                 aggregate.activeCount++;
                 aggregate.severity = maxSeverity(aggregate.severity, incident.severity());
                 aggregate.lastSeenAt = maxInstant(aggregate.lastSeenAt, incident.detectedAt());
             }
             for (AdminIncidentRecord record : incidentHistory(Math.max(24, safeLimit * 8))) {
-                SignalAggregate aggregate = aggregates.computeIfAbsent(record.code(), SignalAggregate::new);
+                SignalAggregate aggregate =
+                        aggregates.computeIfAbsent(record.code(), SignalAggregate::new);
                 if (aggregate.description == null || aggregate.description.isBlank()) {
                     aggregate.description = record.description();
                 }
@@ -1802,22 +2700,36 @@ public final class CacheDatabaseAdmin {
                 aggregate.severity = maxSeverity(aggregate.severity, record.severity());
                 aggregate.lastSeenAt = maxInstant(aggregate.lastSeenAt, record.recordedAt());
             }
-            List<FailingSignalSnapshot> fresh = aggregates.values().stream()
-                    .sorted(Comparator
-                            .comparingInt((SignalAggregate value) -> severityRank(value.severity)).reversed()
-                            .thenComparingLong(value -> value.activeCount).reversed()
-                            .thenComparingLong(value -> value.recentCount).reversed()
-                            .thenComparing(value -> value.lastSeenAt, Comparator.nullsLast(Comparator.reverseOrder())))
-                    .limit(safeLimit)
-                    .map(value -> new FailingSignalSnapshot(
-                            value.code,
-                            value.severity == null ? AdminIncidentSeverity.INFO.name() : value.severity.name(),
-                            value.activeCount,
-                            value.recentCount,
-                            summarizeSignal(value),
-                            value.lastSeenAt == null ? Instant.EPOCH : value.lastSeenAt
-                    ))
-                    .toList();
+            List<FailingSignalSnapshot> fresh =
+                    aggregates.values().stream()
+                            .sorted(
+                                    Comparator.comparingInt(
+                                                    (SignalAggregate value) ->
+                                                            severityRank(value.severity))
+                                            .reversed()
+                                            .thenComparingLong(value -> value.activeCount)
+                                            .reversed()
+                                            .thenComparingLong(value -> value.recentCount)
+                                            .reversed()
+                                            .thenComparing(
+                                                    value -> value.lastSeenAt,
+                                                    Comparator.nullsLast(
+                                                            Comparator.reverseOrder())))
+                            .limit(safeLimit)
+                            .map(
+                                    value ->
+                                            new FailingSignalSnapshot(
+                                                    value.code,
+                                                    value.severity == null
+                                                            ? AdminIncidentSeverity.INFO.name()
+                                                            : value.severity.name(),
+                                                    value.activeCount,
+                                                    value.recentCount,
+                                                    summarizeSignal(value),
+                                                    value.lastSeenAt == null
+                                                            ? Instant.EPOCH
+                                                            : value.lastSeenAt))
+                            .toList();
             lastFailingSignals.set(fresh);
             return fresh;
         } catch (RuntimeException exception) {
@@ -1825,9 +2737,7 @@ public final class CacheDatabaseAdmin {
             if (cached == null || cached.isEmpty()) {
                 return List.of();
             }
-            return cached.stream()
-                    .limit(safeLimit)
-                    .toList();
+            return cached.stream().limit(safeLimit).toList();
         }
     }
 
@@ -1837,10 +2747,14 @@ public final class CacheDatabaseAdmin {
         lastIncidentsSnapshot.set(activeIncidents);
         lastIncidentsSampleAtEpochMillis.set(System.currentTimeMillis());
         for (AdminIncident incident : activeIncidents) {
-            String cooldownKey = monitoringConfig.incidentStreamKey() + ":cooldown:" + incident.code();
-            String lastRecorded = jedis.get(cooldownKey);
+            String cooldownKey =
+                    monitoringConfig.incidentStreamKey() + ":cooldown:" + incident.code();
+            String lastRecorded = jedis.commands().get(cooldownKey);
             long now = System.currentTimeMillis();
-            if (lastRecorded != null && !lastRecorded.isBlank() && now - Long.parseLong(lastRecorded) < monitoringConfig.incidentCooldownMillis()) {
+            if (lastRecorded != null
+                    && !lastRecorded.isBlank()
+                    && now - Long.parseLong(lastRecorded)
+                            < monitoringConfig.incidentCooldownMillis()) {
                 continue;
             }
 
@@ -1851,25 +2765,42 @@ public final class CacheDatabaseAdmin {
             fields.put("source", source == null ? "" : source);
             fields.put("recordedAt", incident.detectedAt().toString());
             fields.putAll(incident.fields());
-            String entryId = jedis.xadd(monitoringConfig.incidentStreamKey(), XAddParams.xAddParams(), fields).toString();
+            String entryId =
+                    jedis.commands()
+                            .xadd(
+                                    monitoringConfig.incidentStreamKey(),
+                                    XAddParams.xAddParams(),
+                                    fields)
+                            .toString();
             if (monitoringConfig.incidentMaxLength() > 0) {
-                jedis.xtrim(monitoringConfig.incidentStreamKey(), monitoringConfig.incidentMaxLength(), true);
+                jedis.commands()
+                        .xtrim(
+                                monitoringConfig.incidentStreamKey(),
+                                monitoringConfig.incidentMaxLength(),
+                                true);
             }
-            RedisTelemetrySupport.expireIfNeeded(jedis, monitoringConfig.incidentStreamKey(), monitoringConfig.incidentTtlSeconds());
-            jedis.psetex(
-                    cooldownKey,
-                    Math.max(1L, Math.max(monitoringConfig.incidentCooldownMillis(), monitoringConfig.incidentTtlSeconds() * 1_000L)),
-                    String.valueOf(now)
-            );
-            persisted.add(new AdminIncidentRecord(
-                    entryId,
-                    incident.code(),
-                    incident.description(),
-                    incident.severity(),
-                    fields.get("source"),
-                    Instant.parse(fields.get("recordedAt")),
-                    Map.copyOf(fields)
-            ));
+            RedisTelemetrySupport.expireIfNeeded(
+                    jedis,
+                    monitoringConfig.incidentStreamKey(),
+                    monitoringConfig.incidentTtlSeconds());
+            jedis.commands()
+                    .psetex(
+                            cooldownKey,
+                            Math.max(
+                                    1L,
+                                    Math.max(
+                                            monitoringConfig.incidentCooldownMillis(),
+                                            monitoringConfig.incidentTtlSeconds() * 1_000L)),
+                            String.valueOf(now));
+            persisted.add(
+                    new AdminIncidentRecord(
+                            entryId,
+                            incident.code(),
+                            incident.description(),
+                            incident.severity(),
+                            fields.get("source"),
+                            Instant.parse(fields.get("recordedAt")),
+                            Map.copyOf(fields)));
             incidentNotifier.accept(persisted.get(persisted.size() - 1));
         }
         List<AdminIncidentRecord> result = List.copyOf(persisted);
@@ -1906,124 +2837,174 @@ public final class CacheDatabaseAdmin {
 
     public AdminExportResult exportDiagnostics(AdminExportFormat format, int limit) {
         List<AdminDiagnosticsRecord> items = diagnostics(limit);
-        List<String> headers = List.of(
-                "entryId", "source", "note", "status", "recordedAt",
-                "writeBehindStreamLength", "deadLetterStreamLength",
-                "reconciliationStreamLength", "archiveStreamLength",
-                "cleanupRunCount", "reportRunCount",
-                "runtimeProfile", "runtimePressureLevel",
-                "runtimeProfileSwitchCount", "runtimeProfileLastSwitchedAt",
-                "eventType", "fromProfile", "toProfile", "pressureLevel"
-        );
-        List<List<String>> rows = items.stream()
-                .map(record -> List.of(
-                        record.entryId(),
-                        record.source(),
-                        record.note(),
-                        record.status().name(),
-                        record.recordedAt().toString(),
-                        record.fields().getOrDefault("writeBehindStreamLength", "0"),
-                        record.fields().getOrDefault("deadLetterStreamLength", "0"),
-                        record.fields().getOrDefault("reconciliationStreamLength", "0"),
-                        record.fields().getOrDefault("archiveStreamLength", "0"),
-                        record.fields().getOrDefault("cleanupRunCount", "0"),
-                        record.fields().getOrDefault("reportRunCount", "0"),
-                        record.fields().getOrDefault("runtimeProfile", ""),
-                        record.fields().getOrDefault("runtimePressureLevel", ""),
-                        record.fields().getOrDefault("runtimeProfileSwitchCount", "0"),
-                        record.fields().getOrDefault("runtimeProfileLastSwitchedAt", "0"),
-                        record.fields().getOrDefault("eventType", ""),
-                        record.fields().getOrDefault("fromProfile", ""),
-                        record.fields().getOrDefault("toProfile", ""),
-                        record.fields().getOrDefault("pressureLevel", "")
-                ))
-                .toList();
+        List<String> headers =
+                List.of(
+                        "entryId",
+                        "source",
+                        "note",
+                        "status",
+                        "recordedAt",
+                        "writeBehindStreamLength",
+                        "deadLetterStreamLength",
+                        "reconciliationStreamLength",
+                        "archiveStreamLength",
+                        "cleanupRunCount",
+                        "reportRunCount",
+                        "runtimeProfile",
+                        "runtimePressureLevel",
+                        "runtimeProfileSwitchCount",
+                        "runtimeProfileLastSwitchedAt",
+                        "eventType",
+                        "fromProfile",
+                        "toProfile",
+                        "pressureLevel");
+        List<List<String>> rows =
+                items.stream()
+                        .map(
+                                record ->
+                                        List.of(
+                                                record.entryId(),
+                                                record.source(),
+                                                record.note(),
+                                                record.status().name(),
+                                                record.recordedAt().toString(),
+                                                record.fields()
+                                                        .getOrDefault(
+                                                                "writeBehindStreamLength", "0"),
+                                                record.fields()
+                                                        .getOrDefault(
+                                                                "deadLetterStreamLength", "0"),
+                                                record.fields()
+                                                        .getOrDefault(
+                                                                "reconciliationStreamLength", "0"),
+                                                record.fields()
+                                                        .getOrDefault("archiveStreamLength", "0"),
+                                                record.fields()
+                                                        .getOrDefault("cleanupRunCount", "0"),
+                                                record.fields().getOrDefault("reportRunCount", "0"),
+                                                record.fields().getOrDefault("runtimeProfile", ""),
+                                                record.fields()
+                                                        .getOrDefault("runtimePressureLevel", ""),
+                                                record.fields()
+                                                        .getOrDefault(
+                                                                "runtimeProfileSwitchCount", "0"),
+                                                record.fields()
+                                                        .getOrDefault(
+                                                                "runtimeProfileLastSwitchedAt",
+                                                                "0"),
+                                                record.fields().getOrDefault("eventType", ""),
+                                                record.fields().getOrDefault("fromProfile", ""),
+                                                record.fields().getOrDefault("toProfile", ""),
+                                                record.fields().getOrDefault("pressureLevel", "")))
+                        .toList();
         return new AdminExportResult(
                 "diagnostics." + format.fileExtension(),
                 format,
                 format.contentType(),
-                renderTable("diagnostics", "limit=" + limit, headers, rows, format)
-        );
+                renderTable("diagnostics", "limit=" + limit, headers, rows, format));
     }
 
     public AdminExportResult exportIncidents(AdminExportFormat format, int limit) {
         List<AdminIncidentRecord> items = incidentHistory(limit);
-        List<String> headers = List.of("entryId", "code", "description", "severity", "source", "recordedAt");
-        List<List<String>> rows = items.stream()
-                .map(record -> List.of(
-                        record.entryId(),
-                        record.code(),
-                        record.description(),
-                        record.severity().name(),
-                        record.source(),
-                        record.recordedAt().toString()
-                ))
-                .toList();
+        List<String> headers =
+                List.of("entryId", "code", "description", "severity", "source", "recordedAt");
+        List<List<String>> rows =
+                items.stream()
+                        .map(
+                                record ->
+                                        List.of(
+                                                record.entryId(),
+                                                record.code(),
+                                                record.description(),
+                                                record.severity().name(),
+                                                record.source(),
+                                                record.recordedAt().toString()))
+                        .toList();
         return new AdminExportResult(
                 "incidents." + format.fileExtension(),
                 format,
                 format.contentType(),
-                renderTable("incidents", "limit=" + limit, headers, rows, format)
-        );
+                renderTable("incidents", "limit=" + limit, headers, rows, format));
     }
 
     public AdminExportResult exportRuntimeProfileChurn(AdminExportFormat format, int limit) {
         List<RuntimeProfileChurnRecord> items = runtimeProfileChurn(limit);
-        List<String> headers = List.of(
-                "entryId", "source", "note", "fromProfile", "toProfile",
-                "pressureLevel", "recordedAt", "usedMemoryBytes",
-                "writeBehindBacklog", "compactionPendingCount", "switchCount"
-        );
-        List<List<String>> rows = items.stream()
-                .map(record -> List.of(
-                        record.entryId(),
-                        record.source(),
-                        record.note(),
-                        record.fromProfile(),
-                        record.toProfile(),
-                        record.pressureLevel(),
-                        record.recordedAt().toString(),
-                        record.fields().getOrDefault("usedMemoryBytes", "0"),
-                        record.fields().getOrDefault("writeBehindBacklog", "0"),
-                        record.fields().getOrDefault("compactionPendingCount", "0"),
-                        record.fields().getOrDefault("switchCount", "0")
-                ))
-                .toList();
+        List<String> headers =
+                List.of(
+                        "entryId",
+                        "source",
+                        "note",
+                        "fromProfile",
+                        "toProfile",
+                        "pressureLevel",
+                        "recordedAt",
+                        "usedMemoryBytes",
+                        "writeBehindBacklog",
+                        "compactionPendingCount",
+                        "switchCount");
+        List<List<String>> rows =
+                items.stream()
+                        .map(
+                                record ->
+                                        List.of(
+                                                record.entryId(),
+                                                record.source(),
+                                                record.note(),
+                                                record.fromProfile(),
+                                                record.toProfile(),
+                                                record.pressureLevel(),
+                                                record.recordedAt().toString(),
+                                                record.fields()
+                                                        .getOrDefault("usedMemoryBytes", "0"),
+                                                record.fields()
+                                                        .getOrDefault("writeBehindBacklog", "0"),
+                                                record.fields()
+                                                        .getOrDefault(
+                                                                "compactionPendingCount", "0"),
+                                                record.fields().getOrDefault("switchCount", "0")))
+                        .toList();
         return new AdminExportResult(
                 "runtime-profile-churn." + format.fileExtension(),
                 format,
                 format.contentType(),
-                renderTable("runtime-profile-churn", "limit=" + limit, headers, rows, format)
-        );
+                renderTable("runtime-profile-churn", "limit=" + limit, headers, rows, format));
     }
 
-    public Path writeDeadLetterReport(Path outputPath, DeadLetterQuery query, AdminExportFormat format) throws IOException {
+    public Path writeDeadLetterReport(
+            Path outputPath, DeadLetterQuery query, AdminExportFormat format) throws IOException {
         return writeExport(outputPath, exportDeadLetters(query, format));
     }
 
-    public Path writeReconciliationReport(Path outputPath, ReconciliationQuery query, AdminExportFormat format) throws IOException {
+    public Path writeReconciliationReport(
+            Path outputPath, ReconciliationQuery query, AdminExportFormat format)
+            throws IOException {
         return writeExport(outputPath, exportReconciliation(query, format));
     }
 
-    public Path writeArchiveReport(Path outputPath, ReconciliationQuery query, AdminExportFormat format) throws IOException {
+    public Path writeArchiveReport(
+            Path outputPath, ReconciliationQuery query, AdminExportFormat format)
+            throws IOException {
         return writeExport(outputPath, exportArchive(query, format));
     }
 
-    public Path writeDiagnosticsReport(Path outputPath, AdminExportFormat format, int limit) throws IOException {
+    public Path writeDiagnosticsReport(Path outputPath, AdminExportFormat format, int limit)
+            throws IOException {
         return writeExport(outputPath, exportDiagnostics(format, limit));
     }
 
-    public Path writeIncidentReport(Path outputPath, AdminExportFormat format, int limit) throws IOException {
+    public Path writeIncidentReport(Path outputPath, AdminExportFormat format, int limit)
+            throws IOException {
         return writeExport(outputPath, exportIncidents(format, limit));
     }
 
-    public Path writeRuntimeProfileChurnReport(Path outputPath, AdminExportFormat format, int limit) throws IOException {
+    public Path writeRuntimeProfileChurnReport(Path outputPath, AdminExportFormat format, int limit)
+            throws IOException {
         return writeExport(outputPath, exportRuntimeProfileChurn(format, limit));
     }
 
     private long streamLength(String streamKey) {
         try {
-            return jedis.xlen(streamKey);
+            return jedis.commands().xlen(streamKey);
         } catch (RuntimeException exception) {
             return 0L;
         }
@@ -2038,9 +3019,10 @@ public final class CacheDatabaseAdmin {
     }
 
     private long writeBehindBacklog() {
-        com.reactor.cachedb.redis.RedisKeyStrategy keyStrategy = new com.reactor.cachedb.redis.RedisKeyStrategy(keyPrefix);
+        com.reactor.cachedb.redis.RedisKeyStrategy keyStrategy =
+                new com.reactor.cachedb.redis.RedisKeyStrategy(keyPrefix);
         try {
-            Map<String, String> stats = jedis.hgetAll(keyStrategy.compactionStatsKey());
+            Map<String, String> stats = jedis.commands().hgetAll(keyStrategy.compactionStatsKey());
             long pendingCount = parseLong(stats.get("pendingCount"));
             if (pendingCount > 0L) {
                 return pendingCount;
@@ -2069,16 +3051,14 @@ public final class CacheDatabaseAdmin {
                 incidentDeliverySnapshotSupplier.get(),
                 plannerStatisticsSnapshot(),
                 redisGuardrailSnapshotSupplier.get(),
-                redisRuntimeProfileSnapshotSupplier.get()
-        );
+                redisRuntimeProfileSnapshotSupplier.get());
     }
 
     private PlannerStatisticsSnapshot plannerStatisticsSnapshot() {
         return new PlannerStatisticsSnapshot(
                 keyCount(keyPrefix + ":*:index:stats:estimate:*"),
                 keyCount(keyPrefix + ":*:index:stats:histogram:*"),
-                keyCount(keyPrefix + ":*:index:stats:learned:*")
-        );
+                keyCount(keyPrefix + ":*:index:stats:learned:*"));
     }
 
     private long keyCount(String pattern) {
@@ -2091,13 +3071,16 @@ public final class CacheDatabaseAdmin {
     }
 
     private long scanKeyCountIncrementally(String pattern, int maxKeys) {
-        IncrementalKeyScan progress = plannerKeyScans.computeIfAbsent(pattern, ignored -> new IncrementalKeyScan());
-        redis.clients.jedis.params.ScanParams params = new redis.clients.jedis.params.ScanParams()
-                .match(pattern)
-                .count(ADMIN_METRICS_SCAN_COUNT);
+        IncrementalKeyScan progress =
+                plannerKeyScans.computeIfAbsent(pattern, ignored -> new IncrementalKeyScan());
+        redis.clients.jedis.params.ScanParams params =
+                new redis.clients.jedis.params.ScanParams()
+                        .match(pattern)
+                        .count(ADMIN_METRICS_SCAN_COUNT);
         synchronized (progress) {
             for (int step = 0; step < ADMIN_METRICS_SCAN_STEPS; step++) {
-                redis.clients.jedis.resps.ScanResult<String> scan = jedis.scan(progress.cursor(), params);
+                redis.clients.jedis.resps.ScanResult<String> scan =
+                        jedis.scan(progress.cursor(), params);
                 progress.add(scan.getResult().size());
                 if (progress.currentCount() >= maxKeys) {
                     return progress.complete(maxKeys);
@@ -2114,16 +3097,18 @@ public final class CacheDatabaseAdmin {
     private long deleteKeysByScan(String pattern, int maxKeys) {
         long deleted = 0L;
         String cursor = "0";
-        redis.clients.jedis.params.ScanParams params = new redis.clients.jedis.params.ScanParams()
-                .match(pattern)
-                .count(ADMIN_KEY_SCAN_COUNT);
+        redis.clients.jedis.params.ScanParams params =
+                new redis.clients.jedis.params.ScanParams()
+                        .match(pattern)
+                        .count(ADMIN_KEY_SCAN_COUNT);
         do {
             redis.clients.jedis.resps.ScanResult<String> scan = jedis.scan(cursor, params);
             List<String> keys = scan.getResult();
             int fromIndex = 0;
             while (fromIndex < keys.size() && deleted < maxKeys) {
                 int toIndex = Math.min(fromIndex + ADMIN_KEY_SCAN_COUNT, keys.size());
-                RedisTelemetrySupport.deleteKeysSafely(jedis, keys.subList(fromIndex, toIndex).toArray(String[]::new));
+                RedisTelemetrySupport.deleteKeysSafely(
+                        jedis, keys.subList(fromIndex, toIndex).toArray(String[]::new));
                 deleted += toIndex - fromIndex;
                 fromIndex = toIndex;
             }
@@ -2172,7 +3157,8 @@ public final class CacheDatabaseAdmin {
 
     private boolean recentError(long lastErrorAtEpochMillis) {
         return lastErrorAtEpochMillis > 0
-                && System.currentTimeMillis() - lastErrorAtEpochMillis <= monitoringConfig.recentErrorWindowMillis();
+                && System.currentTimeMillis() - lastErrorAtEpochMillis
+                        <= monitoringConfig.recentErrorWindowMillis();
     }
 
     private AdminDiagnosticsRecord toDiagnosticsRecord(StreamEntry entry) {
@@ -2183,8 +3169,7 @@ public final class CacheDatabaseAdmin {
                 fields.getOrDefault("note", ""),
                 AdminHealthStatus.valueOf(fields.getOrDefault("status", "UP")),
                 Instant.parse(fields.getOrDefault("recordedAt", Instant.EPOCH.toString())),
-                fields
-        );
+                fields);
     }
 
     private AdminIncidentRecord toIncidentRecord(StreamEntry entry) {
@@ -2196,8 +3181,7 @@ public final class CacheDatabaseAdmin {
                 AdminIncidentSeverity.valueOf(fields.getOrDefault("severity", "INFO")),
                 fields.getOrDefault("source", ""),
                 Instant.parse(fields.getOrDefault("recordedAt", Instant.EPOCH.toString())),
-                fields
-        );
+                fields);
     }
 
     private RuntimeProfileChurnRecord toRuntimeProfileChurnRecord(StreamEntry entry) {
@@ -2210,8 +3194,7 @@ public final class CacheDatabaseAdmin {
                 fields.getOrDefault("toProfile", ""),
                 fields.getOrDefault("pressureLevel", ""),
                 Instant.parse(fields.getOrDefault("recordedAt", Instant.EPOCH.toString())),
-                fields
-        );
+                fields);
     }
 
     private AdminIncident incident(
@@ -2219,8 +3202,7 @@ public final class CacheDatabaseAdmin {
             String description,
             AdminIncidentSeverity severity,
             Instant detectedAt,
-            Map<String, String> fields
-    ) {
+            Map<String, String> fields) {
         return new AdminIncident(code, description, severity, detectedAt, fields);
     }
 
@@ -2248,14 +3230,15 @@ public final class CacheDatabaseAdmin {
         ArrayList<DeadLetterEntry> entries = new ArrayList<>();
         String cursor = query.cursor();
         while (true) {
-            StreamPage<DeadLetterEntry> page = deadLetterManagement.queryDeadLetters(new DeadLetterQuery(
-                    query.limit(),
-                    cursor,
-                    query.entityName(),
-                    query.operationType(),
-                    query.entityId(),
-                    query.errorType()
-            ));
+            StreamPage<DeadLetterEntry> page =
+                    deadLetterManagement.queryDeadLetters(
+                            new DeadLetterQuery(
+                                    query.limit(),
+                                    cursor,
+                                    query.entityName(),
+                                    query.operationType(),
+                                    query.entityId(),
+                                    query.errorType()));
             entries.addAll(page.items());
             if (!page.hasMore() || page.nextCursor() == null) {
                 return List.copyOf(entries);
@@ -2268,14 +3251,15 @@ public final class CacheDatabaseAdmin {
         ArrayList<ReconciliationRecord> entries = new ArrayList<>();
         String cursor = query.cursor();
         while (true) {
-            StreamPage<ReconciliationRecord> page = deadLetterManagement.queryReconciliation(new ReconciliationQuery(
-                    query.limit(),
-                    cursor,
-                    query.status(),
-                    query.entityName(),
-                    query.operationType(),
-                    query.entityId()
-            ));
+            StreamPage<ReconciliationRecord> page =
+                    deadLetterManagement.queryReconciliation(
+                            new ReconciliationQuery(
+                                    query.limit(),
+                                    cursor,
+                                    query.status(),
+                                    query.entityName(),
+                                    query.operationType(),
+                                    query.entityId()));
             entries.addAll(page.items());
             if (!page.hasMore() || page.nextCursor() == null) {
                 return List.copyOf(entries);
@@ -2288,14 +3272,15 @@ public final class CacheDatabaseAdmin {
         ArrayList<DeadLetterArchiveRecord> entries = new ArrayList<>();
         String cursor = query.cursor();
         while (true) {
-            StreamPage<DeadLetterArchiveRecord> page = deadLetterManagement.queryArchive(new ReconciliationQuery(
-                    query.limit(),
-                    cursor,
-                    query.status(),
-                    query.entityName(),
-                    query.operationType(),
-                    query.entityId()
-            ));
+            StreamPage<DeadLetterArchiveRecord> page =
+                    deadLetterManagement.queryArchive(
+                            new ReconciliationQuery(
+                                    query.limit(),
+                                    cursor,
+                                    query.status(),
+                                    query.entityName(),
+                                    query.operationType(),
+                                    query.entityId()));
             entries.addAll(page.items());
             if (!page.hasMore() || page.nextCursor() == null) {
                 return List.copyOf(entries);
@@ -2304,71 +3289,108 @@ public final class CacheDatabaseAdmin {
         }
     }
 
-    private String renderDeadLetters(List<DeadLetterEntry> items, DeadLetterQuery query, AdminExportFormat format) {
-        List<String> headers = List.of(
-                "entryId", "entity", "operationType", "entityId", "version",
-                "errorType", "errorMessage", "failureCategory", "sqlState",
-                "retryable", "attempts", "createdAt"
-        );
-        List<List<String>> rows = items.stream()
-                .map(entry -> List.of(
-                        entry.entryId(),
-                        entry.operation().entityName(),
-                        entry.operation().type().name(),
-                        entry.operation().id(),
-                        String.valueOf(entry.operation().version()),
-                        entry.errorType(),
-                        entry.errorMessage(),
-                        entry.failureDetails().category().name(),
-                        entry.failureDetails().sqlState(),
-                        String.valueOf(entry.failureDetails().retryable()),
-                        String.valueOf(entry.deadLetterAttempts()),
-                        entry.createdAt().toString()
-                ))
-                .toList();
+    private String renderDeadLetters(
+            List<DeadLetterEntry> items, DeadLetterQuery query, AdminExportFormat format) {
+        List<String> headers =
+                List.of(
+                        "entryId",
+                        "entity",
+                        "operationType",
+                        "entityId",
+                        "version",
+                        "errorType",
+                        "errorMessage",
+                        "failureCategory",
+                        "sqlState",
+                        "retryable",
+                        "attempts",
+                        "createdAt");
+        List<List<String>> rows =
+                items.stream()
+                        .map(
+                                entry ->
+                                        List.of(
+                                                entry.entryId(),
+                                                entry.operation().entityName(),
+                                                entry.operation().type().name(),
+                                                entry.operation().id(),
+                                                String.valueOf(entry.operation().version()),
+                                                entry.errorType(),
+                                                entry.errorMessage(),
+                                                entry.failureDetails().category().name(),
+                                                entry.failureDetails().sqlState(),
+                                                String.valueOf(entry.failureDetails().retryable()),
+                                                String.valueOf(entry.deadLetterAttempts()),
+                                                entry.createdAt().toString()))
+                        .toList();
         return renderTable("deadLetters", describeDeadLetterQuery(query), headers, rows, format);
     }
 
-    private String renderReconciliation(List<ReconciliationRecord> items, ReconciliationQuery query, AdminExportFormat format) {
-        List<String> headers = List.of(
-                "entryId", "status", "entity", "operationType", "entityId",
-                "version", "replayCategory", "replaySqlState", "retryable", "reconciledAt"
-        );
-        List<List<String>> rows = items.stream()
-                .map(record -> List.of(
-                        record.entryId(),
-                        record.status(),
-                        record.entityName(),
-                        record.operationType(),
-                        record.entityId(),
-                        String.valueOf(record.version()),
-                        record.replayFailureDetails().category().name(),
-                        record.replayFailureDetails().sqlState(),
-                        String.valueOf(record.replayFailureDetails().retryable()),
-                        record.reconciledAt().toString()
-                ))
-                .toList();
-        return renderTable("reconciliation", describeReconciliationQuery(query), headers, rows, format);
+    private String renderReconciliation(
+            List<ReconciliationRecord> items, ReconciliationQuery query, AdminExportFormat format) {
+        List<String> headers =
+                List.of(
+                        "entryId",
+                        "status",
+                        "entity",
+                        "operationType",
+                        "entityId",
+                        "version",
+                        "replayCategory",
+                        "replaySqlState",
+                        "retryable",
+                        "reconciledAt");
+        List<List<String>> rows =
+                items.stream()
+                        .map(
+                                record ->
+                                        List.of(
+                                                record.entryId(),
+                                                record.status(),
+                                                record.entityName(),
+                                                record.operationType(),
+                                                record.entityId(),
+                                                String.valueOf(record.version()),
+                                                record.replayFailureDetails().category().name(),
+                                                record.replayFailureDetails().sqlState(),
+                                                String.valueOf(
+                                                        record.replayFailureDetails().retryable()),
+                                                record.reconciledAt().toString()))
+                        .toList();
+        return renderTable(
+                "reconciliation", describeReconciliationQuery(query), headers, rows, format);
     }
 
-    private String renderArchive(List<DeadLetterArchiveRecord> items, ReconciliationQuery query, AdminExportFormat format) {
-        List<String> headers = List.of(
-                "entryId", "sourceEntryId", "status", "entity",
-                "operationType", "entityId", "version", "archivedAt", "note"
-        );
-        List<List<String>> rows = items.stream()
-                .map(record -> List.of(
-                        record.entryId(),
-                        record.sourceEntryId(),
-                        record.status(),
-                        record.entityName(),
-                        record.operationType(),
-                        record.entityId(),
-                        String.valueOf(record.version()),
-                        record.archivedAt().toString(),
-                        record.fields().getOrDefault("note", "")
-                ))
-                .toList();
+    private String renderArchive(
+            List<DeadLetterArchiveRecord> items,
+            ReconciliationQuery query,
+            AdminExportFormat format) {
+        List<String> headers =
+                List.of(
+                        "entryId",
+                        "sourceEntryId",
+                        "status",
+                        "entity",
+                        "operationType",
+                        "entityId",
+                        "version",
+                        "archivedAt",
+                        "note");
+        List<List<String>> rows =
+                items.stream()
+                        .map(
+                                record ->
+                                        List.of(
+                                                record.entryId(),
+                                                record.sourceEntryId(),
+                                                record.status(),
+                                                record.entityName(),
+                                                record.operationType(),
+                                                record.entityId(),
+                                                String.valueOf(record.version()),
+                                                record.archivedAt().toString(),
+                                                record.fields().getOrDefault("note", "")))
+                        .toList();
         return renderTable("archive", describeReconciliationQuery(query), headers, rows, format);
     }
 
@@ -2377,8 +3399,7 @@ public final class CacheDatabaseAdmin {
             String queryDescription,
             List<String> headers,
             List<List<String>> rows,
-            AdminExportFormat format
-    ) {
+            AdminExportFormat format) {
         return switch (format) {
             case JSON -> renderJson(name, queryDescription, headers, rows);
             case CSV -> renderCsv(headers, rows);
@@ -2386,7 +3407,8 @@ public final class CacheDatabaseAdmin {
         };
     }
 
-    private String renderJson(String name, String queryDescription, List<String> headers, List<List<String>> rows) {
+    private String renderJson(
+            String name, String queryDescription, List<String> headers, List<List<String>> rows) {
         StringBuilder builder = new StringBuilder();
         builder.append("{\"report\":\"").append(jsonEscape(name)).append("\",");
         builder.append("\"query\":\"").append(jsonEscape(queryDescription)).append("\",");
@@ -2426,7 +3448,8 @@ public final class CacheDatabaseAdmin {
         return builder.toString();
     }
 
-    private String renderMarkdown(String name, String queryDescription, List<String> headers, List<List<String>> rows) {
+    private String renderMarkdown(
+            String name, String queryDescription, List<String> headers, List<List<String>> rows) {
         StringBuilder builder = new StringBuilder();
         builder.append("# ").append(name).append('\n');
         builder.append('\n');
@@ -2456,17 +3479,25 @@ public final class CacheDatabaseAdmin {
     }
 
     private String describeDeadLetterQuery(DeadLetterQuery query) {
-        return "entity=" + blankAsAny(query.entityName())
-                + ", operation=" + blankAsAny(query.operationType())
-                + ", id=" + blankAsAny(query.entityId())
-                + ", error=" + blankAsAny(query.errorType());
+        return "entity="
+                + blankAsAny(query.entityName())
+                + ", operation="
+                + blankAsAny(query.operationType())
+                + ", id="
+                + blankAsAny(query.entityId())
+                + ", error="
+                + blankAsAny(query.errorType());
     }
 
     private String describeReconciliationQuery(ReconciliationQuery query) {
-        return "status=" + blankAsAny(query.status())
-                + ", entity=" + blankAsAny(query.entityName())
-                + ", operation=" + blankAsAny(query.operationType())
-                + ", id=" + blankAsAny(query.entityId());
+        return "status="
+                + blankAsAny(query.status())
+                + ", entity="
+                + blankAsAny(query.entityName())
+                + ", operation="
+                + blankAsAny(query.operationType())
+                + ", id="
+                + blankAsAny(query.entityId());
     }
 
     private String blankAsAny(String value) {
@@ -2480,8 +3511,7 @@ public final class CacheDatabaseAdmin {
 
     private String jsonEscape(String value) {
         String safe = value == null ? "" : value;
-        return safe
-                .replace("\\", "\\\\")
+        return safe.replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\r", "\\r")
                 .replace("\n", "\\n");
@@ -2513,16 +3543,15 @@ public final class CacheDatabaseAdmin {
             String group,
             String property,
             Object value,
-            String description
-    ) {
+            String description) {
         modeledProperties.add(property);
-        items.add(new EffectiveTuningEntry(
-                group,
-                property,
-                String.valueOf(value),
-                tuningSource(property),
-                description
-        ));
+        items.add(
+                new EffectiveTuningEntry(
+                        group,
+                        property,
+                        String.valueOf(value),
+                        tuningSource(property),
+                        description));
     }
 
     private String tuningSource(String property) {
@@ -2530,23 +3559,17 @@ public final class CacheDatabaseAdmin {
     }
 
     private RuntimeProfilePropertySnapshot runtimeProfileProperty(
-            Map<String, String> values,
-            String property,
-            String unit,
-            String description
-    ) {
+            Map<String, String> values, String property, String unit, String description) {
         return new RuntimeProfilePropertySnapshot(
-                property,
-                defaultString(values.get(property)),
-                unit,
-                description
-        );
+                property, defaultString(values.get(property)), unit, description);
     }
 
     private String summarizeSignal(SignalAggregate aggregate) {
         return defaultString(aggregate.description)
-                + " (active=" + aggregate.activeCount
-                + ", recent=" + aggregate.recentCount
+                + " (active="
+                + aggregate.activeCount
+                + ", recent="
+                + aggregate.recentCount
                 + ")";
     }
 
@@ -2560,7 +3583,8 @@ public final class CacheDatabaseAdmin {
         return left.isAfter(right) ? left : right;
     }
 
-    private AdminIncidentSeverity maxSeverity(AdminIncidentSeverity left, AdminIncidentSeverity right) {
+    private AdminIncidentSeverity maxSeverity(
+            AdminIncidentSeverity left, AdminIncidentSeverity right) {
         if (left == null) {
             return right;
         }
@@ -2604,7 +3628,8 @@ public final class CacheDatabaseAdmin {
         return AdminHealthStatus.UP.name();
     }
 
-    private String escalationLevel(com.reactor.cachedb.core.queue.IncidentChannelSnapshot channel, boolean enabled) {
+    private String escalationLevel(
+            com.reactor.cachedb.core.queue.IncidentChannelSnapshot channel, boolean enabled) {
         if (!enabled) {
             return "OFF";
         }
@@ -2633,11 +3658,16 @@ public final class CacheDatabaseAdmin {
     private long totalIncidentDeliveryDropped(ReconciliationMetrics metrics) {
         return metrics.incidentDeliverySnapshot().droppedBeforeDeliveryCount()
                 + metrics.incidentDeliverySnapshot().channels().stream()
-                .mapToLong(channel -> channel.droppedCount())
-                .sum();
+                        .mapToLong(channel -> channel.droppedCount())
+                        .sum();
     }
 
-    private void appendAlertRule(StringBuilder builder, String alert, String expression, String severity, String summary) {
+    private void appendAlertRule(
+            StringBuilder builder,
+            String alert,
+            String expression,
+            String severity,
+            String summary) {
         builder.append("      - alert: ").append(alert).append('\n');
         builder.append("        expr: ").append(expression).append('\n');
         builder.append("        for: 1m\n");

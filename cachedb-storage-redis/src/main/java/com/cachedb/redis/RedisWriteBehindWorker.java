@@ -6,11 +6,12 @@ import com.reactor.cachedb.core.queue.FailureClassifyingFlusher;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.queue.WorkerErrorCapture;
 import com.reactor.cachedb.core.queue.WorkerErrorDetails;
-import com.reactor.cachedb.core.queue.WriteFailureDetails;
-import com.reactor.cachedb.core.queue.WriteBehindWorkerSnapshot;
 import com.reactor.cachedb.core.queue.WriteBehindFlusher;
+import com.reactor.cachedb.core.queue.WriteBehindWorkerSnapshot;
+import com.reactor.cachedb.core.queue.WriteFailureDetails;
+
+import redis.clients.jedis.AbstractPipeline;
 import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.Response;
 import redis.clients.jedis.StreamEntryID;
 import redis.clients.jedis.exceptions.JedisDataException;
@@ -22,8 +23,8 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map.Entry;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -39,7 +40,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class RedisWriteBehindWorker implements AutoCloseable {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final WriteBehindFlusher flusher;
     private final WriteBehindConfig config;
     private final RedisWriteOperationMapper mapper;
@@ -72,8 +73,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private final AtomicReference<String> lastErrorRootMessage = new AtomicReference<>();
     private final AtomicReference<String> lastErrorOrigin = new AtomicReference<>();
     private final AtomicReference<String> lastErrorStackTrace = new AtomicReference<>();
-    private final ConcurrentLinkedQueue<PendingEntry> deferredAcknowledgements = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<PendingEntry> deferredDependencies = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<PendingEntry> deferredAcknowledgements =
+            new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<PendingEntry> deferredDependencies =
+            new ConcurrentLinkedQueue<>();
     private final Set<PendingEntryIdentity> deferredDependencyKeys = ConcurrentHashMap.newKeySet();
     private final AtomicLong nextDependencyRetryAtEpochMillis = new AtomicLong();
     private final int deferredDependencyCapacity;
@@ -84,8 +87,23 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             WriteBehindConfig config,
             RedisWriteOperationMapper mapper,
             RedisKeyStrategy keyStrategy,
-            RedisFunctionExecutor functionExecutor
-    ) {
+            RedisFunctionExecutor functionExecutor) {
+        this(
+                JedisPooledOperations.of(jedis),
+                flusher,
+                config,
+                mapper,
+                keyStrategy,
+                functionExecutor);
+    }
+
+    public RedisWriteBehindWorker(
+            RedisClientOperations jedis,
+            WriteBehindFlusher flusher,
+            WriteBehindConfig config,
+            RedisWriteOperationMapper mapper,
+            RedisKeyStrategy keyStrategy,
+            RedisFunctionExecutor functionExecutor) {
         this.jedis = jedis;
         this.flusher = flusher;
         this.config = config;
@@ -93,13 +111,15 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         this.keyStrategy = keyStrategy;
         this.functionExecutor = functionExecutor;
         this.durabilityTracker = new RedisDurabilityTracker(jedis, keyStrategy);
-        long requestedDependencyCapacity = (long) config.batchSize() * Math.max(1, config.workerThreads()) * 4L;
-        this.deferredDependencyCapacity = (int) Math.max(128L, Math.min(100_000L, requestedDependencyCapacity));
-        this.executorService = Executors.newFixedThreadPool(config.workerThreads(), threadFactory(config));
-        this.flushExecutorService = Executors.newFixedThreadPool(
-                Math.max(1, config.flushGroupParallelism()),
-                flushThreadFactory(config)
-        );
+        long requestedDependencyCapacity =
+                (long) config.batchSize() * Math.max(1, config.workerThreads()) * 4L;
+        this.deferredDependencyCapacity =
+                (int) Math.max(128L, Math.min(100_000L, requestedDependencyCapacity));
+        this.executorService =
+                Executors.newFixedThreadPool(config.workerThreads(), threadFactory(config));
+        this.flushExecutorService =
+                Executors.newFixedThreadPool(
+                        Math.max(1, config.flushGroupParallelism()), flushThreadFactory(config));
     }
 
     public RedisWriteBehindWorker(
@@ -107,8 +127,16 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             WriteBehindFlusher flusher,
             WriteBehindConfig config,
             RedisWriteOperationMapper mapper,
-            RedisKeyStrategy keyStrategy
-    ) {
+            RedisKeyStrategy keyStrategy) {
+        this(JedisPooledOperations.of(jedis), flusher, config, mapper, keyStrategy);
+    }
+
+    public RedisWriteBehindWorker(
+            RedisClientOperations jedis,
+            WriteBehindFlusher flusher,
+            WriteBehindConfig config,
+            RedisWriteOperationMapper mapper,
+            RedisKeyStrategy keyStrategy) {
         this(jedis, flusher, config, mapper, keyStrategy, null);
     }
 
@@ -130,7 +158,12 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
         for (String streamKey : config.activeStreamKeys()) {
             try {
-                jedis.xgroupCreate(streamKey, config.activeConsumerGroup(), new StreamEntryID("0-0"), true);
+                jedis.commands()
+                        .xgroupCreate(
+                                streamKey,
+                                config.activeConsumerGroup(),
+                                new StreamEntryID("0-0"),
+                                true);
             } catch (JedisDataException exception) {
                 if (!exception.getMessage().contains("BUSYGROUP")) {
                     throw exception;
@@ -140,9 +173,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private void runLoop(String consumerName) {
-        XReadGroupParams params = new XReadGroupParams()
-                .count(config.batchSize())
-                .block((int) config.blockTimeoutMillis());
+        XReadGroupParams params =
+                new XReadGroupParams()
+                        .count(config.batchSize())
+                        .block((int) config.blockTimeoutMillis());
         while (running.get() && !Thread.currentThread().isInterrupted()) {
             try {
                 drainDeferredAcknowledgements();
@@ -158,13 +192,17 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 if (hasEntries(responses)) {
                     markProgress(now);
                 }
-                if (!hasEntries(responses) && config.recoverPendingEntries() && shouldAttemptClaim(now)) {
+                if (!hasEntries(responses)
+                        && config.recoverPendingEntries()
+                        && shouldAttemptClaim(now)) {
                     try {
                         responses = claimAbandonedEntries(consumerName);
                         claimedRecoveryEntries = hasEntries(responses);
                     } catch (RuntimeException exception) {
                         if (isTransientRedisTimeout(exception)) {
-                            sleepQuietly(Math.max(config.retryBackoffMillis(), config.claimIdleMillis()));
+                            sleepQuietly(
+                                    Math.max(
+                                            config.retryBackoffMillis(), config.claimIdleMillis()));
                             continue;
                         }
                         throw exception;
@@ -192,14 +230,23 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         }
     }
 
-    private void processEntries(String sourceStreamKey, List<StreamEntry> entries, long currentBacklog) {
+    private void processEntries(
+            String sourceStreamKey, List<StreamEntry> entries, long currentBacklog) {
         if (entries == null || entries.isEmpty()) {
             return;
         }
 
-        List<PendingEntry> candidates = config.dedicatedWriteConsumerGroupEnabled()
-                ? resolveCompactionEntries(sourceStreamKey, entries)
-                : rawEntries(sourceStreamKey, entries);
+        List<PendingEntry> candidates =
+                config.dedicatedWriteConsumerGroupEnabled()
+                        ? resolveCompactionEntries(sourceStreamKey, entries)
+                        : rawEntries(sourceStreamKey, entries);
+
+        List<PendingEntry> ordinary = new ArrayList<>(candidates.size());
+        for (var candidate : candidates) {
+            if (candidate.operation().atomicBatch()) processOperationWithRetry(candidate);
+            else ordinary.add(candidate);
+        }
+        candidates = ordinary;
 
         if (config.batchFlushEnabled() && candidates.size() > 1 && config.coalescingEnabled()) {
             candidates = coalesceEntries(candidates);
@@ -227,7 +274,8 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         }
 
         LinkedHashMap<FlushGroupKey, List<PendingEntry>> groups = groupEntries(candidates);
-        int maxInFlightGroups = Math.max(1, Math.min(config.flushGroupParallelism(), config.flushPipelineDepth()));
+        int maxInFlightGroups =
+                Math.max(1, Math.min(config.flushGroupParallelism(), config.flushPipelineDepth()));
         if (groups.size() <= 1 || maxInFlightGroups <= 1) {
             for (List<PendingEntry> group : groups.values()) {
                 flushGroup(group, currentBacklog);
@@ -251,14 +299,32 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private List<PendingEntry> rawEntries(String sourceStreamKey, List<StreamEntry> entries) {
         List<PendingEntry> candidates = new ArrayList<>(entries.size());
         for (StreamEntry entry : entries) {
-            candidates.add(new PendingEntry(entry, mapper.fromBody(entry.getFields()), List.of(entry.getID()), false, sourceStreamKey));
+            candidates.add(
+                    new PendingEntry(
+                            entry,
+                            mapper.fromBody(entry.getFields()),
+                            List.of(entry.getID()),
+                            false,
+                            sourceStreamKey));
         }
         return candidates;
     }
 
-    private List<PendingEntry> resolveCompactionEntries(String sourceStreamKey, List<StreamEntry> entries) {
+    private List<PendingEntry> resolveCompactionEntries(
+            String sourceStreamKey, List<StreamEntry> entries) {
         LinkedHashMap<EntityKey, CompactionTokenGroup> tokenGroups = new LinkedHashMap<>();
+        ArrayList<PendingEntry> atomic = new ArrayList<>();
         for (StreamEntry entry : entries) {
+            if (entry.getFields().containsKey("batchCount")) {
+                atomic.add(
+                        new PendingEntry(
+                                entry,
+                                mapper.fromBody(entry.getFields()),
+                                List.of(entry.getID()),
+                                false,
+                                sourceStreamKey));
+                continue;
+            }
             String namespace = entry.getFields().get("namespace");
             String id = entry.getFields().get("id");
             if (namespace == null || id == null) {
@@ -267,13 +333,13 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             }
             tokenGroups.compute(
                     EntityKey.of(namespace, id),
-                    (ignored, currentGroup) -> currentGroup == null
-                            ? CompactionTokenGroup.initial(entry, namespace, id)
-                            : currentGroup.merge(entry)
-            );
+                    (ignored, currentGroup) ->
+                            currentGroup == null
+                                    ? CompactionTokenGroup.initial(entry, namespace, id)
+                                    : currentGroup.merge(entry));
         }
         if (tokenGroups.isEmpty()) {
-            return List.of();
+            return atomic;
         }
 
         ArrayList<CompactionTokenGroup> orderedGroups = new ArrayList<>(tokenGroups.values());
@@ -281,20 +347,25 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         int chunkSize = compactionPayloadFetchChunkSize(orderedGroups.size());
         for (int start = 0; start < orderedGroups.size(); start += chunkSize) {
             int end = Math.min(orderedGroups.size(), start + chunkSize);
-            candidates.addAll(resolveCompactionChunk(sourceStreamKey, orderedGroups.subList(start, end)));
+            candidates.addAll(
+                    resolveCompactionChunk(sourceStreamKey, orderedGroups.subList(start, end)));
         }
-        return candidates;
+        atomic.addAll(candidates);
+        return atomic;
     }
 
-    private List<PendingEntry> resolveCompactionChunk(String sourceStreamKey, List<CompactionTokenGroup> tokenGroups) {
-        LinkedHashMap<EntityKey, Response<Map<String, String>>> payloadResponses = new LinkedHashMap<>(tokenGroups.size());
-        Pipeline pipeline = jedis.pipelined();
+    private List<PendingEntry> resolveCompactionChunk(
+            String sourceStreamKey, List<CompactionTokenGroup> tokenGroups) {
+        LinkedHashMap<EntityKey, Response<Map<String, String>>> payloadResponses =
+                new LinkedHashMap<>(tokenGroups.size());
+        AbstractPipeline pipeline = jedis.pipeline();
         try {
             for (CompactionTokenGroup tokenGroup : tokenGroups) {
                 payloadResponses.put(
                         EntityKey.of(tokenGroup.namespace(), tokenGroup.id()),
-                        pipeline.hgetAll(keyStrategy.compactionPayloadKey(tokenGroup.namespace(), tokenGroup.id()))
-                );
+                        pipeline.hgetAll(
+                                keyStrategy.compactionPayloadKey(
+                                        tokenGroup.namespace(), tokenGroup.id())));
             }
             pipeline.sync();
         } catch (RuntimeException exception) {
@@ -308,7 +379,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
         ArrayList<PendingEntry> candidates = new ArrayList<>(tokenGroups.size());
         for (CompactionTokenGroup tokenGroup : tokenGroups) {
-            Map<String, String> body = payloadResponses.get(EntityKey.of(tokenGroup.namespace(), tokenGroup.id())).get();
+            Map<String, String> body =
+                    payloadResponses
+                            .get(EntityKey.of(tokenGroup.namespace(), tokenGroup.id()))
+                            .get();
             PendingEntry pendingEntry = resolveCompactionEntry(sourceStreamKey, tokenGroup, body);
             if (pendingEntry != null) {
                 candidates.add(pendingEntry);
@@ -317,12 +391,17 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         return candidates;
     }
 
-    private List<PendingEntry> resolveCompactionChunkSequential(String sourceStreamKey, List<CompactionTokenGroup> tokenGroups) {
+    private List<PendingEntry> resolveCompactionChunkSequential(
+            String sourceStreamKey, List<CompactionTokenGroup> tokenGroups) {
         ArrayList<PendingEntry> candidates = new ArrayList<>(tokenGroups.size());
         for (CompactionTokenGroup tokenGroup : tokenGroups) {
             Map<String, String> body;
             try {
-                body = jedis.hgetAll(keyStrategy.compactionPayloadKey(tokenGroup.namespace(), tokenGroup.id()));
+                body =
+                        jedis.commands()
+                                .hgetAll(
+                                        keyStrategy.compactionPayloadKey(
+                                                tokenGroup.namespace(), tokenGroup.id()));
             } catch (RuntimeException exception) {
                 if (isTransientRedisTimeout(exception)) {
                     continue;
@@ -337,21 +416,23 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         return candidates;
     }
 
-    private PendingEntry resolveCompactionEntry(String sourceStreamKey, CompactionTokenGroup tokenGroup, Map<String, String> body) {
+    private PendingEntry resolveCompactionEntry(
+            String sourceStreamKey, CompactionTokenGroup tokenGroup, Map<String, String> body) {
         if (body == null || body.isEmpty()) {
             throw new IllegalStateException(
-                    "Durable compaction payload is missing for namespace=" + tokenGroup.namespace()
-                            + ", id=" + tokenGroup.id()
-                            + ", stream=" + sourceStreamKey
-            );
+                    "Durable compaction payload is missing for namespace="
+                            + tokenGroup.namespace()
+                            + ", id="
+                            + tokenGroup.id()
+                            + ", stream="
+                            + sourceStreamKey);
         }
         return new PendingEntry(
                 tokenGroup.entry(),
                 mapper.fromBody(body),
                 tokenGroup.ackIds(),
                 true,
-                sourceStreamKey
-        );
+                sourceStreamKey);
     }
 
     private int compactionPayloadFetchChunkSize(int entryCount) {
@@ -365,7 +446,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         }
         long total = 0L;
         for (String streamKey : config.activeStreamKeys()) {
-            total += jedis.xlen(streamKey);
+            total += jedis.commands().xlen(streamKey);
         }
         cachedBacklogLength.set(total);
         lastBacklogSampleAtEpochMillis.set(now);
@@ -377,12 +458,16 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             try {
                 future.get();
             } catch (Exception exception) {
-                captureError(exception instanceof RuntimeException runtimeException ? runtimeException : new RuntimeException(exception));
+                captureError(
+                        exception instanceof RuntimeException runtimeException
+                                ? runtimeException
+                                : new RuntimeException(exception));
             }
         }
     }
 
-    private LinkedHashMap<FlushGroupKey, List<PendingEntry>> groupEntries(List<PendingEntry> entries) {
+    private LinkedHashMap<FlushGroupKey, List<PendingEntry>> groupEntries(
+            List<PendingEntry> entries) {
         if (!config.tableAwareBatchingEnabled()) {
             LinkedHashMap<FlushGroupKey, List<PendingEntry>> singleGroup = new LinkedHashMap<>();
             singleGroup.put(FlushGroupKey.singleGroup(), entries);
@@ -391,7 +476,9 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
         LinkedHashMap<FlushGroupKey, List<PendingEntry>> groups = new LinkedHashMap<>();
         for (PendingEntry entry : entries) {
-            groups.computeIfAbsent(FlushGroupKey.of(entry.operation()), ignored -> new ArrayList<>()).add(entry);
+            groups.computeIfAbsent(
+                            FlushGroupKey.of(entry.operation()), ignored -> new ArrayList<>())
+                    .add(entry);
         }
         return groups;
     }
@@ -431,7 +518,8 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             return true;
         }
 
-        List<QueuedWriteOperation> operations = chunk.stream().map(PendingEntry::operation).toList();
+        List<QueuedWriteOperation> operations =
+                chunk.stream().map(PendingEntry::operation).toList();
         try {
             flusher.flushBatch(operations);
             markDurable(chunk);
@@ -470,19 +558,32 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private List<PendingEntry> filterFreshEntriesChunk(List<PendingEntry> entries) {
-        List<String> versionKeys = entries.stream()
-                .map(entry -> keyStrategy.versionKey(entry.operation().redisNamespace(), entry.operation().id()))
-                .toList();
-        List<String> tombstoneKeys = entries.stream()
-                .map(entry -> keyStrategy.tombstoneKey(entry.operation().redisNamespace(), entry.operation().id()))
-                .toList();
+        List<String> versionKeys =
+                entries.stream()
+                        .map(
+                                entry ->
+                                        keyStrategy.versionKey(
+                                                entry.operation().redisNamespace(),
+                                                entry.operation().id()))
+                        .toList();
+        List<String> tombstoneKeys =
+                entries.stream()
+                        .map(
+                                entry ->
+                                        keyStrategy.tombstoneKey(
+                                                entry.operation().redisNamespace(),
+                                                entry.operation().id()))
+                        .toList();
         List<String> currentVersions = jedis.mget(versionKeys.toArray(String[]::new));
         List<String> tombstoneVersions = jedis.mget(tombstoneKeys.toArray(String[]::new));
         ArrayList<PendingEntry> freshEntries = new ArrayList<>(entries.size());
         ArrayList<PendingEntry> staleEntries = new ArrayList<>();
         for (int index = 0; index < entries.size(); index++) {
             PendingEntry pendingEntry = entries.get(index);
-            long latestVersion = Math.max(parseVersion(currentVersions.get(index)), parseVersion(tombstoneVersions.get(index)));
+            long latestVersion =
+                    Math.max(
+                            parseVersion(currentVersions.get(index)),
+                            parseVersion(tombstoneVersions.get(index)));
             if (latestVersion > pendingEntry.operation().version()) {
                 staleEntries.add(pendingEntry);
                 staleSkippedCount.incrementAndGet();
@@ -528,7 +629,8 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 attempts++;
                 retriedCount.incrementAndGet();
                 if (attempts > retryPolicy.maxRetries()) {
-                    publishDeadLetter(pendingEntry.entry(), pendingEntry.operation(), exception, attempts);
+                    publishDeadLetter(
+                            pendingEntry.entry(), pendingEntry.operation(), exception, attempts);
                     acknowledgeOrDefer(pendingEntry);
                     return;
                 }
@@ -548,10 +650,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 continue;
             }
             dependent.add(entry);
-            dependencyKeys.add(keyStrategy.durabilityKey(
-                    entry.operation().dependencyNamespace(),
-                    entry.operation().dependencyId()
-            ));
+            dependencyKeys.add(
+                    keyStrategy.durabilityKey(
+                            entry.operation().dependencyNamespace(),
+                            entry.operation().dependencyId()));
         }
         if (dependent.isEmpty()) {
             return new DependencyPartition(entries, List.of());
@@ -560,7 +662,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         LinkedHashMap<PendingEntry, Boolean> ready = new LinkedHashMap<>(dependent.size());
         for (int index = 0; index < dependent.size(); index++) {
             PendingEntry entry = dependent.get(index);
-            ready.put(entry, parseVersion(durableVersions.get(index)) >= entry.operation().dependencyVersion());
+            ready.put(
+                    entry,
+                    parseVersion(durableVersions.get(index))
+                            >= entry.operation().dependencyVersion());
         }
         ArrayList<PendingEntry> readyEntries = new ArrayList<>(entries.size());
         ArrayList<PendingEntry> blockedEntries = new ArrayList<>();
@@ -592,8 +697,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
     private boolean drainDeferredDependencies(long now) {
         long scheduledAt = nextDependencyRetryAtEpochMillis.get();
-        if (scheduledAt == 0L || now < scheduledAt
-                || !nextDependencyRetryAtEpochMillis.compareAndSet(scheduledAt, now + dependencyRetryMillis())) {
+        if (scheduledAt == 0L
+                || now < scheduledAt
+                || !nextDependencyRetryAtEpochMillis.compareAndSet(
+                        scheduledAt, now + dependencyRetryMillis())) {
             return false;
         }
 
@@ -630,8 +737,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         long candidate = now + dependencyRetryMillis();
         nextDependencyRetryAtEpochMillis.accumulateAndGet(
                 candidate,
-                (current, requested) -> current == 0L ? requested : Math.min(current, requested)
-        );
+                (current, requested) -> current == 0L ? requested : Math.min(current, requested));
     }
 
     private long dependencyRetryMillis() {
@@ -645,6 +751,9 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private void markDurable(QueuedWriteOperation operation) {
+        if (operation.atomicBatch()) {
+            for (var member : operation.batchOperations()) markDurable(member);
+        }
         durabilityTracker.advance(operation.redisNamespace(), operation.id(), operation.version());
     }
 
@@ -675,8 +784,8 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             completeCompaction(pendingEntry.operation());
         }
         StreamEntryID[] ackIds = pendingEntry.ackIds().toArray(StreamEntryID[]::new);
-        jedis.xack(pendingEntry.sourceStreamKey(), config.activeConsumerGroup(), ackIds);
-        jedis.xdel(pendingEntry.sourceStreamKey(), ackIds);
+        jedis.commands().xack(pendingEntry.sourceStreamKey(), config.activeConsumerGroup(), ackIds);
+        jedis.commands().xdel(pendingEntry.sourceStreamKey(), ackIds);
     }
 
     private void ackPendingEntries(List<PendingEntry> pendingEntries) {
@@ -697,19 +806,21 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         }
         for (Entry<String, ArrayList<StreamEntryID>> entry : ackIdsByStream.entrySet()) {
             StreamEntryID[] ackIds = entry.getValue().toArray(StreamEntryID[]::new);
-            jedis.xack(entry.getKey(), config.activeConsumerGroup(), ackIds);
-            jedis.xdel(entry.getKey(), ackIds);
+            jedis.commands().xack(entry.getKey(), config.activeConsumerGroup(), ackIds);
+            jedis.commands().xdel(entry.getKey(), ackIds);
         }
     }
 
     private void ackToken(String sourceStreamKey, StreamEntryID streamEntryID) {
-        jedis.xack(sourceStreamKey, config.activeConsumerGroup(), streamEntryID);
-        jedis.xdel(sourceStreamKey, streamEntryID);
+        jedis.commands().xack(sourceStreamKey, config.activeConsumerGroup(), streamEntryID);
+        jedis.commands().xdel(sourceStreamKey, streamEntryID);
     }
 
     private void completeCompaction(QueuedWriteOperation operation) {
-        String pendingKey = keyStrategy.compactionPendingKey(operation.redisNamespace(), operation.id());
-        String payloadKey = keyStrategy.compactionPayloadKey(operation.redisNamespace(), operation.id());
+        String pendingKey =
+                keyStrategy.compactionPendingKey(operation.redisNamespace(), operation.id());
+        String payloadKey =
+                keyStrategy.compactionPayloadKey(operation.redisNamespace(), operation.id());
         if (functionExecutor != null && functionExecutor.enabled()) {
             try {
                 functionExecutor.compactionComplete(
@@ -719,13 +830,11 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                                 config.compactionStreamKey(),
                                 operation.redisNamespace(),
                                 operation.id(),
-                                config.compactionShardCount()
-                        ),
+                                config.compactionShardCount()),
                         keyStrategy.compactionStatsKey(),
                         operation.redisNamespace(),
                         operation.id(),
-                        operation.version()
-                );
+                        operation.version());
                 return;
             } catch (RuntimeException exception) {
                 handleCompactionCompletionFailure(operation, exception);
@@ -739,61 +848,72 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         }
     }
 
-    private void handleCompactionCompletionFailure(QueuedWriteOperation operation, RuntimeException exception) {
+    private void handleCompactionCompletionFailure(
+            QueuedWriteOperation operation, RuntimeException exception) {
         if (tryRequeueCompaction(operation, exception)) {
             return;
         }
         throw exception;
     }
 
-    private void completeCompactionLocally(QueuedWriteOperation operation, String pendingKey, String payloadKey) {
-        String pendingVersion = jedis.get(pendingKey);
+    private void completeCompactionLocally(
+            QueuedWriteOperation operation, String pendingKey, String payloadKey) {
+        String pendingVersion = jedis.commands().get(pendingKey);
         if (pendingVersion == null) {
-            long payloadRemoved = jedis.del(payloadKey);
+            long payloadRemoved = jedis.commands().del(payloadKey);
             if (payloadRemoved > 0) {
-                jedis.hincrBy(keyStrategy.compactionStatsKey(), "payloadCount", -payloadRemoved);
+                jedis.commands()
+                        .hincrBy(keyStrategy.compactionStatsKey(), "payloadCount", -payloadRemoved);
             }
             return;
         }
         long currentVersion = Long.parseLong(pendingVersion);
         if (currentVersion <= operation.version()) {
-            long pendingRemoved = jedis.del(pendingKey);
-            long payloadRemoved = jedis.del(payloadKey);
+            long pendingRemoved = jedis.commands().del(pendingKey);
+            long payloadRemoved = jedis.commands().del(payloadKey);
             if (pendingRemoved > 0) {
-                jedis.hincrBy(keyStrategy.compactionStatsKey(), "pendingCount", -pendingRemoved);
+                jedis.commands()
+                        .hincrBy(keyStrategy.compactionStatsKey(), "pendingCount", -pendingRemoved);
             }
             if (payloadRemoved > 0) {
-                jedis.hincrBy(keyStrategy.compactionStatsKey(), "payloadCount", -payloadRemoved);
+                jedis.commands()
+                        .hincrBy(keyStrategy.compactionStatsKey(), "payloadCount", -payloadRemoved);
             }
             return;
         }
-        String targetCompactionStreamKey = keyStrategy.compactionStreamKey(
-                config.compactionStreamKey(),
-                operation.redisNamespace(),
-                operation.id(),
-                config.compactionShardCount()
-        );
-        jedis.xadd(targetCompactionStreamKey, redis.clients.jedis.params.XAddParams.xAddParams(), Map.of(
-                "namespace", operation.redisNamespace(),
-                "id", operation.id(),
-                "version", String.valueOf(currentVersion),
-                "entity", operation.entityName()
-        ));
+        String targetCompactionStreamKey =
+                keyStrategy.compactionStreamKey(
+                        config.compactionStreamKey(),
+                        operation.redisNamespace(),
+                        operation.id(),
+                        config.compactionShardCount());
+        jedis.commands()
+                .xadd(
+                        targetCompactionStreamKey,
+                        redis.clients.jedis.params.XAddParams.xAddParams(),
+                        Map.of(
+                                "namespace", operation.redisNamespace(),
+                                "id", operation.id(),
+                                "version", String.valueOf(currentVersion),
+                                "entity", operation.entityName()));
     }
 
     private void requeueCompaction(QueuedWriteOperation operation) {
-        String targetCompactionStreamKey = keyStrategy.compactionStreamKey(
-                config.compactionStreamKey(),
-                operation.redisNamespace(),
-                operation.id(),
-                config.compactionShardCount()
-        );
-        jedis.xadd(targetCompactionStreamKey, redis.clients.jedis.params.XAddParams.xAddParams(), Map.of(
-                "namespace", operation.redisNamespace(),
-                "id", operation.id(),
-                "version", String.valueOf(operation.version()),
-                "entity", operation.entityName()
-        ));
+        String targetCompactionStreamKey =
+                keyStrategy.compactionStreamKey(
+                        config.compactionStreamKey(),
+                        operation.redisNamespace(),
+                        operation.id(),
+                        config.compactionShardCount());
+        jedis.commands()
+                .xadd(
+                        targetCompactionStreamKey,
+                        redis.clients.jedis.params.XAddParams.xAddParams(),
+                        Map.of(
+                                "namespace", operation.redisNamespace(),
+                                "id", operation.id(),
+                                "version", String.valueOf(operation.version()),
+                                "entity", operation.entityName()));
         retriedCount.incrementAndGet();
     }
 
@@ -814,7 +934,8 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         deferAcknowledgements(List.of(pendingEntry), exception);
     }
 
-    private void deferAcknowledgements(List<PendingEntry> pendingEntries, RuntimeException exception) {
+    private void deferAcknowledgements(
+            List<PendingEntry> pendingEntries, RuntimeException exception) {
         if (!isTransientRedisTimeout(exception)) {
             captureError(exception);
         }
@@ -848,8 +969,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 config.maxFlushRetries(),
                 config.retryBackoffMillis(),
                 config.retryOverrides(),
-                operation
-        );
+                operation);
     }
 
     private void captureError(Exception exception) {
@@ -864,8 +984,19 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private boolean isStale(QueuedWriteOperation operation) {
-        long currentVersion = parseVersion(jedis.get(keyStrategy.versionKey(operation.redisNamespace(), operation.id())));
-        long tombstoneVersion = parseVersion(jedis.get(keyStrategy.tombstoneKey(operation.redisNamespace(), operation.id())));
+        if (operation.atomicBatch()) return false;
+        long currentVersion =
+                parseVersion(
+                        jedis.commands()
+                                .get(
+                                        keyStrategy.versionKey(
+                                                operation.redisNamespace(), operation.id())));
+        long tombstoneVersion =
+                parseVersion(
+                        jedis.commands()
+                                .get(
+                                        keyStrategy.tombstoneKey(
+                                                operation.redisNamespace(), operation.id())));
         return Math.max(currentVersion, tombstoneVersion) > operation.version();
     }
 
@@ -886,14 +1017,15 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         for (String streamKey : config.activeStreamKeys()) {
             Entry<StreamEntryID, List<StreamEntry>> claimed;
             try {
-                claimed = jedis.xautoclaim(
-                        streamKey,
-                        config.activeConsumerGroup(),
-                        consumerName,
-                        config.claimIdleMillis(),
-                        new StreamEntryID("0-0"),
-                        new XAutoClaimParams().count(config.claimBatchSize())
-                );
+                claimed =
+                        jedis.commands()
+                                .xautoclaim(
+                                        streamKey,
+                                        config.activeConsumerGroup(),
+                                        consumerName,
+                                        config.claimIdleMillis(),
+                                        new StreamEntryID("0-0"),
+                                        new XAutoClaimParams().count(config.claimBatchSize()));
             } catch (JedisDataException exception) {
                 if (isMissingConsumerGroup(exception)) {
                     ensureConsumerGroup();
@@ -931,18 +1063,15 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         lastProgressAtEpochMillis.set(now);
     }
 
-    private List<Entry<String, List<StreamEntry>>> readNewEntries(String consumerName, XReadGroupParams params) {
+    private List<Entry<String, List<StreamEntry>>> readNewEntries(
+            String consumerName, XReadGroupParams params) {
         LinkedHashMap<String, StreamEntryID> streams = new LinkedHashMap<>();
         for (String streamKey : config.activeStreamKeys()) {
             streams.put(streamKey, StreamEntryID.UNRECEIVED_ENTRY);
         }
         try {
-            return jedis.xreadGroup(
-                    config.activeConsumerGroup(),
-                    consumerName,
-                    params,
-                    streams
-            );
+            return jedis.commands()
+                    .xreadGroup(config.activeConsumerGroup(), consumerName, params, streams);
         } catch (JedisDataException exception) {
             if (isMissingConsumerGroup(exception)) {
                 ensureConsumerGroup();
@@ -973,14 +1102,16 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         return false;
     }
 
-    private void publishDeadLetter(StreamEntry entry, QueuedWriteOperation operation, Exception exception, int attempts) {
+    private void publishDeadLetter(
+            StreamEntry entry, QueuedWriteOperation operation, Exception exception, int attempts) {
         Map<String, String> fields = new java.util.LinkedHashMap<>(mapper.toBody(operation));
         for (Map.Entry<String, String> entryField : entry.getFields().entrySet()) {
             fields.putIfAbsent(entryField.getKey(), entryField.getValue());
         }
         WriteFailureDetails failureDetails = FailureClassifyingFlusher.classify(flusher, exception);
         fields.put("deadLetterReason", exception.getClass().getName());
-        fields.put("deadLetterMessage", exception.getMessage() == null ? "" : exception.getMessage());
+        fields.put(
+                "deadLetterMessage", exception.getMessage() == null ? "" : exception.getMessage());
         fields.put("deadLetterFailureCategory", failureDetails.category().name());
         fields.put("deadLetterSqlState", failureDetails.sqlState());
         fields.put("deadLetterRetryable", String.valueOf(failureDetails.retryable()));
@@ -988,9 +1119,14 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         fields.put("deadLetterRootType", failureDetails.errorType());
         fields.put("deadLetterAttempts", String.valueOf(attempts));
         fields.put("deadLetterEntity", operation.entityName());
-        jedis.xadd(config.deadLetterStreamKey(), redis.clients.jedis.params.XAddParams.xAddParams(), fields);
+        jedis.commands()
+                .xadd(
+                        config.deadLetterStreamKey(),
+                        redis.clients.jedis.params.XAddParams.xAddParams(),
+                        fields);
         if (config.deadLetterMaxLength() > 0) {
-            jedis.xtrim(config.deadLetterStreamKey(), config.deadLetterMaxLength(), true);
+            jedis.commands()
+                    .xtrim(config.deadLetterStreamKey(), config.deadLetterMaxLength(), true);
         }
         deadLetterCount.incrementAndGet();
     }
@@ -1009,7 +1145,12 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private ThreadFactory threadFactory(WriteBehindConfig config) {
         AtomicInteger counter = new AtomicInteger();
         return runnable -> {
-            Thread thread = new Thread(runnable, config.activeConsumerNamePrefix() + "-thread-" + counter.incrementAndGet());
+            Thread thread =
+                    new Thread(
+                            runnable,
+                            config.activeConsumerNamePrefix()
+                                    + "-thread-"
+                                    + counter.incrementAndGet());
             thread.setDaemon(config.daemonThreads());
             return thread;
         };
@@ -1018,7 +1159,12 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private ThreadFactory flushThreadFactory(WriteBehindConfig config) {
         AtomicInteger counter = new AtomicInteger();
         return runnable -> {
-            Thread thread = new Thread(runnable, config.activeConsumerNamePrefix() + "-flush-" + counter.incrementAndGet());
+            Thread thread =
+                    new Thread(
+                            runnable,
+                            config.activeConsumerNamePrefix()
+                                    + "-flush-"
+                                    + counter.incrementAndGet());
             thread.setDaemon(config.daemonThreads());
             return thread;
         };
@@ -1031,7 +1177,8 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         flushExecutorService.shutdownNow();
         try {
             executorService.awaitTermination(config.shutdownAwaitMillis(), TimeUnit.MILLISECONDS);
-            flushExecutorService.awaitTermination(config.shutdownAwaitMillis(), TimeUnit.MILLISECONDS);
+            flushExecutorService.awaitTermination(
+                    config.shutdownAwaitMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException interruptedException) {
             Thread.currentThread().interrupt();
         }
@@ -1057,8 +1204,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 lastErrorRootType.get(),
                 lastErrorRootMessage.get(),
                 lastErrorOrigin.get(),
-                lastErrorStackTrace.get()
-        );
+                lastErrorStackTrace.get());
     }
 
     private record PendingEntry(
@@ -1066,10 +1212,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             QueuedWriteOperation operation,
             List<StreamEntryID> ackIds,
             boolean compacted,
-            String sourceStreamKey
-    ) {
+            String sourceStreamKey) {
         private PendingEntry merge(PendingEntry newerEntry) {
-            ArrayList<StreamEntryID> mergedAckIds = new ArrayList<>(ackIds.size() + newerEntry.ackIds().size());
+            ArrayList<StreamEntryID> mergedAckIds =
+                    new ArrayList<>(ackIds.size() + newerEntry.ackIds().size());
             mergedAckIds.addAll(ackIds);
             mergedAckIds.addAll(newerEntry.ackIds());
             if (newerEntry.operation().version() >= operation().version()) {
@@ -1078,16 +1224,14 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                         newerEntry.operation(),
                         List.copyOf(mergedAckIds),
                         compacted || newerEntry.compacted(),
-                        newerEntry.sourceStreamKey()
-                );
+                        newerEntry.sourceStreamKey());
             }
             return new PendingEntry(
                     entry(),
                     operation(),
                     List.copyOf(mergedAckIds),
                     compacted || newerEntry.compacted(),
-                    sourceStreamKey()
-            );
+                    sourceStreamKey());
         }
     }
 
@@ -1096,16 +1240,11 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             String namespace,
             String id,
             List<StreamEntryID> ackIds,
-            long streamVersion
-    ) {
-        private static CompactionTokenGroup initial(StreamEntry entry, String namespace, String id) {
+            long streamVersion) {
+        private static CompactionTokenGroup initial(
+                StreamEntry entry, String namespace, String id) {
             return new CompactionTokenGroup(
-                    entry,
-                    namespace,
-                    id,
-                    List.of(entry.getID()),
-                    parseStreamVersion(entry)
-            );
+                    entry, namespace, id, List.of(entry.getID()), parseStreamVersion(entry));
         }
 
         private CompactionTokenGroup merge(StreamEntry newerEntry) {
@@ -1115,20 +1254,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             long newerVersion = parseStreamVersion(newerEntry);
             if (newerVersion >= streamVersion) {
                 return new CompactionTokenGroup(
-                        newerEntry,
-                        namespace,
-                        id,
-                        List.copyOf(mergedAckIds),
-                        newerVersion
-                );
+                        newerEntry, namespace, id, List.copyOf(mergedAckIds), newerVersion);
             }
             return new CompactionTokenGroup(
-                    entry,
-                    namespace,
-                    id,
-                    List.copyOf(mergedAckIds),
-                    streamVersion
-            );
+                    entry, namespace, id, List.copyOf(mergedAckIds), streamVersion);
         }
 
         private static long parseStreamVersion(StreamEntry entry) {
@@ -1149,20 +1278,19 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             String idColumn,
             String versionColumn,
             String operationType,
-            List<String> columns
-    ) {
+            List<String> columns) {
         private static FlushGroupKey of(QueuedWriteOperation operation) {
             return new FlushGroupKey(
                     operation.tableName(),
                     operation.idColumn(),
                     operation.versionColumn(),
                     operation.type().name(),
-                    List.copyOf(operation.columns().keySet())
-            );
+                    List.copyOf(operation.columns().keySet()));
         }
 
         private static FlushGroupKey singleGroup() {
-            return new FlushGroupKey("__single__", "__single__", "__single__", "__single__", List.of("__single__"));
+            return new FlushGroupKey(
+                    "__single__", "__single__", "__single__", "__single__", List.of("__single__"));
         }
     }
 

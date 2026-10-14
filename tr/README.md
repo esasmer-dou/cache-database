@@ -40,8 +40,8 @@ doğrulanmalıdır.
 
 | Sürüm bilgisi | Değer |
 | --- | --- |
-| Yayımlanmış son sürüm | `v0.12.0` |
-| Repo sürümü | `0.12.0` |
+| Yayımlanmış son sürüm | [GitHub sürümü](https://github.com/esasmer-dou/cache-database/releases/latest) |
+| Repo sürümü | `0.13.0` |
 | Kütüphane bytecode seviyesi | Java 17 |
 | Çalıştırılabilir örnekler | Java 21 |
 | Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 ve lisanslı self-hosted runner üzerinde Oracle 19c fiziksel Data Guard |
@@ -49,24 +49,20 @@ doğrulanmalıdır.
 
 Çok tablodan hazırlanan bir API cevabını yenilemek için [tanımla katalog yenileme rehberini](docs/snapshot-projectionlar.md) kullanın. Kaynak, projection ve ayarları tanımlayın; dosya, partileme, kilit ve güvenli yayını framework yönetsin.
 
-## Güncel Sürüm: 0.12.0
+## Güncel Sürüm: 0.13.0
 
-`0.12.0`, kaynak ve ilişki tanımlarını sadeleştirir. Redis öncelikli okuma,
-yazma ve güvenli katalog yayını sözleşmeleri değişmez.
+`0.13.0`; yeni kaynak tipleri ve tipli ilişkiler, indeksli ve artımlı katalog,
+açık kayıt limitleri, parçalı outbox tüketimi, atomik yazım zarfı, ortak sequence
+kimlikleri ve Redis Cluster adaptörleri ekler. Ana proje ve tüm modüller bu sürümü
+SNAPSHOT eki olmadan kullanır. Sözleşmeler ve yükseltme uyarıları için
+[v0.13.0 sürüm notlarını](docs/releases/v0.13.0.md) ve
+[sınırlı çalışma rehberini](docs/sinirli-calisma-islemleri.md) okuyun.
 
-- Üretilmiş binding'lerdeki `SOURCE`, tablo ve dönüşüm tanımını birleştirir.
-  Parametreli filtreler ve alt sorgular, elle SQL birleştirmenin yerini alır.
-- `@CacheSourceRecord`, ek kimlik veya yazılabilir depo gerektirmeden
-  record alanları için doğrudan dönüşüm kodu üretir.
-- `SnapshotRelation`, liste/üyelik yardımcıları ve köke göre dağıtım,
-  uygulamadaki tekrarlı ilişki hazırlama kodunu azaltır.
-- Eski SELECT kaynakları desteklenir. İş kuralları uygulamada kalır.
-  Gizli SQL fallback veya kök başına ek sorgu oluşmaz.
-- PostgreSQL, SQL Server ve Oracle için tutarlı okuma, kaynak sınırları,
-  yenilenebilir kilit ve atomik yayın korunur.
-
-Yükseltmeden önce [v0.12.0 sürüm notlarını](docs/releases/v0.12.0.md) ve
-[kaynak başvurusunu](docs/snapshot-kaynak-basvurusu.md) okuyun.
+BOM, annotation processor ve sağlayıcı starter'ını `0.13.0` ile eşitleyin.
+Üretilmiş binding'leri yeniden derleyin. Yükseltmeden önce nullable boolean,
+sıfır kayıt limiti, katalog saklama biçimi ve atomik batch sınırlarını inceleyin.
+Framework paketinin yayımlanması, uygulamanızın canlı ortam yollarını veya
+Oracle HA topolojisini kendiliğinden doğrulamaz.
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -121,7 +117,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
 | "Repository'leri güvenli biçimde nasıl tanımlar ve işletirim?" | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| "Güncel sürümde neler değişti?" | [v0.12.0 Sürüm Notları](docs/releases/v0.12.0.md) |
+| "Güncel sürümde neler değişti?" | [v0.13.0 Sürüm Notları](docs/releases/v0.13.0.md) |
 | "Çalışan REST API örneği nerede?" | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) örneği |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Oracle provider sözleşmesi nedir?" | [Oracle Provider](docs/oracle-provider.md) |
@@ -172,13 +168,13 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut. `0.12.0`, kimlik
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.13.0`, kimlik
 doğrulaması istemeyen CacheDB Maven deposu ve GitHub Release paketi üzerinden
 sunulan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.12.0</cachedb.version>
+    <cachedb.version>0.13.0</cachedb.version>
 </properties>
 
 <dependencyManagement>

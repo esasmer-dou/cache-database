@@ -4,8 +4,11 @@ import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.config.IncidentDeliveryDlqConfig;
 import com.reactor.cachedb.core.queue.AdminIncidentRecord;
 import com.reactor.cachedb.core.queue.IncidentChannelSnapshot;
-import com.reactor.cachedb.core.queue.IncidentDeliverySnapshot;
 import com.reactor.cachedb.core.queue.IncidentDeliveryRecoverySnapshot;
+import com.reactor.cachedb.core.queue.IncidentDeliverySnapshot;
+import com.reactor.cachedb.redis.JedisPooledOperations;
+import com.reactor.cachedb.redis.RedisClientOperations;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.XAddParams;
 
@@ -26,7 +29,7 @@ public final class AdminIncidentDeliveryManager implements AutoCloseable {
 
     private final boolean enabled;
     private final AdminMonitoringConfig config;
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final BlockingQueue<AdminIncidentRecord> queue;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicLong enqueuedCount = new AtomicLong();
@@ -41,34 +44,49 @@ public final class AdminIncidentDeliveryManager implements AutoCloseable {
     private ExecutorService executor;
 
     public AdminIncidentDeliveryManager(AdminMonitoringConfig config, JedisPooled jedis) {
+        this(config, JedisPooledOperations.of(jedis));
+    }
+
+    public AdminIncidentDeliveryManager(AdminMonitoringConfig config, RedisClientOperations jedis) {
         this(true, config, jedis);
     }
 
-    private AdminIncidentDeliveryManager(boolean enabled, AdminMonitoringConfig config, JedisPooled jedis) {
+    private AdminIncidentDeliveryManager(
+            boolean enabled, AdminMonitoringConfig config, JedisPooled jedis) {
+        this(enabled, config, JedisPooledOperations.of(jedis));
+    }
+
+    private AdminIncidentDeliveryManager(
+            boolean enabled, AdminMonitoringConfig config, RedisClientOperations jedis) {
         this.enabled = enabled;
         this.config = config;
         this.jedis = jedis;
-        int queueCapacity = Math.max(
-                8,
-                Math.max(config.incidentWebhook().queueCapacity(), config.incidentDeliveryQueueFloor())
-        );
+        int queueCapacity =
+                Math.max(
+                        8,
+                        Math.max(
+                                config.incidentWebhook().queueCapacity(),
+                                config.incidentDeliveryQueueFloor()));
         this.queue = new ArrayBlockingQueue<>(queueCapacity);
         this.workerThreads = Math.max(1, config.incidentWebhook().workerThreads());
-        ArrayList<IncidentChannel> builtChannels = enabled ? buildChannels(config, jedis) : new ArrayList<>();
+        ArrayList<IncidentChannel> builtChannels =
+                enabled ? buildChannels(config, jedis) : new ArrayList<>();
         this.channels = List.copyOf(builtChannels);
-        this.channelsByName = builtChannels.stream()
-                .collect(java.util.stream.Collectors.toUnmodifiableMap(
-                        channel -> channel.snapshot().channelName(),
-                        channel -> channel
-                ));
+        this.channelsByName =
+                builtChannels.stream()
+                        .collect(
+                                java.util.stream.Collectors.toUnmodifiableMap(
+                                        channel -> channel.snapshot().channelName(),
+                                        channel -> channel));
         this.deliveryDlqConfig = config.incidentDeliveryDlq();
-        this.recoveryWorker = enabled && deliveryDlqConfig.enabled() && !channels.isEmpty()
-                ? new AdminIncidentDeliveryRecoveryWorker(jedis, this, deliveryDlqConfig)
-                : null;
+        this.recoveryWorker =
+                enabled && deliveryDlqConfig.enabled() && !channels.isEmpty()
+                        ? new AdminIncidentDeliveryRecoveryWorker(jedis, this, deliveryDlqConfig)
+                        : null;
     }
 
     static AdminIncidentDeliveryManager disabled(AdminMonitoringConfig config) {
-        return new AdminIncidentDeliveryManager(false, config, null);
+        return new AdminIncidentDeliveryManager(false, config, (RedisClientOperations) null);
     }
 
     public void start() {
@@ -105,8 +123,8 @@ public final class AdminIncidentDeliveryManager implements AutoCloseable {
                     0L,
                     0L,
                     List.of(),
-                    new IncidentDeliveryRecoverySnapshot(0L, 0L, 0L, 0L, 0L, null, null, null, null, null, null)
-            );
+                    new IncidentDeliveryRecoverySnapshot(
+                            0L, 0L, 0L, 0L, 0L, null, null, null, null, null, null));
         }
         return new IncidentDeliverySnapshot(
                 enqueuedCount.get(),
@@ -115,9 +133,9 @@ public final class AdminIncidentDeliveryManager implements AutoCloseable {
                 lastEnqueuedAtEpochMillis.get(),
                 channels.stream().map(IncidentChannel::snapshot).toList(),
                 recoveryWorker == null
-                        ? new IncidentDeliveryRecoverySnapshot(0L, 0L, 0L, 0L, 0L, null, null, null, null, null, null)
-                        : recoveryWorker.snapshot()
-        );
+                        ? new IncidentDeliveryRecoverySnapshot(
+                                0L, 0L, 0L, 0L, 0L, null, null, null, null, null, null)
+                        : recoveryWorker.snapshot());
     }
 
     boolean replay(String channelName, AdminIncidentRecord record) {
@@ -128,7 +146,13 @@ public final class AdminIncidentDeliveryManager implements AutoCloseable {
         return deliverToChannel(channel, record, false);
     }
 
-    private ArrayList<IncidentChannel> buildChannels(AdminMonitoringConfig config, JedisPooled jedis) {
+    private ArrayList<IncidentChannel> buildChannels(
+            AdminMonitoringConfig config, JedisPooled jedis) {
+        return buildChannels(config, JedisPooledOperations.of(jedis));
+    }
+
+    private ArrayList<IncidentChannel> buildChannels(
+            AdminMonitoringConfig config, RedisClientOperations jedis) {
         ArrayList<IncidentChannel> built = new ArrayList<>();
         if (config.incidentWebhook().enabled()) {
             built.add(new WebhookIncidentChannel(config.incidentWebhook()));
@@ -145,10 +169,10 @@ public final class AdminIncidentDeliveryManager implements AutoCloseable {
     private void runLoop() {
         while (running.get() && !Thread.currentThread().isInterrupted()) {
             try {
-                AdminIncidentRecord record = queue.poll(
-                        Math.max(1L, config.incidentDeliveryPollTimeoutMillis()),
-                        TimeUnit.MILLISECONDS
-                );
+                AdminIncidentRecord record =
+                        queue.poll(
+                                Math.max(1L, config.incidentDeliveryPollTimeoutMillis()),
+                                TimeUnit.MILLISECONDS);
                 if (record == null) {
                     continue;
                 }
@@ -162,7 +186,8 @@ public final class AdminIncidentDeliveryManager implements AutoCloseable {
         }
     }
 
-    private boolean deliverToChannel(IncidentChannel channel, AdminIncidentRecord record, boolean deadLetterOnFailure) {
+    private boolean deliverToChannel(
+            IncidentChannel channel, AdminIncidentRecord record, boolean deadLetterOnFailure) {
         boolean delivered = channel.deliver(record);
         if (!delivered && deadLetterOnFailure) {
             deadLetter(channel.snapshot(), record, 1);
@@ -188,7 +213,7 @@ public final class AdminIncidentDeliveryManager implements AutoCloseable {
         for (Map.Entry<String, String> entry : record.fields().entrySet()) {
             fields.put("field." + entry.getKey(), nullSafe(entry.getValue()));
         }
-        jedis.xadd(deliveryDlqConfig.streamKey(), XAddParams.xAddParams(), fields);
+        jedis.commands().xadd(deliveryDlqConfig.streamKey(), XAddParams.xAddParams(), fields);
     }
 
     private String nullSafe(String value) {

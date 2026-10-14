@@ -4,6 +4,7 @@ import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.model.WriteOperation;
 import com.reactor.cachedb.core.queue.WriteBehindQueue;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.XAddParams;
 
@@ -11,7 +12,7 @@ import java.util.Map;
 
 public final class RedisWriteBehindQueue implements WriteBehindQueue {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final String streamKey;
     private final String compactionStreamKey;
     private final RedisWriteOperationMapper mapper;
@@ -28,8 +29,27 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
             int maxColumnsPerOperation,
             WriteBehindConfig config,
             RedisGuardrailConfig guardrailConfig,
-            RedisKeyStrategy keyStrategy
-    ) {
+            RedisKeyStrategy keyStrategy) {
+        this(
+                JedisPooledOperations.of(jedis),
+                streamKey,
+                compactionStreamKey,
+                mapper,
+                maxColumnsPerOperation,
+                config,
+                guardrailConfig,
+                keyStrategy);
+    }
+
+    public RedisWriteBehindQueue(
+            RedisClientOperations jedis,
+            String streamKey,
+            String compactionStreamKey,
+            RedisWriteOperationMapper mapper,
+            int maxColumnsPerOperation,
+            WriteBehindConfig config,
+            RedisGuardrailConfig guardrailConfig,
+            RedisKeyStrategy keyStrategy) {
         this.jedis = jedis;
         this.streamKey = streamKey;
         this.compactionStreamKey = compactionStreamKey;
@@ -44,8 +64,15 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
             JedisPooled jedis,
             String streamKey,
             RedisWriteOperationMapper mapper,
-            int maxColumnsPerOperation
-    ) {
+            int maxColumnsPerOperation) {
+        this(JedisPooledOperations.of(jedis), streamKey, mapper, maxColumnsPerOperation);
+    }
+
+    public RedisWriteBehindQueue(
+            RedisClientOperations jedis,
+            String streamKey,
+            RedisWriteOperationMapper mapper,
+            int maxColumnsPerOperation) {
         this(
                 jedis,
                 streamKey,
@@ -57,48 +84,55 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
                         .compactionStreamKey(streamKey + ":compaction")
                         .build(),
                 RedisGuardrailConfig.defaults(),
-                new RedisKeyStrategy()
-        );
+                new RedisKeyStrategy());
     }
 
     @Override
     public <T, ID> void enqueue(WriteOperation<T, ID> operation) {
         if (operation.columns().size() > maxColumnsPerOperation) {
             throw new IllegalArgumentException(
-                    "Operation column count " + operation.columns().size()
-                            + " exceeds configured limit " + maxColumnsPerOperation
-            );
+                    "Operation column count "
+                            + operation.columns().size()
+                            + " exceeds configured limit "
+                            + maxColumnsPerOperation);
         }
         enforceHardLimits(operation);
         var body = mapper.toBody(operation);
         if (!config.compactionActive()) {
-            jedis.xadd(streamKey, XAddParams.xAddParams(), body);
+            jedis.commands().xadd(streamKey, XAddParams.xAddParams(), body);
             return;
         }
-        String targetCompactionStreamKey = keyStrategy.compactionStreamKey(
-                compactionStreamKey,
-                operation.metadata().redisNamespace(),
-                operation.id(),
-                config.compactionShardCount()
-        );
-        String payloadKey = keyStrategy.compactionPayloadKey(operation.metadata().redisNamespace(), operation.id());
-        String pendingKey = keyStrategy.compactionPendingKey(operation.metadata().redisNamespace(), operation.id());
+        String targetCompactionStreamKey =
+                keyStrategy.compactionStreamKey(
+                        compactionStreamKey,
+                        operation.metadata().redisNamespace(),
+                        operation.id(),
+                        config.compactionShardCount());
+        String payloadKey =
+                keyStrategy.compactionPayloadKey(
+                        operation.metadata().redisNamespace(), operation.id());
+        String pendingKey =
+                keyStrategy.compactionPendingKey(
+                        operation.metadata().redisNamespace(), operation.id());
         String statsKey = keyStrategy.compactionStatsKey();
-        boolean payloadExists = jedis.exists(payloadKey);
-        jedis.hset(payloadKey, body);
+        boolean payloadExists = jedis.commands().exists(payloadKey);
+        jedis.commands().hset(payloadKey, body);
         if (!payloadExists) {
-            jedis.hincrBy(statsKey, "payloadCount", 1L);
+            jedis.commands().hincrBy(statsKey, "payloadCount", 1L);
         }
-        if (jedis.setnx(pendingKey, String.valueOf(operation.version())) == 1L) {
-            jedis.hincrBy(statsKey, "pendingCount", 1L);
-            jedis.xadd(targetCompactionStreamKey, XAddParams.xAddParams(), Map.of(
-                    "namespace", operation.metadata().redisNamespace(),
-                    "id", String.valueOf(operation.id()),
-                    "version", String.valueOf(operation.version()),
-                    "entity", operation.metadata().entityName()
-            ));
+        if (jedis.commands().setnx(pendingKey, String.valueOf(operation.version())) == 1L) {
+            jedis.commands().hincrBy(statsKey, "pendingCount", 1L);
+            jedis.commands()
+                    .xadd(
+                            targetCompactionStreamKey,
+                            XAddParams.xAddParams(),
+                            Map.of(
+                                    "namespace", operation.metadata().redisNamespace(),
+                                    "id", String.valueOf(operation.id()),
+                                    "version", String.valueOf(operation.version()),
+                                    "entity", operation.metadata().entityName()));
         } else {
-            jedis.set(pendingKey, String.valueOf(operation.version()));
+            jedis.commands().set(pendingKey, String.valueOf(operation.version()));
         }
     }
 
@@ -107,14 +141,18 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
             return;
         }
         String statsKey = keyStrategy.compactionStatsKey();
-        Map<String, String> stats = jedis.hgetAll(statsKey);
+        Map<String, String> stats = jedis.commands().hgetAll(statsKey);
         long pendingCount = parseLong(stats.get("pendingCount"));
         long payloadCount = parseLong(stats.get("payloadCount"));
         long backlog = backlogLength();
-        String payloadKey = keyStrategy.compactionPayloadKey(operation.metadata().redisNamespace(), operation.id());
-        String pendingKey = keyStrategy.compactionPendingKey(operation.metadata().redisNamespace(), operation.id());
-        boolean newPayload = !jedis.exists(payloadKey);
-        boolean newPending = !jedis.exists(pendingKey);
+        String payloadKey =
+                keyStrategy.compactionPayloadKey(
+                        operation.metadata().redisNamespace(), operation.id());
+        String pendingKey =
+                keyStrategy.compactionPendingKey(
+                        operation.metadata().redisNamespace(), operation.id());
+        boolean newPayload = !jedis.commands().exists(payloadKey);
+        boolean newPending = !jedis.commands().exists(pendingKey);
 
         if (guardrailConfig.writeBehindBacklogHardLimit() > 0
                 && backlog >= guardrailConfig.writeBehindBacklogHardLimit()) {
@@ -133,7 +171,7 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
     }
 
     private void reject(String statsKey, String message) {
-        jedis.hincrBy(statsKey, "hardRejectedWriteCount", 1L);
+        jedis.commands().hincrBy(statsKey, "hardRejectedWriteCount", 1L);
         throw new IllegalStateException(message);
     }
 

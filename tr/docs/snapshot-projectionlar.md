@@ -92,7 +92,8 @@ warn-age ve max-age ortak ayarlardır; repository kendiliğinden HTTP hatası ü
 Yakın zamanda tamamlanan periyodik iş için diğer pod NOT_DUE alır.
 Manuel ucu kimlik doğrulamasız açmayın. Executor ve timeout sınırlı olsun.
 
-Bu, genel ProjectionRepository.query değildir. Kimlikle tam cevap okuma modelidir.
+Bu, genel ProjectionRepository.query değildir. Varsayılan olarak kimlikle tam cevap okur.
+0.13 ile açık SnapshotIndexSpec tanımı, bölüm bazında cursor ile listelemeyi de açar.
 plan.map(...) iş kuralını başka bir özet planında kullanır.
 Ayrı planlar ayrı SQL snapshot'ı okur; birlikte atomik yayımlandıkları varsayılmaz.
 
@@ -118,9 +119,33 @@ Commit cevabı kaybolursa sonuç belirsizdir; temizlik aktif kataloğu silmez.
 
 Bu güvence aynı yetkili Redis primary içindir.
 Asenkron Redis failover veri kaybını veya split-brain durumunu ortadan kaldırmaz.
-Key'ler ortak hash tag kullanır. Spring istemcisi JedisPooled'dur, Redis Cluster istemcisi değildir.
+Anahtarlar ortak hash tag kullanır. Varsayılan istemci JedisPooled'dur.
+JedisClusterOperations ile açık Cluster yapılandırması da kullanılabilir;
+tek atomik kapsam bir slot'ta kalır. Okuma içinde işaretçi ve içerik birlikte alınır.
 
 ## Kapasite ve İşletim
+
+### İndeksli ve Artımlı Yenileme (0.13)
+
+```java
+var indexed = plan.indexed(SnapshotIndexSpec.of(root -> root.customerId.toString(),
+        root -> -root.orderDate.toEpochMilli()));
+var reusable = indexed.withContentReuse();
+var first = jobs.repository("order-timeline").findPage("42", WindowRequest.first(50));
+```
+
+Örnek order kökleri ve Instant orderDate alanını varsayar. Planı yenilemeden önce
+kaydedin; ilk kullanım için başarılı tam katalog gerekir. İndeks kökleri sıralar,
+kökün JSON listesindeki rastgele alanları değil. Sayfa SnapshotValue içerir.
+Artımlı yenilemede her kaynak için SnapshotRootScope verin; ardından
+jobs.refreshRoots("order-timeline", List.of("9001")) çağırın.
+Seçilen kapsam tek tutarlı SQL bağlantısından okunur. İçerik ve indeks birlikte
+değişir; bulunmayan kök silinir. Dokunulmayan kayıt eski veri yaşını korur.
+Bütün kataloğun saklama süresi uzatılmaz. Tam ve artımlı yenileme eski cursor'u
+geçersiz kılar. İçerik paylaşımı değişmeyen JSON'u yeniden kullanır; SQL okumasını
+ve değişen içeriklerin geçici bellek maliyetini kaldırmaz.
+Tam kapsam örneği, limitler ve Cluster ayarları için
+[sınırlı çalışma rehberini](sinirli-calisma-islemleri.md) okuyun.
 
 | Ayar | Varsayılan |
 |---|---|

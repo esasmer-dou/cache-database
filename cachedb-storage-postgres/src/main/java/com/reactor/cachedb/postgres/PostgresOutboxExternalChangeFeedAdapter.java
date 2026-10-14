@@ -4,8 +4,9 @@ import com.reactor.cachedb.core.change.ExternalChangeFeedAdapter;
 import com.reactor.cachedb.core.change.ExternalChangeSink;
 import com.reactor.cachedb.jdbc.JdbcOutboxExternalChangeFeedAdapter;
 
-import javax.sql.DataSource;
 import java.sql.SQLException;
+
+import javax.sql.DataSource;
 
 public final class PostgresOutboxExternalChangeFeedAdapter implements ExternalChangeFeedAdapter {
 
@@ -45,7 +46,9 @@ public final class PostgresOutboxExternalChangeFeedAdapter implements ExternalCh
         private final JdbcOutboxExternalChangeFeedAdapter.Builder delegate;
 
         private Builder(DataSource dataSource) {
-            this.delegate = JdbcOutboxExternalChangeFeedAdapter.builder(dataSource, new PostgresOutboxDialect());
+            this.delegate =
+                    JdbcOutboxExternalChangeFeedAdapter.builder(
+                            dataSource, new PostgresOutboxDialect());
         }
 
         public Builder adapterName(String adapterName) {
@@ -105,6 +108,11 @@ public final class PostgresOutboxExternalChangeFeedAdapter implements ExternalCh
 
         public Builder batchSize(int batchSize) {
             delegate.batchSize(batchSize);
+            return this;
+        }
+
+        public Builder partition(int count, int index, String column) {
+            delegate.partition(count, index, column);
             return this;
         }
 

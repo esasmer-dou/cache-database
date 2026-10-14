@@ -6,20 +6,38 @@ public record CachePolicy(
         boolean lruEvictionEnabled,
         long entityTtlSeconds,
         long pageTtlSeconds,
-        EntityHotPolicy hotPolicy
-) {
+        EntityHotPolicy hotPolicy) {
+    public static final int UNBOUNDED = -1;
+    public static final int DISABLED = 0;
+
     public CachePolicy(
             int hotEntityLimit,
             int pageSize,
             boolean lruEvictionEnabled,
             long entityTtlSeconds,
-            long pageTtlSeconds
-    ) {
-        this(hotEntityLimit, pageSize, lruEvictionEnabled, entityTtlSeconds, pageTtlSeconds, EntityHotPolicy.countWindow());
+            long pageTtlSeconds) {
+        this(
+                hotEntityLimit,
+                pageSize,
+                lruEvictionEnabled,
+                entityTtlSeconds,
+                pageTtlSeconds,
+                EntityHotPolicy.countWindow());
     }
 
     public CachePolicy {
+        if (hotEntityLimit < UNBOUNDED)
+            throw new IllegalArgumentException("hotEntityLimit must be -1, 0, or positive");
         hotPolicy = hotPolicy == null ? EntityHotPolicy.countWindow() : hotPolicy;
+        if (hotEntityLimit == DISABLED) hotPolicy = EntityHotPolicy.disabled();
+    }
+
+    public boolean admissionEnabled() {
+        return hotEntityLimit != DISABLED;
+    }
+
+    public boolean shouldAdmit(java.util.Map<String, Object> columns, CacheAdmissionSource source) {
+        return admissionEnabled() && hotPolicy.shouldAdmit(columns, source);
     }
 
     public static Builder builder() {
@@ -93,12 +111,15 @@ public record CachePolicy(
             return this;
         }
 
-        public Builder compositeHotPolicy(EntityHotPolicyCompositeOperator operator, java.util.Collection<EntityHotPolicy> children) {
-            this.hotPolicy = EntityHotPolicy.builder()
-                    .mode(EntityHotPolicyMode.COMPOSITE)
-                    .compositeOperator(operator)
-                    .children(children)
-                    .build();
+        public Builder compositeHotPolicy(
+                EntityHotPolicyCompositeOperator operator,
+                java.util.Collection<EntityHotPolicy> children) {
+            this.hotPolicy =
+                    EntityHotPolicy.builder()
+                            .mode(EntityHotPolicyMode.COMPOSITE)
+                            .compositeOperator(operator)
+                            .children(children)
+                            .build();
             return this;
         }
 
@@ -109,8 +130,7 @@ public record CachePolicy(
                     lruEvictionEnabled,
                     entityTtlSeconds,
                     pageTtlSeconds,
-                    hotPolicy
-            );
+                    hotPolicy);
         }
     }
 }

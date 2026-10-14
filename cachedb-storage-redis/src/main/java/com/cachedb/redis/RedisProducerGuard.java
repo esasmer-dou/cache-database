@@ -6,10 +6,11 @@ import com.reactor.cachedb.core.config.HardLimitQueryPolicy;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.query.HardLimitQueryClass;
-import com.reactor.cachedb.core.queue.RedisGuardrailSnapshot;
 import com.reactor.cachedb.core.queue.RedisBackpressureException;
+import com.reactor.cachedb.core.queue.RedisGuardrailSnapshot;
 import com.reactor.cachedb.core.queue.RedisRuntimeProfileEvent;
 import com.reactor.cachedb.core.queue.RedisRuntimeProfileSnapshot;
+
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.XAddParams;
 
@@ -25,7 +26,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class RedisProducerGuard {
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
     private final RedisGuardrailConfig config;
     private final WriteBehindConfig writeBehindConfig;
     private final RedisKeyStrategy keyStrategy;
@@ -35,14 +36,17 @@ public final class RedisProducerGuard {
     private final AtomicLong producerCriticalPressureDelayCount = new AtomicLong();
     private final AtomicBoolean samplingInProgress = new AtomicBoolean(false);
     private final AtomicLong nextSampleAllowedAtEpochMillis = new AtomicLong();
-    private final AtomicReference<RedisGuardrailSnapshot> lastSnapshot = new AtomicReference<>(
-            new RedisGuardrailSnapshot(0L, 0L, 0L, "unknown", false, true, 0L, 0L, 0L, 0L, 0L, 0L, 0L, "NORMAL")
-    );
-    private final AtomicReference<RedisRuntimeProfileSnapshot> runtimeProfileSnapshot = new AtomicReference<>(
-            new RedisRuntimeProfileSnapshot("STANDARD", "NORMAL", 0L, 0L, 0L, 0L, 0L)
-    );
+    private final AtomicReference<RedisGuardrailSnapshot> lastSnapshot =
+            new AtomicReference<>(
+                    new RedisGuardrailSnapshot(
+                            0L, 0L, 0L, "unknown", false, true, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+                            "NORMAL"));
+    private final AtomicReference<RedisRuntimeProfileSnapshot> runtimeProfileSnapshot =
+            new AtomicReference<>(
+                    new RedisRuntimeProfileSnapshot("STANDARD", "NORMAL", 0L, 0L, 0L, 0L, 0L));
     private final AtomicReference<String> manualRuntimeProfileOverride = new AtomicReference<>();
-    private final ArrayDeque<RedisRuntimeProfileEvent> recentRuntimeProfileEvents = new ArrayDeque<>();
+    private final ArrayDeque<RedisRuntimeProfileEvent> recentRuntimeProfileEvents =
+            new ArrayDeque<>();
 
     public RedisProducerGuard(
             JedisPooled jedis,
@@ -50,8 +54,23 @@ public final class RedisProducerGuard {
             WriteBehindConfig writeBehindConfig,
             RedisKeyStrategy keyStrategy,
             String diagnosticsStreamKey,
-            long diagnosticsMaxLength
-    ) {
+            long diagnosticsMaxLength) {
+        this(
+                JedisPooledOperations.of(jedis),
+                config,
+                writeBehindConfig,
+                keyStrategy,
+                diagnosticsStreamKey,
+                diagnosticsMaxLength);
+    }
+
+    public RedisProducerGuard(
+            RedisClientOperations jedis,
+            RedisGuardrailConfig config,
+            WriteBehindConfig writeBehindConfig,
+            RedisKeyStrategy keyStrategy,
+            String diagnosticsStreamKey,
+            long diagnosticsMaxLength) {
         this.jedis = jedis;
         this.config = config;
         this.writeBehindConfig = writeBehindConfig;
@@ -102,7 +121,9 @@ public final class RedisProducerGuard {
             return false;
         }
         HardLimitEntityPolicy policy = entityPolicy(namespace);
-        return policy != null ? policy.shedPageCacheWrites() : config.shedPageCacheWritesOnHardLimit();
+        return policy != null
+                ? policy.shedPageCacheWrites()
+                : config.shedPageCacheWritesOnHardLimit();
     }
 
     public boolean shouldShedReadThroughCache() {
@@ -114,7 +135,9 @@ public final class RedisProducerGuard {
             return false;
         }
         HardLimitEntityPolicy policy = entityPolicy(namespace);
-        return policy != null ? policy.shedReadThroughCache() : config.shedReadThroughCacheOnHardLimit();
+        return policy != null
+                ? policy.shedReadThroughCache()
+                : config.shedReadThroughCacheOnHardLimit();
     }
 
     public boolean shouldShedHotSetTracking() {
@@ -126,7 +149,9 @@ public final class RedisProducerGuard {
             return false;
         }
         HardLimitEntityPolicy policy = entityPolicy(namespace);
-        return policy != null ? policy.shedHotSetTracking() : config.shedHotSetTrackingOnHardLimit();
+        return policy != null
+                ? policy.shedHotSetTracking()
+                : config.shedHotSetTrackingOnHardLimit();
     }
 
     public boolean shouldShedQueryIndexWrites() {
@@ -138,14 +163,17 @@ public final class RedisProducerGuard {
             return false;
         }
         HardLimitEntityPolicy policy = entityPolicy(namespace);
-        return policy != null ? policy.shedQueryIndexWrites() : config.shedQueryIndexWritesOnHardLimit();
+        return policy != null
+                ? policy.shedQueryIndexWrites()
+                : config.shedQueryIndexWritesOnHardLimit();
     }
 
     public boolean shouldShedQueryIndexReads() {
         return config.shedQueryIndexReadsOnHardLimit() && isHardLimitActive();
     }
 
-    public boolean shouldShedQueryIndexReads(String namespace, java.util.Collection<HardLimitQueryClass> queryClasses) {
+    public boolean shouldShedQueryIndexReads(
+            String namespace, java.util.Collection<HardLimitQueryClass> queryClasses) {
         if (!isHardLimitActive()) {
             return false;
         }
@@ -166,7 +194,8 @@ public final class RedisProducerGuard {
         return config.shedPlannerLearningOnHardLimit() && isHardLimitActive();
     }
 
-    public boolean shouldShedPlannerLearning(String namespace, java.util.Collection<HardLimitQueryClass> queryClasses) {
+    public boolean shouldShedPlannerLearning(
+            String namespace, java.util.Collection<HardLimitQueryClass> queryClasses) {
         if (!isHardLimitActive()) {
             return false;
         }
@@ -215,74 +244,91 @@ public final class RedisProducerGuard {
         LinkedHashMap<String, String> values = new LinkedHashMap<>();
         values.put("profile", profile.name());
         values.put("mode", manualRuntimeProfileOverride.get() == null ? "AUTO" : "MANUAL");
-        values.put("automaticSwitchingEnabled", String.valueOf(config.automaticRuntimeProfileSwitchingEnabled()));
+        values.put(
+                "automaticSwitchingEnabled",
+                String.valueOf(config.automaticRuntimeProfileSwitchingEnabled()));
         values.put("hotEntityLimitFactor", String.valueOf(profile.hotEntityLimitFactor));
         values.put("pageSizeFactor", String.valueOf(profile.pageSizeFactor));
         values.put("entityTtlCapSeconds", String.valueOf(profile.entityTtlCapSeconds));
         values.put("pageTtlCapSeconds", String.valueOf(profile.pageTtlCapSeconds));
         values.put("highSleepMillisBonus", String.valueOf(profile.highSleepMillisBonus));
         values.put("criticalSleepMillisBonus", String.valueOf(profile.criticalSleepMillisBonus));
-        values.put("effectiveHighSleepMillis", String.valueOf(profile.adjustHighSleep(config.highSleepMillis())));
-        values.put("effectiveCriticalSleepMillis", String.valueOf(profile.adjustCriticalSleep(config.criticalSleepMillis())));
+        values.put(
+                "effectiveHighSleepMillis",
+                String.valueOf(profile.adjustHighSleep(config.highSleepMillis())));
+        values.put(
+                "effectiveCriticalSleepMillis",
+                String.valueOf(profile.adjustCriticalSleep(config.criticalSleepMillis())));
         return values;
     }
 
     private RedisGuardrailSnapshot sampleNow(long now) {
-        Object memoryInfoResponse = jedis.sendCommand(redis.clients.jedis.Protocol.Command.INFO, "memory");
-        String memoryInfo = memoryInfoResponse instanceof byte[] bytes
-                ? new String(bytes, StandardCharsets.UTF_8)
-                : String.valueOf(memoryInfoResponse);
+        Object memoryInfoResponse = jedis.serverInfo("memory", keyStrategy.compactionStatsKey());
+        String memoryInfo =
+                memoryInfoResponse instanceof byte[] bytes
+                        ? new String(bytes, StandardCharsets.UTF_8)
+                        : String.valueOf(memoryInfoResponse);
         Map<String, String> memoryStats = parseInfo(memoryInfo);
         long usedMemory = parseLong(memoryStats.get("used_memory"));
         long usedMemoryPeak = parseLong(memoryStats.get("used_memory_peak"));
         long maxMemory = parseLong(memoryStats.get("maxmemory"));
         String maxMemoryPolicy = memoryStats.getOrDefault("maxmemory_policy", "unknown");
         boolean maxMemoryPolicyExpected = maxmemoryPolicyExpected(maxMemoryPolicy);
-        Map<String, String> compactionStats = jedis.hgetAll(keyStrategy.compactionStatsKey());
+        Map<String, String> compactionStats =
+                jedis.commands().hgetAll(keyStrategy.compactionStatsKey());
         long pendingCount = parseLong(compactionStats.get("pendingCount"));
         long payloadCount = parseLong(compactionStats.get("payloadCount"));
         long hardRejectedWriteCount = parseLong(compactionStats.get("hardRejectedWriteCount"));
-        long backlog = RedisBacklogEstimator.estimateWriteBehindBacklog(jedis, keyStrategy, writeBehindConfig);
+        long backlog =
+                RedisBacklogEstimator.estimateWriteBehindBacklog(
+                        jedis, keyStrategy, writeBehindConfig);
 
         String pressureLevel = "NORMAL";
-        if (config.usedMemoryCriticalBytes() > 0 && usedMemory >= config.usedMemoryCriticalBytes()) {
+        if (config.usedMemoryCriticalBytes() > 0
+                && usedMemory >= config.usedMemoryCriticalBytes()) {
             pressureLevel = "CRITICAL";
-        } else if (memoryPercentExceeded(usedMemory, maxMemory, config.usedMemoryCriticalMaxmemoryPercent())) {
+        } else if (memoryPercentExceeded(
+                usedMemory, maxMemory, config.usedMemoryCriticalMaxmemoryPercent())) {
             pressureLevel = "CRITICAL";
-        } else if (config.writeBehindBacklogCriticalThreshold() > 0 && backlog >= config.writeBehindBacklogCriticalThreshold()) {
+        } else if (config.writeBehindBacklogCriticalThreshold() > 0
+                && backlog >= config.writeBehindBacklogCriticalThreshold()) {
             pressureLevel = "CRITICAL";
-        } else if (config.compactionPendingCriticalThreshold() > 0 && pendingCount >= config.compactionPendingCriticalThreshold()) {
+        } else if (config.compactionPendingCriticalThreshold() > 0
+                && pendingCount >= config.compactionPendingCriticalThreshold()) {
             pressureLevel = "CRITICAL";
         } else if (config.usedMemoryWarnBytes() > 0 && usedMemory >= config.usedMemoryWarnBytes()) {
             pressureLevel = "WARN";
-        } else if (memoryPercentExceeded(usedMemory, maxMemory, config.usedMemoryWarnMaxmemoryPercent())) {
+        } else if (memoryPercentExceeded(
+                usedMemory, maxMemory, config.usedMemoryWarnMaxmemoryPercent())) {
             pressureLevel = "WARN";
         } else if (config.warnOnMissingMaxmemory() && maxMemory <= 0L) {
             pressureLevel = "WARN";
         } else if (!maxMemoryPolicyExpected) {
             pressureLevel = "WARN";
-        } else if (config.writeBehindBacklogWarnThreshold() > 0 && backlog >= config.writeBehindBacklogWarnThreshold()) {
+        } else if (config.writeBehindBacklogWarnThreshold() > 0
+                && backlog >= config.writeBehindBacklogWarnThreshold()) {
             pressureLevel = "WARN";
-        } else if (config.compactionPendingWarnThreshold() > 0 && pendingCount >= config.compactionPendingWarnThreshold()) {
+        } else if (config.compactionPendingWarnThreshold() > 0
+                && pendingCount >= config.compactionPendingWarnThreshold()) {
             pressureLevel = "WARN";
         }
 
-        RedisGuardrailSnapshot snapshot = new RedisGuardrailSnapshot(
-                usedMemory,
-                usedMemoryPeak,
-                maxMemory,
-                maxMemoryPolicy,
-                maxMemory > 0L,
-                maxMemoryPolicyExpected,
-                backlog,
-                pendingCount,
-                payloadCount,
-                hardRejectedWriteCount,
-                producerHighPressureDelayCount.get(),
-                producerCriticalPressureDelayCount.get(),
-                now,
-                pressureLevel
-        );
+        RedisGuardrailSnapshot snapshot =
+                new RedisGuardrailSnapshot(
+                        usedMemory,
+                        usedMemoryPeak,
+                        maxMemory,
+                        maxMemoryPolicy,
+                        maxMemory > 0L,
+                        maxMemoryPolicyExpected,
+                        backlog,
+                        pendingCount,
+                        payloadCount,
+                        hardRejectedWriteCount,
+                        producerHighPressureDelayCount.get(),
+                        producerCriticalPressureDelayCount.get(),
+                        now,
+                        pressureLevel);
         updateRuntimeProfile(snapshot);
         lastSnapshot.set(snapshot);
         return snapshot;
@@ -314,14 +360,22 @@ public final class RedisProducerGuard {
 
     private synchronized void updateRuntimeProfile(RedisGuardrailSnapshot snapshot) {
         RedisRuntimeProfileSnapshot current = runtimeProfileSnapshot.get();
-        long normalSamples = "NORMAL".equals(snapshot.pressureLevel()) ? current.normalPressureSamples() + 1L : 0L;
-        long warnSamples = "WARN".equals(snapshot.pressureLevel()) ? current.warnPressureSamples() + 1L : 0L;
-        long criticalSamples = "CRITICAL".equals(snapshot.pressureLevel()) ? current.criticalPressureSamples() + 1L : 0L;
+        long normalSamples =
+                "NORMAL".equals(snapshot.pressureLevel())
+                        ? current.normalPressureSamples() + 1L
+                        : 0L;
+        long warnSamples =
+                "WARN".equals(snapshot.pressureLevel()) ? current.warnPressureSamples() + 1L : 0L;
+        long criticalSamples =
+                "CRITICAL".equals(snapshot.pressureLevel())
+                        ? current.criticalPressureSamples() + 1L
+                        : 0L;
         RuntimeProfile activeProfile = RuntimeProfile.parse(current.activeProfile());
         String manualOverride = manualRuntimeProfileOverride.get();
 
         if (manualOverride != null && !manualOverride.isBlank()) {
-            applyRuntimeProfileOverride(RuntimeProfile.parse(manualOverride), snapshot.pressureLevel());
+            applyRuntimeProfileOverride(
+                    RuntimeProfile.parse(manualOverride), snapshot.pressureLevel());
             return;
         }
 
@@ -331,9 +385,10 @@ public final class RedisProducerGuard {
                 activeProfile = RuntimeProfile.AGGRESSIVE;
             } else if ("WARN".equals(snapshot.pressureLevel())
                     && warnSamples >= Math.max(1, config.warnSamplesToBalanced())) {
-                activeProfile = current.activeProfile().equals("AGGRESSIVE")
-                        ? RuntimeProfile.AGGRESSIVE
-                        : RuntimeProfile.BALANCED;
+                activeProfile =
+                        current.activeProfile().equals("AGGRESSIVE")
+                                ? RuntimeProfile.AGGRESSIVE
+                                : RuntimeProfile.BALANCED;
             } else if ("WARN".equals(snapshot.pressureLevel())
                     && current.activeProfile().equals("AGGRESSIVE")
                     && warnSamples >= Math.max(1, config.warnSamplesToDeescalateAggressive())) {
@@ -350,28 +405,28 @@ public final class RedisProducerGuard {
         if (!activeProfile.name().equals(current.activeProfile())) {
             switchCount++;
             lastSwitchedAtEpochMillis = snapshot.lastSampleAtEpochMillis();
-            RedisRuntimeProfileEvent event = new RedisRuntimeProfileEvent(
-                    previousProfile,
-                    activeProfile.name(),
-                    snapshot.pressureLevel(),
-                    Instant.ofEpochMilli(snapshot.lastSampleAtEpochMillis()),
-                    switchCount,
-                    snapshot.usedMemoryBytes(),
-                    snapshot.writeBehindBacklog(),
-                    snapshot.compactionPendingCount()
-            );
+            RedisRuntimeProfileEvent event =
+                    new RedisRuntimeProfileEvent(
+                            previousProfile,
+                            activeProfile.name(),
+                            snapshot.pressureLevel(),
+                            Instant.ofEpochMilli(snapshot.lastSampleAtEpochMillis()),
+                            switchCount,
+                            snapshot.usedMemoryBytes(),
+                            snapshot.writeBehindBacklog(),
+                            snapshot.compactionPendingCount());
             recordRuntimeProfileEvent(event);
         }
 
-        runtimeProfileSnapshot.set(new RedisRuntimeProfileSnapshot(
-                activeProfile.name(),
-                snapshot.pressureLevel(),
-                switchCount,
-                lastSwitchedAtEpochMillis,
-                normalSamples,
-                warnSamples,
-                criticalSamples
-        ));
+        runtimeProfileSnapshot.set(
+                new RedisRuntimeProfileSnapshot(
+                        activeProfile.name(),
+                        snapshot.pressureLevel(),
+                        switchCount,
+                        lastSwitchedAtEpochMillis,
+                        normalSamples,
+                        warnSamples,
+                        criticalSamples));
     }
 
     private void applyRuntimeProfileOverride(RuntimeProfile selectedProfile, String pressureLevel) {
@@ -384,26 +439,26 @@ public final class RedisProducerGuard {
             switchCount++;
             lastSwitchedAtEpochMillis = sampledAt;
             RedisGuardrailSnapshot snapshot = lastSnapshot.get();
-            recordRuntimeProfileEvent(new RedisRuntimeProfileEvent(
-                    previousProfile,
-                    selectedProfile.name(),
-                    pressureLevel,
-                    Instant.ofEpochMilli(sampledAt),
-                    switchCount,
-                    snapshot.usedMemoryBytes(),
-                    snapshot.writeBehindBacklog(),
-                    snapshot.compactionPendingCount()
-            ));
+            recordRuntimeProfileEvent(
+                    new RedisRuntimeProfileEvent(
+                            previousProfile,
+                            selectedProfile.name(),
+                            pressureLevel,
+                            Instant.ofEpochMilli(sampledAt),
+                            switchCount,
+                            snapshot.usedMemoryBytes(),
+                            snapshot.writeBehindBacklog(),
+                            snapshot.compactionPendingCount()));
         }
-        runtimeProfileSnapshot.set(new RedisRuntimeProfileSnapshot(
-                selectedProfile.name(),
-                pressureLevel,
-                switchCount,
-                lastSwitchedAtEpochMillis,
-                current.normalPressureSamples(),
-                current.warnPressureSamples(),
-                current.criticalPressureSamples()
-        ));
+        runtimeProfileSnapshot.set(
+                new RedisRuntimeProfileSnapshot(
+                        selectedProfile.name(),
+                        pressureLevel,
+                        switchCount,
+                        lastSwitchedAtEpochMillis,
+                        current.normalPressureSamples(),
+                        current.warnPressureSamples(),
+                        current.criticalPressureSamples()));
     }
 
     private RuntimeProfile activeRuntimeProfile() {
@@ -422,8 +477,7 @@ public final class RedisProducerGuard {
         if (memoryPercentExceeded(
                 snapshot.usedMemoryBytes(),
                 snapshot.maxMemoryBytes(),
-                config.usedMemoryCriticalMaxmemoryPercent()
-        )) {
+                config.usedMemoryCriticalMaxmemoryPercent())) {
             return true;
         }
         if (config.writeBehindBacklogHardLimit() > 0
@@ -438,7 +492,8 @@ public final class RedisProducerGuard {
                 && snapshot.compactionPayloadCount() >= config.compactionPayloadHardLimit();
     }
 
-    private boolean memoryPercentExceeded(long usedMemoryBytes, long maxMemoryBytes, int thresholdPercent) {
+    private boolean memoryPercentExceeded(
+            long usedMemoryBytes, long maxMemoryBytes, int thresholdPercent) {
         return thresholdPercent > 0
                 && maxMemoryBytes > 0
                 && usedMemoryBytes > 0
@@ -496,9 +551,9 @@ public final class RedisProducerGuard {
         fields.put("writeBehindBacklog", String.valueOf(event.writeBehindBacklog()));
         fields.put("compactionPendingCount", String.valueOf(event.compactionPendingCount()));
         try {
-            jedis.xadd(diagnosticsStreamKey, XAddParams.xAddParams(), fields);
+            jedis.commands().xadd(diagnosticsStreamKey, XAddParams.xAddParams(), fields);
             if (diagnosticsMaxLength > 0) {
-                jedis.xtrim(diagnosticsStreamKey, diagnosticsMaxLength, true);
+                jedis.commands().xtrim(diagnosticsStreamKey, diagnosticsMaxLength, true);
             }
         } catch (RuntimeException ignored) {
             // Diagnostics should not block producer-path switching.
@@ -579,8 +634,7 @@ public final class RedisProducerGuard {
                 int entityTtlCapSeconds,
                 int pageTtlCapSeconds,
                 long highSleepMillisBonus,
-                long criticalSleepMillisBonus
-        ) {
+                long criticalSleepMillisBonus) {
             this.hotEntityLimitFactor = hotEntityLimitFactor;
             this.pageSizeFactor = pageSizeFactor;
             this.entityTtlCapSeconds = entityTtlCapSeconds;
@@ -591,15 +645,25 @@ public final class RedisProducerGuard {
 
         private CachePolicy apply(CachePolicy basePolicy) {
             return CachePolicy.builder()
-                    .hotEntityLimit(Math.max(1, (int) Math.round(basePolicy.hotEntityLimit() * hotEntityLimitFactor)))
+                    .hotEntityLimit(
+                            basePolicy.hotEntityLimit() <= 0
+                                    ? basePolicy.hotEntityLimit()
+                                    : Math.max(
+                                            1,
+                                            (int)
+                                                    Math.round(
+                                                            basePolicy.hotEntityLimit()
+                                                                    * hotEntityLimitFactor)))
                     .pageSize(Math.max(1, (int) Math.round(basePolicy.pageSize() * pageSizeFactor)))
                     .lruEvictionEnabled(basePolicy.lruEvictionEnabled())
-                    .entityTtlSeconds(basePolicy.entityTtlSeconds() <= 0L
-                            ? 0L
-                            : Math.min(basePolicy.entityTtlSeconds(), entityTtlCapSeconds))
-                    .pageTtlSeconds(basePolicy.pageTtlSeconds() <= 0L
-                            ? 0L
-                            : Math.min(basePolicy.pageTtlSeconds(), pageTtlCapSeconds))
+                    .entityTtlSeconds(
+                            basePolicy.entityTtlSeconds() <= 0L
+                                    ? 0L
+                                    : Math.min(basePolicy.entityTtlSeconds(), entityTtlCapSeconds))
+                    .pageTtlSeconds(
+                            basePolicy.pageTtlSeconds() <= 0L
+                                    ? 0L
+                                    : Math.min(basePolicy.pageTtlSeconds(), pageTtlCapSeconds))
                     .hotPolicy(basePolicy.hotPolicy())
                     .build();
         }

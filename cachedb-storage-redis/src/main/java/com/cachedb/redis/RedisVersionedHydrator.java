@@ -1,7 +1,7 @@
 package com.reactor.cachedb.redis;
 
+import redis.clients.jedis.AbstractPipeline;
 import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.Response;
 
 import java.util.ArrayList;
@@ -9,7 +9,8 @@ import java.util.List;
 
 final class RedisVersionedHydrator {
 
-    private static final String UPSERT_SCRIPT = """
+    private static final String UPSERT_SCRIPT =
+            """
             local incoming = tonumber(ARGV[1])
             if not incoming or incoming <= 0 then
                 return redis.error_reply('incoming version must be greater than zero')
@@ -32,7 +33,8 @@ final class RedisVersionedHydrator {
             return 1
             """;
 
-    private static final String DELETE_SCRIPT = """
+    private static final String DELETE_SCRIPT =
+            """
             local incoming = tonumber(ARGV[1])
             if not incoming or incoming <= 0 then
                 return redis.error_reply('incoming version must be greater than zero')
@@ -52,18 +54,31 @@ final class RedisVersionedHydrator {
             return 1
             """;
 
-    private final JedisPooled jedis;
+    private final RedisClientOperations jedis;
 
     RedisVersionedHydrator(JedisPooled jedis) {
+        this(JedisPooledOperations.of(jedis));
+    }
+
+    RedisVersionedHydrator(RedisClientOperations jedis) {
         this.jedis = jedis;
     }
 
-    boolean upsert(String entityKey, String versionKey, String tombstoneKey, String payload, long version, long ttlSeconds) {
-        Object result = jedis.eval(
-                UPSERT_SCRIPT,
-                List.of(entityKey, versionKey, tombstoneKey),
-                List.of(String.valueOf(version), payload, String.valueOf(Math.max(0, ttlSeconds)))
-        );
+    boolean upsert(
+            String entityKey,
+            String versionKey,
+            String tombstoneKey,
+            String payload,
+            long version,
+            long ttlSeconds) {
+        Object result =
+                jedis.eval(
+                        UPSERT_SCRIPT,
+                        List.of(entityKey, versionKey, tombstoneKey),
+                        List.of(
+                                String.valueOf(version),
+                                payload,
+                                String.valueOf(Math.max(0, ttlSeconds))));
         return accepted(result);
     }
 
@@ -72,29 +87,38 @@ final class RedisVersionedHydrator {
             return List.of();
         }
         ArrayList<Response<Object>> responses = new ArrayList<>(operations.size());
-        try (Pipeline pipeline = jedis.pipelined()) {
+        try (AbstractPipeline pipeline = jedis.pipeline()) {
             for (Upsert operation : operations) {
-                responses.add(pipeline.eval(
-                        UPSERT_SCRIPT,
-                        List.of(operation.entityKey(), operation.versionKey(), operation.tombstoneKey()),
-                        List.of(
-                                String.valueOf(operation.version()),
-                                operation.payload(),
-                                String.valueOf(Math.max(0, operation.ttlSeconds()))
-                        )
-                ));
+                responses.add(
+                        pipeline.eval(
+                                UPSERT_SCRIPT,
+                                List.of(
+                                        operation.entityKey(),
+                                        operation.versionKey(),
+                                        operation.tombstoneKey()),
+                                List.of(
+                                        String.valueOf(operation.version()),
+                                        operation.payload(),
+                                        String.valueOf(Math.max(0, operation.ttlSeconds())))));
             }
             pipeline.sync();
         }
         return responses.stream().map(Response::get).map(RedisVersionedHydrator::accepted).toList();
     }
 
-    boolean delete(String entityKey, String versionKey, String tombstoneKey, long version, int tombstoneTtlSeconds) {
-        Object result = jedis.eval(
-                DELETE_SCRIPT,
-                List.of(entityKey, versionKey, tombstoneKey),
-                List.of(String.valueOf(version), String.valueOf(Math.max(0, tombstoneTtlSeconds)))
-        );
+    boolean delete(
+            String entityKey,
+            String versionKey,
+            String tombstoneKey,
+            long version,
+            int tombstoneTtlSeconds) {
+        Object result =
+                jedis.eval(
+                        DELETE_SCRIPT,
+                        List.of(entityKey, versionKey, tombstoneKey),
+                        List.of(
+                                String.valueOf(version),
+                                String.valueOf(Math.max(0, tombstoneTtlSeconds))));
         return accepted(result);
     }
 
@@ -108,7 +132,5 @@ final class RedisVersionedHydrator {
             String tombstoneKey,
             String payload,
             long version,
-            long ttlSeconds
-    ) {
-    }
+            long ttlSeconds) {}
 }

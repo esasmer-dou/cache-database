@@ -34,8 +34,12 @@ JDBC fetches still require network round trips.
 | withoutPerSourceLimit | Remove only one table's row cap | Total row/byte/deadline budgets remain |
 
 Repeated `where` calls use AND; combine alternatives with `or`.
-`eq(field, null)` means IS NULL. Supported predicates are equality, IN subquery,
-AND and OR. They do not parse arbitrary business expressions.
+`eq(field, null)` means IS NULL. Since 0.13, predicates also support `ne`, `gt`,
+`gte`, `lt`, `lte`, `between`, `isNull`, `isNotNull` and `inValues`.
+String columns and generated CacheField overloads use prepared parameters.
+An empty `inValues` list fails. Oracle splits lists into groups of 900;
+SQL Server's total 2,100-parameter limit is checked before execution.
+They do not parse arbitrary business expressions.
 Mapped columns are validated. Generated fields help with types and names but do
 not prove cross-table relationship semantics. Review source coverage and indexes.
 Keep tables, columns and scope in trusted application definitions.
@@ -63,11 +67,17 @@ The factory name is shared; this record does not become a writable entity.
 
 Supported components: String, UUID, int/Integer, long/Long, double/Double,
 boolean/Boolean, BigDecimal, LocalDate, LocalDateTime and Instant.
+Since 0.13: OffsetDateTime, LocalTime, BigInteger, float/Float, short/Short,
+byte/Byte and declared Java enums. Enums use generated `State::valueOf`, not reflection.
 Component names are literal column names unless overridden by CacheColumn.
 Nested/generic records, unsupported fields, unsafe identifiers and duplicate columns
 are compile errors. Conversion uses generated constructor calls, not reflection.
-Missing columns fail. Boxed nulls remain null; numeric primitive nulls fail.
-Primitive boolean treats null as false. Integral overflow and non-0/1 numeric booleans fail.
+Missing columns fail. Boxed nulls remain null; all primitive nulls fail,
+including boolean since 0.13. Integral overflow and non-0/1 numeric booleans fail.
+Float overflow/underflow fails; normal IEEE-754 rounding remains possible.
+Timestamp/Instant to OffsetDateTime uses UTC; a timestamp without a zone cannot recover
+the original offset. LocalTime accepts JDBC Time; store a bounded scalar on Oracle,
+which does not have the same standalone TIME column as PostgreSQL and SQL Server.
 Use boxed types when absence differs from zero or false.
 
 ## 3. Prepare Lookups Once
@@ -83,7 +93,12 @@ boolean inAll = ordersByProduct.containsAll(productId, requiredOrderIds);
 Here `items` is the two-column relation from section 1. Its direction is
 order_id to product_id. The String relation helper reads those two columns only.
 `reverse()` reuses the same source and does not query SQL again.
-For other key types or additional columns use a record source and the generic
+Since 0.13, use `SnapshotRelation.longs(...)`, `SnapshotRelation.uuids(...)` or
+`SnapshotRelation.of(..., Long.class, ..., UUID.class)` for typed endpoints.
+Typed list helpers preserve input order unless an explicit comparator is supplied;
+do not confuse that with the original String helper's lexical order.
+UUID values can be UUID objects, canonical text or a 16-byte representation.
+For additional columns use a record source and the generic
 `rows.lists(source, key, value, comparator)` or `rows.membership(source, key, value)`.
 
 | Helper | Contract |
@@ -127,3 +142,24 @@ preparation must not replace a successful catalog. New helpers add no implicit
 fallback, auto-warm on reads, unbounded retry or background synchronization.
 Configure finite connection/socket timeouts and observe job duration, rows and bytes.
 Keep source indexes and total heap, disk and Redis overlap budgets explicit.
+
+## 5. Filter and Type Examples (0.13)
+
+```java
+var orders = SnapshotSource.entity("orders", OrderEntityCacheBinding.SOURCE)
+        .where(SnapshotPredicate.gte("order_date", Instant.parse("2026-01-01T00:00:00Z"))
+                .and(SnapshotPredicate.inValues("status", List.of("OPEN", "PENDING")))
+                .and(SnapshotPredicate.ne("deleted_at", null)));
+var links = SnapshotRelation.longs("items", "order_items", "order_id", "product_id")
+        .where(SnapshotPredicate.in("order_id", orders.select("order_id")));
+// Inside the mapping factory, build both views once. Neither call performs SQL.
+var itemsByOrder = rows.lists(links, Comparator.naturalOrder());
+var ordersByItem = rows.membership(links.reverse());
+```
+
+Column names above must exist in your generated mapping. `ne(column, null)` means
+IS NOT NULL; use `isNull("deleted_at")` instead for non-deleted rows.
+Enum values bind their names, not ordinals. Unknown names and fractional values for
+integral fields fail rather than silently changing data.
+See [bounded runtime operations](bounded-runtime-operations.md) for indexed/delta
+snapshots, cache limit migration, atomic writes and Cluster configuration.
