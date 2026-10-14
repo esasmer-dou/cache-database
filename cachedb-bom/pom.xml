@@ -16,6 +16,11 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
+                <groupId>redis.clients</groupId>
+                <artifactId>jedis</artifactId>
+                <version>${jedis.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>com.reactor.cachedb</groupId>
                 <artifactId>cachedb-annotations</artifactId>
                 <version>${project.version}</version>
