@@ -14,6 +14,35 @@
     <name>cachedb-spring-boot-starter</name>
     <description>Provider-neutral Spring Boot auto-configuration for CacheDB</description>
 
+    <properties>
+        <argLine/>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <id>test-instrumentation-path</id>
+                        <goals><goal>properties</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <!-- Inline mocks must not depend on runtime self-attachment permissions. -->
+                    <argLine>@{argLine} -javaagent:"${net.bytebuddy:byte-buddy-agent:jar}"</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
     <dependencies>
         <dependency>
             <groupId>com.reactor.cachedb</groupId>
