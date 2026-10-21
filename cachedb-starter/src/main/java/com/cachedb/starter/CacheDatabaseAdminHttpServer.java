@@ -100,11 +100,18 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     private HttpServer server;
     private ExecutorService executor;
     private ExecutorService backgroundExecutor;
+    private final AdminMigrationEndpoints migrationEndpoints;
 
     public CacheDatabaseAdminHttpServer(CacheDatabase cacheDatabase, AdminHttpConfig config) {
         this.admin = cacheDatabase.admin();
         this.debug = cacheDatabase.debug();
         this.config = config;
+        this.migrationEndpoints = new AdminMigrationEndpoints(admin,
+                exchange -> "POST".equalsIgnoreCase(exchange.getRequestMethod())
+                        ? parseFormParameters(exchange) : parseQuery(exchange.getRequestURI().getRawQuery()),
+                this::sendJson, this::sendMethodNotAllowed,
+                new AdminMigrationEndpoints.Views(this::renderMigrationPlannerTemplate, this::renderMigrationSchemaDiscovery,
+                        this::parseMigrationPlannerRequest, this::renderMigrationPlannerResult, message -> escapeJson(message)));
         this.jobStatusStore = new RedisAdminJobStatusStore(
                 cacheDatabase.backgroundRedisClient(),
                 cacheDatabase.redisKeyPrefix(),
@@ -113,25 +120,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     }
 
     private static String loadRequiredAdminTextResource(String resourcePath) {
-        try (InputStream input = CacheDatabaseAdminHttpServer.class.getClassLoader().getResourceAsStream(resourcePath)) {
-            if (input == null) {
-                throw new IllegalStateException("Missing admin UI resource: " + resourcePath);
-            }
-            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException exception) {
-            throw new IllegalStateException("Could not load admin UI resource: " + resourcePath, exception);
-        }
+        return AdminTemplateResources.load(resourcePath);
     }
 
     private static String renderAdminTemplate(String template, String... replacements) {
-        if ((replacements.length & 1) != 0) {
-            throw new IllegalArgumentException("Template replacements must be provided as token/value pairs");
-        }
-        String rendered = template;
-        for (int index = 0; index < replacements.length; index += 2) {
-            rendered = rendered.replace(replacements[index], replacements[index + 1] == null ? "" : replacements[index + 1]);
-        }
-        return rendered;
+        return AdminTemplateResources.render(template, replacements);
     }
 
     public void start() throws IOException {
@@ -910,11 +903,7 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     }
 
     private void handleMigrationPlannerTemplate(HttpExchange exchange) throws IOException {
-        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-            sendMethodNotAllowed(exchange);
-            return;
-        }
-        sendJson(exchange, 200, renderMigrationPlannerTemplate(admin.migrationPlannerTemplate()));
+        migrationEndpoints.template(exchange);
     }
 
     private void handleMigrationPlannerDemo(HttpExchange exchange) throws IOException {
@@ -945,27 +934,11 @@ public final class CacheDatabaseAdminHttpServer implements AutoCloseable {
     }
 
     private void handleMigrationPlannerDiscovery(HttpExchange exchange) throws IOException {
-        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-            sendMethodNotAllowed(exchange);
-            return;
-        }
-        try {
-            sendJson(exchange, 200, renderMigrationSchemaDiscovery(admin.discoverMigrationSchema()));
-        } catch (IllegalStateException exception) {
-            sendJson(exchange, 500, "{\"error\":\"" + escapeJson(exception.getMessage()) + "\"}");
-        }
+        migrationEndpoints.discovery(exchange);
     }
 
     private void handleMigrationPlannerPlan(HttpExchange exchange) throws IOException {
-        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod()) && !"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-            sendMethodNotAllowed(exchange);
-            return;
-        }
-        Map<String, List<String>> parameters = "POST".equalsIgnoreCase(exchange.getRequestMethod())
-                ? parseFormParameters(exchange)
-                : parseQuery(exchange.getRequestURI().getRawQuery());
-        MigrationPlanner.Result plan = admin.planMigration(parseMigrationPlannerRequest(parameters));
-        sendJson(exchange, 200, renderMigrationPlannerResult(plan, admin.estimateMigrationRedisMemory(plan)));
+        migrationEndpoints.plan(exchange);
     }
 
     private void handleMigrationPlannerWarm(HttpExchange exchange) throws IOException {

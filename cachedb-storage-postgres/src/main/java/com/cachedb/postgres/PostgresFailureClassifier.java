@@ -42,6 +42,9 @@ public final class PostgresFailureClassifier {
     }
 
     private WriteFailureCategory categoryFor(String sqlState) {
+        if ("CDB03".equals(sqlState)) {
+            return WriteFailureCategory.SCHEMA;
+        }
         if (sqlState.startsWith("08")) {
             return WriteFailureCategory.CONNECTION;
         }

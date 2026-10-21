@@ -629,6 +629,8 @@ public final class EcommerceProductionScenarioRunner {
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_prodtest_inventory");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_prodtest_products");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_prodtest_customers");
+            for (String table : List.of("cachedb_prodtest_orders", "cachedb_prodtest_carts", "cachedb_prodtest_inventory", "cachedb_prodtest_products", "cachedb_prodtest_customers"))
+                ProductionTestEnvironment.resetFixtureWriteFence(connection, table);
             statement.executeUpdate("""
                     CREATE %s cachedb_prodtest_customers (
                         id BIGINT PRIMARY KEY,

@@ -80,6 +80,12 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private final Set<PendingEntryIdentity> deferredDependencyKeys = ConcurrentHashMap.newKeySet();
     private final AtomicLong nextDependencyRetryAtEpochMillis = new AtomicLong();
     private final int deferredDependencyCapacity;
+    private final AtomicInteger streamRoundRobin = new AtomicInteger();
+
+    private List<String> activeStreamKeys() {
+        return keyStrategy instanceof ClusterHashTagKeyStrategy clusterKeys
+                ? clusterKeys.activeStreamKeys(config) : config.activeStreamKeys();
+    }
 
     public RedisWriteBehindWorker(
             JedisPooled jedis,
@@ -156,7 +162,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             return;
         }
 
-        for (String streamKey : config.activeStreamKeys()) {
+        for (String streamKey : activeStreamKeys()) {
             try {
                 jedis.commands()
                         .xgroupCreate(
@@ -445,7 +451,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             return cachedBacklogLength.get();
         }
         long total = 0L;
-        for (String streamKey : config.activeStreamKeys()) {
+        for (String streamKey : activeStreamKeys()) {
             total += jedis.commands().xlen(streamKey);
         }
         cachedBacklogLength.set(total);
@@ -831,7 +837,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                                 operation.redisNamespace(),
                                 operation.id(),
                                 config.compactionShardCount()),
-                        keyStrategy.compactionStatsKey(),
+                        keyStrategy.compactionStatsKey(operation.redisNamespace()),
                         operation.redisNamespace(),
                         operation.id(),
                         operation.version());
@@ -863,7 +869,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             long payloadRemoved = jedis.commands().del(payloadKey);
             if (payloadRemoved > 0) {
                 jedis.commands()
-                        .hincrBy(keyStrategy.compactionStatsKey(), "payloadCount", -payloadRemoved);
+                        .hincrBy(keyStrategy.compactionStatsKey(operation.redisNamespace()), "payloadCount", -payloadRemoved);
             }
             return;
         }
@@ -873,11 +879,11 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             long payloadRemoved = jedis.commands().del(payloadKey);
             if (pendingRemoved > 0) {
                 jedis.commands()
-                        .hincrBy(keyStrategy.compactionStatsKey(), "pendingCount", -pendingRemoved);
+                        .hincrBy(keyStrategy.compactionStatsKey(operation.redisNamespace()), "pendingCount", -pendingRemoved);
             }
             if (payloadRemoved > 0) {
                 jedis.commands()
-                        .hincrBy(keyStrategy.compactionStatsKey(), "payloadCount", -payloadRemoved);
+                        .hincrBy(keyStrategy.compactionStatsKey(operation.redisNamespace()), "payloadCount", -payloadRemoved);
             }
             return;
         }
@@ -1014,7 +1020,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private List<Entry<String, List<StreamEntry>>> claimAbandonedEntries(String consumerName) {
         lastClaimAttemptAtEpochMillis.set(System.currentTimeMillis());
         ArrayList<Entry<String, List<StreamEntry>>> responses = new ArrayList<>();
-        for (String streamKey : config.activeStreamKeys()) {
+        for (String streamKey : activeStreamKeys()) {
             Entry<StreamEntryID, List<StreamEntry>> claimed;
             try {
                 claimed =
@@ -1065,8 +1071,24 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
     private List<Entry<String, List<StreamEntry>>> readNewEntries(
             String consumerName, XReadGroupParams params) {
+        if (jedis.clustered()) {
+            List<String> keys = activeStreamKeys();
+            // Never XREADGROUP across slots or block a worker on each empty namespace.
+            for (int i = 0; i < Math.min(32, keys.size()); i++) {
+                String key = keys.get(Math.floorMod(streamRoundRobin.getAndIncrement(), keys.size()));
+                try {
+                    var result = jedis.commands().xreadGroup(config.activeConsumerGroup(), consumerName,
+                            new XReadGroupParams().count(config.batchSize()), Map.of(key, StreamEntryID.UNRECEIVED_ENTRY));
+                    if (hasEntries(result)) return result;
+                } catch (JedisDataException failure) {
+                    if (!isMissingConsumerGroup(failure)) throw failure;
+                    ensureConsumerGroup();
+                }
+            }
+            return List.of();
+        }
         LinkedHashMap<String, StreamEntryID> streams = new LinkedHashMap<>();
-        for (String streamKey : config.activeStreamKeys()) {
+        for (String streamKey : activeStreamKeys()) {
             streams.put(streamKey, StreamEntryID.UNRECEIVED_ENTRY);
         }
         try {

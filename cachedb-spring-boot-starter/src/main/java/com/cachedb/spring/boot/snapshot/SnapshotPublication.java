@@ -82,7 +82,7 @@ final class SnapshotPublication {
         return new Batch(keys, args);
     }
 
-    private static int slot(List<String> keys, Map<String, Integer> slots, String key) {
+    static int slot(List<String> keys, Map<String, Integer> slots, String key) {
         Integer prior = slots.get(key);
         if (prior != null) return prior;
         keys.add(key);
@@ -90,7 +90,7 @@ final class SnapshotPublication {
         return keys.size();
     }
 
-    private static String digest(String text) {
+    static String digest(String text) {
         try {
             return HexFormat.of()
                     .formatHex(

@@ -15,6 +15,7 @@ $publicJarModules = @(
     "cachedb-annotations",
     "cachedb-processor",
     "cachedb-core",
+    "cachedb-json",
     "cachedb-storage-redis",
     "cachedb-storage-jdbc",
     "cachedb-storage-postgres",
@@ -73,6 +74,33 @@ foreach ($module in $publicJarModules) {
         }
         if (-not $hasExpectedContent) {
             $invalid.Add("$([System.IO.Path]::GetRelativePath($repoRoot, $artifact)): expected packaged content is missing")
+        }
+        if ($module -eq 'cachedb-storage-jdbc' -and $suffix -ne '-javadoc.jar' -and
+            [version]$Version -ge [version]'0.14.0') {
+            foreach ($provider in @('postgres', 'mssql', 'oracle')) {
+                $migration = "com/reactor/cachedb/jdbc/migrations/$provider/V014__durable_write_fence.sql"
+                if ($entries -notcontains $migration) {
+                    $invalid.Add("$([System.IO.Path]::GetRelativePath($repoRoot, $artifact)): required migration is missing: $migration")
+                }
+            }
+        }
+        if ($module -eq 'cachedb-json' -and $suffix -ne '-javadoc.jar' -and
+            [version]$Version -ge [version]'0.14.0') {
+            $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }
+            foreach ($type in @('StreamingJsonCodec', 'JsonTokenWriter', 'JsonUtf8Writer')) {
+                $entry = "com/reactor/cachedb/json/$type.$extension"
+                if ($entries -notcontains $entry) {
+                    $invalid.Add("$([System.IO.Path]::GetRelativePath($repoRoot, $artifact)): required JSON implementation is missing: $entry")
+                }
+            }
+        }
+        if ($module -eq 'cachedb-core' -and $suffix -ne '-javadoc.jar' -and
+            [version]$Version -ge [version]'0.14.0') {
+            $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }
+            $prefix = if ($suffix -eq '.jar') { 'com/reactor/cachedb' } else { 'com/cachedb' }
+            if ($entries -notcontains "$prefix/core/codec/JsonNoopCheckpoint.$extension") {
+                $invalid.Add("$([System.IO.Path]::GetRelativePath($repoRoot, $artifact)): reusable JSON checkpoint is missing")
+            }
         }
     }
 }

@@ -49,8 +49,8 @@ class SnapshotContractTest {
                         redis.eval(
                                 org.mockito.ArgumentMatchers.anyString(),
                                 org.mockito.ArgumentMatchers.eq(List.of("test:active")),
-                                org.mockito.ArgumentMatchers.eq(List.of("test", "root"))))
-                .thenReturn(List.of(fresh, "2000", "[]"));
+                                org.mockito.ArgumentMatchers.eq(List.of("test", "2147483639", "root"))))
+                .thenReturn(List.of(fresh, "2000", "root", "FOUND", "2000", "[]"));
         var result = new RedisSnapshotRepository(redis, "test").findById("root").orElseThrow();
         assertThat(result.generation()).isEqualTo(fresh);
         assertThat(result.refreshedAt()).isEqualTo(2000);

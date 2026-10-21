@@ -1347,7 +1347,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         out.append("    private static final int MAX_BULK_SIZE = 1000;\n");
         renderRepositoryRouteCatalog(out, model);
         renderRouteConstants(out, model);
-        out.append("    private final com.reactor.cachedb.starter.CacheDatabase cacheDatabase;\n");
+        out.append("    private final com.reactor.cachedb.core.api.CacheSession cacheDatabase;\n");
         out.append("    private final com.reactor.cachedb.core.api.EntityRepository<")
                 .append(entity.typeName()).append(", ").append(entity.idField().typeName()).append("> hotRepository;\n");
         out.append("    private final com.reactor.cachedb.core.api.SourceRepository<")
@@ -1365,6 +1365,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         out.append('\n');
         out.append("    public ").append(implementationName)
                 .append("(com.reactor.cachedb.starter.CacheDatabase cacheDatabase) {\n");
+        out.append("        this((com.reactor.cachedb.core.api.CacheSession) cacheDatabase);\n    }\n\n");
+        out.append("    public ").append(implementationName).append("(com.reactor.cachedb.core.api.CacheSession cacheDatabase) {\n");
         out.append("        this.cacheDatabase = java.util.Objects.requireNonNull(cacheDatabase, \"cacheDatabase\");\n");
         out.append("        this.hotRepository = ").append(entity.bindingTypeName()).append(".repository(cacheDatabase);\n");
         out.append("        this.sourceRepository = cacheDatabase.sourceRepository(")

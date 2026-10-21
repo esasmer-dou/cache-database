@@ -44,6 +44,7 @@ final class CacheScheduledWarmRegistrar implements SmartInitializingSingleton, D
 
     @Override
     public void afterSingletonsInstantiated() {
+        if (coordinator.clientOnly()) return;
         Set<String> registeredNames = new LinkedHashSet<>();
         for (CacheScheduledWarmTask task : tasks) {
             register(task, registeredNames);

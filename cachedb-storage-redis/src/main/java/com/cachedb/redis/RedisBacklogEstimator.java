@@ -20,6 +20,28 @@ public final class RedisBacklogEstimator {
             RedisClientOperations jedis,
             RedisKeyStrategy keyStrategy,
             WriteBehindConfig writeBehindConfig) {
+        if (keyStrategy instanceof ClusterHashTagKeyStrategy cluster
+                && cluster.namespaceSharded()) {
+            long total = 0;
+            for (String namespace : cluster.namespaces()) {
+                long streamCount = 0;
+                for (String stream : writeBehindConfig.activeStreamKeys()) {
+                    streamCount +=
+                            safeStreamLength(jedis, cluster.writeStreamKey(stream, namespace));
+                }
+                if (writeBehindConfig.durableCompactionEnabled()) {
+                    Map<String, String> stats =
+                            safeStats(jedis, cluster.compactionStatsKey(namespace));
+                    if (!stats.isEmpty()) {
+                        // Atomic envelopes share the streams but are not compaction-stat entries.
+                        total += Math.max(parseLong(stats.get("pendingCount")), streamCount);
+                        continue;
+                    }
+                }
+                total += streamCount;
+            }
+            return total;
+        }
         return estimateWriteBehindBacklog(
                 jedis,
                 keyStrategy,
@@ -67,6 +89,16 @@ public final class RedisBacklogEstimator {
     }
 
     public static long pendingCount(RedisClientOperations jedis, RedisKeyStrategy keyStrategy) {
+        if (keyStrategy instanceof ClusterHashTagKeyStrategy cluster
+                && cluster.namespaceSharded()) {
+            long total = 0;
+            for (String namespace : cluster.namespaces())
+                total +=
+                        parseLong(
+                                safeStats(jedis, cluster.compactionStatsKey(namespace))
+                                        .get("pendingCount"));
+            return total;
+        }
         return parseLong(safeStats(jedis, keyStrategy).get("pendingCount"));
     }
 
@@ -76,8 +108,12 @@ public final class RedisBacklogEstimator {
 
     private static Map<String, String> safeStats(
             RedisClientOperations jedis, RedisKeyStrategy keyStrategy) {
+        return safeStats(jedis, keyStrategy.compactionStatsKey());
+    }
+
+    private static Map<String, String> safeStats(RedisClientOperations jedis, String statsKey) {
         try {
-            return jedis.commands().hgetAll(keyStrategy.compactionStatsKey());
+            return jedis.commands().hgetAll(statsKey);
         } catch (RuntimeException exception) {
             return Map.of();
         }

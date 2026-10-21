@@ -1,18 +1,24 @@
 package com.reactor.cachedb.mssql;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.reactor.cachedb.core.config.WriteBehindConfig;
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.registry.EntityRegistry;
+
 import org.junit.jupiter.api.Test;
 
-import javax.sql.DataSource;
 import java.io.PrintWriter;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -26,12 +32,23 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Logger;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import javax.sql.DataSource;
 
 class MssqlWriteBehindFlusherTest {
+    @Test
+    void incompleteFenceBatchRollsBackBeforeBusinessDml() {
+        RecordingDataSource dataSource = new RecordingDataSource(1, false);
+        dataSource.incompleteFenceBatch = true;
+        var flusher = new MssqlWriteBehindFlusher(dataSource, emptyRegistry());
+        var failure =
+                assertThrows(
+                        SQLException.class,
+                        () -> flusher.flush(operation(OperationType.UPSERT, "1", 1)));
+        assertEquals("CDB03", failure.getSQLState());
+        assertTrue(dataSource.rolledBack);
+        assertFalse(dataSource.committed);
+        assertTrue(dataSource.sqlCalls.isEmpty());
+    }
 
     @Test
     void shouldUpdateThenInsertWhenRowDoesNotExist() throws Exception {
@@ -83,18 +100,17 @@ class MssqlWriteBehindFlusherTest {
     @Test
     void shouldChunkLargeBatchesByConfiguredTransactionSize() throws Exception {
         RecordingDataSource dataSource = new RecordingDataSource(1, false);
-        WriteBehindConfig config = WriteBehindConfig.builder()
-                .maxFlushBatchSize(2)
-                .build();
-        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(dataSource, emptyRegistry(), config);
+        WriteBehindConfig config = WriteBehindConfig.builder().maxFlushBatchSize(2).build();
+        MssqlWriteBehindFlusher flusher =
+                new MssqlWriteBehindFlusher(dataSource, emptyRegistry(), config);
 
-        flusher.flushBatch(List.of(
-                operation(OperationType.UPSERT, "1", 1),
-                operation(OperationType.UPSERT, "2", 2),
-                operation(OperationType.UPSERT, "3", 3),
-                operation(OperationType.UPSERT, "4", 4),
-                operation(OperationType.UPSERT, "5", 5)
-        ));
+        flusher.flushBatch(
+                List.of(
+                        operation(OperationType.UPSERT, "1", 1),
+                        operation(OperationType.UPSERT, "2", 2),
+                        operation(OperationType.UPSERT, "3", 3),
+                        operation(OperationType.UPSERT, "4", 4),
+                        operation(OperationType.UPSERT, "5", 5)));
 
         assertEquals(3, dataSource.statementKinds().size());
         assertEquals(3, dataSource.commitCount);
@@ -105,49 +121,62 @@ class MssqlWriteBehindFlusherTest {
         RecordingDataSource dataSource = new RecordingDataSource(1, false);
         MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(dataSource, emptyRegistry());
 
-        flusher.flushBatch(List.of(
-                operation(OperationType.DELETE, "1", 1),
-                operation(OperationType.DELETE, "2", 2),
-                operation(OperationType.DELETE, "3", 3)
-        ));
+        flusher.flushBatch(
+                List.of(
+                        operation(OperationType.DELETE, "1", 1),
+                        operation(OperationType.DELETE, "2", 2),
+                        operation(OperationType.DELETE, "3", 3)));
 
         assertEquals(List.of("DELETE"), dataSource.statementKinds());
         assertEquals(1, dataSource.commitCount);
     }
 
     @Test
-    void shouldBatchMissingUpsertsIntoThreeDatabaseCommands() throws Exception {
+    void shouldBatchMissingUpsertsIntoThreeBusinessCommandsAndOneFenceBatch() throws Exception {
         RecordingDataSource dataSource = new RecordingDataSource(0, false);
         MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(dataSource, emptyRegistry());
 
-        flusher.flushBatch(List.of(
-                operation(OperationType.UPSERT, "11", 1),
-                operation(OperationType.UPSERT, "12", 1),
-                operation(OperationType.UPSERT, "13", 1)
-        ));
+        flusher.flushBatch(
+                List.of(
+                        operation(OperationType.UPSERT, "11", 1),
+                        operation(OperationType.UPSERT, "12", 1),
+                        operation(OperationType.UPSERT, "13", 1)));
 
         assertEquals(List.of("UPDATE", "SELECT", "INSERT"), dataSource.statementKinds());
         assertEquals(1, dataSource.commitCount);
+        assertEquals(
+                1,
+                dataSource.fenceSqlCalls.stream().filter(sql -> sql.startsWith("MERGE")).count());
+        assertEquals(
+                1,
+                dataSource.fenceSqlCalls.stream()
+                        .filter(sql -> sql.contains("WITH (UPDLOCK,HOLDLOCK)"))
+                        .count());
+        assertEquals(
+                1,
+                dataSource.fenceSqlCalls.stream()
+                        .filter(sql -> sql.startsWith("UPDATE cachedb_write_fence"))
+                        .count());
     }
 
     @Test
     void shouldApplySharedPoolMssqlTimeoutOptionsAndRestoreLockTimeout() throws Exception {
         RecordingDataSource dataSource = new RecordingDataSource(1, false);
-        MssqlWriteBehindOptions options = MssqlWriteBehindOptions.builder()
-                .lockTimeoutMillis(250)
-                .queryTimeoutSeconds(3)
-                .restoreLockTimeoutAfterTransaction(true)
-                .build();
-        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(
-                dataSource,
-                emptyRegistry(),
-                WriteBehindConfig.defaults(),
-                options
-        );
+        MssqlWriteBehindOptions options =
+                MssqlWriteBehindOptions.builder()
+                        .lockTimeoutMillis(250)
+                        .queryTimeoutSeconds(3)
+                        .restoreLockTimeoutAfterTransaction(true)
+                        .build();
+        MssqlWriteBehindFlusher flusher =
+                new MssqlWriteBehindFlusher(
+                        dataSource, emptyRegistry(), WriteBehindConfig.defaults(), options);
 
         flusher.flush(operation(OperationType.UPSERT, "6", 12));
 
-        assertEquals(List.of("SELECT @@LOCK_TIMEOUT", "SET LOCK_TIMEOUT 250", "SET LOCK_TIMEOUT -1"), dataSource.sessionSqlCalls);
+        assertEquals(
+                List.of("SELECT @@LOCK_TIMEOUT", "SET LOCK_TIMEOUT 250", "SET LOCK_TIMEOUT -1"),
+                dataSource.sessionSqlCalls);
         assertFalse(dataSource.queryTimeouts.isEmpty());
         assertTrue(dataSource.queryTimeouts.stream().allMatch(timeout -> timeout == 3));
     }
@@ -155,17 +184,14 @@ class MssqlWriteBehindFlusherTest {
     @Test
     void shouldUseDedicatedWorkerPoolPresetWithoutLockTimeoutRestoreRead() throws Exception {
         RecordingDataSource dataSource = new RecordingDataSource(1, false);
-        MssqlWriteBehindOptions options = MssqlWriteBehindOptions.dedicatedWorkerPoolDefaults()
-                .toBuilder()
-                .lockTimeoutMillis(300)
-                .queryTimeoutSeconds(4)
-                .build();
-        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(
-                dataSource,
-                emptyRegistry(),
-                WriteBehindConfig.defaults(),
-                options
-        );
+        MssqlWriteBehindOptions options =
+                MssqlWriteBehindOptions.dedicatedWorkerPoolDefaults().toBuilder()
+                        .lockTimeoutMillis(300)
+                        .queryTimeoutSeconds(4)
+                        .build();
+        MssqlWriteBehindFlusher flusher =
+                new MssqlWriteBehindFlusher(
+                        dataSource, emptyRegistry(), WriteBehindConfig.defaults(), options);
 
         flusher.flush(operation(OperationType.UPSERT, "7", 13));
 
@@ -176,27 +202,27 @@ class MssqlWriteBehindFlusherTest {
 
     @Test
     void shouldRejectUnsupportedMssqlOptions() {
-        assertThrows(IllegalArgumentException.class, () -> MssqlWriteBehindOptions.builder()
-                .lockTimeoutMillis(-2)
-                .build());
-        assertThrows(IllegalArgumentException.class, () -> MssqlWriteBehindOptions.builder()
-                .queryTimeoutSeconds(-1)
-                .build());
-        assertThrows(IllegalArgumentException.class, () -> MssqlWriteBehindOptions.builder()
-                .transactionIsolation(Connection.TRANSACTION_NONE)
-                .build());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> MssqlWriteBehindOptions.builder().lockTimeoutMillis(-2).build());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> MssqlWriteBehindOptions.builder().queryTimeoutSeconds(-1).build());
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        MssqlWriteBehindOptions.builder()
+                                .transactionIsolation(Connection.TRANSACTION_NONE)
+                                .build());
     }
 
     @Test
     void shouldTagStoragePerformanceBreakdownWithMssqlProvider() throws Exception {
         RecordingDataSource dataSource = new RecordingDataSource(1, false);
         StoragePerformanceCollector collector = new StoragePerformanceCollector();
-        MssqlWriteBehindFlusher flusher = new MssqlWriteBehindFlusher(
-                dataSource,
-                emptyRegistry(),
-                WriteBehindConfig.defaults(),
-                collector
-        );
+        MssqlWriteBehindFlusher flusher =
+                new MssqlWriteBehindFlusher(
+                        dataSource, emptyRegistry(), WriteBehindConfig.defaults(), collector);
 
         flusher.flush(operation(OperationType.UPSERT, "5", 11));
 
@@ -212,39 +238,42 @@ class MssqlWriteBehindFlusherTest {
                     com.reactor.cachedb.core.model.EntityCodec<T> codec,
                     com.reactor.cachedb.core.cache.CachePolicy cachePolicy,
                     com.reactor.cachedb.core.relation.RelationBatchLoader<T> relationBatchLoader,
-                    com.reactor.cachedb.core.page.EntityPageLoader<T> pageLoader
-            ) {
+                    com.reactor.cachedb.core.page.EntityPageLoader<T> pageLoader) {
                 throw new UnsupportedOperationException();
             }
 
             @Override
-            public <T, ID, P> com.reactor.cachedb.core.projection.EntityProjectionBinding<T, P, ID> registerProjection(
-                    com.reactor.cachedb.core.model.EntityMetadata<T, ID> metadata,
-                    com.reactor.cachedb.core.projection.EntityProjection<T, P, ID> projection
-            ) {
+            public <T, ID, P>
+                    com.reactor.cachedb.core.projection.EntityProjectionBinding<T, P, ID>
+                            registerProjection(
+                                    com.reactor.cachedb.core.model.EntityMetadata<T, ID> metadata,
+                                    com.reactor.cachedb.core.projection.EntityProjection<T, P, ID>
+                                            projection) {
                 throw new UnsupportedOperationException();
             }
 
             @Override
-            public Optional<com.reactor.cachedb.core.registry.EntityBinding<?, ?>> find(String entityName) {
+            public Optional<com.reactor.cachedb.core.registry.EntityBinding<?, ?>> find(
+                    String entityName) {
                 return Optional.empty();
             }
 
             @Override
-            public Optional<com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>> findProjection(
-                    String entityName,
-                    String projectionName
-            ) {
+            public Optional<com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>>
+                    findProjection(String entityName, String projectionName) {
                 return Optional.empty();
             }
 
             @Override
-            public java.util.Collection<com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>> projections(String entityName) {
+            public java.util.Collection<
+                            com.reactor.cachedb.core.projection.EntityProjectionBinding<?, ?, ?>>
+                    projections(String entityName) {
                 return List.of();
             }
 
             @Override
-            public java.util.Collection<com.reactor.cachedb.core.registry.EntityBinding<?, ?>> all() {
+            public java.util.Collection<com.reactor.cachedb.core.registry.EntityBinding<?, ?>>
+                    all() {
                 return List.of();
             }
         };
@@ -267,14 +296,16 @@ class MssqlWriteBehindFlusherTest {
                 id,
                 columns,
                 version,
-                Instant.parse("2026-04-05T13:00:00Z")
-        );
+                Instant.parse("2026-04-05T13:00:00Z"));
     }
 
     private static final class RecordingDataSource implements DataSource {
         private final int updateCount;
         private final Long currentVersion;
         private final List<String> sqlCalls = new ArrayList<>();
+        private final List<String> fenceSqlCalls = new ArrayList<>();
+        private final Map<String, String> fenceSeeds = new LinkedHashMap<>();
+        private boolean incompleteFenceBatch;
         private final List<String> sessionSqlCalls = new ArrayList<>();
         private final List<Integer> queryTimeouts = new ArrayList<>();
         private boolean committed;
@@ -295,32 +326,33 @@ class MssqlWriteBehindFlusherTest {
 
         private List<String> statementKinds() {
             return sqlCalls.stream()
-                    .map(sql -> {
-                        if (sql.startsWith("UPDATE")) {
-                            return "UPDATE";
-                        }
-                        if (sql.startsWith("SELECT")) {
-                            return "SELECT";
-                        }
-                        if (sql.startsWith("INSERT")) {
-                            return "INSERT";
-                        }
-                        if (sql.startsWith("DELETE")) {
-                            return "DELETE";
-                        }
-                        return sql;
-                    })
+                    .map(
+                            sql -> {
+                                if (sql.startsWith("UPDATE")) {
+                                    return "UPDATE";
+                                }
+                                if (sql.startsWith("SELECT")) {
+                                    return "SELECT";
+                                }
+                                if (sql.startsWith("INSERT")) {
+                                    return "INSERT";
+                                }
+                                if (sql.startsWith("DELETE")) {
+                                    return "DELETE";
+                                }
+                                return sql;
+                            })
                     .toList();
         }
 
         @Override
         public Connection getConnection() {
             InvocationHandler handler = new ConnectionHandler(this);
-            return (Connection) Proxy.newProxyInstance(
-                    Connection.class.getClassLoader(),
-                    new Class<?>[]{Connection.class},
-                    handler
-            );
+            return (Connection)
+                    Proxy.newProxyInstance(
+                            Connection.class.getClassLoader(),
+                            new Class<?>[] {Connection.class},
+                            handler);
         }
 
         @Override
@@ -334,12 +366,10 @@ class MssqlWriteBehindFlusherTest {
         }
 
         @Override
-        public void setLogWriter(PrintWriter out) {
-        }
+        public void setLogWriter(PrintWriter out) {}
 
         @Override
-        public void setLoginTimeout(int seconds) {
-        }
+        public void setLoginTimeout(int seconds) {}
 
         @Override
         public int getLoginTimeout() {
@@ -364,6 +394,7 @@ class MssqlWriteBehindFlusherTest {
 
     private static final class ConnectionHandler implements InvocationHandler {
         private final RecordingDataSource dataSource;
+        private boolean autoCommit = true;
 
         private ConnectionHandler(RecordingDataSource dataSource) {
             this.dataSource = dataSource;
@@ -372,8 +403,24 @@ class MssqlWriteBehindFlusherTest {
         @Override
         public Object invoke(Object proxy, Method method, Object[] args) {
             return switch (method.getName()) {
-                case "getAutoCommit" -> true;
-                case "setAutoCommit", "close" -> null;
+                case "getAutoCommit" -> autoCommit;
+                case "setAutoCommit" -> {
+                    autoCommit = (Boolean) args[0];
+                    yield null;
+                }
+                case "getSchema" -> "dbo";
+                case "getCatalog" -> "fixture";
+                case "getMetaData" ->
+                        Proxy.newProxyInstance(
+                                DatabaseMetaData.class.getClassLoader(),
+                                new Class<?>[] {DatabaseMetaData.class},
+                                (ignored, call, values) ->
+                                        "getPrimaryKeys".equals(call.getName())
+                                                ? rowsResultSet(
+                                                        java.util.Collections.singletonList(
+                                                                new Object[] {"fence_key"}))
+                                                : defaultValue(call.getReturnType()));
+                case "close" -> null;
                 case "getTransactionIsolation" -> Connection.TRANSACTION_READ_COMMITTED;
                 case "setTransactionIsolation" -> {
                     dataSource.requestedIsolation = (Integer) args[0];
@@ -399,126 +446,208 @@ class MssqlWriteBehindFlusherTest {
     }
 
     private static PreparedStatement preparedStatement(RecordingDataSource dataSource, String sql) {
-        dataSource.sqlCalls.add(sql);
-        InvocationHandler handler = new InvocationHandler() {
-            private int batchSize;
+        boolean fence =
+                sql.contains("cachedb_write_fence") || sql.startsWith("SELECT OBJECT_SCHEMA_NAME");
+        (fence ? dataSource.fenceSqlCalls : dataSource.sqlCalls).add(sql);
+        InvocationHandler handler =
+                new InvocationHandler() {
+                    private int batchSize;
+                    private final Map<Integer, Object> parameters = new LinkedHashMap<>();
 
-            @Override
-            public Object invoke(Object proxy, Method method, Object[] args) {
-                return switch (method.getName()) {
-                    case "executeUpdate" -> sql.startsWith("UPDATE") ? dataSource.updateCount : 1;
-                    case "executeQuery" -> resultSet(dataSource.currentVersion);
-                    case "addBatch" -> {
-                        batchSize++;
-                        yield null;
+                    @Override
+                    public Object invoke(Object proxy, Method method, Object[] args) {
+                        return switch (method.getName()) {
+                            case "executeUpdate" -> {
+                                if (fence && sql.startsWith("MERGE")) {
+                                    for (int i = 1; i <= parameters.size(); i += 2)
+                                        dataSource.fenceSeeds.put(
+                                                (String) parameters.get(i),
+                                                (String) parameters.get(i + 1));
+                                }
+                                yield fence
+                                        ? 1
+                                        : sql.startsWith("UPDATE") ? dataSource.updateCount : 1;
+                            }
+                            case "executeQuery" -> {
+                                if (sql.startsWith("SELECT OBJECT_SCHEMA_NAME"))
+                                    yield rowsResultSet(
+                                            java.util.Collections.singletonList(
+                                                    new Object[] {"dbo", "demo_table"}));
+                                if (fence) {
+                                    List<Object[]> rows = new ArrayList<>();
+                                    if (!sql.contains("WHERE 1=0"))
+                                        for (Object key : parameters.values())
+                                            rows.add(
+                                                    new Object[] {
+                                                        key, dataSource.fenceSeeds.get(key), null, 0
+                                                    });
+                                    yield rowsResultSet(rows);
+                                }
+                                yield resultSet(dataSource.currentVersion);
+                            }
+                            case "addBatch" -> {
+                                batchSize++;
+                                yield null;
+                            }
+                            case "executeBatch" -> {
+                                if (fence
+                                        && sql.startsWith("UPDATE")
+                                        && dataSource.incompleteFenceBatch) yield new int[0];
+                                int[] results = new int[batchSize];
+                                java.util.Arrays.fill(
+                                        results,
+                                        fence || sql.startsWith("INSERT")
+                                                ? 1
+                                                : dataSource.updateCount);
+                                yield results;
+                            }
+                            case "clearBatch" -> {
+                                batchSize = 0;
+                                yield null;
+                            }
+                            case "setQueryTimeout" -> {
+                                dataSource.queryTimeouts.add((Integer) args[0]);
+                                yield null;
+                            }
+                            case "setObject", "setLong", "setString", "setInt" -> {
+                                parameters.put((Integer) args[0], args[1]);
+                                yield null;
+                            }
+                            case "clearParameters" -> {
+                                parameters.clear();
+                                yield null;
+                            }
+                            case "close" -> null;
+                            default -> defaultValue(method.getReturnType());
+                        };
                     }
-                    case "executeBatch" -> {
-                        int[] results = new int[batchSize];
-                        java.util.Arrays.fill(results, sql.startsWith("INSERT") ? 1 : dataSource.updateCount);
-                        yield results;
-                    }
-                    case "clearBatch" -> {
-                        batchSize = 0;
-                        yield null;
-                    }
-                    case "setQueryTimeout" -> {
-                        dataSource.queryTimeouts.add((Integer) args[0]);
-                        yield null;
-                    }
-                    case "setObject", "setLong", "clearParameters", "close" -> null;
-                    default -> defaultValue(method.getReturnType());
                 };
-            }
-        };
-        return (PreparedStatement) Proxy.newProxyInstance(
-                PreparedStatement.class.getClassLoader(),
-                new Class<?>[]{PreparedStatement.class},
-                handler
-        );
+        return (PreparedStatement)
+                Proxy.newProxyInstance(
+                        PreparedStatement.class.getClassLoader(),
+                        new Class<?>[] {PreparedStatement.class},
+                        handler);
+    }
+
+    private static ResultSet rowsResultSet(List<Object[]> rows) {
+        InvocationHandler handler =
+                new InvocationHandler() {
+                    private int row = -1;
+                    private Object last;
+
+                    public Object invoke(Object proxy, Method method, Object[] args) {
+                        if (method.getName().equals("next")) return ++row < rows.size();
+                        if (method.getName().equals("wasNull")) return last == null;
+                        if (method.getName().equals("getString")
+                                || method.getName().equals("getLong")
+                                || method.getName().equals("getInt")) {
+                            last =
+                                    rows.get(row)[
+                                            args[0] instanceof Integer column ? column - 1 : 0];
+                            return switch (method.getName()) {
+                                case "getString" -> last == null ? null : last.toString();
+                                case "getLong" -> last == null ? 0L : ((Number) last).longValue();
+                                default -> last == null ? 0 : ((Number) last).intValue();
+                            };
+                        }
+                        return defaultValue(method.getReturnType());
+                    }
+                };
+        return (ResultSet)
+                Proxy.newProxyInstance(
+                        ResultSet.class.getClassLoader(),
+                        new Class<?>[] {ResultSet.class},
+                        handler);
     }
 
     private static Statement statement(RecordingDataSource dataSource) {
-        InvocationHandler handler = (proxy, method, args) -> switch (method.getName()) {
-            case "executeQuery" -> {
-                String sql = (String) args[0];
-                dataSource.sessionSqlCalls.add(sql);
-                yield intResultSet(dataSource.currentLockTimeout);
-            }
-            case "execute" -> {
-                String sql = (String) args[0];
-                dataSource.sessionSqlCalls.add(sql);
-                if (sql.startsWith("SET LOCK_TIMEOUT ")) {
-                    dataSource.currentLockTimeout = Integer.parseInt(sql.substring("SET LOCK_TIMEOUT ".length()));
-                }
-                yield false;
-            }
-            case "setQueryTimeout" -> {
-                dataSource.queryTimeouts.add((Integer) args[0]);
-                yield null;
-            }
-            case "close" -> null;
-            default -> defaultValue(method.getReturnType());
-        };
-        return (Statement) Proxy.newProxyInstance(
-                Statement.class.getClassLoader(),
-                new Class<?>[]{Statement.class},
-                handler
-        );
+        InvocationHandler handler =
+                (proxy, method, args) ->
+                        switch (method.getName()) {
+                            case "executeQuery" -> {
+                                String sql = (String) args[0];
+                                dataSource.sessionSqlCalls.add(sql);
+                                yield intResultSet(dataSource.currentLockTimeout);
+                            }
+                            case "execute" -> {
+                                String sql = (String) args[0];
+                                dataSource.sessionSqlCalls.add(sql);
+                                if (sql.startsWith("SET LOCK_TIMEOUT ")) {
+                                    dataSource.currentLockTimeout =
+                                            Integer.parseInt(
+                                                    sql.substring("SET LOCK_TIMEOUT ".length()));
+                                }
+                                yield false;
+                            }
+                            case "setQueryTimeout" -> {
+                                dataSource.queryTimeouts.add((Integer) args[0]);
+                                yield null;
+                            }
+                            case "close" -> null;
+                            default -> defaultValue(method.getReturnType());
+                        };
+        return (Statement)
+                Proxy.newProxyInstance(
+                        Statement.class.getClassLoader(),
+                        new Class<?>[] {Statement.class},
+                        handler);
     }
 
     private static ResultSet resultSet(Long currentVersion) {
-        InvocationHandler handler = new InvocationHandler() {
-            private boolean first = true;
+        InvocationHandler handler =
+                new InvocationHandler() {
+                    private boolean first = true;
 
-            @Override
-            public Object invoke(Object proxy, Method method, Object[] args) {
-                if ("next".equals(method.getName())) {
-                    boolean result = first && currentVersion != null;
-                    first = false;
-                    return result;
-                }
-                if ("getLong".equals(method.getName())) {
-                    return currentVersion == null ? 0L : currentVersion;
-                }
-                if ("wasNull".equals(method.getName())) {
-                    return currentVersion == null;
-                }
-                if ("close".equals(method.getName())) {
-                    return null;
-                }
-                return defaultValue(method.getReturnType());
-            }
-        };
-        return (ResultSet) Proxy.newProxyInstance(
-                ResultSet.class.getClassLoader(),
-                new Class<?>[]{ResultSet.class},
-                handler
-        );
+                    @Override
+                    public Object invoke(Object proxy, Method method, Object[] args) {
+                        if ("next".equals(method.getName())) {
+                            boolean result = first && currentVersion != null;
+                            first = false;
+                            return result;
+                        }
+                        if ("getLong".equals(method.getName())) {
+                            return currentVersion == null ? 0L : currentVersion;
+                        }
+                        if ("wasNull".equals(method.getName())) {
+                            return currentVersion == null;
+                        }
+                        if ("close".equals(method.getName())) {
+                            return null;
+                        }
+                        return defaultValue(method.getReturnType());
+                    }
+                };
+        return (ResultSet)
+                Proxy.newProxyInstance(
+                        ResultSet.class.getClassLoader(),
+                        new Class<?>[] {ResultSet.class},
+                        handler);
     }
 
     private static ResultSet intResultSet(int value) {
-        InvocationHandler handler = new InvocationHandler() {
-            private boolean first = true;
+        InvocationHandler handler =
+                new InvocationHandler() {
+                    private boolean first = true;
 
-            @Override
-            public Object invoke(Object proxy, Method method, Object[] args) {
-                return switch (method.getName()) {
-                    case "next" -> {
-                        boolean result = first;
-                        first = false;
-                        yield result;
+                    @Override
+                    public Object invoke(Object proxy, Method method, Object[] args) {
+                        return switch (method.getName()) {
+                            case "next" -> {
+                                boolean result = first;
+                                first = false;
+                                yield result;
+                            }
+                            case "getInt" -> value;
+                            case "close" -> null;
+                            default -> defaultValue(method.getReturnType());
+                        };
                     }
-                    case "getInt" -> value;
-                    case "close" -> null;
-                    default -> defaultValue(method.getReturnType());
                 };
-            }
-        };
-        return (ResultSet) Proxy.newProxyInstance(
-                ResultSet.class.getClassLoader(),
-                new Class<?>[]{ResultSet.class},
-                handler
-        );
+        return (ResultSet)
+                Proxy.newProxyInstance(
+                        ResultSet.class.getClassLoader(),
+                        new Class<?>[] {ResultSet.class},
+                        handler);
     }
 
     private static Object defaultValue(Class<?> returnType) {

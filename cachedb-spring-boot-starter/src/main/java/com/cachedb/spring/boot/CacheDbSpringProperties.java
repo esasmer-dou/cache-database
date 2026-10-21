@@ -14,6 +14,11 @@ import java.util.Map;
 public class CacheDbSpringProperties implements InitializingBean {
 
     private boolean enabled = true;
+    private com.reactor.cachedb.core.config.CacheRuntimeRole runtimeRole = com.reactor.cachedb.core.config.CacheRuntimeRole.FULL;
+    public com.reactor.cachedb.core.config.CacheRuntimeRole getRuntimeRole() { return runtimeRole; }
+    public void setRuntimeRole(com.reactor.cachedb.core.config.CacheRuntimeRole role) {
+        runtimeRole = java.util.Objects.requireNonNull(role, "runtimeRole");
+    }
     private Profile profile = Profile.DEFAULT;
     private final RedisProperties redis = new RedisProperties();
     private final SqlProperties sql = new SqlProperties();

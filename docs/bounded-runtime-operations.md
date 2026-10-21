@@ -4,6 +4,8 @@ The APIs on this page require 0.13.0 or later. Align the BOM, processor and prov
 starter before recompiling generated bindings. Read the
 [release notes](releases/v0.13.0.md) before changing an existing storage contract.
 
+For the 0.14.0 additions, see [typed snapshots, runtime roles and consumer tests](typed-snapshots-runtime-testing.md).
+
 ## Choose the Boundary
 
 | Requirement | Use | Important limit |
@@ -89,8 +91,10 @@ repository.refreshRoots(List.of("9001", "9002")); // Explicit command, never tri
 
 A full refresh stages payloads, partition indexes and metadata together before one
 active-generation switch. Reads remain Redis-only. Cursors bind the plan, partition,
-generation and revision. A full or partial refresh invalidates old cursors; restart
-from the first window. Page size is bounded by WindowRequest (maximum 1,000),
+generation and revision. In 0.13 a full or partial refresh invalidates old cursors.
+In 0.14 a partial refresh invalidates only the affected old/new partitions; a full
+refresh still invalidates every old generation cursor. Restart affected windows.
+Page size is bounded by WindowRequest (maximum 1,000),
 and payload bytes by `batch-target-size` (4 MiB by default). An oversized page fails
 instead of silently returning a partial answer; reduce the window or use point reads.
 
@@ -240,16 +244,17 @@ use the database's operation adapters. Set distributed-job/operational prefixes 
 the same tag where their scripts require it; do not leave independently configured
 operational stream prefixes unreviewed.
 
-The full CacheDatabase requires a tagged coordination scope and matching write
-streams; startup rejects mismatched slots. Related entities in one atomic batch
-must share that scope. Separate tenant/domain scopes can occupy different slots;
-one very large single scope is not automatically split across nodes.
-Low-level ClusterHashTagKeyStrategy("cachedb") uses `{entityNamespace}` and preserves
-the owner tag for projection namespaces. Its streamKey(namespace) must be used with
-the corresponding independently configured consumer. There is no cross-slot ACID.
+In 0.13 the full CacheDatabase requires a tagged coordination scope and matching
+streams. In 0.14 an untagged prefix instead selects namespace sharding, including
+slot-local write/compaction streams handled by the bounded worker pool. An explicit
+tag retains the shared-slot behavior and rejects mismatched stream slots.
+Related entities in one atomic batch must share a slot; a large individual
+namespace or shared scope is not automatically split across nodes.
+Projection namespaces preserve their owning entity's tag. There is no cross-slot ACID.
 
 The adapter supports primary-node bounded SCAN, slot-grouped MGET/DELETE, Cluster
-pipelines and function loading across primaries. Memory guardrails inspect the scope's
-own primary rather than averaging away an overloaded shard. Observe every shard
+pipelines and function loading across primaries. From 0.14, memory guardrails sample
+current primaries and use the highest relative memory pressure, rather than an
+average that hides a full shard (used bytes break equal-pressure ties). Observe every shard
 separately. Reshard/failover/replication durability and customer staging acceptance
 remain deployment responsibilities; a three-primary local test is not HA certification.

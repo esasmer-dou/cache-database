@@ -5,6 +5,12 @@ on:
   pull_request:
     paths:
       - "cachedb-spring-boot-starter/**"
+      - "cachedb-core/**"
+      - "cachedb-json/**"
+      - "cachedb-annotations/**"
+      - "cachedb-examples/**"
+      - "cachedb-starter/**"
+      - "cachedb-processor/**"
       - "cachedb-storage-*/**"
       - "cachedb-bom/**"
       - "tools/ci/**"
@@ -14,6 +20,12 @@ on:
     branches: [main]
     paths:
       - "cachedb-spring-boot-starter/**"
+      - "cachedb-core/**"
+      - "cachedb-json/**"
+      - "cachedb-annotations/**"
+      - "cachedb-examples/**"
+      - "cachedb-starter/**"
+      - "cachedb-processor/**"
       - "cachedb-storage-*/**"
       - "cachedb-bom/**"
       - "tools/ci/**"
@@ -24,6 +36,65 @@ permissions:
   contents: read
 
 jobs:
+  in-memory-latency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: semeru
+          java-version: "21"
+          cache: maven
+      - name: Build generated codec probe
+        run: mvn -B -ntp -pl cachedb-examples -am package -DskipTests
+      - name: Require all generated-codec cold and repeated samples below 50 ms
+        shell: pwsh
+        run: ./tools/ci/check-jackson-free-latency.ps1 -SkipBuild -PackagedArtifacts
+      - name: Verify original unit contracts and report full-method setup timings
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./tools/ci/check-inmemory-latency.ps1 -ReportOnly
+      - name: Upload every latency sample including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: in-memory-latency
+          path: |
+            target/jackson-free-latency/
+            target/inmemory-unit-latency/
+          if-no-files-found: error
+  json-codec-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:8-alpine
+        ports: ["16383:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Verify generated JSON parity and warm without Jackson JARs
+        run: >-
+          mvn -B -ntp -pl cachedb-examples,cachedb-processor -am test
+          "-Dtest=JsonArrayCodecTest,Utf8LengthTest,StreamingJsonCodecTest,JsonTokenWriterTest,JsonUtf8WriterTest,CacheJsonRecordProcessorTest,CachePolicyValueSemanticsTest,QueryEvaluatorOrderingTest,JacksonFreeSnapshot*Test,TypedSnapshotRepositoryTest,SnapshotContractTest"
+          -Dsurefire.failIfNoSpecifiedTests=false -Dcachedb.snapshot.redis=true
+      - name: Upload JSON contract evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: json-codec-contracts
+          path: |
+            cachedb-json/target/surefire-reports/
+            cachedb-processor/target/surefire-reports/
+            cachedb-spring-boot-starter/target/surefire-reports/
+            cachedb-examples/target/surefire-reports/
+          if-no-files-found: error
   redis-cluster-evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -36,16 +107,21 @@ jobs:
           cache: maven
       - name: Start isolated Redis and three primary shards
         run: |
-          docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml up -d redis cluster1 cluster2 cluster3
+          docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml up -d redis postgres cluster1 cluster2 cluster3
           for attempt in $(seq 1 30); do
             docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml exec -T cluster1 redis-cli -p 7001 ping && break
             sleep 1
           done
           docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml exec -T cluster1 redis-cli -p 7001 --cluster create cluster1:7001 cluster2:7002 cluster3:7003 --cluster-replicas 0 --cluster-yes
+          for attempt in $(seq 1 30); do
+            docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml exec -T postgres pg_isready -U postgres && break
+            sleep 1
+          done
+          docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml exec -T postgres pg_isready -U postgres
       - name: Verify Cluster routing, publication and envelope retry
         run: >-
           mvn -B -ntp -pl cachedb-spring-boot-starter -am test
-          "-Dtest=RedisClusterOperationsTest,RedisAtomicWriteBatchTest,SnapshotIndexDeltaRedisTest"
+          "-Dtest=RedisClusterOperationsTest,ClusterNamespaceShardingTest,CacheRuntimeRoleTest,AtomicWriteBatchEnvelopeCleanTest,RedisAtomicWriteBatchTest,TypedSnapshotRepositoryTest,SnapshotPartitionCursorIsolationTest,SnapshotStreamingTest,SnapshotIndexDeltaRedisTest,JacksonFreeSnapshotTest,JacksonFreeSnapshotRedisTest,StreamingJsonCodecTest,JsonTokenWriterTest,InMemoryCacheRepositoryTest,JdbcPooledSequenceIdGeneratorTest"
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dcachedb.snapshot.redis=true -Dcachedb.redis.cluster=true
       - name: Upload Cluster results
@@ -55,6 +131,9 @@ jobs:
           name: redis-cluster-evidence
           path: |
             cachedb-storage-redis/target/surefire-reports/
+            cachedb-core/target/surefire-reports/
+            cachedb-starter/target/surefire-reports/
+            cachedb-storage-jdbc/target/surefire-reports/
             cachedb-spring-boot-starter/target/surefire-reports/
           if-no-files-found: error
       - name: Stop isolated services
@@ -112,7 +191,7 @@ jobs:
           MAVEN_OPTS: -Xmx512m
         run: >-
           mvn -B -ntp -pl cachedb-spring-boot-starter -am test
-          "-Dtest=Snapshot*Test,FrameworkV013ProvidersTest,RedisAtomicWriteBatchTest,CacheScheduledWarmCoordinatorTest,JdbcPooledSequenceIdGeneratorTest,JdbcOutboxPartitionTest"
+          "-Dtest=Snapshot*Test,JacksonFreeSnapshot*Test,StreamingJsonCodecTest,JsonTokenWriterTest,TypedSnapshotRepositoryTest,InMemoryCacheRepositoryTest,CacheRuntimeRoleTest,AtomicWriteBatchEnvelopeCleanTest,FrameworkV013ProvidersTest,WriteFenceProvidersIntegrationTest,RedisAtomicWriteBatchTest,CacheScheduledWarmCoordinatorTest,JdbcPooledSequenceIdGeneratorTest,JdbcOutboxPartitionTest"
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dcachedb.snapshot.providers=true -Dcachedb.snapshot.redis=true
           -Dcachedb.test.redis.uri=redis://127.0.0.1:16383 -Dcachedb.test.redis.required=true

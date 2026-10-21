@@ -5,6 +5,26 @@ import java.util.Objects;
 /** One atomic scope occupies one slot; use independent scopes to distribute memory. */
 public final class ClusterHashTagKeyStrategy extends RedisKeyStrategy {
     private final boolean scoped;
+    private java.util.function.Supplier<? extends java.util.Collection<String>> namespaces =
+            java.util.List::of;
+
+    public void registeredNamespaces(
+            java.util.function.Supplier<? extends java.util.Collection<String>> namespaces) {
+        this.namespaces = Objects.requireNonNull(namespaces);
+    }
+
+    public java.util.List<String> namespaces() {
+        return java.util.List.copyOf(namespaces.get());
+    }
+
+    public java.util.List<String> activeStreamKeys(
+            com.reactor.cachedb.core.config.WriteBehindConfig config) {
+        if (scoped) return config.activeStreamKeys();
+        java.util.List<String> result = new java.util.ArrayList<>();
+        for (String ns : namespaces())
+            for (String base : config.activeStreamKeys()) result.add(writeStreamKey(base, ns));
+        return result;
+    }
 
     public ClusterHashTagKeyStrategy(String prefix) {
         super(Objects.requireNonNull(prefix, "prefix"));
@@ -14,6 +34,41 @@ public final class ClusterHashTagKeyStrategy extends RedisKeyStrategy {
 
     public ClusterHashTagKeyStrategy(String prefix, String scope) {
         this(scopedPrefix(prefix, scope));
+    }
+
+    public ClusterHashTagKeyStrategy(com.reactor.cachedb.core.config.KeyspaceConfig config) {
+        super(
+                config.keyPrefix(),
+                config.entitySegment(),
+                config.pageSegment(),
+                config.versionSegment(),
+                config.tombstoneSegment(),
+                config.hotSetSegment(),
+                config.indexSegment(),
+                config.compactionSegment());
+        scoped = config.keyPrefix().contains("{");
+        if (scoped) validateTagged(config.keyPrefix());
+    }
+
+    public boolean namespaceSharded() {
+        return !scoped;
+    }
+
+    @Override
+    public String writeStreamKey(String base, String namespace) {
+        return scoped
+                ? base
+                : streamKey(namespace) + ":" + base.replace('{', '_').replace('}', '_');
+    }
+
+    @Override
+    public String compactionStreamKey(String base, String namespace, Object id, int shards) {
+        return super.compactionStreamKey(writeStreamKey(base, namespace), namespace, id, shards);
+    }
+
+    @Override
+    public String compactionStatsKey(String namespace) {
+        return scoped ? compactionStatsKey() : namespacePrefix(namespace) + ":compaction:stats";
     }
 
     public static String scopedPrefix(String prefix, String scope) {
@@ -47,6 +102,6 @@ public final class ClusterHashTagKeyStrategy extends RedisKeyStrategy {
     }
 
     public String streamKey(String namespace) {
-        return entityKey(namespace, "").replace(":entity:", ":stream:write-behind");
+        return namespacePrefix(namespace) + ":stream:write-behind";
     }
 }

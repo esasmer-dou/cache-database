@@ -11,6 +11,7 @@
 [Hızlı kurulum](#5-dakikada-spring-boot-kurulumu) |
 [İlişkiler](#relation-nasıl-düşünülmeli) |
 [Projection](#projection-ne-zaman-şart) |
+[Tipli snapshot, roller ve testler](docs/tipli-snapshot-roller-testler.md) |
 [Canlı ortam](#productiona-yakın-kullanım-için-kısa-kontrol-listesi) |
 [Dokümanlar](#bu-repoda-nereden-başlamalısın)
 
@@ -41,28 +42,33 @@ doğrulanmalıdır.
 | Sürüm bilgisi | Değer |
 | --- | --- |
 | Yayımlanmış son sürüm | [GitHub sürümü](https://github.com/esasmer-dou/cache-database/releases/latest) |
-| Repo sürümü | `0.13.0` |
+| Repo sürümü | `0.14.0` |
 | Kütüphane bytecode seviyesi | Java 17 |
 | Çalıştırılabilir örnekler | Java 21 |
-| Yerel kanıt topolojisi | Redis 8.2.1, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 ve lisanslı self-hosted runner üzerinde Oracle 19c fiziksel Data Guard |
+| Yerel sağlayıcı test topolojisi | Redis 8, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 |
 | Uygulama API'si | Derleme sırasında üretilen `@CacheRepository` interface'leri |
 
-Çok tablodan hazırlanan bir API cevabını yenilemek için [tanımla katalog yenileme rehberini](docs/snapshot-projectionlar.md) kullanın. Kaynak, projection ve ayarları tanımlayın; dosya, partileme, kilit ve güvenli yayını framework yönetsin.
+Çok tablodan hazırlanan bir API cevabını yenilemek için [tanımlı katalog yenileme rehberini](docs/snapshot-projectionlar.md) kullanın. Kaynak, projection ve ayarları tanımlayın; dosya, partileme, kilit ve güvenli yayını framework yönetsin.
 
-## Güncel Sürüm: 0.13.0
+## Güncel Sürüm: 0.14.0
 
-`0.13.0`; yeni kaynak tipleri ve tipli ilişkiler, indeksli ve artımlı katalog,
-açık kayıt limitleri, parçalı outbox tüketimi, atomik yazım zarfı, ortak sequence
-kimlikleri ve Redis Cluster adaptörleri ekler. Ana proje ve tüm modüller bu sürümü
-SNAPSHOT eki olmadan kullanır. Sözleşmeler ve yükseltme uyarıları için
-[v0.13.0 sürüm notlarını](docs/releases/v0.13.0.md) ve
+`0.14.0`; Jackson'sız üretilen JSON codec'lerini, durum bilgisi taşıyan tipli
+snapshot'ları, istemci/worker dağıtım rollerini ve altyapı gerektirmeyen test
+araçlarını ekler. Kalıcı SQL sürüm bilgisi, fiziksel olarak silinen bir kaydın
+eski bir yazma mesajıyla yeniden oluşturulmasını engeller. Sözleşmeler ve geçiş için
+[v0.14.0 sürüm notlarını](docs/releases/v0.14.0.md) ve
 [sınırlı çalışma rehberini](docs/sinirli-calisma-islemleri.md) okuyun.
 
-BOM, annotation processor ve sağlayıcı starter'ını `0.13.0` ile eşitleyin.
-Üretilmiş binding'leri yeniden derleyin. Yükseltmeden önce nullable boolean,
-sıfır kayıt limiti, katalog saklama biçimi ve atomik batch sınırlarını inceleyin.
-Framework paketinin yayımlanması, uygulamanızın canlı ortam yollarını veya
-Oracle HA topolojisini kendiliğinden doğrulamaz.
+BOM, annotation processor ve sağlayıcı starter'ını `0.14.0` ile eşitleyin.
+Üretilmiş binding'leri yeniden derleyin; [kalıcı sürüm tablosunu](docs/kalici-yazma-surumleri.md)
+hazırlayın ve geçişten önce eski worker'ları devreden çıkarın. Framework paketinin
+yayımlanması; uygulamanızın canlı ortam yollarını, Oracle Data Guard veya
+SQL Server Always On topolojisini kendiliğinden doğrulamaz.
+
+Katı 50 ms test hedefi, ilk kullanım dâhil Jackson'sız üretilen codec/snapshot
+senaryolarına uygulanır. Eski mapper API'lerinin uyumluluğu test edilir;
+çağıranın mapper oluşturması ve JUnit metodunun toplam süresi ayrıca raporlanır.
+Bu hedef, her ortamda geçerli bir canlı sistem gecikmesi garantisi değildir.
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -117,7 +123,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
 | "Repository'leri güvenli biçimde nasıl tanımlar ve işletirim?" | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| "Güncel sürümde neler değişti?" | [v0.13.0 Sürüm Notları](docs/releases/v0.13.0.md) |
+| "Güncel sürümde neler değişti?" | [v0.14.0 Sürüm Notları](docs/releases/v0.14.0.md) |
 | "Çalışan REST API örneği nerede?" | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) örneği |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Oracle provider sözleşmesi nedir?" | [Oracle Provider](docs/oracle-provider.md) |
@@ -168,13 +174,13 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut. `0.13.0`, kimlik
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.14.0`, kimlik
 doğrulaması istemeyen CacheDB Maven deposu ve GitHub Release paketi üzerinden
 sunulan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.13.0</cachedb.version>
+    <cachedb.version>0.14.0</cachedb.version>
     <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -392,6 +398,7 @@ Davranış:
 
 - `save` entity'yi Redis'e yazar.
 - Kalıcı yazım seçilen SQL write-behind hattına girer.
+- 0.14.0'a geçerken yeni worker'ları açmadan önce ayrı [kalıcı sürüm tablosunu](docs/kalici-yazma-surumleri.md) hazırlayın; iş tabloları değişmez.
 - `detail` yalnızca Redis'ten okur; `NOT_CACHED`, SQL satırının olmadığı
   anlamına gelmez.
 - Entity etkin veri politikasına uymuyorsa Redis’e kabul edilmeyebilir veya Redis’ten

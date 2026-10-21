@@ -87,6 +87,7 @@ public class CacheDatabaseSpringBootAutoConfiguration {
     }
 
     @Bean(name = "cacheDbScheduledWarmTaskScheduler")
+    @org.springframework.context.annotation.Conditional(CacheWorkerRoleCondition.class)
     @ConditionalOnMissingBean(name = "cacheDbScheduledWarmTaskScheduler")
     @ConditionalOnProperty(
             prefix = "cachedb.scheduled-warm",
@@ -118,6 +119,7 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                     customizers) {
         CacheDatabaseConfig.Builder builder =
                 baseConfigForProfile(properties.getProfile()).toBuilder()
+                        .runtimeRole(properties.getRuntimeRole())
                         .runtimeCoordination(
                                 RuntimeCoordinationConfig.builder()
                                         .instanceId(properties.getRuntime().getInstanceId())
@@ -332,6 +334,7 @@ public class CacheDatabaseSpringBootAutoConfiguration {
             name = "enabled",
             havingValue = "true",
             matchIfMissing = true)
+    @org.springframework.context.annotation.Conditional(CacheWorkerRoleCondition.class)
     CacheScheduledWarmCoordinator cacheScheduledWarmCoordinator(
             CacheDatabase cacheDatabase,
             @Qualifier("cacheDbBackgroundJedisPooled")
@@ -362,6 +365,7 @@ public class CacheDatabaseSpringBootAutoConfiguration {
             name = "enabled",
             havingValue = "true",
             matchIfMissing = true)
+    @org.springframework.context.annotation.Conditional(CacheWorkerRoleCondition.class)
     public CacheDistributedJobExecutor cacheDistributedJobExecutor(
             CacheDatabase cacheDatabase,
             @Qualifier("cacheDbBackgroundJedisPooled")
@@ -380,7 +384,7 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                 objectMapperProvider.getIfAvailable(ObjectMapper::new),
                 cacheDatabase.instanceId(),
                 properties.getJobs(),
-                handlerProvider.orderedStream().toList());
+                handlerProvider.orderedStream().toList(), cacheDatabase.config().runtimeRole().runsWorkers());
     }
 
     /**

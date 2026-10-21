@@ -9,6 +9,7 @@ import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
+import com.reactor.cachedb.jdbc.JdbcWriteFence;
 import com.reactor.cachedb.jdbc.VersionGuardedWriteSupport;
 
 import java.sql.Connection;
@@ -31,6 +32,7 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
     private final StoragePerformanceCollector performanceCollector;
     private final OracleWriteBehindOptions options;
     private final int transactionBatchSize;
+    private final JdbcWriteFence writeFence;
 
     public OracleWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry) {
         this(
@@ -64,6 +66,12 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
         this.entityRegistry = java.util.Objects.requireNonNull(entityRegistry, "entityRegistry");
         this.performanceCollector = performanceCollector;
         this.options = options == null ? OracleWriteBehindOptions.defaults() : options;
+        this.writeFence =
+                new JdbcWriteFence(
+                        dataSource,
+                        entityRegistry,
+                        JdbcWriteFence.Provider.ORACLE,
+                        this.options.queryTimeoutSeconds());
         WriteBehindConfig resolvedConfig = config == null ? WriteBehindConfig.defaults() : config;
         this.transactionBatchSize = Math.max(1, resolvedConfig.maxFlushBatchSize());
     }
@@ -111,6 +119,7 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
         if (operations.isEmpty()) {
             return;
         }
+        writeFence.initialize();
         try (Connection connection = dataSource.getConnection()) {
             executeInTransaction(connection, operations);
         } catch (SQLException failure) {
@@ -144,6 +153,8 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
 
     @Override
     public void flushAtomicBatch(List<QueuedWriteOperation> operations) throws SQLException {
+        if (operations.isEmpty()) return;
+        writeFence.initialize();
         // No per-row duplicate recovery: an atomic group must be retried as one unit.
         try (Connection connection = dataSource.getConnection()) {
             executeInTransaction(connection, operations, true);
@@ -164,6 +175,7 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
         connection.setAutoCommit(false);
         try {
             connection.setTransactionIsolation(options.transactionIsolation());
+            operations = writeFence.filter(connection, operations);
             if (preserveOrder) {
                 for (var operation : operations)
                     executeGroup(

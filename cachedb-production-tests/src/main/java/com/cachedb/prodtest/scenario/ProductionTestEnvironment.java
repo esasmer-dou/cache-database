@@ -58,6 +58,24 @@ final class ProductionTestEnvironment {
         return postgresDataSource().getConnection();
     }
 
+    // Destructive fixture reset only, after its business table has been dropped.
+    // Never use this as a production tombstone retention policy.
+    static void resetFixtureWriteFence(Connection connection, String table) throws SQLException {
+        if (!table.matches("cachedb_prodtest_[a-z_]+")) throw new IllegalArgumentException("Not a production-test fixture table");
+        try (var statement = connection.createStatement();
+             var result = statement.executeQuery("SELECT to_regclass('cachedb_write_fence')")) {
+            result.next();
+            if (result.getString(1) == null) return;
+        }
+        String schema = connection.getSchema();
+        String scope = schema.length() + ":" + schema + table;
+        String prefix = (scope.length() + ":" + scope).replace("!", "!!").replace("_", "!_").replace("%", "!%");
+        try (var statement = connection.prepareStatement("DELETE FROM cachedb_write_fence WHERE identity_value LIKE ? ESCAPE '!'")) {
+            statement.setString(1, prefix + "%");
+            statement.executeUpdate();
+        }
+    }
+
     static String redisPassword() {
         return property("cachedb.prod.redis.password", "cachedb.it.redis.password", DEFAULT_REDIS_PASSWORD);
     }

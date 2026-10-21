@@ -5,6 +5,8 @@ Uygulama kaynakları, iş kuralını ve ayarları tanımlar.
 JDBC döngüsü, geçici dosya, partileme, kilit ve yayın CacheDB'ye aittir.
 
 SnapshotPlan 0.11.0 ile gelir. Kısa kaynak tanımları için 0.12.0 gerekir.
+0.14.0 ile gelen tipli okuma, streaming ve çalışma rolleri için
+[tipli snapshot rehberine](tipli-snapshot-roller-testler.md) bakın.
 PostgreSQL, SQL Server ve Oracle desteklenir.
 H2 yalnızca yalıtılmış testlerde kullanılır. Tanınmayan veritabanında yenileme başlamaz.
 
@@ -86,7 +88,9 @@ jobs, Spring'den alınan SnapshotOperations arayüzüdür.
 Her kök için JSON dizisi tutulur. Eksik kök ile hazırlanmış boş dizi farklıdır.
 Repository SQL'e gitmez ve warm başlatmaz.
 HTTP yetkisini ve SnapshotValue.refreshedAt üzerinden yaş kontrolünü uygulama yapar.
-warn-age ve max-age ortak ayarlardır; repository kendiliğinden HTTP hatası üretmez.
+0.14'te `lookupRaw` ve tipli okumalar, warn-age aşımını `STALE_WARNING` olarak bildirir.
+`warn-age=PT0S` uyarıyı kapatır. max-age kararı uygulamaya aittir;
+repository kendiliğinden HTTP hatası üretmez.
 
 İkinci yenileme BUSY döner; kuyruk biriktirilmez.
 Yakın zamanda tamamlanan periyodik iş için diğer pod NOT_DUE alır.
@@ -141,8 +145,10 @@ Artımlı yenilemede her kaynak için SnapshotRootScope verin; ardından
 jobs.refreshRoots("order-timeline", List.of("9001")) çağırın.
 Seçilen kapsam tek tutarlı SQL bağlantısından okunur. İçerik ve indeks birlikte
 değişir; bulunmayan kök silinir. Dokunulmayan kayıt eski veri yaşını korur.
-Bütün kataloğun saklama süresi uzatılmaz. Tam ve artımlı yenileme eski cursor'u
-geçersiz kılar. İçerik paylaşımı değişmeyen JSON'u yeniden kullanır; SQL okumasını
+Bütün kataloğun saklama süresi uzatılmaz. 0.13'te tam ve artımlı yenileme eski cursor'u
+geçersiz kılar. 0.14'te artımlı yenileme yalnızca etkilenen eski/yeni bölümlerin
+cursor'larını geçersiz kılar; tam yayın bütün eski nesil cursor'larını geçersiz kılar.
+İçerik paylaşımı değişmeyen JSON'u yeniden kullanır; SQL okumasını
 ve değişen içeriklerin geçici bellek maliyetini kaldırmaz.
 Tam kapsam örneği, limitler ve Cluster ayarları için
 [sınırlı çalışma rehberini](sinirli-calisma-islemleri.md) okuyun.
@@ -170,7 +176,9 @@ Hazırlık süresi iş timeout'undan küçük olmalıdır.
 interval + timeout < max-age; retention > max-age + timeout olmalıdır.
 Okuma ana Redis havuzunu, yenileme arka plan havuzunu kullanır.
 
-Kaynak kayıtlar ve ilişki indeksleri heap'tedir. JSON dosyada hazırlanır.
+Çok kaynaklı ve standart planlarda kaynak kayıtlar ile ilişki indeksleri JVM belleğindedir.
+0.14'te açık `SnapshotPlan.streaming` tanımı, bağımsız köklerin listesini bellekte
+biriktirmeden JSON dosyasına aktarır. Geçici dosya indeksi yine bellekte tutulur.
 Bir yayın partisi ve tek büyük cevap yine bellek kullanır.
 Redis aynı anda eski ve yeni kataloğu tutar. İki katalog, ek yük ve diğer verileri ölçerek bütçe ayırın.
 Katalog bütünlüğü için ayrılmış alan ve noeviction politikasını değerlendirin.

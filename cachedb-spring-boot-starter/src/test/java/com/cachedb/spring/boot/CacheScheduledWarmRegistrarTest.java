@@ -41,6 +41,7 @@ class CacheScheduledWarmRegistrarTest {
             registrar.afterSingletonsInstantiated();
 
             verify(coordinator).register("test-active-window");
+            verify(coordinator).clientOnly();
             verifyNoMoreInteractions(coordinator);
         } finally {
             registrar.destroy();

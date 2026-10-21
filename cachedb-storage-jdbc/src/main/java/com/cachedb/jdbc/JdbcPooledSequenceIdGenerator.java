@@ -15,6 +15,7 @@ public final class JdbcPooledSequenceIdGenerator {
     private final int queryTimeoutSeconds;
     private long[] buffer = new long[0];
     private int position;
+    private final java.util.concurrent.locks.ReentrantLock lock = new java.util.concurrent.locks.ReentrantLock();
 
     public JdbcPooledSequenceIdGenerator(DataSource source, String sequence, int allocationSize) {
         this(source, sequence, allocationSize, 5);
@@ -36,13 +37,18 @@ public final class JdbcPooledSequenceIdGenerator {
         this.queryTimeoutSeconds = timeoutSeconds;
     }
 
-    public synchronized long nextId() {
-        if (position == buffer.length) allocate();
-        return buffer[position++];
+    public long nextId() {
+        lock.lock();
+        try {
+            if (position == buffer.length) allocate();
+            return buffer[position++];
+        } finally { lock.unlock(); }
     }
 
-    public synchronized int remaining() {
-        return buffer.length - position;
+    public int remaining() {
+        lock.lock();
+        try { return buffer.length - position; }
+        finally { lock.unlock(); }
     }
 
     private void allocate() {

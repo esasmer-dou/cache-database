@@ -9,16 +9,18 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 public final class RedisCacheIdGenerator implements CacheIdGenerator {
     private static final char[] CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ".toCharArray();
-    private static final String SAFE_NAME = "[A-Za-z0-9_.:-]+";
+    private static final Pattern SAFE_NAME = Pattern.compile("[A-Za-z0-9_.:-]+");
 
     private final RedisClientOperations jedis;
     private final String keyPrefix;
     private final ConcurrentHashMap<String, SequenceBlock> sequences = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
-    private final Object ulidLock = new Object();
+    private final java.util.concurrent.locks.ReentrantLock ulidLock =
+            new java.util.concurrent.locks.ReentrantLock();
     private final byte[] lastRandom = new byte[10];
     private long lastTimestamp = -1L;
 
@@ -28,9 +30,10 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
 
     public RedisCacheIdGenerator(RedisClientOperations jedis, String keyPrefix) {
         this.jedis = Objects.requireNonNull(jedis, "jedis");
-        if (keyPrefix == null || !keyPrefix.matches(SAFE_NAME)) {
+        if (keyPrefix == null || !keyPrefix.matches("[A-Za-z0-9_.:{}-]+")) {
             throw new IllegalArgumentException("Invalid CacheDB id key prefix: " + keyPrefix);
         }
+        if (keyPrefix.contains("{")) ClusterHashTagKeyStrategy.validateTagged(keyPrefix);
         this.keyPrefix = keyPrefix;
     }
 
@@ -41,7 +44,8 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
 
     @Override
     public String nextUlid() {
-        synchronized (ulidLock) {
+        ulidLock.lock();
+        try {
             long timestamp = System.currentTimeMillis();
             if (timestamp > lastTimestamp) {
                 random.nextBytes(lastRandom);
@@ -51,20 +55,23 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
                 incrementRandom();
             }
             return encodeUlid(timestamp, lastRandom);
+        } finally {
+            ulidLock.unlock();
         }
     }
 
     @Override
     public long nextSequence(String sequenceName, int allocationSize) {
-        if (sequenceName == null || !sequenceName.matches(SAFE_NAME)) {
+        SequenceBlock block = sequenceName == null ? null : sequences.get(sequenceName);
+        if (sequenceName == null || (block == null && !SAFE_NAME.matcher(sequenceName).matches())) {
             throw new IllegalArgumentException("Invalid CacheDB sequence name: " + sequenceName);
         }
         if (allocationSize <= 0 || allocationSize > 10_000) {
             throw new IllegalArgumentException("allocationSize must be between 1 and 10000");
         }
-        return sequences
-                .computeIfAbsent(sequenceName, ignored -> new SequenceBlock())
-                .next(jedis, keyPrefix + ":" + sequenceName, allocationSize);
+        if (block == null)
+            block = sequences.computeIfAbsent(sequenceName, ignored -> new SequenceBlock());
+        return block.next(jedis, keyPrefix, sequenceName, allocationSize);
     }
 
     private void incrementRandom() {
@@ -103,24 +110,34 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
     }
 
     private static final class SequenceBlock {
+        private final java.util.concurrent.locks.ReentrantLock allocationLock =
+                new java.util.concurrent.locks.ReentrantLock();
         private final AtomicLong next = new AtomicLong(1L);
         private volatile long end;
 
-        long next(RedisClientOperations jedis, String key, int allocationSize) {
+        long next(
+                RedisClientOperations jedis,
+                String keyPrefix,
+                String sequenceName,
+                int allocationSize) {
             while (true) {
                 long candidate = next.getAndIncrement();
                 if (candidate <= end) {
                     return candidate;
                 }
-                synchronized (this) {
+                allocationLock.lock();
+                try {
                     if (next.get() - 1L <= end) {
                         continue;
                     }
-                    long allocatedEnd = jedis.commands().incrBy(key, allocationSize);
+                    long allocatedEnd =
+                            jedis.commands().incrBy(keyPrefix + ":" + sequenceName, allocationSize);
                     long allocatedStart = allocatedEnd - allocationSize + 1L;
                     next.set(allocatedStart + 1L);
                     end = allocatedEnd;
                     return allocatedStart;
+                } finally {
+                    allocationLock.unlock();
                 }
             }
         }

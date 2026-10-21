@@ -28,7 +28,7 @@ public record SnapshotSettings(
     public SnapshotSettings {
         for (Duration d :
                 new Duration[] {
-                    interval, warnAge, maxAge, retention, timeout, preparationTimeout, leaseDuration
+                    interval, maxAge, retention, timeout, preparationTimeout, leaseDuration
                 })
             if (d == null
                     || d.isNegative()
@@ -36,7 +36,7 @@ public record SnapshotSettings(
                     || d.compareTo(Duration.ofDays(7)) > 0)
                 throw new IllegalArgumentException(
                         "Snapshot durations must be positive and at most seven days");
-        if (warnAge.compareTo(maxAge) >= 0
+        if (warnAge == null || warnAge.isNegative() || warnAge.compareTo(maxAge) >= 0
                 || interval.plus(timeout).compareTo(maxAge) >= 0
                 || preparationTimeout.compareTo(timeout) >= 0
                 || retention.compareTo(maxAge.plus(timeout)) <= 0

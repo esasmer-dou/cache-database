@@ -68,12 +68,66 @@ public record EntityHotPolicy(
                 compositeOperator == null
                         ? EntityHotPolicyCompositeOperator.ALL
                         : compositeOperator;
-        children =
-                children == null ? List.of() : children.stream().filter(Objects::nonNull).toList();
+        if (children == null) {
+            children = List.of();
+        } else if (children.isEmpty()) {
+            children = java.util.Collections.emptyList();
+        } else {
+            java.util.ArrayList<EntityHotPolicy> present =
+                    new java.util.ArrayList<>(children.size());
+            for (EntityHotPolicy child : children) if (child != null) present.add(child);
+            children = java.util.Collections.unmodifiableList(present);
+        }
+    }
+
+    @Override
+    public final boolean equals(Object other) {
+        if (this == other) return true;
+        if (!(other instanceof EntityHotPolicy value)) return false;
+        return mode == value.mode
+                && hotForSeconds == value.hotForSeconds
+                && admitOnWrite == value.admitOnWrite
+                && admitOnRead == value.admitOnRead
+                && admitOnWarm == value.admitOnWarm
+                && evictWhenRejected == value.evictWhenRejected
+                && Objects.equals(timeColumn, value.timeColumn)
+                && Objects.equals(stateColumn, value.stateColumn)
+                && Objects.equals(stateValues, value.stateValues)
+                && Objects.equals(customPredicate, value.customPredicate)
+                && compositeOperator == value.compositeOperator
+                && Objects.equals(children, value.children);
+    }
+
+    @Override
+    public final int hashCode() {
+        int hash = Objects.hashCode(mode);
+        hash = 31 * hash + Objects.hashCode(timeColumn);
+        hash = 31 * hash + Long.hashCode(hotForSeconds);
+        hash = 31 * hash + Objects.hashCode(stateColumn);
+        hash = 31 * hash + Objects.hashCode(stateValues);
+        hash = 31 * hash + Boolean.hashCode(admitOnWrite);
+        hash = 31 * hash + Boolean.hashCode(admitOnRead);
+        hash = 31 * hash + Boolean.hashCode(admitOnWarm);
+        hash = 31 * hash + Boolean.hashCode(evictWhenRejected);
+        hash = 31 * hash + Objects.hashCode(customPredicate);
+        hash = 31 * hash + Objects.hashCode(compositeOperator);
+        return 31 * hash + Objects.hashCode(children);
     }
 
     public static EntityHotPolicy countWindow() {
-        return builder().mode(EntityHotPolicyMode.COUNT_WINDOW).build();
+        return new EntityHotPolicy(
+                EntityHotPolicyMode.COUNT_WINDOW,
+                null,
+                0,
+                null,
+                List.of(),
+                true,
+                true,
+                true,
+                true,
+                null,
+                EntityHotPolicyCompositeOperator.ALL,
+                List.of());
     }
 
     public static EntityHotPolicy timeWindow(String timeColumn, long hotForSeconds) {
@@ -307,13 +361,7 @@ public record EntityHotPolicy(
         }
 
         public Builder stateValues(Collection<String> stateValues) {
-            this.stateValues =
-                    stateValues == null
-                            ? List.of()
-                            : stateValues.stream()
-                                    .filter(value -> value != null && !value.isBlank())
-                                    .map(String::trim)
-                                    .toList();
+            this.stateValues = stateValues == null ? List.of() : cleanStates(stateValues);
             return this;
         }
 
@@ -353,11 +401,21 @@ public record EntityHotPolicy(
         }
 
         public Builder children(Collection<EntityHotPolicy> children) {
-            this.children =
-                    children == null
-                            ? List.of()
-                            : children.stream().filter(Objects::nonNull).toList();
+            this.children = children == null ? List.of() : cleanChildren(children);
             return this;
+        }
+
+        private static List<String> cleanStates(Collection<String> input) {
+            var values = new java.util.ArrayList<String>(input.size());
+            for (String value : input)
+                if (value != null && !value.isBlank()) values.add(value.trim());
+            return java.util.Collections.unmodifiableList(values);
+        }
+
+        private static List<EntityHotPolicy> cleanChildren(Collection<EntityHotPolicy> input) {
+            var values = new java.util.ArrayList<EntityHotPolicy>(input.size());
+            for (EntityHotPolicy value : input) if (value != null) values.add(value);
+            return java.util.Collections.unmodifiableList(values);
         }
 
         public Builder child(EntityHotPolicy child) {

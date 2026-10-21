@@ -488,6 +488,7 @@ class OracleProviderIntegrationTest {
                 throw exception;
             }
         }
+        WriteFenceFixtureCleanup.afterDrop(statement, table);
     }
 
     private boolean reachable() {

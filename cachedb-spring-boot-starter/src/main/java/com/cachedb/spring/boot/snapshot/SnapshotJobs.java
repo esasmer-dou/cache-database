@@ -1,6 +1,7 @@
 package com.reactor.cachedb.spring.boot.snapshot;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.reactor.cachedb.core.codec.JsonArrayCodec;
 import com.reactor.cachedb.redis.JedisPooledOperations;
 import com.reactor.cachedb.redis.RedisClientOperations;
 
@@ -74,6 +75,14 @@ return 1
     private final List<ScheduledFuture<?>> schedules = new ArrayList<>();
     private volatile boolean running;
     private volatile boolean closed;
+    private boolean schedulingEnabled = true;
+
+    public SnapshotJobs withSchedulingEnabled(boolean enabled) {
+        if (running)
+            throw new IllegalStateException("Configure scheduling before starting snapshot jobs");
+        schedulingEnabled = enabled;
+        return this;
+    }
 
     public SnapshotJobs(
             DataSource source,
@@ -126,21 +135,37 @@ return 1
             String namespace,
             List<SnapshotPlan<?, ?>> plans,
             Map<String, SnapshotSettings> settings) {
+        this(source, redis, readRedis, mapper, clock, namespace, plans, settings, false);
+    }
+
+    /** No mapper is created or required. Every plan must explicitly declare its JSON codec. */
+    public static SnapshotJobs jacksonFree(
+            DataSource source, RedisClientOperations redis, RedisClientOperations readRedis,
+            Clock clock, String namespace, List<SnapshotPlan<?, ?>> plans, Map<String, SnapshotSettings> settings) {
+        return new SnapshotJobs(source, redis, readRedis, null, clock, namespace, plans, settings, true);
+    }
+
+    private SnapshotJobs(
+            DataSource source, RedisClientOperations redis, RedisClientOperations readRedis,
+            ObjectMapper mapper, Clock clock, String namespace, List<SnapshotPlan<?, ?>> plans,
+            Map<String, SnapshotSettings> settings, boolean jacksonFree) {
         this.dataSource = Objects.requireNonNull(source);
         this.redis = Objects.requireNonNull(redis);
         this.readRedis = Objects.requireNonNull(readRedis);
-        this.mapper = Objects.requireNonNull(mapper);
+        this.mapper = jacksonFree ? null : Objects.requireNonNull(mapper);
         this.clock = Objects.requireNonNull(clock);
         if (namespace == null || !namespace.matches("[A-Za-z0-9:_{}-]{1,210}"))
             throw new IllegalArgumentException("Invalid snapshot namespace");
         if (namespace.contains("{"))
             com.reactor.cachedb.redis.ClusterHashTagKeyStrategy.validateTagged(namespace);
         for (var plan : plans) {
+            if (jacksonFree && plan.jsonCodec() == null)
+                throw new IllegalArgumentException("Jackson-free snapshot plan requires withJsonCodec: " + plan.name());
             Job job =
                     new Job(
                             plan,
                             settings.getOrDefault(plan.name(), SnapshotSettings.defaults()),
-                            namespace + ":{snapshot:" + plan.name() + "}");
+                            snapshotPrefix(namespace, plan.name()));
             if (jobs.putIfAbsent(plan.name(), job) != null)
                 throw new IllegalArgumentException("Duplicate snapshot plan");
         }
@@ -165,7 +190,46 @@ return 1
                 job.prefix,
                 job.plan.indexSpec() != null,
                 ids -> refreshRoots(name, ids),
-                job.settings.batchTargetSize().toBytes());
+                job.settings.batchTargetSize().toBytes(),
+                clock,
+                job.settings.warnAge());
+    }
+
+    static String snapshotPrefix(String namespace, String name) {
+        // The first tag selects the slot. Never let a preceding application tag win.
+        return namespace.contains("{")
+                ? namespace.replace("{", "").replace("}", "")
+                        + ":{snapshot:"
+                        + Base64.getUrlEncoder().withoutPadding().encodeToString(namespace.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                        + ":"
+                        + name
+                        + "}"
+                : namespace + ":{snapshot:" + name + "}";
+    }
+
+    public <V> TypedSnapshotRepository<String, V> typedRepository(String name) {
+        return typedRepository(name, SnapshotIdentity.INSTANCE);
+    }
+
+    public <ID, V> TypedSnapshotRepository<ID, V> typedRepository(
+            String name, java.util.function.Function<ID, String> idMapper) {
+        Job job = job(name);
+        @SuppressWarnings("unchecked") JsonArrayCodec<V> codec = (JsonArrayCodec<V>) job.codec(mapper);
+        if (codec instanceof JacksonJsonArrayCodec<?> legacy) legacy.prepared();
+        return new DecodedSnapshotRepository<>(repository(name), codec, idMapper);
+    }
+
+    public <V> TypedSnapshotRepository<String, V> typedRepository(String name, Class<V> valueType) {
+        if (!job(name).plan.valueType().equals(valueType))
+            throw new IllegalArgumentException("Snapshot value type does not match plan");
+        return typedRepository(name);
+    }
+
+    public <ID, V> TypedSnapshotRepository<ID, V> typedRepository(
+            String name, Class<V> valueType, java.util.function.Function<ID, String> idMapper) {
+        if (!job(name).plan.valueType().equals(valueType))
+            throw new IllegalArgumentException("Snapshot value type does not match plan");
+        return typedRepository(name, idMapper);
     }
 
     public SnapshotSettings settings(String name) {
@@ -385,8 +449,17 @@ return 1
             Runnable check,
             List<String> rootIds)
             throws IOException {
-        SnapshotRows rows = SnapshotJdbcReader.read(dataSource, plan, settings, check, rootIds);
-        spool.prepare(plan, rows, mapper, check);
+        if (plan.streaming())
+            spool.prepareStreaming(dataSource, plan, settings, codec(plan), check, rootIds);
+        else {
+            SnapshotRows rows = SnapshotJdbcReader.read(dataSource, plan, settings, check, rootIds);
+            spool.prepare(plan, rows, codec(plan), check);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <R, V> JsonArrayCodec<V> codec(SnapshotPlan<R, V> plan) {
+        return (JsonArrayCodec<V>) job(plan.name()).codec(mapper);
     }
 
     private void prepare(Job job, SnapshotSpool spool, Runnable check) throws IOException {
@@ -402,16 +475,11 @@ return 1
             Runnable check)
             throws IOException {
         int submitted = 0;
-        long warningCount =
-                spool.entries().stream()
-                        .filter(
-                                e ->
-                                        job.settings.payloadWarningSize().toBytes() > 0
-                                                && e.bytes()
-                                                        > job.settings
-                                                                .payloadWarningSize()
-                                                                .toBytes())
-                        .count();
+        long warningCount = 0;
+        long payloadWarningBytes = job.settings.payloadWarningSize().toBytes();
+        if (payloadWarningBytes > 0)
+            for (var entry : spool.entries())
+                if (entry.bytes() > payloadWarningBytes) warningCount++;
         if (warningCount > 0
                 || (job.settings.catalogWarningSize().toBytes() > 0
                         && spool.bytes() > job.settings.catalogWarningSize().toBytes()))
@@ -523,12 +591,15 @@ return 1
             redis.eval(
                     CLEAN,
                     List.of(
-                            job.prefix + ":active", job.prefix + ":data:" + generation,
-                            job.prefix + ":keys:" + generation, job.prefix + ":meta:" + generation,
+                            job.prefix + ":active",
+                            job.prefix + ":data:" + generation,
+                            job.prefix + ":keys:" + generation,
+                            job.prefix + ":meta:" + generation,
                             job.prefix + ":format:" + generation,
-                                    job.prefix + ":times:" + generation,
+                            job.prefix + ":times:" + generation,
                             job.prefix + ":revision:" + generation,
-                                    job.prefix + ":digests:" + generation),
+                            job.prefix + ":digests:" + generation,
+                            job.prefix + ":partition-revisions:" + generation),
                     List.of(generation));
         } catch (RuntimeException failure) {
             LOG.warn("Snapshot cleanup deferred to TTL: job={}", job.plan.name());
@@ -543,6 +614,7 @@ return 1
 
     @Override
     public synchronized void start() {
+        if (!schedulingEnabled) return;
         if (closed) throw new IllegalStateException("Snapshot jobs are closed");
         if (running) return;
         running = true;
@@ -597,6 +669,17 @@ return 1
         final String prefix;
         final AtomicBoolean busy = new AtomicBoolean();
         Thread worker;
+        private volatile JsonArrayCodec<?> codec;
+
+        JsonArrayCodec<?> codec(ObjectMapper mapper) {
+            var value = codec;
+            if (value == null)
+                synchronized (this) {
+                    value = codec;
+                    if (value == null) codec = value = plan.jsonCodec() != null ? plan.jsonCodec() : new JacksonJsonArrayCodec<>(mapper, plan.valueType());
+                }
+            return value;
+        }
 
         Job(SnapshotPlan<?, ?> plan, SnapshotSettings settings, String prefix) {
             this.plan = plan;

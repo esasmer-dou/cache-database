@@ -33,7 +33,7 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
     private final long pollIntervalMillis;
     private final boolean createCheckpointTable;
     private final int transactionIsolation;
-    private final Object initializationMonitor = new Object();
+    private final java.util.concurrent.locks.ReentrantLock initializationLock = new java.util.concurrent.locks.ReentrantLock();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean checkpointTableInitialized = new AtomicBoolean(false);
     private final AtomicBoolean checkpointRowEnsured = new AtomicBoolean(false);
@@ -209,7 +209,8 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
         if (!createCheckpointTable || checkpointTableInitialized.get()) {
             return;
         }
-        synchronized (initializationMonitor) {
+        initializationLock.lock();
+        try {
             if (checkpointTableInitialized.get()) {
                 return;
             }
@@ -219,7 +220,7 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
                         dialect.createCheckpointTableSql(mapping.checkpointTable()));
             }
             checkpointTableInitialized.set(true);
-        }
+        } finally { initializationLock.unlock(); }
     }
 
     public RuntimeException lastFailure() {

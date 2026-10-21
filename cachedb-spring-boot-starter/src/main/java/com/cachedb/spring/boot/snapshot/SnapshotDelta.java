@@ -13,11 +13,12 @@ final class SnapshotDelta {
             if ttl <= 0 then return 0 end
             if (redis.call('GET',KEYS[7]) or 'json') ~= ARGV[4] then return 0 end
             local prefix=string.match(KEYS[3],'^(.*):data:')
+            local changed={}
             for i=5,#ARGV,6 do
               local oldDigest=redis.call('HGET',KEYS[3],ARGV[i])
               if ARGV[4] == 'content' and oldDigest then redis.call('SREM',KEYS[9],oldDigest) end
               local oldIndex=redis.call('HGET',KEYS[4],ARGV[i])
-              if oldIndex then redis.call('ZREM',oldIndex,ARGV[i]) end
+              if oldIndex then redis.call('ZREM',oldIndex,ARGV[i]); changed[oldIndex]=true end
               if ARGV[i+1] == '' then
                 redis.call('HDEL',KEYS[3],ARGV[i])
                 redis.call('HDEL',KEYS[4],ARGV[i])
@@ -37,6 +38,7 @@ final class SnapshotDelta {
                   redis.call('PEXPIRE',KEYS[index],ttl)
                   redis.call('HSET',KEYS[4],ARGV[i],KEYS[index])
                   redis.call('SADD',KEYS[8],KEYS[index])
+                  changed[KEYS[index]]=true
                 end
               end
               if ARGV[4] == 'content' and oldDigest and oldDigest ~= ARGV[i+5] then
@@ -46,8 +48,9 @@ final class SnapshotDelta {
                 end
               end
             end
+            for key,_ in pairs(changed) do redis.call('HINCRBY',KEYS[10],key,1) end
             redis.call('INCR',KEYS[6])
-            for i=3,9 do redis.call('PEXPIRE',KEYS[i],ttl) end
+            for i=3,10 do redis.call('PEXPIRE',KEYS[i],ttl) end
             return (#ARGV-4)/6
             """;
 
@@ -82,7 +85,8 @@ final class SnapshotDelta {
                                 prefix + ":revision:" + generation,
                                 prefix + ":format:" + generation,
                                 prefix + ":keys:" + generation,
-                                prefix + ":digests:" + generation));
+                                prefix + ":digests:" + generation,
+                                prefix + ":partition-revisions:" + generation));
         List<String> args =
                 new ArrayList<>(
                         List.of(
@@ -90,48 +94,34 @@ final class SnapshotDelta {
                                 active,
                                 Long.toString(sourceAt),
                                 reuse ? "content" : "json"));
+        Map<String, Integer> slots = new HashMap<>();
         for (String id : ids) {
             var entry = entries.get(id);
             if (entry == null) {
                 args.addAll(List.of(id, "", "0", "0", "0", ""));
                 continue;
             }
-            var stage =
-                    SnapshotPublication.batch(
-                            prefix,
-                            generation,
-                            lock,
-                            owner,
-                            1,
-                            reuse,
-                            List.of(entry),
-                            e -> {
-                                try {
-                                    return spool.read(e, check);
-                                } catch (IOException failure) {
-                                    throw new java.io.UncheckedIOException(failure);
-                                }
-                            });
-            var a = stage.arguments();
-            int index = Integer.parseInt(a.get(7));
-            int content = Integer.parseInt(a.get(8));
-            int newIndex = 0, newContent = 0;
-            if (index > 0) {
-                keys.add(stage.keys().get(index - 1));
-                newIndex = keys.size();
-            }
-            if (content > 0) {
-                keys.add(stage.keys().get(content - 1));
-                newContent = keys.size();
-            }
+            String json = spool.read(entry, check);
+            String digest = reuse ? SnapshotPublication.digest(id + "\u0000" + json) : "";
+            int newIndex =
+                    entry.partition() == null
+                            ? 0
+                            : SnapshotPublication.slot(
+                                    keys,
+                                    slots,
+                                    prefix + ":idx:" + generation + ":" + entry.partition());
+            int newContent =
+                    reuse
+                            ? SnapshotPublication.slot(keys, slots, prefix + ":content:" + digest)
+                            : 0;
             args.addAll(
                     List.of(
                             id,
-                            a.get(5),
-                            a.get(6),
+                            json,
+                            Double.toString(entry.score()),
                             Integer.toString(newIndex),
                             Integer.toString(newContent),
-                            a.get(9)));
+                            digest));
         }
         return new SnapshotPublication.Batch(keys, args);
     }

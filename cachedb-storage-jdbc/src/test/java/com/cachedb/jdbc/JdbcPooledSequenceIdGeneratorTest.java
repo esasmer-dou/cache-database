@@ -59,4 +59,32 @@ class JdbcPooledSequenceIdGeneratorTest {
                 IllegalArgumentException.class,
                 () -> new JdbcPooledSequenceIdGenerator(source, "seq", 0));
     }
+
+    @Test
+    void java21VirtualThreadsCanShareTheAllocationBuffer() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(Runtime.version().feature() >= 21);
+        var source = new JdbcDataSource();
+        source.setURL("jdbc:h2:mem:virtual_seq_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+        try (var connection = source.getConnection(); var statement = connection.createStatement()) {
+            statement.execute("CREATE SEQUENCE virtual_ids START WITH 1");
+        }
+        var generator = new JdbcPooledSequenceIdGenerator(source, "virtual_ids", 8);
+        Set<Long> ids = ConcurrentHashMap.newKeySet();
+        var failures = new ConcurrentLinkedQueue<Throwable>();
+        List<Thread> threads = new ArrayList<>();
+        // Test-only reflective linkage keeps library and test bytecode compatible with Java 17.
+        var start = Thread.class.getMethod("startVirtualThread", Runnable.class);
+        try {
+            for (int i = 0; i < 32; i++) threads.add((Thread) start.invoke(null, (Runnable) () -> {
+                try { for (int n = 0; n < 10; n++) assertTrue(ids.add(generator.nextId())); }
+                catch (Throwable failure) { failures.add(failure); }
+            }));
+            for (Thread thread : threads) { thread.join(10000); assertFalse(thread.isAlive()); }
+            assertTrue(failures.isEmpty(), failures::toString);
+            assertEquals(320, ids.size());
+        } finally {
+            for (Thread thread : threads) thread.interrupt();
+            try (var connection = source.getConnection(); var statement = connection.createStatement()) { statement.execute("SHUTDOWN"); }
+        }
+    }
 }

@@ -35,7 +35,7 @@ local count=tonumber(ARGV[2])
 local pos=5
 local items={}
 for i=1,count do
-  local base=3+(i-1)*5
+  local base=3+(i-1)*6
   local current=tonumber(redis.call('GET',KEYS[base+1]) or '0')
   local expected=tonumber(ARGV[pos+2])
   if current >= 9007199254740990 then return redis.error_reply('Entity version exhausted') end
@@ -49,8 +49,8 @@ for i=1,count do
   local limit=tonumber(ARGV[pos+7])
   if limit > 0 and redis.call('ZCARD',KEYS[base+3])+count-limit > 100 then
     return redis.error_reply('Hot set requires explicit reconciliation before this atomic batch') end
-  table.insert(items,{base,ARGV[pos],ARGV[pos+1],ARGV[pos+3],ARGV[pos+4],ARGV[pos+5],ARGV[pos+6],ARGV[pos+7],ARGV[pos+8]})
-  pos=pos+9
+  table.insert(items,{base,ARGV[pos],ARGV[pos+1],ARGV[pos+3],ARGV[pos+4],ARGV[pos+5],ARGV[pos+6],ARGV[pos+7],ARGV[pos+8],ARGV[pos+9]})
+  pos=pos+10
 end
 local views={}
 local viewCount=tonumber(ARGV[pos]) pos=pos+1
@@ -60,7 +60,7 @@ for i=1,viewCount do
     local kind=redis.call('TYPE',KEYS[base+j]).ok
     if kind ~= 'none' and kind ~= 'string' then return redis.error_reply('Invalid projection key type') end
   end
-  table.insert(views,{base,ARGV[pos+1],ARGV[pos+2],ARGV[pos+3],ARGV[pos+4]}) pos=pos+5
+  table.insert(views,{base,ARGV[pos+1],ARGV[pos+2],ARGV[pos+3],ARGV[pos+4],ARGV[pos+5]}) pos=pos+6
 end
 local fields={}
 for i=pos,#ARGV do table.insert(fields,ARGV[i]) end
@@ -88,7 +88,7 @@ for i,item in ipairs(items) do
       end
     else redis.call('DEL',KEYS[base]) redis.call('ZREM',KEYS[base+3],item[2]) end
   end
-  redis.call('SET',KEYS[base+4],'atomic-batch')
+  if item[10] == '1' or redis.call('EXISTS',KEYS[base+5]) == 1 then redis.call('SET',KEYS[base+4],'atomic-batch') end
   table.insert(fields,'b'..(i-1)..':version') table.insert(fields,tostring(version))
   table.insert(fields,'b'..(i-1)..':col:'..item[7]) table.insert(fields,tostring(version))
   table.insert(result,tostring(version))
@@ -102,7 +102,7 @@ for _,view in ipairs(views) do
     redis.call('SET',KEYS[base],view[2]) redis.call('DEL',KEYS[base+1])
     if tonumber(view[4]) > 0 then redis.call('EXPIRE',KEYS[base],view[4]) end
   end
-  redis.call('SET',KEYS[base+2],'atomic-batch')
+  if view[6] == '1' or redis.call('EXISTS',KEYS[base+3]) == 1 then redis.call('SET',KEYS[base+2],'atomic-batch') end
 end
 local stream=redis.call('XADD',KEYS[1],'*',unpack(fields))
 redis.call('HSET',KEYS[2],'fingerprint',ARGV[1],'stream',stream)
@@ -132,6 +132,14 @@ return result
     private final Set<String> identities = new HashSet<>();
     private boolean committed;
     private int maxColumns = 256;
+    private boolean queryIndexesEnabled = true;
+
+    public RedisAtomicWriteBatch withQueryIndexConfig(QueryIndexConfig config) {
+        if (!items.isEmpty()) throw new IllegalStateException("Configure indexes before adding operations");
+        Objects.requireNonNull(config);
+        queryIndexesEnabled = config.exactIndexEnabled() || config.rangeIndexEnabled() || config.prefixIndexEnabled() || config.textIndexEnabled();
+        return this;
+    }
 
     public RedisAtomicWriteBatch withMaxColumnsPerOperation(int limit) {
         if (limit < 1) throw new IllegalArgumentException("Column limit must be positive");
@@ -269,8 +277,9 @@ return result
             throw new IllegalStateException("Atomic batch requires write-behind");
         if (producer != null) producer.applyBackpressure();
         List<String> redisKeys = new ArrayList<>();
-        redisKeys.add(config.activeStreamKey());
-        redisKeys.add(config.activeStreamKey() + ":batch:" + batchId);
+        String batchStream = keys.writeStreamKey(config.activeStreamKey(), items.get(0).binding.metadata().redisNamespace());
+        redisKeys.add(batchStream);
+        redisKeys.add(batchStream + ":batch:" + batchId);
         List<String> arguments =
                 new ArrayList<>(
                         List.of(
@@ -306,7 +315,7 @@ return result
                             keys.versionKey(ns, item.id),
                             keys.tombstoneKey(ns, item.id),
                             keys.hotSetKey(ns),
-                            keys.indexDegradedKey(ns)));
+                            keys.indexDegradedKey(ns), keys.indexAllKey(ns)));
             var policy =
                     producer == null
                             ? item.binding.cachePolicy()
@@ -327,7 +336,8 @@ return result
                             metadata.versionColumn(),
                             Integer.toString(policy.hotEntityLimit()),
                             payloadKey.substring(
-                                    0, payloadKey.length() - item.id.toString().length())));
+                                    0, payloadKey.length() - item.id.toString().length()),
+                            queryIndexesEnabled || !metadata.partitionedSortIndexes().isEmpty() ? "1" : "0"));
             for (var view : item.projections.entrySet()) {
                 String viewNamespace = ns + ":projection:" + view.getKey();
                 int base = redisKeys.size() + 1;
@@ -335,14 +345,14 @@ return result
                         List.of(
                                 keys.entityKey(viewNamespace, item.id),
                                 keys.tombstoneKey(viewNamespace, item.id),
-                                keys.indexDegradedKey(viewNamespace)));
+                                keys.indexDegradedKey(viewNamespace), keys.indexAllKey(viewNamespace)));
                 viewArguments.addAll(
                         List.of(
                                 Integer.toString(base),
                                 view.getValue(),
                                 item.type.name(),
                                 Long.toString(policy.entityTtlSeconds()),
-                                admit ? "1" : "0"));
+                                admit ? "1" : "0", queryIndexesEnabled ? "1" : "0"));
                 viewCount++;
             }
             var columns = new LinkedHashMap<>(item.columns);
@@ -370,22 +380,24 @@ return result
                             .inTransaction(batchId);
             for (var field : mapper.toBody(operation).entrySet())
                 fields.put("b" + i + ":" + field.getKey(), field.getValue());
+            fields.remove("b" + i + ":version");
+            fields.remove("b" + i + ":col:" + metadata.versionColumn());
         }
         // Projection keys follow all fixed entity key blocks.
         List<String> fixedKeys = new ArrayList<>(List.of(redisKeys.get(0), redisKeys.get(1)));
         List<String> projectionKeys = new ArrayList<>();
         int cursor = 2;
         for (var item : items) {
-            fixedKeys.addAll(redisKeys.subList(cursor, cursor + 5));
-            cursor += 5;
-            int length = item.projections.size() * 3;
+            fixedKeys.addAll(redisKeys.subList(cursor, cursor + 6));
+            cursor += 6;
+            int length = item.projections.size() * 4;
             projectionKeys.addAll(redisKeys.subList(cursor, cursor + length));
             cursor += length;
         }
         fixedKeys.addAll(projectionKeys);
         redisKeys = fixedKeys;
-        for (int i = 0; i < viewArguments.size(); i += 5)
-            viewArguments.set(i, Integer.toString(3 + items.size() * 5 + (i / 5) * 3));
+        for (int i = 0; i < viewArguments.size(); i += 6)
+            viewArguments.set(i, Integer.toString(3 + items.size() * 6 + (i / 6) * 4));
         arguments.add(Integer.toString(viewCount));
         arguments.addAll(viewArguments);
         if (fields.size() > 2000)
@@ -398,6 +410,12 @@ return result
         for (String argument : arguments) bytes += argument.getBytes(StandardCharsets.UTF_8).length;
         if (bytes > MAX_BYTES) throw new IllegalArgumentException("Atomic batch exceeds 4 MiB");
         arguments.set(0, fingerprint(redisKeys, arguments));
+        if (redis.clustered()) {
+            try { redis.requireSameSlot(redisKeys); }
+            catch (IllegalArgumentException crossSlot) {
+                throw new IllegalArgumentException("Atomic write batch across different Redis Cluster slots requires a shared hash-tag scope", crossSlot);
+            }
+        }
         var reply = (List<?>) redis.eval(APPLY, redisKeys, arguments);
         List<Long> versions = new ArrayList<>();
         for (int i = 1; i < reply.size(); i++)

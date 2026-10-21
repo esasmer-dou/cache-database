@@ -267,7 +267,7 @@ class RedisAtomicWriteBatchTest {
                 redis, registry, keys, config, RedisGuardrailConfig.defaults(), null, id);
     }
 
-    private EntityMetadata<Row, Long> metadata() {
+    EntityMetadata<Row, Long> metadata() {
         return new EntityMetadata<>() {
             public String entityName() {
                 return "Row";
@@ -303,7 +303,7 @@ class RedisAtomicWriteBatchTest {
         };
     }
 
-    private EntityCodec<Row> codec() {
+    EntityCodec<Row> codec() {
         return new EntityCodec<>() {
             public String toRedisValue(Row r) {
                 return r.id() + "|" + r.value();

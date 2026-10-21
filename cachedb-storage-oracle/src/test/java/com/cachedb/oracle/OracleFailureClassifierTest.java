@@ -10,6 +10,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OracleFailureClassifierTest {
+    @org.junit.jupiter.api.Test
+    void writeFenceSchemaFailureKeepsDeadLetterTaxonomy() {
+        var details = new OracleFailureClassifier().classify(new java.sql.SQLException("Missing write fence", "CDB03"));
+        org.junit.jupiter.api.Assertions.assertEquals(com.reactor.cachedb.core.queue.WriteFailureCategory.SCHEMA, details.category());
+        org.junit.jupiter.api.Assertions.assertFalse(details.retryable());
+    }
     private final OracleFailureClassifier classifier = new OracleFailureClassifier();
 
     @Test

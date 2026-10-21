@@ -5,6 +5,8 @@ The application declares source mappings, business rules and settings.
 CacheDB owns JDBC iteration, disk spooling, batching, leases and safe publication.
 
 SnapshotPlan is available since 0.11.0. The source DSL below requires 0.12.0.
+For 0.14.0 typed reads, streaming and runtime roles, see the
+[typed snapshot guide](typed-snapshots-runtime-testing.md).
 The source runner supports PostgreSQL, SQL Server and Oracle.
 H2 is used for isolated tests. Unknown database products fail before source iteration.
 
@@ -83,7 +85,9 @@ The repository reads a completed generation only. It never queries SQL or starts
 Each root holds a JSON array serialized using the application's ObjectMapper.
 Absence differs from a prepared empty array.
 Apply authorization and freshness checks at the application boundary using SnapshotValue.refreshedAt().
-warn-age and max-age are validated consumer settings; this low-level repository does not automatically return HTTP errors.
+From 0.14, `lookupRaw` and typed lookups expose warn-age as `STALE_WARNING`;
+`warn-age=PT0S` disables the warning. max-age remains a consumer decision;
+this low-level repository does not automatically return HTTP errors.
 
 enabled=false disables scheduling, not authorized manual execution.
 A concurrent attempt returns BUSY rather than queuing. A scheduled attempt within the interval returns NOT_DUE.
@@ -139,8 +143,10 @@ For incremental updates, attach an explicit SnapshotRootScope for every input, t
 call `jobs.refreshRoots("order-timeline", List.of("9001"))`. The command reads only
 the declared scope on one consistent SQL connection and changes selected roots and
 their indexes together. Missing roots are deleted. Untouched roots keep their age;
-the entire catalog's retention is not extended. Full and delta updates invalidate
-prior pagination cursors. Content reuse shares unchanged JSON between full generations;
+the entire catalog's retention is not extended. In 0.13, full and delta updates
+invalidate prior cursors. In 0.14, deltas invalidate only the old/new partitions
+touched by the refresh; full publication still invalidates all old generation cursors.
+Content reuse shares unchanged JSON between full generations;
 it does not avoid reading SQL or eliminate overlap for changed payloads.
 
 See [bounded runtime operations](bounded-runtime-operations.md) for a complete scope

@@ -1,5 +1,7 @@
 package com.reactor.cachedb.spring.boot.snapshot;
 
+import com.reactor.cachedb.core.codec.Utf8Length;
+
 import java.sql.*;
 import java.util.*;
 
@@ -43,6 +45,42 @@ final class SnapshotJdbcReader {
             Budget budget,
             Runnable check)
             throws SQLException {
+        List<T> rows = new ArrayList<>(Math.min(settings.fetchRows(), settings.maxRowsPerSource()));
+        consume(connection, table, settings, budget, check, rows::add);
+        return List.copyOf(rows);
+    }
+
+    @SuppressWarnings(
+            "unchecked") // narrow preserves the decoder and row type of its declared source.
+    static <R> void stream(
+            DataSource source,
+            SnapshotPlan<R, ?> plan,
+            SnapshotSettings settings,
+            Runnable check,
+            List<String> ids,
+            java.util.function.Consumer<R> consumer) {
+        SnapshotSource<R> selected =
+                ids.isEmpty()
+                        ? plan.roots()
+                        : (SnapshotSource<R>) plan.rootScope().narrow(plan.roots(), ids);
+        try (Connection connection = source.getConnection();
+                SnapshotTransaction transaction = SnapshotTransaction.begin(connection)) {
+            consume(connection, selected, settings, new Budget(settings), check, consumer);
+        } catch (SQLException failure) {
+            throw new IllegalStateException(
+                    "Snapshot source read failed (SQLState=" + failure.getSQLState() + ")",
+                    failure);
+        }
+    }
+
+    private static <T> void consume(
+            Connection connection,
+            SnapshotSource<T> table,
+            SnapshotSettings settings,
+            Budget budget,
+            Runnable check,
+            java.util.function.Consumer<T> consumer)
+            throws SQLException {
         check.run();
         String product = connection.getMetaData().getDatabaseProductName();
         var command = table.command(product);
@@ -71,22 +109,25 @@ final class SnapshotJdbcReader {
                                             ? settings.maxRowsPerSource()
                                             : settings.maxSourceRows())
                             + 1);
-            List<T> rows = new ArrayList<>();
+            int rowCount = 0;
             try (ResultSet result = statement.executeQuery()) {
                 ResultSetMetaData metadata = result.getMetaData();
                 String[] columns = new String[metadata.getColumnCount()];
                 for (int i = 0; i < columns.length; i++)
                     columns[i] = metadata.getColumnLabel(i + 1);
+                int[] types = new int[columns.length];
+                for (int i = 0; i < types.length; i++) types[i] = metadata.getColumnType(i + 1);
+                RowLayout layout = new RowLayout(columns);
                 while (result.next()) {
-                    check.run();
+                    if ((rowCount & 255) == 0) check.run();
                     if (++budget.rows > settings.maxSourceRows()
-                            || (table.bounded() && rows.size() >= settings.maxRowsPerSource()))
+                            || (table.bounded() && rowCount >= settings.maxRowsPerSource()))
                         throw new IllegalStateException(
                                 "Snapshot source row budget exceeded: " + table.name());
-                    Map<String, Object> row = new LinkedHashMap<>();
+                    Object[] values = new Object[columns.length];
                     for (int i = 0; i < columns.length; i++) {
                         Object value =
-                                switch (metadata.getColumnType(i + 1)) {
+                                switch (types[i]) {
                                     // JDBC and vendor type codes use the same standard Java-time
                                     // decoder.
                                     case Types.TIMESTAMP_WITH_TIMEZONE, -101, -102, -155 ->
@@ -105,12 +146,79 @@ final class SnapshotJdbcReader {
                                             + " LOB/structured column: "
                                             + columns[i]);
                         budget.add(value);
-                        row.put(columns[i], value);
+                        values[i] = value;
                     }
-                    rows.add(Objects.requireNonNull(table.decoder().apply(row), "Null source row"));
+                    if (budget.bytes - budget.checkedBytes >= 65536) {
+                        check.run();
+                        budget.checkedBytes = budget.bytes;
+                    }
+                    consumer.accept(
+                            Objects.requireNonNull(
+                                    table.decoder().apply(new Row(layout, values)),
+                                    "Null source row"));
+                    rowCount++;
                 }
             }
-            return List.copyOf(rows);
+            check.run();
+        }
+    }
+
+    /** One shared index per result set, rather than a column scan per decoded field. */
+    private static final class RowLayout {
+        final String[] columns;
+        final Map<String, Integer> positions = new HashMap<>();
+
+        RowLayout(String[] columns) {
+            this.columns = columns;
+            for (int i = 0; i < columns.length; i++) positions.putIfAbsent(columns[i], i);
+        }
+    }
+
+    /** Immutable row; decoders may safely retain it. No per-column map nodes. */
+    private static final class Row extends AbstractMap<String, Object> {
+        private final RowLayout layout;
+        private final Object[] values;
+
+        Row(RowLayout layout, Object[] values) {
+            this.layout = layout;
+            this.values = values;
+        }
+
+        @Override
+        public Object get(Object key) {
+            Integer position = key instanceof String ? layout.positions.get(key) : null;
+            return position == null ? null : values[position];
+        }
+
+        @Override
+        public boolean containsKey(Object key) {
+            return key instanceof String && layout.positions.containsKey(key);
+        }
+
+        @Override
+        public Set<Map.Entry<String, Object>> entrySet() {
+            return new AbstractSet<>() {
+                public int size() {
+                    return layout.columns.length;
+                }
+
+                public Iterator<Map.Entry<String, Object>> iterator() {
+                    return new Iterator<>() {
+                        int at;
+
+                        public boolean hasNext() {
+                            return at < layout.columns.length;
+                        }
+
+                        public Map.Entry<String, Object> next() {
+                            if (!hasNext()) throw new NoSuchElementException();
+                            int i = at++;
+                            return new AbstractMap.SimpleImmutableEntry<>(
+                                    layout.columns[i], values[i]);
+                        }
+                    };
+                }
+            };
         }
     }
 
@@ -118,6 +226,7 @@ final class SnapshotJdbcReader {
         private final long maxBytes;
         private long bytes;
         private int rows;
+        private long checkedBytes;
 
         Budget(SnapshotSettings settings) {
             maxBytes = settings.maxSourceSize().toBytes();
@@ -130,18 +239,38 @@ final class SnapshotJdbcReader {
                 checkLimit();
                 return;
             }
-            String text = value.toString();
-            for (int i = 0; i < text.length(); i++) {
-                char c = text.charAt(i);
-                if (c < 128) bytes++;
-                else if (c < 2048) bytes += 2;
-                else if (Character.isHighSurrogate(c)
-                        && i + 1 < text.length()
-                        && Character.isLowSurrogate(text.charAt(i + 1))) {
-                    bytes += 4;
-                    i++;
-                } else bytes += Character.isSurrogate(c) ? 1 : 3;
+            if (!(value instanceof CharSequence)) {
+                long scalar =
+                        value instanceof java.math.BigDecimal decimal
+                                ? (long) decimal.precision() + 32
+                                : value instanceof java.math.BigInteger integer
+                                        ? (long) integer.bitLength() * 30103 / 100000 + 2
+                                        : value instanceof java.util.UUID
+                                                ? 36
+                                                : value instanceof Number
+                                                        ? 24
+                                                        : value instanceof Boolean
+                                                                ? 5
+                                                                : value
+                                                                                        instanceof
+                                                                                        java.time
+                                                                                                .temporal
+                                                                                                .TemporalAccessor
+                                                                                || value
+                                                                                        instanceof
+                                                                                        java.util
+                                                                                                .Date
+                                                                        ? 40
+                                                                        : -1;
+                if (scalar >= 0) {
+                    bytes += scalar;
+                    checkLimit();
+                    return;
+                }
+                // Preserve vendor scalar support; only unknown types use the allocating fallback.
             }
+            String text = value.toString();
+            bytes += Utf8Length.of(text);
             checkLimit();
         }
 

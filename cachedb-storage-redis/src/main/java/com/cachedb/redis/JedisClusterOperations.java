@@ -22,6 +22,29 @@ public final class JedisClusterOperations implements RedisClientOperations {
         return true;
     }
 
+    @Override public Object memoryInfo(String routingKey) {
+        String selected = null;
+        double worst = -1;
+        long largestUsed = -1;
+        for (var pool : client.getClusterNodes().values()) {
+            try (var jedis = new Jedis(pool.getResource())) {
+                if (!jedis.info("replication").contains("role:master")) continue;
+                String info = jedis.info("memory");
+                long used = 0, max = 0;
+                for (String line : info.split("\\r?\\n")) {
+                    if (line.startsWith("used_memory:")) used = Long.parseLong(line.substring(12));
+                    if (line.startsWith("maxmemory:")) max = Long.parseLong(line.substring(10));
+                }
+                double pressure = max > 0 ? (double) used / max : 0;
+                if (pressure > worst || (pressure == worst && used > largestUsed)) {
+                    worst = pressure; largestUsed = used; selected = info;
+                }
+            }
+        }
+        if (selected == null) throw new IllegalStateException("Redis Cluster has no reachable primary");
+        return selected;
+    }
+
     @Override
     public Object serverInfo(String section, String routingKey) {
         try (var jedis =

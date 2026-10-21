@@ -6,6 +6,7 @@ param(
     [string[]]$Modules = @(
         "cachedb-annotations",
         "cachedb-core",
+        "cachedb-json",
         "cachedb-processor",
         "cachedb-storage-redis",
         "cachedb-storage-jdbc",
@@ -147,6 +148,8 @@ function Get-ApiBlocks([string]$Text) {
         } elseif ($current -and $line.Trim() -and $line -ne "}") {
             # Removing final widens a class without removing a binary member.
             $normalized = $line -replace '^public final class ', 'public class '
+            # A method monitor is an implementation detail, not part of its JVM descriptor.
+            $normalized = $normalized -replace '\bsynchronized\s+', ''
             [void]$blocks[$current].Add($normalized)
         }
     }

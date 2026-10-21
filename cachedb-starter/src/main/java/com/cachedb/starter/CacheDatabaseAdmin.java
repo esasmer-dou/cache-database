@@ -85,6 +85,8 @@ public final class CacheDatabaseAdmin {
     private final RedisClientOperations jedis;
     private final String keyPrefix;
     private final List<String> writeBehindStreamKeys;
+    private Supplier<List<String>> runtimeWriteStreamKeys;
+    private java.util.function.LongSupplier runtimeWriteBehindBacklog;
     private final String deadLetterStreamKey;
     private final String reconciliationStreamKey;
     private final String archiveStreamKey;
@@ -494,13 +496,24 @@ public final class CacheDatabaseAdmin {
         return projectionRefreshReplayFunction.apply(entryId);
     }
 
+    // Installed by the internal context before this admin instance is published.
+    void runtimeStreams(Supplier<List<String>> streams, java.util.function.LongSupplier backlog) {
+        runtimeWriteStreamKeys = java.util.Objects.requireNonNull(streams);
+        runtimeWriteBehindBacklog = java.util.Objects.requireNonNull(backlog);
+    }
+
+    private List<String> activeWriteStreamKeys() {
+        return runtimeWriteStreamKeys == null ? writeBehindStreamKeys : runtimeWriteStreamKeys.get();
+    }
+
     public DeploymentStatusSnapshot deploymentStatus() {
+        List<String> activeStreams = activeWriteStreamKeys();
         return new DeploymentStatusSnapshot(
                 cacheDatabaseConfig.adminHttp().enabled(),
                 cacheDatabaseConfig.adminHttp().dashboardEnabled(),
                 cacheDatabaseConfig.writeBehind().enabled(),
                 cacheDatabaseConfig.writeBehind().workerThreads(),
-                cacheDatabaseConfig.writeBehind().activeStreamKeys().size(),
+                activeStreams.size(),
                 cacheDatabaseConfig.writeBehind().dedicatedWriteConsumerGroupEnabled(),
                 cacheDatabaseConfig.writeBehind().durableCompactionEnabled(),
                 cacheDatabaseConfig.writeBehind().postgresCopyBulkLoadEnabled(),
@@ -513,7 +526,7 @@ public final class CacheDatabaseAdmin {
                 cacheDatabaseConfig.queryIndex().plannerStatisticsPersisted(),
                 cacheDatabaseConfig.keyspace().keyPrefix(),
                 Instant.now(),
-                cacheDatabaseConfig.writeBehind().activeStreamKeys());
+                activeStreams);
     }
 
     public SchemaStatusSnapshot schemaStatus() {
@@ -3019,6 +3032,7 @@ public final class CacheDatabaseAdmin {
     }
 
     private long writeBehindBacklog() {
+        if (runtimeWriteBehindBacklog != null) return runtimeWriteBehindBacklog.getAsLong();
         com.reactor.cachedb.redis.RedisKeyStrategy keyStrategy =
                 new com.reactor.cachedb.redis.RedisKeyStrategy(keyPrefix);
         try {

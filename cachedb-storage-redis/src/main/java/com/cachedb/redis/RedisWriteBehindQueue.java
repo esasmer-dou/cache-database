@@ -99,7 +99,7 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
         enforceHardLimits(operation);
         var body = mapper.toBody(operation);
         if (!config.compactionActive()) {
-            jedis.commands().xadd(streamKey, XAddParams.xAddParams(), body);
+            jedis.commands().xadd(keyStrategy.writeStreamKey(streamKey, operation.metadata().redisNamespace()), XAddParams.xAddParams(), body);
             return;
         }
         String targetCompactionStreamKey =
@@ -114,7 +114,7 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
         String pendingKey =
                 keyStrategy.compactionPendingKey(
                         operation.metadata().redisNamespace(), operation.id());
-        String statsKey = keyStrategy.compactionStatsKey();
+        String statsKey = keyStrategy.compactionStatsKey(operation.metadata().redisNamespace());
         boolean payloadExists = jedis.commands().exists(payloadKey);
         jedis.commands().hset(payloadKey, body);
         if (!payloadExists) {
@@ -140,7 +140,7 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
         if (!guardrailConfig.enabled() || !guardrailConfig.rejectWritesOnHardLimit()) {
             return;
         }
-        String statsKey = keyStrategy.compactionStatsKey();
+        String statsKey = keyStrategy.compactionStatsKey(operation.metadata().redisNamespace());
         Map<String, String> stats = jedis.commands().hgetAll(statsKey);
         long pendingCount = parseLong(stats.get("pendingCount"));
         long payloadCount = parseLong(stats.get("payloadCount"));

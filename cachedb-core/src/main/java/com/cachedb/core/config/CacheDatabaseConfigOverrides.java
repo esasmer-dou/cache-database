@@ -34,6 +34,8 @@ public final class CacheDatabaseConfigOverrides {
         Objects.requireNonNull(properties, "properties");
         Lookup root = new Lookup(properties, prefix);
         return CacheDatabaseConfig.builder()
+                .writeBehindFlusherFactory(baseConfig.writeBehindFlusherFactory())
+                .runtimeRole(root.enumValue("runtimeRole", CacheRuntimeRole.class, baseConfig.runtimeRole()))
                 .writeBehind(applyWriteBehind(baseConfig.writeBehind(), root.child("writeBehind.")))
                 .resourceLimits(applyResourceLimits(baseConfig.resourceLimits(), root.child("resourceLimits.")))
                 .keyspace(applyKeyspace(baseConfig.keyspace(), root.child("keyspace.")))

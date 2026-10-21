@@ -8,13 +8,17 @@ public final class OptimisticWriteConflictException extends IllegalStateExceptio
     private final long actualVersion;
 
     public OptimisticWriteConflictException(
-            String entityName,
-            Object id,
-            long expectedVersion,
-            long actualVersion
-    ) {
-        super("Optimistic write conflict for " + entityName + " id=" + id
-                + ": expected version " + expectedVersion + " but current version is " + actualVersion);
+            String entityName, Object id, long expectedVersion, long actualVersion) {
+        super(
+                new StringBuilder("Optimistic write conflict for ")
+                        .append(entityName)
+                        .append(" id=")
+                        .append(id)
+                        .append(": expected version ")
+                        .append(expectedVersion)
+                        .append(" but current version is ")
+                        .append(actualVersion)
+                        .toString());
         this.entityName = entityName;
         this.id = String.valueOf(id);
         this.expectedVersion = expectedVersion;

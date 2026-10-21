@@ -21,6 +21,40 @@ public final class RedisFunctionExecutor {
     private final RedisGuardrailConfig guardrailConfig;
     private final WriteBehindConfig writeBehindConfig;
     private final RedisFunctionArgsMapper argsMapper;
+    private final java.util.concurrent.locks.ReentrantLock reloadLock =
+            new java.util.concurrent.locks.ReentrantLock();
+    private volatile long reloadEpoch;
+
+    private boolean missingFunction(redis.clients.jedis.exceptions.JedisDataException failure) {
+        String message = failure.getMessage();
+        return message != null
+                && (message.toLowerCase(java.util.Locale.ROOT).contains("function not found")
+                        || message.startsWith("NOSCRIPT"));
+    }
+
+    private void reload(long epoch) {
+        reloadLock.lock();
+        try {
+            if (epoch == reloadEpoch) {
+                new RedisFunctionLoader(jedis, config, new RedisFunctionLibrarySource())
+                        .reloadMissingLibrary();
+                reloadEpoch++;
+            }
+        } finally {
+            reloadLock.unlock();
+        }
+    }
+
+    private Object call(String name, List<String> keys, List<String> args) {
+        long epoch = reloadEpoch;
+        try {
+            return jedis.fcall(name, keys, args);
+        } catch (redis.clients.jedis.exceptions.JedisDataException failure) {
+            if (!missingFunction(failure) || !config.autoLoadLibrary()) throw failure;
+            reload(epoch);
+            return jedis.fcall(name, keys, args);
+        }
+    }
 
     public RedisFunctionExecutor(
             JedisPooled jedis,
@@ -110,7 +144,7 @@ public final class RedisFunctionExecutor {
             boolean cacheEntity,
             long expectedVersion) {
         Object result =
-                jedis.fcall(
+                call(
                         config.upsertFunctionName(),
                         List.of(
                                 entityKey,
@@ -150,7 +184,7 @@ public final class RedisFunctionExecutor {
             String compactionStatsKey,
             WriteOperation<T, ID> operation) {
         Object result =
-                jedis.fcall(
+                call(
                         config.deleteFunctionName(),
                         List.of(
                                 entityKey,
@@ -187,8 +221,26 @@ public final class RedisFunctionExecutor {
             pipeline.sync();
         }
         ArrayList<Long> versions = new ArrayList<>(responses.size());
-        for (Response<Object> response : responses) {
-            long version = toLong(response.get());
+        for (int i = 0; i < responses.size(); i++) {
+            Object result;
+            try {
+                result = responses.get(i).get();
+            } catch (redis.clients.jedis.exceptions.JedisDataException failure) {
+                if (!missingFunction(failure) || !config.autoLoadLibrary()) throw failure;
+                UpsertRequest request = requests.get(i);
+                result =
+                        call(
+                                config.upsertFunctionName(),
+                                request.keys(),
+                                argsMapper.upsertArgs(
+                                        request.operation(),
+                                        request.cachePolicy(),
+                                        guardrailConfig,
+                                        writeBehindConfig,
+                                        request.cacheEntity(),
+                                        -1L));
+            }
+            long version = toLong(result);
             if (version <= 0) {
                 throw new IllegalStateException(
                         "Bulk upsert returned a non-positive Redis version: " + version);
@@ -207,7 +259,7 @@ public final class RedisFunctionExecutor {
             String id,
             long flushedVersion) {
         Object result =
-                jedis.fcall(
+                call(
                         config.compactionCompleteFunctionName(),
                         List.of(
                                 compactionPendingKey,

@@ -338,6 +338,7 @@ public final class CrashReplayChaosSuiteRunner {
              Statement statement = connection.createStatement()) {
             for (String table : tables) {
                 statement.executeUpdate("DROP TABLE IF EXISTS " + table);
+                ProductionTestEnvironment.resetFixtureWriteFence(connection, table);
             }
         }
     }

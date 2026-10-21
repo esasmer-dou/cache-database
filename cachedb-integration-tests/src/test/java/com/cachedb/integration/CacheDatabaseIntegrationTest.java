@@ -3762,6 +3762,7 @@ public final class CacheDatabaseIntegrationTest {
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_hot_policy_orders");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_example_orders");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_example_users");
+            resetFixtureWriteFence(connection, "cachedb_hot_policy_orders", "cachedb_example_orders", "cachedb_example_users");
             statement.executeUpdate("""
                     CREATE TABLE cachedb_example_users (
                         id BIGINT PRIMARY KEY,
@@ -3786,6 +3787,7 @@ public final class CacheDatabaseIntegrationTest {
         try (Connection connection = DriverManager.getConnection(jdbcUrl, JDBC_USER, JDBC_PASSWORD);
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_hot_policy_orders");
+            resetFixtureWriteFence(connection, "cachedb_hot_policy_orders");
             statement.executeUpdate("""
                     CREATE TABLE cachedb_hot_policy_orders (
                         id BIGINT PRIMARY KEY,
@@ -3803,6 +3805,7 @@ public final class CacheDatabaseIntegrationTest {
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_hot_policy_orders");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_example_orders");
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_example_users");
+            resetFixtureWriteFence(connection, "cachedb_hot_policy_orders", "cachedb_example_orders", "cachedb_example_users");
         }
     }
 
@@ -3810,6 +3813,23 @@ public final class CacheDatabaseIntegrationTest {
         try (Connection connection = DriverManager.getConnection(jdbcUrl, JDBC_USER, JDBC_PASSWORD);
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("DROP TABLE IF EXISTS " + tableName);
+            resetFixtureWriteFence(connection, tableName);
+        }
+    }
+
+    private static void resetFixtureWriteFence(Connection connection, String... tables) throws SQLException {
+        try (var statement = connection.createStatement(); var result = statement.executeQuery("SELECT to_regclass('cachedb_write_fence')")) {
+            result.next();
+            if (result.getString(1) == null) return;
+        }
+        for (String table : tables) {
+            if (!table.matches("cachedb_[a-z_]+")) throw new IllegalArgumentException("Not a test fixture table");
+            String schema = connection.getSchema();
+            String scope = schema.length() + ":" + schema + table;
+            String prefix = (scope.length() + ":" + scope).replace("!", "!!").replace("_", "!_").replace("%", "!%");
+            try (var statement = connection.prepareStatement("DELETE FROM cachedb_write_fence WHERE identity_value LIKE ? ESCAPE '!'")) {
+                statement.setString(1, prefix + "%"); statement.executeUpdate();
+            }
         }
     }
 

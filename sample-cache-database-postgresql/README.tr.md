@@ -3,7 +3,7 @@
 [English](README.md) | Türkçe
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.13.0](https://img.shields.io/badge/CacheDB-0.13.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.13.0)
+[![CacheDB 0.14.0](https://img.shields.io/badge/CacheDB-0.14.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.14.0)
 
 Bu proje, CacheDB'nin Redis 8 ve PostgreSQL ile nasıl kullanılacağını gösteren
 bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
@@ -11,7 +11,7 @@ açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
 kullanır, kalıcı geçmiş PostgreSQL'de tutulur, büyüyen listeler ise bütün nesne
 ağacı yerine projection üzerinden okunur.
 
-> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.13.0`
+> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.14.0`
 > paketini kullanır. GitHub token'ı veya yerel CacheDB kaynak kodu gerekmez.
 
 Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
@@ -20,19 +20,22 @@ yolunu okuyacak, karşılık gelen Redis projection'ını hazırlayacak, aktif y
 çağıracak ve kapsam ile kalıcılık sinyallerini inceleyeceksin. Redis'te kayıt
 bulunmaması arka planda gizli bir PostgreSQL sorgusu başlatmaz.
 
-## CacheDB 0.13.0'a Yükseltme
+## CacheDB 0.14.0'a Yükseltme
 
 Örnek POM; BOM, sağlayıcı starter'ı, annotation processor ve doctor plugin'ini
-`0.13.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
+`0.14.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
 POM ayrıca `jedis.version=5.2.0` ayarını içerir. Bu ayar olmadan Spring Boot parent,
 gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 
 - Mevcut REST, arşiv, projection ve ön yükleme yollarının açık davranışı korunur.
-- `hotEntityLimit=0` artık entity kabulünü kapatır. `-1` değerini yalnızca bilinçli bir sınırsız kayıt politikası için kullanın. Varsayılan 1.000 olarak korunur.
+- Mevcut SQL worker'larını yükseltmeden önce sağlayıcınıza ait `cachedb_write_fence` migration'ını uygulayın, eski worker'ları devreden çıkarın ve sürüm sayaçlarını koruyun. Ayrı metadata tablosu, geciken eski yazmanın silinmiş kaydı yeniden oluşturmasını engeller; iş tabloları değişmez. [Kalıcı yazma sürümleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/kalici-yazma-surumleri.md) rehberini izleyin.
+- Tipli snapshot'lar, Jackson'sız üretilen codec'ler, atomik batch'ler ve istemci/worker rolleri isteğe bağlı framework API'leridir; örnekte kendiliğinden yeni endpoint açılmaz. [Tipli snapshot ve çalışma rolleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/tipli-snapshot-roller-testler.md) rehberine bakın.
+- Katı 50 ms CI hedefi, ilk kullanım dâhil üretilen codec/snapshot senaryosu içindir. REST, SQL, ağ veya canlı sistem SLA'sı değildir; eski mapper API'lerinin uyumluluğu ve tüm JUnit metot süreleri ayrıca raporlanır.
+- `hotEntityLimit=0` entity kabulünü kapatır. `-1` değerini yalnızca bilinçli bir sınırsız kayıt politikası için kullanın. Varsayılan 1.000 olarak korunur.
 - SQL kolonunuz NULL alabiliyorsa `Boolean` kullanın; primitive `boolean`, SQL NULL değerini reddeder.
 - Redis Cluster, atomik yazım batch'leri ve indeksli katalog sayfaları isteğe bağlı framework API'leridir; örnekte kendiliğinden etkinleşen endpoint'ler değildir.
 
-Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.13.0.md)
+Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.14.0.md)
 ve [sınırlı çalışma sözleşmelerini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/sinirli-calisma-islemleri.md)
 okuyun. Paketin kullanılabilir olması, uygulamanızın canlı ortam topolojisini doğrulamaz.
 
@@ -132,7 +135,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.13.0</cachedb.version>
+<cachedb.version>0.14.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -224,7 +227,7 @@ herkese açıktır; Maven `settings.xml`, kullanıcı adı veya token gerekmez.
 ### 1. Yayımlanmış CacheDB paketini çözümle
 
 Sample projesini doğrudan doğrula. Maven; BOM, starter, annotation processor ve
-doctor plugin'ini değişmez `0.13.0` paketinden kimlik bilgisi istemeden çözümler:
+doctor plugin'ini değişmez `0.14.0` paketinden kimlik bilgisi istemeden çözümler:
 
 ```powershell
 mvn -U -DskipTests validate

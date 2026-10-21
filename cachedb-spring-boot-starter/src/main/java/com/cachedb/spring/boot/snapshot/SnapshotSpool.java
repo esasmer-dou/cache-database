@@ -1,8 +1,7 @@
 package com.reactor.cachedb.spring.boot.snapshot;
 
-import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.ObjectWriter;
+import com.reactor.cachedb.core.codec.JsonArrayCodec;
 
 import java.io.*;
 import java.nio.ByteBuffer;
@@ -44,47 +43,124 @@ final class SnapshotSpool implements AutoCloseable {
     <R, V> void prepare(
             SnapshotPlan<R, V> plan, SnapshotRows rows, ObjectMapper mapper, Runnable check)
             throws IOException {
-        Function<R, Iterable<V>> projection = plan.projection().apply(rows);
-        ObjectWriter writer =
-                mapper.writerFor(plan.valueType())
-                        .without(
-                                com.fasterxml.jackson.databind.SerializationFeature
-                                        .FLUSH_AFTER_WRITE_VALUE);
-        Set<String> ids = new HashSet<>();
-        var buffer = new BufferedOutputStream(Channels.newOutputStream(channel), 64 * 1024);
-        OutputStream counted =
-                new FilterOutputStream(buffer) {
-                    @Override
-                    public void write(int value) throws IOException {
-                        check.run();
-                        out.write(value);
-                        bytes++;
-                    }
+        prepare(
+                plan,
+                rows,
+                plan.jsonCodec() != null
+                        ? plan.jsonCodec()
+                        : new JacksonJsonArrayCodec<>(mapper, plan.valueType()),
+                check);
+    }
 
-                    @Override
-                    public void write(byte[] data, int offset, int length) throws IOException {
-                        check.run();
-                        out.write(data, offset, length);
-                        bytes += length;
-                    }
-                };
-        for (R root : rows.get(plan.roots())) {
-            check.run();
+    <R, V> void prepare(
+            SnapshotPlan<R, V> plan, SnapshotRows rows, JsonArrayCodec<V> codec, Runnable check)
+            throws IOException {
+        Function<R, Iterable<V>> projection = plan.projection().apply(rows);
+        try (RootWriter<R, V> writer = new RootWriter<>(plan, projection, codec, check)) {
+            for (R root : rows.get(plan.roots())) writer.write(root);
+        }
+    }
+
+    <R, V> void prepareStreaming(
+            javax.sql.DataSource source,
+            SnapshotPlan<R, V> plan,
+            SnapshotSettings settings,
+            ObjectMapper mapper,
+            Runnable check,
+            List<String> ids)
+            throws IOException {
+        prepareStreaming(
+                source,
+                plan,
+                settings,
+                plan.jsonCodec() != null
+                        ? plan.jsonCodec()
+                        : new JacksonJsonArrayCodec<>(mapper, plan.valueType()),
+                check,
+                ids);
+    }
+
+    <R, V> void prepareStreaming(
+            javax.sql.DataSource source,
+            SnapshotPlan<R, V> plan,
+            SnapshotSettings settings,
+            JsonArrayCodec<V> codec,
+            Runnable check,
+            List<String> ids)
+            throws IOException {
+        try (RootWriter<R, V> writer =
+                new RootWriter<>(plan, plan.projection().apply(null), codec, check)) {
+            SnapshotJdbcReader.stream(
+                    source,
+                    plan,
+                    settings,
+                    check,
+                    ids,
+                    root -> {
+                        try {
+                            writer.write(root);
+                        } catch (IOException failure) {
+                            throw new UncheckedIOException(failure);
+                        }
+                    });
+        }
+    }
+
+    private final class RootWriter<R, V> implements AutoCloseable {
+        private final SnapshotPlan<R, V> plan;
+        private final Function<R, Iterable<V>> projection;
+        private final Runnable check;
+        private final OutputStream counted;
+        private final JsonArrayCodec.ArrayEncoder<V> encoder;
+        private final Set<String> ids = new HashSet<>();
+        private int roots;
+
+        RootWriter(
+                SnapshotPlan<R, V> plan,
+                Function<R, Iterable<V>> projection,
+                JsonArrayCodec<V> codec,
+                Runnable check)
+                throws IOException {
+            this.plan = plan;
+            this.projection = projection;
+            this.check = check;
+            var buffer = new BufferedOutputStream(Channels.newOutputStream(channel), 64 * 1024);
+            counted =
+                    new FilterOutputStream(buffer) {
+                        long checked;
+
+                        private void checkpoint() {
+                            if (bytes - checked >= 65536) {
+                                check.run();
+                                checked = bytes;
+                            }
+                        }
+
+                        @Override
+                        public void write(int value) throws IOException {
+                            out.write(value);
+                            bytes++;
+                            checkpoint();
+                        }
+
+                        @Override
+                        public void write(byte[] data, int offset, int length) throws IOException {
+                            out.write(data, offset, length);
+                            bytes += length;
+                            checkpoint();
+                        }
+                    };
+            encoder = codec.openEncoder(counted, check);
+        }
+
+        void write(R root) throws IOException {
+            if ((roots++ & 63) == 0) check.run();
             String id = Objects.requireNonNull(plan.id().apply(root), "Null snapshot root id");
             if (id.isBlank() || id.length() > 512 || id.indexOf('\n') >= 0 || !ids.add(id))
                 throw new IllegalStateException("Invalid or duplicate snapshot root identity");
             long start = bytes;
-            try (JsonGenerator json = mapper.getFactory().createGenerator(counted)) {
-                json.disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
-                json.writeStartArray();
-                for (V value :
-                        Objects.requireNonNull(
-                                projection.apply(root), "Null snapshot projection")) {
-                    check.run();
-                    writer.writeValue(json, Objects.requireNonNull(value, "Null snapshot value"));
-                }
-                json.writeEndArray();
-            }
+            encoder.writeArray(
+                    Objects.requireNonNull(projection.apply(root), "Null snapshot projection"));
             long length = bytes - start;
             if (length > Integer.MAX_VALUE - 8L)
                 throw new IllegalStateException("Snapshot response exceeds Java String capacity");
@@ -99,7 +175,12 @@ final class SnapshotSpool implements AutoCloseable {
                 throw new IllegalArgumentException("Snapshot score must be finite");
             entries.add(new Entry(id, start, (int) length, partition, score));
         }
-        counted.flush();
+
+        public void close() throws IOException {
+            encoder.close();
+            counted.flush();
+            check.run();
+        }
     }
 
     List<Entry> entries() {

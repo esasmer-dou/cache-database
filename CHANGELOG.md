@@ -4,6 +4,36 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.14.0 - 2026-10-21
+
+### Added
+
+- typed snapshot lookups with freshness/availability states and bounded, single-generation multi-root reads
+- opt-in `@CacheJsonRecord` generated JSON codecs and `cachedb-json` streaming support for Jackson-free typed snapshot preparation/reads, retaining configured Jackson APIs
+- partition-local cursor revisions and explicit row-local streaming snapshot preparation
+- namespace-sharded Redis Cluster streams and one-retry recovery for missing Redis Functions
+- infrastructure-free repository fixtures and generated repositories accepting CacheSession
+- lower-allocation fixture sorting and repeatable unit/JMH latency checks that distinguish first use from warmed execution
+- bounded direct token output for generated JSON codecs, retaining custom Gson writers and legacy Jackson mappings
+- single-buffer UTF-8 output without per-encoder charset setup, verified against JDK bytes including split and malformed surrogate input
+- reusable no-op encoder checkpoints without lambda-metafactory bootstrap; artifact-backed cold probes retain JAR hashes and every measured sample
+- fail-fast rejection of null entity serialization in test fixtures, before mutation or batch deletion
+- CI cold/repeated latency gates with stale-result invalidation and complete sample retention
+- bounded single-write/batch durability waiting and configurable client/worker runtime roles
+- reusable spool JSON encoding, lower-allocation JDBC rows and virtual-thread-friendly allocation locks
+- English and Turkish usage, deployment and compatibility guidance
+- release sample exports that respect Git ignore rules and exclude local memory/environment files
+- durable SQL version/tombstone fencing across PostgreSQL, SQL Server and Oracle, preventing stale UPSERT resurrection after physical DELETE
+
+### Compatibility
+
+- Existing 0.13.0 public constructors and methods remain available; Java 17 bytecode is retained.
+- FULL remains the default role; CLIENT_ONLY requires separate, identically registered workers.
+- Namespace-sharded Cluster keys and tagged snapshot prefixes require a coordinated rewarm migration.
+- SQL workers require the separate `cachedb_write_fence` metadata migration and a drained upgrade; do not mix unfenced old workers with upgraded workers. See [durable write fences](docs/durable-write-fences.md).
+- Streaming preparation is opt-in and does not change existing whole-catalog mapping semantics.
+- See [the release notes](docs/releases/v0.14.0.md) for upgrade and evidence boundaries.
+
 ## 0.13.0 - 2026-10-14
 
 ### Added

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reactor.cachedb.spring.boot.CacheDatabaseSpringBootAutoConfiguration;
 import com.reactor.cachedb.starter.CacheDatabase;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -26,7 +27,7 @@ public class CacheSnapshotAutoConfiguration {
     SnapshotJobs snapshotJobs(
             DataSource source,
             CacheDatabase database,
-            ObjectMapper mapper,
+            ObjectProvider<ObjectMapper> mapper,
             SnapshotProperties properties,
             List<SnapshotPlan<?, ?>> plans) {
         Map<String, SnapshotSettings> settings = properties.jobs();
@@ -35,14 +36,26 @@ public class CacheSnapshotAutoConfiguration {
             if (!names.contains(name))
                 throw new IllegalArgumentException(
                         "Snapshot configuration references an unknown plan: " + name);
+        if (plans.stream().allMatch(plan -> plan.jsonCodec() != null)) {
+            return SnapshotJobs.jacksonFree(
+                            source,
+                            database.backgroundRedisOperations(),
+                            database.redisOperations(),
+                            Clock.systemUTC(),
+                            database.config().keyspace().keyPrefix(),
+                            plans,
+                            settings)
+                    .withSchedulingEnabled(database.config().runtimeRole().runsWorkers());
+        }
         return new SnapshotJobs(
-                source,
-                database.backgroundRedisOperations(),
-                database.redisOperations(),
-                mapper,
-                Clock.systemUTC(),
-                database.config().keyspace().keyPrefix(),
-                plans,
-                settings);
+                        source,
+                        database.backgroundRedisOperations(),
+                        database.redisOperations(),
+                        mapper.getObject(),
+                        Clock.systemUTC(),
+                        database.config().keyspace().keyPrefix(),
+                        plans,
+                        settings)
+                .withSchedulingEnabled(database.config().runtimeRole().runsWorkers());
     }
 }

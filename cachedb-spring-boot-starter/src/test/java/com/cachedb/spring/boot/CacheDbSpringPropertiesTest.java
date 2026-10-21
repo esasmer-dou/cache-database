@@ -238,7 +238,7 @@ class CacheDbSpringPropertiesTest {
 
         assertNotNull(config.writeBehindFlusherFactory());
         Object flusher = config.writeBehindFlusherFactory().create(
-                null,
+                new org.h2.jdbcx.JdbcDataSource(),
                 null,
                 WriteBehindConfig.defaults(),
                 StoragePerformanceCollector.noop()

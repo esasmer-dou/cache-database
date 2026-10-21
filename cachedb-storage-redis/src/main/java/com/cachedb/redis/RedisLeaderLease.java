@@ -101,7 +101,19 @@ public final class RedisLeaderLease implements AutoCloseable {
                 safeRenewInterval);
     }
 
-    public synchronized boolean tryAcquireOrRenewLeadership() {
+    private final java.util.concurrent.locks.ReentrantLock lock =
+            new java.util.concurrent.locks.ReentrantLock();
+
+    public boolean tryAcquireOrRenewLeadership() {
+        lock.lock();
+        try {
+            return acquireOrRenewLeadership();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private boolean acquireOrRenewLeadership() {
         if (!enabled) {
             return true;
         }
@@ -121,12 +133,26 @@ public final class RedisLeaderLease implements AutoCloseable {
         }
     }
 
-    public synchronized boolean isLeader() {
-        return !enabled || leader;
+    public boolean isLeader() {
+        lock.lock();
+        try {
+            return !enabled || leader;
+        } finally {
+            lock.unlock();
+        }
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
+        lock.lock();
+        try {
+            release();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void release() {
         if (!enabled || !leader) {
             return;
         }

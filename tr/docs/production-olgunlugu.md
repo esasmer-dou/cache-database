@@ -26,7 +26,7 @@ kapasite, failover, canary veya geri dönüş kanıtı oluşturmaz.
 
 ## Production GA Framework Kontrolleri
 
-`0.13.0`, numaralandırılmış bir framework paket sürümüdür. Yeni fiziksel Data Guard
+`0.14.0`, numaralandırılmış bir framework paket sürümüdür. Yeni fiziksel Data Guard
 testinin çalıştırılamadığı, sürüm notlarında açıkça belirtilir. Kararlı sürüm numarası
 veya başarılı `FrameworkPackage` dağıtım kontrolü, tam GA onayı olarak sunulamaz.
 Varsayılan hazırlık kapsamı `ProductionGA` olarak kalır; aynı commit üzerindeki

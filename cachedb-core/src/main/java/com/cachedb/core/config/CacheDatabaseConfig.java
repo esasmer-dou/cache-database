@@ -20,8 +20,54 @@ public record CacheDatabaseConfig(
         AdminMonitoringConfig adminMonitoring,
         AdminReportJobConfig adminReportJob,
         AdminHttpConfig adminHttp,
-        SchemaBootstrapConfig schemaBootstrap
-) {
+        SchemaBootstrapConfig schemaBootstrap,
+        CacheRuntimeRole runtimeRole) {
+    public CacheDatabaseConfig {
+        java.util.Objects.requireNonNull(runtimeRole, "runtimeRole");
+    }
+
+    /** Retains the 0.13 canonical constructor. */
+    public CacheDatabaseConfig(
+            WriteBehindConfig writeBehind,
+            WriteBehindFlusherFactory writeBehindFlusherFactory,
+            ResourceLimits resourceLimits,
+            KeyspaceConfig keyspace,
+            RuntimeCoordinationConfig runtimeCoordination,
+            RedisFunctionsConfig redisFunctions,
+            RelationConfig relations,
+            PageCacheConfig pageCache,
+            ReadThroughConfig readThrough,
+            ReadShapeGuardrailConfig readShapeGuardrail,
+            QueryIndexConfig queryIndex,
+            ProjectionRefreshConfig projectionRefresh,
+            RedisGuardrailConfig redisGuardrail,
+            DeadLetterRecoveryConfig deadLetterRecovery,
+            AdminMonitoringConfig adminMonitoring,
+            AdminReportJobConfig adminReportJob,
+            AdminHttpConfig adminHttp,
+            SchemaBootstrapConfig schemaBootstrap) {
+        this(
+                writeBehind,
+                writeBehindFlusherFactory,
+                resourceLimits,
+                keyspace,
+                runtimeCoordination,
+                redisFunctions,
+                relations,
+                pageCache,
+                readThrough,
+                readShapeGuardrail,
+                queryIndex,
+                projectionRefresh,
+                redisGuardrail,
+                deadLetterRecovery,
+                adminMonitoring,
+                adminReportJob,
+                adminHttp,
+                schemaBootstrap,
+                CacheRuntimeRole.FULL);
+    }
+
     public CacheDatabaseConfig(
             WriteBehindConfig writeBehind,
             WriteBehindFlusherFactory writeBehindFlusherFactory,
@@ -39,14 +85,26 @@ public record CacheDatabaseConfig(
             AdminMonitoringConfig adminMonitoring,
             AdminReportJobConfig adminReportJob,
             AdminHttpConfig adminHttp,
-            SchemaBootstrapConfig schemaBootstrap
-    ) {
+            SchemaBootstrapConfig schemaBootstrap) {
         this(
-                writeBehind, writeBehindFlusherFactory, resourceLimits, keyspace, runtimeCoordination,
-                redisFunctions, relations, pageCache, ReadThroughConfig.defaults(), readShapeGuardrail,
-                queryIndex, projectionRefresh, redisGuardrail, deadLetterRecovery, adminMonitoring,
-                adminReportJob, adminHttp, schemaBootstrap
-        );
+                writeBehind,
+                writeBehindFlusherFactory,
+                resourceLimits,
+                keyspace,
+                runtimeCoordination,
+                redisFunctions,
+                relations,
+                pageCache,
+                ReadThroughConfig.defaults(),
+                readShapeGuardrail,
+                queryIndex,
+                projectionRefresh,
+                redisGuardrail,
+                deadLetterRecovery,
+                adminMonitoring,
+                adminReportJob,
+                adminHttp,
+                schemaBootstrap);
     }
 
     public CacheDatabaseConfig(
@@ -65,14 +123,26 @@ public record CacheDatabaseConfig(
             AdminMonitoringConfig adminMonitoring,
             AdminReportJobConfig adminReportJob,
             AdminHttpConfig adminHttp,
-            SchemaBootstrapConfig schemaBootstrap
-    ) {
+            SchemaBootstrapConfig schemaBootstrap) {
         this(
-                writeBehind, null, resourceLimits, keyspace, runtimeCoordination, redisFunctions,
-                relations, pageCache, ReadThroughConfig.defaults(), readShapeGuardrail, queryIndex,
-                projectionRefresh, redisGuardrail, deadLetterRecovery, adminMonitoring, adminReportJob,
-                adminHttp, schemaBootstrap
-        );
+                writeBehind,
+                null,
+                resourceLimits,
+                keyspace,
+                runtimeCoordination,
+                redisFunctions,
+                relations,
+                pageCache,
+                ReadThroughConfig.defaults(),
+                readShapeGuardrail,
+                queryIndex,
+                projectionRefresh,
+                redisGuardrail,
+                deadLetterRecovery,
+                adminMonitoring,
+                adminReportJob,
+                adminHttp,
+                schemaBootstrap);
     }
 
     public CacheDatabaseConfig(
@@ -92,8 +162,7 @@ public record CacheDatabaseConfig(
             AdminMonitoringConfig adminMonitoring,
             AdminReportJobConfig adminReportJob,
             AdminHttpConfig adminHttp,
-            SchemaBootstrapConfig schemaBootstrap
-    ) {
+            SchemaBootstrapConfig schemaBootstrap) {
         this(
                 writeBehind,
                 null,
@@ -112,8 +181,7 @@ public record CacheDatabaseConfig(
                 adminMonitoring,
                 adminReportJob,
                 adminHttp,
-                schemaBootstrap
-        );
+                schemaBootstrap);
     }
 
     public static Builder builder() {
@@ -127,6 +195,7 @@ public record CacheDatabaseConfig(
     public Builder toBuilder() {
         return builder()
                 .writeBehind(writeBehind)
+                .runtimeRole(runtimeRole)
                 .writeBehindFlusherFactory(writeBehindFlusherFactory)
                 .resourceLimits(resourceLimits)
                 .keyspace(keyspace)
@@ -147,11 +216,19 @@ public record CacheDatabaseConfig(
     }
 
     public static final class Builder {
+        private CacheRuntimeRole runtimeRole = CacheRuntimeRole.FULL;
+
+        public Builder runtimeRole(CacheRuntimeRole role) {
+            this.runtimeRole = java.util.Objects.requireNonNull(role, "runtimeRole");
+            return this;
+        }
+
         private WriteBehindConfig writeBehind = WriteBehindConfig.defaults();
         private WriteBehindFlusherFactory writeBehindFlusherFactory;
         private ResourceLimits resourceLimits = ResourceLimits.defaults();
         private KeyspaceConfig keyspace = KeyspaceConfig.defaults();
-        private RuntimeCoordinationConfig runtimeCoordination = RuntimeCoordinationConfig.defaults();
+        private RuntimeCoordinationConfig runtimeCoordination =
+                RuntimeCoordinationConfig.defaults();
         private RedisFunctionsConfig redisFunctions = RedisFunctionsConfig.defaults();
         private RelationConfig relations = RelationConfig.defaults();
         private PageCacheConfig pageCache = PageCacheConfig.defaults();
@@ -171,7 +248,8 @@ public record CacheDatabaseConfig(
             return this;
         }
 
-        public Builder writeBehindFlusherFactory(WriteBehindFlusherFactory writeBehindFlusherFactory) {
+        public Builder writeBehindFlusherFactory(
+                WriteBehindFlusherFactory writeBehindFlusherFactory) {
             this.writeBehindFlusherFactory = writeBehindFlusherFactory;
             return this;
         }
@@ -275,8 +353,8 @@ public record CacheDatabaseConfig(
                     adminMonitoring,
                     adminReportJob,
                     adminHttp,
-                    schemaBootstrap
-            );
+                    schemaBootstrap,
+                    runtimeRole);
         }
     }
 }

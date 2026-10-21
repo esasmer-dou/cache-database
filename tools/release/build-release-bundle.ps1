@@ -62,74 +62,27 @@ foreach ($file in $topLevelFiles) {
     Copy-Item -Path (Join-Path $repoRoot $file) -Destination (Join-Path $stagingRoot $file)
 }
 
-$docsDest = Join-Path $stagingRoot "docs"
-New-Item -ItemType Directory -Path $docsDest -Force | Out-Null
-
-$docFiles = @(
-    "docs\getting-started.md",
-    "docs\database-provider-spi.md",
-    "docs\oracle-provider.md",
-    "docs\use-case-examples.md",
-    "docs\spring-boot-starter.md",
-    "docs\scheduled-warm.md",
-    "docs\tuning-parameters.md",
-    "docs\migration-planner.md",
-    "docs\production-recipes.md",
-    "docs\orm-alternative.md",
-    "docs\production-ga-release-runbook.md",
-    "docs\production-certification.md",
-    "docs\production-test-report.md",
-    "docs\release-checklist.md",
-    "docs\maven-central-publish-checklist.md",
-    "docs\releases\v$Version.md",
-    "PRODUCTION_GA_CRITERIA.md",
-    "tr\README.md",
-    "tr\DOKUMAN_HARITASI.md",
-    "tr\docs\getting-started.md",
-    "tr\docs\veritabani-provider-spi.md",
-    "tr\docs\oracle-provider.md",
-    "tr\docs\use-case-examples.md",
-    "tr\docs\spring-boot-starter.md",
-    "tr\docs\periodik-warm.md",
-    "tr\docs\tuning-parameters.md",
-    "tr\docs\migration-planner.md",
-    "tr\docs\production-recipes.md",
-    "tr\docs\production-ga-release-runbook.md",
-    "tr\docs\production-olgunlugu.md",
-    "tr\docs\production-sertifikasi.md",
-    "tr\docs\production-test-report.md",
-    "tr\docs\release-checklist.md"
-)
-
-$docFiles += @(
-    "docs\snapshot-projections.md",
-    "docs\snapshot-source-reference.md",
-    "docs\bounded-runtime-operations.md",
-    "tr\docs\snapshot-projectionlar.md",
-    "tr\docs\snapshot-kaynak-basvurusu.md",
-    "tr\docs\sinirli-calisma-islemleri.md",
-    "docs\stable-release-launch-kit.md",
-    "tr\docs\stable-release-launch-kit.md"
-)
-
-foreach ($file in $docFiles) {
-    $source = Join-Path $repoRoot $file
+# Export the complete public documentation tree, not a hand-maintained partial list.
+$docFiles = @(& git -c core.quotepath=false -C $repoRoot ls-files --cached --others --exclude-standard -- docs tr DOCUMENTATION_MAP.md PRODUCTION_GA_CRITERIA.md)
+if ($LASTEXITCODE -ne 0) { throw "Cannot enumerate public documentation." }
+$repositoryPrefix = [IO.Path]::GetFullPath($repoRoot) + [IO.Path]::DirectorySeparatorChar
+foreach ($file in ($docFiles | Sort-Object -Unique)) {
+    if ($file -match '(^|/)(target|\.git|\.codex|agentmemory|secrets|\.ssh)(/|$)' -or
+        $file -match '(^|/)(PROJECT_MEMORY|MEMORY)\.md$|(^|/)\.env($|\.)|\.(log|secret|secrets|pem|pfx|p12|jks)$') {
+        continue
+    }
+    $source = [IO.Path]::GetFullPath((Join-Path $repoRoot $file))
+    if (-not $source.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Documentation source escaped the repository: $file"
+    }
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+    if ((Get-Item -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Release documentation must not be symbolic links: $file"
+    }
     $destination = Join-Path $stagingRoot $file
     $parent = Split-Path -Parent $destination
-    if (-not (Test-Path $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    Copy-Item -Path $source -Destination $destination
-}
-
-$localizedReleaseNote = Join-Path $repoRoot "tr\docs\releases\v$Version.md"
-if (Test-Path $localizedReleaseNote) {
-    $destination = Join-Path $stagingRoot "tr\docs\releases\v$Version.md"
-    $parent = Split-Path -Parent $destination
-    if (-not (Test-Path $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    Copy-Item -Path $localizedReleaseNote -Destination $destination
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    Copy-Item -LiteralPath $source -Destination $destination
 }
 
 $sampleProjects = @(
@@ -144,29 +97,40 @@ foreach ($sampleProject in $sampleProjects) {
     $sampleSource = Join-Path $repoRoot $sampleProject
     $sampleDest = Join-Path $samplesDest $sampleProject
     New-Item -ItemType Directory -Path $sampleDest -Force | Out-Null
-    Get-ChildItem -Path $sampleSource -Recurse -File |
-        Where-Object {
-            $_.FullName -notmatch '\\target\\' -and
-            $_.FullName -notmatch '\\\.git\\' -and
-            $_.FullName -notmatch '\\\.idea\\' -and
-            $_.FullName -notmatch '\\\.vscode\\' -and
-            $_.Name -notmatch '\.log$'
-        } |
-        ForEach-Object {
-            $relative = $_.FullName.Substring($sampleSource.Length).TrimStart([char[]]@('\', '/'))
-            $destination = Join-Path $sampleDest $relative
-            $parent = Split-Path -Parent $destination
-            if (-not (Test-Path $parent)) {
-                New-Item -ItemType Directory -Path $parent -Force | Out-Null
-            }
-            Copy-Item -Path $_.FullName -Destination $destination
+    # Respect each sample's ignore rules: release archives must not export local state.
+    $files = @(& git -c core.quotepath=false -C $sampleSource ls-files --cached --others --exclude-standard)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot enumerate release sources for $sampleProject; use a Git checkout."
+    }
+    $sourcePrefix = [IO.Path]::GetFullPath($sampleSource) + [IO.Path]::DirectorySeparatorChar
+    foreach ($relative in ($files | Sort-Object -Unique)) {
+        $portable = $relative.Replace('\', '/')
+        if ($portable -match '(^|/)(target|\.git|\.idea|\.vscode|\.codex|agentmemory|secrets|\.ssh)(/|$)' -or
+            $portable -match '(^|/)(PROJECT_MEMORY|MEMORY)\.md$|(^|/)\.env($|\.)|\.(log|secret|secrets|pem|pfx|p12|jks)$') {
+            continue
         }
+        $source = [IO.Path]::GetFullPath((Join-Path $sampleSource $relative))
+        if (-not $source.StartsWith($sourcePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Sample source escaped its root: $relative"
+        }
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+        if ((Get-Item -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Release sources must not be symbolic links: $relative"
+        }
+        $destination = Join-Path $sampleDest $relative
+        $parent = Split-Path -Parent $destination
+        if (-not (Test-Path -LiteralPath $parent)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $source -Destination $destination
+    }
 }
 
 $artifactModules = @(
     "cachedb-annotations",
     "cachedb-processor",
     "cachedb-core",
+    "cachedb-json",
     "cachedb-storage-redis",
     "cachedb-storage-jdbc",
     "cachedb-storage-postgres",

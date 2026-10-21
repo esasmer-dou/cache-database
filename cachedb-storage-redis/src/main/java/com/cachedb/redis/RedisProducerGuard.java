@@ -239,8 +239,10 @@ public final class RedisProducerGuard {
         updateRuntimeProfile(lastSnapshot.get());
     }
 
-    public synchronized Map<String, String> activeRuntimeProfileProperties() {
-        RuntimeProfile profile = activeRuntimeProfile();
+    public Map<String, String> activeRuntimeProfileProperties() {
+        sampleSafely(); // Redis I/O must not run while holding the profile monitor.
+        synchronized (this) {
+        RuntimeProfile profile = RuntimeProfile.parse(runtimeProfileSnapshot.get().activeProfile());
         LinkedHashMap<String, String> values = new LinkedHashMap<>();
         values.put("profile", profile.name());
         values.put("mode", manualRuntimeProfileOverride.get() == null ? "AUTO" : "MANUAL");
@@ -260,10 +262,11 @@ public final class RedisProducerGuard {
                 "effectiveCriticalSleepMillis",
                 String.valueOf(profile.adjustCriticalSleep(config.criticalSleepMillis())));
         return values;
+        }
     }
 
     private RedisGuardrailSnapshot sampleNow(long now) {
-        Object memoryInfoResponse = jedis.serverInfo("memory", keyStrategy.compactionStatsKey());
+        Object memoryInfoResponse = jedis.memoryInfo(keyStrategy.compactionStatsKey());
         String memoryInfo =
                 memoryInfoResponse instanceof byte[] bytes
                         ? new String(bytes, StandardCharsets.UTF_8)
@@ -274,8 +277,7 @@ public final class RedisProducerGuard {
         long maxMemory = parseLong(memoryStats.get("maxmemory"));
         String maxMemoryPolicy = memoryStats.getOrDefault("maxmemory_policy", "unknown");
         boolean maxMemoryPolicyExpected = maxmemoryPolicyExpected(maxMemoryPolicy);
-        Map<String, String> compactionStats =
-                jedis.commands().hgetAll(keyStrategy.compactionStatsKey());
+        Map<String, String> compactionStats = compactionStats();
         long pendingCount = parseLong(compactionStats.get("pendingCount"));
         long payloadCount = parseLong(compactionStats.get("payloadCount"));
         long hardRejectedWriteCount = parseLong(compactionStats.get("hardRejectedWriteCount"));
@@ -332,6 +334,20 @@ public final class RedisProducerGuard {
         updateRuntimeProfile(snapshot);
         lastSnapshot.set(snapshot);
         return snapshot;
+    }
+
+    private Map<String, String> compactionStats() {
+        if (!(keyStrategy instanceof ClusterHashTagKeyStrategy cluster) || !cluster.namespaceSharded())
+            return jedis.commands().hgetAll(keyStrategy.compactionStatsKey());
+        Map<String, Long> counts = new java.util.HashMap<>();
+        for (String namespace : cluster.namespaces()) {
+            var stats = jedis.commands().hgetAll(keyStrategy.compactionStatsKey(namespace));
+            for (String name : java.util.List.of("pendingCount", "payloadCount", "hardRejectedWriteCount"))
+                counts.merge(name, parseLong(stats.get(name)), Long::sum);
+        }
+        Map<String, String> result = new java.util.HashMap<>();
+        counts.forEach((name, count) -> result.put(name, Long.toString(count)));
+        return result;
     }
 
     private RedisGuardrailSnapshot sampleSafely() {

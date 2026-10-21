@@ -15,6 +15,36 @@ public record SnapshotPlan<R, V>(
         SnapshotIndexSpec<R> indexSpec,
         SnapshotRootScope rootScope,
         boolean contentReuse) {
+    /** Explicit JSON contract; preserves all existing plan constructors and record components. */
+    public SnapshotPlan<R, V> withJsonCodec(
+            com.reactor.cachedb.core.codec.JsonArrayCodec<V> codec) {
+        Objects.requireNonNull(codec, "codec");
+        if (!valueType.equals(codec.valueType()))
+            throw new IllegalArgumentException(
+                    "JSON codec type does not match snapshot value type");
+        var delegate =
+                projection instanceof JsonSnapshotProjection<R, V> encoded
+                        ? encoded.delegate()
+                        : projection;
+        return new SnapshotPlan<>(
+                name,
+                roots,
+                id,
+                sources,
+                valueType,
+                new JsonSnapshotProjection<>(delegate, codec),
+                indexSpec,
+                rootScope,
+                contentReuse);
+    }
+
+    @SuppressWarnings("unchecked")
+    public com.reactor.cachedb.core.codec.JsonArrayCodec<V> jsonCodec() {
+        return projection instanceof JsonSnapshotProjection<?, ?> encoded
+                ? (com.reactor.cachedb.core.codec.JsonArrayCodec<V>) encoded.codec()
+                : null;
+    }
+
     public SnapshotPlan(
             String name,
             SnapshotSource<R> roots,
@@ -59,6 +89,30 @@ public record SnapshotPlan<R, V>(
                 name, roots, id, sources, valueType, projection, indexSpec, rootScope, true);
     }
 
+    /** Opt-in row-local mapping: roots are decoded and spooled without retaining a root list. */
+    public static <R, V> SnapshotPlan<R, V> streaming(
+            String name,
+            SnapshotSource<R> roots,
+            Function<R, String> id,
+            Class<V> valueType,
+            Function<R, Iterable<V>> mapping) {
+        return new SnapshotPlan<>(
+                name,
+                roots,
+                id,
+                List.of(roots),
+                valueType,
+                new StreamingSnapshotProjection<>(mapping));
+    }
+
+    boolean streaming() {
+        var delegate =
+                projection instanceof JsonSnapshotProjection<?, ?> encoded
+                        ? encoded.delegate()
+                        : projection;
+        return sources.size() == 1 && delegate instanceof StreamingSnapshotProjection<?, ?>;
+    }
+
     /** Keeps the SQL read set explicit; declarations are never discovered by reflection. */
     public static List<SnapshotSource<?>> inputs(SnapshotInput... inputs) {
         List<SnapshotSource<?>> result = new ArrayList<>();
@@ -76,10 +130,13 @@ public record SnapshotPlan<R, V>(
                 id,
                 sources,
                 type,
-                rows -> {
-                    Function<R, Iterable<V>> base = projection.apply(rows);
-                    return root -> mapping.apply(root, base.apply(root));
-                },
+                streaming()
+                        ? new StreamingSnapshotProjection<>(
+                                root -> mapping.apply(root, projection.apply(null).apply(root)))
+                        : rows -> {
+                            Function<R, Iterable<V>> base = projection.apply(rows);
+                            return root -> mapping.apply(root, base.apply(root));
+                        },
                 indexSpec,
                 rootScope,
                 contentReuse);

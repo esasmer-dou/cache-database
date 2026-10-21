@@ -147,6 +147,7 @@ class OracleHighLatencyIntegrationTest {
                 throw exception;
             }
         }
+        WriteFenceFixtureCleanup.afterDrop(statement, "cachedb_it_latency_entity");
     }
 
     private void assumeReachable() {

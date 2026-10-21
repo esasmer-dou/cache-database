@@ -10,6 +10,7 @@ import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
+import com.reactor.cachedb.jdbc.JdbcWriteFence;
 import com.reactor.cachedb.jdbc.VersionGuardedWriteSupport;
 
 import org.postgresql.copy.CopyManager;
@@ -37,6 +38,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
     private final PostgresDatabaseDialect dialect;
     private final WriteBehindConfig config;
     private final StoragePerformanceCollector performanceCollector;
+    private final JdbcWriteFence writeFence;
 
     public PostgresWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry) {
         this(dataSource, entityRegistry, WriteBehindConfig.defaults(), null);
@@ -58,6 +60,12 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         this.dialect = new PostgresDatabaseDialect();
         this.config = config;
         this.performanceCollector = performanceCollector;
+        this.writeFence =
+                new JdbcWriteFence(
+                        dataSource,
+                        entityRegistry,
+                        JdbcWriteFence.Provider.POSTGRES,
+                        config.statementTimeoutSeconds());
     }
 
     @Override
@@ -68,13 +76,7 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         }
         long startedAt = System.nanoTime();
         try {
-            try (Connection connection = dataSource.getConnection()) {
-                if (operation.type() == OperationType.DELETE) {
-                    delete(connection, operation);
-                    return;
-                }
-                upsert(connection, operation);
-            }
+            flushAtomicBatch(List.of(operation));
         } finally {
             recordPostgresWrite(startedAt, operation.observationTag());
         }
@@ -94,11 +96,13 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
 
     @Override
     public void flushAtomicBatch(List<QueuedWriteOperation> operations) throws SQLException {
+        if (operations.isEmpty()) return;
+        writeFence.initialize();
         try (Connection connection = dataSource.getConnection()) {
             boolean autoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
             try {
-                for (var operation : operations) {
+                for (var operation : writeFence.filter(connection, operations)) {
                     if (operation.type() == OperationType.DELETE) delete(connection, operation);
                     else upsert(connection, operation);
                 }
@@ -129,10 +133,12 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             return;
         }
 
+        writeFence.initialize();
         try (Connection connection = dataSource.getConnection()) {
             boolean previousAutoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
             try {
+                batchOperations = writeFence.filter(connection, batchOperations);
                 if (config.entityFlushPolicies().isEmpty()) {
                     LinkedHashMap<StatementKey, List<QueuedWriteOperation>> groups =
                             new LinkedHashMap<>();

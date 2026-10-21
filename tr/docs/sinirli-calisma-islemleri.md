@@ -90,8 +90,10 @@ repository.refreshRoots(List.of("9001", "9002")); // Açık komut; GET bunu teti
 
 Tam yenileme, içerik ve bölüm indekslerini yeni nesilde hazırlar; aktif işaretçiyi
 bir kez değiştirir. Okuma yalnızca Redis'ten yapılır. Cursor, plan/bölüm/nesil/sürüm
-bilgisine bağlıdır. Tam veya artımlı yenilemeden sonra eski cursor reddedilir;
-ilk sayfadan başlayın. WindowRequest tek istekte en fazla 1.000 kayıt kabul eder.
+bilgisine bağlıdır. 0.13'te tam veya artımlı yenilemeden sonra eski cursor reddedilir.
+0.14'te artımlı yenileme yalnızca etkilenen eski/yeni bölümlerin cursor'larını
+geçersiz kılar; tam yenileme bütün eski nesil cursor'larını geçersiz kılmaya devam eder.
+Etkilenen bölümde ilk sayfadan başlayın. WindowRequest tek istekte en fazla 1.000 kayıt kabul eder.
 İçerik ayrıca batch-target-size sınırına (varsayılan 4 MiB) sığmalıdır.
 Fazla büyük sayfa kesilmez; hata verir. Pencereyi küçültün veya tekil okuma kullanın.
 
@@ -237,16 +239,17 @@ Snapshot ve periyodik warm aynı adaptörleri kullanır. Dağıtık iş/işletim
 script'lerinin gerektirdiği ortak tag'e göre ayarlayın; bağımsız stream ayarlarını
 incelemeden varsayılanlarla bırakmayın.
 
-Tam CacheDatabase, ortak tag içeren koordinasyon kapsamı ve eşleşen yazım stream'leri
-ister; farklı slot'lar başlangıçta reddedilir. Aynı batch'teki entity'ler aynı kapsamda
-olmalıdır. Ayrı tenant/iş alanı kapsamları farklı slot'lara dağıtılabilir; tek büyük
-kapsam kendiliğinden birden fazla node'a bölünmez.
-Düşük seviyeli ClusterHashTagKeyStrategy("cachedb"), entity namespace'ini tag yapar
-ve projection için sahibinin tag'ini korur. streamKey(namespace), aynı kapsamı
-kullanan ayrı tüketici yapılandırmasıyla kullanılmalıdır. Slot'lar arası ACID yoktur.
+0.13'te tam CacheDatabase, ortak etiket içeren kapsam ve eşleşen yazma stream'leri ister.
+0.14'te etiketsiz önek, namespace başına dağılımı açar; yazma ve compaction stream'leri
+de aynı slota taşınır ve sınırlı işleyici havuzundan tüketilir. Açık `{scope}` etiketi
+ortak slot davranışını korur; uyuşmayan stream slot'ları başlangıçta reddedilir.
+Aynı atomik batch'teki entity'ler aynı slotta olmalıdır. Tek bir namespace veya
+ortak kapsam kendiliğinden birden fazla düğüme bölünmez. Projection, sahibi entity'nin
+etiketini korur. Slot'lar arasında ACID garantisi yoktur.
 
 Adaptör primary'lerde sınırlı SCAN, slot'a göre MGET/DELETE, Cluster pipeline ve
-bütün primary'lere function yüklemeyi destekler. Bellek koruması kapsamın kendi
-primary'sini ölçer; aşırı dolu bir node'u ortalamayla gizlemez. Her node'u ayrı izleyin.
+bütün primary'lere function yüklemeyi destekler. 0.14'te bellek koruması güncel primary
+düğümleri örnekler; en yüksek göreli bellek doluluğunu kullanır. Eşitlikte kullanılan
+bayt miktarı belirleyicidir. Böylece dolu bir düğüm ortalamayla gizlenmez. Her düğümü ayrıca izleyin.
 Failover, yeniden bölümleme, replikasyon kalıcılığı ve uygulama kabulü altyapıda
 doğrulanmalıdır; üç primary'li yerel test HA sertifikası değildir.

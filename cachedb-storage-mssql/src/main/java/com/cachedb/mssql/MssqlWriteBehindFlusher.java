@@ -9,6 +9,7 @@ import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
+import com.reactor.cachedb.jdbc.JdbcWriteFence;
 import com.reactor.cachedb.jdbc.VersionGuardedWriteSupport;
 
 import java.sql.Connection;
@@ -34,6 +35,7 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
     private final StoragePerformanceCollector performanceCollector;
     private final MssqlWriteBehindOptions options;
     private final int transactionBatchSize;
+    private final JdbcWriteFence writeFence;
 
     public MssqlWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry) {
         this(
@@ -81,6 +83,12 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
         this.failureClassifier = new MssqlFailureClassifier();
         this.performanceCollector = performanceCollector;
         this.options = options == null ? MssqlWriteBehindOptions.defaults() : options;
+        this.writeFence =
+                new JdbcWriteFence(
+                        dataSource,
+                        entityRegistry,
+                        JdbcWriteFence.Provider.MSSQL,
+                        this.options.queryTimeoutSeconds());
         this.transactionBatchSize =
                 Math.max(
                         1,
@@ -109,6 +117,7 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
         }
         long startedAt = System.nanoTime();
         try {
+            writeFence.initialize();
             try (Connection connection = dataSource.getConnection()) {
                 executeInTransaction(connection, List.of(operation));
             }
@@ -124,6 +133,7 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
             if (operations.isEmpty()) {
                 return;
             }
+            writeFence.initialize();
             try (Connection connection = dataSource.getConnection()) {
                 for (int start = 0; start < operations.size(); start += transactionBatchSize) {
                     int end = Math.min(operations.size(), start + transactionBatchSize);
@@ -153,6 +163,7 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
                 setLockTimeout(connection, options.lockTimeoutMillis());
             }
             connection.setTransactionIsolation(options.transactionIsolation());
+            operations = writeFence.filter(connection, operations);
             try (StatementCache statements = new StatementCache(connection)) {
                 int index = 0;
                 while (index < operations.size()) {
@@ -203,6 +214,8 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
 
     @Override
     public void flushAtomicBatch(List<QueuedWriteOperation> operations) throws SQLException {
+        if (operations.isEmpty()) return;
+        writeFence.initialize();
         try (Connection connection = dataSource.getConnection()) {
             executeInTransaction(connection, operations);
         }

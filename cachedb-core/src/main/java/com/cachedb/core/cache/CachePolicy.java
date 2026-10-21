@@ -10,6 +10,28 @@ public record CachePolicy(
     public static final int UNBOUNDED = -1;
     public static final int DISABLED = 0;
 
+    @Override
+    public final boolean equals(Object other) {
+        if (this == other) return true;
+        if (!(other instanceof CachePolicy value)) return false;
+        return hotEntityLimit == value.hotEntityLimit
+                && pageSize == value.pageSize
+                && lruEvictionEnabled == value.lruEvictionEnabled
+                && entityTtlSeconds == value.entityTtlSeconds
+                && pageTtlSeconds == value.pageTtlSeconds
+                && java.util.Objects.equals(hotPolicy, value.hotPolicy);
+    }
+
+    @Override
+    public final int hashCode() {
+        int hash = Integer.hashCode(hotEntityLimit);
+        hash = 31 * hash + Integer.hashCode(pageSize);
+        hash = 31 * hash + Boolean.hashCode(lruEvictionEnabled);
+        hash = 31 * hash + Long.hashCode(entityTtlSeconds);
+        hash = 31 * hash + Long.hashCode(pageTtlSeconds);
+        return 31 * hash + java.util.Objects.hashCode(hotPolicy);
+    }
+
     public CachePolicy(
             int hotEntityLimit,
             int pageSize,
@@ -45,7 +67,7 @@ public record CachePolicy(
     }
 
     public static CachePolicy defaults() {
-        return builder().build();
+        return new CachePolicy(1_000, 100, true, 0, 60, EntityHotPolicy.countWindow());
     }
 
     public static final class Builder {

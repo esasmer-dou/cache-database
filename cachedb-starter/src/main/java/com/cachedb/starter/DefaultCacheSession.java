@@ -36,6 +36,17 @@ import redis.clients.jedis.JedisPooled;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class DefaultCacheSession implements CacheSession {
+    private final com.reactor.cachedb.redis.RedisDurabilityTracker durabilityTracker;
+    @Override public boolean isDurable(com.reactor.cachedb.core.model.WriteReceipt<?, ?> receipt) {
+        return durabilityTracker.isDurable(receipt);
+    }
+    @Override public boolean isDurable(com.reactor.cachedb.core.api.CacheWriteBatchReceipt receipt) {
+        if (receipt.dependencies().isEmpty()) throw new IllegalArgumentException("Batch receipt has no durability dependencies");
+        return durabilityTracker.areDurableDependencies(receipt.dependencies());
+    }
+    @Override public boolean areDurable(java.util.Collection<? extends com.reactor.cachedb.core.model.WriteReceipt<?, ?>> receipts) {
+        return durabilityTracker.areDurable(receipts);
+    }
 
     private final RedisClientOperations foregroundJedis;
     private final RedisClientOperations backgroundJedis;
@@ -98,6 +109,7 @@ public final class DefaultCacheSession implements CacheSession {
             ProjectionRefreshDispatcher projectionRefreshDispatcher,
             RedisProjectionRefreshQueue projectionRefreshQueue) {
         this.foregroundJedis = foregroundJedis;
+        this.durabilityTracker = new com.reactor.cachedb.redis.RedisDurabilityTracker(backgroundJedis, redisKeyStrategy);
         this.backgroundJedis = backgroundJedis;
         this.config = config;
         this.entityRegistry = entityRegistry;
@@ -192,7 +204,7 @@ public final class DefaultCacheSession implements CacheSession {
                 functionExecutor,
                 producerGuard,
                 config.redisGuardrail(),
-                config.writeBehind().streamKey(),
+                redisKeyStrategy.writeStreamKey(config.writeBehind().streamKey(), metadata.redisNamespace()),
                 config.writeBehind().compactionStreamKey(),
                 config.writeBehind().compactionShardCount(),
                 entityRegistry,

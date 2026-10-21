@@ -49,6 +49,7 @@ class MssqlWriteBehindFlusherLoadSqlServerTest {
         try (Connection connection = DriverManager.getConnection(JDBC_URL, JDBC_USER, JDBC_PASSWORD);
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_it_load_entity");
+            WriteFenceFixtureCleanup.afterDrop(statement, "cachedb_it_load_entity");
             statement.executeUpdate("""
                     CREATE TABLE cachedb_it_load_entity (
                         id BIGINT NOT NULL PRIMARY KEY,

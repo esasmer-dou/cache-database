@@ -30,8 +30,9 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Çalışan REST API örneği nerede? | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) |
 | Yeni projeye nasıl eklerim? | [Başlangıç Rehberi](docs/getting-started.md) |
 | Hızlı erişim, SQL, warm ve command route'larını nasıl tanımlarım? | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| Güncel kararlı sürümde neler değişti? | [v0.13.0 Sürüm Notları](docs/releases/v0.13.0.md) |
+| Güncel kararlı sürümde neler değişti? | [v0.14.0 Sürüm Notları](docs/releases/v0.14.0.md) |
 | Kaynak ve ilişki tanımları nasıl sadeleşir? | [Kaynak başvurusu](docs/snapshot-kaynak-basvurusu.md) |
+| 0.14.0 ile tipli snapshot, istemci/worker ayrımı ve altyapısız test nasıl kullanılır? | [Tipli Snapshot, Çalışma Rolleri ve Tüketici Testleri](docs/tipli-snapshot-roller-testler.md) |
 | Spring Boot'ta JDBC dependency gerekiyor mu? | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | Entity, relation, projection, route contract ne demek? | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | Insert, read, update, delete nasıl yapılır? | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
@@ -89,6 +90,9 @@ olduğunu ve production risklerini görmek.
 
 Hedef: Redis, kalıcı SQL provider, worker, leader lease, failover, CI evidence
 ve operasyonel gözlemlenebilirlik sınırlarını anlamak.
+
+0.14.0 worker geçişinde SQL migration'ını uygulamadan önce
+[Kalıcı Yazma Sürüm Koruması](docs/kalici-yazma-surumleri.md) rehberini okuyun.
 
 ### Mevcut ORM'den Geçecek Ekip
 

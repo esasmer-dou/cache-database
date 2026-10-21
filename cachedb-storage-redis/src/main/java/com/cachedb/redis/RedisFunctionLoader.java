@@ -91,6 +91,45 @@ public final class RedisFunctionLoader {
         }
     }
 
+    /** Only called after a definite missing-function reply, never after ambiguous I/O failure. */
+    public void reloadMissingLibrary() {
+        if (!config.enabled() || !config.autoLoadLibrary())
+            throw new IllegalStateException("Automatic Redis Function reload is disabled");
+        String rendered = source.render(config);
+        String marker = normalizedVersion() + "|" + sha256(rendered);
+        String markerKey = "cachedb:function-library:" + config.libraryName() + ":marker";
+        String leaseKey = markerKey + ":lease";
+        String owner = UUID.randomUUID().toString();
+        boolean acquired = false;
+        for (int attempt = 0; attempt < 100 && !acquired; attempt++) {
+            acquired =
+                    jedis.commands()
+                                    .set(
+                                            leaseKey,
+                                            owner,
+                                            SetParams.setParams().nx().px(LOAD_LEASE_MILLIS))
+                            != null;
+            if (!acquired) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                            "Interrupted while waiting for Redis Function reload", failure);
+                }
+            }
+        }
+        if (!acquired)
+            throw new IllegalStateException("Timed out waiting for Redis Function reload lease");
+        try {
+            rejectDowngradeOrDrift(jedis.commands().get(markerKey), marker);
+            jedis.functionLoadReplace(rendered); // Cluster implementation visits current primaries.
+            jedis.commands().set(markerKey, marker);
+        } finally {
+            jedis.eval(RELEASE_LEASE_SCRIPT, 1, leaseKey, owner);
+        }
+    }
+
     private void waitForConcurrentLoader(String markerKey, String desiredMarker) {
         for (int attempt = 0; attempt < 100; attempt++) {
             String marker = jedis.commands().get(markerKey);

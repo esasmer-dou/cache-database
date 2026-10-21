@@ -39,6 +39,7 @@ $artifactModules = @(
     "cachedb-annotations",
     "cachedb-processor",
     "cachedb-core",
+    "cachedb-json",
     "cachedb-storage-redis",
     "cachedb-storage-jdbc",
     "cachedb-storage-postgres",

@@ -6,7 +6,7 @@
 
     <groupId>com.reactor.cachedb</groupId>
     <artifactId>cache-database</artifactId>
-    <version>0.13.0</version>
+    <version>0.14.0</version>
     <packaging>pom</packaging>
 
     <name>cache-database</name>
@@ -49,6 +49,7 @@
     </ciManagement>
 
     <properties>
+        <cachedb.gson.version>2.13.2</cachedb.gson.version>
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jedis.version>5.2.0</jedis.version>
@@ -77,6 +78,7 @@
         <module>cachedb-annotations</module>
         <module>cachedb-processor</module>
         <module>cachedb-core</module>
+        <module>cachedb-json</module>
         <module>cachedb-storage-redis</module>
         <module>cachedb-storage-jdbc</module>
         <module>cachedb-storage-postgres</module>
@@ -133,6 +135,12 @@
     </build>
 
     <profiles>
+        <profile>
+            <id>inmemory-benchmarks</id>
+            <modules>
+                <module>tools/benchmarks/inmemory</module>
+            </modules>
+        </profile>
         <profile>
             <id>oss-release</id>
             <build>

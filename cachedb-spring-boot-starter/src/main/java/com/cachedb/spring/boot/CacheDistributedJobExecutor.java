@@ -112,6 +112,13 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
             String ownerInstanceId,
             CacheDbSpringProperties.JobExecutorProperties properties,
             Collection<? extends CacheDistributedJobHandler<?>> handlers) {
+        this(jedis, objectMapper, ownerInstanceId, properties, handlers, true);
+    }
+
+    public CacheDistributedJobExecutor(
+            RedisClientOperations jedis, ObjectMapper objectMapper, String ownerInstanceId,
+            CacheDbSpringProperties.JobExecutorProperties properties,
+            Collection<? extends CacheDistributedJobHandler<?>> handlers, boolean consumeJobs) {
         this.jedis = Objects.requireNonNull(jedis, "jedis");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.ownerInstanceId = requireText(ownerInstanceId, "ownerInstanceId");
@@ -143,7 +150,7 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
                         Math.min(workers, 2),
                         runnable ->
                                 daemonThread(runnable, "cachedb-job-heartbeat-" + ownerInstanceId));
-        if (this.handlers.isEmpty()) {
+        if (this.handlers.isEmpty() || !consumeJobs) {
             this.streamWorkers = null;
         } else {
             ensureConsumerGroup();

@@ -3,14 +3,14 @@
 English | [Türkçe](README.tr.md)
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.13.0](https://img.shields.io/badge/CacheDB-0.13.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.13.0)
+[![CacheDB 0.14.0](https://img.shields.io/badge/CacheDB-0.14.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.14.0)
 
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and SQL Server. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in SQL Server, and
 growing lists use projections instead of full aggregates.
 
-> This release consumes the immutable CacheDB `0.13.0` package from the public
+> This release consumes the immutable CacheDB `0.14.0` package from the public
 > CacheDB Maven repository. It requires no GitHub token and does not require a
 > local CacheDB source checkout.
 
@@ -20,19 +20,22 @@ matching Redis projection, read the active route, and inspect coverage and
 durability signals. The sample does not hide a SQL Server query behind a Redis
 miss.
 
-## CacheDB 0.13.0 Upgrade
+## CacheDB 0.14.0 Upgrade
 
 The sample POM aligns the BOM, provider starter, annotation processor and doctor
-plugin at `0.13.0`. Rebuild the sample to regenerate its bindings.
+plugin at `0.14.0`. Rebuild the sample to regenerate its bindings.
 The POM also sets `jedis.version=5.2.0`; the Spring Boot parent would otherwise
 select an older driver that lacks the required pipeline API.
 
 - Existing REST, archive, projection and warm routes retain their explicit behavior.
-- `hotEntityLimit=0` now disables entity admission; use `-1` only for a deliberate unbounded count policy. The default remains 1,000.
+- Before upgrading existing SQL workers, provision the provider migration for `cachedb_write_fence`, drain old workers and keep version counters intact. This separate metadata table prevents stale replay from recreating a deleted row; business tables are unchanged. See [durable write fences](https://github.com/esasmer-dou/cache-database/blob/main/docs/durable-write-fences.md).
+- Typed snapshots, generated Jackson-free codecs, atomic batches and client/worker roles are opt-in framework APIs, not new endpoints automatically enabled in this sample. See [typed snapshots and runtime roles](https://github.com/esasmer-dou/cache-database/blob/main/docs/typed-snapshots-runtime-testing.md).
+- The strict 50 ms CI target concerns the generated-codec/snapshot probe, including first use. It is not a REST, SQL, network or production SLA; legacy mapper compatibility and full JUnit timings are reported separately.
+- `hotEntityLimit=0` disables entity admission; use `-1` only for a deliberate unbounded count policy. The default remains 1,000.
 - Use `Boolean` for nullable SQL booleans; primitive `boolean` rejects SQL NULL.
 - Redis Cluster, atomic write batches and indexed snapshot pages are optional framework APIs, not automatically enabled sample endpoints.
 
-Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.13.0.md)
+Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.14.0.md)
 and [bounded operation contracts](https://github.com/esasmer-dou/cache-database/blob/main/docs/bounded-runtime-operations.md)
 before adding those APIs. Package availability does not certify your application's production topology.
 
@@ -131,7 +134,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.13.0</cachedb.version>
+<cachedb.version>0.14.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -222,7 +225,7 @@ no Maven `settings.xml`, username, or token is required.
 ### 1. Resolve the published CacheDB package
 
 Validate the sample directly. Maven resolves the BOM, starter, annotation
-processor, and doctor plugin anonymously from the immutable `0.13.0` package:
+processor, and doctor plugin anonymously from the immutable `0.14.0` package:
 
 ```powershell
 mvn -U -DskipTests validate

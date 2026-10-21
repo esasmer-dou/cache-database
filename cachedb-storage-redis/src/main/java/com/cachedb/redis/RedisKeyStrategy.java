@@ -286,6 +286,10 @@ public class RedisKeyStrategy {
         return keyPrefix + ":" + compactionSegment + ":stats";
     }
 
+    public String compactionStatsKey(String namespace) { return compactionStatsKey(); }
+
+    public String writeStreamKey(String baseStreamKey, String namespace) { return baseStreamKey; }
+
     public int compactionShard(String namespace, Object id, int shardCount) {
         if (shardCount <= 1) {
             return 0;
@@ -312,4 +316,6 @@ public class RedisKeyStrategy {
     protected String namespacePart(String namespace) {
         return namespace;
     }
+
+    protected String namespacePrefix(String namespace) { return keyPrefix + ":" + namespacePart(namespace); }
 }

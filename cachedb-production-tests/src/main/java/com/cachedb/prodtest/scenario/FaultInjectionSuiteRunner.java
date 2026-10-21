@@ -351,6 +351,7 @@ public final class FaultInjectionSuiteRunner {
         try (Connection connection = ProductionTestEnvironment.postgresConnection();
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("DROP TABLE IF EXISTS cachedb_prodtest_customers");
+            ProductionTestEnvironment.resetFixtureWriteFence(connection, "cachedb_prodtest_customers");
         }
     }
 

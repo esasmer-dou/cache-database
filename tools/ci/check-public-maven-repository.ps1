@@ -27,6 +27,12 @@ $requiredArtifacts = @(
     "cachedb-maven-plugin/$Version/cachedb-maven-plugin-$Version.pom",
     "cachedb-core/$Version/cachedb-core-$Version.jar"
 )
+if ([version]$Version -ge [version]'0.14.0') {
+    $requiredArtifacts += @(
+        "cachedb-json/$Version/cachedb-json-$Version.pom",
+        "cachedb-json/$Version/cachedb-json-$Version.jar"
+    )
+}
 
 $results = New-Object System.Collections.Generic.List[object]
 foreach ($artifact in $requiredArtifacts) {

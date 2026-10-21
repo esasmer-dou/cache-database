@@ -37,6 +37,9 @@ public final class OracleFailureClassifier {
     }
 
     private WriteFailureCategory categoryFor(String sqlState, int vendorCode) {
+        if ("CDB03".equals(sqlState)) {
+            return WriteFailureCategory.SCHEMA;
+        }
         WriteFailureCategory byVendorCode = switch (vendorCode) {
             case 1, 1400, 1407, 2291, 2292 -> WriteFailureCategory.CONSTRAINT;
             case 54 -> WriteFailureCategory.LOCK_CONFLICT;

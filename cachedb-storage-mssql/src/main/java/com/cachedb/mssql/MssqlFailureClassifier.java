@@ -42,6 +42,9 @@ public final class MssqlFailureClassifier {
     }
 
     private WriteFailureCategory categoryFor(String sqlState, int vendorCode) {
+        if ("CDB03".equals(sqlState)) {
+            return WriteFailureCategory.SCHEMA;
+        }
         WriteFailureCategory byVendorCode = switch (vendorCode) {
             case -2 -> WriteFailureCategory.TIMEOUT;
             case 1205 -> WriteFailureCategory.DEADLOCK;

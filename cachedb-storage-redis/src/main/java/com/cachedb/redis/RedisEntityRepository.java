@@ -56,7 +56,6 @@ import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.resps.ScanResult;
 import redis.clients.jedis.resps.Tuple;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -904,7 +903,7 @@ public final class RedisEntityRepository<T, ID>
                                         keyStrategy.compactionPendingKey(
                                                 metadata.redisNamespace(), id),
                                         targetCompactionStreamKey,
-                                        keyStrategy.compactionStatsKey()),
+                                        keyStrategy.compactionStatsKey(metadata.redisNamespace())),
                                 operation,
                                 effectivePolicy,
                                 cacheEntity));
@@ -957,7 +956,7 @@ public final class RedisEntityRepository<T, ID>
                     keyStrategy.compactionPayloadKey(metadata.redisNamespace(), id);
             String compactionPendingKey =
                     keyStrategy.compactionPendingKey(metadata.redisNamespace(), id);
-            String compactionStatsKey = keyStrategy.compactionStatsKey();
+            String compactionStatsKey = keyStrategy.compactionStatsKey(metadata.redisNamespace());
             CachePolicy effectiveCachePolicy = effectiveCachePolicy();
             String targetCompactionStreamKey =
                     keyStrategy.compactionStreamKey(
@@ -1470,7 +1469,7 @@ public final class RedisEntityRepository<T, ID>
                     keyStrategy.compactionPayloadKey(metadata.redisNamespace(), id);
             String compactionPendingKey =
                     keyStrategy.compactionPendingKey(metadata.redisNamespace(), id);
-            String compactionStatsKey = keyStrategy.compactionStatsKey();
+            String compactionStatsKey = keyStrategy.compactionStatsKey(metadata.redisNamespace());
             String targetCompactionStreamKey =
                     keyStrategy.compactionStreamKey(
                             compactionStreamKey,
@@ -1656,7 +1655,7 @@ public final class RedisEntityRepository<T, ID>
         if (encoded == null || encoded.isEmpty()) {
             return 1L;
         }
-        return encoded.getBytes(StandardCharsets.UTF_8).length + 128L;
+        return com.reactor.cachedb.core.codec.Utf8Length.of(encoded) + 128L;
     }
 
     private void recordCacheAdmission(CacheAdmissionSource source, boolean admitted) {

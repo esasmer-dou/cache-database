@@ -18,6 +18,8 @@ public interface RedisClientOperations extends AutoCloseable {
         return commands().sendCommand(redis.clients.jedis.Protocol.Command.INFO, section);
     }
 
+    default Object memoryInfo(String routingKey) { return serverInfo("memory", routingKey); }
+
     default String ping(String routingKey) {
         return commands().ping();
     }

@@ -25,6 +25,43 @@ class CacheRepositoryProcessorTest {
     Path temp;
 
     @Test
+    @SuppressWarnings("unchecked")
+    void generatedRepositoryAcceptsAnInfrastructureFreeSession() throws Exception {
+        var compilation = compile(
+                source("sample/Ticket.java", """
+                        package sample;
+                        import com.reactor.cachedb.annotations.*;
+                        @CacheEntity(table="tickets", redisNamespace="tickets")
+                        public record Ticket(@CacheId(column="ticket_id") Long id,
+                                             @CacheColumn("status") String status) {}
+                        """),
+                source("sample/Tickets.java", """
+                        package sample;
+                        import com.reactor.cachedb.annotations.*;
+                        import com.reactor.cachedb.core.repository.CacheDbRepository;
+                        @CacheRepository(entity=Ticket.class)
+                        public interface Tickets extends CacheDbRepository<Ticket, Long> {}
+                        """));
+        assertTrue(compilation.success(), compilation.diagnosticsText());
+        try (var loader = new java.net.URLClassLoader(new java.net.URL[] {compilation.classes().toUri().toURL()}, getClass().getClassLoader())) {
+            var memory = new com.reactor.cachedb.core.testing.InMemoryCacheDatabase();
+            var implementation = loader.loadClass("sample.TicketsCacheDbImplementation");
+            var repository = (com.reactor.cachedb.core.repository.CacheDbRepository<Object, Long>) implementation
+                    .getConstructor(com.reactor.cachedb.core.api.CacheSession.class).newInstance(memory);
+            Object row = loader.loadClass("sample.Ticket").getConstructor(Long.class, String.class).newInstance(1L, "OPEN");
+            var receipt = repository.save(row, 0);
+            assertTrue(repository.findHotById(1L).isHit());
+            org.junit.jupiter.api.Assertions.assertThrows(com.reactor.cachedb.core.model.OptimisticWriteConflictException.class, () -> repository.save(row, 0));
+            assertFalse(repository.isDurable(receipt));
+            memory.markDurable(receipt);
+            assertTrue(repository.awaitDurable(receipt, java.time.Duration.ofMillis(10)));
+            repository.deleteById(1L);
+            assertTrue(repository.findHotById(1L).isTombstoned());
+            org.junit.jupiter.api.Assertions.assertThrows(UnsupportedOperationException.class, () -> repository.findSourceById(1L));
+        }
+    }
+
+    @Test
     void generatesRepositoryWithCoverageKeysetAndReceiptFirstCommands() throws IOException {
         Compilation compilation = compile(
                 source("sample/OrderEntity.java", """
@@ -816,7 +853,7 @@ class CacheRepositoryProcessorTest {
                     new CacheScheduledWarmProcessor()
             ));
             boolean success = Boolean.TRUE.equals(task.call());
-            return new Compilation(success, generated, diagnostics.getDiagnostics());
+            return new Compilation(success, generated, classes, diagnostics.getDiagnostics());
         }
     }
 
@@ -830,6 +867,7 @@ class CacheRepositoryProcessorTest {
     private record Compilation(
             boolean success,
             Path generated,
+            Path classes,
             List<Diagnostic<? extends JavaFileObject>> diagnostics
     ) {
         String diagnosticsText() {

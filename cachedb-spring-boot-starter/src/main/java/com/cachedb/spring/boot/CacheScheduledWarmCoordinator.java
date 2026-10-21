@@ -127,6 +127,8 @@ final class CacheScheduledWarmCoordinator implements AutoCloseable {
         registry.registered(jobName, instanceId);
     }
 
+    boolean clientOnly() { return !cacheDatabase.config().runtimeRole().runsWorkers(); }
+
     void execute(CacheScheduledWarmDefinition definition, Supplier<CacheWarmPlan> planSupplier) {
         Instant triggerStartedAt = clock.instant();
         String jobPrefix = jobPrefix(definition.jobName());
