@@ -111,6 +111,13 @@ reflection'ı kullanılmaz.
 | Route coverage | Gerekli kapsamın ve pencerenin Redis'te hazır olduğunu gösteren kanıt |
 | Write-behind | Redis'in kabul ettiği komutun SQL Server'a asenkron yazılması |
 | Write receipt | Kimlik, sürüm ve kalıcılık durumunu izlemek için kullanılan komut sonucu |
+| Snapshot / yayın nesli | Redis'te tutarlı bir sürüm olarak yayımlanan hazır okuma modeli; okuma isteği bunu kendiliğinden hazırlamaz |
+| Üretilmiş JSON codec | Belirlenen DTO için derleme sırasında üretilen JSON dönüştürücü; Spring MVC'nin JSON işlemesinden ayrıdır |
+| Atomik batch | Birden fazla komutun Redis'te birlikte kabul edilmesi veya hiçbirinin uygulanmaması; SQL'e yazma daha sonra gerçekleşir |
+| SQL kalıcılığı | Kabul edilen yazmanın SQL'e ulaştığının doğrulanması; HTTP `202` bunu tek başına göstermez |
+| Çalışma rolü | `CLIENT_ONLY` okuma ve iş kabulünü, `WORKER_ONLY` arka plan işlemesini üstlenir |
+| Silme sürüm koruması | Eski UPSERT'in silinen kaydı geri getirmesini engelleyen, SQL'de kalıcı tutulan sürüm bilgisi |
+| Snapshot cursor'ı | Hazırlanan nesle/bölüme bağlı kapalı devam anahtarı; rastgele SQL offset'i değildir |
 
 ## Gereksinimler
 
@@ -241,9 +248,16 @@ yerel olarak kurulmuş bir CacheDB checkout'una bağımlı olmamalıdır.
 ### 2. Redis ve SQL Server'ı başlat
 
 ```powershell
-docker compose up -d
+docker compose up -d --wait --wait-timeout 180 redis sqlserver
+docker compose run --rm --no-deps sql-init
 docker compose ps
 ```
+
+İki komut da başarılıysa devam edin. `sql-init` bir kez çalışıp kapanır;
+çıkış kodunun `0` olması demo veritabanının hazır olduğunu gösterir. Sürekli
+çalışması beklenmez. `--wait` yalnızca Redis ve SQL Server için kullanılır;
+böylece Compose sürümlerinin tamamlanan kurulum container'ını farklı
+değerlendirmesi engellenir.
 
 Compose dosyası şu servisleri açar:
 

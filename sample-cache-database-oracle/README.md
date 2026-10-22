@@ -110,6 +110,13 @@ discovery.
 | Route coverage | Evidence that the required scope/window has been prepared in Redis |
 | Write-behind | An accepted Redis command that is persisted to Oracle Database asynchronously |
 | Write receipt | The command result used to track identity, version, and durability state |
+| Snapshot / generation | A prepared read model published as one consistent version in Redis; reads do not prepare it |
+| Generated JSON codec | Compile-time JSON encoding/decoding for a declared DTO; separate from Spring MVC's JSON stack |
+| Atomic batch | All-or-none Redis acceptance of several commands; SQL persistence happens later |
+| SQL durability | Confirmation that the accepted write reached SQL; not implied by HTTP `202` |
+| Runtime role | `CLIENT_ONLY` accepts/reads work; `WORKER_ONLY` processes background work |
+| Delete fence | Durable SQL version metadata that prevents an older UPSERT from restoring a deleted row |
+| Snapshot cursor | Opaque continuation token tied to the prepared generation/partition; not an arbitrary SQL offset |
 
 ## Prerequisites
 

@@ -21,8 +21,14 @@ $previousPort = $env:SAMPLE_HTTP_PORT
 Push-Location $root
 try {
     if (!$SkipInfrastructure) {
-        & docker compose -p $project up -d --wait --wait-timeout 180
+        $database = @{postgresql='postgres'; mssql='sqlserver'; oracle='oracle'}[$provider]
+        & docker compose -p $project up -d --wait --wait-timeout 180 redis $database
         if ($LASTEXITCODE -ne 0) { throw 'Disposable provider infrastructure did not become ready.' }
+        if ($provider -eq 'mssql') {
+            # Some Compose versions treat a successful one-shot exit as a failed --wait.
+            & docker compose -p $project run --rm --no-deps sql-init
+            if ($LASTEXITCODE -ne 0) { throw 'Disposable SQL Server schema preparation failed.' }
+        }
     }
     $start = [Diagnostics.ProcessStartInfo]::new($java)
     $start.UseShellExecute = $false
@@ -64,7 +70,7 @@ try {
         $process.Dispose()
         $process = $null
         $env:SAMPLE_HTTP_PORT = [string]$port
-        & docker compose -p $project -f docker-compose.yml -f docker-compose.roles.yml up -d --scale worker=2 --wait --wait-timeout 180
+        & docker compose -p $project -f docker-compose.yml -f docker-compose.roles.yml up -d --scale worker=2 api worker
         if ($LASTEXITCODE -ne 0) { throw 'Split API/worker containers failed to start.' }
         $ready = $false
         $deadline = [DateTime]::UtcNow.AddSeconds(120)
@@ -77,6 +83,10 @@ try {
             Start-Sleep -Milliseconds 250
         }
         if (!$ready) { throw 'Split-role API readiness exceeded 120 seconds.' }
+        $workers = @(& docker compose -p $project -f docker-compose.yml -f docker-compose.roles.yml ps --status running -q worker)
+        if ($LASTEXITCODE -ne 0 -or $workers.Count -ne 2) {
+            throw 'Expected two running worker containers before executing the API contract.'
+        }
     }
     & $npx.Source --yes newman@6.2.1 run "postman/cache-database-$provider-catalog.postman_collection.json" `
         --env-var "baseUrl=$base" --timeout 120000 --timeout-request 10000 --timeout-script 5000 `

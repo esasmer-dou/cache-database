@@ -17,7 +17,7 @@ services:
       - >-
         if [ -x /opt/mssql-tools18/bin/sqlcmd ]; then tool=/opt/mssql-tools18/bin/sqlcmd;
         else tool=/opt/mssql-tools/bin/sqlcmd; fi;
-        exec "$$tool" -S sqlserver -U sa -P "$$SQLCMDPASSWORD" -C -b -i /bootstrap.sql
+        exec "$$tool" -S sqlserver -U sa -P "$$SQLCMDPASSWORD" -C -b -l 10 -t 30 -i /bootstrap.sql
     environment:
       SQLCMDPASSWORD: "YourStrong!Passw0rd"
     volumes:
