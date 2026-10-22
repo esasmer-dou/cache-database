@@ -18,7 +18,7 @@ public record CatalogImportItem(
         if (productId < 1
                 || unitPrice == null
                 || unitPrice.signum() < 0
-                || unitPrice.precision() - unitPrice.scale() > 15
+                || (long) unitPrice.precision() - unitPrice.scale() > 15
                 || unitPrice.scale() > 4
                 || stock < 0
                 || reserved < 0

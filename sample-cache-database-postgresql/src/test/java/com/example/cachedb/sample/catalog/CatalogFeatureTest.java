@@ -209,6 +209,13 @@ class CatalogFeatureTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> new CatalogImportItem(1, "a", "b", "c", new BigDecimal("1E+20"), 1, 0, 1));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new CatalogImportItem(
+                                1, "a", "b", "c", new BigDecimal("1E+2147483647"), 1, 0, 1));
+        assertDoesNotThrow(
+                () -> new CatalogImportItem(1, "a", "b", "c", new BigDecimal("1E+14"), 1, 0, 1));
         var plan = new CatalogConfiguration().stockCatalog();
         assertSame(CatalogCardJsonCodec.INSTANCE, plan.jsonCodec());
         assertNotNull(plan.rootScope());

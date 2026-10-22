@@ -97,6 +97,11 @@
       "name": "15 Reject empty import",
       "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"empty\",\"items\":[]}"}},
       "event": [{"listen": "test", "script": {"exec": ["pm.test('Empty batch is not queued', () => pm.response.to.have.status(400));"]}}]
+    },
+    {
+      "name": "16 Reject extreme numeric exponent before queueing",
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"extreme-price\",\"items\":[{\"productId\":9100099,\"sku\":\"INVALID\",\"name\":\"Invalid price\",\"category\":\"pm-tools\",\"unitPrice\":1e2147483647,\"stock\":1,\"reserved\":0,\"updatedAt\":1700000000}]}"}},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('NUMERIC(19,4) bound cannot overflow', () => pm.response.to.have.status(400));"]}}]
     }
   ]
 }

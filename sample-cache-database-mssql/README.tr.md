@@ -1146,7 +1146,7 @@ public record CatalogImportItem(
         if (productId < 1
                 || unitPrice == null
                 || unitPrice.signum() < 0
-                || unitPrice.precision() - unitPrice.scale() > 15
+                || (long) unitPrice.precision() - unitPrice.scale() > 15
                 || unitPrice.scale() > 4
                 || stock < 0
                 || reserved < 0
@@ -1292,6 +1292,9 @@ operasyonel takip gerektirir. Redis kabulü ile sonraki SQL transaction'ı **tek
 dağıtık transaction değildir**: SQL aktarımı başarısızken kabul edilmiş Redis
 değerleri görülebilir. Aynı içeriğin tekrarı güvenlidir; fakat hatalı SQL kaydını
 onarmaz ve batch receipt'ini bir denetim kaydı saklama politikasına dönüştürmez.
+
+Fiyat kontrolü, aşırı büyük bilimsel üsleri kuyruğa alınmadan reddeder.
+NUMERIC(19,4) sınırlarına sığan normal bilimsel gösterim kullanılabilir.
 
 Farklı batch kimlikleri Redis'te koordinasyon/receipt bilgisi biriktirir. Bu alan,
 TTL ile yönetilen entity penceresi değildir. Büyümeyi ölçüp bütçelendirin; eski
@@ -1609,6 +1612,13 @@ class CatalogFeatureTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> new CatalogImportItem(1, "a", "b", "c", new BigDecimal("1E+20"), 1, 0, 1));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new CatalogImportItem(
+                                1, "a", "b", "c", new BigDecimal("1E+2147483647"), 1, 0, 1));
+        assertDoesNotThrow(
+                () -> new CatalogImportItem(1, "a", "b", "c", new BigDecimal("1E+14"), 1, 0, 1));
         var plan = new CatalogConfiguration().stockCatalog();
         assertSame(CatalogCardJsonCodec.INSTANCE, plan.jsonCodec());
         assertNotNull(plan.rootScope());
@@ -1627,7 +1637,7 @@ endpoint'i olarak sunulmaz. Kalıcı `cachedb_write_fence` tablosunu koruyun;
 sağlayıcı migration'ı ve kontrollü yükseltme rehberini uygulayın.
 
 `postman/cache-database-mssql-catalog.postman_collection.json` dosyasını içe
-aktarın. **15 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed gerekmez.
+aktarın. **16 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed gerekmez.
 Akış; ilk süre sınırlı bekleme yeterli değilse yalnızca aynı teslimatı tekrar
 göndererek SQL kalıcılığını, aynı receipt ile tekrarı, değişen içeriğin reddini,
 snapshot yayınını, Türkçe metin/ondalık sayıyı, tek nesilden okumayı, sayfalamayı

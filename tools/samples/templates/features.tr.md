@@ -178,6 +178,9 @@ dağıtık transaction değildir**: SQL aktarımı başarısızken kabul edilmi�
 değerleri görülebilir. Aynı içeriğin tekrarı güvenlidir; fakat hatalı SQL kaydını
 onarmaz ve batch receipt'ini bir denetim kaydı saklama politikasına dönüştürmez.
 
+Fiyat kontrolü, aşırı büyük bilimsel üsleri kuyruğa alınmadan reddeder.
+NUMERIC(19,4) sınırlarına sığan normal bilimsel gösterim kullanılabilir.
+
 Farklı batch kimlikleri Redis'te koordinasyon/receipt bilgisi biriktirir. Bu alan,
 TTL ile yönetilen entity penceresi değildir. Büyümeyi ölçüp bütçelendirin; eski
 teslimatlar için tekrar koruması sözü verirken receipt'leri silmeyin. Üretim
@@ -261,7 +264,7 @@ endpoint'i olarak sunulmaz. Kalıcı `cachedb_write_fence` tablosunu koruyun;
 sağlayıcı migration'ı ve kontrollü yükseltme rehberini uygulayın.
 
 `postman/cache-database-{{PROVIDER}}-catalog.postman_collection.json` dosyasını içe
-aktarın. **15 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed gerekmez.
+aktarın. **16 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed gerekmez.
 Akış; ilk süre sınırlı bekleme yeterli değilse yalnızca aynı teslimatı tekrar
 göndererek SQL kalıcılığını, aynı receipt ile tekrarı, değişen içeriğin reddini,
 snapshot yayınını, Türkçe metin/ondalık sayıyı, tek nesilden okumayı, sayfalamayı

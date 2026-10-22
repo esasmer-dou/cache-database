@@ -31,7 +31,7 @@ public final class CatalogScenarios {
                 () ->
                         sql.queryForObject(
                                         "SELECT COUNT(*) FROM sample_products WHERE product_id"
-                                            + " BETWEEN 9000001 AND 9000004",
+                                                + " BETWEEN 9000001 AND 9000004",
                                         Integer.class)
                                 == 4);
         var receipt = ((Map<?, ?>) imported.get("result")).get("receipt");
@@ -51,6 +51,16 @@ public final class CatalogScenarios {
                         base + "/api/catalog/imports",
                         Map.of("batchId", "empty", "items", List.of()));
         assertEquals(HttpStatus.BAD_REQUEST, invalid.getStatusCode());
+        var extremePrice =
+                post(
+                        http,
+                        base + "/api/catalog/imports",
+                        """
+                        {"batchId":"extreme-price","items":[{"productId":9000099,"sku":"INVALID",
+                        "name":"Invalid price","category":"feature-a","unitPrice":1e2147483647,
+                        "stock":1,"reserved":0,"updatedAt":1700000000}]}
+                        """);
+        assertEquals(HttpStatus.BAD_REQUEST, extremePrice.getStatusCode());
         var changed =
                 terminal(
                         http,

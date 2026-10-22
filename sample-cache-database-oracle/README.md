@@ -1120,7 +1120,7 @@ public record CatalogImportItem(
         if (productId < 1
                 || unitPrice == null
                 || unitPrice.signum() < 0
-                || unitPrice.precision() - unitPrice.scale() > 15
+                || (long) unitPrice.precision() - unitPrice.scale() > 15
                 || unitPrice.scale() > 4
                 || stock < 0
                 || reserved < 0
@@ -1266,6 +1266,9 @@ still need operational handling. Redis acceptance and later SQL transaction are
 **not one distributed transaction**: accepted Redis values can precede or outlive
 a failed SQL flush. Identical retry is idempotent; it does not repair a rejected
 SQL row or make the batch receipt an audit-log retention policy.
+
+Price bounds also reject extreme scientific exponents before queueing; ordinary
+scientific notation that fits NUMERIC(19,4) remains valid.
 
 Distinct batch IDs retain Redis coordination/receipt metadata. It is not a
 TTL-managed entity window. Budget and monitor this growth; do not erase receipts
@@ -1579,6 +1582,13 @@ class CatalogFeatureTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> new CatalogImportItem(1, "a", "b", "c", new BigDecimal("1E+20"), 1, 0, 1));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new CatalogImportItem(
+                                1, "a", "b", "c", new BigDecimal("1E+2147483647"), 1, 0, 1));
+        assertDoesNotThrow(
+                () -> new CatalogImportItem(1, "a", "b", "c", new BigDecimal("1E+14"), 1, 0, 1));
         var plan = new CatalogConfiguration().stockCatalog();
         assertSame(CatalogCardJsonCodec.INSTANCE, plan.jsonCodec());
         assertNotNull(plan.rootScope());
@@ -1596,7 +1606,7 @@ a production HTTP endpoint. Keep the durable `cachedb_write_fence` table and fol
 the provider migration/drained-upgrade guide.
 
 Import `postman/cache-database-oracle-catalog.postman_collection.json`.
-Run all **15 requests** in order; no demo seed is required after schema setup.
+Run all **16 requests** in order; no demo seed is required after schema setup.
 They assert import durability (retrying only the identical delivery if the
 initial bounded wait returns pending), identical replay, changed-payload rejection,
 snapshot publication, Unicode/decimal data, single-generation reads, pagination
