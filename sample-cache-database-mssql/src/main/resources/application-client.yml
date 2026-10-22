@@ -1,0 +1,2 @@
+cachedb:
+  runtime-role: CLIENT_ONLY

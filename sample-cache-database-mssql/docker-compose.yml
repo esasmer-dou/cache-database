@@ -10,6 +10,22 @@ services:
       timeout: 3s
       retries: 20
 
+  sql-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest@sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        if [ -x /opt/mssql-tools18/bin/sqlcmd ]; then tool=/opt/mssql-tools18/bin/sqlcmd;
+        else tool=/opt/mssql-tools/bin/sqlcmd; fi;
+        exec "$$tool" -S sqlserver -U sa -P "$$SQLCMDPASSWORD" -C -b -i /bootstrap.sql
+    environment:
+      SQLCMDPASSWORD: "YourStrong!Passw0rd"
+    volumes:
+      - ./scripts/bootstrap-mssql.sql:/bootstrap.sql:ro
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest@sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56
     environment:

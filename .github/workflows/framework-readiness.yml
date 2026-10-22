@@ -46,6 +46,7 @@ on:
       - "tr/cachedb-examples/**"
       - "pom.xml"
       - "tools/ci/**"
+      - "tools/samples/**"
   push:
     branches:
       - main
@@ -93,6 +94,7 @@ on:
       - "tr/cachedb-examples/**"
       - "pom.xml"
       - "tools/ci/**"
+      - "tools/samples/**"
 
 jobs:
   framework-readiness:
@@ -125,6 +127,10 @@ jobs:
       - name: Validate README onboarding contracts
         shell: pwsh
         run: ./tools/ci/check-readme-quality.ps1 -SummaryPath ./target/readme-quality-summary.md
+
+      - name: Verify complete EN/TR sample code examples match compiled sources
+        shell: pwsh
+        run: ./tools/samples/sync-feature-guide.ps1 -Check
 
       - name: Validate Postman onboarding flows
         shell: pwsh

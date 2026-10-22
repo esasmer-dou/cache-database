@@ -1,0 +1,2 @@
+IF DB_ID('cachedb_sample') IS NULL EXEC('CREATE DATABASE cachedb_sample');
+ALTER DATABASE cachedb_sample SET ALLOW_SNAPSHOT_ISOLATION ON;

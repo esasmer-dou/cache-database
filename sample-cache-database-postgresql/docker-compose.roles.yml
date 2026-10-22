@@ -1,0 +1,29 @@
+# Complete Quick Start once to initialize SQL, then stop the local JVM before starting these services.
+x-application: &application
+  image: eclipse-temurin:21-jre@sha256:227118764cccd3c3294617061aaa93a08309c63a395eefa83e6b35032992ea99
+  volumes:
+    - ./target/sample-cache-database-postgresql-0.14.0.jar:/app/sample.jar:ro
+  mem_limit: 768m
+  cpus: 2
+  environment: &application-environment
+    DB_URL: jdbc:postgresql://postgres:5432/cachedb_sample
+    DB_USERNAME: cachedb
+    DB_PASSWORD: cachedb
+    REDIS_URI: redis://redis:6379
+    SERVER_ADDRESS: 0.0.0.0
+    JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=60.0 -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8
+  depends_on:
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+services:
+  api:
+    <<: *application
+    command: [java, -jar, /app/sample.jar, "--spring.profiles.active=demo,client", --spring.sql.init.mode=never]
+    ports:
+      - "127.0.0.1:${SAMPLE_HTTP_PORT:-8091}:8091"
+  worker:
+    <<: *application
+    command: [java, -jar, /app/sample.jar, "--spring.profiles.active=demo,worker"]

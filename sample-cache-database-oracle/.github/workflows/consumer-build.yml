@@ -29,6 +29,18 @@ jobs:
       - name: Build sample against published CacheDB package
         run: mvn -B clean verify -Pprovider-integration
 
+      - name: Run catalog Postman contracts against the packaged application
+        shell: pwsh
+        run: ./scripts/test-catalog-postman.ps1 -SplitRoles
+
+      - name: Upload catalog API evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: catalog-postman-oracle
+          path: target/catalog-postman/
+          if-no-files-found: warn
+
       - name: Verify production certification fails closed without evidence
         shell: bash
         run: |

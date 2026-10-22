@@ -29,11 +29,11 @@ select an older driver that lacks the required pipeline API.
 
 - Existing REST, archive, projection and warm routes retain their explicit behavior.
 - Before upgrading existing SQL workers, provision the provider migration for `cachedb_write_fence`, drain old workers and keep version counters intact. This separate metadata table prevents stale replay from recreating a deleted row; business tables are unchanged. See [durable write fences](https://github.com/esasmer-dou/cache-database/blob/main/docs/durable-write-fences.md).
-- Typed snapshots, generated Jackson-free codecs, atomic batches and client/worker roles are opt-in framework APIs, not new endpoints automatically enabled in this sample. See [typed snapshots and runtime roles](https://github.com/esasmer-dou/cache-database/blob/main/docs/typed-snapshots-runtime-testing.md).
+- Typed snapshots, generated Jackson-free codecs and atomic product imports are runnable catalog scenarios. Separate API/worker profiles are also included. Follow the [runnable 0.14 scenarios](#runnable-014-feature-scenarios).
 - The strict 50 ms CI target concerns the generated-codec/snapshot probe, including first use. It is not a REST, SQL, network or production SLA; legacy mapper compatibility and full JUnit timings are reported separately.
 - `hotEntityLimit=0` disables entity admission; use `-1` only for a deliberate unbounded count policy. The default remains 1,000.
 - Use `Boolean` for nullable SQL booleans; primitive `boolean` rejects SQL NULL.
-- Redis Cluster, atomic write batches and indexed snapshot pages are optional framework APIs, not automatically enabled sample endpoints.
+- Atomic catalog imports and indexed snapshot pages have explicit endpoints. Redis Cluster distribution remains an optional framework infrastructure capability; local Compose uses standalone Redis.
 
 Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.14.0.md)
 and [bounded operation contracts](https://github.com/esasmer-dou/cache-database/blob/main/docs/bounded-runtime-operations.md)
@@ -49,6 +49,7 @@ before adding those APIs. Package availability does not certify your application
 | Warm existing PostgreSQL rows | [Warm Existing Data](#warm-existing-data) |
 | Choose cache limits | [Tuning by Use Case](#tuning-by-use-case) |
 | Exercise every route | [API Catalog](#api-catalog) or [Postman](#postman) |
+| Run typed snapshots, atomic imports and separate workers | [Runnable 0.14 Feature Scenarios](#runnable-014-feature-scenarios) |
 | Prove production readiness | [Production Certification](#production-certification) |
 | Prepare a production rollout | [Production Checklist](#production-checklist) |
 | Fix a startup or data-path problem | [Troubleshooting](#troubleshooting) |
@@ -369,6 +370,9 @@ indexes, stream state, leases, and operational metadata.
 
 ## Code Walkthrough
 
+The short blocks here are teaching excerpts; their linked files contain the complete source.
+The [runnable 0.14 scenarios](#runnable-014-feature-scenarios) include complete compiled Java files with imports and constructors.
+
 ### 1. Entity: persistence shape
 
 [`OrderEntity`](src/main/java/com/example/cachedb/sample/domain/OrderEntity.java)
@@ -457,7 +461,10 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             coverageScopeParameter = "customerId"
     )
     @CacheRouteQuery(
-            predicates = @CachePredicate(field = "customerId"),
+            predicates = {
+                    @CachePredicate(field = "customerId"),
+                    @CachePredicate(field = "status", operator = CachePredicate.Operator.NE, constants = "DELETED")
+            },
             orderBy = {
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)
@@ -735,6 +742,8 @@ the Redis memory headroom needed during rewarm or failover.
 | Support | `GET /api/tickets/open`, `POST /api/tickets`, `PATCH /api/tickets/{id}/status` | Bounded entity read and commands |
 | Reporting | `GET /api/reports/jobs/live`, `GET /api/reports/audit/security`, `GET /api/reports/audit/archive` | Active rows and durable archive |
 | Dashboards | `GET /api/dashboard/commerce`, `GET /api/dashboard/operations` | Pre-shaped Redis data |
+| Catalog snapshots | `GET /api/catalog/items/{id}`, `GET /api/catalog/items?ids=...`, `GET /api/catalog/categories/{category}` | Typed Redis-only snapshot reads and cursor pages |
+| Catalog preparation and imports | `POST /api/catalog/refresh`, `POST /api/catalog/imports` | Bounded demo jobs; inspect both job outcome and SQL durability |
 | Warm | `POST /api/warm/customers/active`, `/orders/customer/{id}`, `/orders/{id}/lines`, `/orders/high-value`, `/orders/highlighted`, `/products/active`, `/products/low-stock`, `/tickets/open`, `/shipments/active`, `/shipments/customer/{id}`, `/shipments/exceptions`, `/shipments/{id}/events`, `/reports/live`, `/reports/type/{type}`, `/audit/security` | Bounded PostgreSQL-to-Redis jobs; poll `/api/warm/jobs/{jobId}` after every submission |
 
 Request limits are validated. Oversized values return `400 Bad Request` rather
@@ -761,6 +770,12 @@ Run folders in this order:
    the folder provides one.
 5. Run the dashboard folder only after its component routes have been warmed.
 6. Inspect tuning and scheduled-warm status before changing any window or pool.
+
+For snapshots and atomic imports, use the separate
+`postman/cache-database-postgresql-catalog.postman_collection.json` collection.
+It carries its own four-product fixture and assertions. Follow the
+[runnable scenarios](#runnable-014-feature-scenarios) for the automated runner,
+API/worker setup, replay rules and expected results.
 
 ## Load Test
 
@@ -858,3 +873,725 @@ never copy placeholder evidence and mark it as passed.
 - [Use-case examples](https://github.com/esasmer-dou/cache-database/blob/main/docs/use-case-examples.md)
 - [Database provider SPI](https://github.com/esasmer-dou/cache-database/blob/main/docs/database-provider-spi.md)
 - [Production recipes](https://github.com/esasmer-dou/cache-database/blob/main/docs/production-recipes.md)
+
+<!-- BEGIN COMPILED FEATURE EXAMPLES -->
+## Runnable 0.14 Feature Scenarios
+
+These scenarios use the published **CacheDB 0.14.0** package. Existing commerce,
+support, logistics and archive routes are unchanged. Unlike a release-note link,
+the classes below are actual sample sources, compiled and tested for all three
+providers. Each complete Java block belongs at the path printed above it.
+
+| Real situation | Implementation | What it proves |
+| --- | --- | --- |
+| A storefront needs a small, predictable stock card | Generated JSON codec + streaming typed snapshot | Explicit SQL preparation, Redis-only reads, Unicode and decimal parity |
+| A supplier sends a small new-product delivery twice | Atomic catalog import + stable batch ID | All-or-none Redis acceptance, replay identity and separate SQL durability |
+| Stock changes in one category while another page is open | Scoped snapshot refresh | Unrelated category cursors survive; changed-category cursors must restart |
+| API demand grows independently of SQL persistence | `client` and `worker` profiles + Compose | API accepts work; separate, replaceable workers persist it |
+| An old queued write arrives after physical deletion | Disposable-provider integration test | Durable delete fences reject stale UPSERTs and roll back with business data |
+
+
+
+### 1. Storefront Stock Cards Without Jackson Mapping
+
+`CatalogCard` is a compact response model, not the full entity. The annotation
+processor generates `CatalogCardJsonCodec`; never create or commit that class.
+Spring MVC still uses its normal HTTP JSON stack. Only snapshot preparation and
+typed snapshot decoding use the explicit generated codec.
+
+`src/main/java/com/example/cachedb/sample/catalog/CatalogCard.java`:
+
+```java
+package com.example.cachedb.sample.catalog;
+
+import com.example.cachedb.sample.domain.ProductEntity;
+import com.reactor.cachedb.annotations.CacheJsonRecord;
+
+import java.math.BigDecimal;
+
+@CacheJsonRecord
+public record CatalogCard(
+        long productId,
+        String sku,
+        String name,
+        String category,
+        int available,
+        BigDecimal unitPrice) {
+    public static CatalogCard from(ProductEntity product) {
+        return new CatalogCard(
+                product.productId,
+                product.sku,
+                product.productName,
+                product.category,
+                Math.max(0, product.stockQuantity - product.reservedQuantity),
+                product.unitPrice);
+    }
+}
+```
+
+The plan reads only active SQL products. It prepares one root at a time instead
+of keeping the full root list, partitions the sorted index by category, and
+defines parameter-bound SQL for a partial refresh. Ascending available quantity
+puts low-stock items first; equal quantities use the textual product ID order.
+
+`src/main/java/com/example/cachedb/sample/catalog/CatalogConfiguration.java`:
+
+```java
+package com.example.cachedb.sample.catalog;
+
+import com.example.cachedb.sample.domain.ProductEntity;
+import com.example.cachedb.sample.domain.ProductEntityCacheBinding;
+import com.reactor.cachedb.spring.boot.snapshot.*;
+import com.reactor.cachedb.starter.CacheDatabase;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
+
+@Configuration(proxyBeanMethods = false)
+public class CatalogConfiguration {
+    public static final String PLAN = "stock-catalog";
+
+    @Bean
+    SnapshotPlan<ProductEntity, CatalogCard> stockCatalog() {
+        var source =
+                SnapshotSource.entity("products", ProductEntityCacheBinding.SOURCE)
+                        .where(SnapshotPredicate.eq("active_status", "ACTIVE"));
+        return SnapshotPlan.streaming(
+                        PLAN,
+                        source,
+                        row -> row.productId.toString(),
+                        CatalogCard.class,
+                        row -> List.of(CatalogCard.from(row)))
+                .indexed(
+                        SnapshotIndexSpec.of(
+                                row -> row.category,
+                                row -> Math.max(0, row.stockQuantity - row.reservedQuantity)))
+                .scoped(
+                        SnapshotRootScope.builder()
+                                .source(
+                                        source,
+                                        ids ->
+                                                SnapshotPredicate.inValues(
+                                                        "product_id",
+                                                        ids.stream().map(Long::valueOf).toList()))
+                                .build())
+                .withJsonCodec(CatalogCardJsonCodec.INSTANCE);
+    }
+
+    @Bean
+    TypedSnapshotRepository<Long, CatalogCard> stockCatalogRepository(SnapshotJobs jobs) {
+        return jobs.typedRepository(PLAN, CatalogCard.class, Object::toString);
+    }
+
+    @Bean
+    CatalogImportService catalogImports(CacheDatabase database) {
+        return new CatalogImportService(database::writeBatch, database::awaitDurable);
+    }
+}
+```
+
+The sample explicitly pins Gson **2.13.2**, because the Spring Boot parent can
+otherwise select an older Gson without `Strictness`. The POM includes
+`cachedb-json`, the annotation dependency and the 0.14.0 processor. Do not remove
+the Gson override or mix framework versions.
+
+With the 0.14.0 BOM and annotation processor already configured, these are the
+additional runtime dependencies used by the compiled sample:
+
+```xml
+<dependency>
+    <groupId>com.reactor.cachedb</groupId>
+    <artifactId>cachedb-json</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.google.code.gson</groupId>
+    <artifactId>gson</artifactId>
+    <version>2.13.2</version>
+</dependency>
+```
+
+After Quick Start has initialized SQL and started the demo API:
+
+```powershell
+$base = 'http://127.0.0.1:8091'
+$job = Invoke-RestMethod "$base/api/catalog/refresh" -Method Post -ContentType 'application/json' -Body '{"ids":[]}'
+$deadline = [DateTime]::UtcNow.AddSeconds(30)
+do {
+    Start-Sleep -Milliseconds 200
+    $state = Invoke-RestMethod "$base/api/warm/jobs/$($job.jobId)"
+} while ($state.status -notin @('COMPLETED', 'FAILED') -and [DateTime]::UtcNow -lt $deadline)
+if ($state.status -ne 'COMPLETED') { throw ($state | ConvertTo-Json -Depth 10) }
+$state
+Invoke-RestMethod "$base/api/catalog/items/10"
+Invoke-RestMethod "$base/api/catalog/items?ids=10,11"
+Invoke-RestMethod "$base/api/catalog/categories/electronics?limit=10"
+```
+
+Use a category present in your source data; category matching is exact. Demo
+product categories are shown by the source or product APIs. `202` means a job
+was queued, not that the snapshot is ready. A completed preparation publishes
+one generation atomically. Failed preparation leaves the prior generation active.
+
+| Operation | Database/cache behavior |
+| --- | --- |
+| `POST /api/catalog/refresh` with `{"ids":[]}` | Explicit bounded SQL preparation; writes a new Redis generation |
+| Same POST with `{"ids":[10]}` | Explicit parameter-bound SQL for those IDs; updates affected partitions |
+| `GET /api/catalog/items/10` | Redis only; `200` FOUND/STALE_WARNING, `404` ABSENT_IN_GENERATION, `503` SNAPSHOT_UNAVAILABLE |
+| `GET /api/catalog/items?ids=10,11` | At most 100 IDs; one-generation read; `200` with explicit per-ID states |
+| Category GET | At most 100 rows; opaque cursor; an unprepared catalog can return an empty page, so use point lookup to inspect availability |
+
+GET never prepares data or falls back to SQL. Snapshot data does **not** follow
+entity/projection updates automatically. Refresh explicitly or enable the
+schedule. `STALE_WARNING` is visible but remains readable; an absent product is
+not proof that no durable SQL row exists outside this active-product catalog.
+
+To update product 10 after a confirmed SQL commit, submit `{"ids":[10]}`. A
+cursor for another unaffected category remains valid. A cursor for an affected
+category returns `400`; restart that category's first page. A complete refresh
+invalidates every older cursor.
+
+### 2. Atomic Supplier Delivery, Safe Replay and Durability
+
+This endpoint is a deliberately **bounded new-product import**,
+not an arbitrary Excel updater. Use new IDs/SKUs owned by this flow. Expected
+Redis version `0` rejects existing versioned entities before any member changes.
+That is not a substitute for SQL uniqueness or recovery of lost version counters.
+
+**This is not a database-enforced insert-only operation.** If an ID already
+exists only in SQL, Redis version `0` cannot detect it, and the write-behind
+UPSERT can update that SQL row. A primary-key constraint does not prevent an
+UPSERT. Reserve a new ID/SKU range for this demo; do not use it to import over
+an existing catalog. Production insert-only semantics require an explicit SQL
+command/constraint contract, not an assumption based on a Redis miss.
+
+`CatalogImportItem` carries a full row and the source's stable `updatedAt`.
+Changing timestamps, prices, item order or identifiers changes the batch identity.
+Never put `Instant.now()` into a retry of the same delivery.
+
+`src/main/java/com/example/cachedb/sample/catalog/CatalogImportItem.java`:
+
+```java
+package com.example.cachedb.sample.catalog;
+
+import com.example.cachedb.sample.domain.ProductEntity;
+
+import java.math.BigDecimal;
+
+/** Complete insert-only source row. updatedAt comes from the source, never from a retry clock. */
+public record CatalogImportItem(
+        long productId,
+        String sku,
+        String name,
+        String category,
+        BigDecimal unitPrice,
+        int stock,
+        int reserved,
+        long updatedAt) {
+    public CatalogImportItem {
+        if (productId < 1
+                || unitPrice == null
+                || unitPrice.signum() < 0
+                || unitPrice.precision() - unitPrice.scale() > 15
+                || unitPrice.scale() > 4
+                || stock < 0
+                || reserved < 0
+                || reserved > stock
+                || updatedAt < 1) {
+            throw new IllegalArgumentException(
+                    "Invalid complete catalog row or NUMERIC(19,4) price");
+        }
+        text(sku, 64, "sku");
+        text(name, 160, "name");
+        text(category, 64, "category");
+    }
+
+    private static void text(String value, int maximum, String field) {
+        if (value == null || value.isBlank() || value.length() > maximum) {
+            throw new IllegalArgumentException(
+                    field + " must contain 1.." + maximum + " characters");
+        }
+    }
+
+    public ProductEntity entity() {
+        var row = new ProductEntity();
+        row.productId = productId;
+        row.sku = sku;
+        row.productName = name;
+        row.category = category;
+        row.activeStatus = "ACTIVE";
+        row.unitPrice = unitPrice;
+        row.stockQuantity = stock;
+        row.reservedQuantity = reserved;
+        row.stockStatus = stock - reserved == 0 ? "OUT_OF_STOCK" : "IN_STOCK";
+        row.updatedAt = updatedAt;
+        return row;
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/catalog/CatalogImportCommand.java`:
+
+```java
+package com.example.cachedb.sample.catalog;
+
+import java.util.HashSet;
+import java.util.List;
+
+public record CatalogImportCommand(String batchId, List<CatalogImportItem> items) {
+    public CatalogImportCommand {
+        if (batchId == null || !batchId.matches("[A-Za-z0-9_-]{1,64}")) {
+            throw new IllegalArgumentException(
+                    "batchId must contain 1..64 letters, digits, underscores or hyphens");
+        }
+        if (items == null || items.isEmpty() || items.size() > 25) {
+            throw new IllegalArgumentException("A catalog import requires 1..25 complete rows");
+        }
+        items = List.copyOf(items);
+        var ids = new HashSet<Long>();
+        var skus = new HashSet<String>();
+        for (var item : items) {
+            if (!ids.add(item.productId()) || !skus.add(item.sku())) {
+                throw new IllegalArgumentException("Duplicate product IDs or SKUs in one batch");
+            }
+        }
+    }
+}
+```
+
+This application service is also directly testable with an in-memory session.
+The two callbacks are supplied by `CatalogConfiguration`, not by HTTP clients.
+The durable job worker performs the bounded wait; the HTTP request does not wait
+for the three-second SQL deadline.
+
+`src/main/java/com/example/cachedb/sample/catalog/CatalogImportService.java`:
+
+```java
+package com.example.cachedb.sample.catalog;
+
+import com.reactor.cachedb.core.api.CacheWriteBatch;
+import com.reactor.cachedb.core.api.CacheWriteBatchReceipt;
+
+import java.time.Duration;
+import java.util.Objects;
+import java.util.function.BiPredicate;
+import java.util.function.Function;
+
+/** Executes on a bounded background worker, not on the HTTP request thread. */
+public final class CatalogImportService {
+    private final Function<String, CacheWriteBatch> batches;
+    private final BiPredicate<CacheWriteBatchReceipt, Duration> durability;
+
+    public CatalogImportService(
+            Function<String, CacheWriteBatch> batches,
+            BiPredicate<CacheWriteBatchReceipt, Duration> durability) {
+        this.batches = Objects.requireNonNull(batches);
+        this.durability = Objects.requireNonNull(durability);
+    }
+
+    public Result execute(CatalogImportCommand command) {
+        var batch = batches.apply("sample-catalog-" + command.batchId());
+        for (var item : command.items()) {
+            batch.put(item.entity(), 0L);
+        }
+        var receipt = batch.commit();
+        return new Result(
+                "ACCEPTED", receipt, durability.test(receipt, Duration.ofSeconds(3)), null);
+    }
+
+    public record Result(
+            String outcome, CacheWriteBatchReceipt receipt, boolean durable, String message) {}
+}
+```
+
+```powershell
+$body = @'
+{"batchId":"supplier-delivery-001","items":[{"productId":9200001,"sku":"SUP-9200001","name":"İğne çelik","category":"tools","unitPrice":12.3456,"stock":8,"reserved":2,"updatedAt":1700000000},{"productId":9200002,"sku":"SUP-9200002","name":"Tool B","category":"tools","unitPrice":15.0000,"stock":12,"reserved":0,"updatedAt":1700000000}]}
+'@
+$job = Invoke-RestMethod "$base/api/catalog/imports" -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body))
+$deadline = [DateTime]::UtcNow.AddSeconds(30)
+do {
+    Start-Sleep -Milliseconds 200
+    $state = Invoke-RestMethod "$base/api/warm/jobs/$($job.jobId)"
+} while ($state.status -notin @('COMPLETED', 'FAILED') -and [DateTime]::UtcNow -lt $deadline)
+if ($state.status -ne 'COMPLETED') { throw ($state | ConvertTo-Json -Depth 10) }
+$state.result
+# Submit the identical $body again to verify the original receipt is returned.
+```
+
+| Result | Meaning / action |
+| --- | --- |
+| `202` | Job submission accepted; no SQL commit claim |
+| COMPLETED + `result.durable=true` | The atomic batch's SQL durability was observed |
+| COMPLETED + `result.outcome=ACCEPTED`, `result.durable=false` | Redis accepted the batch, but SQL was not confirmed in 3 seconds; inspect backlog/DLQ and retry only the identical delivery |
+| COMPLETED + `result.outcome=REJECTED`, `Batch id reused` | Same ID with different contents; no new batch application; deterministic rejection is not retried |
+| COMPLETED + `result.outcome=REJECTED`, optimistic version conflict | A member was not a new version-zero entity; Redis changes none of the batch members |
+| `400` / `413` | Invalid contract / body larger than 64 KiB; command not queued |
+
+`COMPLETED` describes the job lifecycle; inspect `outcome` and `durable` before
+treating a delivery as accepted and persisted. Unexpected connection failures
+still follow the framework's bounded retry path and can finish as FAILED.
+
+At most **25 rows**, **64 KiB HTTP body**, NUMERIC(19,4)-compatible prices and
+nonnegative stock/reservations are accepted. SQL uniqueness/constraint failures
+still need operational handling. Redis acceptance and later SQL transaction are
+**not one distributed transaction**: accepted Redis values can precede or outlive
+a failed SQL flush. Identical retry is idempotent; it does not repair a rejected
+SQL row or make the batch receipt an audit-log retention policy.
+
+Distinct batch IDs retain Redis coordination/receipt metadata. It is not a
+TTL-managed entity window. Budget and monitor this growth; do not erase receipts
+while promising replay protection for old deliveries. A production retention
+policy needs an explicit replay horizon and a drained recovery/migration plan.
+
+### 3. Separate API and Worker Containers
+
+Build `mvn clean verify -Pprovider-integration`. Complete Quick Start once so
+SQL exists, then stop the local Java process to free the API port. Keep the
+same Redis and SQL data; do not reset version counters.
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.roles.yml up -d --scale worker=2
+docker compose -f docker-compose.yml -f docker-compose.roles.yml logs worker
+```
+
+The same JAR runs with `demo,client` on the API and `demo,worker` on workers.
+The worker profile sets `web-application-type=none`; it exposes no REST listener.
+All instances share metadata, JSON codecs, Redis, SQL and job definitions.
+In 0.14.0, worker auto-configuration does not create the client job executor.
+The sample supplies this producer-only bean explicitly using the public API;
+the final `false` disables job consumption. Do not remove it when enabling
+demo job endpoints in the client profile.
+
+`src/main/java/com/example/cachedb/sample/catalog/ClientJobSubmissionConfiguration.java`:
+
+```java
+package com.example.cachedb.sample.catalog;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.reactor.cachedb.spring.boot.CacheDbSpringProperties;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobHandler;
+import com.reactor.cachedb.starter.CacheDatabase;
+
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+
+/** 0.14.0 auto-configures job executors on workers; this explicit client bean only publishes. */
+@Configuration(proxyBeanMethods = false)
+@Profile("client")
+@ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
+public class ClientJobSubmissionConfiguration {
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(CacheDistributedJobExecutor.class)
+    CacheDistributedJobExecutor clientJobPublisher(
+            CacheDatabase database,
+            ObjectMapper mapper,
+            CacheDbSpringProperties properties,
+            ObjectProvider<CacheDistributedJobHandler<?>> handlers) {
+        return new CacheDistributedJobExecutor(
+                database.backgroundRedisOperations(),
+                mapper,
+                database.instanceId(),
+                properties.getJobs(),
+                handlers.orderedStream().toList(),
+                false);
+    }
+}
+```
+
+Each application container is limited to **2 CPU / 768 MiB** in this local recipe.
+These are demonstration limits, not a certified capacity recommendation.
+
+With workers stopped, API submissions can still be accepted, but work and SQL
+writes remain pending. Start a worker again; do not submit a different batch ID
+as a recovery strategy. Do not stop workers during a production upgrade without
+draining pending work. Redis here is a disposable local fixture, not HA storage.
+
+For periodic stock preparation, set `SAMPLE_CATALOG_SCHEDULE_ENABLED=true` on
+worker containers. The framework coordinates preparation with a renewable Redis
+lease; another worker cannot publish concurrently under the same lease. Default
+interval is 5 minutes, not a claim of instant external-SQL synchronization.
+
+| Setting | Sample value | Why |
+| --- | --- | --- |
+| source row/byte limits | 10,000 / 16 MB | Reject an unexpectedly broad source rather than exhaust JVM memory |
+| fetch / preparation batch | 128 / 100 | Bound driver and preparation work |
+| page/batch byte target | 1 MB | Keep reads bounded; not a total Redis memory quota |
+| warning / maximum age | 10 / 30 minutes | Separate warning from expiry |
+| preparation / total snapshot timeout | 20 / 30 seconds | Bound work and leave time to publish |
+| lease duration | 45 seconds | Renewable ownership across pods |
+
+### 4. Reproduce the Safety Checks
+
+```powershell
+mvn clean verify -Pprovider-integration
+```
+
+`CatalogFeatureTest` uses generated repository constructors with
+`InMemoryCacheDatabase`, generated JSON codecs and `InMemorySnapshotRepository`.
+It checks replay, conflict rollback, Unicode/money, states and partition cursors
+without Docker. `markDurable` in a fixture is **test evidence only**, not SQL commit.
+
+`src/test/java/com/example/cachedb/sample/catalog/CatalogFeatureTest.java`:
+
+```java
+package com.example.cachedb.sample.catalog;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import com.example.cachedb.sample.domain.ProductEntityCacheBinding;
+import com.example.cachedb.sample.repository.ProductRepositoryCacheDbImplementation;
+import com.example.cachedb.sample.web.CatalogController;
+import com.reactor.cachedb.core.model.OptimisticWriteConflictException;
+import com.reactor.cachedb.core.repository.WindowRequest;
+import com.reactor.cachedb.core.testing.InMemoryCacheDatabase;
+import com.reactor.cachedb.spring.boot.snapshot.*;
+
+import org.junit.jupiter.api.Test;
+
+import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+class CatalogFeatureTest {
+    private static final class TestClock extends java.time.Clock {
+        long now = 1_700_000_000_000L;
+
+        @Override
+        public java.time.ZoneId getZone() {
+            return java.time.ZoneOffset.UTC;
+        }
+
+        @Override
+        public java.time.Clock withZone(java.time.ZoneId zone) {
+            if (!getZone().equals(zone)) throw new IllegalArgumentException("UTC fixture");
+            return this;
+        }
+
+        @Override
+        public long millis() {
+            return now;
+        }
+
+        @Override
+        public java.time.Instant instant() {
+            return java.time.Instant.ofEpochMilli(now);
+        }
+    }
+
+    @Test
+    void staleWarningIsNotAbsenceOrAnImplicitSqlRefresh() {
+        var clock = new TestClock();
+        var raw = new InMemorySnapshotRepository(clock, java.time.Duration.ofSeconds(1));
+        raw.putSnapshot("1", "[]");
+        var typed = raw.typedRepository(CatalogCardJsonCodec.INSTANCE);
+        assertEquals(SnapshotStatus.FOUND, typed.lookup("1").status());
+        clock.now += 2_000;
+        assertEquals(SnapshotStatus.STALE_WARNING, typed.lookup("1").status());
+        assertTrue(typed.findValuesById("1").orElseThrow().isEmpty());
+        assertEquals(SnapshotStatus.ABSENT_IN_GENERATION, typed.lookup("2").status());
+    }
+
+    static CatalogImportItem item(long id, String category) {
+        return new CatalogImportItem(
+                id,
+                "SKU-" + id,
+                "\u0130\u011fne \u00e7elik \ud83d\ude80",
+                category,
+                new BigDecimal("12.3456"),
+                8,
+                2,
+                1_700_000_000L);
+    }
+
+    @Test
+    void generatedCodecPreservesUnicodeMoneyAndEmptyArrays() throws Exception {
+        var expected = List.of(CatalogCard.from(item(1, "tools").entity()));
+        var output = new ByteArrayOutputStream();
+        CatalogCardJsonCodec.INSTANCE.encodeArray(expected, output);
+        assertEquals(
+                expected,
+                CatalogCardJsonCodec.INSTANCE.decodeArray(output.toString(StandardCharsets.UTF_8)));
+        assertTrue(CatalogCardJsonCodec.INSTANCE.decodeArray("[]").isEmpty());
+        assertThrows(
+                java.io.IOException.class,
+                () -> CatalogCardJsonCodec.INSTANCE.decodeArray("[{\"extra\":1}]"));
+    }
+
+    @Test
+    void generatedRepositoryAcceptsTestSessionAndDoesNotInventSqlDurability() {
+        var memory = new InMemoryCacheDatabase();
+        var repository = new ProductRepositoryCacheDbImplementation(memory);
+        var accepted = repository.save(item(1, "tools").entity());
+        assertTrue(repository.findHotById(1L).isHit());
+        assertFalse(memory.isDurable(accepted));
+        memory.markDurable(accepted);
+        assertTrue(memory.isDurable(accepted));
+    }
+
+    @Test
+    void atomicImportReplayRetainsReceiptAndRequiresExplicitDurabilityEvidence() {
+        var memory = new InMemoryCacheDatabase();
+        ProductEntityCacheBinding.repository(memory);
+        var imports =
+                new CatalogImportService(
+                        memory::writeBatch, (receipt, timeout) -> memory.isDurable(receipt));
+        var command =
+                new CatalogImportCommand("delivery-1", List.of(item(1, "tools"), item(2, "tools")));
+        var first = imports.execute(command);
+        assertFalse(first.durable());
+        memory.markDurable(first.receipt());
+        var replay = imports.execute(command);
+        assertEquals(first.receipt(), replay.receipt());
+        assertTrue(replay.durable());
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        imports.execute(
+                                new CatalogImportCommand("delivery-1", List.of(item(3, "tools")))));
+    }
+
+    @Test
+    void optimisticConflictLeavesAllOtherBatchMembersUnchanged() {
+        var memory = new InMemoryCacheDatabase();
+        var products = ProductEntityCacheBinding.repository(memory);
+        products.saveWithReceipt(item(2, "tools").entity());
+        var imports = new CatalogImportService(memory::writeBatch, (receipt, timeout) -> false);
+        assertThrows(
+                OptimisticWriteConflictException.class,
+                () ->
+                        imports.execute(
+                                new CatalogImportCommand(
+                                        "conflict", List.of(item(1, "tools"), item(2, "tools")))));
+        assertTrue(products.findById(1L).isEmpty());
+    }
+
+    @Test
+    void snapshotStateAndUnrelatedPartitionPaginationStayExplicit() throws Exception {
+        var raw = new InMemorySnapshotRepository();
+        var typed =
+                TypedSnapshotRepository.decoding(
+                        raw, CatalogCardJsonCodec.INSTANCE, (Long id) -> id.toString());
+        var api = new CatalogController(typed);
+        assertEquals(503, api.item(1).getStatusCode().value());
+        var encoded = new ByteArrayOutputStream();
+        CatalogCardJsonCodec.INSTANCE.encodeArray(
+                List.of(CatalogCard.from(item(1, "tools").entity())), encoded);
+        String payload = encoded.toString(StandardCharsets.UTF_8);
+        raw.putSnapshot("1", payload, "tools", 1);
+        raw.putSnapshot("2", payload, "tools", 2);
+        raw.putSnapshot("3", payload, "other", 3);
+        assertEquals(200, api.item(1).getStatusCode().value());
+        assertEquals(404, api.item(99).getStatusCode().value());
+        var first = typed.findTypedPage("tools", WindowRequest.first(1));
+        raw.putSnapshot("3", payload, "other", 4);
+        assertEquals(
+                "2",
+                typed.findTypedPage("tools", WindowRequest.after(first.nextCursor(), 1))
+                        .items()
+                        .getFirst()
+                        .id());
+        raw.putSnapshot("1", payload, "tools", 5);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> typed.findTypedPage("tools", WindowRequest.after(first.nextCursor(), 1)));
+        raw.expire();
+        assertEquals(503, api.item(1).getStatusCode().value());
+    }
+
+    @Test
+    void deterministicBatchRejectionIsNotRetriedAsAnInfrastructureFailure() {
+        var service =
+                new CatalogImportService(
+                        id -> {
+                            throw new redis.clients.jedis.exceptions.JedisDataException(
+                                    "Batch id reused with different operations");
+                        },
+                        (receipt, timeout) -> false);
+        var handler = new CatalogImportJobHandler(service);
+        var rejected =
+                (CatalogImportService.Result)
+                        handler.execute(
+                                new CatalogImportCommand("delivery", List.of(item(1, "tools"))),
+                                null);
+        assertEquals("REJECTED", rejected.outcome());
+        assertFalse(rejected.durable());
+        assertNull(rejected.receipt());
+        var broken =
+                new CatalogImportService(
+                        id -> {
+                            throw new redis.clients.jedis.exceptions.JedisDataException(
+                                    "WRONGTYPE unexpected storage error");
+                        },
+                        (receipt, timeout) -> false);
+        assertThrows(
+                redis.clients.jedis.exceptions.JedisDataException.class,
+                () ->
+                        new CatalogImportJobHandler(broken)
+                                .execute(
+                                        new CatalogImportCommand(
+                                                "delivery", List.of(item(1, "tools"))),
+                                        null));
+    }
+
+    @Test
+    void sourceLimitsAndRequestContractsRejectUnboundedOrAmbiguousImports() {
+        assertThrows(
+                IllegalArgumentException.class, () -> new CatalogImportCommand("x", List.of()));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new CatalogImportCommand("x", List.of(item(1, "a"), item(1, "b"))));
+        assertThrows(IllegalArgumentException.class, () -> new CatalogRefreshCommand(List.of(-1L)));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new CatalogImportItem(1, "a", "b", "c", new BigDecimal("1E+20"), 1, 0, 1));
+        var plan = new CatalogConfiguration().stockCatalog();
+        assertSame(CatalogCardJsonCodec.INSTANCE, plan.jsonCodec());
+        assertNotNull(plan.rootScope());
+        assertNotNull(plan.indexSpec());
+    }
+}
+```
+
+The real-provider integration suite also runs `CatalogScenarios`,
+`WriteFenceScenarios` and `SplitRoleScenarios`. It checks REST + real Redis/SQL,
+physical DELETE followed by older UPSERT after writer recreation, atomic SQL/fence
+rollback, and pending client writes persisted by an independently started worker
+and its replacement. Replay injection exists **only in disposable tests**, not in
+a production HTTP endpoint. Keep the durable `cachedb_write_fence` table and follow
+the provider migration/drained-upgrade guide.
+
+Import `postman/cache-database-postgresql-catalog.postman_collection.json`.
+Run all **15 requests** in order; no demo seed is required after schema setup.
+They assert import durability (retrying only the identical delivery if the
+initial bounded wait returns pending), identical replay, changed-payload rejection,
+snapshot publication, Unicode/decimal data, single-generation reads, pagination
+and invalid-input responses. The existing 59-request business collection remains
+separate. Neither collection asserts a 50 ms REST SLA.
+
+```powershell
+npx --yes newman@6.2.1 run postman/cache-database-postgresql-catalog.postman_collection.json --env-var baseUrl=$base
+```
+
+The integration tests additionally verify unrelated-category cursor continuity;
+the Postman flow does not mutate SQL directly. Redis Cluster namespace sharding
+remains a framework infrastructure capability: the local Compose recipe uses
+standalone Redis and does not claim a Cluster/HA topology test. All JSON/role
+changes are explicit opt-ins, not transparent ORM fallback.
+
+For an isolated command-line run, install Node.js/npm and PowerShell 7, build the
+JAR, then run `./scripts/test-catalog-postman.ps1`. It starts disposable provider
+fixtures and the JAR on a free local port, executes the saved collection with
+Newman, exports JSON/JUnit reports under `target/catalog-postman`, and removes
+only its own test project and volumes. Never point this script at production.
+Pass `-SplitRoles` to bootstrap the local schema, stop the bootstrap JVM, and run
+the same collection against one API container plus **two worker containers**.
+The sample CI uses this mode; container logs are included in the test evidence.
+<!-- END COMPILED FEATURE EXAMPLES -->

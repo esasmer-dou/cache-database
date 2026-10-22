@@ -13,6 +13,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ApiContractTest {
 
     @Test
+    void expiredSnapshotCursorIsAnInputErrorButOtherRedisFailuresAreNotHidden() {
+        var handler = new ApiExceptionHandler();
+        var stale = new redis.clients.jedis.exceptions.JedisDataException("Snapshot cursor expired; restart pagination");
+        assertEquals(400, handler.expiredSnapshotCursor(stale).getStatusCode().value());
+        var corruption = new redis.clients.jedis.exceptions.JedisDataException("Invalid stored snapshot payload");
+        assertThrows(redis.clients.jedis.exceptions.JedisDataException.class,
+                () -> handler.expiredSnapshotCursor(corruption));
+    }
+
+    @Test
     void cursorWindowRejectsOversizedRequestsInsteadOfSilentlyClamping() {
         IllegalArgumentException exception = assertThrows(
                 IllegalArgumentException.class,

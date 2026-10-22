@@ -55,7 +55,8 @@ class MssqlSampleIT {
             "mcr.microsoft.com/mssql/server:2022-latest@sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56"
     ).asCompatibleSubstituteFor("mcr.microsoft.com/mssql/server"))
             .acceptLicense()
-            .withPassword("YourStrong!Passw0rd");
+            .withPassword("YourStrong!Passw0rd")
+            .withInitScript("mssql-snapshot-init.sql");
 
     @Container
     static final GenericContainer<?> REDIS = new GenericContainer<>(
@@ -69,7 +70,7 @@ class MssqlSampleIT {
     static void properties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", () -> "jdbc:sqlserver://" + SQLSERVER.getHost() + ":"
                 + SQLSERVER.getMappedPort(1433)
-                + ";databaseName=tempdb;encrypt=false;trustServerCertificate=true;loginTimeout=10");
+                + ";databaseName=cachedb_sample;encrypt=false;trustServerCertificate=true;loginTimeout=10");
         registry.add("spring.datasource.username", SQLSERVER::getUsername);
         registry.add("spring.datasource.password", SQLSERVER::getPassword);
         registry.add("cachedb.redis.uri", () -> "redis://" + REDIS.getHost() + ":" + REDIS.getMappedPort(6379));
@@ -90,6 +91,28 @@ class MssqlSampleIT {
 
     @Autowired
     CacheDbTestProbe cacheDbTestProbe;
+
+    @Test
+    void catalogSnapshotsAtomicImportsAndScopedCursors() {
+        com.example.cachedb.sample.catalog.CatalogScenarios.verify(rest, url(""), jdbcTemplate);
+    }
+
+    @Test
+    void durableDeleteReplayAndRollback() throws Exception {
+        com.example.cachedb.sample.catalog.WriteFenceScenarios.verify(EXPECTED_PROVIDER,
+                jdbcTemplate.getDataSource(), cacheDatabase);
+    }
+
+    @Autowired
+    com.reactor.cachedb.starter.CacheDatabase cacheDatabase;
+
+    @Autowired
+    org.springframework.core.env.Environment environment;
+
+    @Test
+    void clientWaitsForWorkerAndReplacementContinuesPersistence() {
+        com.example.cachedb.sample.catalog.SplitRoleScenarios.verify(MssqlSampleApplication.class, environment);
+    }
 
     @Test
     void productionContractsWorkAgainstRealMssqlAndRedis() {

@@ -6,7 +6,7 @@ spring:
   application:
     name: sample-cache-database-mssql
   datasource:
-    url: ${DB_URL:jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true;loginTimeout=5}
+    url: ${DB_URL:jdbc:sqlserver://127.0.0.1:14333;databaseName=cachedb_sample;encrypt=false;trustServerCertificate=true;loginTimeout=5}
     username: ${DB_USERNAME:sa}
     password: ${DB_PASSWORD:YourStrong!Passw0rd}
     hikari:
@@ -21,6 +21,23 @@ spring:
 
 cachedb:
   enabled: true
+  snapshots:
+    jobs:
+      stock-catalog:
+        enabled: ${SAMPLE_CATALOG_SCHEDULE_ENABLED:false}
+        interval: PT5M
+        warn-age: PT10M
+        max-age: PT30M
+        retention: PT1H
+        timeout: PT30S
+        preparation-timeout: PT20S
+        lease-duration: PT45S
+        batch-rows: 100
+        fetch-rows: 128
+        max-source-rows: 10000
+        max-rows-per-source: 10000
+        max-source-size: 16MB
+        batch-target-size: 1MB
   profile: ${CACHEDB_PROFILE:production}
   redis:
     uri: ${REDIS_URI:redis://127.0.0.1:56380}

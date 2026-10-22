@@ -1,0 +1,102 @@
+{
+  "info": {
+    "name": "CacheDB Oracle - Catalog 0.14",
+    "description": "Self-contained 0.14 feature flow. Requires the demo profile and initialized SQL schema, but not demo seed data. Imports four new products atomically, checks replay and changed-payload rejection, explicitly prepares a Jackson-free snapshot and reads its typed results. Run the whole collection; polling is bounded to 30 seconds per job. This is not a latency benchmark.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [{"key": "baseUrl", "value": "http://127.0.0.1:8093"}, {"key": "catalogJobId", "value": ""}],
+  "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
+    "if (pm.response.code === 202) { pm.collectionVariables.set('catalogJobId', pm.response.json().jobId); pm.collectionVariables.set('catalogPolls', 0); pm.collectionVariables.set('catalogPollDeadline', Date.now() + 30000); pm.test('Job is accepted, not a SQL commit', () => pm.expect(pm.response.headers.get('Location')).to.include('/api/warm/jobs/')); }"
+  ]}}],
+  "item": [
+    {
+      "name": "01 Import four complete product rows",
+      "event": [{"listen": "prerequest", "script": {"exec": ["pm.collectionVariables.set('catalogDurabilityDeadline', Date.now() + 30000);"]}}, {"listen": "test", "script": {"exec": ["pm.test('Accepted', () => pm.response.to.have.status(202));"]}}],
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"postman-catalog-014\",\"items\":[{\"productId\":9100001,\"sku\":\"PM-9100001\",\"name\":\"İğne çelik\",\"category\":\"pm-tools\",\"unitPrice\":12.3456,\"stock\":8,\"reserved\":2,\"updatedAt\":1700000000},{\"productId\":9100002,\"sku\":\"PM-9100002\",\"name\":\"Tool B\",\"category\":\"pm-tools\",\"unitPrice\":15.0000,\"stock\":12,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100003,\"sku\":\"PM-9100003\",\"name\":\"Electrical A\",\"category\":\"pm-electrical\",\"unitPrice\":20.0000,\"stock\":5,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100004,\"sku\":\"PM-9100004\",\"name\":\"Electrical B\",\"category\":\"pm-electrical\",\"unitPrice\":25.0000,\"stock\":9,\"reserved\":1,\"updatedAt\":1700000000}]}"}},
+      "response": []
+    },
+    {
+      "name": "02 Wait for import",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/warm/jobs/{{catalogJobId}}"},
+      "event": [{"listen": "test", "script": {"exec": [
+        "pm.test('Job status available', () => pm.response.to.have.status(200));",
+        "const job = pm.response.json(); const n = Number(pm.collectionVariables.get('catalogPolls') || 0) + 1; pm.collectionVariables.set('catalogPolls', n);",
+        "if (!['COMPLETED','FAILED'].includes(job.status) && n < 150 && Date.now() < Number(pm.collectionVariables.get('catalogPollDeadline'))) { setTimeout(() => pm.execution.setNextRequest(pm.info.requestName), 200); } else { pm.test('Atomic batch accepted with explicit durability state', () => { pm.expect(job.status).to.eql('COMPLETED'); pm.expect(job.result.outcome).to.eql('ACCEPTED'); pm.expect(job.result.durable).to.be.a('boolean'); }); if (job.result) pm.collectionVariables.set('catalogReceipt', JSON.stringify(job.result.receipt)); }"
+      ]}}]
+    },
+    {
+      "name": "03 Replay identical import",
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"postman-catalog-014\",\"items\":[{\"productId\":9100001,\"sku\":\"PM-9100001\",\"name\":\"İğne çelik\",\"category\":\"pm-tools\",\"unitPrice\":12.3456,\"stock\":8,\"reserved\":2,\"updatedAt\":1700000000},{\"productId\":9100002,\"sku\":\"PM-9100002\",\"name\":\"Tool B\",\"category\":\"pm-tools\",\"unitPrice\":15.0000,\"stock\":12,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100003,\"sku\":\"PM-9100003\",\"name\":\"Electrical A\",\"category\":\"pm-electrical\",\"unitPrice\":20.0000,\"stock\":5,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100004,\"sku\":\"PM-9100004\",\"name\":\"Electrical B\",\"category\":\"pm-electrical\",\"unitPrice\":25.0000,\"stock\":9,\"reserved\":1,\"updatedAt\":1700000000}]}"}},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Accepted', () => pm.response.to.have.status(202));"]}}]
+    },
+    {
+      "name": "04 Wait for identical receipt",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/warm/jobs/{{catalogJobId}}"},
+      "event": [{"listen": "test", "script": {"exec": [
+        "const job = pm.response.json(); const n = Number(pm.collectionVariables.get('catalogPolls') || 0) + 1; pm.collectionVariables.set('catalogPolls', n);",
+        "if (!['COMPLETED','FAILED'].includes(job.status) && n < 150 && Date.now() < Number(pm.collectionVariables.get('catalogPollDeadline'))) { setTimeout(() => pm.execution.setNextRequest(pm.info.requestName), 200); } else if (job.status === 'COMPLETED' && job.result.outcome === 'ACCEPTED' && !job.result.durable && Date.now() < Number(pm.collectionVariables.get('catalogDurabilityDeadline'))) { pm.execution.setNextRequest('03 Replay identical import'); } else { pm.test('Replay retained versions and SQL durability is confirmed', () => { pm.expect(job.status).to.eql('COMPLETED'); pm.expect(job.result.receipt).to.deep.eql(JSON.parse(pm.collectionVariables.get('catalogReceipt'))); pm.expect(job.result.durable).to.eql(true); }); }"
+      ]}}]
+    },
+    {
+      "name": "05 Reject changed payload under the same batch ID",
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"postman-catalog-014\",\"items\":[{\"productId\":9100099,\"sku\":\"PM-9100099\",\"name\":\"Must not be inserted\",\"category\":\"pm-tools\",\"unitPrice\":1,\"stock\":1,\"reserved\":0,\"updatedAt\":1700000000}]}"}},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Only job submission accepted', () => pm.response.to.have.status(202));"]}}]
+    },
+    {
+      "name": "06 Wait for rejected import",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/warm/jobs/{{catalogJobId}}"},
+      "event": [{"listen": "test", "script": {"exec": [
+        "const job = pm.response.json(); const n = Number(pm.collectionVariables.get('catalogPolls') || 0) + 1; pm.collectionVariables.set('catalogPolls', n);",
+        "if (!['COMPLETED','FAILED'].includes(job.status) && n < 150 && Date.now() < Number(pm.collectionVariables.get('catalogPollDeadline'))) { setTimeout(() => pm.execution.setNextRequest(pm.info.requestName), 200); } else { pm.test('Conflicting retry is rejected', () => { pm.expect(job.status).to.eql('COMPLETED'); pm.expect(job.result.outcome).to.eql('REJECTED'); pm.expect(job.result.message).to.include('Batch id reused'); }); }"
+      ]}}]
+    },
+    {
+      "name": "07 Explicitly prepare stock snapshot",
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/refresh", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"ids\":[]}"}},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Preparation submitted', () => pm.response.to.have.status(202));"]}}]
+    },
+    {
+      "name": "08 Wait for snapshot publication",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/warm/jobs/{{catalogJobId}}"},
+      "event": [{"listen": "test", "script": {"exec": [
+        "const job = pm.response.json(); const n = Number(pm.collectionVariables.get('catalogPolls') || 0) + 1; pm.collectionVariables.set('catalogPolls', n);",
+        "if (!['COMPLETED','FAILED'].includes(job.status) && n < 150 && Date.now() < Number(pm.collectionVariables.get('catalogPollDeadline'))) { setTimeout(() => pm.execution.setNextRequest(pm.info.requestName), 200); } else { pm.test('Snapshot published', () => { pm.expect(job.status).to.eql('COMPLETED'); pm.expect(job.result.submittedRows).to.be.at.least(4); }); }"
+      ]}}]
+    },
+    {
+      "name": "09 Read typed Unicode and decimal card",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/catalog/items/9100001"},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Typed card from Redis', () => { pm.response.to.have.status(200); const b=pm.response.json(); pm.expect(b.status).to.eql('FOUND'); pm.expect(b.values[0].name).to.eql('İğne çelik'); pm.expect(b.values[0].unitPrice).to.eql(12.3456); pm.expect(b.values[0].available).to.eql(6); pm.expect(b).not.to.have.property('rawPayload'); });"]}}]
+    },
+    {
+      "name": "10 Read two cards from the same generation",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/catalog/items?ids=9100001,9100003"},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Single-generation batch', () => { pm.response.to.have.status(200); const b=pm.response.json(); pm.expect(b['9100001'].generation).to.eql(b['9100003'].generation); });"]}}]
+    },
+    {
+      "name": "11 Read indexed category page",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/catalog/categories/pm-tools?limit=1"},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Bounded page with cursor', () => { pm.response.to.have.status(200); const b=pm.response.json(); pm.expect(b.items).to.have.lengthOf(1); pm.expect(b.nextCursor).to.be.a('string'); pm.collectionVariables.set('catalogCursor', b.nextCursor); });"]}}]
+    },
+    {
+      "name": "12 Continue category page",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/catalog/categories/pm-tools?limit=1&after={{catalogCursor}}"},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Second item', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().items[0].values[0].productId).to.eql(9100002); });"]}}]
+    },
+    {
+      "name": "13 Confirm rejected product is absent",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/catalog/items/9100099"},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Known catalog, absent root', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().status).to.eql('ABSENT_IN_GENERATION'); });"]}}]
+    },
+    {
+      "name": "14 Reject oversized page",
+      "request": {"method": "GET", "url": "{{baseUrl}}/api/catalog/categories/pm-tools?limit=101"},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Explicit page limit', () => pm.response.to.have.status(400));"]}}]
+    },
+    {
+      "name": "15 Reject empty import",
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"empty\",\"items\":[]}"}},
+      "event": [{"listen": "test", "script": {"exec": ["pm.test('Empty batch is not queued', () => pm.response.to.have.status(400));"]}}]
+    }
+  ]
+}

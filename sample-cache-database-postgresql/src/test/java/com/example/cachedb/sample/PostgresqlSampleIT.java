@@ -91,6 +91,28 @@ class PostgresqlSampleIT {
     CacheDbTestProbe cacheDbTestProbe;
 
     @Test
+    void catalogSnapshotsAtomicImportsAndScopedCursors() {
+        com.example.cachedb.sample.catalog.CatalogScenarios.verify(rest, url(""), jdbcTemplate);
+    }
+
+    @Test
+    void durableDeleteReplayAndRollback() throws Exception {
+        com.example.cachedb.sample.catalog.WriteFenceScenarios.verify(EXPECTED_PROVIDER,
+                jdbcTemplate.getDataSource(), cacheDatabase);
+    }
+
+    @Autowired
+    com.reactor.cachedb.starter.CacheDatabase cacheDatabase;
+
+    @Autowired
+    org.springframework.core.env.Environment environment;
+
+    @Test
+    void clientWaitsForWorkerAndReplacementContinuesPersistence() {
+        com.example.cachedb.sample.catalog.SplitRoleScenarios.verify(PostgresqlSampleApplication.class, environment);
+    }
+
+    @Test
     void productionContractsWorkAgainstRealPostgresqlAndRedis() {
         jdbcTemplate.update(
                 "INSERT INTO sample_customers (customer_id, tax_number, customer_type, segment, status, created_at, updated_at) "

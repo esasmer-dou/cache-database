@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import redis.clients.jedis.exceptions.JedisDataException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -45,6 +46,17 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     ResponseEntity<ProblemDetail> invalidQuery(IllegalArgumentException exception) {
         return ResponseEntity.badRequest().body(problem(HttpStatus.BAD_REQUEST, exception.getMessage()));
+    }
+
+    @ExceptionHandler(JedisDataException.class)
+    ResponseEntity<ProblemDetail> expiredSnapshotCursor(JedisDataException exception) {
+        if (exception.getMessage() != null
+                && exception.getMessage().endsWith("Snapshot cursor expired; restart pagination")) {
+            var detail = problem(HttpStatus.BAD_REQUEST, "Snapshot cursor expired; restart pagination");
+            detail.setProperty("requiredAction", "restart-category-first-page");
+            return ResponseEntity.badRequest().body(detail);
+        }
+        throw exception;
     }
 
     @ExceptionHandler(DurableReferenceUnavailableException.class)

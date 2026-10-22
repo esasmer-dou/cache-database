@@ -1,0 +1,13 @@
+spring:
+  main:
+    web-application-type: none
+  sql:
+    init:
+      mode: never
+
+cachedb:
+  runtime-role: WORKER_ONLY
+  admin:
+    enabled: false
+    http-enabled: false
+    dashboard-enabled: false

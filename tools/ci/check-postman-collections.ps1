@@ -160,6 +160,23 @@ if (($postgresqlContract -join "`n") -cne ($oracleContract -join "`n")) {
     throw "PostgreSQL and Oracle Postman request contracts differ."
 }
 
+$catalogContracts = @{}
+foreach ($provider in @('postgresql', 'mssql', 'oracle')) {
+    $path = "sample-cache-database-$provider/postman/cache-database-$provider-catalog.postman_collection.json"
+    $catalog = Read-Collection -RelativePath $path
+    $requests = @(Get-Requests -Items @($catalog.item))
+    if ($requests.Count -ne 15) { throw "$provider catalog collection must maintain the documented 15-request flow." }
+    foreach ($request in $requests) {
+        $scripts = ($request.Event | ForEach-Object { @($_.script.exec) }) -join "`n"
+        if ($scripts -notmatch 'pm\.test') { throw "Missing catalog assertion: $($request.Name)" }
+    }
+    $catalogContracts[$provider] = ($requests | ForEach-Object { "$($_.Path)|$($_.Method)|$($_.Url)" }) -join "`n"
+}
+if ($catalogContracts.postgresql -cne $catalogContracts.mssql -or
+    $catalogContracts.postgresql -cne $catalogContracts.oracle) {
+    throw 'Provider catalog Postman contracts differ.'
+}
+
 $summary = @"
 # Postman Collection Validation
 
@@ -170,6 +187,8 @@ $summary = @"
 - Provider request contract parity: passed
 - Warm-before-hot ordering: passed
 - Job completion assertion: passed
+- Catalog requests per provider: 15
+- Catalog assertion presence and provider parity: passed (structural; live runs are separate)
 "@
 $summaryFullPath = Join-Path $repoRoot $SummaryPath
 $summaryDirectory = Split-Path -Parent $summaryFullPath
