@@ -49,6 +49,13 @@ Server database initialization above; it is not a mock-only capability check.
 Oracle extended mode is proven only if the actual driver/server reports and
 accepts that limit, not by the resolver's 4096 stub test.
 
+Sample lanes use separate standalone Redis logical databases: PostgreSQL 1/2,
+SQL Server 3/4 and Oracle 5/6 (main/split-role). Never reuse another provider's
+cache, job receipts or version counters. These integration contracts require
+fresh disposable SQL and Redis data. For a fresh rerun, recreate the owned
+provider fixtures together; do not clear only Redis while retaining SQL fences.
+The runner never flushes a shared Redis or truncates a managed database.
+
 The unit lane enables the standalone Redis and all three SQL provider contracts;
 the Cluster lane additionally requires the bootstrapped six-node fixture.
 After bootstrapping every fixture, `sh tools/k8s/run-validation.sh all` combines

@@ -117,6 +117,10 @@ foreach ($sample in $samples) {
     $database = [string]$sample.Database
     $workflow = [string]$sample.Workflow
 
+    Require-Text -RelativePath "$root/docker-compose.roles.yml" -Patterns @(
+        "target/$root-$versionPattern\.jar:/app/sample\.jar:ro"
+    )
+
     Require-Text -RelativePath "$root/pom.xml" -Patterns @(
         '<repositories>',
         '<pluginRepositories>',

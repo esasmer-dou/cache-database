@@ -65,12 +65,14 @@ case "${1:-unit}" in
   sample-*)
     provider=${1#sample-}
     case "$provider" in
-      postgresql) export CACHEDB_TEST_DATASOURCE_URL="jdbc:postgresql://postgres.$namespace.svc.cluster.local:5432/cachedb_sample" CACHEDB_TEST_DATASOURCE_USERNAME=cachedb ;;
-      mssql) export CACHEDB_TEST_DATASOURCE_URL="jdbc:sqlserver://mssql.$namespace.svc.cluster.local:1433;databaseName=cachedb_sample;encrypt=false;trustServerCertificate=true" CACHEDB_TEST_DATASOURCE_USERNAME=sa ;;
-      oracle) export CACHEDB_TEST_DATASOURCE_URL="$CACHEDB_SNAPSHOT_ORACLE_URL" CACHEDB_TEST_DATASOURCE_USERNAME=cachedb ;;
+      postgresql) export CACHEDB_TEST_DATASOURCE_URL="jdbc:postgresql://postgres.$namespace.svc.cluster.local:5432/cachedb_sample" CACHEDB_TEST_DATASOURCE_USERNAME=cachedb; redis_database=1; split_redis_database=2 ;;
+      mssql) export CACHEDB_TEST_DATASOURCE_URL="jdbc:sqlserver://mssql.$namespace.svc.cluster.local:1433;databaseName=cachedb_sample;encrypt=false;trustServerCertificate=true" CACHEDB_TEST_DATASOURCE_USERNAME=sa; redis_database=3; split_redis_database=4 ;;
+      oracle) export CACHEDB_TEST_DATASOURCE_URL="$CACHEDB_SNAPSHOT_ORACLE_URL" CACHEDB_TEST_DATASOURCE_USERNAME=cachedb; redis_database=5; split_redis_database=6 ;;
       *) echo 'Unsupported sample provider' >&2; exit 2 ;;
     esac
     export CACHEDB_TEST_DATASOURCE_PASSWORD="$password"
+    export CACHEDB_TEST_REDIS_URI="redis://$redis:6379/$redis_database"
+    export CACHEDB_TEST_SPLIT_REDIS_URI="redis://$redis:6379/$split_redis_database"
     mvn -B -ntp -f "sample-cache-database-$provider/pom.xml" -Pprovider-integration verify ;;
   *) echo 'Expected all, unit, columns, redis, cluster, providers, provider-legacy, release-smoke, or sample-{postgresql,mssql,oracle}' >&2; exit 2 ;;
 esac
