@@ -3,7 +3,6 @@ package com.reactor.cachedb.spring.boot.snapshot;
 import com.reactor.cachedb.core.codec.JsonArrayCodec;
 import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.WindowRequest;
-
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
@@ -49,6 +48,13 @@ final class DecodedSnapshotRepository<ID, V> implements TypedSnapshotRepository<
         List<String> keys = new ArrayList<>(rootIds.size());
         for (ID id : rootIds) keys.add(key(id));
         return raw.refreshRoots(Collections.unmodifiableList(keys));
+    }
+
+    public SnapshotTypedPageReadResult<V> findTypedPage(SnapshotPageRequest request) {
+        var page = raw.findPage(request);
+        List<SnapshotLookup<V>> values = new ArrayList<>(page.items().size());
+        for (var value : page.items()) values.add(decode(raw.describe(value)));
+        return new SnapshotTypedPageReadResult<>(values, page.nextCursor());
     }
 
     private String key(ID id) {

@@ -76,7 +76,7 @@ foreach ($file in ($docFiles | Sort-Object -Unique)) {
         throw "Documentation source escaped the repository: $file"
     }
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
-    if ((Get-Item -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    if ((Get-Item -LiteralPath $source -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
         throw "Release documentation must not be symbolic links: $file"
     }
     $destination = Join-Path $stagingRoot $file
@@ -114,7 +114,7 @@ foreach ($sampleProject in $sampleProjects) {
             throw "Sample source escaped its root: $relative"
         }
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
-        if ((Get-Item -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        if ((Get-Item -LiteralPath $source -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
             throw "Release sources must not be symbolic links: $relative"
         }
         $destination = Join-Path $sampleDest $relative

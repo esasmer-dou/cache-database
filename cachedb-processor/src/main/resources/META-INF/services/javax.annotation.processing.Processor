@@ -4,3 +4,4 @@ com.reactor.cachedb.processor.CacheRepositoryProcessor
 com.reactor.cachedb.processor.CacheScheduledWarmProcessor
 com.reactor.cachedb.processor.CacheSourceRecordProcessor
 com.reactor.cachedb.processor.CacheJsonRecordProcessor
+com.reactor.cachedb.processor.CacheJobHandlerProcessor

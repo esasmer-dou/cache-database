@@ -2,7 +2,6 @@ package com.reactor.cachedb.spring.boot.snapshot;
 
 import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.WindowRequest;
-
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -33,4 +32,14 @@ public interface TypedSnapshotRepository<ID, V> {
     CursorPage<SnapshotLookup<V>> findTypedPage(String partitionKey, WindowRequest window);
 
     SnapshotRefreshResult refreshRoots(Collection<ID> rootIds);
+
+    default SnapshotTypedPageReadResult<V> findTypedPage(SnapshotPageRequest request) {
+        if (!request.unbounded()) throw new UnsupportedOperationException("Snapshot repository does not support score ranges");
+        var page = findTypedPage(request.partitionKey(), request.window());
+        return new SnapshotTypedPageReadResult<>(page.items(), page.nextCursor());
+    }
+
+    default SnapshotTypedPageReadResult<V> findTypedPage(String partition, double minScore, double maxScore, WindowRequest window) {
+        return findTypedPage(new SnapshotPageRequest(partition, minScore, maxScore, window));
+    }
 }

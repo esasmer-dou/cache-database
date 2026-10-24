@@ -4,13 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-
-import redis.clients.jedis.JedisPooled;
-
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -22,14 +15,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
+import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.GenericContainer;
+import redis.clients.jedis.JedisPooled;
 
-@Testcontainers(disabledWithoutDocker = true)
 class RedisCacheIdGeneratorTest {
 
     private static final String REDIS_IMAGE =
             "redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232";
 
-    @Container
     static final GenericContainer<?> REDIS =
             new GenericContainer<>(REDIS_IMAGE).withExposedPorts(6379);
 
@@ -37,8 +31,9 @@ class RedisCacheIdGeneratorTest {
     void allocatesUniqueSequenceBlocksAcrossInstancesAndThreads() throws Exception {
         ExecutorService workers = Executors.newFixedThreadPool(8);
         try (JedisPooled jedis = jedis()) {
-            RedisCacheIdGenerator first = new RedisCacheIdGenerator(jedis, "cachedb:test:ids");
-            RedisCacheIdGenerator second = new RedisCacheIdGenerator(jedis, "cachedb:test:ids");
+            String prefix = "cachedb:test:ids:" + UUID.randomUUID();
+            RedisCacheIdGenerator first = new RedisCacheIdGenerator(jedis, prefix);
+            RedisCacheIdGenerator second = new RedisCacheIdGenerator(jedis, prefix);
             Set<Long> ids = ConcurrentHashMap.newKeySet();
             ArrayList<Callable<Void>> tasks = new ArrayList<>();
             for (int task = 0; task < 8; task++) {
@@ -64,7 +59,7 @@ class RedisCacheIdGeneratorTest {
 
             assertEquals(4_000, ids.size());
             assertTrue(ids.stream().allMatch(id -> id > 0));
-            long reservedEnd = Long.parseLong(jedis.get("cachedb:test:ids:orders"));
+            long reservedEnd = Long.parseLong(jedis.get(prefix + ":orders"));
             assertTrue(reservedEnd >= ids.stream().mapToLong(Long::longValue).max().orElseThrow());
             assertTrue(
                     reservedEnd - ids.size() < 128,
@@ -155,7 +150,22 @@ class RedisCacheIdGeneratorTest {
         }
     }
 
+    @org.junit.jupiter.api.BeforeAll
+    static void startFixture() {
+        if (System.getProperty("cachedb.snapshot.redis.host") == null) {
+            org.junit.jupiter.api.Assumptions.assumeTrue(org.testcontainers.DockerClientFactory.instance().isDockerAvailable(), "No explicit external Redis or Docker fixture");
+            REDIS.start();
+        }
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void stopFixture() {
+        if (System.getProperty("cachedb.snapshot.redis.host") == null && REDIS.isRunning()) REDIS.stop();
+    }
+
     private JedisPooled jedis() {
-        return new JedisPooled(REDIS.getHost(), REDIS.getMappedPort(6379));
+        String host = System.getProperty("cachedb.snapshot.redis.host");
+        return host == null ? new JedisPooled(REDIS.getHost(), REDIS.getMappedPort(6379))
+                : new JedisPooled(host, Integer.getInteger("cachedb.snapshot.redis.port", 6379));
     }
 }

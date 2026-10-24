@@ -45,12 +45,12 @@ class OracleHighLatencyIntegrationTest {
             "^jdbc:oracle:thin:@//(\\[[^]]+]|[^:/?#]+):(\\d+)/([^?]+)(?:\\?.*)?$",
             Pattern.CASE_INSENSITIVE
     );
-    private static final String DIRECT_URL = System.getProperty(
+    private static final String DIRECT_URL = ProviderTestEnvironment.property(
             "cachedb.it.oracle.url",
             "jdbc:oracle:thin:@//127.0.0.1:15211/FREEPDB1"
     );
-    private static final String USER = System.getProperty("cachedb.it.oracle.user", "cachedb");
-    private static final String PASSWORD = System.getProperty("cachedb.it.oracle.password", "CacheDbOracle123");
+    private static final String USER = ProviderTestEnvironment.property("cachedb.it.oracle.user", "cachedb");
+    private static final String PASSWORD = ProviderTestEnvironment.property("cachedb.it.oracle.password", "CacheDbOracle123");
 
     @Test
     void shouldPreserveWriteAndBoundedReadAcrossInjectedNetworkLatency() throws Exception {

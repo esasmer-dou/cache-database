@@ -15,9 +15,12 @@ import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheDatabaseProfiles;
 import com.reactor.cachedb.starter.GeneratedCacheBindingsDiscovery;
 import com.reactor.cachedb.starter.RedisConnectionConfig;
-
 import io.micrometer.core.instrument.MeterRegistry;
-
+import java.sql.Connection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import javax.sql.DataSource;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
@@ -32,15 +35,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
-
 import redis.clients.jedis.JedisPooled;
-
-import java.sql.Connection;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-
-import javax.sql.DataSource;
 
 @AutoConfiguration
 @ConditionalOnClass({CacheDatabase.class, DataSource.class, JedisPooled.class})
@@ -365,7 +360,6 @@ public class CacheDatabaseSpringBootAutoConfiguration {
             name = "enabled",
             havingValue = "true",
             matchIfMissing = true)
-    @org.springframework.context.annotation.Conditional(CacheWorkerRoleCondition.class)
     public CacheDistributedJobExecutor cacheDistributedJobExecutor(
             CacheDatabase cacheDatabase,
             @Qualifier("cacheDbBackgroundJedisPooled")

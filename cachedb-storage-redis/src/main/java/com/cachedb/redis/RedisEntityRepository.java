@@ -50,12 +50,6 @@ import com.reactor.cachedb.core.relation.RelationBatchLoader;
 import com.reactor.cachedb.core.repository.HotLookup;
 import com.reactor.cachedb.core.route.RouteCacheContext;
 import com.reactor.cachedb.core.route.RouteCacheContract;
-
-import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.params.ScanParams;
-import redis.clients.jedis.resps.ScanResult;
-import redis.clients.jedis.resps.Tuple;
-
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -66,6 +60,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.params.ScanParams;
+import redis.clients.jedis.resps.ScanResult;
+import redis.clients.jedis.resps.Tuple;
 
 public final class RedisEntityRepository<T, ID>
         implements EntityRepository<T, ID>, ExternalChangeHydrationRepository<T, ID> {
@@ -411,6 +409,7 @@ public final class RedisEntityRepository<T, ID>
 
             List<String> values = mgetEntityAndTombstones(keys, tombstoneKeys);
             List<T> entities = new ArrayList<>(keys.size());
+            List<ID> accessed = new ArrayList<>(keys.size());
             for (int index = 0; index < keys.size(); index++) {
                 String encoded = values.get(index);
                 String tombstone = values.get(keys.size() + index);
@@ -419,12 +418,13 @@ public final class RedisEntityRepository<T, ID>
                     ID id = idsList.get(index);
                     if (pageCacheManager.shouldServeCachedEntity(entity)) {
                         entities.add(entity);
-                        pageCacheManager.recordEntityAccess(id);
+                        accessed.add(id);
                     } else if (effectiveCachePolicy().hotPolicy().evictWhenRejected()) {
                         pageCacheManager.removeEntity(id);
                     }
                 }
             }
+            pageCacheManager.recordEntityAccessBatch(accessed);
             applyFetchPlan(entities);
             return entities;
         } finally {

@@ -1,23 +1,22 @@
 package com.reactor.cachedb.processor;
 
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import javax.tools.Diagnostic;
-import javax.tools.DiagnosticCollector;
-import javax.tools.JavaCompiler;
-import javax.tools.JavaFileObject;
-import javax.tools.StandardJavaFileManager;
-import javax.tools.ToolProvider;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class CacheRepositoryProcessorTest {
 
@@ -822,6 +821,123 @@ class CacheRepositoryProcessorTest {
         assertTrue(generated.contains(".withQueryTimeoutSeconds(12)"));
     }
 
+    @Test
+    void seekExpandsTwoAndThreeColumnLexicographicPredicates() throws Exception {
+        for (boolean three : List.of(false, true)) {
+            Compilation result = compile(
+                    source("seek/Row.java", """
+                            package seek;
+                            import com.reactor.cachedb.annotations.*;
+                            @CacheEntity(table="rows", redisNamespace="rows")
+                            @CachePartitionedIndex(partitionBy="priority",sortBy="event_date")
+                            public record Row(@CacheId Long id, @CacheColumn("event_date") Long date, @CacheColumn("priority") Long priority) {}
+                            """),
+                    source("seek/Rows.java", """
+                            package seek;
+                            import com.reactor.cachedb.annotations.*;
+                            import com.reactor.cachedb.core.repository.*;
+                            @CacheRepository(entity=Row.class, springBean=false)
+                            public interface Rows extends CacheDbRepository<Row,Long> {
+                              @SourceRoute("archive")
+                              @CacheRouteQuery(seek={%s
+                                @CacheSeek(field="date",param="beforeDate"), @CacheSeek(field="id",param="beforeId")},
+                                orderBy={%s @CacheOrder(field="date",direction=CacheOrder.Direction.DESC),
+                                  @CacheOrder(field="id",direction=CacheOrder.Direction.DESC)})
+                              SourceWindow<Row> archive(long beforeDate, long beforeId, %s WindowRequest window);
+                            }
+                            """.formatted(three ? "@CacheSeek(field=\"priority\",param=\"beforePriority\")," : "",
+                                    three ? "@CacheOrder(field=\"priority\",direction=CacheOrder.Direction.DESC)," : "",
+                                    three ? "long beforePriority," : "")));
+            assertTrue(result.success(), result.diagnosticsText());
+            String generated = Files.readString(result.generated().resolve("seek/RowsCacheDbImplementation.java"));
+            assertTrue(generated.contains("QueryFilter.lt("), generated);
+            assertTrue(generated.contains("QueryFilter.eq("), generated);
+            try (var loader = new java.net.URLClassLoader(new java.net.URL[]{result.classes().toUri().toURL()}, getClass().getClassLoader())) {
+                var metadata = (com.reactor.cachedb.core.model.EntityMetadata<?, ?>) loader.loadClass("seek.RowCacheBinding").getField("METADATA").get(null);
+                org.junit.jupiter.api.Assertions.assertSame(metadata.columnTypes(), metadata.columnTypes());
+                org.junit.jupiter.api.Assertions.assertSame(metadata.partitionedSortIndexes(), metadata.partitionedSortIndexes());
+                assertFalse(metadata.partitionedSortIndexes().isEmpty());
+                org.junit.jupiter.api.Assertions.assertThrows(UnsupportedOperationException.class,
+                        () -> metadata.columnTypes().put("illegal", "java.lang.String"));
+            }
+        }
+    }
+
+    @Test
+    void seekRejectsUnknownRepeatedMismatchedAndNonUniqueFields() throws Exception {
+        List<String> invalid = List.of(
+                "@CacheSeek(field=\"missing\",param=\"before\")",
+                "@CacheSeek(field=\"date\",param=\"before\",direction=CachePredicate.Operator.LTE)",
+                "@CacheSeek(field=\"date\",param=\"before\")",
+                "@CacheSeek(field=\"date\",param=\"before\"),@CacheSeek(field=\"date\",param=\"before\")",
+                "@CacheSeek(field=\"id\",param=\"before\",direction=CachePredicate.Operator.GT)",
+                String.join(",",java.util.Collections.nCopies(5,"@CacheSeek(field=\"id\",param=\"before\")")));
+        for (String seek : invalid) {
+            Compilation result = compile(source("invalid/Row.java", """
+                    package invalid;
+                    import com.reactor.cachedb.annotations.*;
+                    @CacheEntity(table="rows",redisNamespace="rows")
+                    public record Row(@CacheId Long id,@CacheColumn("event_date") Long date) {}
+                    """),source("invalid/Rows.java", """
+                    package invalid;
+                    import com.reactor.cachedb.annotations.*;
+                    import com.reactor.cachedb.core.repository.*;
+                    @CacheRepository(entity=Row.class,springBean=false)
+                    public interface Rows extends CacheDbRepository<Row,Long> {
+                      @SourceRoute("archive")
+                      @CacheRouteQuery(seek={%s},orderBy=@CacheOrder(field="date",direction=CacheOrder.Direction.DESC))
+                      SourceWindow<Row> archive(long before,WindowRequest window);
+                    }
+                    """.formatted(seek)));
+            assertFalse(result.success(),seek);
+            assertTrue(result.diagnosticsText().contains("@CacheSeek"),result.diagnosticsText());
+        }
+    }
+
+    @Test
+    void jobMethodsGenerateDirectTypedCallsAndCodecProviders() throws Exception {
+        Compilation result = compile(
+                source("jobs/Command.java", """
+                        package jobs;
+                        @com.reactor.cachedb.annotations.CacheJsonRecord
+                        public record Command(String id) {}
+                        """),
+                source("jobs/Worker.java", """
+                        package jobs;
+                        public class Worker {
+                          @com.reactor.cachedb.annotations.CacheJobHandler("refresh.catalog")
+                          public String refresh(com.reactor.cachedb.spring.boot.CacheDistributedJobContext context, Command command) {
+                            return command.id();
+                          }
+                        }
+                        """));
+        assertTrue(result.success(), result.diagnosticsText());
+        String generated = Files.readString(result.generated().resolve("jobs/Worker_refreshCacheJobAutoConfiguration.java"));
+        assertTrue(generated.contains("target.refresh(context, arguments)"));
+        assertTrue(generated.contains("CommandJsonCodec.INSTANCE"));
+        assertFalse(generated.contains("Method.invoke"));
+        assertTrue(Files.readString(result.classes().resolve("META-INF/services/com.reactor.cachedb.core.codec.GeneratedJsonCodecProvider"))
+                .contains("jobs.CommandJsonCodecProvider"));
+        try (var loader = new java.net.URLClassLoader(new java.net.URL[]{result.classes().toUri().toURL()}, getClass().getClassLoader())) {
+            Class<?> type = loader.loadClass("jobs.Command");
+            org.junit.jupiter.api.Assertions.assertSame(com.reactor.cachedb.core.codec.GeneratedJsonCodecs.require(type),
+                    com.reactor.cachedb.core.codec.GeneratedJsonCodecs.require(type));
+        }
+    }
+
+    @Test
+    void jobMethodsRejectMissingExplicitSerializationContracts() throws Exception {
+        Compilation result = compile(source("jobs/Bad.java", """
+                package jobs;
+                public class Bad {
+                  @com.reactor.cachedb.annotations.CacheJobHandler("bad")
+                  public void run(String payload) {}
+                }
+                """));
+        assertFalse(result.success());
+        assertTrue(result.diagnosticsText().contains("@CacheJsonRecord or an explicit"));
+    }
+
     private Compilation compile(Source... sources) throws IOException {
         Path sourceRoot = Files.createDirectories(temp.resolve("sources-" + System.nanoTime()));
         Path generated = Files.createDirectories(temp.resolve("generated-" + System.nanoTime()));
@@ -850,7 +966,9 @@ class CacheRepositoryProcessorTest {
                     new CacheEntityProcessor(),
                     new CacheProjectionRecordProcessor(),
                     new CacheRepositoryProcessor(),
-                    new CacheScheduledWarmProcessor()
+                    new CacheScheduledWarmProcessor(),
+                    new CacheJsonRecordProcessor(),
+                    new CacheJobHandlerProcessor()
             ));
             boolean success = Boolean.TRUE.equals(task.call());
             return new Compilation(success, generated, classes, diagnostics.getDiagnostics());

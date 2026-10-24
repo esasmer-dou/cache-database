@@ -3,12 +3,6 @@ package com.reactor.cachedb.integration;
 import com.reactor.cachedb.core.change.ExternalChangeEvent;
 import com.reactor.cachedb.core.change.ExternalChangeType;
 import com.reactor.cachedb.postgres.PostgresOutboxExternalChangeFeedAdapter;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.postgresql.ds.PGSimpleDataSource;
-
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -16,11 +10,16 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.postgresql.ds.PGSimpleDataSource;
 
 public final class PostgresOutboxExternalChangeFeedAdapterTest {
 
-    private static final String JDBC_USER = System.getProperty("cachedb.it.postgres.user", "postgres");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.postgres.password", "postgresql");
+    private static final String JDBC_USER = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.postgres.user", "postgres");
+    private static final String JDBC_PASSWORD = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.postgres.password", "postgresql");
     private String jdbcUrl;
 
     @BeforeEach
@@ -109,7 +108,7 @@ public final class PostgresOutboxExternalChangeFeedAdapterTest {
 
     private String resolveJdbcUrl() {
         List<String> candidates = new ArrayList<>();
-        String explicit = System.getProperty("cachedb.it.postgres.url");
+        String explicit = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.postgres.url");
         if (explicit != null && !explicit.isBlank()) {
             candidates.add(explicit);
         }

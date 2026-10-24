@@ -12,6 +12,19 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class ProjectionSchemaTypesTest {
+    @Test
+    void retainsForwardFieldsNullNamesAndLastValueWinsWithoutTemporaryMaps() {
+        record View(String id,String future,String nullName) {}
+        var schema = ProjectionSchema.<View>builder().stringColumn("id",View::id)
+                .decodeWith(row -> new View(row.string("id"),row.string("future"),row.string(null))).build();
+        java.util.Map<String,String> first = new java.util.LinkedHashMap<>();
+        first.put("id","1"); first.put("future","old"); first.put(null,"null-name");
+        String raw = com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.encode(first)
+                + com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.encode(java.util.Map.of("future","new"));
+        assertEquals(new View("1","new","null-name"),schema.fromRedisValue(raw));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> schema.fromRedisValue(com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.encode(java.util.Map.of("id","1"))));
+    }
 
     @Test
     void shouldRoundTripAllDeclarativeProjectionTypes() {

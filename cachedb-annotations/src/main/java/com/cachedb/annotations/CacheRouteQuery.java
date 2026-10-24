@@ -12,6 +12,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.SOURCE)
 public @interface CacheRouteQuery {
     CachePredicate[] predicates() default {};
+    CacheSeek[] seek() default {};
 
     /**
      * Confirms that predicates split across multiple groups are intentionally

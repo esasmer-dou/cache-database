@@ -18,7 +18,8 @@ public record CacheField<E, V>(String javaName, String columnName, Class<?> valu
     public QueryFilter lt(V value) { return QueryFilter.lt(columnName, value); }
     public QueryFilter lte(V value) { return QueryFilter.lte(columnName, value); }
     public QueryFilter in(Collection<? extends V> values) {
-        return QueryFilter.in(columnName, values == null ? List.of() : List.copyOf(values));
+        Collection<? extends V> copied = values == null ? List.of() : List.copyOf(values);
+        return QueryFilter.in(columnName, copied);
     }
     public QueryFilter contains(V value) { return QueryFilter.contains(columnName, value); }
     public QueryFilter startsWith(V value) { return QueryFilter.startsWith(columnName, value); }

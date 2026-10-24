@@ -48,12 +48,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class OracleProviderIntegrationTest {
-    private static final String JDBC_URL = System.getProperty(
+    private static final String JDBC_URL = ProviderTestEnvironment.property(
             "cachedb.it.oracle.url",
             "jdbc:oracle:thin:@//127.0.0.1:15211/FREEPDB1"
     );
-    private static final String JDBC_USER = System.getProperty("cachedb.it.oracle.user", "cachedb");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.oracle.password", "CacheDbOracle123");
+    private static final String JDBC_USER = ProviderTestEnvironment.property("cachedb.it.oracle.user", "cachedb");
+    private static final String JDBC_PASSWORD = ProviderTestEnvironment.property("cachedb.it.oracle.password", "CacheDbOracle123");
     private HikariDataSource pooledDataSource;
 
     @BeforeEach
@@ -183,7 +183,7 @@ class OracleProviderIntegrationTest {
                 dataSource(), new TestMetadata(), new TestCodec(), 1_500
         );
 
-        List<TestEntity> rows = loader.load(QuerySpec.where(QueryFilter.in("id", ids)).limitTo(1_201));
+        List<TestEntity> rows = loader.load(QuerySpec.where(QueryFilter.in("id", (java.util.Collection<?>) ids)).limitTo(1_201));
 
         assertEquals(1_201, rows.size());
         assertEquals(1L, rows.get(0).id());

@@ -6,16 +6,13 @@ import static org.mockito.Mockito.*;
 
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.redis.RedisClientOperations;
-
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.ScanParams;
-
-import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @EnabledIfSystemProperty(named = "cachedb.snapshot.redis", matches = "true")
 class SnapshotPageReadOverheadRedisTest {
@@ -44,7 +41,7 @@ local function execute()
         String index = prefix + ":idx:" + generation + ":" + SnapshotIndexSpec.partition("customer");
         try (var client =
                 new JedisPooled(
-                        "redis://127.0.0.1:"
+                        "redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1") + ":"
                                 + Integer.getInteger("cachedb.snapshot.redis.port", 16383))) {
             try {
                 client.set(prefix + ":active", generation + ":1000");

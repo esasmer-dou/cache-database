@@ -4,6 +4,29 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.15.0 - 2026-10-24
+
+### Added
+
+- bounded direct entity/projection payload codecs and shared generated metadata maps
+- batched hot-set access recording and diff-aware index mutation planning
+- snapshot scope/binding shortcuts and generated JSON codec provider resolution
+- streaming spool digests and verified reuse without rereading unchanged payloads
+- shared JDBC transaction safety and coalesced PostgreSQL conditional write fences
+- publisher-only CLIENT_ONLY job auto-configuration and lazy worker/scheduler pools
+- compile-time keyset seek declarations and direct method-level job adapters
+- inclusive snapshot score ranges and bounded recoverable dirty-root claims
+- separated admin inspectors and bounded export collection
+- provider-neutral sample scenarios, stock-range/dirty-root REST contracts and EN/TR examples
+- isolated Kubernetes source-sync and validation recipes, without Docker-in-Docker
+- checksum-verified release artifact promotion to public Maven and GitHub Packages without rebuilding tested JARs
+
+### Fixed
+
+- non-web sample worker processes now explicitly stay alive; a resource-level regression test guards all three provider profiles
+
+See [upgrade contracts](docs/releases/v0.15.0.md).
+
 ## 0.14.0 - 2026-10-21
 
 ### Added

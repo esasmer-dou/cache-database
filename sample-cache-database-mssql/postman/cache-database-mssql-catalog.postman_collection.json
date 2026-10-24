@@ -1,18 +1,18 @@
 {
   "info": {
-    "name": "CacheDB MSSQL - Catalog 0.14",
-    "description": "Self-contained 0.14 feature flow. Requires the demo profile and initialized SQL schema, but not demo seed data. Imports four new products atomically, checks replay and changed-payload rejection, explicitly prepares a Jackson-free snapshot and reads its typed results. Run the whole collection; polling is bounded to 30 seconds per job. This is not a latency benchmark.",
+    "name": "CacheDB MSSQL - Catalog 0.15",
+    "description": "Self-contained 0.15 feature flow. Requires the demo profile and initialized SQL schema, but not demo seed data. Imports four new products atomically, checks replay and changed-payload rejection, explicitly prepares a Jackson-free snapshot and reads its typed results. Run the whole collection; polling is bounded to 30 seconds per job. This is not a latency benchmark.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [{"key": "baseUrl", "value": "http://127.0.0.1:8092"}, {"key": "catalogJobId", "value": ""}],
   "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
-    "if (pm.response.code === 202) { pm.collectionVariables.set('catalogJobId', pm.response.json().jobId); pm.collectionVariables.set('catalogPolls', 0); pm.collectionVariables.set('catalogPollDeadline', Date.now() + 30000); pm.test('Job is accepted, not a SQL commit', () => pm.expect(pm.response.headers.get('Location')).to.include('/api/warm/jobs/')); }"
+    "if (pm.response.code === 202 && pm.response.json().jobId) { pm.collectionVariables.set('catalogJobId', pm.response.json().jobId); pm.collectionVariables.set('catalogPolls', 0); pm.collectionVariables.set('catalogPollDeadline', Date.now() + 30000); pm.test('Job is accepted, not a SQL commit', () => pm.expect(pm.response.headers.get('Location')).to.include('/api/warm/jobs/')); }"
   ]}}],
   "item": [
     {
       "name": "01 Import four complete product rows",
       "event": [{"listen": "prerequest", "script": {"exec": ["pm.collectionVariables.set('catalogDurabilityDeadline', Date.now() + 30000);"]}}, {"listen": "test", "script": {"exec": ["pm.test('Accepted', () => pm.response.to.have.status(202));"]}}],
-      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"postman-catalog-014\",\"items\":[{\"productId\":9100001,\"sku\":\"PM-9100001\",\"name\":\"İğne çelik\",\"category\":\"pm-tools\",\"unitPrice\":12.3456,\"stock\":8,\"reserved\":2,\"updatedAt\":1700000000},{\"productId\":9100002,\"sku\":\"PM-9100002\",\"name\":\"Tool B\",\"category\":\"pm-tools\",\"unitPrice\":15.0000,\"stock\":12,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100003,\"sku\":\"PM-9100003\",\"name\":\"Electrical A\",\"category\":\"pm-electrical\",\"unitPrice\":20.0000,\"stock\":5,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100004,\"sku\":\"PM-9100004\",\"name\":\"Electrical B\",\"category\":\"pm-electrical\",\"unitPrice\":25.0000,\"stock\":9,\"reserved\":1,\"updatedAt\":1700000000}]}"}},
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"postman-catalog-015\",\"items\":[{\"productId\":9100001,\"sku\":\"PM-9100001\",\"name\":\"İğne çelik\",\"category\":\"pm-tools\",\"unitPrice\":12.3456,\"stock\":8,\"reserved\":2,\"updatedAt\":1700000000},{\"productId\":9100002,\"sku\":\"PM-9100002\",\"name\":\"Tool B\",\"category\":\"pm-tools\",\"unitPrice\":15.0000,\"stock\":12,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100003,\"sku\":\"PM-9100003\",\"name\":\"Electrical A\",\"category\":\"pm-electrical\",\"unitPrice\":20.0000,\"stock\":5,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100004,\"sku\":\"PM-9100004\",\"name\":\"Electrical B\",\"category\":\"pm-electrical\",\"unitPrice\":25.0000,\"stock\":9,\"reserved\":1,\"updatedAt\":1700000000}]}"}},
       "response": []
     },
     {
@@ -26,7 +26,7 @@
     },
     {
       "name": "03 Replay identical import",
-      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"postman-catalog-014\",\"items\":[{\"productId\":9100001,\"sku\":\"PM-9100001\",\"name\":\"İğne çelik\",\"category\":\"pm-tools\",\"unitPrice\":12.3456,\"stock\":8,\"reserved\":2,\"updatedAt\":1700000000},{\"productId\":9100002,\"sku\":\"PM-9100002\",\"name\":\"Tool B\",\"category\":\"pm-tools\",\"unitPrice\":15.0000,\"stock\":12,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100003,\"sku\":\"PM-9100003\",\"name\":\"Electrical A\",\"category\":\"pm-electrical\",\"unitPrice\":20.0000,\"stock\":5,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100004,\"sku\":\"PM-9100004\",\"name\":\"Electrical B\",\"category\":\"pm-electrical\",\"unitPrice\":25.0000,\"stock\":9,\"reserved\":1,\"updatedAt\":1700000000}]}"}},
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"postman-catalog-015\",\"items\":[{\"productId\":9100001,\"sku\":\"PM-9100001\",\"name\":\"İğne çelik\",\"category\":\"pm-tools\",\"unitPrice\":12.3456,\"stock\":8,\"reserved\":2,\"updatedAt\":1700000000},{\"productId\":9100002,\"sku\":\"PM-9100002\",\"name\":\"Tool B\",\"category\":\"pm-tools\",\"unitPrice\":15.0000,\"stock\":12,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100003,\"sku\":\"PM-9100003\",\"name\":\"Electrical A\",\"category\":\"pm-electrical\",\"unitPrice\":20.0000,\"stock\":5,\"reserved\":0,\"updatedAt\":1700000000},{\"productId\":9100004,\"sku\":\"PM-9100004\",\"name\":\"Electrical B\",\"category\":\"pm-electrical\",\"unitPrice\":25.0000,\"stock\":9,\"reserved\":1,\"updatedAt\":1700000000}]}"}},
       "event": [{"listen": "test", "script": {"exec": ["pm.test('Accepted', () => pm.response.to.have.status(202));"]}}]
     },
     {
@@ -39,7 +39,7 @@
     },
     {
       "name": "05 Reject changed payload under the same batch ID",
-      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"postman-catalog-014\",\"items\":[{\"productId\":9100099,\"sku\":\"PM-9100099\",\"name\":\"Must not be inserted\",\"category\":\"pm-tools\",\"unitPrice\":1,\"stock\":1,\"reserved\":0,\"updatedAt\":1700000000}]}"}},
+      "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"postman-catalog-015\",\"items\":[{\"productId\":9100099,\"sku\":\"PM-9100099\",\"name\":\"Must not be inserted\",\"category\":\"pm-tools\",\"unitPrice\":1,\"stock\":1,\"reserved\":0,\"updatedAt\":1700000000}]}"}},
       "event": [{"listen": "test", "script": {"exec": ["pm.test('Only job submission accepted', () => pm.response.to.have.status(202));"]}}]
     },
     {
@@ -102,6 +102,154 @@
       "name": "16 Reject extreme numeric exponent before queueing",
       "request": {"method": "POST", "url": "{{baseUrl}}/api/catalog/imports", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"batchId\":\"extreme-price\",\"items\":[{\"productId\":9100099,\"sku\":\"INVALID\",\"name\":\"Invalid price\",\"category\":\"pm-tools\",\"unitPrice\":1e2147483647,\"stock\":1,\"reserved\":0,\"updatedAt\":1700000000}]}"}},
       "event": [{"listen": "test", "script": {"exec": ["pm.test('NUMERIC(19,4) bound cannot overflow', () => pm.response.to.have.status(400));"]}}]
+    },
+    {
+      "name": "17 Read inclusive stock range",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/catalog/categories/pm-tools/available?minimum=6&maximum=6&limit=25"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Inclusive range uses only the matching card', () => { pm.response.to.have.status(200); const b=pm.response.json(); pm.expect(b.items).to.have.lengthOf(1); pm.expect(b.items[0].values[0].productId).to.eql(9100001); pm.expect(b.items[0].values[0].available).to.eql(6); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "18 Reject reversed score bounds",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/catalog/categories/pm-tools/available?minimum=20&maximum=5"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Invalid range is explicit', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "19 Coalesce repeated product changes",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/catalog/dirty",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"ids\":[9100001,9100001,9100001]}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('One pending root, not three refreshes', () => { pm.response.to.have.status(202); pm.expect(pm.response.json().added).to.eql(1); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "20 Repeated event stays coalesced",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/catalog/dirty",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"ids\":[9100001]}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Duplicate is not appended', () => { pm.response.to.have.status(202); pm.expect(pm.response.json().added).to.eql(0); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "21 Flush dirty roots on worker",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/catalog/dirty/flush"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('SQL work is a job, not inline HTTP work', () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "22 Wait for dirty-root publication",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/warm/jobs/{{catalogJobId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Job status available', () => pm.response.to.have.status(200));",
+              "const job=pm.response.json(); const n=Number(pm.collectionVariables.get('catalogPolls')||0)+1; pm.collectionVariables.set('catalogPolls',n);",
+              "if (!['COMPLETED','FAILED'].includes(job.status) && n<150 && Date.now()<Number(pm.collectionVariables.get('catalogPollDeadline'))) { setTimeout(() => pm.execution.setNextRequest(pm.info.requestName),200); } else { pm.test('Exactly one root refreshed', () => { pm.expect(job.status).to.eql('COMPLETED'); pm.expect(job.result.rootCount).to.eql(1); }); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "23 Read card after coalesced refresh",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/catalog/items/9100001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Payload parity retained', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().values[0].available).to.eql(6); });"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

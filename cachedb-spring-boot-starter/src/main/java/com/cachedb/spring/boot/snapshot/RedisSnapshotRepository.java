@@ -4,12 +4,10 @@ import com.reactor.cachedb.core.repository.CursorPage;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.redis.JedisPooledOperations;
 import com.reactor.cachedb.redis.RedisClientOperations;
-
-import redis.clients.jedis.JedisPooled;
-
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.function.Function;
+import redis.clients.jedis.JedisPooled;
 
 /** Pointer and payload reads share one Redis operation, without JDBC. */
 final class RedisSnapshotRepository implements SnapshotRepository {
@@ -47,7 +45,9 @@ local gen,at=string.match(active,'^([^:]+):(%d+)$')
 if not gen then return redis.error_reply('Invalid snapshot marker') end
 local key=ARGV[1]..':idx:'..gen..':'..ARGV[2]
 local revision=redis.call('HGET',ARGV[1]..':partition-revisions:'..gen,key) or '0'
+if ARGV[9] == '+inf' or ARGV[10] == '-inf' then return {gen,at,revision} end
 local start=0
+if ARGV[9] and ARGV[9] ~= '-inf' then start=redis.call('ZCOUNT',key,'-inf','('..ARGV[9]) end
 if ARGV[3] ~= '' then
   if ARGV[3] ~= gen or ARGV[4] ~= revision then
     return redis.error_reply('Snapshot cursor expired; restart pagination') end
@@ -62,6 +62,8 @@ local result={gen,at,revision}
 local content=nil
   local bytes=0
   for i,id in ipairs(ids) do
+    local rowScore=redis.call('ZSCORE',key,id)
+    if ARGV[10] and ARGV[10] ~= '+inf' and tonumber(rowScore) > tonumber(ARGV[10]) then break end
     if i > tonumber(ARGV[6]) then
       table.insert(result,id)
       table.insert(result,at)
@@ -80,7 +82,7 @@ local content=nil
     if bytes > tonumber(ARGV[7]) then return redis.error_reply('Snapshot page byte budget exceeded; use a smaller window') end
   table.insert(result,redis.call('HGET',ARGV[1]..':times:'..gen,id) or at)
   table.insert(result,value)
-  table.insert(result,redis.call('ZSCORE',key,id))
+  table.insert(result,rowScore)
     end
 end
 return result
@@ -258,6 +260,12 @@ return result
     }
 
     public CursorPage<SnapshotValue> findPage(String partitionKey, WindowRequest window) {
+        return findPage(new SnapshotPageRequest(partitionKey, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, window));
+    }
+
+    public CursorPage<SnapshotValue> findPage(SnapshotPageRequest request) {
+        String partitionKey = request.partitionKey();
+        WindowRequest window = request.window();
         if (!indexed) return SnapshotRepository.super.findPage(partitionKey, window);
         Objects.requireNonNull(window, "window");
         String partition = SnapshotIndexSpec.partition(partitionKey);
@@ -270,15 +278,18 @@ return result
                                     Base64.getUrlDecoder().decode(window.after()),
                                     StandardCharsets.UTF_8)
                             .split("\\n", -1);
-            if ((cursor.length != 5 && cursor.length != 6)
+            if ((cursor.length != 5 && cursor.length != 6 && cursor.length != 8)
                     || !cursor[0].equals(prefix)
                     || !cursor[1].equals(partition))
                 throw new IllegalArgumentException(
                         "Snapshot cursor belongs to another plan or partition");
+            if (request.unbounded() ? cursor.length == 8 : cursor.length != 8
+                    || !cursor[6].equals(request.redisMinimum()) || !cursor[7].equals(request.redisMaximum()))
+                throw new IllegalArgumentException("Snapshot cursor belongs to another score range");
             gen = cursor[2];
             revision = cursor[3];
             last = cursor[4];
-            if (cursor.length == 6) score = cursor[5];
+            if (cursor.length >= 6) score = cursor[5];
         }
         var result =
                 (List<?>)
@@ -293,7 +304,7 @@ return result
                                         last,
                                         Integer.toString(window.limit()),
                                         Long.toString(maxPageBytes),
-                                        score));
+                                        score, request.redisMinimum(), request.redisMaximum()));
         if (result.isEmpty()) return new CursorPage<>(List.of(), null);
         gen = (String) result.get(0);
         revision = (String) result.get(2);
@@ -324,7 +335,8 @@ return result
                                                         + items.get(items.size() - 1).id()
                                                         + "\n"
                                                         + result.get(
-                                                                3 + 4 * (items.size() - 1) + 3))
+                                                                3 + 4 * (items.size() - 1) + 3)
+                                                        + (request.unbounded() ? "" : "\n" + request.redisMinimum() + "\n" + request.redisMaximum()))
                                                 .getBytes(StandardCharsets.UTF_8))
                         : null;
         return new CursorPage<>(items, next);

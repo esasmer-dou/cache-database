@@ -5,24 +5,24 @@ import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.cache.EntityHotPolicy;
 import com.reactor.cachedb.core.cache.EntityHotPolicyMode;
 import com.reactor.cachedb.core.cache.PageWindow;
+import com.reactor.cachedb.core.config.AdminHttpConfig;
 import com.reactor.cachedb.core.config.AdminMonitoringConfig;
 import com.reactor.cachedb.core.config.AdminReportJobConfig;
-import com.reactor.cachedb.core.config.AdminHttpConfig;
 import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.DeadLetterRecoveryConfig;
 import com.reactor.cachedb.core.config.EntityFlushPolicy;
 import com.reactor.cachedb.core.config.HardLimitEntityPolicy;
 import com.reactor.cachedb.core.config.HardLimitQueryPolicy;
 import com.reactor.cachedb.core.config.IncidentDeliveryDlqConfig;
-import com.reactor.cachedb.core.config.IncidentWebhookConfig;
-import com.reactor.cachedb.core.config.IncidentQueueConfig;
 import com.reactor.cachedb.core.config.IncidentEmailConfig;
+import com.reactor.cachedb.core.config.IncidentQueueConfig;
+import com.reactor.cachedb.core.config.IncidentWebhookConfig;
 import com.reactor.cachedb.core.config.KeyspaceConfig;
 import com.reactor.cachedb.core.config.PageCacheConfig;
+import com.reactor.cachedb.core.config.PersistenceSemantics;
 import com.reactor.cachedb.core.config.QueryIndexConfig;
 import com.reactor.cachedb.core.config.RedisFunctionsConfig;
 import com.reactor.cachedb.core.config.RedisGuardrailConfig;
-import com.reactor.cachedb.core.config.PersistenceSemantics;
 import com.reactor.cachedb.core.config.RelationConfig;
 import com.reactor.cachedb.core.config.ResourceLimits;
 import com.reactor.cachedb.core.config.SchemaBootstrapConfig;
@@ -34,24 +34,24 @@ import com.reactor.cachedb.core.model.EntityMetadata;
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.model.OptimisticWriteConflictException;
 import com.reactor.cachedb.core.model.RelationDefinition;
-import com.reactor.cachedb.core.model.WriteOperation;
 import com.reactor.cachedb.core.model.WriteDependency;
+import com.reactor.cachedb.core.model.WriteOperation;
 import com.reactor.cachedb.core.model.WriteReceipt;
 import com.reactor.cachedb.core.page.VersionedEntity;
 import com.reactor.cachedb.core.plan.FetchPlan;
-import com.reactor.cachedb.core.queue.AdminExportFormat;
-import com.reactor.cachedb.core.queue.DeadLetterQuery;
-import com.reactor.cachedb.core.queue.DeadLetterManagement;
-import com.reactor.cachedb.core.queue.AdminHealthStatus;
-import com.reactor.cachedb.core.queue.ReconciliationQuery;
-import com.reactor.cachedb.core.queue.QueuedWriteOperation;
-import com.reactor.cachedb.core.queue.WriteFailureCategory;
+import com.reactor.cachedb.core.query.HardLimitQueryClass;
 import com.reactor.cachedb.core.query.QueryExplainPlan;
 import com.reactor.cachedb.core.query.QueryFilter;
 import com.reactor.cachedb.core.query.QueryGroup;
-import com.reactor.cachedb.core.query.HardLimitQueryClass;
 import com.reactor.cachedb.core.query.QuerySort;
 import com.reactor.cachedb.core.query.QuerySpec;
+import com.reactor.cachedb.core.queue.AdminExportFormat;
+import com.reactor.cachedb.core.queue.AdminHealthStatus;
+import com.reactor.cachedb.core.queue.DeadLetterManagement;
+import com.reactor.cachedb.core.queue.DeadLetterQuery;
+import com.reactor.cachedb.core.queue.QueuedWriteOperation;
+import com.reactor.cachedb.core.queue.ReconciliationQuery;
+import com.reactor.cachedb.core.queue.WriteFailureCategory;
 import com.reactor.cachedb.core.route.RouteCacheContext;
 import com.reactor.cachedb.core.route.RouteCacheContract;
 import com.reactor.cachedb.core.route.TenantCacheQuota;
@@ -62,14 +62,44 @@ import com.reactor.cachedb.examples.entity.UserEntityCacheBinding;
 import com.reactor.cachedb.examples.loader.UserOrdersRelationBatchLoader;
 import com.reactor.cachedb.examples.loader.UserPageLoader;
 import com.reactor.cachedb.redis.RedisDeadLetterManagement;
-import com.reactor.cachedb.redis.RedisKeyStrategy;
 import com.reactor.cachedb.redis.RedisDeadLetterRecoveryWorker;
+import com.reactor.cachedb.redis.RedisKeyStrategy;
 import com.reactor.cachedb.redis.RedisWriteBehindQueue;
 import com.reactor.cachedb.redis.RedisWriteBehindWorker;
 import com.reactor.cachedb.redis.RedisWriteOperationMapper;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer;
 import com.sun.net.httpserver.HttpServer;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -80,43 +110,12 @@ import redis.clients.jedis.StreamEntryID;
 import redis.clients.jedis.params.XAddParams;
 import redis.clients.jedis.params.XReadGroupParams;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.net.URI;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-
 public final class CacheDatabaseIntegrationTest {
 
-    private static final String JDBC_USER = System.getProperty("cachedb.it.postgres.user", "postgres");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.postgres.password", "postgresql");
-    private static final String REDIS_PASSWORD = System.getProperty("cachedb.it.redis.password", "welcome1");
-    private static final String REDIS_URI = System.getProperty("cachedb.it.redis.uri", "redis://default:" + REDIS_PASSWORD + "@127.0.0.1:6379");
+    private static final String JDBC_USER = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.postgres.user", "postgres");
+    private static final String JDBC_PASSWORD = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.postgres.password", "postgresql");
+    private static final String REDIS_PASSWORD = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.redis.password", "welcome1");
+    private static final String REDIS_URI = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.redis.uri", "redis://default:" + REDIS_PASSWORD + "@127.0.0.1:6379");
 
     private JedisPooled jedis;
     private CacheDatabase cacheDatabase;
@@ -1499,7 +1498,7 @@ public final class CacheDatabaseIntegrationTest {
                 deliveryGroup,
                 "abandoned-consumer",
                 new XReadGroupParams().count(1),
-                Map.of(deliveryDlqStream, StreamEntryID.UNRECEIVED_ENTRY)
+                Map.of(deliveryDlqStream, StreamEntryID.XREADGROUP_UNDELIVERED_ENTRY)
         );
         Thread.sleep(150);
 
@@ -2163,7 +2162,7 @@ public final class CacheDatabaseIntegrationTest {
                 keyPrefix + "-group",
                 "abandoned-consumer",
                 new XReadGroupParams().count(10),
-                Map.of(streamKey, StreamEntryID.UNRECEIVED_ENTRY)
+                Map.of(streamKey, StreamEntryID.XREADGROUP_UNDELIVERED_ENTRY)
         );
         Assertions.assertNotNull(pending);
         Assertions.assertFalse(pending.isEmpty());
@@ -2370,7 +2369,7 @@ public final class CacheDatabaseIntegrationTest {
                 consumerGroup,
                 "stopped-pod",
                 new XReadGroupParams().count(1),
-                Map.of(localStreamKey, StreamEntryID.UNRECEIVED_ENTRY)
+                Map.of(localStreamKey, StreamEntryID.XREADGROUP_UNDELIVERED_ENTRY)
         );
         Assertions.assertNotNull(pending);
         Assertions.assertFalse(pending.isEmpty());
@@ -2983,6 +2982,9 @@ public final class CacheDatabaseIntegrationTest {
             Assertions.assertTrue(Files.readString(reportDirectory.resolve("diagnostics.csv")).contains("status"));
 
             var metrics = reportDatabase.admin().metrics();
+            waitUntil(() -> reportDatabase.admin().metrics().adminReportJobSnapshot().runCount() > 0,
+                    Duration.ofSeconds(10), "Report completion metrics must follow file publication");
+            metrics = reportDatabase.admin().metrics();
             Assertions.assertTrue(metrics.recoveryCleanupSnapshot().runCount() > 0);
             Assertions.assertTrue(metrics.adminReportJobSnapshot().runCount() > 0);
             Assertions.assertTrue(metrics.adminReportJobSnapshot().writtenFileCount() >= 4);
@@ -4294,7 +4296,7 @@ public final class CacheDatabaseIntegrationTest {
     }
 
     private String resolveJdbcUrl() throws SQLException {
-        String forced = System.getProperty("cachedb.it.postgres.url");
+        String forced = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.postgres.url");
         if (forced != null && !forced.isBlank()) {
             return forced;
         }

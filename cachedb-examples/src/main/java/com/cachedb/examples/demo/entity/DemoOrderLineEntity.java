@@ -57,7 +57,7 @@ public class DemoOrderLineEntity {
                 .filter(id -> id != null)
                 .map(id -> (Object) id)
                 .toList();
-        return QuerySpec.where(QueryFilter.in("order_id", rawValues))
+        return QuerySpec.where(QueryFilter.in("order_id", (java.util.Collection<?>) rawValues))
                 .orderBy(QuerySort.asc("order_id"), QuerySort.asc("line_number"))
                 .limitTo(totalLimit);
     }

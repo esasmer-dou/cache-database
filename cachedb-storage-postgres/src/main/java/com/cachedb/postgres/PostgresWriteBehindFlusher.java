@@ -9,13 +9,10 @@ import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.registry.EntityRegistry;
+import com.reactor.cachedb.jdbc.AbstractJdbcWriteBehindFlusher;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
 import com.reactor.cachedb.jdbc.JdbcWriteFence;
 import com.reactor.cachedb.jdbc.VersionGuardedWriteSupport;
-
-import org.postgresql.copy.CopyManager;
-import org.postgresql.core.BaseConnection;
-
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
@@ -27,18 +24,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.StringJoiner;
-
 import javax.sql.DataSource;
+import org.postgresql.copy.CopyManager;
+import org.postgresql.core.BaseConnection;
 
-public final class PostgresWriteBehindFlusher implements FailureClassifyingFlusher {
+public final class PostgresWriteBehindFlusher extends AbstractJdbcWriteBehindFlusher implements FailureClassifyingFlusher {
 
-    private final DataSource dataSource;
-    private final EntityRegistry entityRegistry;
     private final PostgresFailureClassifier failureClassifier;
     private final PostgresDatabaseDialect dialect;
     private final WriteBehindConfig config;
     private final StoragePerformanceCollector performanceCollector;
-    private final JdbcWriteFence writeFence;
 
     public PostgresWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry) {
         this(dataSource, entityRegistry, WriteBehindConfig.defaults(), null);
@@ -54,18 +49,11 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
             EntityRegistry entityRegistry,
             WriteBehindConfig config,
             StoragePerformanceCollector performanceCollector) {
-        this.dataSource = dataSource;
-        this.entityRegistry = entityRegistry;
+        super(dataSource, entityRegistry, JdbcWriteFence.Provider.POSTGRES, config.statementTimeoutSeconds());
         this.failureClassifier = new PostgresFailureClassifier();
         this.dialect = new PostgresDatabaseDialect();
         this.config = config;
         this.performanceCollector = performanceCollector;
-        this.writeFence =
-                new JdbcWriteFence(
-                        dataSource,
-                        entityRegistry,
-                        JdbcWriteFence.Provider.POSTGRES,
-                        config.statementTimeoutSeconds());
     }
 
     @Override
@@ -99,92 +87,51 @@ public final class PostgresWriteBehindFlusher implements FailureClassifyingFlush
         if (operations.isEmpty()) return;
         writeFence.initialize();
         try (Connection connection = dataSource.getConnection()) {
-            boolean autoCommit = connection.getAutoCommit();
-            connection.setAutoCommit(false);
-            try {
-                for (var operation : writeFence.filter(connection, operations)) {
+            inTransaction(connection, operations, null, null, accepted -> {
+                for (var operation : accepted) {
                     if (operation.type() == OperationType.DELETE) delete(connection, operation);
                     else upsert(connection, operation);
                 }
-                connection.commit();
-            } catch (SQLException | RuntimeException failure) {
-                try {
-                    connection.rollback();
-                } catch (SQLException rollback) {
-                    failure.addSuppressed(rollback);
-                }
-                throw failure;
-            } finally {
-                connection.setAutoCommit(autoCommit);
-            }
+            });
         }
     }
 
     private void flushBatchInternal(List<QueuedWriteOperation> operations) throws SQLException {
-        if (operations.isEmpty()) {
-            return;
-        }
-        List<QueuedWriteOperation> batchOperations =
-                config.entityFlushPolicies().isEmpty()
-                        ? operations
-                        : normalizeOperations(operations);
+        if (operations.isEmpty()) return;
+        List<QueuedWriteOperation> batchOperations = config.entityFlushPolicies().isEmpty()
+                ? operations : normalizeOperations(operations);
         if (batchOperations.size() == 1) {
             flush(batchOperations.get(0));
             return;
         }
-
         writeFence.initialize();
         try (Connection connection = dataSource.getConnection()) {
-            boolean previousAutoCommit = connection.getAutoCommit();
-            connection.setAutoCommit(false);
-            try {
-                batchOperations = writeFence.filter(connection, batchOperations);
+            inTransaction(connection, batchOperations, null, null, accepted -> {
                 if (config.entityFlushPolicies().isEmpty()) {
-                    LinkedHashMap<StatementKey, List<QueuedWriteOperation>> groups =
-                            new LinkedHashMap<>();
-                    for (QueuedWriteOperation operation : batchOperations) {
-                        groups.computeIfAbsent(
-                                        StatementKey.of(operation), ignored -> new ArrayList<>())
-                                .add(operation);
-                    }
-                    FlushExecutionPolicy defaultPolicy = defaultFlushExecutionPolicy();
-                    for (Map.Entry<StatementKey, List<QueuedWriteOperation>> group :
-                            groups.entrySet()) {
-                        if (group.getKey().delete()) {
-                            flushDeleteBatch(connection, group.getValue(), defaultPolicy);
-                        } else {
-                            flushUpsertBatch(connection, group.getValue(), defaultPolicy);
-                        }
+                    var groups = groupOperations(accepted, StatementKey::of);
+                    FlushExecutionPolicy policy = defaultFlushExecutionPolicy();
+                    for (var group : groups.entrySet()) {
+                        if (group.getKey().delete()) flushDeleteBatch(connection, group.getValue(), policy);
+                        else flushUpsertBatch(connection, group.getValue(), policy);
                     }
                 } else {
-                    LinkedHashMap<ExecutionKey, List<QueuedWriteOperation>> groups =
-                            new LinkedHashMap<>();
-                    for (QueuedWriteOperation operation : batchOperations) {
-                        groups.computeIfAbsent(
-                                        ExecutionKey.of(
-                                                operation, resolveFlushExecutionPolicy(operation)),
-                                        ignored -> new ArrayList<>())
-                                .add(operation);
-                    }
-                    for (Map.Entry<ExecutionKey, List<QueuedWriteOperation>> group :
-                            groups.entrySet()) {
+                    var groups = groupOperations(accepted,
+                            operation -> ExecutionKey.of(operation, resolveFlushExecutionPolicy(operation)));
+                    for (var group : groups.entrySet()) {
                         if (group.getKey().statementKey().delete()) {
-                            flushDeleteBatch(
-                                    connection, group.getValue(), group.getKey().flushPolicy());
+                            flushDeleteBatch(connection, group.getValue(), group.getKey().flushPolicy());
                         } else {
-                            flushUpsertBatch(
-                                    connection, group.getValue(), group.getKey().flushPolicy());
+                            flushUpsertBatch(connection, group.getValue(), group.getKey().flushPolicy());
                         }
                     }
                 }
-                connection.commit();
-            } catch (SQLException | RuntimeException exception) {
-                connection.rollback();
-                throw exception;
-            } finally {
-                connection.setAutoCommit(previousAutoCommit);
-            }
+            });
         }
+    }
+
+    @Override
+    protected boolean coalesceWrites(List<QueuedWriteOperation> operations) {
+        return operations.stream().allMatch(operation -> resolveFlushExecutionPolicy(operation).stateCompactionEnabled());
     }
 
     private void recordPostgresWrite(long startedAtNanos, String observationTag) {

@@ -2,28 +2,36 @@ package com.reactor.cachedb.processor;
 
 import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheCommand;
-import com.reactor.cachedb.annotations.CacheId;
 import com.reactor.cachedb.annotations.CacheGeneratedId;
+import com.reactor.cachedb.annotations.CacheId;
 import com.reactor.cachedb.annotations.CacheLookup;
 import com.reactor.cachedb.annotations.CacheOrder;
 import com.reactor.cachedb.annotations.CachePredicate;
 import com.reactor.cachedb.annotations.CacheProjectionRecord;
+import com.reactor.cachedb.annotations.CacheRelation;
 import com.reactor.cachedb.annotations.CacheRepository;
 import com.reactor.cachedb.annotations.CacheRepositoryDefaults;
-import com.reactor.cachedb.annotations.CacheRelation;
 import com.reactor.cachedb.annotations.CacheRouteQuery;
 import com.reactor.cachedb.annotations.HotRoute;
 import com.reactor.cachedb.annotations.SourceRoute;
 import com.reactor.cachedb.annotations.SourceSql;
 import com.reactor.cachedb.annotations.WarmRoute;
 import com.reactor.cachedb.core.repository.SourceSqlValidator;
-
+import java.io.IOException;
+import java.io.Writer;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.SourceVersion;
-import javax.lang.model.element.Element;
 import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
@@ -36,16 +44,6 @@ import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
-import java.io.IOException;
-import java.io.Writer;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 /** Generates user-owned repository implementations without runtime proxies or query parsing. */
 @SupportedAnnotationTypes("com.reactor.cachedb.annotations.CacheRepository")
@@ -971,7 +969,47 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                     predicate.constantType()
             ));
         }
-        if (groups.size() > 1 && !annotation.explicitDisjunction()) {
+        if (annotation.seek().length > 0) {
+            var seeks = annotation.seek();
+            if (seeks.length > 4 || groups.size() > 1 || !groups.isEmpty() && !groups.containsKey(0)) {
+                error(method, "@CacheSeek supports at most four fields and one shared predicate group (0)");
+                return null;
+            }
+            List<PredicateModel> base = List.copyOf(groups.getOrDefault(0, List.of()));
+            List<FieldModel> fields = new ArrayList<>();
+            Set<String> names = new java.util.HashSet<>();
+            for (int i = 0; i < seeks.length; i++) {
+                var seek = seeks[i];
+                FieldModel field = entity.fields().get(seek.field());
+                ParameterModel parameter = parameters.get(seek.param());
+                CacheOrder[] orders = annotation.orderBy();
+                boolean descendingTie = orders.length > 0 && orders[orders.length - 1].direction() == CacheOrder.Direction.DESC;
+                boolean idTie = i == orders.length && seek.field().equals(entity.idField().javaName())
+                        && descendingTie == (seek.direction() == CachePredicate.Operator.LT);
+                boolean matchesSort = i < orders.length && orders[i].field().equals(seek.field())
+                        && (orders[i].direction() == CacheOrder.Direction.DESC) == (seek.direction() == CachePredicate.Operator.LT);
+                if (field == null || !names.add(seek.field()) || parameter == null
+                        || seek.direction() != CachePredicate.Operator.LT && seek.direction() != CachePredicate.Operator.GT
+                        || !isPredicateParameterCompatible(field, seek.direction(), parameter) || !matchesSort && !idTie) {
+                    error(method, "@CacheSeek requires distinct persisted sort fields, compatible parameters and LT/DESC or GT/ASC order");
+                    return null;
+                }
+                fields.add(field);
+            }
+            if (!fields.get(fields.size()-1).javaName().equals(entity.idField().javaName())) {
+                error(method, "@CacheSeek must end with the unique entity ID tie-breaker");
+                return null;
+            }
+            groups.clear();
+            for (int branch = 0; branch < seeks.length; branch++) {
+                List<PredicateModel> predicates = new ArrayList<>(base);
+                for (int component = 0; component <= branch; component++) predicates.add(new PredicateModel(
+                        fields.get(component), component == branch ? seeks[component].direction() : CachePredicate.Operator.EQ,
+                        seeks[component].param(), List.of(), CachePredicate.ConstantType.STRING));
+                groups.put(branch, predicates);
+            }
+        }
+        if (groups.size() > 1 && !annotation.explicitDisjunction() && annotation.seek().length == 0) {
             error(method, "@CacheRouteQuery predicates use multiple groups, which are ORed. "
                     + "Set explicitDisjunction=true to confirm this route widening explicitly");
             return null;

@@ -6,15 +6,12 @@ import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.*;
 import com.reactor.cachedb.core.model.*;
 import com.reactor.cachedb.core.registry.*;
-
+import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-
 import redis.clients.jedis.DefaultJedisClientConfig;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.StreamEntryID;
-
-import java.util.*;
 
 @EnabledIfSystemProperty(named = "cachedb.snapshot.redis", matches = "true")
 class RedisAtomicWriteBatchTest {
@@ -32,7 +29,7 @@ class RedisAtomicWriteBatchTest {
         var registry = new DefaultEntityRegistry(ResourceLimits.defaults());
         registry.register(
                 metadata(), codec(), CachePolicy.builder().hotEntityLimit(10).build(), null, null);
-        try (var redis = new JedisPooled("redis://127.0.0.1:16383")) {
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
             try {
                 var receipt =
                         batch(redis, registry, keys, config, "first")
@@ -95,7 +92,7 @@ class RedisAtomicWriteBatchTest {
                 metadata(), codec(), CachePolicy.builder().hotEntityLimit(0).build(), null, null);
         var keys = new RedisKeyStrategy(prefix);
         var config = WriteBehindConfig.builder().streamKey(prefix + ":stream").build();
-        try (var redis = new JedisPooled("redis://127.0.0.1:16383")) {
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
             try {
                 batch(redis, registry, keys, config, "zero").put(new Row(1L, "value")).commit();
                 assertNull(redis.get(keys.entityKey("rows", 1)));
@@ -153,6 +150,7 @@ class RedisAtomicWriteBatchTest {
                             .socketTimeoutMillis(5000)
                             .hostAndPortMapper(
                                     address ->
+                                            System.getProperty("cachedb.redis.cluster.host") != null ? address :
                                             new redis.clients.jedis.HostAndPort(
                                                     "127.0.0.1",
                                                     address.getPort() < 10000
@@ -162,9 +160,9 @@ class RedisAtomicWriteBatchTest {
             redis =
                     new JedisClusterOperations(
                             new redis.clients.jedis.JedisCluster(
-                                    Set.of(new redis.clients.jedis.HostAndPort("127.0.0.1", 17001)),
+                                    Set.of(new redis.clients.jedis.HostAndPort(System.getProperty("cachedb.redis.cluster.host", "127.0.0.1"), Integer.getInteger("cachedb.redis.cluster.port", 17001))),
                                     clientConfig));
-        } else redis = JedisPooledOperations.of(new JedisPooled("redis://127.0.0.1:16383"));
+        } else redis = JedisPooledOperations.of(new JedisPooled(RedisTestEndpoint.uri()));
         try (redis) {
             var attempts = new java.util.concurrent.atomic.AtomicInteger();
             com.reactor.cachedb.core.queue.WriteBehindFlusher flusher =
@@ -227,7 +225,7 @@ class RedisAtomicWriteBatchTest {
                 metadata(), codec(), CachePolicy.builder().hotEntityLimit(1).build(), null, null);
         var keys = new RedisKeyStrategy(prefix);
         var config = WriteBehindConfig.builder().streamKey(prefix + ":stream").build();
-        try (var redis = new JedisPooled("redis://127.0.0.1:16383")) {
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
             try {
                 redis.set(keys.entityKey("rows", 0), "old");
                 redis.zadd(keys.hotSetKey("rows"), System.currentTimeMillis() - 1000, "0");

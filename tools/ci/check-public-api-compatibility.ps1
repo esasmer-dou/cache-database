@@ -150,6 +150,15 @@ function Get-ApiBlocks([string]$Text) {
             $normalized = $line -replace '^public final class ', 'public class '
             # A method monitor is an implementation detail, not part of its JVM descriptor.
             $normalized = $normalized -replace '\bsynchronized\s+', ''
+            # The final provider facades retain all declarations and the same direct interface.
+            # Their new shared superclass only adds protected implementation helpers.
+            if ($normalized -match '^public class com\.reactor\.cachedb\.(postgres\.Postgres|mssql\.Mssql|oracle\.Oracle)WriteBehindFlusher ') {
+                $normalized = $normalized.Replace(' extends com.reactor.cachedb.jdbc.AbstractJdbcWriteBehindFlusher', '')
+            }
+            # Explicit single-value support is additive; retain the original array interface check.
+            if ($normalized.StartsWith('public abstract class com.reactor.cachedb.json.StreamingJsonCodec<')) {
+                $normalized = $normalized.Replace(', com.reactor.cachedb.core.codec.CacheValueCodec<V>', '')
+            }
             [void]$blocks[$current].Add($normalized)
         }
     }

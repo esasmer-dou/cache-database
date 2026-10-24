@@ -1,0 +1,246 @@
+---
+apiVersion: v1
+kind: Service
+metadata: {name: redis, namespace: cachedb-v015-validation}
+spec:
+  selector: {app.kubernetes.io/name: cachedb-redis}
+  ports: [{port: 6379, targetPort: 6379}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: redis, namespace: cachedb-v015-validation}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: cachedb-redis}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: cachedb-redis}
+    spec:
+      serviceAccountName: validator
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: database
+          image: redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
+          ports: [{containerPort: 6379}]
+          command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: "1", memory: 384Mi, ephemeral-storage: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          startupProbe:
+            tcpSocket: {port: 6379}
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket: {port: 6379}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 3Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: postgres, namespace: cachedb-v015-validation}
+spec:
+  selector: {app.kubernetes.io/name: cachedb-postgres}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: postgres, namespace: cachedb-v015-validation}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: cachedb-postgres}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: cachedb-postgres}
+    spec:
+      serviceAccountName: validator
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: database
+          image: postgres:17.6-alpine3.22
+          ports: [{containerPort: 5432}]
+
+          env:
+            - name: POSTGRES_USER
+              value: cachedb
+            - name: POSTGRES_DB
+              value: cachedb
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: fixture-auth, key: password}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          startupProbe:
+            tcpSocket: {port: 5432}
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket: {port: 5432}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 3Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mssql, namespace: cachedb-v015-validation}
+spec:
+  selector: {app.kubernetes.io/name: cachedb-mssql}
+  ports: [{port: 1433, targetPort: 1433}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mssql, namespace: cachedb-v015-validation}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: cachedb-mssql}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: cachedb-mssql}
+    spec:
+      serviceAccountName: validator
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: database
+          image: mcr.microsoft.com/mssql/server:2022-latest@sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56
+          ports: [{containerPort: 1433}]
+
+          env:
+            - name: ACCEPT_EULA
+              value: "Y"
+            - name: MSSQL_PID
+              value: Developer
+            - name: MSSQL_MEMORY_LIMIT_MB
+              value: "2048"
+            - name: MSSQL_SA_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: fixture-auth, key: password}
+          resources:
+            requests: {cpu: 100m, memory: 1536Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: "1", memory: 3Gi, ephemeral-storage: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # sqlservr carries this file capability; the bounding set must permit exec.
+            capabilities: {drop: ["ALL"], add: ["NET_BIND_SERVICE"]}
+          startupProbe:
+            tcpSocket: {port: 1433}
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket: {port: 1433}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: data, mountPath: /var/opt/mssql}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 3Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: oracle, namespace: cachedb-v015-validation}
+spec:
+  selector: {app.kubernetes.io/name: cachedb-oracle}
+  ports: [{port: 1521, targetPort: 1521}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: oracle, namespace: cachedb-v015-validation}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: cachedb-oracle}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: cachedb-oracle}
+    spec:
+      serviceAccountName: validator
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 54321
+        runAsGroup: 54321
+        fsGroup: 54321
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: database
+          image: gvenzl/oracle-free:23.9-slim@sha256:202889b03adeb66f0b87713f5cf01a06af2cfeb0c25e9ba31a74f5cd24172e31
+          ports: [{containerPort: 1521}]
+
+          env:
+            - name: ORACLE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: fixture-auth, key: password}
+            - name: APP_USER
+              value: cachedb
+            - name: APP_USER_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: fixture-auth, key: password}
+          resources:
+            requests: {cpu: 100m, memory: 1Gi, ephemeral-storage: 256Mi}
+            limits: {cpu: "1", memory: 3Gi, ephemeral-storage: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          startupProbe:
+            tcpSocket: {port: 1521}
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket: {port: 1521}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: data, mountPath: /opt/oracle/oradata}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 3Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}

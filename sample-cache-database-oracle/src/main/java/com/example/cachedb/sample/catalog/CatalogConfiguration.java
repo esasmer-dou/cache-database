@@ -4,11 +4,9 @@ import com.example.cachedb.sample.domain.ProductEntity;
 import com.example.cachedb.sample.domain.ProductEntityCacheBinding;
 import com.reactor.cachedb.spring.boot.snapshot.*;
 import com.reactor.cachedb.starter.CacheDatabase;
-
+import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
-import java.util.List;
 
 @Configuration(proxyBeanMethods = false)
 public class CatalogConfiguration {
@@ -29,21 +27,15 @@ public class CatalogConfiguration {
                         SnapshotIndexSpec.of(
                                 row -> row.category,
                                 row -> Math.max(0, row.stockQuantity - row.reservedQuantity)))
-                .scoped(
-                        SnapshotRootScope.builder()
-                                .source(
-                                        source,
-                                        ids ->
-                                                SnapshotPredicate.inValues(
-                                                        "product_id",
-                                                        ids.stream().map(Long::valueOf).toList()))
-                                .build())
-                .withJsonCodec(CatalogCardJsonCodec.INSTANCE);
+                .scopedBy(source, "product_id", Long::valueOf)
+                .withGeneratedJsonCodec()
+                .withContentReuse();
     }
 
     @Bean
-    TypedSnapshotRepository<Long, CatalogCard> stockCatalogRepository(SnapshotJobs jobs) {
-        return jobs.typedRepository(PLAN, CatalogCard.class, Object::toString);
+    TypedSnapshotRepository<Long, CatalogCard> stockCatalogRepository(
+            SnapshotJobs jobs, SnapshotPlan<ProductEntity, CatalogCard> stockCatalog) {
+        return stockCatalog.bind(jobs.repository(PLAN), Object::toString);
     }
 
     @Bean

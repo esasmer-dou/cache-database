@@ -17,7 +17,16 @@ import com.reactor.cachedb.annotations.CacheRoute;
 import com.reactor.cachedb.annotations.CacheSaveCommand;
 import com.reactor.cachedb.annotations.CacheSoftDelete;
 import com.reactor.cachedb.annotations.CacheVersion;
-
+import java.io.IOException;
+import java.io.Writer;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
 import javax.annotation.processing.Messager;
@@ -38,16 +47,6 @@ import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import javax.tools.StandardLocation;
-import java.io.IOException;
-import java.io.Writer;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
 
 @SupportedAnnotationTypes("com.reactor.cachedb.annotations.CacheEntity")
 public final class CacheEntityProcessor extends AbstractProcessor {
@@ -464,6 +463,10 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             }
         }
 
+        if (persistedFields.size() > 1024) {
+            messager.printMessage(Diagnostic.Kind.ERROR, "A CacheDB entity supports at most 1024 persisted fields", typeElement);
+            return null;
+        }
         return new EntityModel(
                 packageName,
                 simpleName,
@@ -2039,15 +2042,23 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public Map<String, String> columnTypes() {\n");
+        builder.append("            return COLUMN_TYPES;\n");
+        builder.append("        }\n\n");
+        builder.append("        private static final Map<String, String> COLUMN_TYPES = createColumnTypes();\n");
+        builder.append("        private static Map<String, String> createColumnTypes() {\n");
         builder.append("            LinkedHashMap<String, String> columnTypes = new LinkedHashMap<>();\n");
         for (FieldModel field : model.persistedFields()) {
             builder.append("            columnTypes.put(").append(javaStringLiteral(field.columnName())).append(", ")
                     .append(javaStringLiteral(columnTypeName(field))).append(");\n");
         }
-        builder.append("            return columnTypes;\n");
+        builder.append("            return java.util.Collections.unmodifiableMap(columnTypes);\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public Map<String, List<String>> partitionedSortIndexes() {\n");
+        builder.append("            return PARTITIONED_SORT_INDEXES;\n");
+        builder.append("        }\n\n");
+        builder.append("        private static final Map<String, List<String>> PARTITIONED_SORT_INDEXES = createPartitionedSortIndexes();\n");
+        builder.append("        private static Map<String, List<String>> createPartitionedSortIndexes() {\n");
         if (model.partitionedSortIndexes().isEmpty()) {
             builder.append("            return Map.of();\n");
         } else {
@@ -2086,30 +2097,45 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    private static final class Codec implements EntityCodec<").append(model.simpleName()).append("> {\n");
         builder.append("        @Override\n");
         builder.append("        public String toRedisValue(").append(model.simpleName()).append(" entity) {\n");
-        builder.append("            LinkedHashMap<String, String> values = new LinkedHashMap<>();\n");
+        builder.append("            StringBuilder payload = new StringBuilder();\n");
         for (FieldModel field : model.persistedFields()) {
-            builder.append("            values.put(").append(javaStringLiteral(field.columnName())).append(", ")
+            builder.append("            LengthPrefixedPayloadCodec.appendField(payload, ").append(javaStringLiteral(field.columnName().length() + ":" + field.columnName())).append(", ")
                     .append(toStringExpression(accessExpression(model, field), field)).append(");\n");
         }
-        builder.append("            return LengthPrefixedPayloadCodec.encode(values);\n");
+        builder.append("            return payload.toString();\n");
         builder.append("        }\n\n");
         builder.append("        @Override\n");
         builder.append("        public ").append(model.simpleName()).append(" fromRedisValue(String encoded) {\n");
-        builder.append("            Map<String, String> values = LengthPrefixedPayloadCodec.decode(encoded);\n");
+        for (int i = 0; i < model.persistedFields().size(); i++) {
+            builder.append("            String value").append(i).append(" = null;\n");
+        }
+        builder.append("            var cursor = LengthPrefixedPayloadCodec.cursor(encoded);\n");
+        builder.append("            while (cursor.next()) {\n");
+        builder.append("                String column = cursor.name();\n");
+        builder.append("                if (column == null) continue;\n");
+        builder.append("                switch (column) {\n");
+        for (int i = 0; i < model.persistedFields().size(); i++) {
+            builder.append("                    case ").append(javaStringLiteral(model.persistedFields().get(i).columnName()))
+                    .append(" -> value").append(i).append(" = cursor.value();\n");
+        }
+        builder.append("                    default -> { }\n");
+        builder.append("                }\n");
+        builder.append("            }\n");
         if (model.recordType()) {
             builder.append("            return new ").append(model.simpleName()).append("(\n");
             for (int index = 0; index < model.persistedFields().size(); index++) {
                 FieldModel field = model.persistedFields().get(index);
                 builder.append("                    ")
-                        .append(fromStringExpression("values.get(\"" + field.columnName() + "\")", field))
+                        .append(fromStringExpression("value" + index, field))
                         .append(index == model.persistedFields().size() - 1 ? "\n" : ",\n");
             }
             builder.append("            );\n");
         } else {
             builder.append("            ").append(model.simpleName()).append(" entity = new ").append(model.simpleName()).append("();\n");
-            for (FieldModel field : model.persistedFields()) {
+            for (int index = 0; index < model.persistedFields().size(); index++) {
+                FieldModel field = model.persistedFields().get(index);
                 builder.append("            entity.").append(field.fieldName()).append(" = ")
-                        .append(fromStringExpression("values.get(\"" + field.columnName() + "\")", field)).append(";\n");
+                        .append(fromStringExpression("value" + index, field)).append(";\n");
             }
             builder.append("            return entity;\n");
         }

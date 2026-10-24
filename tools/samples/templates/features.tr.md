@@ -1,9 +1,86 @@
-## Çalışan 0.14 Özellik Senaryoları
+## Bildirimsel Katalog Senaryoları
 
-Bu senaryolar yayımlanmış **CacheDB 0.14.0** paketini kullanır. Mevcut sipariş,
+Bu senaryolar **CacheDB 0.15.0** sürümünü kullanır. Mevcut sipariş,
 destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar yalnızca anlatım
 için yazılmış taslaklar değildir; üç sağlayıcıda da derlenen ve test edilen
 örnek kaynak kodlarıdır. Her tam Java bloğunu, üstünde belirtilen dosyaya yerleştirin.
+
+### 0.15 ile Gelen Kolaylıklar
+
+Katalog planı, üretilmiş JSON codec'ini tanım oluşturulurken bir kez bulur.
+`scopedBy`, SQL sorgusunu daraltan kimlik sütununu belirtir; `plan.bind` ise tipli
+Redis okuyucusunu oluşturur. Çalışma anında alan keşfi, kendiliğinden SQL'e geçiş
+veya uygulama açılırken otomatik veri aktarımı yapılmaz.
+Arşiv sorgusunda yinelenen OR gruplarının yerini `@CacheSeek` alır.
+`@CacheJobHandler` eklenen metot için doğrudan çağrı yapan bir işleyici üretilir.
+Komut verisi, üretilmiş bir codec veya açıkça tanımlanmış `CacheValueCodec` kullanmalıdır.
+
+### Stok Aralığı ve Birleştirilen Değişiklik Bildirimleri
+
+Okumaya geçmeden önce aşağıdaki yenileme akışıyla kataloğu hazırlayın.
+Alt ve üst stok sınırları sonuca dahildir. Sıralama önce kullanılabilir stok,
+eşitlik durumunda ise metin biçimindeki ürün kimliğine göre yapılır:
+
+Bu örnekler, 2. bölümdeki tedarikçi aktarımının `tools` kategorisine eklediği
+`9200001` ve `9200002` numaralı ürünleri kullanır. Önce SQL kalıcılığını doğrulayın
+ve katalog yenilemesini tamamlayın. Spring servisinize, derlenen sınıflardaki gibi
+`SnapshotJobs snapshots` ve `TypedSnapshotRepository<Long, CatalogCard> catalog`
+bağımlılıklarını ekleyin.
+
+```java
+var page = catalog.findTypedPage(new SnapshotPageRequest(
+        "tools", 5, 20, WindowRequest.first(25)));
+// Sonraki sayfada page.nextCursor() ile AYNI kategori ve sınırları kullanın.
+// Sınırlı sayıda Redis indeks/veri okuması yapılır. Kayıt yoksa SQL çalıştırılmaz.
+```
+
+Bu sorgunun API karşılığı:
+`GET /api/catalog/categories/tools/available?minimum=5&maximum=20&limit=25`.
+Geçersiz sınırlar 400 yanıtı üretir. Önceki kategori adresi de çalışmaya devam eder.
+
+Tedarikçi işlemi SQL'de kalıcılaştıktan sonra değişen ürün kimliklerini biriktirin:
+
+```java
+snapshots.markDirty(CatalogConfiguration.PLAN, List.of(9200001L, 9200002L, 9200001L));
+// İşleyici tarafında, SQL transaction'ı tamamlandıktan sonra:
+var refreshed = snapshots.flushDirty(CatalogConfiguration.PLAN);
+// Optional.empty(): bekleyen kimlik yoktur. Hatalı yenilemede kimlikler yeniden beklemeye alınır.
+```
+
+Aynı ürün için art arda gelen bildirimler sınırlı bir kümede birleştirilir.
+Yenileme sürerken yeniden bildirilen ürün bir sonraki yenilemede de işlenir.
+Grubu tek işleyici sahiplenir; işleyici kapanırsa sahiplik süresi dolduktan sonra
+başka biri devam edebilir. `batch-rows`, bekleyen ve işlenmekte olan benzersiz
+kimliklerin toplamını sınırlar. Sınır aşılırsa veri sessizce atılmaz; hata verilir.
+Önceden tamamlanmış bir snapshot ve açık bir root scope tanımı gerekir.
+Bir çağrıda girilen kimlik sayısı da, tekrarlar birleştirilmeden önce `batch-rows`
+sınırıyla kontrol edilir.
+Yenileme SQL çalıştırır; GET isteğinin içine gizlenmemelidir.
+Bu bildirimler süreli ipuçlarıdır; kalıcı outbox veya CDC yerine geçmez.
+Kurtarma için dönemsel tam karşılaştırmayı ya da kalıcı değişiklik kaynağını koruyun.
+
+Yalnızca demoda açık olan `POST /api/catalog/dirty`, `{"ids":[9200001,9200002]}` alır ve
+eklenen kimlik sayısıyla 202 döndürür. `POST /api/catalog/dirty/flush` ise 202 ve
+işin takip adresini döndürür. Bu adresi COMPLETED veya FAILED görülene kadar izleyin.
+Bu komutlar, açıkça etkinleştirilen demo profili dışında kapalıdır.
+
+`src/main/java/com/example/cachedb/sample/catalog/CatalogDirtyJobHandler.java`:
+
+```java
+{{CODE:src/main/java/com/example/cachedb/sample/catalog/CatalogDirtyJobHandler.java}}
+```
+
+API pod'larında `client`, SQL hazırlığını yapan pod'larda `worker` profilini kullanın.
+İş yayımlayan executor framework tarafından sağlanır; elle yapılandırma gerekmez.
+Yalnızca yayımlayan pod, işleyici/heartbeat veya snapshot zamanlayıcı iş parçacığı
+başlatmaz. Redis Cluster'da anahtarlar aynı slot'taysa tek atomik script kullanılır.
+Farklı slot'larda kontrollü kuyruğa alma ve hata halinde temizleme yolu korunur.
+Redis erişilebilir olmalıdır; bu yapı bellekte çalışan kalıcı bir kuyruk değildir.
+
+`withContentReuse()`, JSON diske yazılırken özetini hesaplar. Değişmeyen içerik
+yeniden okunup gönderilmeden paylaşılır. İçerik yayın öncesinde silinirse dosyadaki
+veriyle tekrar denenir. Bu seçenek, SQL hazırlığını ortadan kaldırmaz ve belleğe
+sınırsız veri alma izni vermez.
 
 | Gerçek ihtiyaç | Kullanılan yapı | Gösterdiği davranış |
 | --- | --- | --- |
@@ -42,10 +119,10 @@ küçükten büyüğe sıralanır. Eşit stokta ürün kimliğinin metinsel sır
 
 Örneğin POM dosyasında Gson **2.13.2** açıkça sabitlenmiştir. Aksi hâlde Spring
 Boot parent, gerekli `Strictness` sınıfını içermeyen eski Gson sürümünü seçebilir.
-POM'da `cachedb-json`, annotation bağımlılığı ve 0.14.0 processor birlikte bulunur.
+POM'da `cachedb-json`, annotation bağımlılığı ve 0.15.0 processor birlikte bulunur.
 Gson sürüm ayarını kaldırmayın; farklı framework sürümlerini karıştırmayın.
 
-0.14.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
+0.15.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
 zamanı bağımlılıkları şunlardır:
 
 ```xml
@@ -201,17 +278,13 @@ docker compose -f docker-compose.yml -f docker-compose.roles.yml logs worker
 
 Aynı JAR, API'de `demo,client`, işleyicilerde `demo,worker` profiliyle çalışır.
 Worker profili `web-application-type=none` kullanır; REST dinleyicisi açmaz.
+Ayrıca `spring.main.keep-alive=true` ayarı bulunur. Arka plan havuzları daemon
+iş parçacıkları kullanır; web sunucusu olmayan JVM'in kendiliğinden kapanmaması
+için uygulama yaşam döngüsü bu ayarla açıkça korunur.
 Entity tanımları, JSON codec'leri, Redis, SQL ve iş tanımları ortaktır.
-0.14.0'da worker otomatik kurulumu, client için iş yürütücüsü oluşturmaz.
-Örnek bu nedenle public API üzerinden yalnızca kuyruğa gönderim yapan bean'i
-açıkça tanımlar. Sondaki `false`, iş tüketimini kapatır. Client profilinde demo
-iş endpoint'lerini açıyorsanız bu tanımı kaldırmayın.
-
-`src/main/java/com/example/cachedb/sample/catalog/ClientJobSubmissionConfiguration.java`:
-
-```java
-{{CODE:src/main/java/com/example/cachedb/sample/catalog/ClientJobSubmissionConfiguration.java}}
-```
+0.15.0'da otomatik yapılandırma, `CLIENT_ONLY` için yalnızca iş yayımlayan
+executor'ı da sağlar. Tanımlı komutları kabul eder; işleri tüketmez ve boşta
+işleyici/heartbeat iş parçacığı başlatmaz. Ek yapılandırma sınıfı gerekmez.
 
 Bu yerel örnekte her uygulama konteyneri **2 CPU / 768 MiB** ile sınırlıdır.
 Bu değerler ölçülmüş üretim kapasitesi önerisi değil, örnek çalışma sınırlarıdır.
@@ -264,7 +337,7 @@ endpoint'i olarak sunulmaz. Kalıcı `cachedb_write_fence` tablosunu koruyun;
 sağlayıcı migration'ı ve kontrollü yükseltme rehberini uygulayın.
 
 `postman/cache-database-{{PROVIDER}}-catalog.postman_collection.json` dosyasını içe
-aktarın. **16 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed gerekmez.
+aktarın. **23 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed gerekmez.
 Akış; ilk süre sınırlı bekleme yeterli değilse yalnızca aynı teslimatı tekrar
 göndererek SQL kalıcılığını, aynı receipt ile tekrarı, değişen içeriğin reddini,
 snapshot yayınını, Türkçe metin/ondalık sayıyı, tek nesilden okumayı, sayfalamayı
@@ -290,3 +363,11 @@ Bu aracı üretim veritabanına bağlamayın.
 `-SplitRoles` seçeneği, yerel şemayı hazırlayıp hazırlık JVM'ini durdurur; aynı
 koleksiyonu bir API konteyneri ve **iki worker konteyneri** üzerinde çalıştırır.
 Örneklerin CI hattı bu modu kullanır; konteyner logları test kanıtına eklenir.
+
+Ayrı sunulan 59 istekli iş senaryoları koleksiyonu, kabul edilen her arka plan
+işinden sonra kayıtlı durum isteğini otomatik sorgular ve tamamlanınca sıradaki
+isteğe geçer. Bekleme en fazla 30 saniye veya 150 denemedir. Her yanıtın HTTP
+kodu doğrulanır; başarısız işten sonra okumaya devam edilmez. HTTP yük kontrolünden
+hemen önce katalog açıkça yenilenmelidir. `warn-age` süresinden sonra görülen
+`STALE_WARNING`, verinin yaşıyla ilgili bilinçli bir uyarıdır; kaydın bulunamadığı
+veya sistemin kendiliğinden SQL'e geçmesi gerektiği anlamına gelmez.

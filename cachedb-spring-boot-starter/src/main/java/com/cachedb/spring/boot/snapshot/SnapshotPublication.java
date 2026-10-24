@@ -12,8 +12,12 @@ final class SnapshotPublication {
             if redis.call('GET',KEYS[1]) ~= ARGV[1] then return 0 end
             for i=5,#ARGV,6 do
               local content=tonumber(ARGV[i+4])
+              if content > 0 and ARGV[i+1] == '' and redis.call('EXISTS',KEYS[content]) == 0 then return -1 end
+            end
+            for i=5,#ARGV,6 do
+              local content=tonumber(ARGV[i+4])
               if content > 0 then
-                redis.call('SET',KEYS[content],ARGV[i+1],'NX','PX',ARGV[2])
+                if ARGV[i+1] ~= '' then redis.call('SET',KEYS[content],ARGV[i+1],'NX','PX',ARGV[2]) end
                 redis.call('PEXPIRE',KEYS[content],ARGV[2])
                 redis.call('HSET',KEYS[2],ARGV[i],ARGV[i+5])
                 redis.call('SADD',KEYS[6],ARGV[i+5])
@@ -43,6 +47,12 @@ final class SnapshotPublication {
             boolean reuse,
             List<SnapshotSpool.Entry> entries,
             java.util.function.Function<SnapshotSpool.Entry, String> payload) {
+        return batch(prefix, generation, lock, owner, retention, reuse, entries, payload, Set.of());
+    }
+
+    static Batch batch(String prefix, String generation, String lock, String owner, long retention,
+            boolean reuse, List<SnapshotSpool.Entry> entries,
+            java.util.function.Function<SnapshotSpool.Entry, String> payload, Set<String> availableDigests) {
         List<String> keys =
                 new ArrayList<>(
                         List.of(
@@ -62,8 +72,9 @@ final class SnapshotPublication {
                                 generation));
         Map<String, Integer> slots = new HashMap<>();
         for (var entry : entries) {
-            String json = payload.apply(entry);
-            String digest = reuse ? digest(entry.id() + "\u0000" + json) : "";
+            String json = reuse && entry.contentDigest() != null && availableDigests.contains(entry.contentDigest())
+                    ? "" : payload.apply(entry);
+            String digest = reuse ? entry.contentDigest() != null ? entry.contentDigest() : digest(entry.id() + "\u0000" + json) : "";
             int index =
                     entry.partition() == null
                             ? 0
@@ -91,11 +102,12 @@ final class SnapshotPublication {
     }
 
     static String digest(String text) {
+        return HexFormat.of().formatHex(sha256().digest(text.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    static MessageDigest sha256() {
         try {
-            return HexFormat.of()
-                    .formatHex(
-                            MessageDigest.getInstance("SHA-256")
-                                    .digest(text.getBytes(StandardCharsets.UTF_8)));
+            return MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException failure) {
             throw new IllegalStateException("SHA-256 unavailable", failure);
         }

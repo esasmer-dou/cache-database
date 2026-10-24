@@ -7,12 +7,10 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
-
-import org.springframework.stereotype.Component;
-import org.springframework.web.filter.OncePerRequestFilter;
-
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 /** Bound command bodies before Jackson materializes their arrays, including chunked requests. */
 @Component
@@ -23,7 +21,8 @@ public final class CatalogRequestSizeFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI().substring(request.getContextPath().length());
         return !"POST".equals(request.getMethod())
-                || !(path.equals("/api/catalog/imports") || path.equals("/api/catalog/refresh"));
+                || !(path.equals("/api/catalog/imports") || path.equals("/api/catalog/refresh")
+                        || path.equals("/api/catalog/dirty"));
     }
 
     @Override

@@ -27,12 +27,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MssqlMigrationPlannerSqlServerTest {
 
-    private static final String JDBC_URL = System.getProperty(
+    private static final String JDBC_URL = ProviderTestEnvironment.property(
             "cachedb.it.mssql.url",
             "jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true"
     );
-    private static final String JDBC_USER = System.getProperty("cachedb.it.mssql.user", "sa");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.mssql.password", "YourStrong!Passw0rd");
+    private static final String JDBC_USER = ProviderTestEnvironment.property("cachedb.it.mssql.user", "sa");
+    private static final String JDBC_PASSWORD = ProviderTestEnvironment.property("cachedb.it.mssql.password", "YourStrong!Passw0rd");
     private static final int VOLUME_CUSTOMER_COUNT = Integer.getInteger("cachedb.it.mssql.migrationCustomers", 200);
     private static final int VOLUME_ORDERS_PER_CUSTOMER = Integer.getInteger("cachedb.it.mssql.migrationOrdersPerCustomer", 50);
     private static final int VOLUME_HOT_WINDOW_PER_ROOT = Integer.getInteger("cachedb.it.mssql.migrationHotWindowPerRoot", 25);

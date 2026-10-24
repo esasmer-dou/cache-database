@@ -8,10 +8,10 @@ import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.registry.EntityRegistry;
+import com.reactor.cachedb.jdbc.AbstractJdbcWriteBehindFlusher;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
 import com.reactor.cachedb.jdbc.JdbcWriteFence;
 import com.reactor.cachedb.jdbc.VersionGuardedWriteSupport;
-
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -19,20 +19,16 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-
 import javax.sql.DataSource;
 
-public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher {
+public final class OracleWriteBehindFlusher extends AbstractJdbcWriteBehindFlusher implements FailureClassifyingFlusher {
     private static final int ORA_UNIQUE_CONSTRAINT = 1;
 
-    private final DataSource dataSource;
-    private final EntityRegistry entityRegistry;
     private final OracleDatabaseDialect dialect = new OracleDatabaseDialect();
     private final OracleFailureClassifier failureClassifier = new OracleFailureClassifier();
     private final StoragePerformanceCollector performanceCollector;
     private final OracleWriteBehindOptions options;
     private final int transactionBatchSize;
-    private final JdbcWriteFence writeFence;
 
     public OracleWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry) {
         this(
@@ -62,16 +58,10 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
             WriteBehindConfig config,
             StoragePerformanceCollector performanceCollector,
             OracleWriteBehindOptions options) {
-        this.dataSource = java.util.Objects.requireNonNull(dataSource, "dataSource");
-        this.entityRegistry = java.util.Objects.requireNonNull(entityRegistry, "entityRegistry");
+        super(dataSource, java.util.Objects.requireNonNull(entityRegistry, "entityRegistry"), JdbcWriteFence.Provider.ORACLE,
+                (options == null ? OracleWriteBehindOptions.defaults() : options).queryTimeoutSeconds(), config);
         this.performanceCollector = performanceCollector;
         this.options = options == null ? OracleWriteBehindOptions.defaults() : options;
-        this.writeFence =
-                new JdbcWriteFence(
-                        dataSource,
-                        entityRegistry,
-                        JdbcWriteFence.Provider.ORACLE,
-                        this.options.queryTimeoutSeconds());
         WriteBehindConfig resolvedConfig = config == null ? WriteBehindConfig.defaults() : config;
         this.transactionBatchSize = Math.max(1, resolvedConfig.maxFlushBatchSize());
     }
@@ -169,47 +159,18 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
     private void executeInTransaction(
             Connection connection, List<QueuedWriteOperation> operations, boolean preserveOrder)
             throws SQLException {
-        boolean previousAutoCommit = connection.getAutoCommit();
-        int previousIsolation = connection.getTransactionIsolation();
-        Exception primaryFailure = null;
-        connection.setAutoCommit(false);
-        try {
-            connection.setTransactionIsolation(options.transactionIsolation());
-            operations = writeFence.filter(connection, operations);
+        inTransaction(connection, operations, options.transactionIsolation(), null, accepted -> {
             if (preserveOrder) {
-                for (var operation : operations)
-                    executeGroup(
-                            connection, StatementKey.of(operation, dialect), List.of(operation));
-                connection.commit();
+                for (var operation : accepted) {
+                    executeGroup(connection, StatementKey.of(operation, dialect), List.of(operation));
+                }
                 return;
             }
-            LinkedHashMap<StatementKey, List<QueuedWriteOperation>> groups = new LinkedHashMap<>();
-            for (QueuedWriteOperation operation : operations) {
-                StatementKey key = StatementKey.of(operation, dialect);
-                groups.computeIfAbsent(key, ignored -> new ArrayList<>()).add(operation);
-            }
-            for (Map.Entry<StatementKey, List<QueuedWriteOperation>> group : groups.entrySet()) {
+            var groups = groupOperations(accepted, operation -> StatementKey.of(operation, dialect));
+            for (var group : groups.entrySet()) {
                 executeGroup(connection, group.getKey(), group.getValue());
             }
-            connection.commit();
-        } catch (SQLException | RuntimeException failure) {
-            primaryFailure = failure;
-            try {
-                connection.rollback();
-            } catch (SQLException rollbackFailure) {
-                failure.addSuppressed(rollbackFailure);
-            }
-            throw failure;
-        } finally {
-            try {
-                restoreConnection(connection, previousIsolation, previousAutoCommit);
-            } catch (SQLException restoreFailure) {
-                if (primaryFailure == null) {
-                    throw restoreFailure;
-                }
-                primaryFailure.addSuppressed(restoreFailure);
-            }
-        }
+        });
     }
 
     private void executeGroup(
@@ -279,28 +240,7 @@ public final class OracleWriteBehindFlusher implements FailureClassifyingFlusher
         }
     }
 
-    private void restoreConnection(
-            Connection connection, int previousIsolation, boolean previousAutoCommit)
-            throws SQLException {
-        SQLException failure = null;
-        try {
-            connection.setTransactionIsolation(previousIsolation);
-        } catch (SQLException exception) {
-            failure = exception;
-        }
-        try {
-            connection.setAutoCommit(previousAutoCommit);
-        } catch (SQLException exception) {
-            if (failure == null) {
-                failure = exception;
-            } else {
-                failure.addSuppressed(exception);
-            }
-        }
-        if (failure != null) {
-            throw failure;
-        }
-    }
+
 
     private boolean isUniqueConstraintViolation(SQLException exception) {
         SQLException current = exception;

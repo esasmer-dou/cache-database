@@ -36,6 +36,7 @@ class CacheDistributedJobExecutorTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation") // Explicit compatibility coverage for the legacy local task API.
     void aSecondPodCanReadTheJobResultFromRedis() throws InterruptedException {
         JedisPooled jedis = sharedRedisMock();
         CacheDbSpringProperties.JobExecutorProperties properties = properties();
@@ -53,6 +54,7 @@ class CacheDistributedJobExecutorTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation") // The deprecated local task API must retain its bounded queue contract.
     void rejectsExcessWorkInsteadOfGrowingAnUnboundedQueue() throws InterruptedException {
         JedisPooled jedis = sharedRedisMock();
         CacheDbSpringProperties.JobExecutorProperties properties = properties();

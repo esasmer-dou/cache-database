@@ -1,17 +1,15 @@
 package com.example.cachedb.sample.catalog;
 
+import com.reactor.cachedb.annotations.CacheJobHandler;
 import com.reactor.cachedb.spring.boot.CacheDistributedJobContext;
 import com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition;
-import com.reactor.cachedb.spring.boot.CacheDistributedJobHandler;
 import com.reactor.cachedb.spring.boot.snapshot.SnapshotJobs;
-
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
 @ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
-public final class CatalogRefreshJobHandler
-        implements CacheDistributedJobHandler.Typed<CatalogRefreshCommand> {
+public final class CatalogRefreshJobHandler {
     public static final CacheDistributedJobDefinition<CatalogRefreshCommand> DEFINITION =
             CacheDistributedJobDefinition.of("sample.catalog.refresh", CatalogRefreshCommand.class);
     private final SnapshotJobs snapshots;
@@ -20,13 +18,12 @@ public final class CatalogRefreshJobHandler
         this.snapshots = snapshots;
     }
 
-    @Override
     public CacheDistributedJobDefinition<CatalogRefreshCommand> definition() {
         return DEFINITION;
     }
 
-    @Override
-    public Object execute(CatalogRefreshCommand command, CacheDistributedJobContext context) {
+    @CacheJobHandler("sample.catalog.refresh")
+    public Object execute(CacheDistributedJobContext context, CatalogRefreshCommand command) {
         var result =
                 command.ids().isEmpty()
                         ? snapshots.refresh(CatalogConfiguration.PLAN, true)

@@ -5,12 +5,11 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 import com.reactor.cachedb.core.codec.JsonArrayCodec;
-
 import java.io.*;
 import java.util.*;
 
 /** Token streaming only: no Gson databinding, reflection, registries or runtime type discovery. */
-public abstract class StreamingJsonCodec<V> implements JsonArrayCodec<V> {
+public abstract class StreamingJsonCodec<V> implements JsonArrayCodec<V>, com.reactor.cachedb.core.codec.CacheValueCodec<V> {
     private final JsonCodecLimits limits;
 
     protected StreamingJsonCodec() {
@@ -25,6 +24,25 @@ public abstract class StreamingJsonCodec<V> implements JsonArrayCodec<V> {
 
     public abstract void writeValue(JsonWriter writer, V value, JsonCodecLimits limits)
             throws IOException;
+
+    public final V decodeValue(String json) throws IOException {
+        Objects.requireNonNull(json, "json");
+        if (json.length() > limits.maxDocumentChars()) throw new IOException("JSON document character budget exceeded");
+        try (JsonReader reader = new JsonReader(new StringReader(json))) {
+            reader.setStrictness(Strictness.STRICT);
+            reader.setNestingLimit(limits.maxDepth());
+            V result = readValue(reader, limits);
+            if (reader.peek() != JsonToken.END_DOCUMENT) throw new IOException("Trailing JSON content");
+            return result;
+        } catch (RuntimeException failure) { throw new IOException("Invalid JSON value", failure); }
+    }
+
+    public final String encodeValue(V value) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        encodeArray(List.of(Objects.requireNonNull(value)), buffer);
+        String array = buffer.toString(java.nio.charset.StandardCharsets.UTF_8);
+        return array.substring(1, array.length() - 1);
+    }
 
     @Override
     public final List<V> decodeArray(String json) throws IOException {

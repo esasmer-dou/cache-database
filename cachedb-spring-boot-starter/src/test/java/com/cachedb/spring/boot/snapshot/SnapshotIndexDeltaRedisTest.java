@@ -5,19 +5,16 @@ import static org.assertj.core.api.Assertions.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reactor.cachedb.core.model.SourceMapping;
 import com.reactor.cachedb.core.repository.WindowRequest;
-
+import java.time.Clock;
+import java.util.*;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-
 import redis.clients.jedis.DefaultJedisClientConfig;
 import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.JedisCluster;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.ScanParams;
-
-import java.time.Clock;
-import java.util.*;
 
 @EnabledIfSystemProperty(named = "cachedb.snapshot.redis", matches = "true")
 class SnapshotIndexDeltaRedisTest {
@@ -33,7 +30,7 @@ class SnapshotIndexDeltaRedisTest {
     void setup() throws Exception {
         redis =
                 new JedisPooled(
-                        "redis://127.0.0.1:"
+                        "redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1") + ":"
                                 + Integer.getInteger("cachedb.snapshot.redis.port", 16383));
         sql = new JdbcDataSource();
         sql.setURL("jdbc:h2:mem:" + namespace + ";DB_CLOSE_DELAY=-1");
@@ -79,6 +76,19 @@ class SnapshotIndexDeltaRedisTest {
                         namespace,
                         List.of(plan),
                         Map.of());
+    }
+
+    @Test
+    void scoreRangeIsAppliedBeforePayloadLoadingAndMatchesFixturePagination() {
+        jobs.refresh("catalog", true);
+        var repository = jobs.repository("catalog");
+        var page = repository.findPage(new SnapshotPageRequest("customer", 1, 1, WindowRequest.first(1)));
+        assertThat(page.items()).extracting(SnapshotValue::id).containsExactly("a");
+        var next = repository.findPage(new SnapshotPageRequest("customer", 1, 1, WindowRequest.after(page.nextCursor(), 1)));
+        assertThat(next.items()).extracting(SnapshotValue::id).containsExactly("b");
+        assertThat(next.nextCursor()).isNull();
+        assertThatThrownBy(() -> repository.findPage(new SnapshotPageRequest("customer", 1, 2,
+                WindowRequest.after(page.nextCursor(), 1)))).isInstanceOf(IllegalArgumentException.class);
     }
 
     void execute(String command) throws Exception {
@@ -205,6 +215,7 @@ class SnapshotIndexDeltaRedisTest {
                         .socketTimeoutMillis(5000)
                         .hostAndPortMapper(
                                 address ->
+                                        System.getProperty("cachedb.redis.cluster.host") != null ? address :
                                         new HostAndPort(
                                                 "127.0.0.1",
                                                 address.getPort() < 10000
@@ -213,7 +224,7 @@ class SnapshotIndexDeltaRedisTest {
                         .build();
         try (var cluster =
                 new com.reactor.cachedb.redis.JedisClusterOperations(
-                        new JedisCluster(Set.of(new HostAndPort("127.0.0.1", 17001)), config))) {
+                        new JedisCluster(Set.of(new HostAndPort(System.getProperty("cachedb.redis.cluster.host", "127.0.0.1"), Integer.getInteger("cachedb.redis.cluster.port", 17001))), config))) {
             jobs.close();
             jobs =
                     new SnapshotJobs(

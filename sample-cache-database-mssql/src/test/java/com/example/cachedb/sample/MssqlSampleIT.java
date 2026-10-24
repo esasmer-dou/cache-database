@@ -1,5 +1,10 @@
 package com.example.cachedb.sample;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.example.cachedb.sample.repository.OrderRepository;
 import com.example.cachedb.sample.repository.OrderRepositoryCacheDbRoutes;
 import com.reactor.cachedb.core.repository.WindowRequest;
@@ -7,11 +12,18 @@ import com.reactor.cachedb.core.route.HotRoutePopulation;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestConfiguration;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestProbe;
 import com.reactor.cachedb.starter.CacheWarmTarget;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -19,30 +31,14 @@ import org.springframework.http.MediaType;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mssqlserver.MSSQLServerContainer;
 import org.testcontainers.utility.DockerImageName;
 
-import java.math.BigDecimal;
-import java.net.URI;
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.function.BooleanSupplier;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-@Testcontainers
 @ActiveProfiles("demo")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -50,7 +46,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class MssqlSampleIT {
     private static final String EXPECTED_PROVIDER = "mssql";
 
-    @Container
     static final MSSQLServerContainer SQLSERVER = new MSSQLServerContainer(DockerImageName.parse(
             "mcr.microsoft.com/mssql/server:2022-latest@sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56"
     ).asCompatibleSubstituteFor("mcr.microsoft.com/mssql/server"))
@@ -58,7 +53,6 @@ class MssqlSampleIT {
             .withPassword("YourStrong!Passw0rd")
             .withInitScript("mssql-snapshot-init.sql");
 
-    @Container
     static final GenericContainer<?> REDIS = new GenericContainer<>(
             "redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232"
     )
@@ -68,6 +62,9 @@ class MssqlSampleIT {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
+        if (com.example.cachedb.sample.ExternalSampleFixtures.configure(registry)) return;
+        SQLSERVER.start();
+        REDIS.start();
         registry.add("spring.datasource.url", () -> "jdbc:sqlserver://" + SQLSERVER.getHost() + ":"
                 + SQLSERVER.getMappedPort(1433)
                 + ";databaseName=cachedb_sample;encrypt=false;trustServerCertificate=true;loginTimeout=10");
@@ -75,6 +72,14 @@ class MssqlSampleIT {
         registry.add("spring.datasource.password", SQLSERVER::getPassword);
         registry.add("cachedb.redis.uri", () -> "redis://" + REDIS.getHost() + ":" + REDIS.getMappedPort(6379));
         registry.add("cachedb.admin.enabled", () -> false);
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void stopOwnedFixtures() {
+        if (System.getenv("CACHEDB_TEST_NAMESPACE") == null) {
+            REDIS.stop();
+            SQLSERVER.stop();
+        }
     }
 
     @LocalServerPort

@@ -41,22 +41,23 @@ application's own staging topology.
 | Release information | Value |
 | --- | --- |
 | Latest published release | [GitHub release](https://github.com/esasmer-dou/cache-database/releases/latest) |
-| Repository version | `0.14.0` |
+| Repository version | `0.15.0` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local provider test topology | Redis 8, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
 
-## Current Release: 0.14.0
+## Current Release: 0.15.0
 
-`0.14.0` adds generated Jackson-free JSON codecs, state-aware typed snapshots,
-client/worker deployment roles and infrastructure-free test fixtures. Durable SQL
-version metadata prevents stale writes from recreating a physically deleted row.
-See the [v0.14.0 release notes](docs/releases/v0.14.0.md) and
+`0.15.0` adds declarative scope/binding and keyset seek, generated method job
+adapters, bounded score-range reads and coalesced snapshot refresh. Direct payload
+codecs, batched Redis access tracking, diff-aware indexes and streaming content
+digests reduce repeated work. Existing SQL durability and delete fences remain intact.
+See the [v0.15.0 release notes](docs/releases/v0.15.0.md) and
 [bounded runtime operations](docs/bounded-runtime-operations.md) for contracts and
 upgrade precautions.
 
-Keep the BOM, annotation processor and provider starter at `0.14.0`. Recompile
+Keep the BOM, annotation processor and provider starter at `0.15.0`. Recompile
 generated bindings, provision the [durable version metadata](docs/durable-write-fences.md)
 and drain old workers before upgrading. A framework package does not certify an
 application's production routes, Oracle Data Guard or SQL Server Always On topology.
@@ -114,7 +115,7 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the current release?" | [v0.14.0 Release Notes](docs/releases/v0.14.0.md) |
+| "What changed in the current release?" | [v0.15.0 Release Notes](docs/releases/v0.15.0.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "What is the Oracle provider contract?" | [Oracle Provider](docs/oracle-provider.md) |
@@ -165,13 +166,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.14.0` is an
+Keep `cachedb.version` aligned with the release you use. Version `0.15.0` is an
 immutable release available from the anonymous CacheDB Maven repository and
 the GitHub Release bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.14.0</cachedb.version>
+    <cachedb.version>0.15.0</cachedb.version>
     <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -389,7 +390,7 @@ Behavior:
 
 - `save` writes the entity to Redis when its policy admits it.
 - Durable persistence is sent to the selected SQL write-behind path.
-- For a 0.14.0 upgrade, provision the separate [durable version table](docs/durable-write-fences.md) before starting upgraded workers; business tables are unchanged.
+- For a 0.15.0 upgrade, provision the separate [durable version table](docs/durable-write-fences.md) before starting upgraded workers; business tables are unchanged.
 - `detail` is Redis-only; `NOT_CACHED` does not mean the SQL row is absent.
 - If the entity does not satisfy the hot policy, it may be rejected or evicted
   from Redis.

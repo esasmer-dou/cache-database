@@ -4,22 +4,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reactor.cachedb.core.codec.JsonArrayCodec;
 import com.reactor.cachedb.redis.JedisPooledOperations;
 import com.reactor.cachedb.redis.RedisClientOperations;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.context.SmartLifecycle;
-
-import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.params.SetParams;
-
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Clock;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-
 import javax.sql.DataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.SmartLifecycle;
+import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.params.SetParams;
 
 /** Framework-owned bounded snapshot preparation, coordination and generation publication. */
 public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, AutoCloseable {
@@ -70,8 +66,8 @@ return 1
     private final ObjectMapper mapper;
     private final Clock clock;
     private final Map<String, Job> jobs = new LinkedHashMap<>();
-    private final ScheduledExecutorService scheduler;
-    private final ScheduledExecutorService heartbeat;
+    private volatile ScheduledExecutorService scheduler;
+    private volatile ScheduledExecutorService heartbeat;
     private final List<ScheduledFuture<?>> schedules = new ArrayList<>();
     private volatile boolean running;
     private volatile boolean closed;
@@ -169,18 +165,17 @@ return 1
             if (jobs.putIfAbsent(plan.name(), job) != null)
                 throw new IllegalArgumentException("Duplicate snapshot plan");
         }
-        scheduler =
-                Executors.newScheduledThreadPool(
-                        Math.max(1, Math.min(4, plans.size())),
-                        task -> new Thread(task, "cachedb-snapshot-schedule"));
-        heartbeat =
-                Executors.newScheduledThreadPool(
-                        Math.max(1, Math.min(4, plans.size())),
-                        task -> {
-                            Thread thread = new Thread(task, "cachedb-snapshot-lease");
-                            thread.setDaemon(true);
-                            return thread;
-                        });
+    }
+
+    private synchronized ScheduledExecutorService heartbeat() {
+        if (closed) throw new IllegalStateException("Snapshot jobs are closed");
+        if (heartbeat == null) heartbeat = Executors.newScheduledThreadPool(
+                Math.max(1, Math.min(4, jobs.size())), task -> {
+                    Thread thread = new Thread(task, "cachedb-snapshot-lease");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+        return heartbeat;
     }
 
     public SnapshotRepository repository(String name) {
@@ -318,7 +313,7 @@ return 1
         AtomicBoolean active = new AtomicBoolean(true);
         long renewMillis = Math.max(250, job.settings.leaseDuration().toMillis() / 3);
         var renewal =
-                heartbeat.scheduleAtFixedRate(
+                heartbeat().scheduleAtFixedRate(
                         () -> {
                             boolean failed;
                             try {
@@ -388,9 +383,16 @@ return 1
                                 job.plan.contentReuse(),
                                 rootIds,
                                 spool,
-                                check);
+                                check,
+                                availableContent(job, spool.entries()));
                 check.run();
                 Object applied = redis.eval(SnapshotDelta.APPLY, delta.keys(), delta.arguments());
+                if (Long.valueOf(-1L).equals(applied)) {
+                    check.run();
+                    delta = SnapshotDelta.batch(job.prefix, lock, owner, expectedActive, sourceAt,
+                            job.plan.contentReuse(), rootIds, spool, check);
+                    applied = redis.eval(SnapshotDelta.APPLY, delta.keys(), delta.arguments());
+                }
                 if (!Long.valueOf(rootIds.size()).equals(applied))
                     throw new IllegalStateException("Partial refresh ownership or generation lost");
                 return new SnapshotRefreshResult(
@@ -525,6 +527,28 @@ return 1
             int start,
             int count,
             Runnable check) {
+        return stage(job, spool, lock, owner, generation, start, count, check,
+                availableContent(job, spool.entries().subList(start, start + count)));
+    }
+
+    private Set<String> availableContent(Job job, List<SnapshotSpool.Entry> entries) {
+        if (!job.plan.contentReuse()) return Set.of();
+        Map<String, redis.clients.jedis.Response<Boolean>> responses = new LinkedHashMap<>();
+        try (var pipeline = redis.pipeline()) {
+            for (var entry : entries) {
+                String digest = entry.contentDigest();
+                if (digest != null && !responses.containsKey(digest))
+                    responses.put(digest, pipeline.exists(job.prefix + ":content:" + digest));
+            }
+            pipeline.sync();
+        }
+        Set<String> available = new HashSet<>();
+        responses.forEach((digest, response) -> { if (Boolean.TRUE.equals(response.get())) available.add(digest); });
+        return available;
+    }
+
+    private Object stage(Job job, SnapshotSpool spool, String lock, String owner, String generation,
+            int start, int count, Runnable check, Set<String> available) {
         var batch =
                 SnapshotPublication.batch(
                         job.prefix,
@@ -542,8 +566,13 @@ return 1
                             } catch (IOException failure) {
                                 throw new UncheckedIOException(failure);
                             }
-                        });
-        return redis.eval(SnapshotPublication.STAGE, batch.keys(), batch.arguments());
+                        }, available);
+        check.run();
+        Object result = redis.eval(SnapshotPublication.STAGE, batch.keys(), batch.arguments());
+        if (Long.valueOf(-1L).equals(result) && !available.isEmpty()) {
+            return stage(job, spool, lock, owner, generation, start, count, check, Set.of());
+        }
+        return result;
     }
 
     private void clean(Job job, String generation) {
@@ -612,11 +641,29 @@ return 1
         return result;
     }
 
+    public int markDirty(String name, Collection<?> rootIds) {
+        Job job = job(name);
+        if (job.plan.rootScope() == null) throw new IllegalStateException("Dirty roots require an explicit root scope");
+        return new SnapshotDirtyRoots(redis, job.prefix, job.settings).mark(rootIds);
+    }
+
+    public Optional<SnapshotManifest> flushDirty(String name) {
+        Job job = job(name);
+        if (job.plan.rootScope() == null) throw new IllegalStateException("Dirty roots require an explicit root scope");
+        return new SnapshotDirtyRoots(redis, job.prefix, job.settings).flush(name, ids -> refreshRoots(name, ids));
+    }
+
     @Override
     public synchronized void start() {
         if (!schedulingEnabled) return;
         if (closed) throw new IllegalStateException("Snapshot jobs are closed");
         if (running) return;
+        if (jobs.values().stream().anyMatch(job -> job.settings.enabled()))
+            scheduler = Executors.newScheduledThreadPool(Math.max(1, Math.min(4, jobs.size())), task -> {
+                Thread thread = new Thread(task, "cachedb-snapshot-schedule");
+                thread.setDaemon(true);
+                return thread;
+            });
         running = true;
         for (Job job : jobs.values())
             if (job.settings.enabled()) {
@@ -659,8 +706,8 @@ return 1
                 if (job.worker != null) job.worker.interrupt();
             }
         for (var future : schedules) future.cancel(true);
-        scheduler.shutdownNow();
-        heartbeat.shutdownNow();
+        if (scheduler != null) scheduler.shutdownNow();
+        if (heartbeat != null) heartbeat.shutdownNow();
     }
 
     private static final class Job {

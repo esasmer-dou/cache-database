@@ -30,12 +30,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class OracleMigrationPlannerTest {
-    private static final String JDBC_URL = System.getProperty(
+    private static final String JDBC_URL = ProviderTestEnvironment.property(
             "cachedb.it.oracle.url",
             "jdbc:oracle:thin:@//127.0.0.1:15211/FREEPDB1"
     );
-    private static final String JDBC_USER = System.getProperty("cachedb.it.oracle.user", "cachedb");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.oracle.password", "CacheDbOracle123");
+    private static final String JDBC_USER = ProviderTestEnvironment.property("cachedb.it.oracle.user", "cachedb");
+    private static final String JDBC_PASSWORD = ProviderTestEnvironment.property("cachedb.it.oracle.password", "CacheDbOracle123");
 
     @BeforeEach
     void setUp() throws Exception {

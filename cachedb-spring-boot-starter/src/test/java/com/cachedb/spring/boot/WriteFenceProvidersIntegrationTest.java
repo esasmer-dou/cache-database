@@ -14,11 +14,6 @@ import com.reactor.cachedb.oracle.OracleWriteBehindFlusher;
 import com.reactor.cachedb.postgres.PostgresWriteBehindFlusher;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
-
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -28,13 +23,46 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** Real SQL contracts. Requires explicitly enabled, disposable provider fixtures. */
 @EnabledIfSystemProperty(named = "cachedb.snapshot.providers", matches = "true")
 class WriteFenceProvidersIntegrationTest {
     @ParameterizedTest
     @ValueSource(strings = {"postgres", "mssql", "oracle"})
+    void coalescingIsExplicitAndTombstonesWinEqualVersions(String provider) throws Exception {
+        try (Fixture fixture = new Fixture(provider)) {
+            var fence = new JdbcWriteFence(fixture.source, fixture.registry,
+                    JdbcWriteFence.Provider.valueOf(provider.toUpperCase(java.util.Locale.ROOT)),10);
+            fence.initialize();
+            var newest = fixture.operation("coalesced", OperationType.UPSERT,2);
+            var stale = fixture.operation("coalesced", OperationType.UPSERT,1);
+            var tombstone = fixture.operation("coalesced", OperationType.DELETE,2);
+            try (var connection = fixture.source.getConnection()) {
+                connection.setAutoCommit(false);
+                assertThat(fence.filter(connection,List.of(newest,stale,tombstone),true)).containsExactly(tombstone);
+                connection.rollback();
+                assertThat(fence.filter(connection,List.of(newest,stale,tombstone))).containsExactly(newest,tombstone);
+                connection.rollback();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"postgres", "mssql", "oracle"})
     void laterDeleteWaitsForTheOlderBusinessTransactionToCommit(String provider) throws Exception {
+        verifyFenceOwnership(provider,false);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"postgres", "mssql", "oracle"})
+    void coalescedFenceHoldsTheSameBusinessTransactionLock(String provider) throws Exception {
+        verifyFenceOwnership(provider,true);
+    }
+
+    private void verifyFenceOwnership(String provider,boolean coalesce) throws Exception {
         try (Fixture fixture = new Fixture(provider)) {
             var fence =
                     new JdbcWriteFence(
@@ -54,7 +82,7 @@ class WriteFenceProvidersIntegrationTest {
                                             connection,
                                             List.of(
                                                     fixture.operation(
-                                                            "root", OperationType.UPSERT, 2))))
+                                                            "root", OperationType.UPSERT, 2)),coalesce))
                             .hasSize(1);
                     var started = new CountDownLatch(1);
                     deletion =
@@ -302,9 +330,9 @@ class WriteFenceProvidersIntegrationTest {
                                 "jdbc:sqlserver://127.0.0.1:14331;databaseName=cachedb_snapshot;encrypt=false;trustServerCertificate=true";
                         default -> "jdbc:oracle:thin:@//127.0.0.1:15211/FREEPDB1";
                     };
-            config.setJdbcUrl(System.getProperty("cachedb.snapshot." + provider + ".url", url));
+            config.setJdbcUrl(com.reactor.cachedb.spring.boot.TestFixtureSettings.value("cachedb.snapshot." + provider + ".url", url));
             config.setUsername(
-                    System.getProperty(
+                    com.reactor.cachedb.spring.boot.TestFixtureSettings.value(
                             "cachedb.snapshot." + provider + ".user",
                             switch (provider) {
                                 case "postgres" -> "postgres";
@@ -312,7 +340,7 @@ class WriteFenceProvidersIntegrationTest {
                                 default -> "cachedb";
                             }));
             config.setPassword(
-                    System.getProperty(
+                    com.reactor.cachedb.spring.boot.TestFixtureSettings.value(
                             "cachedb.snapshot." + provider + ".password",
                             switch (provider) {
                                 case "postgres" -> "LocalFixture_7p92_test";

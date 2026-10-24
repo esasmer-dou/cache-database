@@ -165,7 +165,7 @@ foreach ($provider in @('postgresql', 'mssql', 'oracle')) {
     $path = "sample-cache-database-$provider/postman/cache-database-$provider-catalog.postman_collection.json"
     $catalog = Read-Collection -RelativePath $path
     $requests = @(Get-Requests -Items @($catalog.item))
-    if ($requests.Count -ne 16) { throw "$provider catalog collection must maintain the documented 16-request flow." }
+    if ($requests.Count -ne 23) { throw "$provider catalog collection must maintain the documented 23-request flow." }
     foreach ($request in $requests) {
         $scripts = ($request.Event | ForEach-Object { @($_.script.exec) }) -join "`n"
         if ($scripts -notmatch 'pm\.test') { throw "Missing catalog assertion: $($request.Name)" }
@@ -176,6 +176,7 @@ if ($catalogContracts.postgresql -cne $catalogContracts.mssql -or
     $catalogContracts.postgresql -cne $catalogContracts.oracle) {
     throw 'Provider catalog Postman contracts differ.'
 }
+& (Join-Path $repoRoot 'tools/samples/sync-business-collection-flow.ps1') -Check
 
 $summary = @"
 # Postman Collection Validation
@@ -187,7 +188,7 @@ $summary = @"
 - Provider request contract parity: passed
 - Warm-before-hot ordering: passed
 - Job completion assertion: passed
-- Catalog requests per provider: 16
+- Catalog requests per provider: 23
 - Catalog assertion presence and provider parity: passed (structural; live runs are separate)
 "@
 $summaryFullPath = Join-Path $repoRoot $SummaryPath
@@ -197,5 +198,5 @@ if (-not (Test-Path -LiteralPath $summaryDirectory)) {
 }
 [System.IO.File]::WriteAllText($summaryFullPath, $summary.Trim() + "`n", [System.Text.UTF8Encoding]::new($false))
 
-Write-Host "Validated $($postgresqlRequests.Count) business requests and 16 catalog requests for each provider."
+Write-Host "Validated $($postgresqlRequests.Count) business requests and 23 catalog requests for each provider."
 Write-Host "Summary: $summaryFullPath"

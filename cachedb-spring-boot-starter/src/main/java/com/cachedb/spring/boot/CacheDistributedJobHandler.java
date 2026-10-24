@@ -10,6 +10,8 @@ public interface CacheDistributedJobHandler<A> {
 
     Class<A> argumentType();
 
+    default com.reactor.cachedb.core.codec.CacheValueCodec<A> argumentCodec() { return null; }
+
     default CacheDistributedJobDefinition<A> definition() {
         return CacheDistributedJobDefinition.of(route(), argumentType());
     }

@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       targetRef:
-        description: Branch, tag, or SHA to publish
+        description: Published stable release tag
         required: false
-        default: main
+        default: v0.15.0
       skipTests:
-        description: Skip tests during package publish
+        description: Compatibility input; published release artifacts are not rebuilt
         required: false
         default: "true"
 
@@ -38,15 +38,42 @@ jobs:
           server-username: GITHUB_ACTOR
           server-password: GITHUB_TOKEN
 
-      - name: Publish Maven artifacts to GitHub Packages
+      - name: Import checksum-verified published release artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ inputs.targetRef }}
+        run: |
+          if ($env:RELEASE_REF -notmatch '^v\d+\.\d+\.\d+$') { throw 'Publish a stable GitHub release first, then select its tag.' }
+          $version = $env:RELEASE_REF.Substring(1)
+          $bundle = "cache-database-$version-github-release.zip"
+          gh release download $env:RELEASE_REF --repo $env:GITHUB_REPOSITORY --pattern $bundle --pattern "$bundle.sha256" --dir target/published-release
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot download the canonical release bundle.' }
+          $path = Join-Path 'target/published-release' $bundle
+          $expected = ((Get-Content -LiteralPath "$path.sha256" -Raw).Trim() -split '\s+')[0]
+          if ($expected -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $expected) { throw 'Release bundle checksum mismatch.' }
+          ./tools/release/import-release-artifacts.ps1 -Version $version -ArchivePath $path
+
+      - name: Publish canonical Maven artifacts to GitHub Packages
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SKIP_TESTS: ${{ inputs.skipTests }}
           PACKAGE_REPOSITORY: ${{ github.repository }}
+          RELEASE_REF: ${{ inputs.targetRef }}
         run: |
-          set -euo pipefail
-          case "$SKIP_TESTS" in true|false) ;; *) echo "skipTests must be true or false"; exit 1;; esac
-          # Keep source/Javadoc attachments without invoking the Central deploy lifecycle.
-          mvn -B -P oss-release "-DskipTests=$SKIP_TESTS" -Dgpg.skip=true \
-            install org.apache.maven.plugins:maven-deploy-plugin:3.1.2:deploy \
-            "-DaltDeploymentRepository=github::https://maven.pkg.github.com/$PACKAGE_REPOSITORY"
+          $version = $env:RELEASE_REF.Substring(1)
+          $url = "https://maven.pkg.github.com/$env:PACKAGE_REPOSITORY"
+          $poms = @('pom.xml', 'cachedb-bom/pom.xml')
+          $poms += Get-ChildItem -Directory -Filter 'cachedb-*' | Where-Object { Test-Path (Join-Path $_.FullName "target/$($_.Name)-$version.jar") } | ForEach-Object { Join-Path $_.Name 'pom.xml' }
+          if ($poms.Count -ne 21) { throw 'Expected the parent, BOM and 19 public modules.' }
+          foreach ($pom in $poms) {
+            $arguments = @('-B', '-ntp', '-N', 'org.apache.maven.plugins:maven-deploy-plugin:3.1.2:deploy-file', "-DrepositoryId=github", "-Durl=$url", "-DpomFile=$pom", '-DgeneratePom=false', '-DretryFailedDeploymentCount=3')
+            $module = Split-Path -Parent $pom
+            if ($pom -eq 'pom.xml' -or $module -eq 'cachedb-bom') {
+              $arguments += "-Dfile=$pom"
+            } else {
+              $arguments += "-Dfile=$module/target/$module-$version.jar", "-Dsources=$module/target/$module-$version-sources.jar", "-Djavadoc=$module/target/$module-$version-javadoc.jar"
+            }
+            & mvn @arguments
+            if ($LASTEXITCODE -ne 0) { throw "Package publication failed: $pom" }
+          }

@@ -3,14 +3,14 @@
 English | [Türkçe](README.tr.md)
 
 [![Oracle provider evidence](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
-[![CacheDB 0.14.0](https://img.shields.io/badge/CacheDB-0.14.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.14.0)
+[![CacheDB 0.15.0](https://img.shields.io/badge/CacheDB-0.15.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.15.0)
 
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and Oracle Database. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in Oracle Database, and
 growing lists use projections instead of full aggregates.
 
-> This release consumes the immutable CacheDB `0.14.0` package from the public
+> This release consumes the immutable CacheDB `0.15.0` package from the public
 > CacheDB Maven repository. It requires no GitHub token and does not require a
 > local CacheDB source checkout.
 
@@ -20,22 +20,22 @@ matching Redis projection, read the active route, and inspect coverage and
 durability signals. The sample does not hide an Oracle Database query behind a Redis
 miss.
 
-## CacheDB 0.14.0 Upgrade
+## CacheDB 0.15.0 Upgrade
 
 The sample POM aligns the BOM, provider starter, annotation processor and doctor
-plugin at `0.14.0`. Rebuild the sample to regenerate its bindings.
+plugin at `0.15.0`. Rebuild the sample to regenerate its bindings.
 The POM also sets `jedis.version=5.2.0`; the Spring Boot parent would otherwise
 select an older driver that lacks the required pipeline API.
 
 - Existing REST, archive, projection and warm routes retain their explicit behavior.
 - Before upgrading existing SQL workers, provision the provider migration for `cachedb_write_fence`, drain old workers and keep version counters intact. This separate metadata table prevents stale replay from recreating a deleted row; business tables are unchanged. See [durable write fences](https://github.com/esasmer-dou/cache-database/blob/main/docs/durable-write-fences.md).
-- Typed snapshots, generated Jackson-free codecs and atomic product imports are runnable catalog scenarios. Separate API/worker profiles are also included. Follow the [runnable 0.14 scenarios](#runnable-014-feature-scenarios).
+- Typed snapshots, generated Jackson-free codecs and atomic product imports are runnable catalog scenarios. Separate API/worker profiles are also included. Follow the [declarative catalog scenarios](#declarative-catalog-scenarios).
 - The strict 50 ms CI target concerns the generated-codec/snapshot probe, including first use. It is not a REST, SQL, network or production SLA; legacy mapper compatibility and full JUnit timings are reported separately.
 - `hotEntityLimit=0` disables entity admission; use `-1` only for a deliberate unbounded count policy. The default remains 1,000.
 - Use `Boolean` for nullable SQL booleans; primitive `boolean` rejects SQL NULL.
 - Atomic catalog imports and indexed snapshot pages have explicit endpoints. Redis Cluster distribution remains an optional framework infrastructure capability; local Compose uses standalone Redis.
 
-Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.14.0.md)
+Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.15.0.md)
 and [bounded operation contracts](https://github.com/esasmer-dou/cache-database/blob/main/docs/bounded-runtime-operations.md)
 before adding those APIs. Package availability does not certify your application's production topology.
 
@@ -49,7 +49,7 @@ before adding those APIs. Package availability does not certify your application
 | Warm existing Oracle Database rows | [Warm Existing Data](#warm-existing-data) |
 | Choose cache limits | [Tuning by Use Case](#tuning-by-use-case) |
 | Exercise every route | [API Catalog](#api-catalog) or [Postman](#postman) |
-| Run typed snapshots, atomic imports and separate workers | [Runnable 0.14 Feature Scenarios](#runnable-014-feature-scenarios) |
+| Run typed snapshots, atomic imports and separate workers | [Declarative Catalog Scenarios](#declarative-catalog-scenarios) |
 | Prove production readiness | [Production Certification](#production-certification) |
 | Prepare a production rollout | [Production Checklist](#production-checklist) |
 | Fix a startup or data-path problem | [Troubleshooting](#troubleshooting) |
@@ -142,7 +142,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.14.0</cachedb.version>
+<cachedb.version>0.15.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -229,7 +229,7 @@ no Maven `settings.xml`, username, or token is required.
 ### 1. Resolve the published CacheDB package
 
 Validate the sample directly. Maven resolves the BOM, starter, annotation
-processor, and doctor plugin anonymously from the immutable `0.14.0` package:
+processor, and doctor plugin anonymously from the immutable `0.15.0` package:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -377,7 +377,7 @@ indexes, stream state, leases, and operational metadata.
 ## Code Walkthrough
 
 The short blocks here are teaching excerpts; their linked files contain the complete source.
-The [runnable 0.14 scenarios](#runnable-014-feature-scenarios) include complete compiled Java files with imports and constructors.
+The [declarative catalog scenarios](#declarative-catalog-scenarios) include complete compiled Java files with imports and constructors.
 
 ### 1. Entity: persistence shape
 
@@ -780,7 +780,7 @@ Run folders in this order:
 For snapshots and atomic imports, use the separate
 `postman/cache-database-oracle-catalog.postman_collection.json` collection.
 It carries its own four-product fixture and assertions. Follow the
-[runnable scenarios](#runnable-014-feature-scenarios) for the automated runner,
+[runnable scenarios](#declarative-catalog-scenarios) for the automated runner,
 API/worker setup, replay rules and expected results.
 
 ## Load Test
@@ -902,12 +902,105 @@ never copy placeholder evidence and mark it as passed.
 - [Production recipes](https://github.com/esasmer-dou/cache-database/blob/main/docs/production-recipes.md)
 
 <!-- BEGIN COMPILED FEATURE EXAMPLES -->
-## Runnable 0.14 Feature Scenarios
+## Declarative Catalog Scenarios
 
-These scenarios use the published **CacheDB 0.14.0** package. Existing commerce,
+These scenarios use **CacheDB 0.15.0**. Existing commerce,
 support, logistics and archive routes are unchanged. Unlike a release-note link,
 the classes below are actual sample sources, compiled and tested for all three
 providers. Each complete Java block belongs at the path printed above it.
+
+### What Changed in 0.15
+
+The stock catalog now resolves its generated codec once at plan construction;
+`scopedBy` declares the SQL ID column, and `plan.bind` creates a typed Redis reader.
+There is no runtime field discovery, automatic SQL fallback or implicit startup import.
+The archive repository uses `@CacheSeek` instead of copying OR groups. A method with
+`@CacheJobHandler` becomes a generated, directly invoked worker adapter; its payload
+must have a generated codec or an explicit `CacheValueCodec` bean.
+
+### Stock Ranges and Coalesced Supplier Events
+
+Prepare the catalog using the refresh flow below before serving reads. A stock
+range is inclusive and sorted by available quantity, then textual product ID:
+
+These examples assume section 2's supplier delivery has durably stored products
+`9200001` and `9200002` in `tools`, followed by a completed catalog refresh.
+In your Spring service, inject `SnapshotJobs snapshots` and
+`TypedSnapshotRepository<Long, CatalogCard> catalog` as in the compiled classes.
+
+```java
+var page = catalog.findTypedPage(new SnapshotPageRequest(
+        "tools", 5, 20, WindowRequest.first(25)));
+// Reuse the SAME category and bounds when continuing with page.nextCursor().
+// This performs bounded Redis index/payload reads. A miss never runs SQL.
+```
+
+`GET /api/catalog/categories/tools/available?minimum=5&maximum=20&limit=25`
+exposes this contract. Invalid bounds return 400. The legacy category URL is unchanged.
+
+When a committed supplier transaction changes a few products, coalesce the IDs:
+
+```java
+snapshots.markDirty(CatalogConfiguration.PLAN, List.of(9200001L, 9200002L, 9200001L));
+// In a worker, after the SQL transaction has committed:
+var refreshed = snapshots.flushDirty(CatalogConfiguration.PLAN);
+// Optional.empty(): no pending roots. Failures requeue the reserved roots.
+```
+
+Repeated marks share a bounded pending set. A root marked DURING a refresh stays
+pending for the next flush. One owner claims the batch; a crashed claim becomes
+recoverable after its lease. `batch-rows` bounds pending plus reserved unique IDs;
+overflow fails explicitly, without silently dropping IDs. A first full snapshot
+and an explicit root scope are required. Each mark call's input is also bounded
+by `batch-rows` before deduplication. Flush performs SQL work and must not run
+on a GET handler. Dirty hints expire and are NOT a durable outbox or CDC guarantee;
+retain periodic full reconciliation or a durable change feed for recovery.
+
+The demo-only `POST /api/catalog/dirty` accepts `{"ids":[9200001,9200002]}` (202, added count).
+`POST /api/catalog/dirty/flush` returns a 202 job and Location; poll that job until
+COMPLETED or FAILED. These commands are disabled outside the opt-in demo profile.
+
+`src/main/java/com/example/cachedb/sample/catalog/CatalogDirtyJobHandler.java`:
+
+```java
+package com.example.cachedb.sample.catalog;
+
+import com.reactor.cachedb.annotations.CacheJobHandler;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition;
+import com.reactor.cachedb.spring.boot.snapshot.SnapshotJobs;
+import java.util.Map;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+/** SQL reconciliation is explicit worker work, never a hidden read-endpoint side effect. */
+@Component
+@ConditionalOnProperty(prefix="sample.demo", name="write-tools-enabled", havingValue="true")
+public final class CatalogDirtyJobHandler {
+    public static final CacheDistributedJobDefinition<CatalogRefreshCommand> DEFINITION =
+            CacheDistributedJobDefinition.of("sample.catalog.flush-dirty", CatalogRefreshCommand.class);
+    private final SnapshotJobs snapshots;
+    public CatalogDirtyJobHandler(SnapshotJobs snapshots) { this.snapshots = snapshots; }
+
+    @CacheJobHandler("sample.catalog.flush-dirty")
+    public Object flush(CatalogRefreshCommand command) {
+        if (!command.ids().isEmpty()) throw new IllegalArgumentException("Flush consumes the already marked roots, not an input ID list");
+        return snapshots.flushDirty(CatalogConfiguration.PLAN).<Object>map(value -> value)
+                .orElseGet(() -> Map.of("status", "NO_CHANGES"));
+    }
+}
+```
+
+Use `client` for publisher-only API pods and `worker` for SQL preparation. The
+framework supplies the publisher; no manual client executor configuration is needed.
+Publisher-only construction starts no job worker/heartbeat or snapshot scheduler
+threads. Redis Cluster submission uses a single atomic script only for same-slot
+keys; cross-slot keys retain a checked enqueue and cleanup fallback. Redis must
+still be available: publishing is not an in-process durable queue.
+
+`withContentReuse()` hashes JSON bytes as they are spooled. Existing content is
+shared rather than reloaded and resent. If it expires before publication, the
+framework retries with the spool payload. This reduces work on unchanged catalogs;
+it does not remove SQL preparation or authorize an unbounded in-memory snapshot.
 
 | Real situation | Implementation | What it proves |
 | --- | --- | --- |
@@ -970,11 +1063,9 @@ import com.example.cachedb.sample.domain.ProductEntity;
 import com.example.cachedb.sample.domain.ProductEntityCacheBinding;
 import com.reactor.cachedb.spring.boot.snapshot.*;
 import com.reactor.cachedb.starter.CacheDatabase;
-
+import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
-import java.util.List;
 
 @Configuration(proxyBeanMethods = false)
 public class CatalogConfiguration {
@@ -995,21 +1086,15 @@ public class CatalogConfiguration {
                         SnapshotIndexSpec.of(
                                 row -> row.category,
                                 row -> Math.max(0, row.stockQuantity - row.reservedQuantity)))
-                .scoped(
-                        SnapshotRootScope.builder()
-                                .source(
-                                        source,
-                                        ids ->
-                                                SnapshotPredicate.inValues(
-                                                        "product_id",
-                                                        ids.stream().map(Long::valueOf).toList()))
-                                .build())
-                .withJsonCodec(CatalogCardJsonCodec.INSTANCE);
+                .scopedBy(source, "product_id", Long::valueOf)
+                .withGeneratedJsonCodec()
+                .withContentReuse();
     }
 
     @Bean
-    TypedSnapshotRepository<Long, CatalogCard> stockCatalogRepository(SnapshotJobs jobs) {
-        return jobs.typedRepository(PLAN, CatalogCard.class, Object::toString);
+    TypedSnapshotRepository<Long, CatalogCard> stockCatalogRepository(
+            SnapshotJobs jobs, SnapshotPlan<ProductEntity, CatalogCard> stockCatalog) {
+        return stockCatalog.bind(jobs.repository(PLAN), Object::toString);
     }
 
     @Bean
@@ -1021,10 +1106,10 @@ public class CatalogConfiguration {
 
 The sample explicitly pins Gson **2.13.2**, because the Spring Boot parent can
 otherwise select an older Gson without `Strictness`. The POM includes
-`cachedb-json`, the annotation dependency and the 0.14.0 processor. Do not remove
+`cachedb-json`, the annotation dependency and the 0.15.0 processor. Do not remove
 the Gson override or mix framework versions.
 
-With the 0.14.0 BOM and annotation processor already configured, these are the
+With the 0.15.0 BOM and annotation processor already configured, these are the
 additional runtime dependencies used by the compiled sample:
 
 ```xml
@@ -1288,52 +1373,12 @@ docker compose -f docker-compose.yml -f docker-compose.roles.yml logs worker
 
 The same JAR runs with `demo,client` on the API and `demo,worker` on workers.
 The worker profile sets `web-application-type=none`; it exposes no REST listener.
+It also sets `spring.main.keep-alive=true`: background pools use daemon threads,
+so a non-web JVM must be kept alive explicitly by its application lifecycle.
 All instances share metadata, JSON codecs, Redis, SQL and job definitions.
-In 0.14.0, worker auto-configuration does not create the client job executor.
-The sample supplies this producer-only bean explicitly using the public API;
-the final `false` disables job consumption. Do not remove it when enabling
-demo job endpoints in the client profile.
-
-`src/main/java/com/example/cachedb/sample/catalog/ClientJobSubmissionConfiguration.java`:
-
-```java
-package com.example.cachedb.sample.catalog;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.reactor.cachedb.spring.boot.CacheDbSpringProperties;
-import com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor;
-import com.reactor.cachedb.spring.boot.CacheDistributedJobHandler;
-import com.reactor.cachedb.starter.CacheDatabase;
-
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Profile;
-
-/** 0.14.0 auto-configures job executors on workers; this explicit client bean only publishes. */
-@Configuration(proxyBeanMethods = false)
-@Profile("client")
-@ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
-public class ClientJobSubmissionConfiguration {
-    @Bean(destroyMethod = "close")
-    @ConditionalOnMissingBean(CacheDistributedJobExecutor.class)
-    CacheDistributedJobExecutor clientJobPublisher(
-            CacheDatabase database,
-            ObjectMapper mapper,
-            CacheDbSpringProperties properties,
-            ObjectProvider<CacheDistributedJobHandler<?>> handlers) {
-        return new CacheDistributedJobExecutor(
-                database.backgroundRedisOperations(),
-                mapper,
-                database.instanceId(),
-                properties.getJobs(),
-                handlers.orderedStream().toList(),
-                false);
-    }
-}
-```
+In 0.15.0, auto-configuration also supplies a publisher-only job executor for
+`CLIENT_ONLY`. It accepts registered commands without consuming them or starting
+idle worker/heartbeat threads. No extra configuration class is required.
 
 Each application container is limited to **2 CPU / 768 MiB** in this local recipe.
 These are demonstration limits, not a certified capacity recommendation.
@@ -1606,7 +1651,7 @@ a production HTTP endpoint. Keep the durable `cachedb_write_fence` table and fol
 the provider migration/drained-upgrade guide.
 
 Import `postman/cache-database-oracle-catalog.postman_collection.json`.
-Run all **16 requests** in order; no demo seed is required after schema setup.
+Run all **23 requests** in order; no demo seed is required after schema setup.
 They assert import durability (retrying only the identical delivery if the
 initial bounded wait returns pending), identical replay, changed-payload rejection,
 snapshot publication, Unicode/decimal data, single-generation reads, pagination
@@ -1631,4 +1676,12 @@ only its own test project and volumes. Never point this script at production.
 Pass `-SplitRoles` to bootstrap the local schema, stop the bootstrap JVM, and run
 the same collection against one API container plus **two worker containers**.
 The sample CI uses this mode; container logs are included in the test evidence.
+
+The separate 59-request business collection automatically polls the saved job
+status request after each accepted background command, then resumes its original
+sequence. Polling stops after 30 seconds or 150 attempts. Every business response
+has an HTTP assertion; a failed job stops the flow instead of racing the next
+read. For the HTTP load recipe, explicitly refresh the catalog immediately before
+the run: after `warn-age`, `STALE_WARNING` is an intentional freshness signal,
+not a missing row or a reason to fetch SQL implicitly.
 <!-- END COMPILED FEATURE EXAMPLES -->

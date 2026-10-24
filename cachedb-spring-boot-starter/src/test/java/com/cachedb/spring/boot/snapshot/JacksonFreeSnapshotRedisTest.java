@@ -9,20 +9,17 @@ import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.json.JsonCodecLimits;
 import com.reactor.cachedb.json.StreamingJsonCodec;
 import com.reactor.cachedb.redis.JedisPooledOperations;
-
+import java.io.IOException;
+import java.time.Clock;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.params.ScanParams;
-
-import java.io.IOException;
-import java.time.Clock;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 @EnabledIfSystemProperty(named = "cachedb.snapshot.redis", matches = "true")
 class JacksonFreeSnapshotRedisTest {
@@ -38,7 +35,7 @@ class JacksonFreeSnapshotRedisTest {
     void setup() throws Exception {
         redis =
                 new JedisPooled(
-                        "redis://127.0.0.1:"
+                        "redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1") + ":"
                                 + Integer.getInteger("cachedb.snapshot.redis.port", 16383));
         sql = new JdbcDataSource();
         sql.setURL("jdbc:h2:mem:" + namespace + ";DB_CLOSE_DELAY=-1");

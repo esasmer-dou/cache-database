@@ -12,6 +12,10 @@ final class SnapshotDelta {
             local ttl=redis.call('PTTL',KEYS[2])
             if ttl <= 0 then return 0 end
             if (redis.call('GET',KEYS[7]) or 'json') ~= ARGV[4] then return 0 end
+            for i=5,#ARGV,6 do
+              local content=tonumber(ARGV[i+4])
+              if content > 0 and ARGV[i+1] == '' and redis.call('EXISTS',KEYS[content]) == 0 then return -1 end
+            end
             local prefix=string.match(KEYS[3],'^(.*):data:')
             local changed={}
             for i=5,#ARGV,6 do
@@ -19,14 +23,14 @@ final class SnapshotDelta {
               if ARGV[4] == 'content' and oldDigest then redis.call('SREM',KEYS[9],oldDigest) end
               local oldIndex=redis.call('HGET',KEYS[4],ARGV[i])
               if oldIndex then redis.call('ZREM',oldIndex,ARGV[i]); changed[oldIndex]=true end
-              if ARGV[i+1] == '' then
+              if ARGV[i+1] == '' and tonumber(ARGV[i+4]) == 0 then
                 redis.call('HDEL',KEYS[3],ARGV[i])
                 redis.call('HDEL',KEYS[4],ARGV[i])
                 redis.call('HDEL',KEYS[5],ARGV[i])
               else
                 local content=tonumber(ARGV[i+4])
                 if content > 0 then
-                  redis.call('SET',KEYS[content],ARGV[i+1],'NX','PX',ttl)
+                  if ARGV[i+1] ~= '' then redis.call('SET',KEYS[content],ARGV[i+1],'NX','PX',ttl) end
                   redis.call('PEXPIRE',KEYS[content],ttl)
                   redis.call('HSET',KEYS[3],ARGV[i],ARGV[i+5])
                   redis.call('SADD',KEYS[9],ARGV[i+5])
@@ -65,6 +69,12 @@ final class SnapshotDelta {
             SnapshotSpool spool,
             Runnable check)
             throws IOException {
+        return batch(prefix, lock, owner, active, sourceAt, reuse, ids, spool, check, Set.of());
+    }
+
+    static SnapshotPublication.Batch batch(String prefix, String lock, String owner, String active,
+            long sourceAt, boolean reuse, List<String> ids, SnapshotSpool spool, Runnable check,
+            Set<String> availableDigests) throws IOException {
         String generation = active.substring(0, active.indexOf(':'));
         Map<String, SnapshotSpool.Entry> entries = new HashMap<>();
         Set<String> requested = new HashSet<>(ids);
@@ -101,8 +111,10 @@ final class SnapshotDelta {
                 args.addAll(List.of(id, "", "0", "0", "0", ""));
                 continue;
             }
-            String json = spool.read(entry, check);
-            String digest = reuse ? SnapshotPublication.digest(id + "\u0000" + json) : "";
+            check.run();
+            String json = reuse && entry.contentDigest() != null && availableDigests.contains(entry.contentDigest())
+                    ? "" : spool.read(entry, check);
+            String digest = reuse ? entry.contentDigest() != null ? entry.contentDigest() : SnapshotPublication.digest(id + "\u0000" + json) : "";
             int newIndex =
                     entry.partition() == null
                             ? 0

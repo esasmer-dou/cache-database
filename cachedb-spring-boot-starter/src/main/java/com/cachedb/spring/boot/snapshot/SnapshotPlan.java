@@ -15,6 +15,26 @@ public record SnapshotPlan<R, V>(
         SnapshotIndexSpec<R> indexSpec,
         SnapshotRootScope rootScope,
         boolean contentReuse) {
+    public SnapshotPlan<R, V> withGeneratedJsonCodec() {
+        return withJsonCodec(com.reactor.cachedb.core.codec.GeneratedJsonCodecs.require(valueType));
+    }
+
+    public SnapshotPlan<R, V> scopedBy(SnapshotSource<?> source, String column, Function<String, ?> parser) {
+        return scoped(SnapshotRootScope.byColumn(source, column, parser));
+    }
+
+    public SnapshotPlan<R, V> scopedByString(SnapshotSource<?> source, String column) {
+        return scoped(SnapshotRootScope.byStringColumn(source, column));
+    }
+
+    public <ID> TypedSnapshotRepository<ID, V> bind(SnapshotRepository repository, Function<ID, String> idSerializer) {
+        if (jsonCodec() == null) throw new IllegalStateException("Binding requires an explicit or generated JSON codec");
+        return TypedSnapshotRepository.decoding(repository, jsonCodec(), idSerializer);
+    }
+
+    public <ID> TypedSnapshotRepository<ID, V> bind(SnapshotRepository repository) {
+        return bind(repository, String::valueOf);
+    }
     /** Explicit JSON contract; preserves all existing plan constructors and record components. */
     public SnapshotPlan<R, V> withJsonCodec(
             com.reactor.cachedb.core.codec.JsonArrayCodec<V> codec) {

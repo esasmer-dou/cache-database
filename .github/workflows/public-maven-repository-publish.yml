@@ -6,9 +6,8 @@ on:
       targetRef:
         description: Stable tag to publish, for example v0.10.0
         required: true
-  push:
-    tags:
-      - "v*.*.*"
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -35,8 +34,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           TARGET_REF: ${{ inputs.targetRef }}
           REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          $releaseRef = if ($env:EVENT_NAME -eq "workflow_dispatch") { $env:TARGET_REF } else { $env:REF_NAME }
+          $releaseRef = if ($env:EVENT_NAME -eq "workflow_dispatch") { $env:TARGET_REF } else { $env:RELEASE_TAG }
           if ($releaseRef -notmatch '^v\d+\.\d+\.\d+$') {
             throw "Public Maven repository only accepts stable semantic-version tags: $releaseRef"
           }
@@ -50,16 +50,21 @@ jobs:
           fetch-depth: 0
           path: source
 
-      - name: Setup Java
-        uses: actions/setup-java@v5.2.0
-        with:
-          distribution: temurin
-          java-version: "21"
-          cache: maven
-
-      - name: Build signed-shape release artifacts
+      - name: Import checksum-verified published release artifacts
         working-directory: source
-        run: mvn -B -P oss-release -DskipTests -Dgpg.skip=true package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ steps.release.outputs.ref }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          $bundle = "cache-database-$env:RELEASE_VERSION-github-release.zip"
+          gh release download $env:RELEASE_REF --repo $env:GITHUB_REPOSITORY --pattern $bundle --pattern "$bundle.sha256" --dir target/published-release
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot download the canonical release bundle.' }
+          $path = Join-Path 'target/published-release' $bundle
+          $expected = ((Get-Content -LiteralPath "$path.sha256" -Raw).Trim() -split '\s+')[0]
+          if ($expected -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $expected) { throw 'Release bundle checksum mismatch.' }
+          ./tools/release/import-release-artifacts.ps1 -Version $env:RELEASE_VERSION -ArchivePath $path
 
       - name: Checkout persistent public repository branch
         shell: bash
@@ -79,16 +84,20 @@ jobs:
 
       - name: Add immutable Maven artifacts
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           ./source/tools/release/build-public-maven-repository.ps1 `
-            -Version "${{ steps.release.outputs.version }}" `
-            -OutputDirectory "${{ github.workspace }}/public-repository" `
+            -Version $env:RELEASE_VERSION `
+            -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE 'public-repository') `
             -SkipBuild `
             -PreserveExisting
 
       - name: Commit public Maven repository state
         shell: bash
         working-directory: public-repository
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -97,7 +106,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Public Maven repository already contains this immutable release."
           else
-            git commit -m "Publish CacheDB ${{ steps.release.outputs.version }}"
+            git commit -m "Publish CacheDB $RELEASE_VERSION"
             git push origin HEAD:public-maven
           fi
 

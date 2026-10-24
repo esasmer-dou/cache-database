@@ -75,6 +75,27 @@ foreach ($module in $publicJarModules) {
         if (-not $hasExpectedContent) {
             $invalid.Add("$([System.IO.Path]::GetRelativePath($repoRoot, $artifact)): expected packaged content is missing")
         }
+        if ([version]$Version -ge [version]'0.15.0' -and $suffix -ne '-javadoc.jar') {
+            $requiredTypes = switch ($module) {
+                'cachedb-annotations' { @('annotations/CacheSeek', 'annotations/CacheJobHandler') }
+                'cachedb-core' { @('core/codec/CacheValueCodec', 'core/codec/GeneratedJsonCodecProvider', 'core/codec/GeneratedJsonCodecs') }
+                'cachedb-storage-jdbc' { @('jdbc/AbstractJdbcWriteBehindFlusher') }
+                'cachedb-spring-boot-starter' { @('spring/boot/snapshot/SnapshotPageRequest', 'spring/boot/snapshot/SnapshotTypedPageReadResult', 'spring/boot/snapshot/SnapshotManifest') }
+                'cachedb-processor' { @('processor/CacheJobHandlerProcessor') }
+                default { @() }
+            }
+            $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }
+            $prefix = if ($suffix -eq '.jar' -or $module -eq 'cachedb-annotations') { 'com/reactor/cachedb' } else { 'com/cachedb' }
+            foreach ($type in $requiredTypes) {
+                if ($entries -notcontains "$prefix/$type.$extension") {
+                    $invalid.Add("${module}: required 0.15 type is missing: $type.$extension")
+                }
+            }
+            if ($module -eq 'cachedb-examples' -and $suffix -eq '.jar' -and
+                $entries -notcontains 'META-INF/services/com.reactor.cachedb.core.codec.GeneratedJsonCodecProvider') {
+                $invalid.Add('cachedb-examples: generated JSON provider service descriptor is missing')
+            }
+        }
         if ($module -eq 'cachedb-storage-jdbc' -and $suffix -ne '-javadoc.jar' -and
             [version]$Version -ge [version]'0.14.0') {
             foreach ($provider in @('postgres', 'mssql', 'oracle')) {

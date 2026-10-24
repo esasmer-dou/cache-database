@@ -3,7 +3,6 @@ package com.reactor.cachedb.jdbc;
 import com.reactor.cachedb.core.model.OperationType;
 import com.reactor.cachedb.core.queue.QueuedWriteOperation;
 import com.reactor.cachedb.core.registry.EntityRegistry;
-
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -22,13 +21,13 @@ import java.util.Objects;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
-
 import javax.sql.DataSource;
 
 /** Durable SQL high-water marks, including physical deletes. Never expire this table by TTL. */
 public final class JdbcWriteFence {
     public static final String TABLE = "cachedb_write_fence";
     private static final int KEY_BATCH_SIZE = 500;
+    private static final ThreadLocal<MessageDigest> HASH = ThreadLocal.withInitial(JdbcWriteFence::sha256);
 
     public enum Provider {
         POSTGRES,
@@ -155,12 +154,18 @@ public final class JdbcWriteFence {
     }
 
     /**
-     * Claims and locks all identities in a transaction, then returns accepted writes in input
-     * order. Metadata updates and the caller's DML must be committed or rolled back on this SAME
+     * Claims and locks all identities, coalescing each identity to its winning version/delete.
+     * Winners retain first identity appearance order. The caller's DML must use this SAME
      * connection. Seed/lock/update work is bounded and batched, not one network query per entity.
      */
     public List<QueuedWriteOperation> filter(
             Connection connection, List<QueuedWriteOperation> operations) throws SQLException {
+        return filter(connection, operations, false);
+    }
+
+    /** Coalescing is opt-in: audit/EXACT_SEQUENCE callers must retain intermediate writes. */
+    public List<QueuedWriteOperation> filter(Connection connection, List<QueuedWriteOperation> operations,
+            boolean coalesce) throws SQLException {
         if (connection.getAutoCommit())
             throw new SQLException("Write fence requires the business transaction", "CDB03");
         if (!initialized || !Objects.equals(initializedContext, context(connection)))
@@ -170,34 +175,45 @@ public final class JdbcWriteFence {
                     "CDB03");
         if (operations.isEmpty()) return operations;
         TreeMap<String, Entry> entries = new TreeMap<>();
-        ArrayList<Entry> ordered = new ArrayList<>(operations.size());
-        MessageDigest digest = sha256();
+        Map<String, Entry> identities = new java.util.LinkedHashMap<>();
+        Map<QueuedWriteOperation, Entry> operationEntries = new java.util.IdentityHashMap<>();
+        MessageDigest digest = HASH.get();
         for (QueuedWriteOperation operation : operations) {
-            if (operation.atomicBatch())
-                throw new SQLException("Flatten the atomic envelope before fencing", "CDB03");
+            if (operation.atomicBatch()) throw new SQLException("Flatten the atomic envelope before fencing", "CDB03");
             String identity = identity(connection, operation);
-            String key =
-                    HexFormat.of()
-                            .formatHex(digest.digest(identity.getBytes(StandardCharsets.UTF_8)));
-            Entry entry = entries.computeIfAbsent(key, ignored -> new Entry(key, identity));
-            if (!entry.identity.equals(identity)) throw collision();
-            ordered.add(entry);
+            Entry entry = identities.get(identity);
+            if (entry == null) {
+                String key = HexFormat.of().formatHex(digest.digest(identity.getBytes(StandardCharsets.UTF_8)));
+                entry = new Entry(key, identity);
+                Entry collision = entries.putIfAbsent(key, entry);
+                if (collision != null && !collision.identity.equals(identity)) throw collision();
+                identities.put(identity, entry);
+            }
+            operationEntries.put(operation, entry);
+            QueuedWriteOperation prior = entry.candidate;
+            if (prior == null || operation.version() > prior.version()
+                    || operation.version() == prior.version() && operation.type() == OperationType.DELETE && prior.type() != OperationType.DELETE)
+                entry.candidate = operation;
         }
         ArrayList<Entry> sorted = new ArrayList<>(entries.values());
+        if (provider == Provider.POSTGRES && coalesce) {
+            for (int start = 0; start < sorted.size(); start += KEY_BATCH_SIZE)
+                claimPostgres(connection, sorted.subList(start, Math.min(start + KEY_BATCH_SIZE, sorted.size())));
+            return identities.values().stream().filter(entry -> entry.changed).map(entry -> entry.candidate).toList();
+        }
         for (int start = 0; start < sorted.size(); start += KEY_BATCH_SIZE) {
-            List<Entry> chunk =
-                    sorted.subList(start, Math.min(start + KEY_BATCH_SIZE, sorted.size()));
+            List<Entry> chunk = sorted.subList(start, Math.min(start + KEY_BATCH_SIZE, sorted.size()));
             seed(connection, chunk);
             lock(connection, chunk);
         }
-        ArrayList<QueuedWriteOperation> accepted = new ArrayList<>(operations.size());
-        for (int i = 0; i < operations.size(); i++) {
-            QueuedWriteOperation operation = operations.get(i);
-            Entry entry = ordered.get(i);
+        ArrayList<QueuedWriteOperation> accepted = new ArrayList<>(identities.size());
+        List<QueuedWriteOperation> candidates = coalesce
+                ? identities.values().stream().map(entry -> entry.candidate).toList() : operations;
+        for (QueuedWriteOperation operation : candidates) {
+            Entry entry = operationEntries.get(operation);
             boolean delete = operation.type() == OperationType.DELETE;
-            if (entry.version == null
-                    || operation.version() > entry.version
-                    || (operation.version() == entry.version && delete && !entry.deleted)) {
+            if (entry.version == null || operation.version() > entry.version
+                    || operation.version() == entry.version && delete && !entry.deleted) {
                 accepted.add(operation);
                 entry.version = operation.version();
                 entry.deleted = delete;
@@ -268,6 +284,36 @@ public final class JdbcWriteFence {
                 statement.setString(index++, entry.identity);
             }
             statement.executeUpdate();
+        }
+    }
+
+    private void claimPostgres(Connection connection, List<Entry> entries) throws SQLException {
+        String rows = String.join(",", java.util.Collections.nCopies(entries.size(), "(?,?,?,?)"));
+        String equal = TABLE + ".identity_value=EXCLUDED.identity_value";
+        String sql = "INSERT INTO " + TABLE + " (fence_key,identity_value,entity_version,deleted) VALUES " + rows
+                + " ON CONFLICT (fence_key) DO UPDATE SET entity_version=CASE WHEN " + equal
+                + " THEN EXCLUDED.entity_version ELSE " + TABLE + ".entity_version END, deleted=CASE WHEN "
+                + equal + " THEN EXCLUDED.deleted ELSE " + TABLE + ".deleted END WHERE NOT (" + equal + ") OR "
+                + TABLE + ".entity_version IS NULL OR EXCLUDED.entity_version>" + TABLE + ".entity_version OR "
+                + "(EXCLUDED.entity_version=" + TABLE + ".entity_version AND EXCLUDED.deleted>" + TABLE + ".deleted)"
+                + " RETURNING fence_key,identity_value";
+        Map<String, Entry> byKey = new HashMap<>();
+        try (PreparedStatement statement = prepare(connection, sql)) {
+            int parameter = 1;
+            for (Entry entry : entries) {
+                byKey.put(entry.key, entry);
+                statement.setString(parameter++, entry.key);
+                statement.setString(parameter++, entry.identity);
+                statement.setLong(parameter++, entry.candidate.version());
+                statement.setInt(parameter++, entry.candidate.type() == OperationType.DELETE ? 1 : 0);
+            }
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    Entry entry = byKey.get(result.getString(1));
+                    if (entry == null || !entry.identity.equals(result.getString(2))) throw collision();
+                    entry.changed = true;
+                }
+            }
         }
     }
 
@@ -431,6 +477,7 @@ public final class JdbcWriteFence {
         Long version;
         boolean deleted;
         boolean changed;
+        QueuedWriteOperation candidate;
 
         Entry(String key, String identity) {
             this.key = key;

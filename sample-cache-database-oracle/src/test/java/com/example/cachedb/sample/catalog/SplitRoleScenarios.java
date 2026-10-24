@@ -6,15 +6,13 @@ import com.example.cachedb.sample.domain.ReportJobEntity;
 import com.example.cachedb.sample.repository.ReportJobRepository;
 import com.reactor.cachedb.core.config.CacheRuntimeRole;
 import com.reactor.cachedb.starter.CacheDatabase;
-
+import java.time.Duration;
+import java.util.ArrayList;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.GenericContainer;
-
-import java.time.Duration;
-import java.util.ArrayList;
 
 /**
  * Two application instances share one disposable Redis and the provider's disposable SQL fixture.
@@ -23,6 +21,11 @@ public final class SplitRoleScenarios {
     private SplitRoleScenarios() {}
 
     public static void verify(Class<?> application, Environment original) {
+        String externalRedis = com.example.cachedb.sample.ExternalSampleFixtures.splitRedisUri();
+        if (externalRedis != null) {
+            verify(application, original, externalRedis);
+            return;
+        }
         try (var redis =
                 new GenericContainer<>(
                                 "redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232")
@@ -30,11 +33,21 @@ public final class SplitRoleScenarios {
                         .withCommand("redis-server", "--save", "", "--appendonly", "no")) {
             redis.start();
             String redisUri = "redis://" + redis.getHost() + ":" + redis.getMappedPort(6379);
+            verify(application, original, redisUri);
+        }
+    }
+
+    private static void verify(Class<?> application, Environment original, String redisUri) {
             try (var client = start(application, original, redisUri, "client")) {
                 var api = client.getBean(CacheDatabase.class);
                 var reports = client.getBean(ReportJobRepository.class);
                 var sql = client.getBean(JdbcTemplate.class);
                 assertEquals(CacheRuntimeRole.CLIENT_ONLY, api.config().runtimeRole());
+                var publisher = client.getBean(com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor.class);
+                var submitted = publisher.submit(CatalogRefreshJobHandler.DEFINITION, new CatalogRefreshCommand(java.util.List.of()));
+                assertEquals(com.reactor.cachedb.spring.boot.CacheDistributedJobState.QUEUED, submitted.status());
+                assertTrue(Thread.getAllStackTraces().keySet().stream().noneMatch(thread ->
+                        thread.getName().startsWith("cachedb-job-") && thread.getName().contains(api.instanceId())));
                 var accepted = reports.save(report(8_200_001));
                 assertFalse(api.awaitDurable(accepted, Duration.ofMillis(100)));
                 assertEquals(
@@ -70,7 +83,6 @@ public final class SplitRoleScenarios {
                     assertTrue(api.awaitDurable(pending, Duration.ofSeconds(20)));
                 }
             }
-        }
     }
 
     private static ConfigurableApplicationContext start(
@@ -85,6 +97,7 @@ public final class SplitRoleScenarios {
             arguments.add("--" + property + "=" + original.getRequiredProperty(property));
         }
         arguments.add("--cachedb.redis.uri=" + redisUri);
+        arguments.add("--cachedb.runtime.instance-id=" + role + "-" + java.util.UUID.randomUUID());
         arguments.add("--spring.main.web-application-type=none");
         arguments.add("--spring.sql.init.mode=never");
         arguments.add("--cachedb.admin.enabled=false");

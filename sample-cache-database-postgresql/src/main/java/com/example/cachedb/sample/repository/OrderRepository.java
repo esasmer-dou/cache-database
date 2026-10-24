@@ -9,6 +9,7 @@ import com.reactor.cachedb.annotations.CachePredicate;
 import com.reactor.cachedb.annotations.CacheRepository;
 import com.reactor.cachedb.annotations.CacheRepositoryDefaults;
 import com.reactor.cachedb.annotations.CacheRouteQuery;
+import com.reactor.cachedb.annotations.CacheSeek;
 import com.reactor.cachedb.annotations.HotRoute;
 import com.reactor.cachedb.annotations.SourceRoute;
 import com.reactor.cachedb.annotations.WarmRoute;
@@ -19,7 +20,6 @@ import com.reactor.cachedb.core.repository.HotWindow;
 import com.reactor.cachedb.core.repository.WindowRequest;
 import com.reactor.cachedb.starter.CacheWarmPlan;
 import com.reactor.cachedb.starter.CacheWarmTarget;
-
 import java.math.BigDecimal;
 
 @CacheRepository(entity = OrderEntity.class)
@@ -102,19 +102,14 @@ public interface OrderRepository extends CacheDbRepository<OrderEntity, Long> {
             maxRows = 500, timeoutSeconds = 15)
     @CacheRouteQuery(
             predicates = {
-                    @CachePredicate(field = "customerId", group = 0),
+                    @CachePredicate(field = "customerId"),
                     @CachePredicate(field = "status", operator = CachePredicate.Operator.NE,
-                            constants = "DELETED", group = 0),
-                    @CachePredicate(field = "orderDate", operator = CachePredicate.Operator.LT,
-                            parameter = "beforeOrderDate", group = 0),
-                    @CachePredicate(field = "customerId", group = 1),
-                    @CachePredicate(field = "status", operator = CachePredicate.Operator.NE,
-                            constants = "DELETED", group = 1),
-                    @CachePredicate(field = "orderDate", parameter = "beforeOrderDate", group = 1),
-                    @CachePredicate(field = "orderId", operator = CachePredicate.Operator.LT,
-                            parameter = "beforeOrderId", group = 1)
+                            constants = "DELETED")
             },
-            explicitDisjunction = true,
+            seek = {
+                    @CacheSeek(field = "orderDate", param = "beforeOrderDate"),
+                    @CacheSeek(field = "orderId", param = "beforeOrderId")
+            },
             orderBy = {
                     @CacheOrder(field = "orderDate", direction = CacheOrder.Direction.DESC),
                     @CacheOrder(field = "orderId", direction = CacheOrder.Direction.DESC)

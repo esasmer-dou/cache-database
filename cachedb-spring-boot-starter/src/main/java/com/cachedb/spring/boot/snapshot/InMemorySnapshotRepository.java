@@ -3,7 +3,6 @@ package com.reactor.cachedb.spring.boot.snapshot;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reactor.cachedb.core.codec.Utf8Length;
 import com.reactor.cachedb.core.repository.*;
-
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -218,27 +217,43 @@ public final class InMemorySnapshotRepository implements SnapshotRepository {
     }
 
     public CursorPage<SnapshotValue> findPage(String partition, WindowRequest window) {
+        return page(partition, window, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY);
+    }
+
+    public CursorPage<SnapshotValue> findPage(SnapshotPageRequest request) {
+        return page(request.partitionKey(), request.window(), request.minScore(), request.maxScore());
+    }
+
+    private CursorPage<SnapshotValue> page(String partition, WindowRequest window, double minimum, double maximum) {
+        Objects.requireNonNull(window, "window");
+        boolean ranged = minimum != Double.NEGATIVE_INFINITY || maximum != Double.POSITIVE_INFINITY;
+        String bounds = ranged ? Double.toString(minimum) + "\n" + Double.toString(maximum) : null;
         lock.lock();
         try {
             if (generation == null) return new CursorPage<>(List.of(), null);
             long revision = revisions.getOrDefault(partition, 0L);
             List<Map.Entry<String, Row>> sorted = new ArrayList<>();
+            if (rows.size() > 100000) throw new IllegalStateException("In-memory snapshot sort budget exceeded");
             for (var entry : rows.entrySet())
-                if (Objects.equals(partition, entry.getValue().partition)) sorted.add(entry);
+                if (Objects.equals(partition, entry.getValue().partition)
+                        && entry.getValue().score >= minimum && entry.getValue().score <= maximum) sorted.add(entry);
             sorted.sort(PAGE_ORDER);
             int start = 0;
             if (window.after() != null) {
+                if (window.after().length() > 8192) throw new IllegalArgumentException("Invalid snapshot cursor");
                 String[] cursor =
                         new String(
                                         Base64.getUrlDecoder().decode(window.after()),
                                         java.nio.charset.StandardCharsets.UTF_8)
                                 .split("\n", -1);
-                if (cursor.length != 4
+                if ((cursor.length != 4 && cursor.length != 6)
                         || !cursor[0].equals(generation)
                         || !cursor[1].equals(partition)
                         || !cursor[2].equals(Long.toString(revision)))
                     throw new IllegalArgumentException(
                             "Snapshot cursor expired or belongs to another partition");
+                if (ranged ? cursor.length != 6 || !(cursor[4] + "\n" + cursor[5]).equals(bounds) : cursor.length != 4)
+                    throw new IllegalArgumentException("Snapshot cursor belongs to another score range");
                 while (start < sorted.size() && !sorted.get(start).getKey().equals(cursor[3]))
                     start++;
                 if (start == sorted.size())
@@ -272,6 +287,7 @@ public final class InMemorySnapshotRepository implements SnapshotRepository {
                                                     .append(revision)
                                                     .append('\n')
                                                     .append(sorted.get(end - 1).getKey())
+                                                    .append(ranged ? "\n" + bounds : "")
                                                     .toString()
                                                     .getBytes(
                                                             java.nio.charset.StandardCharsets

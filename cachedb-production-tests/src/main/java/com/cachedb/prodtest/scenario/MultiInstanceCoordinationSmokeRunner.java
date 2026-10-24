@@ -27,7 +27,7 @@ import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.StreamEntryID;
 import redis.clients.jedis.params.XAddParams;
 import redis.clients.jedis.params.XReadGroupParams;
-import redis.clients.jedis.resps.StreamConsumersInfo;
+import redis.clients.jedis.resps.StreamConsumerInfo;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class MultiInstanceCoordinationSmokeRunner {
 
@@ -338,7 +339,7 @@ public final class MultiInstanceCoordinationSmokeRunner {
 
     private void ensureConsumerGroup(JedisPooled jedis, String streamKey, String consumerGroup) {
         try {
-            jedis.xgroupCreate(streamKey, consumerGroup, StreamEntryID.LAST_ENTRY, true);
+            jedis.xgroupCreate(streamKey, consumerGroup, StreamEntryID.XGROUP_LAST_ENTRY, true);
         } catch (RuntimeException ignored) {
             // BUSYGROUP is fine for repeat runs.
         }
@@ -377,7 +378,7 @@ public final class MultiInstanceCoordinationSmokeRunner {
                 consumerGroup,
                 ownerConsumerName,
                 new XReadGroupParams().count(1),
-                Map.of(streamKey, StreamEntryID.UNRECEIVED_ENTRY)
+                Map.of(streamKey, StreamEntryID.XREADGROUP_UNDELIVERED_ENTRY)
         );
     }
 
@@ -400,27 +401,27 @@ public final class MultiInstanceCoordinationSmokeRunner {
     }
 
     private List<String> waitForConsumers(JedisPooled jedis, String streamKey, String consumerGroup, int minimumCount, Duration timeout) throws Exception {
-        final List<String>[] holder = new List[]{List.of()};
+        final AtomicReference<List<String>> holder = new AtomicReference<>(List.of());
         waitUntil(() -> {
             try {
-                List<String> names = jedis.xinfoConsumers(streamKey, consumerGroup).stream()
-                        .map(StreamConsumersInfo::getName)
+                List<String> names = jedis.xinfoConsumers2(streamKey, consumerGroup).stream()
+                        .map(StreamConsumerInfo::getName)
                         .sorted()
                         .toList();
-                holder[0] = names;
+                holder.set(names);
                 return names.size() >= minimumCount;
             } catch (RuntimeException exception) {
                 return false;
             }
         }, timeout, "expected at least " + minimumCount + " write-behind consumers");
-        return holder[0];
+        return holder.get();
     }
 
     private String waitForPendingConsumer(JedisPooled jedis, String streamKey, String consumerGroup, String consumerFragment, Duration timeout) throws Exception {
         final String[] holder = new String[1];
         waitUntil(() -> {
             try {
-                for (StreamConsumersInfo consumer : jedis.xinfoConsumers(streamKey, consumerGroup)) {
+                for (StreamConsumerInfo consumer : jedis.xinfoConsumers2(streamKey, consumerGroup)) {
                     if (consumer.getName().contains(consumerFragment) && consumer.getPending() > 0L) {
                         holder[0] = consumer.getName();
                         return true;

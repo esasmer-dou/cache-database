@@ -61,7 +61,7 @@ public final class DemoOrderLinesRelationBatchLoader implements RelationBatchLoa
             while (true) {
                 List<Object> chunk = new ArrayList<>(chunkOrderIds);
                 List<DemoOrderLineEntity> lines = orderLineRepository.query(
-                        QuerySpec.where(QueryFilter.in("order_id", chunk))
+                        QuerySpec.where(QueryFilter.in("order_id", (java.util.Collection<?>) chunk))
                                 .orderBy(QuerySort.asc("order_id"), QuerySort.asc("line_number"))
                                 .offsetBy(offset)
                                 .limitTo(LINE_PAGE_SIZE)

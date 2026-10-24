@@ -1,7 +1,6 @@
 package com.reactor.cachedb.core.projection;
 
 import com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec;
-
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -23,11 +22,15 @@ public final class ProjectionSchema<P> implements ProjectionCodec<P> {
     private final List<Column<P, ?>> columns;
     private final List<String> columnNames;
     private final Function<ProjectionRow, P> decoder;
+    private final Map<String, Integer> positions;
 
     private ProjectionSchema(List<Column<P, ?>> columns, Function<ProjectionRow, P> decoder) {
         this.columns = List.copyOf(columns);
         this.columnNames = columns.stream().map(Column::name).toList();
         this.decoder = decoder;
+        Map<String, Integer> indexes = new LinkedHashMap<>();
+        for (int i = 0; i < columns.size(); i++) indexes.put(columns.get(i).name(), i);
+        this.positions = Map.copyOf(indexes);
     }
 
     public static <P> Builder<P> builder() {
@@ -37,16 +40,34 @@ public final class ProjectionSchema<P> implements ProjectionCodec<P> {
     @Override
     public String toRedisValue(P projection) {
         Objects.requireNonNull(projection, "projection");
-        LinkedHashMap<String, String> values = new LinkedHashMap<>(columns.size());
+        StringBuilder payload = new StringBuilder();
         for (Column<P, ?> column : columns) {
-            values.put(column.name(), column.encodedValue(projection));
+            LengthPrefixedPayloadCodec.appendField(payload, column.prefix(), column.encodedValue(projection));
         }
-        return LengthPrefixedPayloadCodec.encode(values);
+        return payload.toString();
     }
 
     @Override
     public P fromRedisValue(String encoded) {
-        return decoder.apply(new ProjectionRow(LengthPrefixedPayloadCodec.decode(encoded)));
+        String[] values = new String[columns.size()];
+        boolean[] present = new boolean[columns.size()];
+        String[] extras = null;
+        int extraSize = 0;
+        var cursor = LengthPrefixedPayloadCodec.cursor(encoded);
+        while (cursor.next()) {
+            String name = cursor.name();
+            Integer position = name == null ? null : positions.get(name);
+            if (position != null) {
+                values[position] = cursor.value();
+                present[position] = true;
+            } else {
+                if (extras == null) extras = new String[8];
+                else if (extraSize == extras.length) extras = java.util.Arrays.copyOf(extras,extras.length*2);
+                extras[extraSize++] = name;
+                extras[extraSize++] = cursor.value();
+            }
+        }
+        return decoder.apply(new ProjectionRow(positions, values, present, extras, extraSize));
     }
 
     public List<String> columns() {
@@ -65,13 +86,18 @@ public final class ProjectionSchema<P> implements ProjectionCodec<P> {
     private record Column<P, V>(
             String name,
             Function<P, V> accessor,
-            ProjectionValueCodec<V> codec
+            ProjectionValueCodec<V> codec,
+            String prefix
     ) {
+        private Column(String name, Function<P, V> accessor, ProjectionValueCodec<V> codec) {
+            this(name, accessor, codec, null);
+        }
         private Column {
             if (name == null || name.isBlank()) {
                 throw new IllegalArgumentException("Projection column name must not be blank");
             }
             name = name.trim();
+            prefix = LengthPrefixedPayloadCodec.fieldPrefix(name);
             Objects.requireNonNull(accessor, "accessor");
             Objects.requireNonNull(codec, "codec");
         }
@@ -94,6 +120,8 @@ public final class ProjectionSchema<P> implements ProjectionCodec<P> {
                 Function<P, V> accessor,
                 ProjectionValueCodec<V> codec
         ) {
+            if (columns.size() >= LengthPrefixedPayloadCodec.MAX_FIELDS)
+                throw new IllegalArgumentException("Projection schema supports at most 1024 columns");
             String normalizedName = name == null ? null : name.trim();
             if (columns.stream().anyMatch(column -> column.name().equals(normalizedName))) {
                 throw new IllegalArgumentException("Duplicate projection column: " + normalizedName);

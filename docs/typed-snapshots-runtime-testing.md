@@ -122,6 +122,8 @@ cachedb.runtime-role=CLIENT_ONLY
 ```properties
 # Worker deployment using the same entity/projection registrations and Redis config
 cachedb.runtime-role=WORKER_ONLY
+spring.main.web-application-type=none
+spring.main.keep-alive=true
 ```
 
 | Role | Redis reads / acceptance | Automatic background work |

@@ -3,15 +3,12 @@ package com.reactor.cachedb.starter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.reactor.cachedb.core.config.*;
-
+import java.util.*;
+import java.util.stream.Collectors;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-
 import redis.clients.jedis.JedisPooled;
-
-import java.util.*;
-import java.util.stream.Collectors;
 
 class CacheRuntimeRoleTest {
     @Test
@@ -48,7 +45,8 @@ class CacheRuntimeRoleTest {
                         .build();
         var sql = new JdbcDataSource();
         var before = threads();
-        try (var redis = new JedisPooled("redis://127.0.0.1:16383");
+        try (var redis = new JedisPooled("redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1")
+                        + ":" + Integer.getInteger("cachedb.snapshot.redis.port", 16383));
                 var database = new CacheDatabase(redis, sql, config)) {
             database.start();
             assertEquals(before, threads());

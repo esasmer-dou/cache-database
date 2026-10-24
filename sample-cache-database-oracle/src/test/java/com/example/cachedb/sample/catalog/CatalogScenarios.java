@@ -2,15 +2,14 @@ package com.example.cachedb.sample.catalog;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.http.*;
-import org.springframework.jdbc.core.JdbcTemplate;
-
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.http.*;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 /** The same REST contract runs unchanged against all three real SQL providers. */
 public final class CatalogScenarios {
@@ -128,6 +127,20 @@ public final class CatalogScenarios {
                 HttpStatus.BAD_REQUEST,
                 http.getForEntity(base + "/api/catalog/categories/feature-a?limit=101", Map.class)
                         .getStatusCode());
+
+        var range = http.getForObject(base + "/api/catalog/categories/feature-a/available?minimum=10&maximum=10&limit=10", Map.class);
+        assertEquals(1, ((List<?>) range.get("items")).size());
+        assertEquals(HttpStatus.BAD_REQUEST, http.getForEntity(
+                base + "/api/catalog/categories/feature-a/available?minimum=10&maximum=1", Map.class).getStatusCode());
+        sql.update("UPDATE sample_products SET stock_quantity = 14 WHERE product_id = ?", 9_000_001);
+        var marked = post(http, base + "/api/catalog/dirty", Map.of("ids", List.of(9_000_001,9_000_001)));
+        assertEquals(HttpStatus.ACCEPTED, marked.getStatusCode());
+        assertEquals(1, ((Number) marked.getBody().get("added")).intValue());
+        assertEquals(0, ((Number) post(http, base + "/api/catalog/dirty", Map.of("ids", List.of(9_000_001)))
+                .getBody().get("added")).intValue());
+        complete(http, base, post(http, base + "/api/catalog/dirty/flush", Map.of()));
+        var updated = http.getForObject(base + "/api/catalog/items/9000001", Map.class);
+        assertEquals(12, ((Number) ((Map<?, ?>) ((List<?>) updated.get("values")).getFirst()).get("available")).intValue());
     }
 
     private static Map<String, Object> row(long id, String category) {

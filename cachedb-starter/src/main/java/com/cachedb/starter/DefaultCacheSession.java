@@ -125,7 +125,6 @@ public final class DefaultCacheSession implements CacheSession {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public <T, ID> EntityRepository<T, ID> repository(
             EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
         EntityBinding<T, ID> binding =
@@ -138,6 +137,7 @@ public final class DefaultCacheSession implements CacheSession {
     }
 
     @Override
+    @SuppressWarnings("unchecked") // The registered entity and policy select this typed factory result.
     public <T, ID> EntityRepository<T, ID> repository(
             EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy cachePolicy) {
         CachePolicy defaultPolicy = config.resourceLimits().defaultCachePolicy();

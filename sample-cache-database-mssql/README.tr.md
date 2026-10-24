@@ -3,7 +3,7 @@
 [English](README.md) | Türkçe
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.14.0](https://img.shields.io/badge/CacheDB-0.14.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.14.0)
+[![CacheDB 0.15.0](https://img.shields.io/badge/CacheDB-0.15.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.15.0)
 
 Bu proje, CacheDB'nin Redis 8 ve SQL Server ile nasıl kullanılacağını gösteren
 bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
@@ -11,7 +11,7 @@ açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
 kullanır, kalıcı geçmiş SQL Server'da tutulur, büyüyen listeler ise bütün nesne
 ağacı yerine projection üzerinden okunur.
 
-> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.14.0`
+> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.15.0`
 > paketini kullanır. GitHub token'ı veya yerel CacheDB kaynak kodu gerekmez.
 
 Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
@@ -20,22 +20,22 @@ yolunu okuyacak, karşılık gelen Redis projection'ını hazırlayacak, aktif y
 çağıracak ve kapsam ile kalıcılık sinyallerini inceleyeceksin. Redis'te kayıt
 bulunmaması arka planda gizli bir SQL Server sorgusu başlatmaz.
 
-## CacheDB 0.14.0'a Yükseltme
+## CacheDB 0.15.0'a Yükseltme
 
 Örnek POM; BOM, sağlayıcı starter'ı, annotation processor ve doctor plugin'ini
-`0.14.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
+`0.15.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
 POM ayrıca `jedis.version=5.2.0` ayarını içerir. Bu ayar olmadan Spring Boot parent,
 gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 
 - Mevcut REST, arşiv, projection ve ön yükleme yollarının açık davranışı korunur.
 - Mevcut SQL worker'larını yükseltmeden önce sağlayıcınıza ait `cachedb_write_fence` migration'ını uygulayın, eski worker'ları devreden çıkarın ve sürüm sayaçlarını koruyun. Ayrı metadata tablosu, geciken eski yazmanın silinmiş kaydı yeniden oluşturmasını engeller; iş tabloları değişmez. [Kalıcı yazma sürümleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/kalici-yazma-surumleri.md) rehberini izleyin.
-- Tipli snapshot, Jackson'sız codec ve atomik ürün aktarımı çalışan katalog senaryosunda kullanılır. Ayrı API/worker profilleri de bulunur. [Çalışan 0.14 senaryolarını](#çalışan-014-özellik-senaryoları) adım adım izleyin.
+- Tipli snapshot, Jackson'sız codec ve atomik ürün aktarımı çalışan katalog senaryosunda kullanılır. Ayrı API/worker profilleri de bulunur. [Çalışan 0.14 senaryolarını](#bildirimsel-katalog-senaryoları) adım adım izleyin.
 - Katı 50 ms CI hedefi, ilk kullanım dâhil üretilen codec/snapshot senaryosu içindir. REST, SQL, ağ veya canlı sistem SLA'sı değildir; eski mapper API'lerinin uyumluluğu ve tüm JUnit metot süreleri ayrıca raporlanır.
 - `hotEntityLimit=0` entity kabulünü kapatır. `-1` değerini yalnızca bilinçli bir sınırsız kayıt politikası için kullanın. Varsayılan 1.000 olarak korunur.
 - SQL kolonunuz NULL alabiliyorsa `Boolean` kullanın; primitive `boolean`, SQL NULL değerini reddeder.
 - Atomik katalog aktarımı ve indeksli snapshot sayfaları açık endpoint'lerle gösterilir. Redis Cluster dağılımı isteğe bağlı framework altyapısıdır; yerel Compose tek Redis kullanır.
 
-Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.14.0.md)
+Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.15.0.md)
 ve [sınırlı çalışma sözleşmelerini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/sinirli-calisma-islemleri.md)
 okuyun. Paketin kullanılabilir olması, uygulamanızın canlı ortam topolojisini doğrulamaz.
 
@@ -49,7 +49,7 @@ okuyun. Paketin kullanılabilir olması, uygulamanızın canlı ortam topolojisi
 | SQL Server'daki mevcut veriyi Redis'e hazırlamak | [Mevcut Veriyi Hazırlama](#mevcut-veriyi-hazırlama) |
 | Cache sınırlarını belirlemek | [Kullanım Senaryosuna Göre Ayar](#kullanım-senaryosuna-göre-ayar) |
 | Tüm yolları denemek | [API Kataloğu](#api-kataloğu) veya [Postman](#postman) |
-| Tipli snapshot, atomik aktarım ve ayrı worker'ları çalıştırmak | [Çalışan 0.14 Özellik Senaryoları](#çalışan-014-özellik-senaryoları) |
+| Tipli snapshot, atomik aktarım ve ayrı worker'ları çalıştırmak | [Bildirimsel Katalog Senaryoları](#bildirimsel-katalog-senaryoları) |
 | Canlı ortam hazırlığını kanıtlamak | [Production Sertifikası](#production-sertifikası) |
 | Canlı ortam geçişini hazırlamak | [Canlı Ortam Kontrol Listesi](#canlı-ortam-kontrol-listesi) |
 | Başlangıç veya veri yolu sorununu çözmek | [Sorun Giderme](#sorun-giderme) |
@@ -143,7 +143,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.14.0</cachedb.version>
+<cachedb.version>0.15.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -235,7 +235,7 @@ herkese açıktır; Maven `settings.xml`, kullanıcı adı veya token gerekmez.
 ### 1. Yayımlanmış CacheDB paketini çözümle
 
 Sample projesini doğrudan doğrula. Maven; BOM, starter, annotation processor ve
-doctor plugin'ini değişmez `0.14.0` paketinden kimlik bilgisi istemeden çözümler:
+doctor plugin'ini değişmez `0.15.0` paketinden kimlik bilgisi istemeden çözümler:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -391,7 +391,7 @@ operasyon metadata'sıyla birlikte hesaplamalısın.
 ## Kod Üzerinden Akış
 
 Bu bölümdeki kısa parçalar öğretici kesitlerdir; tam kaynak dosyaları bağlantılarda bulunur.
-[Çalışan 0.14 senaryolarında](#çalışan-014-özellik-senaryoları) ise import ve constructor'ları dâhil tam, derlenen Java dosyaları yer alır.
+[Çalışan 0.14 senaryolarında](#bildirimsel-katalog-senaryoları) ise import ve constructor'ları dâhil tam, derlenen Java dosyaları yer alır.
 
 ### 1. Entity: kalıcı veri şekli
 
@@ -805,7 +805,7 @@ Snapshot ve atomik aktarım için ayrı hazırlanan
 `postman/cache-database-mssql-catalog.postman_collection.json` koleksiyonunu
 kullanın. Bu koleksiyon kendi dört ürününü oluşturur ve sonuçları doğrular.
 Otomatik çalıştırıcı, API/worker kurulumu, tekrar gönderim kuralları ve beklenen
-sonuçlar için [çalışan senaryoları](#çalışan-014-özellik-senaryoları) izleyin.
+sonuçlar için [çalışan senaryoları](#bildirimsel-katalog-senaryoları) izleyin.
 
 ## Yük Testi
 
@@ -917,12 +917,113 @@ kullan. Örnek kanıtları başarılı gibi işaretleme.
 - [Production reçeteleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/production-recipes.md)
 
 <!-- BEGIN COMPILED FEATURE EXAMPLES -->
-## Çalışan 0.14 Özellik Senaryoları
+## Bildirimsel Katalog Senaryoları
 
-Bu senaryolar yayımlanmış **CacheDB 0.14.0** paketini kullanır. Mevcut sipariş,
+Bu senaryolar **CacheDB 0.15.0** sürümünü kullanır. Mevcut sipariş,
 destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar yalnızca anlatım
 için yazılmış taslaklar değildir; üç sağlayıcıda da derlenen ve test edilen
 örnek kaynak kodlarıdır. Her tam Java bloğunu, üstünde belirtilen dosyaya yerleştirin.
+
+### 0.15 ile Gelen Kolaylıklar
+
+Katalog planı, üretilmiş JSON codec'ini tanım oluşturulurken bir kez bulur.
+`scopedBy`, SQL sorgusunu daraltan kimlik sütununu belirtir; `plan.bind` ise tipli
+Redis okuyucusunu oluşturur. Çalışma anında alan keşfi, kendiliğinden SQL'e geçiş
+veya uygulama açılırken otomatik veri aktarımı yapılmaz.
+Arşiv sorgusunda yinelenen OR gruplarının yerini `@CacheSeek` alır.
+`@CacheJobHandler` eklenen metot için doğrudan çağrı yapan bir işleyici üretilir.
+Komut verisi, üretilmiş bir codec veya açıkça tanımlanmış `CacheValueCodec` kullanmalıdır.
+
+### Stok Aralığı ve Birleştirilen Değişiklik Bildirimleri
+
+Okumaya geçmeden önce aşağıdaki yenileme akışıyla kataloğu hazırlayın.
+Alt ve üst stok sınırları sonuca dahildir. Sıralama önce kullanılabilir stok,
+eşitlik durumunda ise metin biçimindeki ürün kimliğine göre yapılır:
+
+Bu örnekler, 2. bölümdeki tedarikçi aktarımının `tools` kategorisine eklediği
+`9200001` ve `9200002` numaralı ürünleri kullanır. Önce SQL kalıcılığını doğrulayın
+ve katalog yenilemesini tamamlayın. Spring servisinize, derlenen sınıflardaki gibi
+`SnapshotJobs snapshots` ve `TypedSnapshotRepository<Long, CatalogCard> catalog`
+bağımlılıklarını ekleyin.
+
+```java
+var page = catalog.findTypedPage(new SnapshotPageRequest(
+        "tools", 5, 20, WindowRequest.first(25)));
+// Sonraki sayfada page.nextCursor() ile AYNI kategori ve sınırları kullanın.
+// Sınırlı sayıda Redis indeks/veri okuması yapılır. Kayıt yoksa SQL çalıştırılmaz.
+```
+
+Bu sorgunun API karşılığı:
+`GET /api/catalog/categories/tools/available?minimum=5&maximum=20&limit=25`.
+Geçersiz sınırlar 400 yanıtı üretir. Önceki kategori adresi de çalışmaya devam eder.
+
+Tedarikçi işlemi SQL'de kalıcılaştıktan sonra değişen ürün kimliklerini biriktirin:
+
+```java
+snapshots.markDirty(CatalogConfiguration.PLAN, List.of(9200001L, 9200002L, 9200001L));
+// İşleyici tarafında, SQL transaction'ı tamamlandıktan sonra:
+var refreshed = snapshots.flushDirty(CatalogConfiguration.PLAN);
+// Optional.empty(): bekleyen kimlik yoktur. Hatalı yenilemede kimlikler yeniden beklemeye alınır.
+```
+
+Aynı ürün için art arda gelen bildirimler sınırlı bir kümede birleştirilir.
+Yenileme sürerken yeniden bildirilen ürün bir sonraki yenilemede de işlenir.
+Grubu tek işleyici sahiplenir; işleyici kapanırsa sahiplik süresi dolduktan sonra
+başka biri devam edebilir. `batch-rows`, bekleyen ve işlenmekte olan benzersiz
+kimliklerin toplamını sınırlar. Sınır aşılırsa veri sessizce atılmaz; hata verilir.
+Önceden tamamlanmış bir snapshot ve açık bir root scope tanımı gerekir.
+Bir çağrıda girilen kimlik sayısı da, tekrarlar birleştirilmeden önce `batch-rows`
+sınırıyla kontrol edilir.
+Yenileme SQL çalıştırır; GET isteğinin içine gizlenmemelidir.
+Bu bildirimler süreli ipuçlarıdır; kalıcı outbox veya CDC yerine geçmez.
+Kurtarma için dönemsel tam karşılaştırmayı ya da kalıcı değişiklik kaynağını koruyun.
+
+Yalnızca demoda açık olan `POST /api/catalog/dirty`, `{"ids":[9200001,9200002]}` alır ve
+eklenen kimlik sayısıyla 202 döndürür. `POST /api/catalog/dirty/flush` ise 202 ve
+işin takip adresini döndürür. Bu adresi COMPLETED veya FAILED görülene kadar izleyin.
+Bu komutlar, açıkça etkinleştirilen demo profili dışında kapalıdır.
+
+`src/main/java/com/example/cachedb/sample/catalog/CatalogDirtyJobHandler.java`:
+
+```java
+package com.example.cachedb.sample.catalog;
+
+import com.reactor.cachedb.annotations.CacheJobHandler;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition;
+import com.reactor.cachedb.spring.boot.snapshot.SnapshotJobs;
+import java.util.Map;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+/** SQL reconciliation is explicit worker work, never a hidden read-endpoint side effect. */
+@Component
+@ConditionalOnProperty(prefix="sample.demo", name="write-tools-enabled", havingValue="true")
+public final class CatalogDirtyJobHandler {
+    public static final CacheDistributedJobDefinition<CatalogRefreshCommand> DEFINITION =
+            CacheDistributedJobDefinition.of("sample.catalog.flush-dirty", CatalogRefreshCommand.class);
+    private final SnapshotJobs snapshots;
+    public CatalogDirtyJobHandler(SnapshotJobs snapshots) { this.snapshots = snapshots; }
+
+    @CacheJobHandler("sample.catalog.flush-dirty")
+    public Object flush(CatalogRefreshCommand command) {
+        if (!command.ids().isEmpty()) throw new IllegalArgumentException("Flush consumes the already marked roots, not an input ID list");
+        return snapshots.flushDirty(CatalogConfiguration.PLAN).<Object>map(value -> value)
+                .orElseGet(() -> Map.of("status", "NO_CHANGES"));
+    }
+}
+```
+
+API pod'larında `client`, SQL hazırlığını yapan pod'larda `worker` profilini kullanın.
+İş yayımlayan executor framework tarafından sağlanır; elle yapılandırma gerekmez.
+Yalnızca yayımlayan pod, işleyici/heartbeat veya snapshot zamanlayıcı iş parçacığı
+başlatmaz. Redis Cluster'da anahtarlar aynı slot'taysa tek atomik script kullanılır.
+Farklı slot'larda kontrollü kuyruğa alma ve hata halinde temizleme yolu korunur.
+Redis erişilebilir olmalıdır; bu yapı bellekte çalışan kalıcı bir kuyruk değildir.
+
+`withContentReuse()`, JSON diske yazılırken özetini hesaplar. Değişmeyen içerik
+yeniden okunup gönderilmeden paylaşılır. İçerik yayın öncesinde silinirse dosyadaki
+veriyle tekrar denenir. Bu seçenek, SQL hazırlığını ortadan kaldırmaz ve belleğe
+sınırsız veri alma izni vermez.
 
 | Gerçek ihtiyaç | Kullanılan yapı | Gösterdiği davranış |
 | --- | --- | --- |
@@ -994,11 +1095,9 @@ import com.example.cachedb.sample.domain.ProductEntity;
 import com.example.cachedb.sample.domain.ProductEntityCacheBinding;
 import com.reactor.cachedb.spring.boot.snapshot.*;
 import com.reactor.cachedb.starter.CacheDatabase;
-
+import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
-import java.util.List;
 
 @Configuration(proxyBeanMethods = false)
 public class CatalogConfiguration {
@@ -1019,21 +1118,15 @@ public class CatalogConfiguration {
                         SnapshotIndexSpec.of(
                                 row -> row.category,
                                 row -> Math.max(0, row.stockQuantity - row.reservedQuantity)))
-                .scoped(
-                        SnapshotRootScope.builder()
-                                .source(
-                                        source,
-                                        ids ->
-                                                SnapshotPredicate.inValues(
-                                                        "product_id",
-                                                        ids.stream().map(Long::valueOf).toList()))
-                                .build())
-                .withJsonCodec(CatalogCardJsonCodec.INSTANCE);
+                .scopedBy(source, "product_id", Long::valueOf)
+                .withGeneratedJsonCodec()
+                .withContentReuse();
     }
 
     @Bean
-    TypedSnapshotRepository<Long, CatalogCard> stockCatalogRepository(SnapshotJobs jobs) {
-        return jobs.typedRepository(PLAN, CatalogCard.class, Object::toString);
+    TypedSnapshotRepository<Long, CatalogCard> stockCatalogRepository(
+            SnapshotJobs jobs, SnapshotPlan<ProductEntity, CatalogCard> stockCatalog) {
+        return stockCatalog.bind(jobs.repository(PLAN), Object::toString);
     }
 
     @Bean
@@ -1045,10 +1138,10 @@ public class CatalogConfiguration {
 
 Örneğin POM dosyasında Gson **2.13.2** açıkça sabitlenmiştir. Aksi hâlde Spring
 Boot parent, gerekli `Strictness` sınıfını içermeyen eski Gson sürümünü seçebilir.
-POM'da `cachedb-json`, annotation bağımlılığı ve 0.14.0 processor birlikte bulunur.
+POM'da `cachedb-json`, annotation bağımlılığı ve 0.15.0 processor birlikte bulunur.
 Gson sürüm ayarını kaldırmayın; farklı framework sürümlerini karıştırmayın.
 
-0.14.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
+0.15.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
 zamanı bağımlılıkları şunlardır:
 
 ```xml
@@ -1316,52 +1409,13 @@ docker compose -f docker-compose.yml -f docker-compose.roles.yml logs worker
 
 Aynı JAR, API'de `demo,client`, işleyicilerde `demo,worker` profiliyle çalışır.
 Worker profili `web-application-type=none` kullanır; REST dinleyicisi açmaz.
+Ayrıca `spring.main.keep-alive=true` ayarı bulunur. Arka plan havuzları daemon
+iş parçacıkları kullanır; web sunucusu olmayan JVM'in kendiliğinden kapanmaması
+için uygulama yaşam döngüsü bu ayarla açıkça korunur.
 Entity tanımları, JSON codec'leri, Redis, SQL ve iş tanımları ortaktır.
-0.14.0'da worker otomatik kurulumu, client için iş yürütücüsü oluşturmaz.
-Örnek bu nedenle public API üzerinden yalnızca kuyruğa gönderim yapan bean'i
-açıkça tanımlar. Sondaki `false`, iş tüketimini kapatır. Client profilinde demo
-iş endpoint'lerini açıyorsanız bu tanımı kaldırmayın.
-
-`src/main/java/com/example/cachedb/sample/catalog/ClientJobSubmissionConfiguration.java`:
-
-```java
-package com.example.cachedb.sample.catalog;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.reactor.cachedb.spring.boot.CacheDbSpringProperties;
-import com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor;
-import com.reactor.cachedb.spring.boot.CacheDistributedJobHandler;
-import com.reactor.cachedb.starter.CacheDatabase;
-
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Profile;
-
-/** 0.14.0 auto-configures job executors on workers; this explicit client bean only publishes. */
-@Configuration(proxyBeanMethods = false)
-@Profile("client")
-@ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
-public class ClientJobSubmissionConfiguration {
-    @Bean(destroyMethod = "close")
-    @ConditionalOnMissingBean(CacheDistributedJobExecutor.class)
-    CacheDistributedJobExecutor clientJobPublisher(
-            CacheDatabase database,
-            ObjectMapper mapper,
-            CacheDbSpringProperties properties,
-            ObjectProvider<CacheDistributedJobHandler<?>> handlers) {
-        return new CacheDistributedJobExecutor(
-                database.backgroundRedisOperations(),
-                mapper,
-                database.instanceId(),
-                properties.getJobs(),
-                handlers.orderedStream().toList(),
-                false);
-    }
-}
-```
+0.15.0'da otomatik yapılandırma, `CLIENT_ONLY` için yalnızca iş yayımlayan
+executor'ı da sağlar. Tanımlı komutları kabul eder; işleri tüketmez ve boşta
+işleyici/heartbeat iş parçacığı başlatmaz. Ek yapılandırma sınıfı gerekmez.
 
 Bu yerel örnekte her uygulama konteyneri **2 CPU / 768 MiB** ile sınırlıdır.
 Bu değerler ölçülmüş üretim kapasitesi önerisi değil, örnek çalışma sınırlarıdır.
@@ -1637,7 +1691,7 @@ endpoint'i olarak sunulmaz. Kalıcı `cachedb_write_fence` tablosunu koruyun;
 sağlayıcı migration'ı ve kontrollü yükseltme rehberini uygulayın.
 
 `postman/cache-database-mssql-catalog.postman_collection.json` dosyasını içe
-aktarın. **16 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed gerekmez.
+aktarın. **23 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed gerekmez.
 Akış; ilk süre sınırlı bekleme yeterli değilse yalnızca aynı teslimatı tekrar
 göndererek SQL kalıcılığını, aynı receipt ile tekrarı, değişen içeriğin reddini,
 snapshot yayınını, Türkçe metin/ondalık sayıyı, tek nesilden okumayı, sayfalamayı
@@ -1663,4 +1717,12 @@ Bu aracı üretim veritabanına bağlamayın.
 `-SplitRoles` seçeneği, yerel şemayı hazırlayıp hazırlık JVM'ini durdurur; aynı
 koleksiyonu bir API konteyneri ve **iki worker konteyneri** üzerinde çalıştırır.
 Örneklerin CI hattı bu modu kullanır; konteyner logları test kanıtına eklenir.
+
+Ayrı sunulan 59 istekli iş senaryoları koleksiyonu, kabul edilen her arka plan
+işinden sonra kayıtlı durum isteğini otomatik sorgular ve tamamlanınca sıradaki
+isteğe geçer. Bekleme en fazla 30 saniye veya 150 denemedir. Her yanıtın HTTP
+kodu doğrulanır; başarısız işten sonra okumaya devam edilmez. HTTP yük kontrolünden
+hemen önce katalog açıkça yenilenmelidir. `warn-age` süresinden sonra görülen
+`STALE_WARNING`, verinin yaşıyla ilgili bilinçli bir uyarıdır; kaydın bulunamadığı
+veya sistemin kendiliğinden SQL'e geçmesi gerektiği anlamına gelmez.
 <!-- END COMPILED FEATURE EXAMPLES -->

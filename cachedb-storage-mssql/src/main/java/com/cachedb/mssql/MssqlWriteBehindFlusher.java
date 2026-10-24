@@ -8,10 +8,10 @@ import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.queue.WriteBehindFlusherFactory;
 import com.reactor.cachedb.core.queue.WriteFailureDetails;
 import com.reactor.cachedb.core.registry.EntityRegistry;
+import com.reactor.cachedb.jdbc.AbstractJdbcWriteBehindFlusher;
 import com.reactor.cachedb.jdbc.JdbcWriteBehindSupport;
 import com.reactor.cachedb.jdbc.JdbcWriteFence;
 import com.reactor.cachedb.jdbc.VersionGuardedWriteSupport;
-
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -23,19 +23,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 import javax.sql.DataSource;
 
-public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher {
+public final class MssqlWriteBehindFlusher extends AbstractJdbcWriteBehindFlusher implements FailureClassifyingFlusher {
 
-    private final DataSource dataSource;
-    private final EntityRegistry entityRegistry;
     private final MssqlDatabaseDialect dialect;
     private final MssqlFailureClassifier failureClassifier;
     private final StoragePerformanceCollector performanceCollector;
     private final MssqlWriteBehindOptions options;
     private final int transactionBatchSize;
-    private final JdbcWriteFence writeFence;
 
     public MssqlWriteBehindFlusher(DataSource dataSource, EntityRegistry entityRegistry) {
         this(
@@ -77,18 +73,12 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
             WriteBehindConfig config,
             StoragePerformanceCollector performanceCollector,
             MssqlWriteBehindOptions options) {
-        this.dataSource = dataSource;
-        this.entityRegistry = entityRegistry;
+        super(dataSource, entityRegistry, JdbcWriteFence.Provider.MSSQL,
+                (options == null ? MssqlWriteBehindOptions.defaults() : options).queryTimeoutSeconds(), config);
         this.dialect = new MssqlDatabaseDialect();
         this.failureClassifier = new MssqlFailureClassifier();
         this.performanceCollector = performanceCollector;
         this.options = options == null ? MssqlWriteBehindOptions.defaults() : options;
-        this.writeFence =
-                new JdbcWriteFence(
-                        dataSource,
-                        entityRegistry,
-                        JdbcWriteFence.Provider.MSSQL,
-                        this.options.queryTimeoutSeconds());
         this.transactionBatchSize =
                 Math.max(
                         1,
@@ -149,67 +139,33 @@ public final class MssqlWriteBehindFlusher implements FailureClassifyingFlusher 
 
     private void executeInTransaction(Connection connection, List<QueuedWriteOperation> operations)
             throws SQLException {
-        boolean previousAutoCommit = connection.getAutoCommit();
-        int previousIsolation = connection.getTransactionIsolation();
-        int previousLockTimeout = MssqlWriteBehindOptions.LOCK_TIMEOUT_WAIT_FOREVER;
-        boolean restoreLockTimeout = false;
-        connection.setAutoCommit(false);
-        try {
-            if (options.lockTimeoutEnabled()) {
+        SessionSettings settings = options.lockTimeoutEnabled() ? new SessionSettings() {
+            private int previousTimeout;
+            private boolean restore;
+            @Override
+            public void apply(Connection connection) throws SQLException {
                 if (options.restoreLockTimeoutAfterTransaction()) {
-                    previousLockTimeout = currentLockTimeout(connection);
-                    restoreLockTimeout = true;
+                    previousTimeout = currentLockTimeout(connection);
+                    restore = true;
                 }
                 setLockTimeout(connection, options.lockTimeoutMillis());
             }
-            connection.setTransactionIsolation(options.transactionIsolation());
-            operations = writeFence.filter(connection, operations);
+            @Override
+            public void restore(Connection connection) throws SQLException {
+                if (restore) setLockTimeout(connection, previousTimeout);
+            }
+        } : null;
+        inTransaction(connection, operations, options.transactionIsolation(), settings, accepted -> {
             try (StatementCache statements = new StatementCache(connection)) {
                 int index = 0;
-                while (index < operations.size()) {
-                    QueuedWriteOperation operation = operations.get(index);
-                    if (operation.type() == OperationType.DELETE) {
-                        index = deleteConsecutiveBatch(statements, operations, index);
-                    } else {
-                        index = upsertConsecutiveBatch(statements, operations, index);
-                    }
+                while (index < accepted.size()) {
+                    QueuedWriteOperation operation = accepted.get(index);
+                    index = operation.type() == OperationType.DELETE
+                            ? deleteConsecutiveBatch(statements, accepted, index)
+                            : upsertConsecutiveBatch(statements, accepted, index);
                 }
             }
-            connection.commit();
-        } catch (SQLException | RuntimeException exception) {
-            connection.rollback();
-            throw exception;
-        } finally {
-            SQLException restoreFailure = null;
-            try {
-                connection.setTransactionIsolation(previousIsolation);
-            } catch (SQLException exception) {
-                restoreFailure = exception;
-            }
-            if (restoreLockTimeout) {
-                try {
-                    setLockTimeout(connection, previousLockTimeout);
-                } catch (SQLException exception) {
-                    if (restoreFailure == null) {
-                        restoreFailure = exception;
-                    } else {
-                        restoreFailure.addSuppressed(exception);
-                    }
-                }
-            }
-            try {
-                connection.setAutoCommit(previousAutoCommit);
-            } catch (SQLException exception) {
-                if (restoreFailure == null) {
-                    restoreFailure = exception;
-                } else {
-                    restoreFailure.addSuppressed(exception);
-                }
-            }
-            if (restoreFailure != null) {
-                throw restoreFailure;
-            }
-        }
+        });
     }
 
     @Override

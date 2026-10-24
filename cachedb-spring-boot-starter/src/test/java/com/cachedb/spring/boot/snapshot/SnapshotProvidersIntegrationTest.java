@@ -5,22 +5,19 @@ import static org.assertj.core.api.Assertions.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.junit.jupiter.api.io.TempDir;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
-
-import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.params.ScanParams;
-
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Clock;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.params.ScanParams;
 
 /** Explicit opt-in evidence against disposable local/provider CI databases, never production. */
 @EnabledIfSystemProperty(named = "cachedb.snapshot.providers", matches = "true")
@@ -283,9 +280,7 @@ class SnapshotProvidersIntegrationTest {
         try (var connection =
                         DriverManager.getConnection(
                                 url("mssql")
-                                        .replace(
-                                                "databaseName=cachedb_snapshot",
-                                                "databaseName=master"),
+                                        .replaceAll("(?i)databaseName=[^;]+", "databaseName=master"),
                                 "sa",
                                 password("mssql"));
                 var statement = connection.createStatement()) {
@@ -294,9 +289,7 @@ class SnapshotProvidersIntegrationTest {
             try (var read =
                     DriverManager.getConnection(
                             url("mssql")
-                                    .replace(
-                                            "databaseName=cachedb_snapshot",
-                                            "databaseName=" + database),
+                                    .replaceAll("(?i)databaseName=[^;]+", "databaseName=" + database),
                             "sa",
                             password("mssql"))) {
                 assertThatThrownBy(() -> SnapshotTransaction.begin(read))
@@ -311,7 +304,7 @@ class SnapshotProvidersIntegrationTest {
     }
 
     private static String url(String provider) {
-        return System.getProperty(
+        return com.reactor.cachedb.spring.boot.TestFixtureSettings.value(
                 "cachedb.snapshot." + provider + ".url",
                 switch (provider) {
                     case "postgres" -> "jdbc:postgresql://127.0.0.1:15435/postgres";
@@ -327,7 +320,7 @@ class SnapshotProvidersIntegrationTest {
     }
 
     private static String password(String provider) {
-        return System.getProperty(
+        return com.reactor.cachedb.spring.boot.TestFixtureSettings.value(
                 "cachedb.snapshot." + provider + ".password",
                 switch (provider) {
                     case "postgres" -> "LocalFixture_7p92_test";
@@ -345,14 +338,14 @@ class SnapshotProvidersIntegrationTest {
         final HikariDataSource source;
         final JedisPooled redis =
                 new JedisPooled(
-                        "redis://127.0.0.1:"
+                        "redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1") + ":"
                                 + Integer.getInteger("cachedb.snapshot.redis.port", 16383));
 
         Fixture(String provider) {
             var config = new HikariConfig();
             config.setJdbcUrl(url(provider));
             config.setUsername(
-                    System.getProperty(
+                    com.reactor.cachedb.spring.boot.TestFixtureSettings.value(
                             "cachedb.snapshot." + provider + ".user",
                             switch (provider) {
                                 case "postgres" -> "postgres";

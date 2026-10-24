@@ -2,13 +2,11 @@ package com.reactor.cachedb.redis;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-
 import redis.clients.jedis.*;
 import redis.clients.jedis.params.ScanParams;
-
-import java.util.*;
 
 class RedisClusterOperationsTest {
     @Test
@@ -34,6 +32,7 @@ class RedisClusterOperationsTest {
                         .socketTimeoutMillis(5000)
                         .hostAndPortMapper(
                                 address ->
+                                        System.getProperty("cachedb.redis.cluster.host") != null ? address :
                                         new HostAndPort(
                                                 "127.0.0.1",
                                                 address.getPort() < 10000
@@ -43,7 +42,7 @@ class RedisClusterOperationsTest {
         try (var redis =
                 new JedisClusterOperations(
                         new JedisCluster(
-                                Set.of(new HostAndPort("127.0.0.1", 17001)), configuration))) {
+                                Set.of(new HostAndPort(System.getProperty("cachedb.redis.cluster.host", "127.0.0.1"), Integer.getInteger("cachedb.redis.cluster.port", 17001))), configuration))) {
             String prefix = "cluster-test-" + UUID.randomUUID();
             var keys = List.of(prefix + ":{alpha}:1", prefix + ":{beta}:2", prefix + ":{gamma}:3");
             try {

@@ -287,6 +287,8 @@ cachedb.runtime-role=CLIENT_ONLY
 ```properties
 # Aynı entity/projection tanımları ve Redis ayarlarıyla çalışan işleyici dağıtımı
 cachedb.runtime-role=WORKER_ONLY
+spring.main.web-application-type=none
+spring.main.keep-alive=true
 ```
 
 | Rol | Redis okuması / yazma kabulü | Otomatik arka plan işleri |

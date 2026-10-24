@@ -11,10 +11,6 @@ import com.reactor.cachedb.core.queue.StoragePerformanceCollector;
 import com.reactor.cachedb.core.route.RouteCacheContext;
 import com.reactor.cachedb.core.route.RouteCacheContract;
 import com.reactor.cachedb.core.route.TenantCacheQuota;
-
-import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.params.SetParams;
-
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -24,6 +20,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
+import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.params.SetParams;
 
 public final class RedisPageCacheManager<T, ID> {
 
@@ -142,6 +140,14 @@ public final class RedisPageCacheManager<T, ID> {
 
     public void recordEntityAccess(ID id) {
         recordEntityAccess(id, null, 0L);
+    }
+
+    public void recordEntityAccessBatch(java.util.Collection<ID> ids) {
+        if (ids.isEmpty()) return;
+        if (producerGuard != null && producerGuard.shouldShedHotSetTracking(metadata.redisNamespace())) return;
+        List<String> evicted = hotSetManager.recordAccessBatch(metadata.redisNamespace(), ids, effectiveCachePolicy());
+        recordEviction(evicted.size());
+        for (String id : evicted) removeEntity((ID) id);
     }
 
     public void recordEntityAccess(ID id, Map<String, Object> columns) {

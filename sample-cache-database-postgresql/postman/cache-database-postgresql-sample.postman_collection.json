@@ -36,6 +36,10 @@
     {
       "key": "warmJobId",
       "value": ""
+    },
+    {
+      "key": "businessSequence",
+      "value": "[\"Ready\",\"Seed Demo Data\",\"Latest Background Job Status (repeat until COMPLETED)\",\"Current Tuning Summary\",\"Route Tuning Profiles\",\"Scheduled Warm Status (local pod)\",\"Warm Active Customers\",\"Active Customers\",\"Customer Detail With Order Preview\",\"Warm Customer Orders Dry Run\",\"Warm Customer Orders Projection\",\"Customer Order Timeline Projection\",\"Warm Customer Orders Entity\",\"Warm Order Lines\",\"Order Detail With Line Preview\",\"Warm High Value Orders\",\"High Value Orders Projection\",\"Warm Highlighted Orders For Commerce Dashboard\",\"Archive Orders From SQL\",\"Create Customer\",\"Create Order\",\"Update Order Status\",\"Delete Order\",\"Warm Active Products Projection\",\"Active Products Projection\",\"Warm Low Stock Products\",\"Low Stock Products Projection\",\"Product Detail From Active Set\",\"Inactive Product Archive From SQL\",\"Update Product Stock\",\"Warm Open Tickets\",\"Open Tickets\",\"Ticket Detail From Active Set\",\"Create Support Ticket\",\"Escalate Support Ticket\",\"Warm Active Shipments Projection\",\"Active Shipments Projection\",\"Warm Shipment Exceptions\",\"Shipment Exceptions Projection\",\"Warm Customer Shipments\",\"Customer Shipments Projection\",\"Warm Shipment Events\",\"Shipment Detail With Event Preview\",\"Shipment Events\",\"Delivered Shipment Archive From SQL\",\"Create Shipment\",\"Add Shipment Event\",\"Update Shipment Status\",\"Warm Live Report Jobs\",\"Live Report Jobs\",\"Warm Report Jobs By Type\",\"Report Jobs By Type\",\"Create Report Job\",\"Complete Report Job\",\"Warm Security Audit Events\",\"Security Audit Events From Active Set\",\"Audit Archive From SQL\",\"Commerce Dashboard\",\"Operations Dashboard\"]"
     }
   ],
   "event": [
@@ -44,9 +48,19 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "if (pm.response.code === 202) {",
-          "  const body = pm.response.json();",
-          "  if (body.jobId) pm.collectionVariables.set('warmJobId', body.jobId);",
+          "const pollName = 'Latest Background Job Status (repeat until COMPLETED)';",
+          "if (pm.info.requestName !== pollName) {",
+          "  pm.test('Expected successful HTTP response: ' + pm.info.requestName, () => pm.expect(pm.response.code).to.be.within(200, 299));",
+          "  if (pm.response.code === 202 && pm.response.json().jobId) {",
+          "    const sequence = JSON.parse(pm.collectionVariables.get('businessSequence'));",
+          "    const index = sequence.indexOf(pm.info.requestName);",
+          "    const next = sequence[index + 1] === pollName ? sequence[index + 2] : sequence[index + 1];",
+          "    pm.collectionVariables.set('businessResume', next || '');",
+          "    pm.collectionVariables.set('warmJobId', pm.response.json().jobId);",
+          "    pm.collectionVariables.set('businessPolls', 0);",
+          "    pm.collectionVariables.set('businessDeadline', Date.now() + 30000);",
+          "    pm.execution.setNextRequest(pollName);",
+          "  }",
           "}"
         ]
       }
@@ -78,16 +92,25 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Job status is available', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Job status is available', () => pm.response.to.have.status(200));",
                   "const body = pm.response.json();",
-                  "pm.test('Job completed before a hot read', function () { pm.expect(body.status).to.eql('COMPLETED'); });"
+                  "const count = Number(pm.collectionVariables.get('businessPolls') || 0) + 1;",
+                  "pm.collectionVariables.set('businessPolls', count);",
+                  "if (!['COMPLETED','FAILED','CANCELLED'].includes(body.status) && count < 150 && Date.now() < Number(pm.collectionVariables.get('businessDeadline'))) {",
+                  "  setTimeout(() => pm.execution.setNextRequest(pm.info.requestName), 200);",
+                  "} else {",
+                  "  pm.test('Job completed before a hot read', () => pm.expect(body.status).to.eql('COMPLETED'));",
+                  "  const next = pm.collectionVariables.get('businessResume');",
+                  "  pm.collectionVariables.unset('businessResume');",
+                  "  pm.execution.setNextRequest(body.status === 'COMPLETED' && next ? next : null);",
+                  "}"
                 ]
               }
             }
           ],
           "request": {
             "method": "GET",
-            "description": "Run this request after every 202 Accepted response. Repeat it until status is COMPLETED before calling the related hot route.",
+            "description": "The runner polls this saved request after each accepted background job, for at most 30 seconds and 150 attempts. It then resumes the original sequence. Failed jobs stop the flow.",
             "url": "{{baseUrl}}/api/warm/jobs/{{warmJobId}}"
           }
         },

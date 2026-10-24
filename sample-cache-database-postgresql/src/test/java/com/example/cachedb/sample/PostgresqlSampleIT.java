@@ -1,5 +1,10 @@
 package com.example.cachedb.sample;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.example.cachedb.sample.repository.OrderRepository;
 import com.example.cachedb.sample.repository.OrderRepositoryCacheDbRoutes;
 import com.reactor.cachedb.core.repository.WindowRequest;
@@ -7,11 +12,18 @@ import com.reactor.cachedb.core.route.HotRoutePopulation;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestConfiguration;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestProbe;
 import com.reactor.cachedb.starter.CacheWarmTarget;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -19,30 +31,14 @@ import org.springframework.http.MediaType;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
-import java.math.BigDecimal;
-import java.net.URI;
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.function.BooleanSupplier;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-@Testcontainers
 @ActiveProfiles("demo")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -50,7 +46,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PostgresqlSampleIT {
     private static final String EXPECTED_PROVIDER = "postgres";
 
-    @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(DockerImageName.parse(
             "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
     ).asCompatibleSubstituteFor("postgres"))
@@ -58,7 +53,6 @@ class PostgresqlSampleIT {
             .withUsername("cachedb")
             .withPassword("cachedb");
 
-    @Container
     static final GenericContainer<?> REDIS = new GenericContainer<>(
             "redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232"
     )
@@ -68,11 +62,22 @@ class PostgresqlSampleIT {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
+        if (com.example.cachedb.sample.ExternalSampleFixtures.configure(registry)) return;
+        POSTGRES.start();
+        REDIS.start();
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("cachedb.redis.uri", () -> "redis://" + REDIS.getHost() + ":" + REDIS.getMappedPort(6379));
         registry.add("cachedb.admin.enabled", () -> false);
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void stopOwnedFixtures() {
+        if (System.getenv("CACHEDB_TEST_NAMESPACE") == null) {
+            REDIS.stop();
+            POSTGRES.stop();
+        }
     }
 
     @LocalServerPort

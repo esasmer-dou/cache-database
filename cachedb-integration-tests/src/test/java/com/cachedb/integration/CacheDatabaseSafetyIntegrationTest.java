@@ -1,9 +1,15 @@
 package com.reactor.cachedb.integration;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.reactor.cachedb.core.api.EntityRepository;
 import com.reactor.cachedb.core.cache.CachePolicy;
-import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.AdminHttpConfig;
+import com.reactor.cachedb.core.config.CacheDatabaseConfig;
 import com.reactor.cachedb.core.config.KeyspaceConfig;
 import com.reactor.cachedb.core.config.QueryIndexConfig;
 import com.reactor.cachedb.core.config.RedisFunctionsConfig;
@@ -17,44 +23,37 @@ import com.reactor.cachedb.core.route.TenantCacheQuota;
 import com.reactor.cachedb.examples.entity.UserEntity;
 import com.reactor.cachedb.examples.entity.UserEntityCacheBinding;
 import com.reactor.cachedb.redis.RedisEntityRepository;
-import com.reactor.cachedb.redis.RedisKeyStrategy;
 import com.reactor.cachedb.redis.RedisFunctionLibrarySource;
 import com.reactor.cachedb.redis.RedisFunctionLoader;
+import com.reactor.cachedb.redis.RedisKeyStrategy;
 import com.reactor.cachedb.starter.CacheDatabase;
 import com.reactor.cachedb.starter.CacheDatabaseAdminHttpServer;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.postgresql.ds.PGSimpleDataSource;
-import redis.clients.jedis.JedisPooled;
-
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.postgresql.ds.PGSimpleDataSource;
+import redis.clients.jedis.JedisPooled;
 
 final class CacheDatabaseSafetyIntegrationTest {
 
-    private static final String JDBC_URL = System.getProperty(
+    private static final String JDBC_URL = com.reactor.cachedb.integration.FixtureEnvironment.value(
             "cachedb.it.postgres.url",
             "jdbc:postgresql://127.0.0.1:5432/postgres"
     );
-    private static final String JDBC_USER = System.getProperty("cachedb.it.postgres.user", "postgres");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.postgres.password", "postgresql");
-    private static final String REDIS_URI = System.getProperty(
+    private static final String JDBC_USER = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.postgres.user", "postgres");
+    private static final String JDBC_PASSWORD = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.postgres.password", "postgresql");
+    private static final String REDIS_URI = com.reactor.cachedb.integration.FixtureEnvironment.value(
             "cachedb.it.redis.uri",
             "redis://default:welcome1@127.0.0.1:6379"
     );

@@ -61,9 +61,12 @@ class ClusterNamespaceShardingTest {
         String table = "sharding_" + UUID.randomUUID().toString().replace("-", "");
         String library = "test_" + UUID.randomUUID().toString().replace("-", "");
         var sql = new PGSimpleDataSource();
-        sql.setURL("jdbc:postgresql://127.0.0.1:15435/postgres");
-        sql.setUser("postgres");
-        sql.setPassword("LocalFixture_7p92_test");
+        sql.setURL(System.getProperty("cachedb.it.postgres.url", System.getenv()
+                .getOrDefault("CACHEDB_IT_POSTGRES_URL", "jdbc:postgresql://127.0.0.1:15435/postgres")));
+        sql.setUser(System.getProperty("cachedb.it.postgres.user", System.getenv()
+                .getOrDefault("CACHEDB_IT_POSTGRES_USER", "postgres")));
+        sql.setPassword(System.getProperty("cachedb.it.postgres.password", System.getenv()
+                .getOrDefault("CACHEDB_IT_POSTGRES_PASSWORD", "LocalFixture_7p92_test")));
         try (var connection = sql.getConnection();
                 var statement = connection.createStatement()) {
             statement.execute(
@@ -211,12 +214,14 @@ class ClusterNamespaceShardingTest {
     private JedisClusterOperations client() {
         return new JedisClusterOperations(
                 new JedisCluster(
-                        Set.of(new HostAndPort("127.0.0.1", 17001)),
+                        Set.of(new HostAndPort(System.getProperty("cachedb.redis.cluster.host","127.0.0.1"),
+                                Integer.getInteger("cachedb.redis.cluster.port",17001))),
                         DefaultJedisClientConfig.builder()
                                 .connectionTimeoutMillis(3000)
                                 .socketTimeoutMillis(5000)
                                 .hostAndPortMapper(
                                         address ->
+                                                System.getProperty("cachedb.redis.cluster.host") != null ? address :
                                                 new HostAndPort(
                                                         "127.0.0.1",
                                                         address.getPort() < 10000

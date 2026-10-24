@@ -2,7 +2,6 @@ package com.reactor.cachedb.spring.boot.snapshot;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reactor.cachedb.core.codec.JsonArrayCodec;
-
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
@@ -14,7 +13,11 @@ import java.util.function.Function;
 
 /** Preparation is disk-backed. Only one published batch is materialized as strings. */
 final class SnapshotSpool implements AutoCloseable {
-    record Entry(String id, long offset, int bytes, String partition, double score) {}
+    record Entry(String id, long offset, int bytes, String partition, double score, String contentDigest) {
+        Entry(String id, long offset, int bytes, String partition, double score) {
+            this(id, offset, bytes, partition, score, null);
+        }
+    }
 
     private final Path path;
     private final FileChannel channel;
@@ -114,6 +117,7 @@ final class SnapshotSpool implements AutoCloseable {
         private final JsonArrayCodec.ArrayEncoder<V> encoder;
         private final Set<String> ids = new HashSet<>();
         private int roots;
+        private final java.security.MessageDigest digest;
 
         RootWriter(
                 SnapshotPlan<R, V> plan,
@@ -124,6 +128,7 @@ final class SnapshotSpool implements AutoCloseable {
             this.plan = plan;
             this.projection = projection;
             this.check = check;
+            digest = plan.contentReuse() ? SnapshotPublication.sha256() : null;
             var buffer = new BufferedOutputStream(Channels.newOutputStream(channel), 64 * 1024);
             counted =
                     new FilterOutputStream(buffer) {
@@ -139,6 +144,7 @@ final class SnapshotSpool implements AutoCloseable {
                         @Override
                         public void write(int value) throws IOException {
                             out.write(value);
+                            if (digest != null) digest.update((byte) value);
                             bytes++;
                             checkpoint();
                         }
@@ -146,6 +152,7 @@ final class SnapshotSpool implements AutoCloseable {
                         @Override
                         public void write(byte[] data, int offset, int length) throws IOException {
                             out.write(data, offset, length);
+                            if (digest != null) digest.update(data, offset, length);
                             bytes += length;
                             checkpoint();
                         }
@@ -159,6 +166,11 @@ final class SnapshotSpool implements AutoCloseable {
             if (id.isBlank() || id.length() > 512 || id.indexOf('\n') >= 0 || !ids.add(id))
                 throw new IllegalStateException("Invalid or duplicate snapshot root identity");
             long start = bytes;
+            if (digest != null) {
+                digest.reset();
+                digest.update(id.getBytes(StandardCharsets.UTF_8));
+                digest.update((byte) 0);
+            }
             encoder.writeArray(
                     Objects.requireNonNull(projection.apply(root), "Null snapshot projection"));
             long length = bytes - start;
@@ -173,7 +185,8 @@ final class SnapshotSpool implements AutoCloseable {
                     plan.indexSpec() == null ? 0 : plan.indexSpec().scoreBy().applyAsDouble(root);
             if (!Double.isFinite(score))
                 throw new IllegalArgumentException("Snapshot score must be finite");
-            entries.add(new Entry(id, start, (int) length, partition, score));
+            entries.add(new Entry(id, start, (int) length, partition, score,
+                    digest == null ? null : HexFormat.of().formatHex(digest.digest())));
         }
 
         public void close() throws IOException {

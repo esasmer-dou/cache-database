@@ -1,5 +1,8 @@
 package com.reactor.cachedb.integration;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
+
 import com.microsoft.sqlserver.jdbc.SQLServerDataSource;
 import com.reactor.cachedb.core.api.CacheSession;
 import com.reactor.cachedb.core.api.EntityRepository;
@@ -13,12 +16,6 @@ import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.mssql.MssqlOutboxExternalChangeFeedAdapter;
 import com.reactor.cachedb.starter.ExternalChangeApplyRunner;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -36,18 +33,20 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.fail;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 public final class MssqlOutboxMultiPodApplyRunnerTest {
 
-    private static final String JDBC_URL = System.getProperty(
+    private static final String JDBC_URL = com.reactor.cachedb.integration.FixtureEnvironment.value(
             "cachedb.it.mssql.url",
             "jdbc:sqlserver://127.0.0.1:14333;databaseName=tempdb;encrypt=false;trustServerCertificate=true"
     );
-    private static final String JDBC_USER = System.getProperty("cachedb.it.mssql.user", "sa");
-    private static final String JDBC_PASSWORD = System.getProperty("cachedb.it.mssql.password", "YourStrong!Passw0rd");
+    private static final String JDBC_USER = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.mssql.user", "sa");
+    private static final String JDBC_PASSWORD = com.reactor.cachedb.integration.FixtureEnvironment.value("cachedb.it.mssql.password", "YourStrong!Passw0rd");
     private static final int HIGH_VOLUME_ROW_COUNT = Integer.getInteger("cachedb.it.mssql.outboxRows", 2_000);
 
     @BeforeEach

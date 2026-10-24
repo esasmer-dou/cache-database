@@ -5,14 +5,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.config.*;
 import com.reactor.cachedb.core.registry.DefaultEntityRegistry;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-
-import redis.clients.jedis.*;
-
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import redis.clients.jedis.*;
 
 @EnabledIfSystemProperty(named = "cachedb.snapshot.redis", matches = "true")
 class AtomicWriteBatchEnvelopeCleanTest {
@@ -28,7 +25,7 @@ class AtomicWriteBatchEnvelopeCleanTest {
                         .build();
         var registry = new DefaultEntityRegistry(ResourceLimits.defaults());
         registry.register(fixture.metadata(), fixture.codec(), CachePolicy.defaults(), null, null);
-        try (var redis = new JedisPooled("redis://127.0.0.1:16383")) {
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
             try {
                 new RedisAtomicWriteBatch(
                                 redis,

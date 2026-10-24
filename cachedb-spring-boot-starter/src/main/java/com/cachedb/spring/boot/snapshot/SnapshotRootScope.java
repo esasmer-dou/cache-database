@@ -19,6 +19,25 @@ public final class SnapshotRootScope {
         return new Builder();
     }
 
+    public static <E> SnapshotRootScope byColumn(SnapshotSource<E> source, String column, Function<String, ?> parser) {
+        Objects.requireNonNull(source, "source").checkColumn(column);
+        Objects.requireNonNull(parser, "idParser");
+        return builder().source(source, ids -> {
+            if (ids.size() > 10000) throw new IllegalArgumentException("Too many scoped root IDs");
+            List<Object> parsed = new ArrayList<>(ids.size());
+            for (String id : ids) {
+                if (id == null || id.isBlank()) throw new IllegalArgumentException("Blank scoped root ID");
+                try { parsed.add(Objects.requireNonNull(parser.apply(id), "Parsed root ID")); }
+                catch (RuntimeException failure) { throw new IllegalArgumentException("Invalid scoped root ID", failure); }
+            }
+            return SnapshotPredicate.inValues(column, parsed);
+        }).build();
+    }
+
+    public static <E> SnapshotRootScope byStringColumn(SnapshotSource<E> source, String column) {
+        return byColumn(source, column, Function.identity());
+    }
+
     SnapshotSource<?> narrow(SnapshotSource<?> source, List<String> ids) {
         if (shared.contains(source)) return source;
         var filter = filters.get(source);

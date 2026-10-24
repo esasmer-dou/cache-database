@@ -5,17 +5,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reactor.cachedb.redis.JedisPooledOperations;
 import com.reactor.cachedb.redis.RedisClientOperations;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.StreamEntryID;
-import redis.clients.jedis.exceptions.JedisDataException;
-import redis.clients.jedis.params.XAutoClaimParams;
-import redis.clients.jedis.params.XReadGroupParams;
-import redis.clients.jedis.resps.StreamEntry;
-
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Collection;
@@ -36,6 +25,14 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.StreamEntryID;
+import redis.clients.jedis.exceptions.JedisDataException;
+import redis.clients.jedis.params.XAutoClaimParams;
+import redis.clients.jedis.params.XReadGroupParams;
+import redis.clients.jedis.resps.StreamEntry;
 
 /**
  * Executes typed jobs through a Redis Stream consumer group. The command and its arguments remain
@@ -48,6 +45,12 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
     private static final String FIELD_JOB_ID = "jobId";
     private static final String FIELD_ROUTE = "route";
     private static final String FIELD_PAYLOAD = "payloadJson";
+    private static final String SUBMIT_ATOMIC_SCRIPT = """
+            if redis.call('XLEN', KEYS[1]) >= tonumber(ARGV[1]) then return false end
+            redis.call('HSET', KEYS[2], unpack(ARGV, 6))
+            redis.call('PEXPIRE', KEYS[2], tonumber(ARGV[5]) * 1000)
+            return redis.call('XADD', KEYS[1], '*', 'jobId', ARGV[2], 'route', ARGV[3], 'payloadJson', ARGV[4])
+            """;
     private static final String ENQUEUE_IF_CAPACITY_SCRIPT =
             """
             if redis.call('XLEN', KEYS[1]) >= tonumber(ARGV[1]) then
@@ -75,9 +78,10 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
     private final long claimIdleMillis;
     private final int pollBlockMillis;
     private final long retryBackoffMillis;
-    private final ThreadPoolExecutor localExecutor;
+    private volatile ThreadPoolExecutor localExecutor;
+    private final int workerCount;
     private final ExecutorService streamWorkers;
-    private final ScheduledExecutorService heartbeatExecutor;
+    private volatile ScheduledExecutorService heartbeatExecutor;
     private final Map<String, CacheDistributedJobHandler<?>> handlers;
     private final AtomicBoolean running = new AtomicBoolean(true);
 
@@ -135,21 +139,8 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
         this.pollBlockMillis = Math.max(100, properties.getPollBlockMillis());
         this.retryBackoffMillis = Math.max(0L, properties.getRetryBackoffMillis());
         int workers = Math.max(1, properties.getWorkerThreads());
-        this.localExecutor =
-                new ThreadPoolExecutor(
-                        workers,
-                        workers,
-                        0L,
-                        TimeUnit.MILLISECONDS,
-                        new ArrayBlockingQueue<>(queueCapacity),
-                        runnable -> daemonThread(runnable, "cachedb-local-job-" + ownerInstanceId),
-                        new ThreadPoolExecutor.AbortPolicy());
+        this.workerCount = workers;
         this.handlers = handlerMap(handlers);
-        this.heartbeatExecutor =
-                Executors.newScheduledThreadPool(
-                        Math.min(workers, 2),
-                        runnable ->
-                                daemonThread(runnable, "cachedb-job-heartbeat-" + ownerInstanceId));
         if (this.handlers.isEmpty() || !consumeJobs) {
             this.streamWorkers = null;
         } else {
@@ -166,6 +157,23 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
         }
     }
 
+    private synchronized ThreadPoolExecutor localExecutor() {
+        if (!running.get()) throw new RejectedExecutionException("Job executor is closed");
+        if (localExecutor == null) localExecutor = new ThreadPoolExecutor(
+                workerCount, workerCount, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(queueCapacity),
+                task -> daemonThread(task, "cachedb-local-job-" + ownerInstanceId),
+                new ThreadPoolExecutor.AbortPolicy());
+        return localExecutor;
+    }
+
+    private synchronized ScheduledExecutorService heartbeatExecutor() {
+        if (!running.get()) throw new RejectedExecutionException("Job executor is closed");
+        if (heartbeatExecutor == null) heartbeatExecutor = Executors.newScheduledThreadPool(
+                Math.min(workerCount, 2), task -> daemonThread(task, "cachedb-job-heartbeat-" + ownerInstanceId));
+        return heartbeatExecutor;
+    }
+
     /**
      * Submits a durable typed command. A handler with the same route must be registered on every
      * pod that participates in the consumer group.
@@ -178,12 +186,33 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
                     "No distributed job handler is registered for route=" + normalizedRoute);
         }
         handler.definition().requireArguments(arguments);
-        String payloadJson = writeJson(arguments);
+        String payloadJson = writeArguments(handler, arguments);
         String jobId = UUID.randomUUID().toString();
         long submittedAt = Instant.now().toEpochMilli();
         CacheDistributedJobSnapshot queued = queued(jobId, normalizedRoute, submittedAt);
-        store(queued, null, payloadJson, 0, null);
+        if (!jedis.clustered() || redis.clients.jedis.util.JedisClusterCRC16.getSlot(streamKey)
+                == redis.clients.jedis.util.JedisClusterCRC16.getSlot(key(jobId))) {
+            List<String> args = new java.util.ArrayList<>(List.of(
+                    Integer.toString(queueCapacity), jobId, normalizedRoute, payloadJson,
+                    Integer.toString(statusTtlSeconds),
+                    FIELD_JOB_ID, jobId, FIELD_ROUTE, normalizedRoute,
+                    "status", queued.status().name(), "ownerInstanceId", queued.ownerInstanceId(),
+                    "submittedAtEpochMillis", Long.toString(submittedAt), "attempt", "0",
+                    FIELD_PAYLOAD, payloadJson));
+            Object accepted = jedis.eval(SUBMIT_ATOMIC_SCRIPT, List.of(streamKey, key(jobId)), args);
+            if (accepted == null) throw queueFull();
+            return queued;
+        }
         try {
+            try (var pipeline = jedis.pipeline()) {
+                pipeline.hset(key(jobId), Map.of(
+                        FIELD_JOB_ID, jobId, FIELD_ROUTE, normalizedRoute,
+                        "status", queued.status().name(), "ownerInstanceId", queued.ownerInstanceId(),
+                        "submittedAtEpochMillis", Long.toString(submittedAt), "attempt", "0",
+                        FIELD_PAYLOAD, payloadJson));
+                pipeline.expire(key(jobId), statusTtlSeconds);
+                pipeline.sync();
+            }
             Object streamEntryId =
                     jedis.eval(
                             ENQUEUE_IF_CAPACITY_SCRIPT,
@@ -194,12 +223,12 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
                                     normalizedRoute,
                                     payloadJson));
             if (streamEntryId == null) {
-                jedis.commands().del(key(jobId));
                 throw queueFull();
             }
             return queued;
         } catch (RuntimeException exception) {
-            jedis.commands().del(key(jobId));
+            try { jedis.commands().del(key(jobId)); }
+            catch (RuntimeException cleanupFailure) { exception.addSuppressed(cleanupFailure); }
             throw exception;
         }
     }
@@ -236,7 +265,7 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
         CacheDistributedJobSnapshot queued = queued(jobId, normalizedRoute, submittedAt);
         store(queued, null, null, 0, null);
         try {
-            localExecutor.execute(() -> runLocal(queued, operation));
+            localExecutor().execute(() -> runLocal(queued, operation));
         } catch (RejectedExecutionException exception) {
             jedis.commands().del(key(jobId));
             throw queueFull();
@@ -259,9 +288,15 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
         if (!running.compareAndSet(true, false)) {
             return;
         }
+        ScheduledExecutorService heartbeat;
+        ThreadPoolExecutor local;
+        synchronized (this) {
+            heartbeat = heartbeatExecutor;
+            local = localExecutor;
+        }
         shutdown(streamWorkers, true);
-        shutdown(heartbeatExecutor, true);
-        shutdown(localExecutor, true);
+        shutdown(heartbeat, true);
+        shutdown(local, true);
     }
 
     private void workerLoop() {
@@ -280,7 +315,7 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
                                         XReadGroupParams.xReadGroupParams()
                                                 .count(1)
                                                 .block(pollBlockMillis),
-                                        Map.of(streamKey, StreamEntryID.UNRECEIVED_ENTRY));
+                                        Map.of(streamKey, StreamEntryID.XREADGROUP_UNDELIVERED_ENTRY));
                 if (streams == null) {
                     continue;
                 }
@@ -424,7 +459,7 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
 
     private ScheduledFuture<?> heartbeat(StreamEntry entry, String jobId) {
         long interval = Math.max(500L, claimIdleMillis / 3L);
-        return heartbeatExecutor.scheduleAtFixedRate(
+        return heartbeatExecutor().scheduleAtFixedRate(
                 () -> {
                     try {
                         jedis.commands()
@@ -632,7 +667,12 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
             CacheDistributedJobContext context)
             throws JsonProcessingException {
         CacheDistributedJobHandler<A> handler = (CacheDistributedJobHandler<A>) rawHandler;
-        A arguments = objectMapper.readValue(payloadJson, handler.definition().argumentType());
+        A arguments;
+        if (handler.argumentCodec() == null) arguments = objectMapper.readValue(payloadJson, handler.definition().argumentType());
+        else {
+            try { arguments = handler.argumentCodec().decodeValue(payloadJson); }
+            catch (java.io.IOException failure) { throw new IllegalArgumentException("Invalid generated job payload", failure); }
+        }
         return handler.execute(arguments, context);
     }
 
@@ -647,6 +687,17 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
             throw new IllegalArgumentException(
                     "Distributed job arguments must be JSON serializable", exception);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <A> String writeArguments(CacheDistributedJobHandler<?> raw, Object arguments) {
+        CacheDistributedJobHandler<A> handler = (CacheDistributedJobHandler<A>) raw;
+        try {
+            String json = handler.argumentCodec() == null ? writeJson(arguments)
+                    : handler.argumentCodec().encodeValue((A) arguments);
+            if (json.length() > 1048576) throw new IllegalArgumentException("Job arguments exceed 1 MiB characters");
+            return json;
+        } catch (java.io.IOException failure) { throw new IllegalArgumentException("Invalid job arguments", failure); }
     }
 
     private JsonNode readTree(String value) {

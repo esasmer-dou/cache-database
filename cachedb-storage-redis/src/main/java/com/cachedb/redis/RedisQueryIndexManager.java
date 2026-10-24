@@ -29,17 +29,8 @@ import com.reactor.cachedb.core.relation.NoOpRelationBatchLoader;
 import com.reactor.cachedb.core.route.RouteCacheContext;
 import com.reactor.cachedb.core.route.RouteCacheContract;
 import com.reactor.cachedb.core.route.RouteCacheStrictMode;
-
-import redis.clients.jedis.AbstractPipeline;
-import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.Response;
-import redis.clients.jedis.params.SetParams;
-import redis.clients.jedis.resps.Tuple;
-
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -50,6 +41,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import redis.clients.jedis.AbstractPipeline;
+import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.Response;
+import redis.clients.jedis.params.SetParams;
+import redis.clients.jedis.resps.Tuple;
 
 public final class RedisQueryIndexManager<T, ID> {
 
@@ -199,150 +195,56 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private void reindexEntity(T entity, boolean respectShedding) {
-        ID id = metadata.idAccessor().apply(entity);
-        Map<String, Object> columns = codec.toColumns(entity);
-        if (respectShedding && shouldShedIndexWrites()) {
-            removeById(id);
-            markIndexFeaturesDegraded();
-            return;
-        }
-        removeById(id);
-        String idValue = String.valueOf(id);
-        Map<String, String> metaValues = new LinkedHashMap<>();
-        try (AbstractPipeline pipeline = jedis.pipeline()) {
-            pipeline.sadd(keyStrategy.indexAllKey(metadata.redisNamespace()), idValue);
-            for (String column : metadata.columns()) {
-                Object value = columns.get(column);
-                String serialized = serializeValue(value);
-                metaValues.put(column, serialized);
-                if (config.exactIndexEnabled()) {
-                    pipeline.sadd(
-                            keyStrategy.indexExactKey(
-                                    metadata.redisNamespace(), column, encodeKeyPart(serialized)),
-                            idValue);
-                }
-                if (value instanceof String stringValue) {
-                    indexStringValue(pipeline, idValue, column, stringValue);
-                }
-                if (config.rangeIndexEnabled()) {
-                    Double score = RedisScoreSupport.toScore(metadata.columnTypes(), column, value);
-                    if (score != null) {
-                        pipeline.zadd(
-                                keyStrategy.indexSortKey(metadata.redisNamespace(), column),
-                                score,
-                                idValue);
-                    }
-                }
-            }
-            upsertPartitionedSortIndexes(pipeline, idValue, columns);
-            if (!metaValues.isEmpty()) {
-                pipeline.hset(keyStrategy.indexMetaKey(metadata.redisNamespace(), id), metaValues);
-            }
-            pipeline.sync();
-        }
+        reindexEntities(List.of(entity), respectShedding);
     }
 
     private void reindexEntities(Collection<T> entities, boolean respectShedding) {
-        ArrayList<T> candidates = new ArrayList<>(entities.size());
-        for (T entity : entities) {
-            if (entity != null) {
-                candidates.add(entity);
-            }
-        }
-        if (candidates.isEmpty()) {
-            return;
-        }
+        if (entities.size() > 10000) throw new IllegalArgumentException("At most 10000 index rows per batch");
+        Map<ID, T> unique = new LinkedHashMap<>();
+        for (T entity : entities) if (entity != null) unique.put(metadata.idAccessor().apply(entity), entity);
+        if (unique.isEmpty()) return;
         if (respectShedding && shouldShedIndexWrites()) {
-            for (T entity : candidates) {
-                removeById(metadata.idAccessor().apply(entity));
-            }
+            for (ID id : unique.keySet()) removeById(id);
             markIndexFeaturesDegraded();
             return;
         }
-
-        invalidatePlannerStatistics();
-        ArrayList<String> idValues = new ArrayList<>(candidates.size());
-        ArrayList<Map<String, Object>> entityColumns = new ArrayList<>(candidates.size());
-        ArrayList<Response<Map<String, String>>> priorMetaResponses =
-                new ArrayList<>(candidates.size());
         String namespace = metadata.redisNamespace();
-        try (AbstractPipeline readPipeline = jedis.pipeline()) {
-            for (T entity : candidates) {
-                ID id = metadata.idAccessor().apply(entity);
-                idValues.add(String.valueOf(id));
-                entityColumns.add(codec.toColumns(entity));
-                priorMetaResponses.add(
-                        readPipeline.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
+        List<ID> ids = new ArrayList<>(unique.keySet());
+        List<Map<String, Object>> columns = new ArrayList<>(ids.size());
+        List<Response<Map<String, String>>> responses = new ArrayList<>(ids.size());
+        try (AbstractPipeline read = jedis.pipeline()) {
+            for (ID id : ids) {
+                columns.add(codec.toColumns(unique.get(id)));
+                responses.add(read.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
             }
-            readPipeline.sync();
+            read.sync();
         }
-
-        try (AbstractPipeline writePipeline = jedis.pipeline()) {
-            for (int index = 0; index < candidates.size(); index++) {
-                String idValue = idValues.get(index);
-                Map<String, String> priorMetaValues = priorMetaResponses.get(index).get();
-                String metaKey = keyStrategy.indexMetaKey(namespace, idValue);
-                if (priorMetaValues != null && !priorMetaValues.isEmpty()) {
-                    for (Map.Entry<String, String> entry : priorMetaValues.entrySet()) {
-                        if (config.exactIndexEnabled()) {
-                            writePipeline.srem(
-                                    keyStrategy.indexExactKey(
-                                            namespace,
-                                            entry.getKey(),
-                                            encodeKeyPart(entry.getValue())),
-                                    idValue);
-                        }
-                        removeStringValueIndex(
-                                writePipeline,
-                                idValue,
-                                entry.getKey(),
-                                decodeValue(entry.getValue()));
-                        writePipeline.zrem(
-                                keyStrategy.indexSortKey(namespace, entry.getKey()), idValue);
-                    }
-                    removePartitionedSortIndexes(writePipeline, idValue, priorMetaValues);
-                    writePipeline.del(metaKey);
-                } else {
-                    for (String column : metadata.columns()) {
-                        writePipeline.zrem(keyStrategy.indexSortKey(namespace, column), idValue);
-                    }
-                }
-                writePipeline.srem(keyStrategy.indexAllKey(namespace), idValue);
+        List<RedisIndexMutationPlanner.Plan> plans = new ArrayList<>(ids.size());
+        boolean changed = false;
+        for (int i = 0; i < ids.size(); i++) {
+            Map<String, String> next = new LinkedHashMap<>();
+            for (String column : metadata.columns()) next.put(column, serializeValue(columns.get(i).get(column)));
+            var plan = RedisIndexMutationPlanner.plan(responses.get(i).get(), next, !respectShedding);
+            plans.add(plan);
+            changed |= !plan.unchanged();
+        }
+        if (!changed) return;
+        cardinalityCache.clear();
+        histogramCache.clear();
+        learnedStatsCache.clear();
+        Map<String,List<String>> partitions = new LinkedHashMap<>();
+        if (supportsPartitionedExactSortIndexes()) {
+            for (String partition : partitionedExactSortColumns()) partitions.put(partition,partitionedSortColumns(partition));
+        }
+        try (AbstractPipeline write = jedis.pipeline()) {
+            for (int i = 0; i < ids.size(); i++) {
+                var plan = plans.get(i);
+                if (plan.unchanged()) continue;
+                RedisIndexMutationPlanner.apply(write,keyStrategy,metadata,config,
+                        String.valueOf(ids.get(i)),columns.get(i),plan,partitions);
             }
-
-            for (int index = 0; index < candidates.size(); index++) {
-                String idValue = idValues.get(index);
-                Map<String, Object> columns = entityColumns.get(index);
-                LinkedHashMap<String, String> metaValues = new LinkedHashMap<>();
-                writePipeline.sadd(keyStrategy.indexAllKey(namespace), idValue);
-                for (String column : metadata.columns()) {
-                    Object value = columns.get(column);
-                    String serialized = serializeValue(value);
-                    metaValues.put(column, serialized);
-                    if (config.exactIndexEnabled()) {
-                        writePipeline.sadd(
-                                keyStrategy.indexExactKey(
-                                        namespace, column, encodeKeyPart(serialized)),
-                                idValue);
-                    }
-                    if (value instanceof String stringValue) {
-                        indexStringValue(writePipeline, idValue, column, stringValue);
-                    }
-                    if (config.rangeIndexEnabled()) {
-                        Double score =
-                                RedisScoreSupport.toScore(metadata.columnTypes(), column, value);
-                        if (score != null) {
-                            writePipeline.zadd(
-                                    keyStrategy.indexSortKey(namespace, column), score, idValue);
-                        }
-                    }
-                }
-                upsertPartitionedSortIndexes(writePipeline, idValue, columns);
-                if (!metaValues.isEmpty()) {
-                    writePipeline.hset(keyStrategy.indexMetaKey(namespace, idValue), metaValues);
-                }
-            }
-            writePipeline.sync();
+            if (config.plannerStatisticsPersisted()) write.incr(keyStrategy.indexPlannerEpochKey(namespace));
+            write.sync();
         }
     }
 
@@ -2194,74 +2096,15 @@ public final class RedisQueryIndexManager<T, ID> {
         return left;
     }
 
-    private String serializeValue(Object value) {
-        return value == null ? NULL_SENTINEL : String.valueOf(value);
+    private String serializeValue(Object value) { return RedisIndexKeySpace.serializeValue(value); }
+    private String decodeValue(String value) { return RedisIndexKeySpace.decodeValue(value); }
+    private String encodeKeyPart(String value) { return RedisIndexKeySpace.encodeKeyPart(value); }
+
+    private void indexStringValue(AbstractPipeline pipeline, String id, String column, String value) {
+        RedisIndexMutationPlanner.stringValue(pipeline,keyStrategy,metadata.redisNamespace(),config,id,column,value,true);
     }
-
-    private String decodeValue(String value) {
-        return NULL_SENTINEL.equals(value) ? null : value;
-    }
-
-    private String encodeKeyPart(String value) {
-        return Base64.getUrlEncoder()
-                .withoutPadding()
-                .encodeToString(value.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private void indexStringValue(
-            AbstractPipeline pipeline, String idValue, String column, String rawValue) {
-        String normalized = normalizeText(rawValue);
-        if (normalized.isBlank()) {
-            return;
-        }
-
-        if (config.prefixIndexEnabled()) {
-            int prefixLength = Math.min(config.prefixMaxLength(), normalized.length());
-            for (int index = 1; index <= prefixLength; index++) {
-                pipeline.sadd(
-                        keyStrategy.indexPrefixKey(
-                                metadata.redisNamespace(),
-                                column,
-                                encodeKeyPart(normalized.substring(0, index))),
-                        idValue);
-            }
-        }
-
-        if (config.textIndexEnabled()) {
-            for (String token : tokenize(rawValue)) {
-                pipeline.sadd(
-                        keyStrategy.indexTokenKey(
-                                metadata.redisNamespace(), column, encodeKeyPart(token)),
-                        idValue);
-            }
-        }
-    }
-
-    private void removeStringValueIndex(
-            AbstractPipeline pipeline, String idValue, String column, String rawValue) {
-        if (rawValue == null) {
-            return;
-        }
-        String normalized = normalizeText(rawValue);
-        if (config.prefixIndexEnabled() && !normalized.isBlank()) {
-            int prefixLength = Math.min(config.prefixMaxLength(), normalized.length());
-            for (int index = 1; index <= prefixLength; index++) {
-                pipeline.srem(
-                        keyStrategy.indexPrefixKey(
-                                metadata.redisNamespace(),
-                                column,
-                                encodeKeyPart(normalized.substring(0, index))),
-                        idValue);
-            }
-        }
-        if (config.textIndexEnabled()) {
-            for (String token : tokenize(rawValue)) {
-                pipeline.srem(
-                        keyStrategy.indexTokenKey(
-                                metadata.redisNamespace(), column, encodeKeyPart(token)),
-                        idValue);
-            }
-        }
+    private void removeStringValueIndex(AbstractPipeline pipeline, String id, String column, String value) {
+        RedisIndexMutationPlanner.stringValue(pipeline,keyStrategy,metadata.redisNamespace(),config,id,column,value,false);
     }
 
     private void upsertPartitionedSortIndexes(
@@ -2373,45 +2216,9 @@ public final class RedisQueryIndexManager<T, ID> {
                 .contains(sortColumn);
     }
 
-    private List<String> tokenize(String rawValue) {
-        String normalized = normalizeText(rawValue);
-        if (normalized.isBlank()) {
-            return List.of();
-        }
-
-        String[] parts = normalized.split("[^\\p{IsAlphabetic}\\p{IsDigit}]+");
-        LinkedHashSet<String> tokens = new LinkedHashSet<>();
-        for (String part : parts) {
-            if (part.length() < config.textTokenMinLength()) {
-                continue;
-            }
-            String token =
-                    part.length() > config.textTokenMaxLength()
-                            ? part.substring(0, config.textTokenMaxLength())
-                            : part;
-            tokens.add(token);
-            if (tokens.size() >= config.textMaxTokensPerValue()) {
-                break;
-            }
-        }
-        return new ArrayList<>(tokens);
-    }
-
-    private String normalizeText(String value) {
-        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
-    }
-
-    private String toSnakeCase(String value) {
-        StringBuilder builder = new StringBuilder();
-        for (int index = 0; index < value.length(); index++) {
-            char current = value.charAt(index);
-            if (Character.isUpperCase(current) && index > 0) {
-                builder.append('_');
-            }
-            builder.append(Character.toLowerCase(current));
-        }
-        return builder.toString();
-    }
+    private List<String> tokenize(String rawValue) { return RedisIndexKeySpace.tokenize(rawValue, config); }
+    private String normalizeText(String value) { return RedisIndexKeySpace.normalizeText(value); }
+    private String toSnakeCase(String value) { return RedisIndexKeySpace.toSnakeCase(value); }
 
     private boolean supportsScoreOrdering(String column) {
         String declaredType = metadata.columnTypes().get(column);

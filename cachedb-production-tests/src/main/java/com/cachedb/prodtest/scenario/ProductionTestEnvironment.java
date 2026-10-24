@@ -1,11 +1,10 @@
 package com.reactor.cachedb.prodtest.scenario;
 
-import org.postgresql.ds.PGSimpleDataSource;
-import redis.clients.jedis.JedisPooled;
-
 import java.net.URI;
 import java.sql.Connection;
 import java.sql.SQLException;
+import org.postgresql.ds.PGSimpleDataSource;
+import redis.clients.jedis.JedisPooled;
 
 final class ProductionTestEnvironment {
 
@@ -103,7 +102,8 @@ final class ProductionTestEnvironment {
     }
 
     private static String normalizedProperty(String name) {
-        return System.getProperty(name, "").trim();
+        String environment = System.getenv(name.toUpperCase(java.util.Locale.ROOT).replace('.', '_'));
+        return System.getProperty(name, environment == null ? "" : environment).trim();
     }
 
     private static int intProperty(String name, int defaultValue) {

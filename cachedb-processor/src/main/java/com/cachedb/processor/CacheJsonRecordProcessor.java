@@ -1,11 +1,9 @@
 package com.reactor.cachedb.processor;
 
 import com.reactor.cachedb.annotations.CacheJsonRecord;
-
 import java.io.IOException;
 import java.io.Writer;
 import java.util.*;
-
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.*;
@@ -15,6 +13,8 @@ import javax.tools.Diagnostic;
 /** Emits direct constructors/accessors and token code. No runtime type discovery is generated. */
 @SupportedAnnotationTypes("com.reactor.cachedb.annotations.CacheJsonRecord")
 public final class CacheJsonRecordProcessor extends AbstractProcessor {
+    private final Set<String> providers = new TreeSet<>();
+    private boolean servicesWritten;
     private static final String VALUES = "com.reactor.cachedb.json.JsonValues";
     private static final String STRINGS = "com.reactor.cachedb.json.JsonStrings";
     private static final Map<String, String> READERS =
@@ -47,6 +47,16 @@ public final class CacheJsonRecordProcessor extends AbstractProcessor {
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment round) {
+        if (round.processingOver() && !servicesWritten && !providers.isEmpty()) {
+            servicesWritten = true;
+            try (Writer writer = processingEnv.getFiler().createResource(
+                    javax.tools.StandardLocation.CLASS_OUTPUT, "",
+                    "META-INF/services/com.reactor.cachedb.core.codec.GeneratedJsonCodecProvider").openWriter()) {
+                for (String provider : providers) writer.write(provider + "\n");
+            } catch (IOException failure) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, failure.getMessage());
+            }
+        }
         for (Element element : round.getElementsAnnotatedWith(CacheJsonRecord.class)) {
             try {
                 generate((TypeElement) element);
@@ -103,6 +113,14 @@ public final class CacheJsonRecordProcessor extends AbstractProcessor {
         String qualifiedCodec = codecName(record);
         String name = qualifiedCodec.substring(pkg.length() + 1);
         String type = record.getQualifiedName().toString();
+        String providerName = name + "Provider";
+        try (Writer writer = processingEnv.getFiler().createSourceFile(pkg + "." + providerName, record).openWriter()) {
+            writer.write("package " + pkg + ";\npublic final class " + providerName
+                    + " implements com.reactor.cachedb.core.codec.GeneratedJsonCodecProvider {\n"
+                    + " public com.reactor.cachedb.core.codec.JsonArrayCodec<?> codecFor(Class<?> type) { return type == "
+                    + type + ".class ? " + name + ".INSTANCE : null; }\n}\n");
+        }
+        providers.add(pkg + "." + providerName);
         List<? extends RecordComponentElement> fields = record.getRecordComponents();
         StringBuilder code = new StringBuilder("package " + pkg + ";\n\n");
         code.append("public final class ")

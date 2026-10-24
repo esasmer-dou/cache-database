@@ -49,7 +49,8 @@ class JacksonFreeSnapshotProcessTest {
                                 classpath,
                                 Probe.class.getName(),
                                 Integer.toString(
-                                        Integer.getInteger("cachedb.snapshot.redis.port", 16383)))
+                                        Integer.getInteger("cachedb.snapshot.redis.port", 16383)),
+                                System.getProperty("cachedb.snapshot.redis.host","127.0.0.1"))
                         .redirectErrorStream(true)
                         .redirectOutput(output.toFile())
                         .start();
@@ -84,7 +85,7 @@ class JacksonFreeSnapshotProcessTest {
             sql.setURL("jdbc:h2:mem:" + namespace);
             try (var connection = sql.getConnection();
                     var statement = connection.createStatement();
-                    var redis = new JedisPooled("redis://127.0.0.1:" + args[0])) {
+                    var redis = new JedisPooled("redis://" + (args.length>1 ? args[1] : "127.0.0.1") + ":" + args[0])) {
                 statement.execute(
                         "CREATE TABLE \"products\"(\"id\" VARCHAR PRIMARY KEY, \"title\" VARCHAR)");
                 statement.execute(

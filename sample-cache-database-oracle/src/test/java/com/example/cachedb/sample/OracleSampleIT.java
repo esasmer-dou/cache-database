@@ -1,5 +1,10 @@
 package com.example.cachedb.sample;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.example.cachedb.sample.repository.OrderRepository;
 import com.example.cachedb.sample.repository.OrderRepositoryCacheDbRoutes;
 import com.reactor.cachedb.core.repository.WindowRequest;
@@ -7,11 +12,18 @@ import com.reactor.cachedb.core.route.HotRoutePopulation;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestConfiguration;
 import com.reactor.cachedb.spring.boot.test.CacheDbTestProbe;
 import com.reactor.cachedb.starter.CacheWarmTarget;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -19,29 +31,13 @@ import org.springframework.http.MediaType;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.containers.wait.strategy.Wait;
 
-import java.math.BigDecimal;
-import java.net.URI;
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.function.BooleanSupplier;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-@Testcontainers
 @ActiveProfiles("demo")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -51,7 +47,6 @@ class OracleSampleIT {
     private static final String ORACLE_USER = "cachedb";
     private static final String ORACLE_PASSWORD = "CacheDbOracle123";
 
-    @Container
     static final GenericContainer<?> ORACLE = new GenericContainer<>(
             "gvenzl/oracle-free:23.9-slim@sha256:202889b03adeb66f0b87713f5cf01a06af2cfeb0c25e9ba31a74f5cd24172e31"
     )
@@ -62,7 +57,6 @@ class OracleSampleIT {
             .waitingFor(Wait.forLogMessage(".*DATABASE IS READY TO USE!.*", 1))
             .withStartupTimeout(Duration.ofMinutes(7));
 
-    @Container
     static final GenericContainer<?> REDIS = new GenericContainer<>(
             "redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232"
     )
@@ -72,12 +66,23 @@ class OracleSampleIT {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
+        if (com.example.cachedb.sample.ExternalSampleFixtures.configure(registry)) return;
+        ORACLE.start();
+        REDIS.start();
         registry.add("spring.datasource.url", () -> "jdbc:oracle:thin:@//" + ORACLE.getHost()
                 + ":" + ORACLE.getMappedPort(1521) + "/FREEPDB1");
         registry.add("spring.datasource.username", () -> ORACLE_USER);
         registry.add("spring.datasource.password", () -> ORACLE_PASSWORD);
         registry.add("cachedb.redis.uri", () -> "redis://" + REDIS.getHost() + ":" + REDIS.getMappedPort(6379));
         registry.add("cachedb.admin.enabled", () -> false);
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void stopOwnedFixtures() {
+        if (System.getenv("CACHEDB_TEST_NAMESPACE") == null) {
+            REDIS.stop();
+            ORACLE.stop();
+        }
     }
 
     @LocalServerPort

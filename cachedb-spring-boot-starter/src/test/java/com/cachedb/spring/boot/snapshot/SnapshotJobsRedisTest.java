@@ -5,23 +5,19 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-
-import org.h2.jdbcx.JdbcDataSource;
-import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.junit.jupiter.api.io.TempDir;
-
-import redis.clients.jedis.JedisPooled;
-import redis.clients.jedis.params.ScanParams;
-
 import java.nio.file.*;
 import java.time.Clock;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
-
 import javax.sql.DataSource;
+import org.h2.jdbcx.JdbcDataSource;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.io.TempDir;
+import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.params.ScanParams;
 
 /** Uses an isolated namespace, never FLUSHDB, and never the application database. */
 @EnabledIfSystemProperty(named = "cachedb.snapshot.redis", matches = "true")
@@ -47,7 +43,7 @@ class SnapshotJobsRedisTest {
         prefix = namespace + ":{snapshot:catalog}";
         redis =
                 new JedisPooled(
-                        "redis://127.0.0.1:"
+                        "redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1") + ":"
                                 + Integer.getInteger("cachedb.snapshot.redis.port", 16383));
         var ds = new JdbcDataSource();
         ds.setURL("jdbc:h2:mem:" + namespace + ";DB_CLOSE_DELAY=-1");
@@ -331,8 +327,12 @@ class SnapshotJobsRedisTest {
         var job = job();
         job.start();
         long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (redis.get(prefix + ":completed-at") == null && System.nanoTime() < end)
+        // Publication precedes lease cleanup; a completion marker alone is not an idle worker.
+        while ((redis.get(prefix + ":completed-at") == null || redis.exists(prefix + ":lock"))
+                && System.nanoTime() < end)
             Thread.sleep(20);
+        assertThat(redis.get(prefix + ":completed-at")).isNotNull();
+        assertThat(redis.exists(prefix + ":lock")).isFalse();
         assertThat(read(job, "a")).isEqualTo("[\"old\"]");
         var second = job();
         assertThat(second.refresh("catalog", false).status()).isEqualTo("NOT_DUE");

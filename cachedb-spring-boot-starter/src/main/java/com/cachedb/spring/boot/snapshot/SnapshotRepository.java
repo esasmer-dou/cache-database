@@ -58,4 +58,9 @@ public interface SnapshotRepository {
     default SnapshotRefreshResult refreshRoots(java.util.Collection<String> rootIds) {
         throw new UnsupportedOperationException("Snapshot repository has no refresh coordinator");
     }
+
+    default com.reactor.cachedb.core.repository.CursorPage<SnapshotValue> findPage(SnapshotPageRequest request) {
+        if (!request.unbounded()) throw new UnsupportedOperationException("Snapshot repository does not support score ranges");
+        return findPage(request.partitionKey(), request.window());
+    }
 }
