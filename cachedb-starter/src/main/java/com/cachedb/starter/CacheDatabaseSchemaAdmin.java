@@ -9,6 +9,7 @@ import com.reactor.cachedb.core.registry.EntityBinding;
 import com.reactor.cachedb.core.registry.EntityRegistry;
 import com.reactor.cachedb.jdbc.JdbcSchemaDialect;
 import com.reactor.cachedb.jdbc.JdbcSchemaDialects;
+import com.reactor.cachedb.jdbc.JdbcColumnLimits;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -22,6 +23,9 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.Locale;
 
 public final class CacheDatabaseSchemaAdmin {
 
@@ -59,12 +63,25 @@ public final class CacheDatabaseSchemaAdmin {
 
         try (Connection connection = dataSource.getConnection()) {
             JdbcSchemaDialect dialect = JdbcSchemaDialects.resolve(connection);
+            int maxColumns = dialect.resolveMaxColumnsInTable(connection.getMetaData());
             for (EntityBinding<?, ?> binding : entityRegistry.all()) {
                 EntityMetadata<?, ?> metadata = binding.metadata();
                 String tableName = qualifiedTableName(metadata.tableName());
+                int count;
+                try {
+                    count = expectedColumns(metadata).size();
+                } catch (IllegalArgumentException invalidShape) {
+                    issues.add(new SchemaBootstrapIssue(metadata.entityName(), tableName, invalidShape.getMessage()));
+                    continue;
+                }
+                if (count > maxColumns) {
+                    issues.add(new SchemaBootstrapIssue(metadata.entityName(), tableName,
+                            columnLimitMessage(count, maxColumns, dialect)));
+                    continue;
+                }
                 boolean exists = tableExists(connection, dialect, tableName);
                 if (!exists && mode == SchemaBootstrapMode.CREATE_IF_MISSING) {
-                    createTable(connection, dialect, metadata, tableName);
+                    createTable(connection, dialect, metadata, tableName, maxColumns);
                     createdTables.add(tableName);
                     exists = true;
                 }
@@ -72,7 +89,8 @@ public final class CacheDatabaseSchemaAdmin {
                     issues.add(new SchemaBootstrapIssue(metadata.entityName(), tableName, "Missing table"));
                     continue;
                 }
-                List<String> missingColumns = missingColumns(connection, dialect, metadata, tableName);
+                Set<String> actualColumns = tableColumns(connection, dialect, tableName, maxColumns);
+                List<String> missingColumns = missingColumns(metadata, actualColumns);
                 if (!missingColumns.isEmpty()) {
                     issues.add(new SchemaBootstrapIssue(
                             metadata.entityName(),
@@ -100,15 +118,17 @@ public final class CacheDatabaseSchemaAdmin {
     }
 
     public Map<String, String> exportDdl() {
-        JdbcSchemaDialect dialect = JdbcSchemaDialects.resolve(dataSource);
         LinkedHashMap<String, String> ddl = new LinkedHashMap<>();
-        for (EntityBinding<?, ?> binding : entityRegistry.all()) {
-            EntityMetadata<?, ?> metadata = binding.metadata();
-            ddl.put(metadata.entityName(), createTableSql(
-                    dialect,
-                    metadata,
-                    qualifiedTableName(metadata.tableName())
-            ));
+        try (Connection connection = dataSource.getConnection()) {
+            JdbcSchemaDialect dialect = JdbcSchemaDialects.resolve(connection);
+            int maxColumns = dialect.resolveMaxColumnsInTable(connection.getMetaData());
+            for (EntityBinding<?, ?> binding : entityRegistry.all()) {
+                EntityMetadata<?, ?> metadata = binding.metadata();
+                ddl.put(metadata.entityName(), createTableSql(dialect, metadata,
+                        qualifiedTableName(metadata.tableName()), maxColumns));
+            }
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Could not export CacheDB schema DDL: " + exception.getMessage(), exception);
         }
         return Map.copyOf(ddl);
     }
@@ -117,27 +137,30 @@ public final class CacheDatabaseSchemaAdmin {
         ArrayList<SchemaMigrationStep> steps = new ArrayList<>();
         try (Connection connection = dataSource.getConnection()) {
             JdbcSchemaDialect dialect = JdbcSchemaDialects.resolve(connection);
+            int maxColumns = dialect.resolveMaxColumnsInTable(connection.getMetaData());
             for (EntityBinding<?, ?> binding : entityRegistry.all()) {
                 EntityMetadata<?, ?> metadata = binding.metadata();
+                JdbcColumnLimits.validate(expectedColumns(metadata).size(), maxColumns, dialect.name());
                 String tableName = qualifiedTableName(metadata.tableName());
                 if (!tableExists(connection, dialect, tableName)) {
                     steps.add(new SchemaMigrationStep(
                             metadata.entityName(),
                             tableName,
-                            createTableSql(dialect, metadata, tableName),
+                            createTableSql(dialect, metadata, tableName, maxColumns),
                             "Create missing table"
                     ));
                     continue;
                 }
-                for (String column : expectedColumns(metadata)) {
-                    if (!columnExists(connection, dialect, tableName, column)) {
-                        steps.add(new SchemaMigrationStep(
-                                metadata.entityName(),
-                                tableName,
-                                dialect.addColumnSql(tableName, columnDefinition(dialect, metadata, column)),
-                                "Add missing column " + column
-                        ));
-                    }
+                Set<String> actualColumns = tableColumns(connection, dialect, tableName, maxColumns);
+                List<String> missing = missingColumns(metadata, actualColumns);
+                JdbcColumnLimits.validate(actualColumns.size() + missing.size(), maxColumns, dialect.name());
+                for (String column : missing) {
+                    steps.add(new SchemaMigrationStep(
+                            metadata.entityName(),
+                            tableName,
+                            dialect.addColumnSql(tableName, columnDefinition(dialect, metadata, column)),
+                            "Add missing column " + column
+                    ));
                 }
             }
         } catch (SQLException exception) {
@@ -218,11 +241,12 @@ public final class CacheDatabaseSchemaAdmin {
             Connection connection,
             JdbcSchemaDialect dialect,
             EntityMetadata<?, ?> metadata,
-            String tableName
+            String tableName,
+            int maxColumns
     ) throws SQLException {
         try (Statement statement = connection.createStatement()) {
             try {
-                statement.executeUpdate(createTableSql(dialect, metadata, tableName));
+                statement.executeUpdate(createTableSql(dialect, metadata, tableName, maxColumns));
             } catch (SQLException exception) {
                 if (!tableExists(connection, dialect, tableName)) {
                     throw exception;
@@ -234,8 +258,10 @@ public final class CacheDatabaseSchemaAdmin {
     private String createTableSql(
             JdbcSchemaDialect dialect,
             EntityMetadata<?, ?> metadata,
-            String tableName
+            String tableName,
+            int maxColumns
     ) {
+        JdbcColumnLimits.validate(expectedColumns(metadata).size(), maxColumns, dialect.name());
         LinkedHashMap<String, String> columns = new LinkedHashMap<>();
         for (String column : metadata.columns()) {
             columns.put(column, columnDefinition(dialect, metadata, column));
@@ -253,7 +279,7 @@ public final class CacheDatabaseSchemaAdmin {
                     false
             ));
         }
-        return dialect.createTableSql(tableName, List.copyOf(columns.values()), metadata.idColumn());
+        return dialect.createTableSql(tableName, List.copyOf(columns.values()), metadata.idColumn(), maxColumns);
     }
 
     private String columnDefinition(
@@ -280,22 +306,22 @@ public final class CacheDatabaseSchemaAdmin {
         try (ResultSet resultSet = metaData.getTables(
                 connection.getCatalog(),
                 schemaPattern(connection, dialect),
-                dialect.metadataIdentifier(metaData, normalizedTableName(tableName)),
+                dialect.metadataPattern(metaData, normalizedTableName(tableName)),
                 new String[]{"TABLE"}
         )) {
-            return resultSet.next();
+            String expected = dialect.metadataIdentifier(metaData, normalizedTableName(tableName));
+            while (resultSet.next()) {
+                String found = resultSet.getString("TABLE_NAME");
+                if (found == null || found.equalsIgnoreCase(expected)) return true;
+            }
+            return false;
         }
     }
 
-    private List<String> missingColumns(
-            Connection connection,
-            JdbcSchemaDialect dialect,
-            EntityMetadata<?, ?> metadata,
-            String tableName
-    ) throws SQLException {
+    private List<String> missingColumns(EntityMetadata<?, ?> metadata, Set<String> actualColumns) {
         ArrayList<String> missing = new ArrayList<>();
         for (String column : expectedColumns(metadata)) {
-            if (!columnExists(connection, dialect, tableName, column)) {
+            if (!actualColumns.contains(column.toLowerCase(Locale.ROOT))) {
                 missing.add(column);
             }
         }
@@ -303,7 +329,9 @@ public final class CacheDatabaseSchemaAdmin {
     }
 
     private List<String> expectedColumns(EntityMetadata<?, ?> metadata) {
-        ArrayList<String> columns = new ArrayList<>(metadata.columns());
+        JdbcColumnLimits.validate(metadata.columns().size(),
+                com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.MAX_FIELDS, "payload");
+        LinkedHashSet<String> columns = new LinkedHashSet<>(metadata.columns());
         if (config.includeVersionColumn() && !columns.contains(metadata.versionColumn())) {
             columns.add(metadata.versionColumn());
         }
@@ -336,23 +364,39 @@ public final class CacheDatabaseSchemaAdmin {
         }
         return schemaName == null || schemaName.isBlank()
                 ? null
-                : dialect.metadataIdentifier(connection.getMetaData(), schemaName);
+                : dialect.metadataPattern(connection.getMetaData(), schemaName);
     }
 
-    private boolean columnExists(
+    private static String columnLimitMessage(int count, int maxColumns, JdbcSchemaDialect dialect) {
+        return "Table column count " + count + " exceeds database dictionary limit "
+                + maxColumns + " for dialect " + dialect.name();
+    }
+
+    private Set<String> tableColumns(
             Connection connection,
             JdbcSchemaDialect dialect,
             String tableName,
-            String column
+            int maxColumns
     ) throws SQLException {
         DatabaseMetaData metaData = connection.getMetaData();
+        LinkedHashSet<String> columns = new LinkedHashSet<>();
+        String expectedTable = dialect.metadataIdentifier(metaData, normalizedTableName(tableName));
         try (ResultSet resultSet = metaData.getColumns(
                 connection.getCatalog(),
                 schemaPattern(connection, dialect),
-                dialect.metadataIdentifier(metaData, normalizedTableName(tableName)),
-                dialect.metadataIdentifier(metaData, column)
+                dialect.metadataPattern(metaData, normalizedTableName(tableName)),
+                "%"
         )) {
-            return resultSet.next();
+            int readColumns = 0;
+            while (resultSet.next()) {
+                String foundTable = resultSet.getString("TABLE_NAME");
+                if (foundTable != null && !foundTable.equalsIgnoreCase(expectedTable)) continue;
+                JdbcColumnLimits.validate(++readColumns, maxColumns, dialect.name());
+                String column = resultSet.getString("COLUMN_NAME");
+                if (column == null) throw new SQLException("Metadata returned an unnamed column for " + tableName);
+                columns.add(column.toLowerCase(Locale.ROOT));
+            }
         }
+        return columns;
     }
 }

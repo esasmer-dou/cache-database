@@ -5,7 +5,7 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class LengthPrefixedPayloadCodec {
-    public static final int MAX_FIELDS = 1024;
+    public static final int MAX_FIELDS = 4096;
     public static final int MAX_PAYLOAD_CHARS = 8 * 1024 * 1024;
 
     private LengthPrefixedPayloadCodec() {

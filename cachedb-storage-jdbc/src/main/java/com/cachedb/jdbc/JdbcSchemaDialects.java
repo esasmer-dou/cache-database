@@ -91,6 +91,22 @@ public final class JdbcSchemaDialects {
 
     private record StandardJdbcSchemaDialect(String name, Family family) implements JdbcSchemaDialect {
         @Override
+        public String createTableSql(String tableName, List<String> columns, String idColumn, int maxColumns) {
+            JdbcColumnLimits.validate(columns.size(), maxColumns, name());
+            return "CREATE TABLE " + tableName + " (" + String.join(", ", columns)
+                    + ", PRIMARY KEY (" + idColumn + "))";
+        }
+
+        @Override
+        public int maxColumnsInTable() {
+            return switch (family) {
+                case ORACLE -> 1_000;
+                case MSSQL, H2, ANSI -> 1_024;
+                case POSTGRES -> 1_600;
+            };
+        }
+
+        @Override
         public String sqlType(String javaTypeName) {
             String type = javaTypeName == null ? "" : javaTypeName;
             return switch (family) {

@@ -13,6 +13,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class ProjectionSchemaTypesTest {
     @Test
+    void accepts4096ColumnsAndRejectsTheNextColumn() {
+        var builder = ProjectionSchema.<String>builder();
+        for (int i = 0; i < 4096; i++) builder.stringColumn("c" + i, value -> value);
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> builder.stringColumn("overflow", value -> value));
+        var schema = builder.decodeWith(row -> row.string("c4095")).build();
+        assertEquals("last", schema.fromRedisValue(schema.toRedisValue("last")));
+    }
+
+    @Test
     void retainsForwardFieldsNullNamesAndLastValueWinsWithoutTemporaryMaps() {
         record View(String id,String future,String nullName) {}
         var schema = ProjectionSchema.<View>builder().stringColumn("id",View::id)

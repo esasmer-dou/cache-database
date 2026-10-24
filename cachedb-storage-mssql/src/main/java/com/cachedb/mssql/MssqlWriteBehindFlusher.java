@@ -28,6 +28,9 @@ import javax.sql.DataSource;
 public final class MssqlWriteBehindFlusher extends AbstractJdbcWriteBehindFlusher implements FailureClassifyingFlusher {
 
     private final MssqlDatabaseDialect dialect;
+
+    @Override
+    protected com.reactor.cachedb.jdbc.JdbcDatabaseDialect dialectForValidation() { return dialect; }
     private final MssqlFailureClassifier failureClassifier;
     private final StoragePerformanceCollector performanceCollector;
     private final MssqlWriteBehindOptions options;

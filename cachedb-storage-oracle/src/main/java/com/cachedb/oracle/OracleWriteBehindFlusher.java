@@ -25,6 +25,9 @@ public final class OracleWriteBehindFlusher extends AbstractJdbcWriteBehindFlush
     private static final int ORA_UNIQUE_CONSTRAINT = 1;
 
     private final OracleDatabaseDialect dialect = new OracleDatabaseDialect();
+
+    @Override
+    protected com.reactor.cachedb.jdbc.JdbcDatabaseDialect dialectForValidation() { return dialect; }
     private final OracleFailureClassifier failureClassifier = new OracleFailureClassifier();
     private final StoragePerformanceCollector performanceCollector;
     private final OracleWriteBehindOptions options;

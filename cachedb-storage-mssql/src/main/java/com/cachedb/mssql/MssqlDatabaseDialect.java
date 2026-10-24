@@ -8,6 +8,16 @@ import java.util.Map;
 import java.util.StringJoiner;
 
 public final class MssqlDatabaseDialect implements JdbcDatabaseDialect {
+    public static final int MSSQL_MAX_COLUMNS = 1_024;
+
+    @Override
+    public int maxColumnsInTable() { return MSSQL_MAX_COLUMNS; }
+
+    @Override
+    public int upsertParameterCount(QueuedWriteOperation operation) {
+        return operation.columns().size() + (operation.columns().containsKey(operation.idColumn()) ? 1 : 2);
+    }
+
     public static final int MSSQL_PARAMETER_LIMIT = 2_100;
 
     @Override

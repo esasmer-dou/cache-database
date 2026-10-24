@@ -938,6 +938,52 @@ class CacheRepositoryProcessorTest {
         assertTrue(result.diagnosticsText().contains("@CacheJsonRecord or an explicit"));
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void wideEntityActuallyCompilesAndRoundTripsAtTheAbsoluteLimit() throws Exception {
+        StringBuilder fields = new StringBuilder("@com.reactor.cachedb.annotations.CacheId(column=\"id\") public Long id;\n");
+        for (int i = 1; i < 4096; i++) fields.append("@com.reactor.cachedb.annotations.CacheColumn(\"c").append(i)
+                .append("\") public String c").append(i).append(";\n");
+        Compilation result = compile(source("wide/Row.java", "package wide; @com.reactor.cachedb.annotations.CacheEntity(table=\"wide_row\",redisNamespace=\"wide\") public class Row {" + fields + "}"));
+        assertTrue(result.success(), result.diagnosticsText());
+        assertTrue(result.diagnosticsText().contains("more than 1000 columns"));
+        try (var loader = new java.net.URLClassLoader(new java.net.URL[]{result.classes().toUri().toURL()}, getClass().getClassLoader())) {
+            var type = loader.loadClass("wide.Row");
+            var binding = loader.loadClass("wide.RowCacheBinding");
+            var codec = (com.reactor.cachedb.core.model.EntityCodec<Object>) binding.getField("CODEC").get(null);
+            Object value = type.getConstructor().newInstance();
+            type.getField("id").set(value, 42L);
+            type.getField("c4095").set(value, "last");
+            Object decoded = codec.fromRedisValue(codec.toRedisValue(value));
+            org.junit.jupiter.api.Assertions.assertEquals(42L, type.getField("id").get(decoded));
+            org.junit.jupiter.api.Assertions.assertEquals("last", type.getField("c4095").get(decoded));
+            org.junit.jupiter.api.Assertions.assertEquals("last", type.getField("c4095").get(codec.fromColumns(codec.toColumns(value))));
+            org.junit.jupiter.api.Assertions.assertNotNull(loader.loadClass("wide.RowFields").getField("c4095").get(null));
+            Object duplicate = codec.fromRedisValue("2:id7:invalid2:id2:42");
+            org.junit.jupiter.api.Assertions.assertEquals(42L, type.getField("id").get(duplicate));
+        }
+    }
+
+    @Test
+    void entityBeyondTheAbsoluteLimitGetsAnExplicitDiagnostic() throws Exception {
+        StringBuilder fields = new StringBuilder("@com.reactor.cachedb.annotations.CacheId(column=\"id\") public Long id;\n");
+        for (int i = 1; i <= 4096; i++) fields.append("@com.reactor.cachedb.annotations.CacheColumn(\"c").append(i)
+                .append("\") public String c").append(i).append(";\n");
+        Compilation result = compile(source("wide/TooWide.java", "package wide; @com.reactor.cachedb.annotations.CacheEntity(table=\"wide_row\",redisNamespace=\"wide\") public class TooWide {" + fields + "}"));
+        assertFalse(result.success());
+        assertTrue(result.diagnosticsText().contains("at most 4096 persisted fields"), result.diagnosticsText());
+    }
+
+    @Test
+    void rejectsRecordsWhoseConstructorCannotFitJvmSlots() throws Exception {
+        StringBuilder fields = new StringBuilder("@com.reactor.cachedb.annotations.CacheId(column=\"id\") Long id");
+        for (int i = 1; i < 255; i++) fields.append(", @com.reactor.cachedb.annotations.CacheColumn(\"c")
+                .append(i).append("\") String c").append(i);
+        var result = compile(source("wide/WideRecord.java", "package wide; @com.reactor.cachedb.annotations.CacheEntity(table=\"wide\", redisNamespace=\"wide\") public record WideRecord(" + fields + ") {}"));
+        assertFalse(result.success());
+        assertTrue(result.diagnosticsText().contains("JVM 255-slot limit"), result.diagnosticsText());
+    }
+
     private Compilation compile(Source... sources) throws IOException {
         Path sourceRoot = Files.createDirectories(temp.resolve("sources-" + System.nanoTime()));
         Path generated = Files.createDirectories(temp.resolve("generated-" + System.nanoTime()));

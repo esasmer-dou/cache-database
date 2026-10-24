@@ -62,10 +62,12 @@ final class MigrationSchemaDiscovery {
         ArrayList<String> warnings = new ArrayList<>();
         try (Connection connection = dataSource.getConnection()) {
             DatabaseMetaData metaData = connection.getMetaData();
+            var dialect = com.reactor.cachedb.jdbc.JdbcSchemaDialects.resolve(connection);
+            int maxColumns = dialect.resolveMaxColumnsInTable(metaData);
             String catalog = connection.getCatalog();
             String schemaPattern = metadataSchemaPattern(connection, metaData);
             loadTables(metaData, catalog, schemaPattern, tables);
-            loadColumns(metaData, catalog, tables);
+            loadColumns(metaData, catalog, tables, dialect, maxColumns, warnings);
             loadPrimaryKeys(metaData, catalog, tables);
             loadImportedKeys(metaData, catalog, tables);
         } catch (SQLException exception) {
@@ -126,13 +128,23 @@ final class MigrationSchemaDiscovery {
         }
     }
 
-    private void loadColumns(DatabaseMetaData metaData, String catalog, Map<TableKey, MutableTable> tables) throws SQLException {
+    private void loadColumns(DatabaseMetaData metaData, String catalog, Map<TableKey, MutableTable> tables,
+            com.reactor.cachedb.jdbc.JdbcSchemaDialect dialect, int maxColumns, List<String> warnings) throws SQLException {
         for (Map.Entry<TableKey, MutableTable> entry : tables.entrySet()) {
             TableKey key = entry.getKey();
             MutableTable table = entry.getValue();
-            try (ResultSet resultSet = metaData.getColumns(catalog, key.schemaName(), key.tableName(), "%")) {
+            String schema = key.schemaName() == null ? null : dialect.metadataPattern(metaData, key.schemaName());
+            try (ResultSet resultSet = metaData.getColumns(catalog, schema,
+                    dialect.metadataPattern(metaData, key.tableName()), "%")) {
+                int readColumns = 0;
                 while (resultSet.next()) {
+                    String foundTable = resultSet.getString("TABLE_NAME");
+                    if (foundTable != null && !foundTable.equalsIgnoreCase(key.tableName())) continue;
+                    com.reactor.cachedb.jdbc.JdbcColumnLimits.validate(++readColumns,
+                            table.plannable() ? maxColumns : com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.MAX_FIELDS,
+                            "migration " + table.qualifiedTableName);
                     String columnName = resultSet.getString("COLUMN_NAME");
+                    if (columnName == null) throw new SQLException("Metadata returned an unnamed column for " + key.tableName());
                     int jdbcType = resultSet.getInt("DATA_TYPE");
                     String jdbcTypeName = resultSet.getString("TYPE_NAME");
                     boolean nullable = DatabaseMetaData.columnNullable == resultSet.getInt("NULLABLE");
@@ -143,6 +155,11 @@ final class MigrationSchemaDiscovery {
                             nullable
                     ));
                 }
+            }
+            if (!table.plannable() && table.columns.size() > maxColumns) {
+                warnings.add("View " + table.qualifiedTableName + " has " + table.columns.size()
+                        + " columns, exceeding the table dictionary limit " + maxColumns
+                        + "; use an explicit projection rather than a direct table mapping.");
             }
         }
     }

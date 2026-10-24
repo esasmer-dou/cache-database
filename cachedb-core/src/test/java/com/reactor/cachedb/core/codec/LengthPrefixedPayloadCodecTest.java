@@ -30,10 +30,19 @@ class LengthPrefixedPayloadCodecTest {
     }
 
     @Test void boundsFieldsAndPayloadBeforeMaterializingValues() {
-        assertThrows(IllegalArgumentException.class, () -> LengthPrefixedPayloadCodec.decode("1:a0:".repeat(1025)));
+        assertThrows(IllegalArgumentException.class, () -> LengthPrefixedPayloadCodec.decode("1:a0:".repeat(LengthPrefixedPayloadCodec.MAX_FIELDS + 1)));
         assertThrows(IllegalArgumentException.class,
                 () -> LengthPrefixedPayloadCodec.cursor("x".repeat(LengthPrefixedPayloadCodec.MAX_PAYLOAD_CHARS + 1)));
-        assertEquals(1, LengthPrefixedPayloadCodec.decode("1:a0:".repeat(1024)).size());
+        assertEquals(1, LengthPrefixedPayloadCodec.decode("1:a0:".repeat(LengthPrefixedPayloadCodec.MAX_FIELDS)).size());
+    }
+
+    @Test void acceptsTheFullWidePayloadAndRefusesOneExtraField() {
+        assertEquals(4096, LengthPrefixedPayloadCodec.MAX_FIELDS);
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (int i = 0; i < LengthPrefixedPayloadCodec.MAX_FIELDS; i++) fields.put("c" + i, i % 2 == 0 ? "value" : null);
+        assertEquals(fields, LengthPrefixedPayloadCodec.decode(LengthPrefixedPayloadCodec.encode(fields)));
+        fields.put("overflow", "value");
+        assertThrows(IllegalArgumentException.class, () -> LengthPrefixedPayloadCodec.encode(fields));
     }
 
     @Test void duplicateAndNullKeysRetainLegacyMapSemantics() {

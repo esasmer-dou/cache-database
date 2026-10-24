@@ -32,6 +32,7 @@ Source synchronization is not a local Maven build.
 
 ```sh
 sh tools/k8s/run-validation.sh unit
+sh tools/k8s/run-validation.sh columns
 sh tools/k8s/run-validation.sh providers
 sh tools/k8s/run-validation.sh provider-legacy
 sh tools/k8s/run-validation.sh redis
@@ -40,6 +41,13 @@ sh tools/k8s/run-validation.sh sample-postgresql
 sh tools/k8s/run-validation.sh sample-mssql
 sh tools/k8s/run-validation.sh sample-oracle
 ```
+
+The columns lane checks bounded JDBC capability resolution, schema/DDL rejection,
+4096-field generation and serialization, and full-width insert/update/delete on
+all three disposable SQL providers. It requires the provider services and SQL
+Server database initialization above; it is not a mock-only capability check.
+Oracle extended mode is proven only if the actual driver/server reports and
+accepts that limit, not by the resolver's 4096 stub test.
 
 The unit lane enables the standalone Redis and all three SQL provider contracts;
 the Cluster lane additionally requires the bootstrapped six-node fixture.

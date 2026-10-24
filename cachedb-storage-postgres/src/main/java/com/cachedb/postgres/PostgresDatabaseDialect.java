@@ -8,6 +8,11 @@ import java.util.Map;
 import java.util.StringJoiner;
 
 public final class PostgresDatabaseDialect implements JdbcDatabaseDialect {
+    public static final int POSTGRES_MAX_COLUMNS = 1_600;
+
+    @Override
+    public int maxColumnsInTable() { return POSTGRES_MAX_COLUMNS; }
+
     private static final int POSTGRES_PARAMETER_LIMIT = 65_535;
 
     @Override

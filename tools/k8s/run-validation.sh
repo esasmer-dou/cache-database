@@ -36,6 +36,10 @@ case "${1:-unit}" in
   unit) mvn -B -ntp install -Dcachedb.snapshot.redis=true -Dcachedb.snapshot.providers=true \
     -Dcachedb.snapshot.redis.host="$redis" -Dcachedb.snapshot.redis.port=6379 \
     -Dcachedb.test.redis.uri="redis://$redis:6379/11" ;;
+  columns) mvn -B -ntp -pl cachedb-annotations,cachedb-processor,cachedb-spring-boot-starter -am test \
+    -Dcachedb.snapshot.providers=true \
+    '-Dtest=JdbcColumnLimitsTest,JdbcWriteColumnGuardTest,ProviderColumnLimitsTest,ProviderColumnLimitsIntegrationTest,SchemaColumnLimitsTest,ProjectionSchemaTypesTest,LengthPrefixedPayloadCodecTest,RedisIndexMutationPlannerTest,AdminWriteBehindInspectorTest,CacheRepositoryProcessorTest' \
+    -Dsurefire.failIfNoSpecifiedTests=false ;;
   providers) mvn -B -ntp -pl cachedb-spring-boot-starter -am test \
     -Dcachedb.snapshot.providers=true -Dcachedb.snapshot.redis=true \
     -Dcachedb.snapshot.redis.host="$redis" -Dcachedb.snapshot.redis.port=6379 \
@@ -68,5 +72,5 @@ case "${1:-unit}" in
     esac
     export CACHEDB_TEST_DATASOURCE_PASSWORD="$password"
     mvn -B -ntp -f "sample-cache-database-$provider/pom.xml" -Pprovider-integration verify ;;
-  *) echo 'Expected all, unit, redis, cluster, providers, provider-legacy, release-smoke, or sample-{postgresql,mssql,oracle}' >&2; exit 2 ;;
+  *) echo 'Expected all, unit, columns, redis, cluster, providers, provider-legacy, release-smoke, or sample-{postgresql,mssql,oracle}' >&2; exit 2 ;;
 esac

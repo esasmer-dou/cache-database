@@ -29,7 +29,8 @@ production tuning should be approached.
 | How do I run a complete REST API sample? | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
 | How do I declare hot, source, warm, and command routes? | [Declarative Repositories](docs/declarative-repositories.md) |
-| What changed in the latest stable release? | [v0.14.0 Release Notes](docs/releases/v0.14.0.md) |
+| What changed in the latest stable release? | [v0.15.1 Release Notes](docs/releases/v0.15.1.md) |
+| How are wide entities and SQL column limits checked? | [Database-Aware Column Limits](docs/schema-column-limits.md) |
 | How do I simplify snapshot sources and relationships? | [Source reference](docs/snapshot-source-reference.md) |
 | How do I use typed snapshots, client/worker roles and infrastructure-free tests in 0.14.0? | [Typed Snapshots, Runtime Roles and Consumer Tests](docs/typed-snapshots-runtime-testing.md) |
 | Do I need the Spring Boot JDBC starter? | [Spring Boot Starter](docs/spring-boot-starter.md) |

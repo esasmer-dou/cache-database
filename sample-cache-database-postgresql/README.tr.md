@@ -3,7 +3,7 @@
 [English](README.md) | Türkçe
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.15.0](https://img.shields.io/badge/CacheDB-0.15.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.15.0)
+[![CacheDB 0.15.1](https://img.shields.io/badge/CacheDB-0.15.1-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.15.1)
 
 Bu proje, CacheDB'nin Redis 8 ve PostgreSQL ile nasıl kullanılacağını gösteren
 bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
@@ -11,7 +11,7 @@ açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
 kullanır, kalıcı geçmiş PostgreSQL'de tutulur, büyüyen listeler ise bütün nesne
 ağacı yerine projection üzerinden okunur.
 
-> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.15.0`
+> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.15.1`
 > paketini kullanır. GitHub token'ı veya yerel CacheDB kaynak kodu gerekmez.
 
 Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
@@ -20,10 +20,10 @@ yolunu okuyacak, karşılık gelen Redis projection'ını hazırlayacak, aktif y
 çağıracak ve kapsam ile kalıcılık sinyallerini inceleyeceksin. Redis'te kayıt
 bulunmaması arka planda gizli bir PostgreSQL sorgusu başlatmaz.
 
-## CacheDB 0.15.0'a Yükseltme
+## CacheDB 0.15.1'e Yükseltme
 
 Örnek POM; BOM, sağlayıcı starter'ı, annotation processor ve doctor plugin'ini
-`0.15.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
+`0.15.1` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
 POM ayrıca `jedis.version=5.2.0` ayarını içerir. Bu ayar olmadan Spring Boot parent,
 gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 
@@ -35,9 +35,66 @@ gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 - SQL kolonunuz NULL alabiliyorsa `Boolean` kullanın; primitive `boolean`, SQL NULL değerini reddeder.
 - Atomik katalog aktarımı ve indeksli snapshot sayfaları açık endpoint'lerle gösterilir. Redis Cluster dağılımı isteğe bağlı framework altyapısıdır; yerel Compose tek Redis kullanır.
 
-Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.15.0.md)
+Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.15.1.md)
 ve [sınırlı çalışma sözleşmelerini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/sinirli-calisma-islemleri.md)
 okuyun. Paketin kullanılabilir olması, uygulamanızın canlı ortam topolojisini doğrulamaz.
+
+## 0.15.1'de Kolon Güvenliği
+
+Mevcut sample entity'leri bilerek dar tutulur. Yeni kontroller, 0.15.1 bağımlılığı
+ile devrededir; ek cache politikası veya iş tablosu değişikliği gerekmez.
+Redis'te daha geniş veri kabul edilmesi, SQL tablosunun sınırını kaldırmaz.
+
+| Veri yüzeyi | Varsayılan sayı sınırı |
+| --- | --- |
+| PostgreSQL tablosu | 1600 fiziksel kolon |
+| SQL Server standart tablosu | 1024 fiziksel kolon |
+| Oracle standart tablosu | 1000 fiziksel kolon |
+| Redis entity/projection verisi | 4096 alan; veri boyutu ve bellek bütçeleri ayrıca geçerlidir |
+
+JDBC pozitif kapasite bildirirse, 4096'yı aşmamak koşuluyla bu değer kullanılır.
+Kapasite bilinmiyorsa sağlayıcının varsayılanı esas alınır. ID, sürüm ve mantıksal
+silme kolonları toplama katılır. Örneğin PostgreSQL'de ID dâhil 1199 eşlenmiş
+kolona ayrı sürüm kolonu eklenirse toplam 1200 olur. Kolon sayısı denetimi geçer;
+aynı tanım standart Oracle ve SQL Server sınırını aşar. Satır genişliği ve SQL
+parametre bütçesi de uygun olmalıdır. Bir rapor ekranında 1200 alanın tümünü
+yüklemek yerine dar bir projection kullanın.
+
+İsteğe bağlı, tek seferlik dağıtım kontrolü için aşağıdaki yardımcı metodu
+**üretilmiş entity'ler kaydedildikten sonra**, trafik açılmadan önce çağırın.
+Her REST isteğinde çalıştırmayın; ikinci bir otomatik warm döngüsü eklemeyin:
+
+```java
+import javax.sql.DataSource;
+import com.reactor.cachedb.core.config.SchemaBootstrapConfig;
+import com.reactor.cachedb.starter.CacheDatabase;
+import com.reactor.cachedb.starter.CacheDatabaseSchemaAdmin;
+
+public final class SampleSchemaSafety {
+    private SampleSchemaSafety() {}
+
+    public static void verify(CacheDatabase database, DataSource source) {
+        var schema = new CacheDatabaseSchemaAdmin(
+                source, database.entityRegistry(), SchemaBootstrapConfig.defaults());
+        var result = schema.validate();
+        if (!result.success()) {
+            throw new IllegalStateException("Schema validation failed: " + result.issues());
+        }
+    }
+}
+```
+
+Bu kontrol, iş tablosu oluşturmadan kayıtlı eşlemeleri doğrular. Uyumsuz tanım,
+normal trafik başlamadan raporlanır. Write-behind da iş tablosuna SQL göndermeden
+önce kolon ve parametre sayısını denetler. JDBC metadata davranışı sürücüye bağlıdır.
+
+1024 alanı aşan veri üretmeden önce tüm okuyucu ve worker'ları yükseltin: eski
+0.15.0 okuyucuları bu veriyi okuyamaz. 0.15.0 kalıcı sürüm koruma tablosu zaten
+kuruluysa bu yama için ek iş tablosu migration'ı gerekmez. Oracle extended modu
+kendiliğinden açılmaz; standart Oracle test kurulumu bu modun kanıtı değildir.
+
+Sürücü varsayılanları, record constructor sınırları ve migration denetimleri için
+[kolon sınırları rehberini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/sema-kolon-sinirlari.md) okuyun.
 
 ## Buradan Başla
 
@@ -143,7 +200,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.15.0</cachedb.version>
+<cachedb.version>0.15.1</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -235,7 +292,7 @@ herkese açıktır; Maven `settings.xml`, kullanıcı adı veya token gerekmez.
 ### 1. Yayımlanmış CacheDB paketini çözümle
 
 Sample projesini doğrudan doğrula. Maven; BOM, starter, annotation processor ve
-doctor plugin'ini değişmez `0.15.0` paketinden kimlik bilgisi istemeden çözümler:
+doctor plugin'ini değişmez `0.15.1` paketinden kimlik bilgisi istemeden çözümler:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -901,7 +958,7 @@ kullan. Örnek kanıtları başarılı gibi işaretleme.
 <!-- BEGIN COMPILED FEATURE EXAMPLES -->
 ## Bildirimsel Katalog Senaryoları
 
-Bu senaryolar **CacheDB 0.15.0** sürümünü kullanır. Mevcut sipariş,
+Bu senaryolar **CacheDB 0.15.1** sürümünü kullanır. Mevcut sipariş,
 destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar yalnızca anlatım
 için yazılmış taslaklar değildir; üç sağlayıcıda da derlenen ve test edilen
 örnek kaynak kodlarıdır. Her tam Java bloğunu, üstünde belirtilen dosyaya yerleştirin.
@@ -1112,10 +1169,10 @@ public class CatalogConfiguration {
 
 Örneğin POM dosyasında Gson **2.13.2** açıkça sabitlenmiştir. Aksi hâlde Spring
 Boot parent, gerekli `Strictness` sınıfını içermeyen eski Gson sürümünü seçebilir.
-POM'da `cachedb-json`, annotation bağımlılığı ve 0.15.0 processor birlikte bulunur.
+POM'da `cachedb-json`, annotation bağımlılığı ve 0.15.1 processor birlikte bulunur.
 Gson sürüm ayarını kaldırmayın; farklı framework sürümlerini karıştırmayın.
 
-0.15.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
+0.15.1 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
 zamanı bağımlılıkları şunlardır:
 
 ```xml
@@ -1387,7 +1444,7 @@ Ayrıca `spring.main.keep-alive=true` ayarı bulunur. Arka plan havuzları daemo
 iş parçacıkları kullanır; web sunucusu olmayan JVM'in kendiliğinden kapanmaması
 için uygulama yaşam döngüsü bu ayarla açıkça korunur.
 Entity tanımları, JSON codec'leri, Redis, SQL ve iş tanımları ortaktır.
-0.15.0'da otomatik yapılandırma, `CLIENT_ONLY` için yalnızca iş yayımlayan
+Otomatik yapılandırma, `CLIENT_ONLY` için yalnızca iş yayımlayan
 executor'ı da sağlar. Tanımlı komutları kabul eder; işleri tüketmez ve boşta
 işleyici/heartbeat iş parçacığı başlatmaz. Ek yapılandırma sınıfı gerekmez.
 

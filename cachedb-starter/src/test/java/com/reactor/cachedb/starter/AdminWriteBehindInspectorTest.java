@@ -8,6 +8,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class AdminWriteBehindInspectorTest {
+    @Test void wideExportsUseThePayloadLimitNotOneProviderLimit() {
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (int i = 0; i < 4096; i++) fields.put("c" + i, "value");
+        assertEquals(List.of("row"), AdminWriteBehindInspector.collect(null,
+                cursor -> new StreamPage<>(List.of("row"), null, false), row -> fields));
+        fields.put("overflow", "value");
+        assertThrows(IllegalStateException.class, () -> AdminWriteBehindInspector.collect(null,
+                cursor -> new StreamPage<>(List.of("row"), null, false), row -> fields));
+    }
     @Test void exportFollowsPagesWithoutDiscardingRows() {
         AtomicInteger calls = new AtomicInteger();
         var rows = AdminWriteBehindInspector.collect(null, cursor -> calls.getAndIncrement() == 0

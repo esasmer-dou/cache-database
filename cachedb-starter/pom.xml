@@ -7,13 +7,19 @@
     <parent>
         <groupId>com.reactor.cachedb</groupId>
         <artifactId>cache-database</artifactId>
-        <version>0.15.0</version>
+        <version>0.15.1</version>
     </parent>
 
     <artifactId>cachedb-starter</artifactId>
     <name>cachedb-starter</name>
 
     <dependencies>
+        <dependency>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-storage-mssql</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>com.reactor.cachedb</groupId>
             <artifactId>cachedb-core</artifactId>

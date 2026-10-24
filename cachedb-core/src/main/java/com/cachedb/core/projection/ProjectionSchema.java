@@ -121,7 +121,7 @@ public final class ProjectionSchema<P> implements ProjectionCodec<P> {
                 ProjectionValueCodec<V> codec
         ) {
             if (columns.size() >= LengthPrefixedPayloadCodec.MAX_FIELDS)
-                throw new IllegalArgumentException("Projection schema supports at most 1024 columns");
+                throw new IllegalArgumentException("Projection schema supports at most " + LengthPrefixedPayloadCodec.MAX_FIELDS + " columns");
             String normalizedName = name == null ? null : name.trim();
             if (columns.stream().anyMatch(column -> column.name().equals(normalizedName))) {
                 throw new IllegalArgumentException("Duplicate projection column: " + normalizedName);

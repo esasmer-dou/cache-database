@@ -32,6 +32,9 @@ public final class PostgresWriteBehindFlusher extends AbstractJdbcWriteBehindFlu
 
     private final PostgresFailureClassifier failureClassifier;
     private final PostgresDatabaseDialect dialect;
+
+    @Override
+    protected com.reactor.cachedb.jdbc.JdbcDatabaseDialect dialectForValidation() { return dialect; }
     private final WriteBehindConfig config;
     private final StoragePerformanceCollector performanceCollector;
 

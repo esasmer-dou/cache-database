@@ -79,7 +79,7 @@ final class AdminWriteBehindInspector implements DeadLetterManagement {
             for (T entry : page.items()) {
                 Map<String, String> values = fields.apply(entry);
                 if (values != null) {
-                    if (values.size() > 1024) throw tooLarge();
+                    if (values.size() > com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.MAX_FIELDS) throw tooLarge();
                     for (var value : values.entrySet()) {
                         chars += (value.getKey() == null ? 0 : value.getKey().length());
                         chars += (value.getValue() == null ? 0 : value.getValue().length());

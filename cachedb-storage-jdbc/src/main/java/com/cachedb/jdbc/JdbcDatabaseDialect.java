@@ -8,7 +8,17 @@ import java.util.Map;
 public interface JdbcDatabaseDialect {
     String name();
 
+    default int maxColumnsInTable() { return 1_024; }
+
+    default int resolveMaxColumnsInTable(java.sql.DatabaseMetaData metaData) throws java.sql.SQLException {
+        return JdbcColumnLimits.resolve(metaData, maxColumnsInTable());
+    }
+
     int maxParametersPerStatement();
+
+    default int upsertParameterCount(QueuedWriteOperation operation) {
+        return operation.columns().size();
+    }
 
     default boolean supportsMultiRowUpsert() {
         return true;
@@ -30,6 +40,10 @@ public interface JdbcDatabaseDialect {
 
     default int safeStatementRowLimit(int requestedRowLimit, int parametersPerRow) {
         int safeParametersPerRow = Math.max(1, parametersPerRow);
+        if (safeParametersPerRow > maxParametersPerStatement()) {
+            throw new IllegalArgumentException("Single row parameter count " + safeParametersPerRow
+                    + " exceeds statement limit " + maxParametersPerStatement() + " for dialect " + name());
+        }
         int maximumRows = Math.max(1, maxParametersPerStatement() / safeParametersPerRow);
         if (requestedRowLimit <= 0) {
             return maximumRows;

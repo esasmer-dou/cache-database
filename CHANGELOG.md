@@ -4,6 +4,22 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.15.1 - 2026-10-24
+
+### Added
+
+- database-aware table column validation using bounded JDBC capabilities, with Oracle 1000, SQL Server 1024 and PostgreSQL 1600 fallbacks
+- a 4096-field payload/projection/index/export ceiling, with chunked generation for wide mutable entities and an explicit JVM record-constructor diagnostic
+- early schema/migration/write-shape rejection, including version/deleted columns and oversized single-row statement parameter counts
+- bounded, single-call column discovery per table and English/Turkish column-limit guidance
+
+### Compatibility
+
+- Existing payload format and public APIs are retained. Regenerate bindings and upgrade all readers before producing payloads above the published 0.15.0 ceiling.
+- Database row-width limits and driver-specific capabilities still apply. Oracle extended mode is never enabled or inferred automatically.
+
+See [upgrade contracts](docs/releases/v0.15.1.md).
+
 ## 0.15.0 - 2026-10-24
 
 ### Added

@@ -70,7 +70,10 @@ final class RedisIndexMutationPlanner {
 
     static Plan plan(Map<String, String> prior, Map<String, String> next, boolean force) {
         if (prior == null) prior = Map.of();
-        if (prior.size() > 1024 || next.size() > 1024) throw new IllegalArgumentException("Too many index fields");
+        if (prior.size() > com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.MAX_FIELDS
+                || next.size() > com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.MAX_FIELDS)
+            throw new IllegalArgumentException("Too many index fields; maximum is "
+                    + com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.MAX_FIELDS);
         Set<String> changed = new LinkedHashSet<>();
         for (String column : prior.keySet())
             if (force || !next.containsKey(column) || !Objects.equals(prior.get(column), next.get(column))) changed.add(column);

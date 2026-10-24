@@ -18,7 +18,9 @@ class RedisIndexMutationPlannerTest {
     @Test void rebuildForcesAllColumnsAndRejectsOversizedMetadata() {
         assertEquals(Set.of("a"), RedisIndexMutationPlanner.plan(Map.of("a", "1"), Map.of("a", "1"), true).changed());
         Map<String, String> huge = new HashMap<>();
-        for (int i=0; i<1025; i++) huge.put("field"+i, "value");
+        for (int i=0; i<com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.MAX_FIELDS; i++) huge.put("field"+i, "value");
+        assertEquals(4096, RedisIndexMutationPlanner.plan(Map.of(), huge, false).changed().size());
+        huge.put("overflow", "value");
         assertThrows(IllegalArgumentException.class, () -> RedisIndexMutationPlanner.plan(Map.of(), huge, false));
     }
 }

@@ -8,6 +8,12 @@ import java.util.Map;
 import java.util.StringJoiner;
 
 public final class OracleDatabaseDialect implements JdbcDatabaseDialect {
+    public static final int ORACLE_STANDARD_MAX_COLUMNS = 1_000;
+    public static final int ORACLE_EXTENDED_MAX_COLUMNS = 4_096;
+
+    @Override
+    public int maxColumnsInTable() { return ORACLE_STANDARD_MAX_COLUMNS; }
+
     private static final int SAFE_PARAMETER_LIMIT = 65_535;
 
     @Override

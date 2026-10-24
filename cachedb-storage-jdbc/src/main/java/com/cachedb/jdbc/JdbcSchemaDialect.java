@@ -8,6 +8,12 @@ import java.util.List;
 public interface JdbcSchemaDialect {
     String name();
 
+    default int maxColumnsInTable() { return 1_024; }
+
+    default int resolveMaxColumnsInTable(DatabaseMetaData metaData) throws SQLException {
+        return JdbcColumnLimits.resolve(metaData, maxColumnsInTable());
+    }
+
     String sqlType(String javaTypeName);
 
     default String columnDefinition(String columnName, String javaTypeName, boolean required) {
@@ -19,9 +25,15 @@ public interface JdbcSchemaDialect {
     }
 
     default String createTableSql(String tableName, List<String> columnDefinitions, String idColumn) {
+        JdbcColumnLimits.validate(columnDefinitions.size(), maxColumnsInTable(), name());
         return "CREATE TABLE " + tableName + " ("
                 + String.join(", ", columnDefinitions)
                 + ", PRIMARY KEY (" + idColumn + "))";
+    }
+
+    default String createTableSql(String tableName, List<String> columnDefinitions, String idColumn, int maxColumns) {
+        JdbcColumnLimits.validate(columnDefinitions.size(), maxColumns, name());
+        return createTableSql(tableName, columnDefinitions, idColumn);
     }
 
     default String addColumnSql(String tableName, String columnDefinition) {
@@ -39,5 +51,13 @@ public interface JdbcSchemaDialect {
             return identifier.toLowerCase(java.util.Locale.ROOT);
         }
         return identifier;
+    }
+
+    default String metadataPattern(DatabaseMetaData metaData, String identifier) throws SQLException {
+        String normalized = metadataIdentifier(metaData, identifier);
+        String escape = metaData.getSearchStringEscape();
+        if (normalized == null || escape == null || escape.isEmpty()) return normalized;
+        return normalized.replace(escape, escape + escape)
+                .replace("_", escape + "_").replace("%", escape + "%");
     }
 }

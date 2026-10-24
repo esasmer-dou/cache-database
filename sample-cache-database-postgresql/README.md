@@ -3,14 +3,14 @@
 English | [Türkçe](README.tr.md)
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.15.0](https://img.shields.io/badge/CacheDB-0.15.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.15.0)
+[![CacheDB 0.15.1](https://img.shields.io/badge/CacheDB-0.15.1-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.15.1)
 
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and PostgreSQL. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in PostgreSQL, and
 growing lists use projections instead of full aggregates.
 
-> This release consumes the immutable CacheDB `0.15.0` package from the public
+> This release consumes the immutable CacheDB `0.15.1` package from the public
 > CacheDB Maven repository. It requires no GitHub token and does not require a
 > local CacheDB source checkout.
 
@@ -20,10 +20,10 @@ matching Redis projection, read the active route, and inspect coverage and
 durability signals. The sample does not hide a PostgreSQL query behind a Redis
 miss.
 
-## CacheDB 0.15.0 Upgrade
+## CacheDB 0.15.1 Upgrade
 
 The sample POM aligns the BOM, provider starter, annotation processor and doctor
-plugin at `0.15.0`. Rebuild the sample to regenerate its bindings.
+plugin at `0.15.1`. Rebuild the sample to regenerate its bindings.
 The POM also sets `jedis.version=5.2.0`; the Spring Boot parent would otherwise
 select an older driver that lacks the required pipeline API.
 
@@ -35,9 +35,65 @@ select an older driver that lacks the required pipeline API.
 - Use `Boolean` for nullable SQL booleans; primitive `boolean` rejects SQL NULL.
 - Atomic catalog imports and indexed snapshot pages have explicit endpoints. Redis Cluster distribution remains an optional framework infrastructure capability; local Compose uses standalone Redis.
 
-Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.15.0.md)
+Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.15.1.md)
 and [bounded operation contracts](https://github.com/esasmer-dou/cache-database/blob/main/docs/bounded-runtime-operations.md)
 before adding those APIs. Package availability does not certify your application's production topology.
+
+## Column Safety in 0.15.1
+
+The existing sample entities stay deliberately narrow. The new limits are active
+through the 0.15.1 dependency; no additional cache policy or business-table change
+is required. A wider Redis payload is not permission to create a wider SQL table.
+
+| Surface | Default count limit |
+| --- | --- |
+| PostgreSQL table | 1600 physical columns |
+| SQL Server standard table | 1024 physical columns |
+| Oracle standard table | 1000 physical columns |
+| Entity/projection payload in Redis | 4096 fields, still subject to byte and memory budgets |
+
+A positive JDBC capability value takes precedence, capped at 4096; unknown values
+use the provider default. ID, version and soft-delete columns count. For example,
+a PostgreSQL reporting entity with 1199 mapped columns including its ID plus a
+separate version column uses 1200 slots. It passes the count check on PostgreSQL,
+but exceeds the default Oracle/SQL Server table limits. Row width and SQL parameter
+budgets must still fit. Prefer a small report projection to loading all 1200 fields.
+
+For an optional one-time deployment check, call this helper **after the generated
+entities have registered**, before admitting traffic. Do not call it on every REST
+request or add a second automatic warm loop:
+
+```java
+import javax.sql.DataSource;
+import com.reactor.cachedb.core.config.SchemaBootstrapConfig;
+import com.reactor.cachedb.starter.CacheDatabase;
+import com.reactor.cachedb.starter.CacheDatabaseSchemaAdmin;
+
+public final class SampleSchemaSafety {
+    private SampleSchemaSafety() {}
+
+    public static void verify(CacheDatabase database, DataSource source) {
+        var schema = new CacheDatabaseSchemaAdmin(
+                source, database.entityRegistry(), SchemaBootstrapConfig.defaults());
+        var result = schema.validate();
+        if (!result.success()) {
+            throw new IllegalStateException("Schema validation failed: " + result.issues());
+        }
+    }
+}
+```
+
+This validates registered mappings without creating business tables. An incompatible
+definition is reported before normal traffic; write-behind also checks column and
+parameter counts before business SQL. JDBC metadata behavior is driver-dependent.
+
+Upgrade every reader/worker before producing payloads above 1024 fields: old 0.15.0
+readers cannot consume them. If the 0.15.0 durable write-fence table is already
+provisioned, this patch needs no new business-table migration. Oracle extended mode
+is not enabled automatically and was not certified on the standard Oracle fixture.
+
+See the [column-limit guide](https://github.com/esasmer-dou/cache-database/blob/main/docs/schema-column-limits.md)
+for driver fallbacks, record-constructor limits and migration checks.
 
 ## Start Here
 
@@ -142,7 +198,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.15.0</cachedb.version>
+<cachedb.version>0.15.1</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -233,7 +289,7 @@ no Maven `settings.xml`, username, or token is required.
 ### 1. Resolve the published CacheDB package
 
 Validate the sample directly. Maven resolves the BOM, starter, annotation
-processor, and doctor plugin anonymously from the immutable `0.15.0` package:
+processor, and doctor plugin anonymously from the immutable `0.15.1` package:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -884,7 +940,7 @@ never copy placeholder evidence and mark it as passed.
 <!-- BEGIN COMPILED FEATURE EXAMPLES -->
 ## Declarative Catalog Scenarios
 
-These scenarios use **CacheDB 0.15.0**. Existing commerce,
+These scenarios use **CacheDB 0.15.1**. Existing commerce,
 support, logistics and archive routes are unchanged. Unlike a release-note link,
 the classes below are actual sample sources, compiled and tested for all three
 providers. Each complete Java block belongs at the path printed above it.
@@ -1086,10 +1142,10 @@ public class CatalogConfiguration {
 
 The sample explicitly pins Gson **2.13.2**, because the Spring Boot parent can
 otherwise select an older Gson without `Strictness`. The POM includes
-`cachedb-json`, the annotation dependency and the 0.15.0 processor. Do not remove
+`cachedb-json`, the annotation dependency and the 0.15.1 processor. Do not remove
 the Gson override or mix framework versions.
 
-With the 0.15.0 BOM and annotation processor already configured, these are the
+With the 0.15.1 BOM and annotation processor already configured, these are the
 additional runtime dependencies used by the compiled sample:
 
 ```xml
@@ -1356,7 +1412,7 @@ The worker profile sets `web-application-type=none`; it exposes no REST listener
 It also sets `spring.main.keep-alive=true`: background pools use daemon threads,
 so a non-web JVM must be kept alive explicitly by its application lifecycle.
 All instances share metadata, JSON codecs, Redis, SQL and job definitions.
-In 0.15.0, auto-configuration also supplies a publisher-only job executor for
+Auto-configuration also supplies a publisher-only job executor for
 `CLIENT_ONLY`. It accepts registered commands without consuming them or starting
 idle worker/heartbeat threads. No extra configuration class is required.
 
