@@ -28,6 +28,15 @@ public interface EntityMetadata<T, ID> {
     Class<T> entityType();
     Function<T, ID> idAccessor();
     List<String> columns();
+    /** True only for generated records whose complete state is known immutable. */
+    default boolean deeplyImmutable() { return false; }
+    default int schemaVersion() { return 1; }
+    default String tenantFieldName() { return null; }
+    default String extractTenantId(T entity) { return null; }
+    default int compressionThresholdBytes() { return 0; }
+    default com.reactor.cachedb.core.codec.CachePayloadUpcaster payloadUpcaster() {
+        return com.reactor.cachedb.core.codec.NoOpPayloadUpcaster.INSTANCE;
+    }
     default com.reactor.cachedb.core.cache.NearCachePolicy nearCachePolicy() {
         return com.reactor.cachedb.core.cache.NearCachePolicy.disabled();
     }

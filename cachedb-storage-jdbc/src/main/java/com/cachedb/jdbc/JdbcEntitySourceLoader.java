@@ -33,7 +33,7 @@ import java.util.Set;
 import java.util.StringJoiner;
 
 public final class JdbcEntitySourceLoader<T, ID>
-        implements VersionedEntitySourceLoader<T, ID> {
+        implements VersionedEntitySourceLoader<T, ID>, com.reactor.cachedb.core.page.EntityOwnershipLoader<ID> {
 
     private static final String IDENTIFIER_SEGMENT = "[A-Za-z_][A-Za-z0-9_]*";
     private static final String IDENTIFIER = IDENTIFIER_SEGMENT;
@@ -114,6 +114,35 @@ public final class JdbcEntitySourceLoader<T, ID>
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
+    @Override public Map<ID, String> loadTenantOwners(java.util.Collection<ID> ids) {
+        if (!com.reactor.cachedb.core.tenant.CacheTenantContext.isAdministrative())
+            throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
+        if (metadata.tenantFieldName() == null || ids == null || ids.isEmpty() || ids.size() > 500)
+            throw new IllegalArgumentException("Ownership lookup needs 1..500 identities and a tenant column");
+        var requested = new LinkedHashMap<String, ID>();
+        for (ID id : ids) if (requested.put(Objects.requireNonNull(id).toString(), id) != null)
+            throw new IllegalArgumentException("Ownership identities must be unique");
+        String sql = "SELECT " + requireAllowedColumn(metadata.idColumn()) + ", "
+                + requireAllowedColumn(metadata.tenantFieldName()) + " FROM " + tableName + " WHERE "
+                + requireAllowedColumn(metadata.idColumn()) + " IN (" + String.join(",", java.util.Collections.nCopies(ids.size(), "?")) + ")";
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(sql)) {
+            statement.setQueryTimeout(queryTimeoutSeconds); statement.setMaxRows(ids.size() + 1);
+            statement.setFetchSize(Math.min(128, ids.size()));
+            int index = 1; for (ID id : ids) dialect.bindParameter(statement, index++, id);
+            var result = new LinkedHashMap<ID, String>();
+            try (var rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    ID id = requested.get(rows.getString(1));
+                    String tenant = rows.getString(2);
+                    if (id == null || result.containsKey(id) || tenant == null || tenant.isBlank() || tenant.length() > 256)
+                        throw new IllegalStateException("Invalid or duplicate source ownership row");
+                    result.put(id, tenant);
+                }
+            }
+            return java.util.Collections.unmodifiableMap(result);
+        } catch (SQLException failure) { throw new IllegalStateException("Tenant ownership source lookup failed", failure); }
+    }
+
     @Override
     public java.util.OptionalLong loadVersionById(ID id) {
         Objects.requireNonNull(id, "id");
@@ -137,6 +166,9 @@ public final class JdbcEntitySourceLoader<T, ID>
     @Override
     public List<VersionedEntity<T>> loadVersionedPage(PageWindow pageWindow) {
         PageWindow normalized = pageWindow == null ? new PageWindow(0, Math.min(maxRows, 100)) : pageWindow;
+        if (com.reactor.cachedb.core.tenant.TenantAccess.active(metadata) != null)
+            return loadVersionedQuery(QuerySpec.allOf().offsetBy(normalized.offset()).limitTo(boundedLimit(normalized.pageSize()))
+                    .orderBy(QuerySort.asc(metadata.idColumn())));
         int pageSize = boundedLimit(normalized.pageSize());
         ArrayList<Object> parameters = new ArrayList<>();
         String sql = "SELECT " + selectList()
@@ -153,6 +185,7 @@ public final class JdbcEntitySourceLoader<T, ID>
     @Override
     public List<VersionedEntity<T>> loadVersionedQuery(QuerySpec querySpec) {
         QuerySpec normalized = querySpec == null ? QuerySpec.builder().limit(Math.min(maxRows, 100)).build() : querySpec;
+        normalized = com.reactor.cachedb.core.tenant.TenantAccess.scoped(metadata, normalized);
         int limit = boundedLimit(normalized.limit());
         ArrayList<Object> parameters = new ArrayList<>();
         String sql = "SELECT " + selectList()
@@ -195,7 +228,9 @@ public final class JdbcEntitySourceLoader<T, ID>
                                 + " for " + metadata.entityName());
                     }
                     LinkedHashMap<String, Object> columns = rowColumns(resultSet);
-                    rows.add(new VersionedEntity<>(codec.fromColumns(columns), versionFrom(columns)));
+                    T entity = codec.fromColumns(columns);
+                    com.reactor.cachedb.core.tenant.TenantAccess.verify(metadata, entity);
+                    rows.add(new VersionedEntity<>(entity, versionFrom(columns)));
                 }
                 return List.copyOf(rows);
             }
@@ -347,12 +382,18 @@ public final class JdbcEntitySourceLoader<T, ID>
     }
 
     private String activePredicate(List<Object> parameters) {
+        String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
+        String tenantPredicate = "";
+        if (tenant != null) {
+            parameters.add(tenant);
+            tenantPredicate = " AND " + requireAllowedColumn(metadata.tenantFieldName()) + " = ?";
+        }
         String deletedColumn = metadata.deletedColumn();
         if (deletedColumn == null || deletedColumn.isBlank()) {
-            return "";
+            return tenantPredicate;
         }
         parameters.add(metadata.deletedMarkerValue());
-        return " AND (" + requireAllowedColumn(deletedColumn) + " IS NULL OR "
+        return tenantPredicate + " AND (" + requireAllowedColumn(deletedColumn) + " IS NULL OR "
                 + requireAllowedColumn(deletedColumn) + " <> ?)";
     }
 

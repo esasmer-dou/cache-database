@@ -60,6 +60,8 @@ public final class InMemoryCacheWriteBatch implements CacheWriteBatch {
     }
 
     private void add(Command command) {
+        if (command.repository.metadata.tenantFieldName() != null)
+            throw new IllegalStateException("Tenant entities require ownership-checked repository writes; atomic batch tenant ownership is not supported");
         if (receipt != null || commands.size() >= 100)
             throw new IllegalStateException("Batch committed or exceeds 100 operations");
         Objects.requireNonNull(command.id, "id");

@@ -783,7 +783,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                                                         + metadata.entityName()));
         EntityBinding<T, ID> binding = (EntityBinding<T, ID>) rawBinding;
         return new RegisteredSourceRepository<>(
-                metadata.entityName(),
+                metadata,
                 binding.byIdLoader(),
                 binding.pageLoader(),
                 binding.queryLoader());

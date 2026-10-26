@@ -13,7 +13,10 @@ import java.util.function.Function;
 
 /** Preparation is disk-backed. Only one published batch is materialized as strings. */
 final class SnapshotSpool implements AutoCloseable {
-    record Entry(String id, long offset, int bytes, String partition, double score, String contentDigest) {
+    record Entry(String id, long offset, int bytes, String partition, double score, String contentDigest, int storedBytes) {
+        Entry(String id, long offset, int bytes, String partition, double score, String contentDigest) {
+            this(id, offset, bytes, partition, score, contentDigest, bytes);
+        }
         Entry(String id, long offset, int bytes, String partition, double score) {
             this(id, offset, bytes, partition, score, null);
         }
@@ -166,6 +169,11 @@ final class SnapshotSpool implements AutoCloseable {
             if (id.isBlank() || id.length() > 512 || id.indexOf('\n') >= 0 || !ids.add(id))
                 throw new IllegalStateException("Invalid or duplicate snapshot root identity");
             long start = bytes;
+            long fileStart = start;
+            if (plan.spoolCompressionThresholdBytes() > 0) {
+                counted.flush();
+                fileStart = channel.position();
+            }
             if (digest != null) {
                 digest.reset();
                 digest.update(id.getBytes(StandardCharsets.UTF_8));
@@ -176,6 +184,26 @@ final class SnapshotSpool implements AutoCloseable {
             long length = bytes - start;
             if (length > Integer.MAX_VALUE - 8L)
                 throw new IllegalStateException("Snapshot response exceeds Java String capacity");
+            int storedBytes = (int) length;
+            if (plan.spoolCompressionThresholdBytes() > 0) {
+                counted.flush();
+                if (length >= plan.spoolCompressionThresholdBytes()
+                        && length <= com.reactor.cachedb.core.codec.PayloadCompressionCodec.MAX_PAYLOAD_BYTES) {
+                    String raw = readBytes(fileStart, (int) length, check);
+                    String compressed = com.reactor.cachedb.core.codec.PayloadCompressionCodec.compressIfBeneficial(
+                            raw, plan.spoolCompressionThresholdBytes());
+                    if (compressed != raw) {
+                        ByteBuffer encoded = StandardCharsets.UTF_8.encode(compressed);
+                        storedBytes = encoded.remaining();
+                        channel.position(fileStart);
+                        while (encoded.hasRemaining()) {
+                            check.run();
+                            if (channel.write(encoded) <= 0) throw new IOException("Snapshot spool write made no progress");
+                        }
+                        channel.truncate(channel.position());
+                    }
+                }
+            }
             String partition =
                     plan.indexSpec() == null
                             ? null
@@ -185,8 +213,8 @@ final class SnapshotSpool implements AutoCloseable {
                     plan.indexSpec() == null ? 0 : plan.indexSpec().scoreBy().applyAsDouble(root);
             if (!Double.isFinite(score))
                 throw new IllegalArgumentException("Snapshot score must be finite");
-            entries.add(new Entry(id, start, (int) length, partition, score,
-                    digest == null ? null : HexFormat.of().formatHex(digest.digest())));
+            entries.add(new Entry(id, fileStart, (int) length, partition, score,
+                    digest == null ? null : HexFormat.of().formatHex(digest.digest()), storedBytes));
         }
 
         public void close() throws IOException {
@@ -205,11 +233,18 @@ final class SnapshotSpool implements AutoCloseable {
     }
 
     String read(Entry entry, Runnable check) throws IOException {
+        String stored = readBytes(entry.offset(), entry.storedBytes(), check);
+        return entry.storedBytes() == entry.bytes() ? stored
+                : com.reactor.cachedb.core.codec.PayloadCompressionCodec.decompressIfNeeded(
+                        stored, com.reactor.cachedb.core.codec.PayloadCompressionCodec.MAX_PAYLOAD_BYTES);
+    }
+
+    private String readBytes(long offset, int length, Runnable check) throws IOException {
         check.run();
-        ByteBuffer buffer = ByteBuffer.allocate(entry.bytes());
+        ByteBuffer buffer = ByteBuffer.allocate(length);
         while (buffer.hasRemaining()) {
             check.run();
-            if (channel.read(buffer, entry.offset() + buffer.position()) <= 0)
+            if (channel.read(buffer, offset + buffer.position()) <= 0)
                 throw new EOFException("Incomplete snapshot spool");
         }
         return new String(buffer.array(), StandardCharsets.UTF_8);

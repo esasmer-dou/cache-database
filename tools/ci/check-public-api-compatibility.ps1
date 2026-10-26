@@ -159,6 +159,10 @@ function Get-ApiBlocks([string]$Text) {
             if ($normalized.StartsWith('public abstract class com.reactor.cachedb.json.StreamingJsonCodec<')) {
                 $normalized = $normalized.Replace(', com.reactor.cachedb.core.codec.CacheValueCodec<V>', '')
             }
+            # Adding the implemented ownership SPI does not remove the original source-loader contract.
+            if ($normalized.StartsWith('public class com.reactor.cachedb.jdbc.JdbcEntitySourceLoader<')) {
+                $normalized = $normalized.Replace(', com.reactor.cachedb.core.page.EntityOwnershipLoader<ID>', '')
+            }
             [void]$blocks[$current].Add($normalized)
         }
     }

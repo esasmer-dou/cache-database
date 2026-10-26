@@ -164,8 +164,7 @@ public final class MssqlWriteBehindFlusher extends AbstractJdbcWriteBehindFlushe
                 while (index < accepted.size()) {
                     QueuedWriteOperation operation = accepted.get(index);
                     if (operation.type() == OperationType.PATCH) {
-                        patch(connection, operation);
-                        index++;
+                        index = patchConsecutiveBatch(connection, accepted, index);
                         continue;
                     }
                     index = operation.type() == OperationType.DELETE

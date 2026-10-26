@@ -10,7 +10,7 @@ import javax.lang.model.type.*;
 import javax.tools.Diagnostic;
 
 /** Emits compile-time validated, direct calls to bean methods, not reflective proxies. */
-@SupportedAnnotationTypes("com.reactor.cachedb.annotations.CacheJobHandler")
+@SupportedAnnotationTypes({"com.reactor.cachedb.annotations.CacheJobHandler", "com.reactor.cachedb.annotations.CacheWatcher"})
 public final class CacheJobHandlerProcessor extends AbstractProcessor {
     private final Set<String> configurations = new TreeSet<>();
     private boolean importsWritten;
@@ -29,7 +29,80 @@ public final class CacheJobHandlerProcessor extends AbstractProcessor {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, failure.getMessage(), element);
             }
         }
+        for (Element element : round.getElementsAnnotatedWith(com.reactor.cachedb.annotations.CacheWatcher.class)) {
+            try { generateWatcher((ExecutableElement) element); }
+            catch (IllegalArgumentException | IOException failure) {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, failure.getMessage(), element);
+            }
+        }
         return true;
+    }
+
+    private void generateWatcher(ExecutableElement method) throws IOException {
+        var declaration = method.getAnnotation(com.reactor.cachedb.annotations.CacheWatcher.class);
+        TypeElement owner = (TypeElement) method.getEnclosingElement();
+        if (!method.getModifiers().contains(Modifier.PUBLIC) || method.getModifiers().contains(Modifier.STATIC)
+                || !owner.getModifiers().contains(Modifier.PUBLIC) || !method.getTypeParameters().isEmpty()
+                || !method.getThrownTypes().isEmpty() || method.getReturnType().getKind() != TypeKind.VOID
+                || method.getParameters().size() != 1)
+            throw new IllegalArgumentException("@CacheWatcher requires a public void bean method with one concrete CacheChangeEvent and no checked exceptions");
+        TypeMirror entityMirror;
+        try { declaration.entity(); throw new IllegalStateException(); }
+        catch (MirroredTypeException mirror) { entityMirror = mirror.getTypeMirror(); }
+        TypeElement entity = (TypeElement) processingEnv.getTypeUtils().asElement(entityMirror);
+        if (entity.getAnnotation(com.reactor.cachedb.annotations.CacheEntity.class) == null)
+            throw new IllegalArgumentException("Watcher entity must be a generated @CacheEntity");
+        String field = null, fieldType = null, idType = null;
+        for (Element member : entity.getEnclosedElements()) {
+            if (member.getKind() != ElementKind.FIELD && member.getKind() != ElementKind.RECORD_COMPONENT) continue;
+            var column = member.getAnnotation(com.reactor.cachedb.annotations.CacheColumn.class);
+            if (member.getAnnotation(com.reactor.cachedb.annotations.CacheId.class) != null) idType = member.asType().toString();
+            String sql = column == null ? member.getSimpleName().toString() : column.value();
+            if (member.getSimpleName().contentEquals(declaration.filterField()) || sql.equals(declaration.filterField())) {
+                field = sql; fieldType = member.asType().toString();
+            }
+        }
+        if (field == null || idType == null) throw new IllegalArgumentException("Unknown watcher field or missing entity ID");
+        var event = method.getParameters().get(0).asType();
+        if (!(event instanceof DeclaredType eventType) || eventType.getTypeArguments().size() != 2
+                || !processingEnv.getTypeUtils().erasure(event).toString().equals("com.reactor.cachedb.core.watch.CacheChangeEvent")
+                || !eventType.getTypeArguments().get(0).toString().equals(entityMirror.toString())
+                || !eventType.getTypeArguments().get(1).toString().equals(idType))
+            throw new IllegalArgumentException("Watcher event entity and ID types must match @CacheEntity");
+        String literal = quoted(declaration.filterEquals());
+        String parsed = switch (fieldType) {
+            case "java.lang.String" -> literal;
+            case "java.lang.Long", "long" -> "java.lang.Long.valueOf(" + literal + ")";
+            case "java.lang.Integer", "int" -> "java.lang.Integer.valueOf(" + literal + ")";
+            case "java.util.UUID" -> "java.util.UUID.fromString(" + literal + ")";
+            default -> throw new IllegalArgumentException("Watcher equality supports String, Long, Integer and UUID fields");
+        };
+        String pkg = processingEnv.getElementUtils().getPackageOf(owner).getQualifiedName().toString();
+        String name = owner.getSimpleName() + "_" + method.getSimpleName() + "CacheWatcherAutoConfiguration";
+        String binding = processingEnv.getElementUtils().getPackageOf(entity).getQualifiedName() + "." + entity.getSimpleName() + "CacheBinding";
+        try (Writer writer = processingEnv.getFiler().createSourceFile(pkg + "." + name, method).openWriter()) {
+            writer.write("package " + pkg + ";\n@org.springframework.boot.autoconfigure.AutoConfiguration(after=com.reactor.cachedb.spring.boot.CacheDatabaseSpringBootAutoConfiguration.class)\n"
+                    + "public class " + name + " {\n"
+                    + " @org.springframework.context.annotation.Bean(name=" + quoted("cachedbWatcher." + owner.getQualifiedName() + "." + method.getSimpleName()) + ", destroyMethod=\"close\")\n"
+                    + " @org.springframework.boot.autoconfigure.condition.ConditionalOnBean(" + owner.getQualifiedName() + ".class)\n"
+                    + " public com.reactor.cachedb.core.watch.CacheWatcherRegistration watcher(com.reactor.cachedb.starter.CacheDatabase database, " + owner.getQualifiedName() + " target) {\n"
+                    + " return database.repository(" + binding + ".METADATA," + binding + ".CODEC).registerWatcher("
+                    + "com.reactor.cachedb.core.query.QuerySpec.where(com.reactor.cachedb.core.query.QueryFilter.eq(" + quoted(field) + "," + parsed + ")), target::" + method.getSimpleName() + ");\n}\n}\n");
+        }
+        configurations.add(pkg + "." + name);
+    }
+
+    private static String quoted(String value) {
+        var out = new StringBuilder("\"");
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            switch (ch) {
+                case '\\' -> out.append("\\\\"); case '"' -> out.append("\\\"");
+                case '\n' -> out.append("\\n"); case '\r' -> out.append("\\r"); case '\t' -> out.append("\\t");
+                default -> { if (ch < 32) out.append(String.format(java.util.Locale.ROOT, "\\u%04x", (int) ch)); else out.append(ch); }
+            }
+        }
+        return out.append('"').toString();
     }
 
     private void generate(ExecutableElement method) throws IOException {

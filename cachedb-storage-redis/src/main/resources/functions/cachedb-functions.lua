@@ -46,6 +46,12 @@ redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
     if operationType == 'PATCH' and redis.call('EXISTS', tombstoneKey) == 1 then
         return redis.error_reply('PATCH cannot recreate a deleted entity')
     end
+    if args[trailerIndex + 7] == 'cachedb:tenant:v1' then
+        local tenant = args[trailerIndex + 8]
+        if tenant == nil or redis.call('GET', keys[#keys]) ~= tenant then
+            return redis.error_reply('CacheDB tenant access denied')
+        end
+    end
     local version = redis.call('INCR', versionKey)
 
     if operationType == 'PATCH' and keys[9] ~= nil then
@@ -165,6 +171,17 @@ redis.register_function('__DELETE_FUNCTION__', function(keys, args)
     local traceMetadata = args[16] or ''
     local invalidationChannel = args[17] or ''
     local invalidationMessage = args[18] or ''
+    local expectedVersion = tonumber(args[21] or '-1')
+    local currentVersion = tonumber(redis.call('GET', versionKey) or '0')
+    if expectedVersion ~= nil and expectedVersion >= 0 and currentVersion ~= expectedVersion then
+        return -(currentVersion + 1)
+    end
+    if args[19] == 'cachedb:tenant:v1' then
+        local tenant = args[20]
+        if tenant == nil or redis.call('GET', keys[#keys]) ~= tenant then
+            return redis.error_reply('CacheDB tenant access denied')
+        end
+    end
     if invalidationChannel ~= '' and not redis.acl_check_cmd('PUBLISH', invalidationChannel, invalidationMessage) then
         return redis.error_reply('Near-cache requires PUBLISH permission before write acceptance')
     end

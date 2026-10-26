@@ -27,6 +27,7 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
     final ReentrantLock lock;
     private final Map<ID, Stored> hot = new ConcurrentHashMap<>();
     private final Map<ID, Long> versions = new ConcurrentHashMap<>();
+    private final Map<ID, String> tenantOwners = new ConcurrentHashMap<>();
     private final Set<ID> tombstones = ConcurrentHashMap.newKeySet();
     private final Set<ID> rejected = ConcurrentHashMap.newKeySet();
     private final LinkedHashSet<ID> order = new LinkedHashSet<>();
@@ -44,8 +45,9 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
             Clock clock,
             ReentrantLock lock) {
         this.metadata = Objects.requireNonNull(metadata);
-        this.codec = Objects.requireNonNull(codec);
         this.policy = Objects.requireNonNull(policy);
+        this.codec = com.reactor.cachedb.core.codec.PayloadEntityCodec.wrap(Objects.requireNonNull(codec), metadata,
+                Math.max(metadata.compressionThresholdBytes(), policy.compressionThresholdBytes()));
         this.clock = clock;
         this.lock = lock;
     }
@@ -62,6 +64,10 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
         lock.lock();
         try {
             Objects.requireNonNull(id, "id");
+            String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
+            String owner = tenantOwners.get(id);
+            if (tenant != null && owner != null && !tenant.equals(owner))
+                throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
             if (tombstones.contains(id)) return HotLookup.tombstoned();
             if (rejected.contains(id)) return HotLookup.outsidePolicy();
             Stored stored = hot.get(id);
@@ -72,6 +78,7 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
                 return HotLookup.notCached();
             }
             T value = codec.fromRedisValue(stored.payload());
+            com.reactor.cachedb.core.tenant.TenantAccess.verify(metadata, value);
             if (!admit(value, CacheAdmissionSource.SERVE)) {
                 hot.remove(id);
                 order.remove(id);
@@ -143,12 +150,15 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
                 List.of("Test double; not a production planner estimate"));
     }
 
-    public List<T> query(QuerySpec query) {
+    public List<T> query(QuerySpec requestedQuery) {
+        QuerySpec query = com.reactor.cachedb.core.tenant.TenantAccess.scoped(metadata, requestedQuery);
+        String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
         requireNoRelations(query.fetchPlan());
         lock.lock();
         try {
             List<QueryRow<T>> values = new ArrayList<>();
             for (ID id : new ArrayList<>(order)) {
+                if (tenant != null && !tenant.equals(tenantOwners.get(id))) continue;
                 T value = findById(id).orElse(null);
                 if (value == null) continue;
                 Map<String, Object> columns =
@@ -219,6 +229,10 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
         lock.lock();
         try {
             ID id = Objects.requireNonNull(metadata.idAccessor().apply(entity), "entity ID");
+            com.reactor.cachedb.core.tenant.TenantAccess.verify(metadata, entity);
+            String tenant = metadata.tenantFieldName() == null ? null : Objects.requireNonNull(metadata.extractTenantId(entity), "tenant ID");
+            if (tenant != null && tenantOwners.containsKey(id) && !tenant.equals(tenantOwners.get(id)))
+                throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
             checkVersion(id, expected);
             // Validate serialization before mutation; null is never a persisted entity value.
             String payload =
@@ -232,6 +246,7 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
                                     clock.millis(),
                                     Math.multiplyExact(policy.entityTtlSeconds(), 1000));
             long version = Math.addExact(version(id), 1);
+            if (tenant != null) tenantOwners.put(id, tenant);
             versions.put(id, version);
             tombstones.remove(id);
             rejected.remove(id);
@@ -276,18 +291,29 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
     }
 
     @Override public T patch(ID id, Map<String, Object> updates) { return patchWithReceipt(id, updates).entity(); }
+    @Override public Object aggregateFieldValue(T entity, String column) { return codec.entityColumnValue(entity, column); }
 
     @Override public WriteReceipt<T, ID> patchWithReceipt(ID id, Map<String, Object> updates) {
         lock.lock();
         try {
             if (updates == null || updates.isEmpty()) throw new IllegalArgumentException("Empty PATCH");
+            if (metadata.tenantFieldName() != null && updates.containsKey(metadata.tenantFieldName()))
+                throw new IllegalArgumentException("PATCH cannot change tenant ownership");
             for (String column : updates.keySet())
                 if (!metadata.columns().contains(column) || column.equals(metadata.idColumn())
                         || column.equals(metadata.versionColumn()) || column.equals(metadata.deletedColumn()))
                     throw new IllegalArgumentException("Invalid PATCH column: " + column);
             T previous = findById(id).orElseThrow(() -> new IllegalStateException("No hot PATCH target"));
             var values = new LinkedHashMap<>(codec.toColumns(previous));
-            values.putAll(codec.normalizePatchColumns(updates));
+            var replacements = new LinkedHashMap<String, Object>();
+            updates.forEach((column, value) -> {
+                if (value instanceof PatchDeltaSpec delta) {
+                    if (!column.equals(delta.columnName())) throw new IllegalArgumentException("Delta column mismatch");
+                    value = NumericDeltas.apply(metadata.entityName(), id, metadata.columnTypes().get(column), delta, values.get(column));
+                }
+                replacements.put(column, value);
+            });
+            values.putAll(codec.normalizePatchColumns(replacements));
             var receipt = saveWithReceipt(codec.fromColumns(values));
             return new WriteReceipt<>(receipt.entity(), id, receipt.redisNamespace(), OperationType.PATCH,
                     receipt.version(), receipt.acceptedAt());
@@ -302,6 +328,9 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
         lock.lock();
         try {
             Objects.requireNonNull(id);
+            String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
+            if (tenant != null && !tenant.equals(tenantOwners.get(id)))
+                throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
             long version = Math.addExact(version(id), 1);
             versions.put(id, version);
             tombstones.add(id);

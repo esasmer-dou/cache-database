@@ -52,6 +52,9 @@ public final class DefaultEntityRegistry implements EntityRegistry {
             EntityQueryLoader<T> queryLoader
     ) {
         EntityBinding<?, ?> existing = bindings.get(metadata.entityName());
+        int threshold = cachePolicy == null ? metadata.compressionThresholdBytes()
+                : Math.max(metadata.compressionThresholdBytes(), cachePolicy.compressionThresholdBytes());
+        if (codec != null) codec = com.reactor.cachedb.core.codec.PayloadEntityCodec.wrap(codec, metadata, threshold);
         RelationBatchLoader<T> safeLoader = relationBatchLoader == null ? new NoOpRelationBatchLoader<>() : relationBatchLoader;
         EntityPageLoader<T> safePageLoader = pageLoader == null ? new NoOpEntityPageLoader<>() : pageLoader;
         EntityByIdLoader<T, ID> safeByIdLoader = byIdLoader == null ? new NoOpEntityByIdLoader<>() : byIdLoader;

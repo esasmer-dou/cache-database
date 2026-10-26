@@ -102,11 +102,8 @@ public final class PostgresWriteBehindFlusher extends AbstractJdbcWriteBehindFlu
 
     private void flushBatchInternal(List<QueuedWriteOperation> operations) throws SQLException {
         if (operations.isEmpty()) return;
-        if (operations.stream().anyMatch(op -> op.type() == OperationType.PATCH)) {
-            flushAtomicBatch(operations);
-            return;
-        }
-        List<QueuedWriteOperation> batchOperations = config.entityFlushPolicies().isEmpty()
+        boolean hasPatch = operations.stream().anyMatch(op -> op.type() == OperationType.PATCH);
+        List<QueuedWriteOperation> batchOperations = hasPatch || config.entityFlushPolicies().isEmpty()
                 ? operations : normalizeOperations(operations);
         if (batchOperations.size() == 1) {
             flush(batchOperations.get(0));
@@ -115,6 +112,25 @@ public final class PostgresWriteBehindFlusher extends AbstractJdbcWriteBehindFlu
         writeFence.initialize();
         try (Connection connection = dataSource.getConnection()) {
             inTransaction(connection, batchOperations, null, null, accepted -> {
+                if (hasPatch) {
+                    int index = 0;
+                    while (index < accepted.size()) {
+                        var operation = accepted.get(index);
+                        if (operation.type() == OperationType.PATCH) {
+                            index = patchConsecutiveBatch(connection, accepted, index);
+                            continue;
+                        }
+                        int end = index + 1;
+                        var policy = resolveFlushExecutionPolicy(operation);
+                        while (end < accepted.size() && sameWriteShape(operation, accepted.get(end))
+                                && policy.equals(resolveFlushExecutionPolicy(accepted.get(end)))) end++;
+                        var group = accepted.subList(index, end);
+                        if (operation.type() == OperationType.DELETE) flushDeleteBatch(connection, group, policy);
+                        else flushUpsertBatch(connection, group, policy);
+                        index = end;
+                    }
+                    return;
+                }
                 if (config.entityFlushPolicies().isEmpty()) {
                     var groups = groupOperations(accepted, StatementKey::of);
                     FlushExecutionPolicy policy = defaultFlushExecutionPolicy();

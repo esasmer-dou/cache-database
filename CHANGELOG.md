@@ -4,6 +4,14 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.17.0 - 2026-10-26
+
+- Grouped JDBC PATCH batching, bounded Redis predicate resolution and access-ordered L1 with immutable record reuse.
+- Declarative numeric deltas, active-set aggregates, explicit tenant scopes and bounded local predicate watchers.
+- Optional schema upcasting and threshold compression through the registered entity codec boundary.
+- Opt-in snapshot spool compression preserves published JSON, digests and logical byte budgets. Partitioned outbox polling tolerates bounded pre-delivery connection saturation without replaying uncertain delivered work.
+- See the [release contracts](docs/releases/v0.17.0.md) for verified tests, topology, consistency, resource and rollout limits.
+
 ## 0.16.0 - 2026-10-26
 
 - Added bounded source single-flight, debounced access tracking, sparse index

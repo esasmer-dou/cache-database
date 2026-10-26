@@ -506,7 +506,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private List<PendingEntry> coalesceEntries(List<PendingEntry> entries) {
         // A delta needs its predecessor even when a newer delta is already accepted.
         if (entries.stream().anyMatch(entry -> entry.operation().type()
-                == com.reactor.cachedb.core.model.OperationType.PATCH)) return entries;
+                == com.reactor.cachedb.core.model.OperationType.PATCH)) return coalesceUnversionedPatches(entries);
         LinkedHashMap<EntityKey, PendingEntry> latestEntries = new LinkedHashMap<>();
         for (PendingEntry entry : entries) {
             EntityKey key = EntityKey.of(entry.operation());
@@ -519,6 +519,32 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             coalescedCount.incrementAndGet();
         }
         return new ArrayList<>(latestEntries.values());
+    }
+
+    private List<PendingEntry> coalesceUnversionedPatches(List<PendingEntry> entries) {
+        var result = new ArrayList<PendingEntry>(entries.size());
+        for (var entry : entries) {
+            PendingEntry previous = result.isEmpty() ? null : result.get(result.size() - 1);
+            var next = entry.operation();
+            var prior = previous == null ? null : previous.operation();
+            if (prior == null || prior.versionColumn() != null || next.versionColumn() != null
+                    || next.type() != com.reactor.cachedb.core.model.OperationType.PATCH
+                    || prior.type() == com.reactor.cachedb.core.model.OperationType.DELETE
+                    || prior.atomicBatch() || next.atomicBatch() || prior.hasDependency() || next.hasDependency()
+                    || next.version() <= prior.version() || !EntityKey.of(prior).equals(EntityKey.of(next))
+                    || !prior.tableName().equals(next.tableName())) {
+                result.add(entry); continue;
+            }
+            var columns = new LinkedHashMap<>(prior.columns()); columns.putAll(next.columns());
+            var operation = new QueuedWriteOperation(prior.type(), next.entityName(), next.tableName(), next.redisNamespace(),
+                    next.observationTag(), next.idColumn(), null, next.deletedColumn(), next.id(),
+                    java.util.Collections.unmodifiableMap(columns), next.version(), next.createdAt(), null, null, 0,
+                    next.transactionGroupId(), List.of(), next.traceMetadata());
+            var merged = previous.merge(entry);
+            result.set(result.size() - 1, new PendingEntry(merged.entry(), operation, merged.ackIds(), merged.compacted(), merged.sourceStreamKey()));
+            coalescedCount.incrementAndGet();
+        }
+        return result;
     }
 
     private void flushGroup(List<PendingEntry> entries, long currentBacklog) {

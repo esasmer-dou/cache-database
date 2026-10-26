@@ -202,8 +202,11 @@ return result
     @SuppressWarnings("unchecked")
     private EntityBinding<Object, Object> binding(Class<?> type) {
         for (var binding : registry.all())
-            if (binding.metadata().entityType() == type)
+            if (binding.metadata().entityType() == type) {
+                if (binding.metadata().tenantFieldName() != null)
+                    throw new IllegalStateException("Tenant entities require ownership-checked repository writes; atomic batch tenant ownership is not yet supported");
                 return (EntityBinding<Object, Object>) binding;
+            }
         throw new IllegalArgumentException("Unregistered entity type: " + type.getName());
     }
 

@@ -2,6 +2,9 @@
 
 [English](../../docs/hot-path-controls.md)
 
+0.17.0 ile gelen sayısal değişimler, toplamlar, tenant kapsamı, yerel bildirimler
+ve veri biçimi geçişi için [deklaratif veri kontrolleri rehberinden](deklaratif-veri-kontrolleri.md) başlayın.
+
 Bu özellikler Redis öncelikli modeli geliştirir. Her SQL sorgusunu kendiliğinden
 Redis üzerinde eksiksiz çalıştırma garantisi vermez. Okuma kapsamını, kaynak
 sorgusunun satır sınırını, zaman aşımını ve kalıcı yazma sürüm kontrolünü koruyun.
@@ -186,9 +189,11 @@ ağ ve işlemci zamanlaması da etki eder.
 ```
 
 Entity'ye bu annotation'ı ekleyin veya `CachePolicy.Builder.nearCachePolicy`
-kullanın. Varsayılan kapalıdır. Kodlanmış veri saklanır ve her okumada ayrı nesneye
-çözülür; record türleri de değiştirilebilir içerik taşıyabileceği için istisna
-değildir. Çalışma zamanı toplam sınırı 64000 kayıt ve tahmini 64 MiB rezervasyondur.
+kullanın. Varsayılan kapalıdır. Değiştirilebilir nesneler ve değiştirilebilir alan
+taşıyan record'lar her okumada ayrı çözülür. Generated metadata'nın tamamen
+değiştirilemez olarak işaretlediği record, şema dönüşümü/sıkıştırma veya ilişki
+işleme yoksa çözülmüş nesneyi paylaşabilir. Tahliye son erişim sırasını izler.
+Çalışma zamanı toplam sınırı 64000 kayıt ve tahmini 64 MiB rezervasyondur.
 Süre 60 saniyeyi ve Redis kaydının gözlenen kalan ömrünü aşamaz. Bölümlenmiş
 tahliye nedeniyle gerçek kayıt sayısı üst sınırdan düşük kalabilir.
 
@@ -206,7 +211,7 @@ BOM, processor, starter, işçi ve örnek sürümlerini hizalayıp üretilen sı
 yeniden derleyin. Eski kurucular ve mevcut küçük Redis payload'ları korunur.
 PATCH üreten uygulamaları açmadan önce eski işçileri durdurup kuyruğu boşaltın;
 eski işçiler yeni işlem türünü çözemez. Eski zarflarda izleme alanı isteğe bağlıdır.
-Varsayılan Redis Function kütüphane sürümü de `0.16.0` olur. Yeni üreticileri
+Varsayılan Redis Function kütüphane sürümü de `0.17.0` olur. Yeni üreticileri
 açmadan önce kütüphaneyi güncelleyin. Özel dağıtımlarda da kaynak ve sürümü
 hizalayın; içerik değişikliği korumasını devre dışı bırakmayın.
 Kalıcı fence metadata tablosunu ve Redis sürüm sayaçlarını silmeyin. Sağlayıcıya

@@ -14,4 +14,5 @@ public @interface CacheEntity {
     Class<?> pageLoader() default Void.class;
     /** Explicit index contract; the wildcard preserves historical all-column indexes. */
     String[] indexedColumns() default {"*"};
+    int compressionThresholdBytes() default 0;
 }

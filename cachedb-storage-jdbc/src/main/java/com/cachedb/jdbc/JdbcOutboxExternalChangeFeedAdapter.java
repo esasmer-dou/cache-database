@@ -167,7 +167,8 @@ public final class JdbcOutboxExternalChangeFeedAdapter implements ExternalChange
     }
 
     private boolean transientTransactionConflict(SQLException failure) {
-        return "40001".equals(failure.getSQLState())
+        return failure instanceof java.sql.SQLTransientConnectionException
+                || "40001".equals(failure.getSQLState())
                 || "40P01".equals(failure.getSQLState())
                 || failure.getErrorCode() == 1205
                 || failure.getErrorCode() == 8177

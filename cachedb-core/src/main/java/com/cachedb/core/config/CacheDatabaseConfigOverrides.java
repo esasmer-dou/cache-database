@@ -130,6 +130,7 @@ public final class CacheDatabaseConfigOverrides {
                 .defaultCachePolicy(applyCachePolicy(base.defaultCachePolicy(), lookup.child("defaultCachePolicy.")))
                 .maxRegisteredEntities(lookup.integer("maxRegisteredEntities", base.maxRegisteredEntities()))
                 .maxColumnsPerOperation(lookup.integer("maxColumnsPerOperation", base.maxColumnsPerOperation()))
+                .maxWatchersPerEntity(lookup.integer("maxWatchersPerEntity", base.maxWatchersPerEntity()))
                 .build();
     }
 
@@ -143,6 +144,7 @@ public final class CacheDatabaseConfigOverrides {
                 .hotPolicy(applyEntityHotPolicy(base.hotPolicy(), lookup.child("hotPolicy.")))
                 .accessDebounceMillis(lookup.longValue("accessDebounceMillis", base.accessDebounceMillis()))
                 .recentTouchSlots(lookup.integer("recentTouchSlots", base.recentTouchSlots()))
+                .compressionThresholdBytes(lookup.integer("compressionThresholdBytes", base.compressionThresholdBytes()))
                 .nearCachePolicy(new com.reactor.cachedb.core.cache.NearCachePolicy(
                         lookup.integer("nearCache.maxEntries", base.nearCachePolicy().maxEntries()),
                         lookup.integer("nearCache.ttlSeconds", base.nearCachePolicy().ttlSeconds()),

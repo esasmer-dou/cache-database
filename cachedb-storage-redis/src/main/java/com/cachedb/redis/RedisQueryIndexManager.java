@@ -99,7 +99,7 @@ public final class RedisQueryIndexManager<T, ID> {
             RedisProducerGuard producerGuard) {
         this.jedis = jedis;
         this.metadata = metadata;
-        this.codec = codec;
+        this.codec = com.reactor.cachedb.core.codec.PayloadEntityCodec.wrap(codec, metadata, metadata.compressionThresholdBytes());
         this.keyStrategy = keyStrategy;
         this.entityRegistry = entityRegistry;
         this.config = config;
@@ -374,6 +374,17 @@ public final class RedisQueryIndexManager<T, ID> {
         }
         return resolveIndexedAndResidualCandidates(querySpec);
     }
+
+    public java.util.Optional<List<String>> indexOnlyCandidates(QuerySpec querySpec) {
+        if (shouldBypassIndexes(querySpec)) return java.util.Optional.empty();
+        if (!querySpec.rootGroup().nodes().isEmpty() && !fullyIndexed(querySpec.rootGroup()))
+            return java.util.Optional.empty();
+        Set<String> ids = resolveIndexedCandidates(querySpec.rootGroup()).candidates();
+        if (ids == null) ids = boundedSetMembers(keyStrategy.indexAllKey(metadata.redisNamespace()), "aggregate active set");
+        return java.util.Optional.of(new ArrayList<>(ids));
+    }
+
+    public boolean hasIndexedColumn(String column) { return indexedColumns.contains(column); }
 
     private void rejectStrictRouteFullScan(String reason) {
         RouteCacheContract contract = RouteCacheContext.currentContract();
@@ -706,6 +717,25 @@ public final class RedisQueryIndexManager<T, ID> {
                                 plan.sortKey(),
                                 querySpec.offset(),
                                 querySpec.offset() + querySpec.limit() - 1);
+    }
+
+    public java.util.Optional<List<String>> resolveOrderedPayloads(QuerySpec querySpec) {
+        return resolveOrderedPayloadWindow(querySpec)
+                .map(values -> values.stream().map(RedisClientOperations.OrderedPayload::payload).toList());
+    }
+
+    public java.util.Optional<List<RedisClientOperations.OrderedPayload>> resolveOrderedPayloadWindow(QuerySpec querySpec) {
+        if (querySpec == null || querySpec.sorts().size() != 1 || shouldBypassIndexes(querySpec))
+            return java.util.Optional.empty();
+        var plan = buildPartitionedExactSortPlan(querySpec);
+        String key = plan == null ? null : plan.sortKey();
+        if (key == null && querySpec.rootGroup().nodes().isEmpty() && supportsSortedIndexScan(querySpec))
+            key = keyStrategy.indexSortKey(metadata.redisNamespace(), querySpec.sorts().get(0).column());
+        if (key == null) return java.util.Optional.empty();
+        return jedis.orderedPayloadWindow(key, keyStrategy.tombstoneKey(metadata.redisNamespace(), ""),
+                keyStrategy.entityKey(metadata.redisNamespace(), ""),
+                querySpec.sorts().get(0).direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC,
+                querySpec.offset(), querySpec.limit());
     }
 
     private List<String> resolvePrimarySortedIdsFromPartitionedExactSort(QuerySpec querySpec) {
@@ -1460,29 +1490,43 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private Resolution resolveAndGroup(QueryGroup group) {
-        boolean fullyIndexed = true;
-        ArrayList<ResolutionWithNode> indexedChildren = new ArrayList<>();
-        boolean hasIndexedChild = false;
+        boolean fullyIndexed = fullyIndexed(group);
         ArrayList<QueryNode> orderedChildren = new ArrayList<>(group.nodes());
         orderedChildren.sort(java.util.Comparator.comparingLong(this::estimateNodeCardinality));
-        for (QueryNode child : orderedChildren) {
-            Resolution resolution = resolveIndexedCandidates(child);
-            fullyIndexed &= resolution.fullyIndexed();
-            if (resolution.candidates() == null) {
+        Set<String> candidates = null;
+        int start = 0;
+        if (orderedChildren.size() >= 2 && exactKey(orderedChildren.get(0)) != null
+                && estimateNodeCardinality(orderedChildren.get(0)) > 128) {
+            var keys = new ArrayList<String>();
+            while (start < orderedChildren.size() && keys.size() < 64) {
+                String key = exactKey(orderedChildren.get(start));
+                if (key == null) break;
+                keys.add(key); start++;
+            }
+            var intersection = jedis.intersectSets(keys, config.maxMaterializedCandidateIds());
+            if (intersection.isPresent()) candidates = intersection.get();
+            else start = 0;
+        }
+        for (int i = start; i < orderedChildren.size(); i++) {
+            if (candidates != null && candidates.isEmpty()) return new Resolution(Set.of(), fullyIndexed);
+            QueryNode child = orderedChildren.get(i);
+            String key = exactKey(child);
+            if (candidates != null && candidates.size() <= 128 && key != null) {
+                candidates = jedis.probeMembers(key, candidates);
                 continue;
             }
-            hasIndexedChild = true;
-            indexedChildren.add(new ResolutionWithNode(child, resolution));
+            Resolution resolution = resolveIndexedCandidates(child);
+            if (resolution.candidates() != null) candidates = intersect(candidates, resolution.candidates());
         }
+        return new Resolution(candidates, fullyIndexed);
+    }
 
-        Set<String> candidates = null;
-        for (ResolutionWithNode child : indexedChildren) {
-            candidates = intersect(candidates, child.resolution().candidates());
-            if (candidates.isEmpty()) {
-                return new Resolution(candidates, fullyIndexed);
-            }
-        }
-        return new Resolution(hasIndexedChild ? candidates : null, fullyIndexed);
+    private String exactKey(QueryNode node) {
+        if (!(node instanceof QueryFilter filter) || filter.operator() != QueryOperator.EQ
+                || !config.exactIndexEnabled() || !indexedColumns.contains(filter.column())
+                || filter.column().contains(".")) return null;
+        return keyStrategy.indexExactKey(metadata.redisNamespace(), filter.column(),
+                encodeKeyPart(serializeValue(filter.value())));
     }
 
     private Resolution resolveOrGroup(QueryGroup group) {
@@ -1582,9 +1626,15 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private Set<String> membersForIn(String column, List<Object> values) {
+        if (!config.exactIndexEnabled()) return null;
+        if (values.size() > 4096) throw new IllegalArgumentException("IN query exceeds 4096 keys");
+        var keys = new LinkedHashSet<String>();
+        for (Object value : values) keys.add(keyStrategy.indexExactKey(metadata.redisNamespace(), column,
+                encodeKeyPart(serializeValue(value))));
+        if (keys.size() == 1) return boundedSetMembers(keys.iterator().next(), "IN query " + column);
         LinkedHashSet<String> matches = new LinkedHashSet<>();
-        for (Object value : values) {
-            matches.addAll(membersForExact(column, value));
+        for (var members : jedis.smembersBatch(keys, config.maxMaterializedCandidateIds()).values()) {
+            matches.addAll(members);
             enforceCandidateLimit(matches, "IN query " + column);
         }
         return matches;

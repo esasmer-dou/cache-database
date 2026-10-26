@@ -93,6 +93,7 @@ public final class RedisFunctionArgsMapper {
             args.add(nearInvalidationChannel);
             args.add(RedisNearCacheCoordinator.message(operation.metadata().redisNamespace(), operation.id()));
         }
+        addTenant(args, operation, cachePolicy.nearCachePolicy().enabled());
         return args;
     }
 
@@ -103,7 +104,15 @@ public final class RedisFunctionArgsMapper {
             args.add(nearInvalidationChannel);
             args.add(RedisNearCacheCoordinator.message(operation.metadata().redisNamespace(), operation.id()));
         }
+        addTenant(args, operation, policy.nearCachePolicy().enabled());
         return args;
+    }
+
+    private void addTenant(List<String> args, WriteOperation<?, ?> operation, boolean hasInvalidation) {
+        String tenant = RedisTenantWriteGuard.tenant(operation);
+        if (tenant == null) return;
+        if (!hasInvalidation) { args.add(""); args.add(""); }
+        args.add("cachedb:tenant:v1"); args.add(tenant);
     }
 
     public <T, ID> List<String> deleteArgs(

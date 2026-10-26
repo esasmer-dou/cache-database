@@ -131,6 +131,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         ArrayList<SourceSqlMethod> sourceSqlMethods = new ArrayList<>();
         ArrayList<CommandMethod> commandMethods = new ArrayList<>();
         ArrayList<PatchMethod> patchMethods = new ArrayList<>();
+        ArrayList<AggregateMethod> aggregateMethods = new ArrayList<>();
         ArrayList<WarmMethod> warmMethods = new ArrayList<>();
         ArrayList<LookupMethod> lookupMethods = new ArrayList<>();
         LinkedHashMap<String, ProjectionModel> projections = new LinkedHashMap<>();
@@ -156,6 +157,11 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 if (patch == null) return null;
                 patchMethods.add(patch);
                 continue;
+            }
+            if (method.getAnnotation(com.reactor.cachedb.annotations.CacheAggregate.class) != null || methodName.startsWith("countBy")) {
+                var aggregate = resolveAggregateMethod(method, entityModel);
+                if (aggregate == null) return null;
+                aggregateMethods.add(aggregate); continue;
             }
             CacheLookup lookup = method.getAnnotation(CacheLookup.class);
             if (lookup != null) {
@@ -295,6 +301,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 List.copyOf(sourceSqlMethods),
                 List.copyOf(commandMethods),
                 List.copyOf(patchMethods),
+                List.copyOf(aggregateMethods),
                 List.copyOf(warmMethods),
                 List.copyOf(lookupMethods),
                 List.copyOf(projections.values())
@@ -456,10 +463,48 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                         && element.getAnnotation(CacheRelation.class) != null);
     }
 
+    private AggregateMethod resolveAggregateMethod(ExecutableElement method, EntityModel entity) {
+        var annotation = method.getAnnotation(com.reactor.cachedb.annotations.CacheAggregate.class);
+        String function = annotation == null ? "COUNT" : annotation.function().name();
+        String field = annotation == null ? "" : annotation.field();
+        if (!function.equals("COUNT")) {
+            String declared = field;
+            var target = entity.fields().values().stream().filter(f -> f.javaName().equals(declared) || f.columnName().equals(declared)).findFirst().orElse(null);
+            if (target == null || !Set.of("java.lang.Integer", "java.lang.Long", "java.lang.Short", "java.lang.Byte", "java.lang.Float", "java.lang.Double", "java.math.BigDecimal", "java.math.BigInteger").contains(boxed(target.type()).toString())) {
+                error(method, "Numeric aggregate requires a numeric entity field"); return null;
+            }
+            field = target.columnName();
+        }
+        var bindings = new LinkedHashMap<String, ParameterModel>();
+        var params = parameters(method);
+        String name = method.getSimpleName().toString();
+        int by = name.indexOf("By");
+        String[] predicates = by < 0 ? new String[0] : name.substring(by + 2).split("And", -1);
+        if (predicates.length != params.size()) { error(method, "Aggregate parameters must match ByFieldAndField predicates"); return null; }
+        int index = 0;
+        for (var parameter : params.values()) {
+            String predicate = predicates[index++];
+            var target = entity.fields().values().stream().filter(f ->
+                    (Character.toUpperCase(f.javaName().charAt(0)) + f.javaName().substring(1)).equals(predicate)).findFirst().orElse(null);
+            if (target == null || !processingEnv.getTypeUtils().isSameType(boxed(parameter.type()), boxed(target.type()))) {
+                error(method, "Unknown aggregate predicate or incompatible parameter type: " + predicate); return null;
+            }
+            bindings.put(target.columnName(), parameter);
+        }
+        String result = method.getReturnType().toString();
+        boolean valid = result.equals("com.reactor.cachedb.core.query.AggregateResult")
+                || function.equals("COUNT") && (result.equals("long") || result.equals("java.lang.Long"))
+                || function.equals("AVG") && result.equals("java.util.OptionalDouble")
+                || Set.of("SUM", "MIN", "MAX").contains(function) && result.equals("java.math.BigDecimal");
+        if (!valid) { error(method, "Aggregate return type does not match function"); return null; }
+        return new AggregateMethod(name, result, List.copyOf(params.values()), function, field, bindings);
+    }
+
     private PatchMethod resolvePatchMethod(ExecutableElement method, EntityModel entity) {
         var parameters = parameters(method);
         ParameterModel id = null;
         var columns = new LinkedHashMap<String, ParameterModel>();
+        var deltas = new LinkedHashMap<String, com.reactor.cachedb.annotations.CacheDelta>();
         for (var parameter : method.getParameters()) {
             ParameterModel value = parameters.get(parameter.getSimpleName().toString());
             if (parameter.getAnnotation(CacheId.class) != null) {
@@ -471,7 +516,14 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 continue;
             }
             var annotation = parameter.getAnnotation(CacheColumn.class);
-            String name = annotation == null ? value.name() : annotation.value();
+            var delta = parameter.getAnnotation(com.reactor.cachedb.annotations.CacheDelta.class);
+            var set = parameter.getAnnotation(com.reactor.cachedb.annotations.CacheSet.class);
+            if (delta != null && (annotation != null || set != null)) {
+                error(parameter, "Use one of @CacheDelta, @CacheSet or @CacheColumn"); return null;
+            }
+            String name = delta != null && !delta.value().isBlank() ? delta.value()
+                    : set != null && !set.value().isBlank() ? set.value()
+                    : annotation == null ? value.name() : annotation.value();
             FieldModel field = entity.fields().values().stream()
                     .filter(candidate -> candidate.javaName().equals(name) || candidate.columnName().equals(name)).findFirst().orElse(null);
             if (field == null || field.id() || field.columnName().equals("entity_version")
@@ -479,6 +531,13 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                     || !processingEnv.getTypeUtils().isSameType(boxed(value.type()), boxed(field.type()))) {
                 error(parameter, "Invalid @CacheColumn PATCH name or type: " + name);
                 return null;
+            }
+            if (delta != null) {
+                String type = boxed(field.type()).toString();
+                if (delta.min() > delta.max() || !Set.of("java.lang.Integer", "java.lang.Long", "java.lang.Double", "java.math.BigDecimal").contains(type)) {
+                    error(parameter, "@CacheDelta needs int, long, double or BigDecimal and min <= max"); return null;
+                }
+                deltas.put(field.columnName(), delta);
             }
             if (columns.put(field.columnName(), value) != null) {
                 error(parameter, "Duplicate PATCH column: " + name);
@@ -491,7 +550,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             error(method, "PATCH needs @CacheId, changed columns and WriteReceipt, boolean, entity or void return");
             return null;
         }
-        return new PatchMethod(method.getSimpleName().toString(), result, List.copyOf(parameters.values()), id, Map.copyOf(columns));
+        return new PatchMethod(method.getSimpleName().toString(), result, List.copyOf(parameters.values()), id, Map.copyOf(columns), Map.copyOf(deltas));
     }
 
     private boolean protectedPatchColumn(TypeElement entity, String field) {
@@ -1493,14 +1552,36 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             out.append("    @Override public ").append(patch.returnType()).append(' ').append(patch.name())
                     .append('(').append(renderParameters(patch.parameters())).append(") {\n")
                     .append("        java.util.Map<String, Object> changes = new java.util.LinkedHashMap<>();\n");
-            patch.columns().forEach((column, parameter) -> out.append("        changes.put(")
-                    .append(quote(column)).append(", ").append(parameter.name()).append(");\n"));
+            patch.columns().forEach((column, parameter) -> {
+                out.append("        changes.put(").append(quote(column)).append(", ");
+                var delta = patch.deltas().get(column);
+                if (delta == null) out.append(parameter.name());
+                else out.append("new com.reactor.cachedb.core.model.PatchDeltaSpec(")
+                        .append(quote(parameter.name())).append(", ").append(quote(column)).append(", ")
+                        .append(parameter.name()).append(", ").append(delta.min()).append("L, ").append(delta.max()).append("L)");
+                out.append(");\n");
+            });
             String invocation = "hotRepository." + (patch.returnType().equals(model.entity().typeName()) ? "patch(" : "patchWithReceipt(")
                     + patch.id().name() + ", changes)";
             if (patch.returnType().equals("void")) out.append("        ").append(invocation).append(";\n");
-            else if (patch.returnType().equals("boolean")) out.append("        ").append(invocation).append(";\n        return true;\n");
+            else if (patch.returnType().equals("boolean")) out.append("        try { ").append(invocation)
+                    .append("; return true; } catch (com.reactor.cachedb.core.repository.HotUpdateUnavailableException missing) { return false; }\n");
             else out.append("        return ").append(invocation).append(";\n");
             out.append("    }\n");
+        }
+        for (AggregateMethod aggregate : model.aggregateMethods()) {
+            out.append("    @Override public ").append(aggregate.returnType()).append(' ').append(aggregate.name())
+                    .append('(').append(renderParameters(aggregate.parameters())).append(") {\n")
+                    .append("        var filters = com.reactor.cachedb.core.query.QuerySpec.builder();\n");
+            aggregate.filters().forEach((column, param) -> out.append("        filters.filter(com.reactor.cachedb.core.query.QueryFilter.eq(")
+                    .append(quote(column)).append(", ").append(param.name()).append("));\n"));
+            out.append("        var result = hotRepository.aggregate(new com.reactor.cachedb.core.query.AggregateSpec(")
+                    .append("com.reactor.cachedb.core.query.AggregateFunction.").append(aggregate.function()).append(", ")
+                    .append(quote(aggregate.field())).append(", filters.build().rootGroup()));\n        return result");
+            if (!aggregate.returnType().equals("com.reactor.cachedb.core.query.AggregateResult"))
+                out.append('.').append(switch (aggregate.function()) { case "COUNT" -> "count"; case "SUM" -> "sum";
+                    case "MIN" -> "min"; case "MAX" -> "max"; default -> "average"; }).append("()");
+            out.append(";\n    }\n");
         }
         for (WarmMethod warm : model.warmMethods()) {
             RouteMethod source = model.routes().stream().filter(route -> route.name().equals(warm.fromMethod())).findFirst().orElseThrow();
@@ -1574,6 +1655,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
     private void renderSourceSqlMethod(StringBuilder out, RepositoryModel model, SourceSqlMethod method) {
         out.append("    @Override\n    public ").append(method.returnType()).append(' ').append(method.name()).append('(')
                 .append(renderParameters(method.parameters())).append(") {\n");
+        out.append("        if (").append(model.entity().bindingTypeName()).append(".METADATA.tenantFieldName() != null && ")
+                .append("!com.reactor.cachedb.core.tenant.CacheTenantContext.isAdministrative()) ")
+                .append("throw new IllegalStateException(\"Raw source SQL cannot bypass an active tenant scope; use the scoped source query API\");\n");
         String bindings = method.bindings().isEmpty()
                 ? "java.util.List.of()"
                 : "java.util.Arrays.asList(" + method.bindings().stream()
@@ -2106,6 +2190,10 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         for (PatchMethod patch : model.patchMethods()) definitions.add(routeDefinition(
                 patch.name(), "COMMAND", patch.name(), quote(""), 0, 1, 0, 0, 0L,
                 false, false, "operation=PATCH;acknowledgement=REDIS_ACCEPTED", "NOT_APPLICABLE"));
+        for (AggregateMethod aggregate : model.aggregateMethods()) definitions.add(routeDefinition(
+                aggregate.name(), "AGGREGATE", aggregate.name(), quote(""), 0,
+                com.reactor.cachedb.core.query.QuerySpec.MAX_LIMIT, 0, 0, 0L,
+                false, false, "function=" + aggregate.function() + ";field=" + aggregate.field() + ";scope=active-set", "NOT_APPLICABLE"));
 
         out.append("    private static final com.reactor.cachedb.core.route.RepositoryRouteCatalog ROUTE_CATALOG = new ")
                 .append("com.reactor.cachedb.core.route.RepositoryRouteCatalog(\n")
@@ -2450,6 +2538,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             List<SourceSqlMethod> sourceSqlMethods,
             List<CommandMethod> commandMethods,
             List<PatchMethod> patchMethods,
+            List<AggregateMethod> aggregateMethods,
             List<WarmMethod> warmMethods,
             List<LookupMethod> lookupMethods,
             List<ProjectionModel> projections
@@ -2457,5 +2546,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
     }
 
     private record PatchMethod(String name, String returnType, List<ParameterModel> parameters,
-            ParameterModel id, Map<String, ParameterModel> columns) {}
+            ParameterModel id, Map<String, ParameterModel> columns, Map<String, com.reactor.cachedb.annotations.CacheDelta> deltas) {}
+    private record AggregateMethod(String name, String returnType, List<ParameterModel> parameters,
+            String function, String field, Map<String, ParameterModel> filters) {}
 }

@@ -7,5 +7,6 @@ public enum RepositoryRouteKind {
     SOURCE_SQL,
     WARM,
     LOOKUP,
-    COMMAND
+    COMMAND,
+    AGGREGATE
 }

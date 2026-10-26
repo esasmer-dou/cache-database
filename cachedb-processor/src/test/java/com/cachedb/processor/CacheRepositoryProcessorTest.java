@@ -1076,6 +1076,62 @@ class CacheRepositoryProcessorTest {
         }
     }
 
+    @Test void generatesTierOneDeclarationsWithoutRuntimeReflection() throws Exception {
+        var result = compile(source("tier/Product.java", """
+                package tier;
+                import com.reactor.cachedb.annotations.*;
+                @CacheEntity(table="products", indexedColumns={"stock"}, compressionThresholdBytes=4096)
+                public record Product(@CacheId(column="id") Long id, @CacheColumn("stock") int stock,
+                        @CacheColumn("amount") java.math.BigDecimal amount,
+                        @CacheColumn("tenant_id") @CacheTenantId String tenant,
+                        @CacheColumn("status") String status) {}
+                """), source("tier/Products.java", """
+                package tier;
+                import com.reactor.cachedb.annotations.*;
+                import com.reactor.cachedb.core.repository.CacheDbRepository;
+                @CacheRepository(entity=Product.class)
+                public interface Products extends CacheDbRepository<Product, Long> {
+                    @CachePatch boolean reserve(@CacheId Long id, @CacheDelta(value="stock",min=0) int delta);
+                    long countByStatus(String status);
+                    @CacheAggregate(function=com.reactor.cachedb.core.query.AggregateFunction.SUM, field="amount")
+                    java.math.BigDecimal sumAmountByStatus(String status);
+                }
+                """), source("tier/Monitor.java", """
+                package tier;
+                import com.reactor.cachedb.annotations.CacheWatcher;
+                import com.reactor.cachedb.core.watch.CacheChangeEvent;
+                public class Monitor {
+                    @CacheWatcher(entity=Product.class,filterField="status",filterEquals="HIGH_RISK")
+                    public void risk(CacheChangeEvent<Product,Long> event) {}
+                }
+                """));
+        assertTrue(result.success(), result.diagnosticsText());
+        String binding = Files.readString(result.generated().resolve("tier/ProductCacheBinding.java"));
+        assertTrue(binding.contains("deeplyImmutable() { return true; }"));
+        assertTrue(binding.contains("tenantFieldName()"));
+        assertTrue(binding.contains("4096"));
+        String repository = Files.readString(result.generated().resolve("tier/ProductsCacheDbImplementation.java"));
+        assertTrue(repository.contains("PatchDeltaSpec")); assertTrue(repository.contains("hotRepository.aggregate("));
+        String watcher = Files.readString(result.generated().resolve("tier/Monitor_riskCacheWatcherAutoConfiguration.java"));
+        assertTrue(watcher.contains("target::risk")); assertFalse(watcher.contains("reflect"));
+    }
+
+    @Test void rejectsUnsafeDeltaAndTenantDeclarations() throws Exception {
+        for (String delta : List.of("@CacheDelta(value=\"name\") String value", "@CacheDelta(value=\"stock\",min=5,max=1) int value")) {
+            var result = compile(source("invalid/Product.java", """
+                    package invalid; import com.reactor.cachedb.annotations.*;
+                    @CacheEntity(table="products") public record Product(@CacheId(column="id") Long id,
+                        @CacheColumn("stock") int stock, @CacheColumn("name") String name) {}
+                    """), source("invalid/Products.java", """
+                    package invalid; import com.reactor.cachedb.annotations.*;
+                    @CacheRepository(entity=Product.class) public interface Products extends com.reactor.cachedb.core.repository.CacheDbRepository<Product,Long> {
+                        @CachePatch void change(@CacheId Long id, %s);
+                    }
+                    """.formatted(delta)));
+            assertFalse(result.success()); assertTrue(result.diagnosticsText().contains("@CacheDelta"), result.diagnosticsText());
+        }
+    }
+
     private Compilation compile(Source... sources) throws IOException {
         Path sourceRoot = Files.createDirectories(temp.resolve("sources-" + System.nanoTime()));
         Path generated = Files.createDirectories(temp.resolve("generated-" + System.nanoTime()));

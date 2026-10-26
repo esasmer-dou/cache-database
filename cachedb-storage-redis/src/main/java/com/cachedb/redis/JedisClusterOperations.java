@@ -22,6 +22,16 @@ public final class JedisClusterOperations implements RedisClientOperations {
         return true;
     }
 
+    @Override public Optional<List<String>> zrangeWithPayloads(String indexKey, String tombstonePrefix,
+            String entityPrefix, boolean reverse, int offset, int limit) {
+        return fetchOrderedPayloads(indexKey, tombstonePrefix, entityPrefix, reverse, offset, limit);
+    }
+
+    @Override public Optional<List<OrderedPayload>> orderedPayloadWindow(String indexKey, String tombstonePrefix,
+            String entityPrefix, boolean reverse, int offset, int limit) {
+        return fetchOrderedPayloadWindow(indexKey, tombstonePrefix, entityPrefix, reverse, offset, limit);
+    }
+
     @Override public Object memoryInfo(String routingKey) {
         String selected = null;
         double worst = -1;

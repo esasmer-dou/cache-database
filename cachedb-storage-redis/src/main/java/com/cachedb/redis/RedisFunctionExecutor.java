@@ -50,6 +50,8 @@ public final class RedisFunctionExecutor {
         try {
             return jedis.fcall(name, keys, args);
         } catch (redis.clients.jedis.exceptions.JedisDataException failure) {
+            if (failure.getMessage() != null && failure.getMessage().contains("CacheDB tenant access denied"))
+                throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException("atomic write");
             if (!missingFunction(failure) || !config.autoLoadLibrary()) throw failure;
             reload(epoch);
             return jedis.fcall(name, keys, args);
@@ -103,6 +105,13 @@ public final class RedisFunctionExecutor {
         return config.enabled();
     }
 
+    private List<String> tenantKeys(List<String> keys, WriteOperation<?, ?> operation) {
+        if (RedisTenantWriteGuard.tenant(operation) == null) return keys;
+        var result = new ArrayList<>(keys);
+        result.add(keys.get(1) + ":tenant");
+        return result;
+    }
+
     public <T, ID> long upsert(
             String entityKey,
             String versionKey,
@@ -146,7 +155,7 @@ public final class RedisFunctionExecutor {
         Object result =
                 call(
                         config.upsertFunctionName(),
-                        List.of(
+                        tenantKeys(List.of(
                                 entityKey,
                                 versionKey,
                                 tombstoneKey,
@@ -154,7 +163,7 @@ public final class RedisFunctionExecutor {
                                 compactionPayloadKey,
                                 compactionPendingKey,
                                 compactionStreamKey,
-                                compactionStatsKey),
+                                compactionStatsKey), operation),
                         argsMapper.upsertArgs(
                                 operation,
                                 cachePolicy,
@@ -190,10 +199,22 @@ public final class RedisFunctionExecutor {
     public <T, ID> long delete(String entityKey, String versionKey, String tombstoneKey, String streamKey,
             String compactionPayloadKey, String compactionPendingKey, String compactionStreamKey,
             String compactionStatsKey, WriteOperation<T, ID> operation, CachePolicy policy) {
+        return delete(entityKey, versionKey, tombstoneKey, streamKey, compactionPayloadKey,
+                compactionPendingKey, compactionStreamKey, compactionStatsKey, operation, policy, -1);
+    }
+
+    public <T, ID> long delete(String entityKey, String versionKey, String tombstoneKey, String streamKey,
+            String compactionPayloadKey, String compactionPendingKey, String compactionStreamKey,
+            String compactionStatsKey, WriteOperation<T, ID> operation, CachePolicy policy, long expectedVersion) {
+        var args = new ArrayList<>(argsMapper.deleteArgs(operation, guardrailConfig, writeBehindConfig, policy));
+        if (expectedVersion >= 0) {
+            while (args.size() < 20) args.add("");
+            args.add(Long.toString(expectedVersion));
+        }
         Object result =
                 call(
                         config.deleteFunctionName(),
-                        List.of(
+                        tenantKeys(List.of(
                                 entityKey,
                                 versionKey,
                                 tombstoneKey,
@@ -201,9 +222,11 @@ public final class RedisFunctionExecutor {
                                 compactionPayloadKey,
                                 compactionPendingKey,
                                 compactionStreamKey,
-                                compactionStatsKey),
-                        argsMapper.deleteArgs(operation, guardrailConfig, writeBehindConfig, policy));
-        return toLong(result);
+                                compactionStatsKey), operation),
+                        args);
+        long version = toLong(result);
+        if (version < 0) throw new OptimisticWriteConflictException(operation.metadata().entityName(), operation.id(), expectedVersion, -(version + 1));
+        return version;
     }
 
     public List<Long> upsertBatch(List<UpsertRequest> requests) {
@@ -216,7 +239,7 @@ public final class RedisFunctionExecutor {
                 responses.add(
                         pipeline.fcall(
                                 config.upsertFunctionName(),
-                                request.keys(),
+                                tenantKeys(request.keys(), request.operation()),
                                 argsMapper.upsertArgs(
                                         request.operation(),
                                         request.cachePolicy(),
@@ -233,12 +256,14 @@ public final class RedisFunctionExecutor {
             try {
                 result = responses.get(i).get();
             } catch (redis.clients.jedis.exceptions.JedisDataException failure) {
+                if (failure.getMessage() != null && failure.getMessage().contains("CacheDB tenant access denied"))
+                    throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException("atomic batch write");
                 if (!missingFunction(failure) || !config.autoLoadLibrary()) throw failure;
                 UpsertRequest request = requests.get(i);
                 result =
                         call(
                                 config.upsertFunctionName(),
-                                request.keys(),
+                                tenantKeys(request.keys(), request.operation()),
                                 argsMapper.upsertArgs(
                                         request.operation(),
                                         request.cachePolicy(),
@@ -267,7 +292,7 @@ public final class RedisFunctionExecutor {
             routedKeys = new ArrayList<>(keys);
             routedKeys.set(3, keys.get(6));
         }
-        long version = toLong(call(config.upsertFunctionName(), routedKeys,
+        long version = toLong(call(config.upsertFunctionName(), tenantKeys(routedKeys, operation),
                 argsMapper.upsertArgs(operation, policy, guardrailConfig, writeBehindConfig, cacheEntity, expectedVersion)));
         if (version < 0) throw new OptimisticWriteConflictException(operation.metadata().entityName(), operation.id(),
                 expectedVersion, -(version + 1));

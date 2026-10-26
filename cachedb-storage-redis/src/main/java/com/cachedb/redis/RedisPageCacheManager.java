@@ -129,7 +129,8 @@ public final class RedisPageCacheManager<T, ID> {
             StoragePerformanceCollector performanceCollector) {
         this.jedis = jedis;
         this.metadata = metadata;
-        this.codec = codec;
+        this.codec = com.reactor.cachedb.core.codec.PayloadEntityCodec.wrap(codec, metadata,
+                Math.max(metadata.compressionThresholdBytes(), cachePolicy.compressionThresholdBytes()));
         this.cachePolicy = cachePolicy;
         this.recentTouches = new com.reactor.cachedb.core.cache.RecentTouchFilter(cachePolicy.recentTouchSlots());
         this.keyStrategy = keyStrategy;
@@ -279,6 +280,21 @@ public final class RedisPageCacheManager<T, ID> {
     }
 
     public Optional<List<T>> getCachedPage(PageWindow pageWindow) {
+        var policy = effectiveCachePolicy();
+        if (policy.admissionEnabled() && policy.hotPolicy().mode() == com.reactor.cachedb.core.cache.EntityHotPolicyMode.COUNT_WINDOW) {
+            var fetched = jedis.zrangeWithPayloads(keyStrategy.pageKey(metadata.redisNamespace(), pageWindow.pageNumber()),
+                    keyStrategy.tombstoneKey(metadata.redisNamespace(), ""), keyStrategy.entityKey(metadata.redisNamespace(), ""),
+                    false, 0, pageWindow.pageSize());
+            if (fetched.isPresent() && !fetched.get().isEmpty()) {
+                var entities = new ArrayList<T>(fetched.get().size());
+                var ids = new ArrayList<ID>(fetched.get().size());
+                for (String payload : fetched.get()) {
+                    T entity = codec.fromRedisValue(payload); entities.add(entity); ids.add(metadata.idAccessor().apply(entity));
+                }
+                recordEntityAccessBatch(ids);
+                return Optional.of(List.copyOf(entities));
+            }
+        }
         List<String> ids =
                 jedis.commands()
                         .lrange(

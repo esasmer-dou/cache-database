@@ -15,7 +15,20 @@ public record SnapshotPlan<R, V>(
         SnapshotIndexSpec<R> indexSpec,
         SnapshotRootScope rootScope,
         boolean contentReuse,
-        List<SnapshotDirtyBinding> autoDirtyBindings) {
+        List<SnapshotDirtyBinding> autoDirtyBindings,
+        int spoolCompressionThresholdBytes) {
+    public SnapshotPlan(String name, SnapshotSource<R> roots, Function<R, String> id,
+            List<SnapshotSource<?>> sources, Class<V> valueType,
+            Function<SnapshotRows, Function<R, Iterable<V>>> projection, SnapshotIndexSpec<R> indexSpec,
+            SnapshotRootScope rootScope, boolean contentReuse, List<SnapshotDirtyBinding> autoDirtyBindings) {
+        this(name, roots, id, sources, valueType, projection, indexSpec, rootScope, contentReuse, autoDirtyBindings, 0);
+    }
+
+    /** Compresses temporary disk blocks only; published JSON and logical byte budgets are unchanged. */
+    public SnapshotPlan<R, V> withSpoolCompression(int thresholdBytes) {
+        return new SnapshotPlan<>(name, roots, id, sources, valueType, projection, indexSpec,
+                rootScope, contentReuse, autoDirtyBindings, thresholdBytes);
+    }
     public SnapshotPlan(String name, SnapshotSource<R> roots, Function<R, String> id,
             List<SnapshotSource<?>> sources, Class<V> valueType,
             Function<SnapshotRows, Function<R, Iterable<V>>> projection, SnapshotIndexSpec<R> indexSpec,
@@ -38,7 +51,7 @@ public record SnapshotPlan<R, V>(
         if (bindings.size() >= 64 || bindings.stream().anyMatch(value -> value.entityName().equals(binding.entityName())))
             throw new IllegalArgumentException("Auto-dirty registrations must be unique and bounded to 64");
         bindings.add(binding);
-        return new SnapshotPlan<>(name, roots, id, sources, valueType, projection, indexSpec, rootScope, contentReuse, bindings);
+        return new SnapshotPlan<>(name, roots, id, sources, valueType, projection, indexSpec, rootScope, contentReuse, bindings, spoolCompressionThresholdBytes);
     }
     public SnapshotPlan<R, V> withGeneratedJsonCodec() {
         return withJsonCodec(com.reactor.cachedb.core.codec.GeneratedJsonCodecs.require(valueType));
@@ -80,7 +93,7 @@ public record SnapshotPlan<R, V>(
                 new JsonSnapshotProjection<>(delegate, codec),
                 indexSpec,
                 rootScope,
-                contentReuse, autoDirtyBindings);
+                contentReuse, autoDirtyBindings, spoolCompressionThresholdBytes);
     }
 
     @SuppressWarnings("unchecked")
@@ -110,7 +123,7 @@ public record SnapshotPlan<R, V>(
                 projection,
                 Objects.requireNonNull(spec),
                 rootScope,
-                contentReuse, autoDirtyBindings);
+                contentReuse, autoDirtyBindings, spoolCompressionThresholdBytes);
     }
 
     public SnapshotPlan<R, V> scoped(SnapshotRootScope scope) {
@@ -124,7 +137,7 @@ public record SnapshotPlan<R, V>(
                         projection,
                         indexSpec,
                         Objects.requireNonNull(scope),
-                        contentReuse, autoDirtyBindings);
+                        contentReuse, autoDirtyBindings, spoolCompressionThresholdBytes);
         scope.validate(plan);
         return plan;
     }
@@ -141,7 +154,7 @@ public record SnapshotPlan<R, V>(
 
     public SnapshotPlan<R, V> withContentReuse() {
         return new SnapshotPlan<>(
-                name, roots, id, sources, valueType, projection, indexSpec, rootScope, true, autoDirtyBindings);
+                name, roots, id, sources, valueType, projection, indexSpec, rootScope, true, autoDirtyBindings, spoolCompressionThresholdBytes);
     }
 
     /** Opt-in row-local mapping: roots are decoded and spooled without retaining a root list. */
@@ -194,10 +207,12 @@ public record SnapshotPlan<R, V>(
                         },
                 indexSpec,
                 rootScope,
-                contentReuse, autoDirtyBindings);
+                contentReuse, autoDirtyBindings, spoolCompressionThresholdBytes);
     }
 
     public SnapshotPlan {
+        if (spoolCompressionThresholdBytes < 0 || spoolCompressionThresholdBytes > 16 * 1024 * 1024)
+            throw new IllegalArgumentException("Invalid spool compression threshold");
         autoDirtyBindings = List.copyOf(autoDirtyBindings);
         if (name == null || !name.matches("[a-z][a-z0-9-]{0,63}"))
             throw new IllegalArgumentException("Invalid snapshot plan name");

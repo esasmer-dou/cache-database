@@ -153,6 +153,32 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
     }
 
     protected final void patch(Connection connection, QueuedWriteOperation operation) throws SQLException {
+        patchBatch(connection, List.of(operation));
+    }
+
+    /** Only consecutive, identical shapes may share a statement; causal ordering is retained. */
+    protected final int patchConsecutiveBatch(Connection connection,
+            List<QueuedWriteOperation> operations, int start) throws SQLException {
+        var template = operations.get(start);
+        int end = start + 1;
+        while (end < operations.size() && sameWriteShape(template, operations.get(end))) end++;
+        patchBatch(connection, operations.subList(start, end));
+        return end;
+    }
+
+    protected static boolean sameWriteShape(QueuedWriteOperation left, QueuedWriteOperation right) {
+        return left.type() == right.type()
+                && Objects.equals(left.entityName(), right.entityName())
+                && Objects.equals(left.tableName(), right.tableName())
+                && Objects.equals(left.idColumn(), right.idColumn())
+                && Objects.equals(left.versionColumn(), right.versionColumn())
+                && Objects.equals(left.deletedColumn(), right.deletedColumn())
+                && new ArrayList<>(left.columns().keySet()).equals(new ArrayList<>(right.columns().keySet()));
+    }
+
+    protected final void patchBatch(Connection connection, List<QueuedWriteOperation> operations) throws SQLException {
+        if (operations.isEmpty()) return;
+        QueuedWriteOperation operation = operations.get(0);
         var changes = new ArrayList<>(operation.columns().entrySet());
         changes.removeIf(entry -> entry.getKey().equals(operation.idColumn()) || entry.getKey().equals(operation.versionColumn()));
         if (changes.isEmpty()) throw new IllegalArgumentException("PATCH has no changed columns");
@@ -169,15 +195,19 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
                 .append(version).append(" IS NULL OR ").append(version).append("<=?)");
         try (var statement = connection.prepareStatement(sql.toString())) {
             statement.setQueryTimeout(statementTimeoutSeconds);
-            int index = 1;
-            for (var change : changes)
-                bindPatchValue(statement, index++, change.getValue(),
-                        JdbcWriteBehindSupport.columnType(entityRegistry, operation, change.getKey()));
-            statement.setLong(index++, operation.version());
-            bindPatchValue(statement, index++, operation.id(), JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn()));
-            statement.setLong(index, operation.version());
-            VersionGuardedWriteSupport.verifySingleOutcome(connection, entityRegistry, operation,
-                    statement.executeUpdate(), statementTimeoutSeconds);
+            for (QueuedWriteOperation member : operations) {
+                if (!sameWriteShape(operation, member)) throw new IllegalArgumentException("Mixed PATCH shapes");
+                int index = 1;
+                for (var change : changes)
+                    bindPatchValue(statement, index++, member.columns().get(change.getKey()),
+                            JdbcWriteBehindSupport.columnType(entityRegistry, member, change.getKey()));
+                statement.setLong(index++, member.version());
+                bindPatchValue(statement, index++, member.id(), JdbcWriteBehindSupport.columnType(entityRegistry, member, member.idColumn()));
+                statement.setLong(index, member.version());
+                statement.addBatch();
+            }
+            VersionGuardedWriteSupport.verifyBatchOutcome(connection, entityRegistry, operations,
+                    statement.executeBatch(), statementTimeoutSeconds);
         }
     }
 

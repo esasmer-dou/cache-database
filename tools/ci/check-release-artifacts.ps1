@@ -122,6 +122,21 @@ foreach ($module in $publicJarModules) {
                 }
             }
         }
+        if ([version]$Version -ge [version]'0.17.0' -and $suffix -ne '-javadoc.jar') {
+            $types = switch ($module) {
+                'cachedb-annotations' { @('annotations/CacheDelta', 'annotations/CacheSet', 'annotations/CacheAggregate', 'annotations/CacheTenantId', 'annotations/CacheWatcher', 'annotations/CacheSchemaVersion') }
+                'cachedb-core' { @('core/codec/PayloadCompressionCodec', 'core/codec/PayloadEntityCodec', 'core/codec/CachePayloadUpcaster', 'core/model/PatchDeltaSpec', 'core/page/EntityOwnershipLoader', 'core/query/AggregateSpec', 'core/query/AggregateResult', 'core/tenant/CacheTenantContext', 'core/watch/CacheChangeEvent') }
+                'cachedb-storage-redis' { @('redis/RedisTenantWriteGuard', 'redis/RedisWatchRegistry') }
+                default { @() }
+            }
+            $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }
+            $prefix = if ($suffix -eq '.jar') { 'com/reactor/cachedb' } else { 'com/cachedb' }
+            foreach ($type in $types) {
+                if ($entries -notcontains "$prefix/$type.$extension") {
+                    $invalid.Add("${module}: required 0.17 type is missing: $type.$extension")
+                }
+            }
+        }
         if ($module -eq 'cachedb-json' -and $suffix -ne '-javadoc.jar' -and
             [version]$Version -ge [version]'0.14.0') {
             $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }

@@ -8,7 +8,7 @@ mkdir -p target
 exec 9>target/kubernetes-validation.lock
 flock -n 9 || { echo 'Validation already running in this checkout; use a separate source directory' >&2; exit 2; }
 date -u '+%Y-%m-%dT%H:%M:%SZ' > target/kubernetes-validation-start.txt
-namespace=${CACHEDB_TEST_NAMESPACE:-cachedb-v016-validation}
+namespace=${CACHEDB_TEST_NAMESPACE:-cachedb-v017-validation}
 case "$namespace" in cachedb-*) ;; *) echo 'Dedicated namespace required' >&2; exit 2;; esac
 export CACHEDB_TEST_NAMESPACE="$namespace"
 password=$(tr -d '\r\n' < /workspace/fixture-password)
@@ -27,7 +27,7 @@ export CACHEDB_IT_ORACLE_URL="$CACHEDB_SNAPSHOT_ORACLE_URL" CACHEDB_IT_ORACLE_US
 export CACHEDB_IT_REDIS_URI="redis://$redis:6379/10"
 
 case "${1:-unit}" in
-  all) mvn -B -ntp -Poss-release -Dgpg.skip=true install \
+  all) mvn -B -ntp -Poss-release -Dgpg.skip=true clean install \
     -Dcachedb.snapshot.redis=true -Dcachedb.snapshot.providers=true \
     -Dcachedb.snapshot.redis.host="$redis" -Dcachedb.snapshot.redis.port=6379 \
     -Dcachedb.test.redis.uri="redis://$redis:6379/11" \

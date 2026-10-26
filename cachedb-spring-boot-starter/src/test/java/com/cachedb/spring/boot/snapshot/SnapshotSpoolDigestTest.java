@@ -39,4 +39,28 @@ class SnapshotSpoolDigestTest {
     @Test void legacyEntryConstructorRemainsAvailable() {
         assertThat(new SnapshotSpool.Entry("root", 0, 2, null, 0).contentDigest()).isNull();
     }
+
+    @Test void compressedSpoolKeepsLogicalBudgetsDigestsAndPublishedJsonUnchanged() throws Exception {
+        var roots = new SnapshotSource<String>("roots", "SELECT id FROM roots", row -> row.get("id").toString());
+        var plan = SnapshotPlan.streaming("catalog", roots, value -> value, String.class,
+                value -> List.of("İstanbul ürün açıklaması ".repeat(500), value))
+                .withSpoolCompression(1024).withContentReuse();
+        assertThat(plan.spoolCompressionThresholdBytes()).isEqualTo(1024);
+        try (var spool = new SnapshotSpool(directory)) {
+            spool.prepare(plan, new SnapshotRows(Map.of(roots, List.of("root-1", "root-2"))), new ObjectMapper(), () -> {});
+            long logicalBytes = 0;
+            for (var entry : spool.entries()) {
+                String json = spool.read(entry, () -> {});
+                assertThat(json).startsWith("[").contains(entry.id());
+                assertThat(entry.bytes()).isEqualTo(json.getBytes(StandardCharsets.UTF_8).length);
+                assertThat(entry.storedBytes()).isLessThan(entry.bytes());
+                logicalBytes += entry.bytes();
+                String expected = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                        .digest((entry.id() + "\u0000" + json).getBytes(StandardCharsets.UTF_8)));
+                assertThat(entry.contentDigest()).isEqualTo(expected);
+            }
+            assertThat(spool.bytes()).isEqualTo(logicalBytes);
+        }
+        assertThat(directory.toFile().list()).isEmpty();
+    }
 }

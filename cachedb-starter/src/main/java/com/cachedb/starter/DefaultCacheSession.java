@@ -176,7 +176,7 @@ public final class DefaultCacheSession implements CacheSession {
                         ignored ->
                                 createRepository(
                                         metadata,
-                                        codec,
+                                        binding.codec(),
                                         resolvedCachePolicy,
                                         relationBatchLoader,
                                         pageLoader,
@@ -244,6 +244,7 @@ public final class DefaultCacheSession implements CacheSession {
                 backgroundJedis,
                 projectionRefreshDispatcher,
                 projectionRefreshQueue).withMutationConfig(config.mutations())
+                .withWatcherLimit(config.resourceLimits().maxWatchersPerEntity())
                 .withNearCache(nearCacheCoordinator);
     }
 

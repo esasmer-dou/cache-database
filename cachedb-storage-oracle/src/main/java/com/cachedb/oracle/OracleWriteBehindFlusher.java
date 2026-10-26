@@ -164,9 +164,18 @@ public final class OracleWriteBehindFlusher extends AbstractJdbcWriteBehindFlush
             throws SQLException {
         inTransaction(connection, operations, options.transactionIsolation(), null, accepted -> {
             if (preserveOrder || accepted.stream().anyMatch(op -> op.type() == OperationType.PATCH)) {
-                for (var operation : accepted) {
-                    if (operation.type() == OperationType.PATCH) patch(connection, operation);
-                    else executeGroup(connection, StatementKey.of(operation, dialect), List.of(operation));
+                int index = 0;
+                while (index < accepted.size()) {
+                    var operation = accepted.get(index);
+                    if (operation.type() == OperationType.PATCH) {
+                        index = patchConsecutiveBatch(connection, accepted, index);
+                        continue;
+                    }
+                    int end = index + 1;
+                    var key = StatementKey.of(operation, dialect);
+                    while (end < accepted.size() && sameWriteShape(operation, accepted.get(end))) end++;
+                    executeGroup(connection, key, accepted.subList(index, end));
+                    index = end;
                 }
                 return;
             }

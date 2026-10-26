@@ -2,9 +2,10 @@
 
 [English](../README.md) | Türkçe
 
-**0.16.0:** [Okuma ve yazma kontrolleri](docs/aktif-veri-performans-kontrolleri.md);
-tipli kolonları, kısmi güncellemeyi, otomatik katalog yenilemeyi, işlem birimlerini,
-izleme bağlamını ve isteğe bağlı L1'i açıklar. [Sürüm notları](docs/releases/v0.16.0.md).
+**0.17.0:** [Okuma ve yazma kontrolleri](docs/aktif-veri-performans-kontrolleri.md);
+toplu PATCH işlemlerini, sayısal değişimleri, aktif veri toplamlarını, tenant denetimini,
+yerel değişiklik bildirimlerini ve veri biçimi/sıkıştırma kurallarını açıklar.
+[Sürüm notları](docs/releases/v0.17.0.md).
 
 [![Son sürüm](https://img.shields.io/github/v/release/esasmer-dou/cache-database?display_name=tag&sort=semver)](https://github.com/esasmer-dou/cache-database/releases/latest)
 [![Production doğrulaması](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
@@ -46,7 +47,7 @@ doğrulanmalıdır.
 | Sürüm bilgisi | Değer |
 | --- | --- |
 | Yayımlanmış son sürüm | [GitHub sürümü](https://github.com/esasmer-dou/cache-database/releases/latest) |
-| Repo sürümü | `0.16.0` |
+| Repo sürümü | `0.17.0` |
 | Kütüphane bytecode seviyesi | Java 17 |
 | Çalıştırılabilir örnekler | Java 21 |
 | Yerel sağlayıcı test topolojisi | Redis 8, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 |
@@ -54,17 +55,18 @@ doğrulanmalıdır.
 
 Çok tablodan hazırlanan bir API cevabını yenilemek için [tanımlı katalog yenileme rehberini](docs/snapshot-projectionlar.md) kullanın. Kaynak, projection ve ayarları tanımlayın; dosya, partileme, kilit ve güvenli yayını framework yönetsin.
 
-## Güncel Sürüm: 0.16.0
+## Güncel Sürüm: 0.17.0
 
-`0.16.0`, kolon sınırlarını veritabanına göre denetler. Şema ve yazma
-kontrolleri, aktif JDBC bağlantısının bildirdiği kapasiteyi veya sağlayıcının
-varsayılanını kullanır. Veri alanı tavanı 4096'ya çıkar; SQL tablo, parametre ve
-veri boyutu sınırları kaldırılmaz. Geniş entity'ler için üretilen kod küçük
-metotlara bölünür. Mevcut codec, SQL kalıcılığı ve silme koruması sözleşmeleri korunur. Geçiş için
-[v0.16.0 sürüm notlarını](docs/releases/v0.16.0.md) ve
+`0.17.0`, tekrarlı JDBC/Redis işlerini azaltır; sayısal alan değişimleri, sınırlı aktif
+veri toplamları, açık tenant kapsamı ve yerel değişiklik bildirimleri ekler.
+Eski veri biçimini okuma ve isteğe bağlı sıkıştırma, kayıtlı codec üzerinden yürür.
+Bu özellikler her SQL sorgusunu önbelleğe alma, dağıtık XA, kalıcı CDC veya eski/yeni
+uygulama sürümleri arasında otomatik uyumluluk garantisi değildir. SQL kapasite,
+kalıcılık ve silme koruması sözleşmeleri korunur. Geçiş için
+[v0.17.0 sürüm notlarını](docs/releases/v0.17.0.md) ve
 [sınırlı çalışma rehberini](docs/sinirli-calisma-islemleri.md) okuyun.
 
-BOM, annotation processor ve sağlayıcı starter'ını `0.16.0` ile eşitleyin.
+BOM, annotation processor ve sağlayıcı starter'ını `0.17.0` ile eşitleyin.
 Üretilmiş binding'leri yeniden derleyin; [kalıcı sürüm tablosunu](docs/kalici-yazma-surumleri.md)
 hazırlayın ve geçişten önce eski worker'ları devreden çıkarın. Framework paketinin
 yayımlanması; uygulamanızın canlı ortam yollarını, Oracle Data Guard veya
@@ -128,7 +130,7 @@ CacheDB özellikle şu problemlere odaklanır:
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
 | "Repository'leri güvenli biçimde nasıl tanımlar ve işletirim?" | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| "Güncel sürümde neler değişti?" | [v0.16.0 Sürüm Notları](docs/releases/v0.16.0.md) |
+| "Güncel sürümde neler değişti?" | [v0.17.0 Sürüm Notları](docs/releases/v0.17.0.md) |
 | "Çalışan REST API örneği nerede?" | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) örneği |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Oracle provider sözleşmesi nedir?" | [Oracle Provider](docs/oracle-provider.md) |
@@ -180,13 +182,13 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın release ile aynı tut. `0.16.0`, kimlik
+`cachedb.version` değerini kullandığın release ile aynı tut. `0.17.0`, kimlik
 doğrulaması istemeyen CacheDB Maven deposu ve GitHub Release paketi üzerinden
 sunulan değişmez sürümdür.
 
 ```xml
 <properties>
-    <cachedb.version>0.16.0</cachedb.version>
+    <cachedb.version>0.17.0</cachedb.version>
     <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -404,7 +406,7 @@ Davranış:
 
 - `save` entity'yi Redis'e yazar.
 - Kalıcı yazım seçilen SQL write-behind hattına girer.
-- 0.16.0'e geçerken yeni worker'ları açmadan önce ayrı [kalıcı sürüm tablosunun](docs/kalici-yazma-surumleri.md) hazır olduğunu doğrulayın; iş tabloları değişmez.
+- 0.17.0'e geçerken yeni worker'ları açmadan önce ayrı [kalıcı sürüm tablosunun](docs/kalici-yazma-surumleri.md) hazır olduğunu doğrulayın; iş tabloları değişmez.
 - `detail` yalnızca Redis'ten okur; `NOT_CACHED`, SQL satırının olmadığı
   anlamına gelmez.
 - Entity etkin veri politikasına uymuyorsa Redis’e kabul edilmeyebilir veya Redis’ten

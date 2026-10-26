@@ -2,6 +2,9 @@
 
 [Türkçe](../tr/docs/aktif-veri-performans-kontrolleri.md)
 
+For 0.17.0 numeric changes, aggregates, tenant scopes, local watchers and payload
+evolution, start with [declarative data controls](declarative-data-controls.md).
+
 These controls extend the Redis-first model. They do not turn arbitrary SQL into
 an automatically complete Redis query. Keep route coverage, cold-read limits,
 provider timeouts, and durable write-fence migrations in place.
@@ -180,8 +183,10 @@ affect end-to-end latency.
 ```
 
 Apply this to an entity, or use `CachePolicy.Builder.nearCachePolicy`. L1 is
-disabled unless enabled explicitly. It stores encoded payloads and decodes every
-result, including records (records may contain mutable members). Limits are 64000
+disabled unless enabled explicitly. Mutable values and records with mutable members
+are decoded defensively. Generated deeply immutable records may share a decoded
+instance when no schema upcasting, compression or relation processing is involved.
+Segments evict by recent access. Limits are 64000
 entries and an estimated 64 MiB reservation per runtime, split across registered
 entities. The TTL cannot exceed 60 seconds or the observed Redis payload TTL.
 Segmented eviction can retain fewer entries than the configured maximum.
@@ -200,7 +205,7 @@ Align the BOM, processor, starters, workers, and samples at the same version and
 regenerate bindings. Existing constructors and smaller Redis payloads remain
 supported. Drain old workers before enabling PATCH producers: old workers cannot
 decode the new operation kind. The default Redis Function library version advances
-to `0.16.0`; upgrade the library before admitting new producers. Custom function
+to `0.17.0`; upgrade the library before admitting new producers. Custom function
 deployments must also use the matching source/version, not bypass drift protection.
 Trace fields are optional for old envelopes. Keep
 the durable fence metadata table and Redis version counters; do not reset them

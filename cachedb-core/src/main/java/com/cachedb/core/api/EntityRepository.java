@@ -35,6 +35,25 @@ public interface EntityRepository<T, ID> {
     List<T> findPage(PageWindow pageWindow);
     QueryExplainPlan explain(QuerySpec querySpec);
     List<T> query(QuerySpec querySpec);
+    default com.reactor.cachedb.core.watch.CacheWatcherRegistration registerWatcher(QuerySpec spec,
+            com.reactor.cachedb.core.watch.CacheWatcherListener<T, ID> listener) {
+        throw new UnsupportedOperationException("Continuous query watchers are not supported by this repository");
+    }
+    default long count(QuerySpec spec) {
+        return aggregate(com.reactor.cachedb.core.query.AggregateSpec.count(spec == null ? null : spec.rootGroup())).count();
+    }
+    default com.reactor.cachedb.core.query.AggregateResult aggregate(com.reactor.cachedb.core.query.AggregateSpec spec) {
+        var rows = query(QuerySpec.where(spec.filter()).limitTo(QuerySpec.MAX_LIMIT));
+        if (rows.size() == QuerySpec.MAX_LIMIT) throw new IllegalStateException("Aggregate may exceed bounded fallback capacity");
+        var accumulator = new com.reactor.cachedb.core.query.AggregateResult.Accumulator();
+        for (T row : rows) accumulator.add(spec.function() == com.reactor.cachedb.core.query.AggregateFunction.COUNT
+                ? null : aggregateFieldValue(row, spec.fieldName()));
+        return accumulator.result();
+    }
+    /** Custom repositories can supply explicit field extraction for the bounded fallback. */
+    default Object aggregateFieldValue(T entity, String column) {
+        throw new UnsupportedOperationException("Custom repository must provide aggregate field extraction");
+    }
     T save(T entity);
     /** Returns the merged hot entity; fails before acceptance when a full hot entity is unavailable. */
     default T patch(ID id, Map<String, Object> columnUpdates) {

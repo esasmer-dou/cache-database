@@ -70,6 +70,63 @@ class RedisQueryIndexDiffRedisTest {
             assertFalse(redis.exists(keys.indexDegradedKey("rows")));
         }
     }
+    @Test void lazyAndProbesOnlySmallCandidatesAndInUsesOneBatch() {
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
+            var keys = new RedisKeyStrategy("lazy-index-" + UUID.randomUUID());
+            var probes = new AtomicInteger(); var batches = new AtomicInteger();
+            RedisClientOperations client = new RedisClientOperations() {
+                public UnifiedJedis commands() { return redis; }
+                public Set<String> probeMembers(String key, Collection<String> candidates) {
+                    probes.incrementAndGet(); return RedisClientOperations.super.probeMembers(key, candidates);
+                }
+                public Map<String, Set<String>> smembersBatch(Collection<String> names, int max) {
+                    batches.incrementAndGet(); return RedisClientOperations.super.smembersBatch(names, max);
+                }
+            };
+            var manager = new RedisQueryIndexManager<>(client, METADATA, CODEC, keys, null,
+                    QueryIndexConfig.defaults(), RelationConfig.defaults(), new QueryEvaluator(), null);
+            manager.reindexBatch(List.of(new Row(1L, 7L, "one", 1L), new Row(2L, 7L, "two", 2L), new Row(3L, 7L, "three", 3L)));
+            long members = calls(redis, "smembers");
+            assertTrue(manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("id", 999L), QueryFilter.eq("tenant_id", 7L))).isEmpty());
+            assertTrue(calls(redis, "smembers") - members <= 1, "Empty first candidate must not materialize later indexes");
+            assertEquals(List.of("1"), manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("id", 1L), QueryFilter.eq("tenant_id", 7L))));
+            assertEquals(1, probes.get());
+            var values = new ArrayList<Long>(); for (long i = 1; i <= 20; i++) values.add(i);
+            assertEquals(Set.of("1", "2", "3"), Set.copyOf(manager.resolveCandidateIds(QuerySpec.where(QueryFilter.in("score", values)))));
+            assertEquals(1, batches.get());
+        }
+    }
+
+    @Test void largerSameSlotExactPredicatesIntersectOnServerWithBoundedReply() {
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
+            var keys = new RedisKeyStrategy("sinter-index-" + UUID.randomUUID());
+            var manager = new RedisQueryIndexManager<>(redis, METADATA, CODEC, keys, null,
+                    QueryIndexConfig.defaults(), RelationConfig.defaults(), new QueryEvaluator(), null);
+            var rows = new ArrayList<Row>(); for (long i = 1; i <= 200; i++) rows.add(new Row(i, 7L, "shared", i));
+            manager.reindexBatch(rows);
+            long calls = calls(redis, "sinter");
+            assertEquals(200, manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("tenant_id", 7L), QueryFilter.eq("name", "shared"))).size());
+            assertEquals(calls + 1, calls(redis, "sinter"));
+        }
+    }
+
+    @Test void orderedPayloadFetchSkipsDeletedAndExpiredRowsAndCrossSlotFallsBack() {
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
+            String prefix = "ordered-" + UUID.randomUUID();
+            redis.zadd(prefix + ":sorted", Map.of("1", 1d, "2", 2d, "3", 3d, "4", 4d));
+            redis.set(prefix + ":entity:1", "one"); redis.set(prefix + ":entity:2", "two");
+            redis.set(prefix + ":entity:3", "deleted"); redis.set(prefix + ":tomb:3", "1");
+            var operations = JedisPooledOperations.of(redis);
+            assertEquals(List.of("two", "one"), operations.zrangeWithPayloads(prefix + ":sorted", prefix + ":tomb:", prefix + ":entity:", true, 0, 2).orElseThrow());
+            RedisClientOperations cluster = new RedisClientOperations() {
+                public boolean clustered() { return true; }
+                public UnifiedJedis commands() { throw new AssertionError("Cross-slot optimization must not call Redis"); }
+            };
+            assertTrue(cluster.fetchOrderedPayloads("a:sorted", "b:tomb:", "c:entity:", true, 0, 2).isEmpty());
+            redis.sadd(prefix + ":too-large", "1", "2");
+            assertThrows(redis.clients.jedis.exceptions.JedisDataException.class, () -> operations.smembersBatch(List.of(prefix + ":too-large"), 1));
+        }
+    }
     private static long calls(JedisPooled redis,String command) {
         Object response = redis.sendCommand(Protocol.Command.INFO,"commandstats");
         String info = response instanceof byte[] bytes ? new String(bytes,java.nio.charset.StandardCharsets.UTF_8) : String.valueOf(response);

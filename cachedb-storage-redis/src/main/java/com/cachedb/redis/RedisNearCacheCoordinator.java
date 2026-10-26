@@ -94,7 +94,7 @@ public final class RedisNearCacheCoordinator implements AutoCloseable {
     }
 
     public static final class Store {
-        private record Entry(String payload, long expiresAt, long bytes) {}
+        private record Entry(String payload, Object decoded, long expiresAt, long bytes) {}
         private final NearCachePolicy policy;
         private final Segment[] segments;
         private final AtomicLong epoch = new AtomicLong();
@@ -117,11 +117,24 @@ public final class RedisNearCacheCoordinator implements AutoCloseable {
                 return entry.payload;
             }
         }
+        public Object getDecoded(String id, String expectedPayload) {
+            var segment = segment(id);
+            synchronized (segment) {
+                var entry = segment.entries.get(id);
+                if (entry == null || !entry.payload.equals(expectedPayload)) return null;
+                if (System.nanoTime() - entry.expiresAt >= 0) { segment.remove(id); return null; }
+                return entry.decoded;
+            }
+        }
         public void put(String id, String payload, long redisTtlMillis, long observedEpoch) {
+            put(id, payload, null, redisTtlMillis, observedEpoch);
+        }
+        public void put(String id, String payload, Object decoded, long redisTtlMillis, long observedEpoch) {
             if (redisTtlMillis == -2 || redisTtlMillis == 0 || epoch.get() != observedEpoch) return;
             long ttl = policy.ttlSeconds() * 1000L;
             if (redisTtlMillis > 0) ttl = Math.min(ttl, redisTtlMillis);
             long bytes = 512L + 2L * (id.length() + payload.length());
+            if (decoded != null) bytes += 512L + 4L * payload.length();
             var segment = segment(id);
             if (bytes > segment.maxBytes) return;
             synchronized (segment) {
@@ -130,7 +143,7 @@ public final class RedisNearCacheCoordinator implements AutoCloseable {
                 while (!segment.entries.isEmpty() && (segment.entries.size() >= segment.capacity
                         || segment.bytes + bytes > segment.maxBytes))
                     segment.remove(segment.entries.keySet().iterator().next());
-                segment.entries.put(id, new Entry(payload, System.nanoTime() + ttl * 1_000_000L, bytes));
+                segment.entries.put(id, new Entry(payload, decoded, System.nanoTime() + ttl * 1_000_000L, bytes));
                 segment.bytes += bytes;
             }
             if (epoch.get() != observedEpoch) { synchronized (segment) { segment.remove(id); } }
@@ -145,7 +158,7 @@ public final class RedisNearCacheCoordinator implements AutoCloseable {
         }
         private static final class Segment {
             final int capacity; final long maxBytes;
-            final LinkedHashMap<String, Entry> entries = new LinkedHashMap<>(); long bytes;
+            final LinkedHashMap<String, Entry> entries = new LinkedHashMap<>(16, 0.75f, true); long bytes;
             Segment(int capacity, long maxBytes) { this.capacity = capacity; this.maxBytes = maxBytes; }
             void remove(String id) { var old = entries.remove(id); if (old != null) bytes -= old.bytes; }
         }

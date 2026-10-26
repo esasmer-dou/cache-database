@@ -8,6 +8,22 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import redis.clients.jedis.JedisPooled;
 
 class RedisNearCacheTest {
+    @Test void evictionFollowsRecentAccessInsteadOfInsertionAndKeepsDecodedReference() {
+        var cache = new RedisNearCacheCoordinator.Store(new NearCachePolicy(32, 10, 1_048_576));
+        // All three identities hash to the same segment, whose capacity is two.
+        String a = "Aa", b = "BB", c = "C#";
+        Object decoded = new Object();
+        cache.put(a, "first", decoded, -1, cache.epoch());
+        cache.put(b, "second", -1, cache.epoch());
+        assertEquals("first", cache.get(a));
+        assertSame(decoded, cache.getDecoded(a, "first"));
+        cache.put(c, "third", -1, cache.epoch());
+        assertNull(cache.get(b));
+        assertEquals("first", cache.get(a));
+        assertEquals("third", cache.get(c));
+        cache.invalidate(a);
+        assertNull(cache.getDecoded(a, "first"));
+    }
     @Test void strictTtlCapacityByteBudgetAndLateFillProtection() throws Exception {
         var cache = new RedisNearCacheCoordinator.Store(new NearCachePolicy(2, 1, 2048));
         long before = cache.epoch();

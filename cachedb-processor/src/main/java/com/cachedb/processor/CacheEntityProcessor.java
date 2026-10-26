@@ -2157,6 +2157,29 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
     private void renderMetadata(StringBuilder builder, EntityModel model) {
         var element = processingEnv.getElementUtils().getTypeElement(model.packageName() + "." + model.simpleName());
+        var tenantNames = new java.util.LinkedHashSet<String>();
+        if (element != null) for (var member : element.getEnclosedElements()) {
+            if (member.getAnnotation(com.reactor.cachedb.annotations.CacheTenantId.class) == null) continue;
+            String name = member.getSimpleName().toString();
+            if (member.getKind() == ElementKind.METHOD && name.startsWith("get") && name.length() > 3)
+                name = Character.toLowerCase(name.charAt(3)) + name.substring(4);
+            tenantNames.add(name);
+        }
+        FieldModel tenant = tenantNames.size() == 1 ? model.persistedFields().stream()
+                .filter(field -> tenantNames.contains(field.fieldName())).findFirst().orElse(null) : null;
+        if (!tenantNames.isEmpty() && (tenant == null || !tenant.typeName().equals("java.lang.String") || tenant.idField()))
+            messager.printMessage(Diagnostic.Kind.ERROR, "@CacheTenantId requires exactly one persisted non-ID String field", element);
+        var schema = element == null ? null : element.getAnnotation(com.reactor.cachedb.annotations.CacheSchemaVersion.class);
+        String upcaster = "com.reactor.cachedb.core.codec.NoOpPayloadUpcaster";
+        if (schema != null) {
+            try { upcaster = schema.upcaster().getCanonicalName(); }
+            catch (javax.lang.model.type.MirroredTypeException mirror) { upcaster = mirror.getTypeMirror().toString(); }
+            if (upcaster.equals("java.lang.Void")) upcaster = "com.reactor.cachedb.core.codec.NoOpPayloadUpcaster";
+            if (schema.version() < 1 || (schema.version() > 1 && upcaster.endsWith(".NoOpPayloadUpcaster")))
+                messager.printMessage(Diagnostic.Kind.ERROR, "Schema version > 1 requires an explicit upcaster", element);
+            builder.append("    private static final com.reactor.cachedb.core.codec.CachePayloadUpcaster UPCASTER = new ")
+                    .append(upcaster).append("();\n");
+        }
         var near = element == null ? null : element.getAnnotation(com.reactor.cachedb.annotations.CacheNearPolicy.class);
         if (near != null) builder.append("    private static final com.reactor.cachedb.core.cache.NearCachePolicy NEAR_POLICY = new com.reactor.cachedb.core.cache.NearCachePolicy(")
                 .append(near.maxEntries()).append(", ").append(near.ttlSeconds()).append(", ")
@@ -2164,6 +2187,25 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    private static final class Metadata implements EntityMetadata<")
                 .append(model.simpleName()).append(", ").append(model.idField().typeName()).append("> {\n");
         if (near != null) builder.append("        public com.reactor.cachedb.core.cache.NearCachePolicy nearCachePolicy() { return NEAR_POLICY; }\n");
+        if (tenant != null) builder.append("        public String tenantFieldName() { return ")
+                .append(javaStringLiteral(tenant.columnName())).append("; }\n")
+                .append("        public String extractTenantId(").append(model.simpleName())
+                .append(" entity) { return ").append(accessExpression(model, tenant)).append("; }\n");
+        var declaration = element == null ? null : element.getAnnotation(CacheEntity.class);
+        if (declaration != null) {
+            if (declaration.compressionThresholdBytes() < 0 || declaration.compressionThresholdBytes() > 16 * 1024 * 1024)
+                messager.printMessage(Diagnostic.Kind.ERROR, "Invalid compressionThresholdBytes", element);
+            builder.append("        public int compressionThresholdBytes() { return ")
+                    .append(declaration.compressionThresholdBytes()).append("; }\n");
+        }
+        if (schema != null) {
+            builder.append("        public int schemaVersion() { return ").append(schema.version()).append("; }\n")
+                    .append("        public com.reactor.cachedb.core.codec.CachePayloadUpcaster payloadUpcaster() { return UPCASTER; }\n");
+        }
+        if (model.recordType() && model.relations().isEmpty()
+                && model.persistedFields().stream().allMatch(this::deeplyImmutableField)) {
+            builder.append("        public boolean deeplyImmutable() { return true; }\n");
+        }
         builder.append("        @Override\n");
         builder.append("        public String entityName() {\n");
         builder.append("            return ").append(javaStringLiteral(model.simpleName())).append(";\n");
@@ -2216,7 +2258,9 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("        }\n\n");
         builder.append("        public java.util.Set<String> indexedColumns() { return INDEXED_COLUMNS; }\n")
                 .append("        private static final java.util.Set<String> INDEXED_COLUMNS = java.util.Set.of(");
-        appendQuotedList(builder, model.indexedColumns().stream().sorted().toList());
+        var indexed = new java.util.TreeSet<>(model.indexedColumns());
+        if (tenant != null) indexed.add(tenant.columnName());
+        appendQuotedList(builder, List.copyOf(indexed));
         builder.append(");\n");
         builder.append("        private static final Map<String, String> COLUMN_TYPES = createColumnTypes();\n");
         builder.append("        private static Map<String, String> createColumnTypes() {\n");
@@ -3672,6 +3716,15 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             saveCommands = List.copyOf(saveCommands);
             deleteCommands = List.copyOf(deleteCommands);
         }
+    }
+
+    private boolean deeplyImmutableField(FieldModel field) {
+        return field.enumType() || java.util.Set.of("boolean", "byte", "short", "int", "long", "float", "double", "char",
+                "java.lang.Boolean", "java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long",
+                "java.lang.Float", "java.lang.Double", "java.lang.Character", "java.lang.String",
+                "java.math.BigDecimal", "java.math.BigInteger", "java.util.UUID", "java.time.Instant",
+                "java.time.LocalDate", "java.time.LocalTime", "java.time.LocalDateTime", "java.time.OffsetDateTime",
+                "java.time.ZonedDateTime", "java.time.Duration", "java.time.Period").contains(field.typeName());
     }
 
     private record FieldModel(

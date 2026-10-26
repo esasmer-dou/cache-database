@@ -2,7 +2,7 @@
 
 English | [Türkçe](README.tr.md)
 
-## Read and Write Controls in 0.16.0
+## Read and Write Controls in 0.17.0
 
 The sample is a SQL Server consumer: it resolves the published BOM, processor,
 starter, and doctor plugin at the same version. Java 21 is required; no framework
@@ -10,6 +10,12 @@ checkout is needed. For the consistency and upgrade rules, read the framework
 [bounded controls guide](https://github.com/esasmer-dou/cache-database/blob/main/docs/hot-path-controls.md).
 
 Follow the existing quick start and seed/warm steps first. Then use this flow:
+
+The existing PATCH and query routes also benefit from 0.17's grouped JDBC writes,
+bounded index reads and access-ordered L1. New delta, aggregate, tenant, watcher and
+schema/compression APIs are opt-in; this sample does not silently enable them or
+add tenant authorization. See the framework's [scenario guide](https://github.com/esasmer-dou/cache-database/blob/main/docs/declarative-data-controls.md)
+before adapting them to your own entity and deployment contract.
 
 1. `CatalogConfiguration` selects active products using
    `ProductEntityCacheBinding.Columns.ACTIVE_STATUS`, scopes by
@@ -81,14 +87,14 @@ Limits are 100 identities, 4 MiB and 2000 stream fields. Cluster requires one
 hash-tag scope; bounded tenant admission cannot be bypassed with atomic batches.
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.16.0](https://img.shields.io/badge/CacheDB-0.16.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.16.0)
+[![CacheDB 0.17.0](https://img.shields.io/badge/CacheDB-0.17.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.17.0)
 
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and SQL Server. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in SQL Server, and
 growing lists use projections instead of full aggregates.
 
-> This release consumes the immutable CacheDB `0.16.0` package from the public
+> This release consumes the immutable CacheDB `0.17.0` package from the public
 > CacheDB Maven repository. It requires no GitHub token and does not require a
 > local CacheDB source checkout.
 
@@ -98,10 +104,10 @@ matching Redis projection, read the active route, and inspect coverage and
 durability signals. The sample does not hide a SQL Server query behind a Redis
 miss.
 
-## CacheDB 0.16.0 Upgrade
+## CacheDB 0.17.0 Upgrade
 
 The sample POM aligns the BOM, provider starter, annotation processor and doctor
-plugin at `0.16.0`. Rebuild the sample to regenerate its bindings.
+plugin at `0.17.0`. Rebuild the sample to regenerate its bindings.
 The POM also sets `jedis.version=5.2.0`; the Spring Boot parent would otherwise
 select an older driver that lacks the required pipeline API.
 
@@ -113,14 +119,14 @@ select an older driver that lacks the required pipeline API.
 - Use `Boolean` for nullable SQL booleans; primitive `boolean` rejects SQL NULL.
 - Atomic catalog imports and indexed snapshot pages have explicit endpoints. Redis Cluster distribution remains an optional framework infrastructure capability; local Compose uses standalone Redis.
 
-Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.16.0.md)
+Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.17.0.md)
 and [bounded operation contracts](https://github.com/esasmer-dou/cache-database/blob/main/docs/bounded-runtime-operations.md)
 before adding those APIs. Package availability does not certify your application's production topology.
 
-## Column Safety in 0.16.0
+## Column Safety in 0.17.0
 
 The existing sample entities stay deliberately narrow. The new limits are active
-through the 0.16.0 dependency; no additional cache policy or business-table change
+through the 0.17.0 dependency; no additional cache policy or business-table change
 is required. A wider Redis payload is not permission to create a wider SQL table.
 
 | Surface | Default count limit |
@@ -276,7 +282,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.16.0</cachedb.version>
+<cachedb.version>0.17.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -367,7 +373,7 @@ no Maven `settings.xml`, username, or token is required.
 ### 1. Resolve the published CacheDB package
 
 Validate the sample directly. Maven resolves the BOM, starter, annotation
-processor, and doctor plugin anonymously from the immutable `0.16.0` package:
+processor, and doctor plugin anonymously from the immutable `0.17.0` package:
 
 ```powershell
 mvn -U -DskipTests validate

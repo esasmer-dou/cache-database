@@ -9,7 +9,8 @@ public record CachePolicy(
         EntityHotPolicy hotPolicy,
         long accessDebounceMillis,
         int recentTouchSlots,
-        NearCachePolicy nearCachePolicy) {
+        NearCachePolicy nearCachePolicy,
+        int compressionThresholdBytes) {
     public static final int UNBOUNDED = -1;
     public static final int DISABLED = 0;
 
@@ -25,7 +26,8 @@ public record CachePolicy(
                 && java.util.Objects.equals(hotPolicy, value.hotPolicy)
                 && accessDebounceMillis == value.accessDebounceMillis
                 && recentTouchSlots == value.recentTouchSlots
-                && nearCachePolicy.equals(value.nearCachePolicy);
+                && nearCachePolicy.equals(value.nearCachePolicy)
+                && compressionThresholdBytes == value.compressionThresholdBytes;
     }
 
     @Override
@@ -42,6 +44,13 @@ public record CachePolicy(
 
     public CachePolicy(int hotEntityLimit, int pageSize, boolean lruEvictionEnabled,
             long entityTtlSeconds, long pageTtlSeconds, EntityHotPolicy hotPolicy,
+            long accessDebounceMillis, int recentTouchSlots, NearCachePolicy nearCachePolicy) {
+        this(hotEntityLimit, pageSize, lruEvictionEnabled, entityTtlSeconds, pageTtlSeconds,
+                hotPolicy, accessDebounceMillis, recentTouchSlots, nearCachePolicy, 0);
+    }
+
+    public CachePolicy(int hotEntityLimit, int pageSize, boolean lruEvictionEnabled,
+            long entityTtlSeconds, long pageTtlSeconds, EntityHotPolicy hotPolicy,
             long accessDebounceMillis, int recentTouchSlots) {
         this(hotEntityLimit, pageSize, lruEvictionEnabled, entityTtlSeconds, pageTtlSeconds,
                 hotPolicy, accessDebounceMillis, recentTouchSlots, NearCachePolicy.disabled());
@@ -49,7 +58,7 @@ public record CachePolicy(
 
     public CachePolicy withNearCachePolicy(NearCachePolicy policy) {
         return new CachePolicy(hotEntityLimit, pageSize, lruEvictionEnabled, entityTtlSeconds,
-                pageTtlSeconds, hotPolicy, accessDebounceMillis, recentTouchSlots, policy);
+                pageTtlSeconds, hotPolicy, accessDebounceMillis, recentTouchSlots, policy, compressionThresholdBytes);
     }
 
     public CachePolicy(int hotEntityLimit, int pageSize, boolean lruEvictionEnabled,
@@ -73,6 +82,8 @@ public record CachePolicy(
     }
 
     public CachePolicy {
+        if (compressionThresholdBytes < 0 || compressionThresholdBytes > 16 * 1024 * 1024)
+            throw new IllegalArgumentException("Invalid compression threshold");
         nearCachePolicy = java.util.Objects.requireNonNull(nearCachePolicy, "nearCachePolicy");
         if (hotEntityLimit < UNBOUNDED)
             throw new IllegalArgumentException("hotEntityLimit must be -1, 0, or positive");
@@ -108,6 +119,9 @@ public record CachePolicy(
         private long accessDebounceMillis = 500;
         private int recentTouchSlots = 8192;
         private NearCachePolicy nearCachePolicy = NearCachePolicy.disabled();
+        private int compressionThresholdBytes;
+
+        public Builder compressionThresholdBytes(int bytes) { compressionThresholdBytes = bytes; return this; }
 
         public Builder nearCachePolicy(NearCachePolicy policy) { nearCachePolicy = policy; return this; }
 
@@ -192,7 +206,7 @@ public record CachePolicy(
                     hotPolicy,
                     accessDebounceMillis,
                     recentTouchSlots,
-                    nearCachePolicy);
+                    nearCachePolicy, compressionThresholdBytes);
         }
     }
 }

@@ -32,6 +32,74 @@ import org.junit.jupiter.params.provider.ValueSource;
 class WriteFenceProvidersIntegrationTest {
     @ParameterizedTest
     @ValueSource(strings = {"postgres", "mssql", "oracle"})
+    void patchColumnSignaturesUseRealJdbcBatchesInOneTransaction(String provider) throws Exception {
+        try (Fixture fixture = new Fixture(provider)) {
+            try (var connection = fixture.source.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE " + fixture.table + " ADD untouched_text VARCHAR(100)");
+            }
+            var initial = new ArrayList<QueuedWriteOperation>();
+            for (int i = 1; i <= 4; i++) initial.add(fixture.operation("row" + i, OperationType.UPSERT, 1));
+            fixture.flusher().flushBatch(initial);
+            var counted = new CountingDataSource(fixture.source, fixture.table);
+            WriteBehindFlusher flusher = switch (provider) {
+                case "postgres" -> new PostgresWriteBehindFlusher(counted, fixture.registry);
+                case "mssql" -> new MssqlWriteBehindFlusher(counted, fixture.registry);
+                default -> new OracleWriteBehindFlusher(counted, fixture.registry);
+            };
+            var changes = new ArrayList<QueuedWriteOperation>();
+            for (int i = 1; i <= 4; i++) {
+                var columns = new LinkedHashMap<String, String>();
+                columns.put("id", "row" + i); columns.put("value_text", "changed");
+                if (i > 2) columns.put("untouched_text", "also changed");
+                columns.put("entity_version", "2");
+                changes.add(new QueuedWriteOperation(OperationType.PATCH, "WriteFenceFixture", fixture.table,
+                        fixture.table, "", "id", "entity_version", null, "row" + i, columns, 2, Instant.EPOCH));
+            }
+            flusher.flushBatch(changes);
+            assertThat(counted.adds.get()).isEqualTo(4);
+            assertThat(counted.batches.get()).isEqualTo(2);
+            assertThat(counted.singles.get()).isZero();
+            assertThat(counted.commits.get()).isEqualTo(1);
+            for (int i = 1; i <= 4; i++) assertThat(fixture.version("row" + i)).isEqualTo(2);
+        }
+    }
+
+    private static final class CountingDataSource implements javax.sql.DataSource {
+        private final javax.sql.DataSource delegate;
+        private final String table;
+        final java.util.concurrent.atomic.AtomicInteger adds = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger batches = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger singles = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger commits = new java.util.concurrent.atomic.AtomicInteger();
+        CountingDataSource(javax.sql.DataSource delegate, String table) { this.delegate = delegate; this.table = table; }
+        public java.sql.Connection getConnection() throws SQLException { return wrap(delegate.getConnection()); }
+        public java.sql.Connection getConnection(String user, String password) throws SQLException { return wrap(delegate.getConnection(user, password)); }
+        private java.sql.Connection wrap(java.sql.Connection connection) {
+            return (java.sql.Connection) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{java.sql.Connection.class}, (proxy, method, args) -> {
+                if (method.getName().equals("commit")) commits.incrementAndGet();
+                Object result = invoke(connection, method, args);
+                if (method.getName().equals("prepareStatement") && args[0] instanceof String sql
+                        && sql.startsWith("UPDATE " + table + " SET ") && result instanceof java.sql.PreparedStatement statement)
+                    return java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{java.sql.PreparedStatement.class}, (p, call, params) -> {
+                        switch (call.getName()) { case "addBatch" -> adds.incrementAndGet(); case "executeBatch" -> batches.incrementAndGet(); case "executeUpdate" -> singles.incrementAndGet(); default -> {} }
+                        return invoke(statement, call, params);
+                    });
+                return result;
+            });
+        }
+        private static Object invoke(Object target, java.lang.reflect.Method method, Object[] args) throws Throwable {
+            try { return method.invoke(target, args); } catch (java.lang.reflect.InvocationTargetException failure) { throw failure.getCause(); }
+        }
+        public java.io.PrintWriter getLogWriter() throws SQLException { return delegate.getLogWriter(); }
+        public void setLogWriter(java.io.PrintWriter writer) throws SQLException { delegate.setLogWriter(writer); }
+        public void setLoginTimeout(int seconds) throws SQLException { delegate.setLoginTimeout(seconds); }
+        public int getLoginTimeout() throws SQLException { return delegate.getLoginTimeout(); }
+        public java.util.logging.Logger getParentLogger() throws java.sql.SQLFeatureNotSupportedException { return delegate.getParentLogger(); }
+        public <T> T unwrap(Class<T> type) throws SQLException { return delegate.unwrap(type); }
+        public boolean isWrapperFor(Class<?> type) throws SQLException { return delegate.isWrapperFor(type); }
+    }
+    @ParameterizedTest
+    @ValueSource(strings = {"postgres", "mssql", "oracle"})
     void patchesPreserveOtherColumnsRejectGapsAndNeverResurrectDeletes(String provider) throws Exception {
         try (Fixture fixture = new Fixture(provider)) {
             try (var connection = fixture.source.getConnection(); var statement = connection.createStatement()) {

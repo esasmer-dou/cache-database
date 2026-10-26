@@ -81,6 +81,17 @@ class RedisClusterOperationsTest {
                     found.addAll(result.getResult());
                 } while (!cursor.equals("0"));
                 assertEquals(new HashSet<>(keys), found);
+                String ordered = prefix + ":{alpha}:sorted";
+                String entity = prefix + ":{alpha}:entity:1";
+                String a = prefix + ":{alpha}:members", b = prefix + ":{beta}:members";
+                try {
+                    redis.commands().zadd(ordered, 1, "1"); redis.commands().set(entity, "payload");
+                    assertEquals(List.of("payload"), redis.zrangeWithPayloads(ordered, prefix + ":{alpha}:tomb:",
+                            prefix + ":{alpha}:entity:", true, 0, 1).orElseThrow());
+                    assertTrue(redis.zrangeWithPayloads(ordered, prefix + ":{beta}:tomb:", prefix + ":{alpha}:entity:", true, 0, 1).isEmpty());
+                    redis.commands().sadd(a, "1", "2"); redis.commands().sadd(b, "2", "3");
+                    assertEquals(Map.of(a, Set.of("1", "2"), b, Set.of("2", "3")), redis.smembersBatch(List.of(a, b), 10));
+                } finally { redis.delete(ordered, entity, a, b); }
             } finally {
                 for (String key : keys) redis.commands().unlink(key);
             }
