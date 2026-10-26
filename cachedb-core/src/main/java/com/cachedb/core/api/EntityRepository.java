@@ -42,12 +42,20 @@ public interface EntityRepository<T, ID> {
     default long count(QuerySpec spec) {
         return aggregate(com.reactor.cachedb.core.query.AggregateSpec.count(spec == null ? null : spec.rootGroup())).count();
     }
+    default Map<String, com.reactor.cachedb.core.query.AggregateResult> aggregateBy(String groupByColumn,
+            com.reactor.cachedb.core.query.AggregateSpec spec) {
+        throw new UnsupportedOperationException("aggregateBy is not supported by this repository");
+    }
     default com.reactor.cachedb.core.query.AggregateResult aggregate(com.reactor.cachedb.core.query.AggregateSpec spec) {
         var rows = query(QuerySpec.where(spec.filter()).limitTo(QuerySpec.MAX_LIMIT));
         if (rows.size() == QuerySpec.MAX_LIMIT) throw new IllegalStateException("Aggregate may exceed bounded fallback capacity");
         var accumulator = new com.reactor.cachedb.core.query.AggregateResult.Accumulator();
-        for (T row : rows) accumulator.add(spec.function() == com.reactor.cachedb.core.query.AggregateFunction.COUNT
-                ? null : aggregateFieldValue(row, spec.fieldName()));
+        boolean count = spec.function() == com.reactor.cachedb.core.query.AggregateFunction.COUNT;
+        boolean field = spec.fieldName() != null && !spec.fieldName().isBlank() && !spec.fieldName().equals("*");
+        for (T row : rows) {
+            Object value = field ? aggregateFieldValue(row, spec.fieldName()) : null;
+            if (!count || !field || value != null) accumulator.add(count ? null : value);
+        }
         return accumulator.result();
     }
     /** Custom repositories can supply explicit field extraction for the bounded fallback. */

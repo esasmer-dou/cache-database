@@ -48,6 +48,19 @@ import redis.clients.jedis.params.SetParams;
 import redis.clients.jedis.resps.Tuple;
 
 public final class RedisQueryIndexManager<T, ID> {
+    static final String PROJECTION_TENANT_MARKER = "$cachedb:projection-tenant";
+
+    private String projectionOwnerNamespace() {
+        return metadata instanceof ProjectionEntityMetadata<?,?> projection ? projection.tenantOwnerNamespace() : null;
+    }
+
+    List<String> projectionTenantCandidates(String tenant) {
+        if (projectionOwnerNamespace() == null) throw new IllegalStateException("Projection has no tenant ownership contract");
+        maybeRecoverDegradedIndexes(classifyQueryClasses(QuerySpec.allOf()));
+        if (indexFeaturesDegraded()) throw new IllegalStateException("Tenant projection indexes require recovery");
+        String key = keyStrategy.indexExactKey(metadata.redisNamespace(),PROJECTION_TENANT_MARKER,encodeKeyPart(tenant));
+        return new ArrayList<>(jedis.smembersBatch(List.of(key),config.maxMaterializedCandidateIds()).get(key));
+    }
 
     private static final String NULL_SENTINEL = "__NULL__";
 
@@ -114,6 +127,8 @@ public final class RedisQueryIndexManager<T, ID> {
             if (!indexedColumns.contains(partition) || !indexedColumns.containsAll(sorts))
                 throw new IllegalArgumentException("Partitioned index columns must be present in indexedColumns");
         });
+        RedisCompositeIndexes.validate(metadata);
+        if (metadata.columns().contains(PROJECTION_TENANT_MARKER)) throw new IllegalArgumentException("Reserved projection tenant metadata column");
     }
 
     public void reindex(T entity) {
@@ -157,6 +172,7 @@ public final class RedisQueryIndexManager<T, ID> {
             reindexBatch(entities);
             return;
         }
+        if (projectionOwnerNamespace() != null) { reindexBatch(entities); return; }
         try {
             reindexProjectionWarmEntities(entities);
         } catch (RuntimeException exception) {
@@ -240,10 +256,12 @@ public final class RedisQueryIndexManager<T, ID> {
         List<ID> ids = new ArrayList<>(unique.keySet());
         List<Map<String, Object>> columns = new ArrayList<>(ids.size());
         List<Response<Map<String, String>>> responses = new ArrayList<>(ids.size());
+        List<Response<String>> owners = new ArrayList<>(ids.size());
         try (AbstractPipeline read = jedis.pipeline()) {
             for (ID id : ids) {
                 columns.add(precomputedColumns == null ? codec.toColumns(unique.get(id)) : precomputedColumns.get(id));
                 responses.add(read.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
+                if (projectionOwnerNamespace() != null) owners.add(read.get(keyStrategy.versionKey(projectionOwnerNamespace(),id) + ":tenant"));
             }
             read.sync();
         }
@@ -252,6 +270,12 @@ public final class RedisQueryIndexManager<T, ID> {
         for (int i = 0; i < ids.size(); i++) {
             Map<String, String> next = new LinkedHashMap<>();
             for (String column : indexedColumns) next.put(column, serializeValue(columns.get(i).get(column)));
+            RedisCompositeIndexes.append(keyStrategy, metadata, columns.get(i), next);
+            if (!owners.isEmpty()) {
+                String owner = owners.get(i).get();
+                if (owner == null || owner.isBlank() || owner.length() > 256) throw new IllegalStateException("Projection requires established base tenant ownership");
+                next.put(PROJECTION_TENANT_MARKER,owner);
+            }
             var plan = RedisIndexMutationPlanner.plan(responses.get(i).get(), next, !respectShedding);
             plans.add(plan);
             changed |= !plan.unchanged();
@@ -339,6 +363,12 @@ public final class RedisQueryIndexManager<T, ID> {
         try (AbstractPipeline pipeline = jedis.pipeline()) {
             if (metaValues != null && !metaValues.isEmpty()) {
                 for (Map.Entry<String, String> entry : metaValues.entrySet()) {
+                    if (entry.getKey().equals(PROJECTION_TENANT_MARKER)) {
+                        pipeline.srem(keyStrategy.indexExactKey(metadata.redisNamespace(),PROJECTION_TENANT_MARKER,encodeKeyPart(entry.getValue())),idValue); continue;
+                    }
+                    if (entry.getKey().startsWith(RedisCompositeIndexes.MARKER)) {
+                        pipeline.srem(entry.getValue(), idValue); continue;
+                    }
                     if (config.exactIndexEnabled()) {
                         pipeline.srem(
                                 keyStrategy.indexExactKey(
@@ -385,6 +415,10 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public boolean hasIndexedColumn(String column) { return indexedColumns.contains(column); }
+
+    void validateCompositeValues(Map<String, Object> columns) {
+        if (!metadata.compositeExactIndexes().isEmpty()) RedisCompositeIndexes.append(keyStrategy,metadata,columns,new LinkedHashMap<>());
+    }
 
     private void rejectStrictRouteFullScan(String reason) {
         RouteCacheContract contract = RouteCacheContext.currentContract();
@@ -1491,6 +1525,28 @@ public final class RedisQueryIndexManager<T, ID> {
 
     private Resolution resolveAndGroup(QueryGroup group) {
         boolean fullyIndexed = fullyIndexed(group);
+        if (config.exactIndexEnabled() && !metadata.compositeExactIndexes().isEmpty()) {
+            var equals = new LinkedHashMap<String, Object>();
+            for (var node : group.nodes()) if (node instanceof QueryFilter filter && filter.operator() == QueryOperator.EQ && filter.value() != null)
+                equals.putIfAbsent(filter.column(), filter.value());
+            var best = metadata.compositeExactIndexes().entrySet().stream()
+                    .filter(index -> equals.keySet().containsAll(index.getValue()))
+                    .sorted(java.util.Comparator.<Map.Entry<String, List<String>>>comparingInt(index -> -index.getValue().size()).thenComparing(Map.Entry::getKey))
+                    .findFirst();
+            if (best.isPresent()) {
+                var index = best.get();
+                String key = RedisCompositeIndexes.key(keyStrategy, metadata.redisNamespace(), index.getKey(), index.getValue(), equals);
+                Set<String> candidates = jedis.smembersBatch(List.of(key), config.maxMaterializedCandidateIds()).get(key);
+                for (var node : group.nodes()) {
+                    if (candidates.isEmpty()) break;
+                    if (node instanceof QueryFilter filter && filter.operator() == QueryOperator.EQ
+                            && index.getValue().contains(filter.column()) && java.util.Objects.equals(equals.get(filter.column()), filter.value())) continue;
+                    var resolution = resolveIndexedCandidates(node);
+                    if (resolution.candidates() != null) candidates = intersect(candidates, resolution.candidates());
+                }
+                return new Resolution(candidates, fullyIndexed);
+            }
+        }
         ArrayList<QueryNode> orderedChildren = new ArrayList<>(group.nodes());
         orderedChildren.sort(java.util.Comparator.comparingLong(this::estimateNodeCardinality));
         Set<String> candidates = null;

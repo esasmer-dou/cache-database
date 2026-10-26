@@ -100,7 +100,7 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
             if (settings != null) settings.apply(connection);
             if (isolation != null) connection.setTransactionIsolation(isolation);
             boolean hasPatch = operations.stream().anyMatch(op -> op.type() == com.reactor.cachedb.core.model.OperationType.PATCH);
-            writer.write(writeFence.filter(connection, operations, !hasPatch && coalesceWrites(operations)));
+            writer.write(compactIndependentWrites(writeFence.filter(connection, operations, !hasPatch && coalesceWrites(operations))));
             connection.commit();
         } catch (SQLException | RuntimeException | Error failure) {
             primary = failure;
@@ -150,6 +150,45 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
             if (selected == null || !selected.effectivePersistenceSemantics().stateCompactionEnabled()) return false;
         }
         return true;
+    }
+
+    private record Identity(String table, String id) {}
+    private record Shape(Object type, String table, String entity, String id, String version, String deleted, List<String> columns) {}
+
+    /** Linear bounded planning. Caller must establish independence across different physical keys. */
+    protected static List<List<QueuedWriteOperation>> planOrderPreservingRuns(List<QueuedWriteOperation> operations) {
+        if (operations.size() > 10_000) throw new IllegalArgumentException("Write planning limit exceeded: max 10000");
+        var runs = new ArrayList<List<QueuedWriteOperation>>();
+        var open = new java.util.HashMap<Shape, Integer>();
+        var last = new java.util.HashMap<Identity, Integer>();
+        int barrier = -1;
+        for (var operation : operations) {
+            Objects.requireNonNull(operation);
+            if (operation.tableName() == null || operation.id() == null) {
+                runs.add(new ArrayList<>(List.of(operation))); barrier = runs.size() - 1; open.clear(); continue;
+            }
+            var identity = new Identity(operation.tableName(), String.valueOf(operation.id()));
+            var shape = new Shape(operation.type(), operation.tableName(), operation.entityName(), operation.idColumn(),
+                    operation.versionColumn(), operation.deletedColumn(), List.copyOf(operation.columns().keySet()));
+            int minimum = Math.max(barrier, last.getOrDefault(identity, -1));
+            Integer index = open.get(shape);
+            if (index == null || index <= minimum) {
+                index = runs.size(); runs.add(new ArrayList<>()); open.put(shape, index);
+            }
+            runs.get(index).add(operation); last.put(identity, index);
+        }
+        return runs.stream().map(List::copyOf).toList();
+    }
+
+    private List<QueuedWriteOperation> compactIndependentWrites(List<QueuedWriteOperation> operations) {
+        if (entityRegistry == null || operations.size() < 2) return operations;
+        for (var operation : operations) {
+            var binding = entityRegistry.find(operation.entityName());
+            if (binding.isEmpty() || !binding.get().metadata().independentWriteReordering()) return operations;
+        }
+        var result = new ArrayList<QueuedWriteOperation>(operations.size());
+        for (var run : planOrderPreservingRuns(operations)) result.addAll(run);
+        return result;
     }
 
     protected final void patch(Connection connection, QueuedWriteOperation operation) throws SQLException {

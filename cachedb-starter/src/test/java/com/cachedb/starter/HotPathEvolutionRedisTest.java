@@ -57,9 +57,19 @@ class HotPathEvolutionRedisTest {
             int before = decodes.get();
             for (int i = 0; i < 100; i++) assertSame(first, repository.findById(1L).orElseThrow());
             assertEquals(before, decodes.get());
+            int reads = fixture.reads.get();
+            assertSame(first, repository.findAll(java.util.Arrays.asList(1L, null, 1L)).get(0));
+            assertEquals(reads, fixture.reads.get()); assertEquals(before, decodes.get());
+            repository.save(new ImmutableRow(2L, "Ankara"));
+            var mixed = repository.findAll(List.of(2L, 1L));
+            assertEquals(List.of(2L, 1L), mixed.stream().map(ImmutableRow::id).toList());
+            assertSame(first, mixed.get(1));
+            reads = fixture.reads.get(); before = decodes.get();
+            assertEquals(mixed, repository.findAll(List.of(2L, 1L)));
+            assertEquals(reads, fixture.reads.get()); assertEquals(before, decodes.get());
         }
     }
-    @Test void tenantScopeProtectsIdsMutationsQueriesCountsAndAtomicFunctionBoundary() {
+    @Test void tenantScopeProtectsIdsMutationsQueriesCountsAndAtomicFunctionBoundary() throws Exception {
         EntityMetadata<TenantRow, Long> metadata = new EntityMetadata<>() {
             public String entityName() { return "TenantRow"; }
             public String tableName() { return "tenant_rows"; }
@@ -77,6 +87,7 @@ class HotPathEvolutionRedisTest {
             public String toRedisValue(TenantRow row) { return LengthPrefixedPayloadCodec.encode(Map.of("id", row.id().toString(), "tenant", row.tenant(), "status", row.status(), "amount", Long.toString(row.amount()))); }
             public TenantRow fromRedisValue(String value) { var c = LengthPrefixedPayloadCodec.decode(value); return new TenantRow(Long.valueOf(c.get("id")), c.get("tenant"), c.get("status"), Long.parseLong(c.get("amount"))); }
             public Map<String, Object> toColumns(TenantRow row) { return Map.of("id", row.id(), "tenant", row.tenant(), "status", row.status(), "amount", row.amount()); }
+            public TenantRow fromColumns(Map<String,Object> columns) { return new TenantRow((Long) columns.get("id"), (String) columns.get("tenant"), (String) columns.get("status"), ((Number) columns.get("amount")).longValue()); }
         };
         try (var fixture = new Fixture(CachePolicy.defaults(), new Source())) {
             class TenantSource implements EntityByIdLoader<TenantRow, Long>, EntityOwnershipLoader<Long> {
@@ -90,9 +101,14 @@ class HotPathEvolutionRedisTest {
                 }
             }
             var source = new TenantSource();
-            fixture.database.register(metadata, codec, CachePolicy.defaults(), null, null, source, null);
-            var repository = fixture.database.repository(metadata, codec);
+            var near = new NearCachePolicy(64,10,2 * 1024 * 1024);
+            var tenantPolicy = CachePolicy.builder().hotEntityLimit(5000).nearCachePolicy(near).build();
+            fixture.database.register(metadata, codec, tenantPolicy, null, null, source, null);
+            var repository = fixture.database.repository(metadata, codec, tenantPolicy);
             assertThrows(com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException.class, () -> repository.query(QuerySpec.allOf()));
+            assertThrows(IllegalStateException.class, () -> repository.aggregateBy("tenant", AggregateSpec.count(null)));
+            assertThrows(IllegalStateException.class, () -> repository.queryPartitions(
+                    PartitionedQuerySpec.top("status", List.of("OPEN"), 2, QuerySort.desc("amount"))));
             assertThrows(com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException.class, () -> repository.save(new TenantRow(3L, "a", "OPEN", 1)));
             try (var scope = com.reactor.cachedb.core.tenant.CacheTenantContext.withTenant("a")) { repository.save(new TenantRow(1L, "a", "OPEN", 5)); }
             try (var scope = com.reactor.cachedb.core.tenant.CacheTenantContext.withTenant("b")) { repository.save(new TenantRow(2L, "b", "OPEN", 9)); }
@@ -102,6 +118,11 @@ class HotPathEvolutionRedisTest {
                         "An unscoped projection must not escape a temporary administrative scope");
             }
             try (var scope = com.reactor.cachedb.core.tenant.CacheTenantContext.withTenant("a")) {
+                awaitNear(fixture,repository,1L);
+                try (var other = com.reactor.cachedb.core.tenant.CacheTenantContext.withTenant("b")) { awaitNear(fixture,repository,2L); }
+                int nearReads = fixture.reads.get();
+                assertThrows(com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException.class, () -> repository.findAll(List.of(2L)));
+                assertEquals(nearReads,fixture.reads.get(),"Tenant mismatch in L1 must fail before a Redis fetch");
                 assertEquals(1L, repository.findById(1L).orElseThrow().id());
                 assertThrows(com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException.class, () -> repository.findById(2L));
                 assertThrows(com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException.class, () -> repository.findAll(List.of(1L, 2L)));
@@ -131,11 +152,70 @@ class HotPathEvolutionRedisTest {
                 assertThrows(com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException.class,
                         () -> repository.saveAll(List.of(new TenantRow(4L, "a", "OPEN", 1), new TenantRow(2L, "a", "OPEN", 1))));
                 assertFalse(fixture.redis.exists(fixture.keys.entityKey("tenant_rows", 4L)));
+                var freshOwnership = fixture.database.repository(metadata,codec,CachePolicy.builder().hotEntityLimit(5001).nearCachePolicy(near).build());
+                int ownerGets = fixture.ownerGets.get();
+                freshOwnership.patchWithReceipt(1L,Map.of("amount",6L));
+                assertEquals(ownerGets,fixture.ownerGets.get());
+                assertEquals(4,fixture.lastMget.size(),"Initial PATCH must fold ownership into its state MGET");
+                freshOwnership.patchWithReceipt(1L,Map.of("amount",5L));
+                assertEquals(ownerGets,fixture.ownerGets.get());
+                assertEquals(3,fixture.lastMget.size(),"Verified owner must not need another GET or MGET column");
                 int calls = source.ownershipCalls.get();
                 var batch = new ArrayList<TenantRow>();
                 for (long id = 100; id < 1100; id++) batch.add(new TenantRow(id, "a", "OPEN", 1));
                 assertEquals(1000, repository.saveAll(batch).size());
                 assertEquals(calls + 2, source.ownershipCalls.get(), "1000 unknown owners must use two bounded source calls, not N+1");
+                var partitioned = repository.queryPartitions(PartitionedQuerySpec.top("status", List.of("OPEN"), 2, QuerySort.desc("amount")));
+                assertEquals(2, partitioned.get("OPEN").size());
+                assertTrue(partitioned.get("OPEN").stream().allMatch(row -> row.tenant().equals("a")));
+                assertEquals(1001, repository.aggregateBy("tenant", AggregateSpec.count(null)).get("a").count());
+                assertThrows(IllegalStateException.class, () -> repository.aggregateBy("tenant", AggregateSpec.count(QueryFilter.eq("tenant", "b"))));
+                assertThrows(IllegalStateException.class, () -> repository.queryPartitions(
+                        PartitionedQuerySpec.top("tenant", List.of("b"), 2, QuerySort.desc("amount"))));
+                var atomic = fixture.database.inTransaction(tx -> tx.put(new TenantRow(2001L, "a", "OPEN", 3)));
+                assertEquals(1, atomic.versions().size());
+                assertEquals("a", fixture.redis.get(fixture.keys.versionKey("tenant_rows", 2001L) + ":tenant"));
+                String versionBefore = fixture.redis.get(fixture.keys.versionKey("tenant_rows", 1L));
+                assertThrows(IllegalStateException.class, () -> fixture.database.inTransaction(tx -> {
+                    tx.put(new TenantRow(1L, "a", "CLOSED", 1)); tx.delete(TenantRow.class, 2L);
+                }));
+                assertEquals(versionBefore, fixture.redis.get(fixture.keys.versionKey("tenant_rows", 1L)));
+                assertThrows(IllegalStateException.class, () -> fixture.database.inTransaction(tx -> tx.delete(TenantRow.class, 99999L)));
+                String marker = fixture.keys.versionKey("tenant_rows",1L) + ":tenant";
+                fixture.beforeEval = () -> fixture.redis.set(marker,"b");
+                try {
+                    assertThrows(IllegalStateException.class, () -> fixture.database.inTransaction(tx -> {
+                        tx.put(new TenantRow(2002L,"a","OPEN",1)); tx.put(new TenantRow(1L,"a","OPEN",5));
+                    }));
+                    assertFalse(fixture.redis.exists(fixture.keys.entityKey("tenant_rows",2002L)));
+                    assertFalse(fixture.redis.exists(fixture.keys.versionKey("tenant_rows",2002L)));
+                    assertFalse(fixture.redis.exists(fixture.keys.versionKey("tenant_rows",2002L) + ":tenant"));
+                } finally { fixture.beforeEval=null; fixture.redis.set(marker,"a"); }
+                var projectionExtractions = new AtomicInteger();
+                var projection = com.reactor.cachedb.core.projection.EntityProjection.<TenantRow,TenantRow,Long>of("tenant_summary",
+                        new com.reactor.cachedb.core.projection.ProjectionCodec<>() {
+                            public String toRedisValue(TenantRow row) { return codec.toRedisValue(row); }
+                            public TenantRow fromRedisValue(String raw) { return codec.fromRedisValue(raw); }
+                        }, TenantRow::id, metadata.columns(), row -> {
+                            projectionExtractions.incrementAndGet();
+                            return codec.toColumns(row);
+                        }, row -> row);
+                var projected = repository.projected(projection);
+                assertEquals(1L, projected.findById(1L).orElseThrow().id());
+                assertEquals(2001L, projected.findById(2001L).orElseThrow().id());
+                assertThrows(IllegalStateException.class, () -> projected.findById(2L));
+                // Materialize the foreign projection in a legitimate scope, then check pre-window isolation.
+                try (var other = com.reactor.cachedb.core.tenant.CacheTenantContext.withTenant("b")) {
+                    assertEquals(2L, projected.findById(2L).orElseThrow().id());
+                }
+                var foreignCandidates = java.util.stream.IntStream.range(0,10001).mapToObj(i -> "foreign" + i).toArray(String[]::new);
+                fixture.redis.sadd(fixture.keys.indexAllKey("tenant_rows:projection:tenant_summary"),foreignCandidates);
+                var ownPage = projected.query(QuerySpec.allOf().orderBy(QuerySort.desc("amount")).limitTo(1));
+                assertEquals(1, ownPage.size()); assertTrue(ownPage.stream().allMatch(row -> row.tenant().equals("a")));
+                projectionExtractions.set(0);
+                assertEquals(List.of(1L,2001L), projected.query(QuerySpec.allOf().orderBy(QuerySort.desc("amount")).limitTo(10))
+                        .stream().map(TenantRow::id).toList());
+                assertEquals(2, projectionExtractions.get(), "Tenant projection columns must be extracted once per row, not per sort comparison");
             }
         }
     }
@@ -175,12 +255,18 @@ class HotPathEvolutionRedisTest {
         public List<VersionedEntity<Row>> loadVersionedQuery(QuerySpec query) { return List.of(); }
     }
     static final class Fixture implements AutoCloseable {
-        final JedisPooled redis = new JedisPooled("redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1") + ":" + Integer.getInteger("cachedb.snapshot.redis.port", 16383));
+        final AtomicInteger ownerGets = new AtomicInteger();
+        final JedisPooled redis = new JedisPooled("redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1") + ":" + Integer.getInteger("cachedb.snapshot.redis.port", 16383)) {
+            @Override public String get(String key) { if (key.endsWith(":tenant")) ownerGets.incrementAndGet(); return super.get(key); }
+        };
         final Codec codec = new Codec();
         final String prefix;
         final RedisKeyStrategy keys;
         final AtomicInteger reads = new AtomicInteger();
         final AtomicInteger orderedReads = new AtomicInteger();
+        volatile CountDownLatch refreshGate;
+        volatile List<String> lastMget = List.of();
+        volatile Runnable beforeEval;
         final CacheDatabase database;
         final EntityRepository<Row, Long> repository;
         Fixture(CachePolicy policy, Source source) {
@@ -191,7 +277,18 @@ class HotPathEvolutionRedisTest {
             var jdbc = new JdbcDataSource(); jdbc.setURL("jdbc:h2:mem:" + prefix);
             RedisClientOperations client = new RedisClientOperations() {
                 public redis.clients.jedis.UnifiedJedis commands() { return redis; }
-                public List<String> mget(String... keys) { reads.incrementAndGet(); return redis.mget(keys); }
+                public List<String> mget(String... keys) {
+                    lastMget = List.of(keys);
+                    if (Thread.currentThread().getName().equals("cachedb-near-refresh") && refreshGate != null) {
+                        try { if (!refreshGate.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Refresh test gate timed out"); }
+                        catch (InterruptedException stopped) { Thread.currentThread().interrupt(); throw new IllegalStateException(stopped); }
+                    }
+                    reads.incrementAndGet(); return redis.mget(keys);
+                }
+                public Object eval(String script,List<String> keys,List<String> args) {
+                    Runnable callback=beforeEval; beforeEval=null; if (callback!=null) callback.run();
+                    return redis.eval(script,keys,args);
+                }
                 public Optional<List<OrderedPayload>> orderedPayloadWindow(String index, String tomb, String entities,
                         boolean reverse, int offset, int limit) {
                     var result = fetchOrderedPayloadWindow(index, tomb, entities, reverse, offset, limit);
@@ -340,6 +437,14 @@ class HotPathEvolutionRedisTest {
             var result = fixture.repository.aggregate(AggregateSpec.sum("score", null));
             assertEquals(new java.math.BigDecimal("12"), result.sum());
             assertEquals(3, result.count());
+            var facets = fixture.repository.aggregateBy("score", AggregateSpec.count(null));
+            assertEquals(List.of("-2", "7"), List.copyOf(facets.keySet()));
+            assertEquals(1, facets.get("-2").count());
+            assertEquals(2, facets.get("7").count());
+            var filtered = fixture.repository.aggregateBy("score", AggregateSpec.sum("score", QueryFilter.eq("score", 7L)));
+            assertEquals(Set.of("7"), filtered.keySet());
+            assertEquals(new java.math.BigDecimal("14"), filtered.get("7").sum());
+            assertThrows(IllegalArgumentException.class, () -> fixture.repository.aggregateBy("name", AggregateSpec.count(null)));
             assertEquals(reads, fixture.reads.get(), "Index-only aggregates must not call entity MGET");
             assertEquals(1, fixture.repository.count(QuerySpec.where(QueryFilter.eq("name", "a"))));
             fixture.repository.patchWithReceipt(1L, Map.of("score", 8L));
@@ -464,6 +569,65 @@ class HotPathEvolutionRedisTest {
             while (second.repository.findById(1L).isPresent() && System.nanoTime() < deadline) Thread.sleep(2);
             assertTrue(second.repository.findById(1L).isEmpty());
         }
+    }
+
+    @Test void causalTokenBypassesStaleAndUnknownVersionsThenUsesVerifiedL1() throws Exception {
+        var policy = CachePolicy.builder().nearCachePolicy(new NearCachePolicy(32, 10, 65536)).build();
+        try (var fixture = new Fixture(policy, new Source())) {
+            fixture.repository.save(new Row(1L, "old", 1));
+            awaitNear(fixture, 1L);
+            fixture.redis.mset(fixture.keys.entityKey("evolution", 1L), fixture.codec.toRedisValue(new Row(1L, "new", 2)),
+                    fixture.keys.versionKey("evolution", 1L), "2");
+            assertEquals("old", fixture.repository.findById(1L).orElseThrow().name);
+            String token;
+            try (var scope = com.reactor.cachedb.core.causal.CacheCausalContext.withMinVersion("evolution", 1L, 2)) {
+                int before = fixture.reads.get();
+                assertEquals("new", fixture.repository.findById(1L).orElseThrow().name);
+                assertEquals(before + 1, fixture.reads.get());
+                before = fixture.reads.get();
+                assertEquals("new", fixture.repository.findAll(List.of(1L)).get(0).name);
+                assertEquals(before, fixture.reads.get()); token = com.reactor.cachedb.core.causal.CacheCausalContext.encodeToken();
+            }
+            try (var scope = com.reactor.cachedb.core.causal.CacheCausalContext.withToken(token)) {
+                assertEquals("new", fixture.repository.findHotById(1L).optional().orElseThrow().name);
+            }
+            try (var scope = com.reactor.cachedb.core.causal.CacheCausalContext.withMinVersion("evolution", 1L, 3)) {
+                assertThrows(IllegalStateException.class, () -> fixture.repository.findById(1L));
+            }
+            fixture.redis.del(fixture.keys.entityKey("evolution",1L));
+            fixture.redis.set(fixture.keys.versionKey("evolution",1L),"3");
+            try (var scope = com.reactor.cachedb.core.causal.CacheCausalContext.withMinVersion("evolution",1L,3)) {
+                assertThrows(IllegalStateException.class,() -> fixture.repository.findById(1L),"An unavailable causal payload must not fall back to older SQL data");
+            }
+        }
+    }
+    @Test void softExpiredReadReturnsBeforeRedisRefreshAndLaterObservesUpdatedPayload() throws Exception {
+        var policy = CachePolicy.builder().nearCachePolicy(new NearCachePolicy(32, 4, 65536, 1)).build();
+        try (var fixture = new Fixture(policy, new Source())) {
+            fixture.repository.save(new Row(1L, "old", 1)); awaitNear(fixture, 1L);
+            fixture.refreshGate = new CountDownLatch(1);
+            fixture.redis.mset(fixture.keys.entityKey("evolution", 1L), fixture.codec.toRedisValue(new Row(1L, "fresh", 2)),
+                    fixture.keys.versionKey("evolution", 1L), "2");
+            Thread.sleep(1050);
+            try { assertEquals("old", fixture.repository.findById(1L).orElseThrow().name); }
+            finally { fixture.refreshGate.countDown(); }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (!fixture.repository.findById(1L).orElseThrow().name.equals("fresh") && System.nanoTime() < deadline) Thread.sleep(2);
+            assertEquals("fresh", fixture.repository.findById(1L).orElseThrow().name);
+        }
+    }
+    private static void awaitNear(Fixture fixture, Long id) throws Exception {
+        awaitNear(fixture,fixture.repository,id);
+    }
+    private static <T> void awaitNear(Fixture fixture,EntityRepository<T,Long> repository,Long id) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            repository.findById(id).orElseThrow(); int reads = fixture.reads.get();
+            repository.findById(id).orElseThrow();
+            if (reads == fixture.reads.get()) return;
+            Thread.sleep(2);
+        }
+        fail("Near cache did not become available");
     }
 
     @Test void fiveHundredColumnsStoreExactlyThreeIndexMetadataFieldsAndExtractOnce() {

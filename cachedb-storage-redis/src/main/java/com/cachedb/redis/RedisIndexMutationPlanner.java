@@ -12,6 +12,20 @@ final class RedisIndexMutationPlanner {
             Map<String,List<String>> partitions) {
         String namespace = metadata.redisNamespace();
         for (String column : plan.changed()) {
+            if (column.equals(RedisQueryIndexManager.PROJECTION_TENANT_MARKER)) {
+                String prior = plan.prior().get(column), next = plan.next().get(column);
+                if (prior != null) pipeline.srem(keys.indexExactKey(namespace,column,RedisIndexKeySpace.encodeKeyPart(prior)),id);
+                if (next != null) pipeline.sadd(keys.indexExactKey(namespace,column,RedisIndexKeySpace.encodeKeyPart(next)),id);
+                continue;
+            }
+            if (column.startsWith(RedisCompositeIndexes.MARKER)) {
+                if (config.exactIndexEnabled()) {
+                    String prior = plan.prior().get(column), next = plan.next().get(column);
+                    if (prior != null) pipeline.srem(prior, id);
+                    if (next != null) pipeline.sadd(next, id);
+                }
+                continue;
+            }
             if (plan.prior().containsKey(column)) {
                 String old = plan.prior().get(column);
                 if (config.exactIndexEnabled()) pipeline.srem(keys.indexExactKey(namespace,column,RedisIndexKeySpace.encodeKeyPart(old)),id);

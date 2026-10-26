@@ -205,7 +205,7 @@ Align the BOM, processor, starters, workers, and samples at the same version and
 regenerate bindings. Existing constructors and smaller Redis payloads remain
 supported. Drain old workers before enabling PATCH producers: old workers cannot
 decode the new operation kind. The default Redis Function library version advances
-to `0.17.0`; upgrade the library before admitting new producers. Custom function
+to `0.18.0` in the current sources; upgrade the library before admitting new producers. Custom function
 deployments must also use the matching source/version, not bypass drift protection.
 Trace fields are optional for old envelopes. Keep
 the durable fence metadata table and Redis version counters; do not reset them

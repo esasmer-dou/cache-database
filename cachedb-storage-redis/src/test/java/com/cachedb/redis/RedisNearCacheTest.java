@@ -8,6 +8,32 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import redis.clients.jedis.JedisPooled;
 
 class RedisNearCacheTest {
+    @Test void sampledFrequencyProtectsHotKeysDuringBoundedColdScan() {
+        var cache = new RedisNearCacheCoordinator.Store(new NearCachePolicy(64, 10, 1_048_576));
+        var ids = java.util.stream.IntStream.range(0, 10000).mapToObj(i -> "key" + i)
+                .filter(id -> (id.hashCode() & Integer.MAX_VALUE) % 16 == 0).limit(40).toList();
+        for (int i = 0; i < 4; i++) cache.put(ids.get(i), "value", -1, cache.epoch());
+        String hot = ids.get(0);
+        for (int i = 0; i < 12; i++) assertEquals("value", cache.get(hot));
+        for (int i = 4; i < ids.size(); i++) cache.put(ids.get(i), "scan", -1, cache.epoch());
+        assertEquals("value", cache.get(hot));
+        long retained = ids.stream().filter(id -> cache.get(id) != null).count();
+        assertTrue(retained <= 4);
+    }
+    @Test void softTtlVersionAndPolicyBoundsRemainSeparateFromHardExpiry() throws Exception {
+        assertEquals(0, new NearCachePolicy(32, 2, 65536).softTtlSeconds());
+        assertThrows(IllegalArgumentException.class, () -> new NearCachePolicy(32, 2, 65536, -1));
+        assertThrows(IllegalArgumentException.class, () -> new NearCachePolicy(32, 2, 65536, 2));
+        var cache = new RedisNearCacheCoordinator.Store(new NearCachePolicy(32, 3, 65536, 1));
+        cache.put("id", "v2", null, -1, cache.epoch(), 2);
+        assertNull(cache.lookup("id", 3));
+        assertEquals(2, cache.lookup("id", 2).version());
+        cache.put("id", "stale", null, -1, cache.epoch(), 1);
+        assertEquals("v2", cache.get("id"));
+        Thread.sleep(1050);
+        assertTrue(cache.lookup("id", 2).softExpired());
+        assertEquals("v2", cache.get("id"));
+    }
     @Test void evictionFollowsRecentAccessInsteadOfInsertionAndKeepsDecodedReference() {
         var cache = new RedisNearCacheCoordinator.Store(new NearCachePolicy(32, 10, 1_048_576));
         // All three identities hash to the same segment, whose capacity is two.
@@ -38,6 +64,31 @@ class RedisNearCacheTest {
         cache.put("a", "fresh", -2, cache.epoch()); assertNull(cache.get("a"));
         assertThrows(IllegalArgumentException.class, () -> new NearCachePolicy(64_001, 1, 1024));
         assertThrows(IllegalArgumentException.class, () -> new NearCachePolicy(1, 61, 1024));
+    }
+
+    @Test @EnabledIfSystemProperty(named = "cachedb.snapshot.redis", matches = "true")
+    void refreshOverloadNeverBlocksCallersAndReleasesReservations() throws Exception {
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri());
+                var coordinator = new RedisNearCacheCoordinator(JedisPooledOperations.of(redis),new RedisKeyStrategy("refresh-" + UUID.randomUUID()))) {
+            var store = coordinator.register("rows",new NearCachePolicy(32,10,65536,1));
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (!coordinator.connected() && System.nanoTime() < deadline) Thread.sleep(2);
+            assertTrue(coordinator.connected());
+            var gate = new java.util.concurrent.CountDownLatch(1);
+            try {
+                for (int i = 0; i < 1000; i++) coordinator.refresh(store,"id" + i,() -> {
+                    try { gate.await(5,java.util.concurrent.TimeUnit.SECONDS); }
+                    catch (InterruptedException stopped) { Thread.currentThread().interrupt(); }
+                });
+                assertTrue(coordinator.rejectedRefreshes() > 0);
+            } finally { gate.countDown(); }
+            var completed = new java.util.concurrent.CountDownLatch(1);
+            deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (completed.getCount() > 0 && System.nanoTime() < deadline) {
+                coordinator.refresh(store,"retry",completed::countDown); Thread.sleep(2);
+            }
+            assertEquals(0,completed.getCount());
+        }
     }
 
     @Test @EnabledIfSystemProperty(named = "cachedb.snapshot.redis", matches = "true")

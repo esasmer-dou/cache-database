@@ -1132,6 +1132,64 @@ class CacheRepositoryProcessorTest {
         }
     }
 
+    @Test void facetsCompositeMetadataAndSoftTtlAreGeneratedWithoutRuntimeReflection() throws Exception {
+        var result = compile(source("facet/Ticket.java", """
+                package facet; import com.reactor.cachedb.annotations.*;
+                @CacheEntity(table="tickets", indexedColumns={"status","active","amount"}, independentWriteReordering=true)
+                @CacheCompositeIndex(columns={"status","active"})
+                @CacheNearPolicy(maxEntries=32,ttlSeconds=4,maxBytes=65536,softTtlSeconds=1)
+                public record Ticket(@CacheId(column="id") Long id, @CacheColumn("status") String status,
+                    @CacheColumn("active") boolean active, @CacheColumn("amount") java.math.BigDecimal amount) {}
+                """), source("facet/Tickets.java", """
+                package facet; import com.reactor.cachedb.annotations.*;
+                import com.reactor.cachedb.core.query.*;
+                @CacheRepository(entity=Ticket.class)
+                public interface Tickets extends com.reactor.cachedb.core.repository.CacheDbRepository<Ticket,Long> {
+                    @CacheFacet(groupBy="status") java.util.Map<String,Long> totals();
+                    @CacheFacet(groupBy="status",function=AggregateFunction.SUM,field="amount") java.util.Map<String,java.math.BigDecimal> totalsByActive(boolean active);
+                    @CacheFacet(groupBy="status") java.util.Map<String,AggregateResult> findAllByActiveTrue();
+                }
+                """));
+        assertTrue(result.success(), result.diagnosticsText());
+        String binding = Files.readString(result.generated().resolve("facet/TicketCacheBinding.java"));
+        assertTrue(binding.contains("compositeExactIndexes()")); assertTrue(binding.contains("independentWriteReordering()"));
+        assertTrue(binding.contains("65536L, 1"));
+        String repository = Files.readString(result.generated().resolve("facet/TicketsCacheDbImplementation.java"));
+        assertTrue(repository.contains("hotRepository.aggregateBy(")); assertTrue(repository.contains("longValueExact()"));
+        try (var loader = new java.net.URLClassLoader(new java.net.URL[]{result.classes().toUri().toURL()}, getClass().getClassLoader())) {
+            var memory = new com.reactor.cachedb.core.testing.InMemoryCacheDatabase();
+            var impl = loader.loadClass("facet.TicketsCacheDbImplementation");
+            Object instance = impl.getConstructor(com.reactor.cachedb.core.api.CacheSession.class).newInstance(memory);
+            Object row = loader.loadClass("facet.Ticket").getConstructor(Long.class,String.class,boolean.class,java.math.BigDecimal.class)
+                    .newInstance(1L,"OPEN",true,new java.math.BigDecimal("12.50"));
+            @SuppressWarnings("unchecked") var typed = (com.reactor.cachedb.core.repository.CacheDbRepository<Object,Long>) instance;
+            typed.save(row);
+            org.junit.jupiter.api.Assertions.assertEquals(java.util.Map.of("OPEN",1L), impl.getMethod("totals").invoke(instance));
+            org.junit.jupiter.api.Assertions.assertEquals(java.util.Map.of("OPEN",new java.math.BigDecimal("12.50")), impl.getMethod("totalsByActive",boolean.class).invoke(instance,true));
+        }
+    }
+    @Test void invalidCompositeDeclarationsAndUnindexedFacetsFailCompilation() throws Exception {
+        for (String columns : List.of("{\"status\"}", "{\"status\",\"missing\"}", "{\"status\",\"status\"}", "{\"id\",\"status\",\"a\",\"b\",\"c\"}")) {
+            var result = compile(source("bad/Row.java", """
+                    package bad; import com.reactor.cachedb.annotations.*;
+                    @CacheEntity(table="rows") @CacheCompositeIndex(columns=%s)
+                    public record Row(@CacheId(column="id") Long id,@CacheColumn("status") String status) {}
+                    """.formatted(columns)));
+            assertFalse(result.success());
+        }
+        var result = compile(source("bad/Row.java", """
+                package bad; import com.reactor.cachedb.annotations.*;
+                @CacheEntity(table="rows",indexedColumns={"id"})
+                public record Row(@CacheId(column="id") Long id,@CacheColumn("status") String status) {}
+                """), source("bad/Rows.java", """
+                package bad; import com.reactor.cachedb.annotations.*;
+                @CacheRepository(entity=Row.class) public interface Rows extends com.reactor.cachedb.core.repository.CacheDbRepository<Row,Long> {
+                    @CacheFacet(groupBy="status") java.util.Map<String,Long> totals();
+                }
+                """));
+        assertFalse(result.success()); assertTrue(result.diagnosticsText().contains("indexed"));
+    }
+
     private Compilation compile(Source... sources) throws IOException {
         Path sourceRoot = Files.createDirectories(temp.resolve("sources-" + System.nanoTime()));
         Path generated = Files.createDirectories(temp.resolve("generated-" + System.nanoTime()));

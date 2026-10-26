@@ -137,6 +137,21 @@ foreach ($module in $publicJarModules) {
                 }
             }
         }
+        if ([version]$Version -ge [version]'0.18.0' -and $suffix -ne '-javadoc.jar') {
+            $types = switch ($module) {
+                'cachedb-annotations' { @('annotations/CacheFacet', 'annotations/CacheCompositeIndex', 'annotations/CacheCompositeIndexes') }
+                'cachedb-core' { @('core/causal/CacheCausalContext', 'core/query/FacetAccumulator') }
+                'cachedb-storage-redis' { @('redis/RedisCompositeIndexes') }
+                default { @() }
+            }
+            $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }
+            $prefix = if ($suffix -eq '.jar') { 'com/reactor/cachedb' } else { 'com/cachedb' }
+            foreach ($type in $types) {
+                if ($entries -notcontains "$prefix/$type.$extension") {
+                    $invalid.Add("${module}: required 0.18 type is missing: $type.$extension")
+                }
+            }
+        }
         if ($module -eq 'cachedb-json' -and $suffix -ne '-javadoc.jar' -and
             [version]$Version -ge [version]'0.14.0') {
             $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }

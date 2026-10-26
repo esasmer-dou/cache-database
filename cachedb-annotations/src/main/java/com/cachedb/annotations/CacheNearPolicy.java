@@ -9,4 +9,5 @@ public @interface CacheNearPolicy {
     int maxEntries() default 1024;
     int ttlSeconds() default 10;
     long maxBytes() default 4 * 1024 * 1024;
+    int softTtlSeconds() default 0;
 }

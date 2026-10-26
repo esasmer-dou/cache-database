@@ -4,6 +4,15 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.18.0 - 2026-10-27
+
+- Bulk L1 reads fetch only unique misses while preserving result order and duplicates; soft TTL and sampled frequency protection are optional bounded controls.
+- Causal entity tokens require minimum Redis versions and never silently return older SQL data on an unavailable causal payload.
+- Indexed scalar aggregation, declarative facets and generated composite exact indexes retain decimal precision and explicit candidate/byte/group limits.
+- Tenant-aware atomic batches preflight ownership before mutation; partition and projection windows filter ownership before pagination.
+- Mixed JDBC write compaction requires an explicit independent-schema contract; default ordering and same-key causal barriers are preserved.
+- See [configuration and upgrade limits](docs/near-cache-facets-indexes.md) and [acceptance status](docs/releases/v0.18.0.md).
+
 ## 0.17.0 - 2026-10-26
 
 - Grouped JDBC PATCH batching, bounded Redis predicate resolution and access-ordered L1 with immutable record reuse.

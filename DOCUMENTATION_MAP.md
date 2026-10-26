@@ -23,6 +23,9 @@ production tuning should be approached.
 
 ## Pick A Document By Question
 
+For bulk L1 reads, soft TTL, causal tokens, facets and composite indexes, see
+[Near Cache, Facets and Composite Indexes](docs/near-cache-facets-indexes.md).
+
 | Question | Document |
 | --- | --- |
 | What is CacheDB, and what is it not? | [README](README.md) |

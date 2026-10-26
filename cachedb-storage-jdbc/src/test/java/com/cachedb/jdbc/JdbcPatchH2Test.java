@@ -10,6 +10,18 @@ import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
 
 class JdbcPatchH2Test {
+    @Test void independentPlanningCompactsDistinctKeysButNeverCrossesSameKeyBarriers() {
+        var operations = new ArrayList<QueuedWriteOperation>();
+        for (int i = 0; i < 100; i++) operations.add(new QueuedWriteOperation(i % 2 == 0 ? OperationType.PATCH : OperationType.UPSERT,
+                "Row", "rows", "rows", "", "id", "entity_version", null, "id" + i,
+                Map.of("id", "id" + i, "value_text", "value"), 1, Instant.EPOCH));
+        var runs = AbstractJdbcWriteBehindFlusher.planOrderPreservingRuns(operations);
+        assertEquals(2, runs.size()); assertEquals(50, runs.get(0).size()); assertEquals(50, runs.get(1).size());
+        var chain = List.of(operation(OperationType.UPSERT, 1, "a"), operation(OperationType.PATCH, 2, "b"),
+                operation(OperationType.DELETE, 3, "c"), operation(OperationType.PATCH, 4, "d"));
+        assertEquals(chain, AbstractJdbcWriteBehindFlusher.planOrderPreservingRuns(chain).stream().flatMap(List::stream).toList());
+        assertEquals(4, AbstractJdbcWriteBehindFlusher.planOrderPreservingRuns(chain).size());
+    }
     static final class Flusher extends AbstractJdbcWriteBehindFlusher {
         Flusher(JdbcDataSource source) { super(source, null, JdbcWriteFence.Provider.POSTGRES, 5); }
         public WriteFailureDetails classify(Exception failure) { return WriteFailureDetails.unknown(failure); }

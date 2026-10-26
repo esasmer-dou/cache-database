@@ -14,6 +14,10 @@ import java.util.function.UnaryOperator;
  * Primary application-facing repository contract. Hot reads and source reads are deliberately separate.
  */
 public interface CacheDbRepository<T, ID> {
+    default java.util.Map<String, com.reactor.cachedb.core.query.AggregateResult> aggregateBy(String groupByColumn,
+            com.reactor.cachedb.core.query.AggregateSpec spec) {
+        throw new UnsupportedOperationException("aggregateBy requires a generated or explicit repository implementation");
+    }
     HotLookup<T> findHotById(ID id);
 
     Optional<VersionedEntity<T>> findVersionedHotById(ID id);

@@ -12,7 +12,7 @@ public final class InMemoryCacheWriteBatch implements CacheWriteBatch {
             InMemoryEntityRepository<Object, Object> repository,
             Object id,
             String payload,
-            long expected) {}
+            long expected, String tenant) {}
 
     private final InMemoryCacheDatabase database;
     private final String id;
@@ -43,7 +43,7 @@ public final class InMemoryCacheWriteBatch implements CacheWriteBatch {
                         repository.metadata.idAccessor().apply(entity),
                         Objects.requireNonNull(
                                 repository.codec.toRedisValue(entity), "Serialized entity payload"),
-                        expected));
+                        expected, tenant(repository)));
         return this;
     }
 
@@ -55,13 +55,12 @@ public final class InMemoryCacheWriteBatch implements CacheWriteBatch {
                                 (Object) database.registered(type),
                         id,
                         null,
-                        -1));
+                        -1, tenant(database.registered(type))));
         return this;
     }
 
     private void add(Command command) {
-        if (command.repository.metadata.tenantFieldName() != null)
-            throw new IllegalStateException("Tenant entities require ownership-checked repository writes; atomic batch tenant ownership is not supported");
+        command.repository.verifyBatchTenant(command.id, command.payload, command.tenant);
         if (receipt != null || commands.size() >= 100)
             throw new IllegalStateException("Batch committed or exceeds 100 operations");
         Objects.requireNonNull(command.id, "id");
@@ -82,6 +81,15 @@ public final class InMemoryCacheWriteBatch implements CacheWriteBatch {
         bytes = nextBytes;
     }
 
+    private static String tenant(InMemoryEntityRepository<?, ?> repository) {
+        if (repository.metadata.tenantFieldName() == null) return "";
+        String tenant;
+        try { tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(repository.metadata); }
+        catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) { throw new IllegalStateException("Tenant atomic batch requires a scope", denied); }
+        if (tenant == null) throw new IllegalStateException("Tenant atomic batches require an explicit tenant scope");
+        return tenant;
+    }
+
     public CacheWriteBatchReceipt commit() {
         database.lock.lock();
         try {
@@ -89,10 +97,12 @@ public final class InMemoryCacheWriteBatch implements CacheWriteBatch {
             if (commands.isEmpty()) throw new IllegalStateException("Empty batch");
             List<String> signature = new ArrayList<>(commands.size() * 4);
             for (Command command : commands) {
+                command.repository.verifyBatchTenant(command.id, command.payload, command.tenant);
                 signature.add(command.repository.metadata.redisNamespace());
                 signature.add(command.id.toString());
                 signature.add(command.payload);
                 signature.add(Long.toString(command.expected));
+                signature.add(command.tenant);
             }
             var prior = database.batches.get(id);
             if (prior != null) {

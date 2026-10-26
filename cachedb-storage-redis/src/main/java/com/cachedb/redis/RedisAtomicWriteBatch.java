@@ -35,7 +35,7 @@ local count=tonumber(ARGV[2])
 local pos=5
 local items={}
 for i=1,count do
-  local base=3+(i-1)*6
+  local base=3+(i-1)*7
   local current=tonumber(redis.call('GET',KEYS[base+1]) or '0')
   local expected=tonumber(ARGV[pos+2])
   if current >= 9007199254740990 then return redis.error_reply('Entity version exhausted') end
@@ -49,8 +49,15 @@ for i=1,count do
   local limit=tonumber(ARGV[pos+7])
   if limit > 0 and redis.call('ZCARD',KEYS[base+3])+count-limit > 100 then
     return redis.error_reply('Hot set requires explicit reconciliation before this atomic batch') end
-  table.insert(items,{base,ARGV[pos],ARGV[pos+1],ARGV[pos+3],ARGV[pos+4],ARGV[pos+5],ARGV[pos+6],ARGV[pos+7],ARGV[pos+8],ARGV[pos+9]})
-  pos=pos+10
+  local tenant=ARGV[pos+10]
+  if tenant~='' then
+    local owner=redis.call('GET',KEYS[base+6])
+    if (owner and owner~=tenant) or (not owner and ARGV[pos+3]=='DELETE') then
+      return redis.error_reply('ERR TENANT_MISMATCH')
+    end
+  end
+  table.insert(items,{base,ARGV[pos],ARGV[pos+1],ARGV[pos+3],ARGV[pos+4],ARGV[pos+5],ARGV[pos+6],ARGV[pos+7],ARGV[pos+8],ARGV[pos+9],tenant})
+  pos=pos+11
 end
 local views={}
 local viewCount=tonumber(ARGV[pos]) pos=pos+1
@@ -77,6 +84,7 @@ end
 local result={}
 for i,item in ipairs(items) do
   local base=item[1]
+  if item[11]~='' then redis.call('SET',KEYS[base+6],item[11]) end
   local version=redis.call('INCR',KEYS[base+1])
   if item[4] == 'DELETE' then
     redis.call('DEL',KEYS[base])
@@ -134,7 +142,8 @@ return result
             Map<String, Object> admissionColumns,
             Map<String, String> projections,
             OperationType type,
-            long expected) {}
+            long expected,
+            String tenant) {}
 
     private final RedisClientOperations redis;
     private final EntityRegistry registry;
@@ -203,8 +212,7 @@ return result
     private EntityBinding<Object, Object> binding(Class<?> type) {
         for (var binding : registry.all())
             if (binding.metadata().entityType() == type) {
-                if (binding.metadata().tenantFieldName() != null)
-                    throw new IllegalStateException("Tenant entities require ownership-checked repository writes; atomic batch tenant ownership is not yet supported");
+                requireTenant(binding.metadata());
                 return (EntityBinding<Object, Object>) binding;
             }
         throw new IllegalArgumentException("Unregistered entity type: " + type.getName());
@@ -218,6 +226,8 @@ return result
         Objects.requireNonNull(entity, "entity");
         if (expectedVersion < -1) throw new IllegalArgumentException("Invalid expected version");
         var binding = binding(entity.getClass());
+        try { com.reactor.cachedb.core.tenant.TenantAccess.verify(binding.metadata(), entity); }
+        catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) { throw new IllegalStateException("Atomic batch tenant mismatch", denied); }
         Object id =
                 Objects.requireNonNull(
                         binding.metadata().idAccessor().apply(entity), "Entity ID is required");
@@ -233,7 +243,7 @@ return result
                         admission,
                         projectionPayloads(binding, entity, id),
                         OperationType.UPSERT,
-                        expectedVersion));
+                        expectedVersion, requireTenant(binding.metadata())));
         return this;
     }
 
@@ -252,7 +262,7 @@ return result
                         Map.of(),
                         projections,
                         OperationType.DELETE,
-                        -1));
+                        -1, requireTenant(binding.metadata())));
         return this;
     }
 
@@ -263,19 +273,22 @@ return result
             throw new IllegalArgumentException("Atomic PATCH requires a bounded nonempty column set");
         for (String column : updates.keySet()) if (!metadata.columns().contains(column)
                 || column.equals(metadata.idColumn()) || column.equals(metadata.versionColumn())
+                || column.equals(metadata.tenantFieldName())
                 || column.equals(metadata.deletedColumn())) throw new IllegalArgumentException("Invalid PATCH column: " + column);
         var delta = binding.codec().normalizePatchColumns(updates);
         var values = redis.mget(keys.entityKey(metadata.redisNamespace(), id),
                 keys.versionKey(metadata.redisNamespace(), id), keys.tombstoneKey(metadata.redisNamespace(), id));
         if (values.get(0) == null || values.get(1) == null || values.get(2) != null)
             throw new IllegalStateException("Atomic PATCH requires a complete hot, versioned, nondeleted entity");
-        var full = new LinkedHashMap<>(binding.codec().toColumns(binding.codec().fromRedisValue(values.get(0))));
+        Object previous = binding.codec().fromRedisValue(values.get(0));
+        com.reactor.cachedb.core.tenant.TenantAccess.verify(metadata, previous);
+        var full = new LinkedHashMap<>(binding.codec().toColumns(previous));
         full.putAll(delta);
         Object entity = binding.codec().fromColumns(full);
         var columns = new LinkedHashMap<String, String>();
         delta.forEach((column, value) -> columns.put(column, value == null ? null : value.toString()));
         add(new Item(binding, id, binding.codec().toRedisValue(entity), columns, full,
-                projectionPayloads(binding, entity, id), OperationType.PATCH, Long.parseLong(values.get(1))));
+                projectionPayloads(binding, entity, id), OperationType.PATCH, Long.parseLong(values.get(1)), requireTenant(metadata)));
         return this;
     }
 
@@ -293,6 +306,53 @@ return result
         if (!identities.add(identity))
             throw new IllegalArgumentException("Duplicate entity in atomic batch");
         items.add(item);
+    }
+
+    private static String requireTenant(EntityMetadata<?, ?> metadata) {
+        if (metadata.tenantFieldName() == null) return "";
+        String tenant;
+        try { tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata); }
+        catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) {
+            throw new IllegalStateException("Tenant atomic batches require an explicit tenant scope", denied);
+        }
+        if (tenant == null) throw new IllegalStateException("Tenant atomic batches require an explicit tenant scope");
+        return tenant;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void verifyTenantItems() {
+        var unknown = new LinkedHashMap<EntityBinding<Object, Object>, List<Item>>();
+        var ownerKeys = new ArrayList<String>();
+        var tenantItems = new ArrayList<Item>();
+        for (Item item : items) {
+            if (item.tenant.isEmpty()) continue;
+            if (!item.tenant.equals(requireTenant(item.binding.metadata()))) throw new IllegalStateException("Atomic batch tenant scope changed");
+            tenantItems.add(item);
+            ownerKeys.add(keys.versionKey(item.binding.metadata().redisNamespace(), item.id) + ":tenant");
+        }
+        if (tenantItems.isEmpty()) return;
+        var owners = redis.mget(ownerKeys.toArray(String[]::new));
+        for (int i = 0; i < tenantItems.size(); i++) {
+            var item = tenantItems.get(i); String owner = owners.get(i);
+            if (owner != null && !owner.equals(item.tenant) || owner == null && item.type == OperationType.DELETE)
+                throw new IllegalStateException("Atomic batch tenant mismatch");
+            if (owner == null) unknown.computeIfAbsent(item.binding, ignored -> new ArrayList<>()).add(item);
+        }
+        for (var group : unknown.entrySet()) {
+            if (!(group.getKey().byIdLoader() instanceof com.reactor.cachedb.core.page.EntityOwnershipLoader<?> loader))
+                throw new IllegalStateException("Tenant batch bootstrap requires a complete EntityOwnershipLoader");
+            var ids = group.getValue().stream().map(Item::id).toList();
+            Map<Object, String> source;
+            try (var admin = com.reactor.cachedb.core.tenant.CacheTenantContext.administrative()) {
+                source = ((com.reactor.cachedb.core.page.EntityOwnershipLoader<Object>) loader).loadTenantOwners(ids);
+            }
+            if (source == null || !new HashSet<>(ids).containsAll(source.keySet())) throw new IllegalStateException("Invalid source ownership result");
+            for (Item item : group.getValue()) {
+                String owner = source.get(item.id);
+                if (source.containsKey(item.id) && !item.tenant.equals(owner))
+                    throw new IllegalStateException("Atomic batch source tenant mismatch");
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -321,6 +381,7 @@ return result
             throw new IllegalStateException("Empty or committed batch");
         if (!config.enabled())
             throw new IllegalStateException("Atomic batch requires write-behind");
+        verifyTenantItems();
         if (producer != null) producer.applyBackpressure();
         List<String> redisKeys = new ArrayList<>();
         String batchStream = keys.writeStreamKey(config.activeStreamKey(), items.get(0).binding.metadata().redisNamespace());
@@ -363,7 +424,7 @@ return result
                             keys.versionKey(ns, item.id),
                             keys.tombstoneKey(ns, item.id),
                             keys.hotSetKey(ns),
-                            keys.indexDegradedKey(ns), keys.indexAllKey(ns)));
+                            keys.indexDegradedKey(ns), keys.indexAllKey(ns), keys.versionKey(ns, item.id) + ":tenant"));
             var policy =
                     producer == null
                             ? item.binding.cachePolicy()
@@ -391,7 +452,7 @@ return result
                             Integer.toString(policy.hotEntityLimit()),
                             payloadKey.substring(
                                     0, payloadKey.length() - item.id.toString().length()),
-                            queryIndexesEnabled || !metadata.partitionedSortIndexes().isEmpty() ? "1" : "0"));
+                            queryIndexesEnabled || !metadata.partitionedSortIndexes().isEmpty() ? "1" : "0", item.tenant));
             for (var view : item.projections.entrySet()) {
                 String viewNamespace = ns + ":projection:" + view.getKey();
                 int base = redisKeys.size() + 1;
@@ -446,8 +507,8 @@ return result
         List<String> projectionKeys = new ArrayList<>();
         int cursor = 2;
         for (var item : items) {
-            fixedKeys.addAll(redisKeys.subList(cursor, cursor + 6));
-            cursor += 6;
+            fixedKeys.addAll(redisKeys.subList(cursor, cursor + 7));
+            cursor += 7;
             int length = item.projections.size() * 4;
             projectionKeys.addAll(redisKeys.subList(cursor, cursor + length));
             cursor += length;
@@ -455,7 +516,7 @@ return result
         fixedKeys.addAll(projectionKeys);
         redisKeys = fixedKeys;
         for (int i = 0; i < viewArguments.size(); i += 6)
-            viewArguments.set(i, Integer.toString(3 + items.size() * 6 + (i / 6) * 4));
+            viewArguments.set(i, Integer.toString(3 + items.size() * 7 + (i / 6) * 4));
         arguments.add(Integer.toString(viewCount));
         arguments.addAll(viewArguments);
         if (fields.size() > 2000)
@@ -475,7 +536,13 @@ return result
                 throw new IllegalArgumentException("Atomic write batch across different Redis Cluster slots requires a shared hash-tag scope", crossSlot);
             }
         }
-        var reply = (List<?>) redis.eval(APPLY, redisKeys, arguments);
+        List<?> reply;
+        try { reply = (List<?>) redis.eval(APPLY, redisKeys, arguments); }
+        catch (redis.clients.jedis.exceptions.JedisDataException denied) {
+            if (denied.getMessage() != null && denied.getMessage().contains("TENANT_MISMATCH"))
+                throw new IllegalStateException("Atomic batch tenant mismatch", denied);
+            throw denied;
+        }
         List<Long> versions = new ArrayList<>();
         for (int i = 1; i < reply.size(); i++)
             versions.add(Long.parseLong(reply.get(i).toString()));

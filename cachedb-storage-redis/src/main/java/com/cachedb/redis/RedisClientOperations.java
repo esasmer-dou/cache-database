@@ -40,6 +40,108 @@ public interface RedisClientOperations extends AutoCloseable {
         return commands().mget(keys);
     }
 
+    /** Read-only admission before materializing payload replies, including a guarded multi-slot path. */
+    default List<String> boundedMget(List<String> keys, long maxBytes) {
+        if (keys.size() > 512 || maxBytes < 1 || maxBytes > 16L * 1024 * 1024)
+            throw new IllegalArgumentException("Bounded read supports 512 keys and at most 16 MiB");
+        if (keys.isEmpty()) return List.of();
+        long keyBytes = 0;
+        for (String key : keys) {
+            if (key == null || key.length() > 16_384) throw new IllegalArgumentException("Invalid bounded read key");
+            keyBytes += 2L * key.length();
+            if (keyBytes > 16L * 1024 * 1024) throw new IllegalArgumentException("Bounded key byte budget exceeded");
+        }
+        boolean sameSlot = true;
+        try { requireSameSlot(keys); } catch (IllegalArgumentException crossSlot) { sameSlot = false; }
+        if (sameSlot) {
+            Object raw = eval("""
+                    local bytes=0
+                    for _,key in ipairs(KEYS) do
+                      bytes=bytes+redis.call('STRLEN',key)
+                      if bytes>tonumber(ARGV[1]) then return redis.error_reply('Payload read byte budget exceeded') end
+                    end
+                    return redis.call('MGET',unpack(KEYS))
+                    """, keys, List.of(Long.toString(maxBytes)));
+            var values = new ArrayList<String>(keys.size());
+            for (Object value : (List<?>) raw) values.add(value == null ? null : value.toString());
+            return values;
+        }
+        var lengths = new ArrayList<redis.clients.jedis.Response<Long>>(keys.size());
+        try (var pipeline = pipeline()) {
+            for (String key : keys) lengths.add(pipeline.strlen(key));
+            pipeline.sync();
+        }
+        long total = 0;
+        for (var length : lengths) {
+            total = Math.addExact(total,length.get());
+            if (total > maxBytes) throw new IllegalStateException("Payload read byte budget exceeded");
+        }
+        var replies = new ArrayList<redis.clients.jedis.Response<Object>>(keys.size());
+        try (var pipeline = pipeline()) {
+            for (int i = 0; i < keys.size(); i++) replies.add(pipeline.eval("""
+                    if redis.call('STRLEN',KEYS[1])>tonumber(ARGV[1]) then return redis.error_reply('Payload grew during bounded read') end
+                    return redis.call('GET',KEYS[1])
+                    """, List.of(keys.get(i)),List.of(Long.toString(lengths.get(i).get()))));
+            pipeline.sync();
+        }
+        var values = new ArrayList<String>(keys.size());
+        for (var reply : replies) { Object value = reply.get(); values.add(value == null ? null : value.toString()); }
+        return values;
+    }
+
+    record IndexAggregateBatch(long count, List<String> values, List<Integer> nullCandidates) {
+        public IndexAggregateBatch(long count, List<String> values) { this(count, values, List.of()); }
+    }
+
+    /** One read-only server call per bounded common-slot batch; numeric arithmetic stays in Java. */
+    default Optional<IndexAggregateBatch> aggregateIndexBatch(List<String> entities, List<String> tombstones,
+            List<String> indexMetadata, String field, boolean countOnly) {
+        int size = entities.size();
+        if (size < 1 || size > 512 || tombstones.size() != size || indexMetadata.size() != size)
+            throw new IllegalArgumentException("Index aggregation requires 1..512 aligned identities");
+        if (field != null && field.length() > 4096) throw new IllegalArgumentException("Aggregate field exceeds 4096 characters");
+        boolean hasField = field != null && !field.isBlank() && !field.equals("*");
+        if (!countOnly && !hasField) throw new IllegalArgumentException("Numeric aggregation requires a field");
+        var keys = new ArrayList<String>(size * 3);
+        keys.addAll(entities); keys.addAll(tombstones); if (hasField) keys.addAll(indexMetadata);
+        long keyBytes = 0;
+        for (String key : keys) {
+            if (key == null || key.length() > 16_384) throw new IllegalArgumentException("Invalid aggregate key");
+            keyBytes += 2L * key.length();
+            if (keyBytes > 16L * 1024 * 1024) throw new IllegalArgumentException("Aggregate key byte budget exceeded");
+        }
+        if (clustered()) try { requireSameSlot(keys); }
+        catch (IllegalArgumentException crossSlot) { return Optional.empty(); }
+        Object response = eval("""
+                local n=tonumber(ARGV[3]); local count=0; local values={}; local bytes=0; local nulls={}
+                for i=1,n do
+                  if redis.call('EXISTS',KEYS[i])==1 and redis.call('EXISTS',KEYS[n+i])==0 then
+                    local value=false
+                    if ARGV[1]~='' then
+                      value=redis.call('HGET',KEYS[2*n+i],ARGV[1])
+                      if not value then return redis.error_reply('Incomplete aggregate index metadata; rebuild indexes') end
+                      bytes=bytes+#value
+                      if bytes>16777216 then return redis.error_reply('Aggregate byte budget exceeded') end
+                    end
+                    if ARGV[2]=='0' or ARGV[1]=='' or value~='__NULL__' then
+                      count=count+1
+                      if ARGV[2]=='0' and value~='__NULL__' then
+                        table.insert(values,value)
+                      end
+                    end
+                    if ARGV[2]=='1' and ARGV[1]~='' and value=='__NULL__' then table.insert(nulls,i-1) end
+                  end
+                end
+                return {count,values,nulls}
+                """, keys, List.of(hasField ? field : "", countOnly ? "1" : "0",Integer.toString(size)));
+        var result = (List<?>) response;
+        var values = new ArrayList<String>();
+        for (Object value : (List<?>) result.get(1)) values.add(value.toString());
+        var nulls = new ArrayList<Integer>();
+        for (Object index : (List<?>) result.get(2)) nulls.add(((Number) index).intValue());
+        return Optional.of(new IndexAggregateBatch(((Number) result.get(0)).longValue(), List.copyOf(values), List.copyOf(nulls)));
+    }
+
     /** Empty means unsupported topology/shape, not an empty result. Both prefixes include the trailing colon. */
     default Optional<List<String>> zrangeWithPayloads(String indexKey, String tombstonePrefix,
             String entityPrefix, boolean reverse, int offset, int limit) {

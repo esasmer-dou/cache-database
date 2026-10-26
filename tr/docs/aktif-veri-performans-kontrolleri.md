@@ -211,7 +211,7 @@ BOM, processor, starter, işçi ve örnek sürümlerini hizalayıp üretilen sı
 yeniden derleyin. Eski kurucular ve mevcut küçük Redis payload'ları korunur.
 PATCH üreten uygulamaları açmadan önce eski işçileri durdurup kuyruğu boşaltın;
 eski işçiler yeni işlem türünü çözemez. Eski zarflarda izleme alanı isteğe bağlıdır.
-Varsayılan Redis Function kütüphane sürümü de `0.17.0` olur. Yeni üreticileri
+Güncel kaynaklarda varsayılan Redis Function kütüphane sürümü `0.18.0` olur. Yeni üreticileri
 açmadan önce kütüphaneyi güncelleyin. Özel dağıtımlarda da kaynak ve sürümü
 hizalayın; içerik değişikliği korumasını devre dışı bırakmayın.
 Kalıcı fence metadata tablosunu ve Redis sürüm sayaçlarını silmeyin. Sağlayıcıya

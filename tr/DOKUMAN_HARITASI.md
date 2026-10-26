@@ -8,6 +8,10 @@ sağlamaktır.
 
 ## İlk Kez Gelen Kullanıcı
 
+Toplu L1 okumaları, soft TTL, causal token, gruplama ve bileşik indeksler için
+[Yakın Önbellek, Gruplanmış Toplamlar ve Bileşik İndeksler](docs/yakin-onbellek-facet-bilesik-indeksler.md)
+rehberine bakabilirsiniz.
+
 Sıra ile oku:
 
 1. [README](README.md)

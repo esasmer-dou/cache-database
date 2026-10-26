@@ -32,6 +32,37 @@ import org.junit.jupiter.params.provider.ValueSource;
 class WriteFenceProvidersIntegrationTest {
     @ParameterizedTest
     @ValueSource(strings = {"postgres", "mssql", "oracle"})
+    void explicitIndependentSchemaCompactsInterleavedPatchAndUpsertWithoutLosingRows(String provider) throws Exception {
+        try (Fixture fixture = new Fixture(provider)) {
+            fixture.enableIndependentWrites();
+            var initial = new ArrayList<QueuedWriteOperation>();
+            for (int i = 0; i < 100; i += 2) initial.add(fixture.operation("mixed" + i, OperationType.UPSERT, 1));
+            fixture.flusher().flushBatch(initial);
+            var counted = new CountingDataSource(fixture.source, fixture.table);
+            WriteBehindFlusher flusher = switch (provider) {
+                case "postgres" -> new PostgresWriteBehindFlusher(counted,fixture.registry);
+                case "mssql" -> new MssqlWriteBehindFlusher(counted,fixture.registry);
+                default -> new OracleWriteBehindFlusher(counted,fixture.registry);
+            };
+            var mixed = new ArrayList<QueuedWriteOperation>();
+            for (int i = 0; i < 100; i++) mixed.add(fixture.operation("mixed" + i,
+                    i % 2 == 0 ? OperationType.PATCH : OperationType.UPSERT, i % 2 == 0 ? 2 : 1));
+            flusher.flushBatch(mixed);
+            assertThat(counted.commits.get()).isEqualTo(1);
+            assertThat(counted.batches.get() + counted.singles.get()).isLessThan(10);
+            assertThat(fixture.rows()).isEqualTo(100);
+            for (int i = 0; i < 100; i++) assertThat(fixture.version("mixed" + i)).isEqualTo(i % 2 == 0 ? 2 : 1);
+            var chain = List.of(fixture.operation("same",OperationType.UPSERT,1),
+                    fixture.operation("same",OperationType.PATCH,2),fixture.operation("same",OperationType.DELETE,3));
+            flusher.flushBatch(chain);
+            try (var connection = fixture.source.getConnection(); var statement = connection.prepareStatement("SELECT COUNT(*) FROM " + fixture.table + " WHERE id=?")) {
+                statement.setString(1,"same");
+                try (var result = statement.executeQuery()) { assertThat(result.next()).isTrue(); assertThat(result.getInt(1)).isZero(); }
+            }
+        }
+    }
+    @ParameterizedTest
+    @ValueSource(strings = {"postgres", "mssql", "oracle"})
     void patchColumnSignaturesUseRealJdbcBatchesInOneTransaction(String provider) throws Exception {
         try (Fixture fixture = new Fixture(provider)) {
             try (var connection = fixture.source.getConnection(); var statement = connection.createStatement()) {
@@ -482,6 +513,28 @@ class WriteFenceProvidersIntegrationTest {
                 case "mssql" -> new MssqlWriteBehindFlusher(source, registry);
                 default -> new OracleWriteBehindFlusher(source, registry);
             };
+        }
+
+        @SuppressWarnings("unchecked")
+        void enableIndependentWrites() {
+            var metadata = new com.reactor.cachedb.core.model.EntityMetadata<java.util.Map<String,String>,String>() {
+                public String entityName() { return "WriteFenceFixture"; }
+                public String tableName() { return table; }
+                public String redisNamespace() { return table; }
+                public String idColumn() { return "id"; }
+                public Class<java.util.Map<String,String>> entityType() { return (Class<java.util.Map<String,String>>)(Class<?>)java.util.Map.class; }
+                public java.util.function.Function<java.util.Map<String,String>,String> idAccessor() { return row -> row.get("id"); }
+                public List<String> columns() { return List.of("id","value_text"); }
+                public List<com.reactor.cachedb.core.model.RelationDefinition> relations() { return List.of(); }
+                public boolean independentWriteReordering() { return true; }
+            };
+            var codec = new com.reactor.cachedb.core.model.EntityCodec<java.util.Map<String,String>>() {
+                public String toRedisValue(java.util.Map<String,String> row) { throw new UnsupportedOperationException(); }
+                public java.util.Map<String,String> fromRedisValue(String raw) { throw new UnsupportedOperationException(); }
+                public java.util.Map<String,Object> toColumns(java.util.Map<String,String> row) { return new java.util.LinkedHashMap<>(row); }
+            };
+            registry.register(metadata,codec,com.reactor.cachedb.core.cache.CachePolicy.defaults(),
+                    new com.reactor.cachedb.core.relation.NoOpRelationBatchLoader<>(),new com.reactor.cachedb.core.page.NoOpEntityPageLoader<>());
         }
 
         QueuedWriteOperation operation(String id, OperationType type, long version) {

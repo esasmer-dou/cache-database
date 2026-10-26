@@ -2,7 +2,14 @@
 
 [English](README.md) | Türkçe
 
-## 0.17.0 ile Okuma ve Yazma Kontrolleri
+## 0.18.0 ile Okuma ve Yazma Kontrolleri
+
+L1 etkinse toplu okumalar artık mevcut L1 kayıtlarını kullanır. Soft TTL, minimum
+entity sürümü taşıyan token, gruplama, bileşik indeks ve bağımsız JDBC gruplama
+özellikleri açık uygulama tanımları ister; örneğin sürümünü yükseltmek bu ayarları
+kendiliğinden açmaz. Mevcut REST yolları ve yetkilendirme davranışı değişmez.
+[Ayar ve sınırlı kullanım örneklerini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/yakin-onbellek-facet-bilesik-indeksler.md)
+inceleyin. Tenant kapsamını doğrulanmış kullanıcı kimliğinden üretin.
 
 Bu örnek SQL Server kullanır. BOM, processor, starter ve doctor eklentisini aynı
 sürümden indirir. Java 21 gerekir; framework kaynak kodunu indirip derlemek
@@ -91,7 +98,7 @@ Sınırlar 100 kimlik, 4 MiB ve 2000 kuyruk alanıdır. Cluster aynı hash-tag k
 ister; sınırlı tenant kabul kuralları atomik işlemle atlanamaz.
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.17.0](https://img.shields.io/badge/CacheDB-0.17.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.17.0)
+[![CacheDB 0.18.0](https://img.shields.io/badge/CacheDB-0.18.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.0)
 
 Bu proje, CacheDB'nin Redis 8 ve SQL Server ile nasıl kullanılacağını gösteren
 bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
@@ -99,8 +106,9 @@ açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
 kullanır, kalıcı geçmiş SQL Server'da tutulur, büyüyen listeler ise bütün nesne
 ağacı yerine projection üzerinden okunur.
 
-> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.17.0`
-> paketini kullanır. GitHub token'ı veya yerel CacheDB kaynak kodu gerekmez.
+> Bu örnek CacheDB `0.18.0` sürümünü kullanır. Paketler herkese açık Maven
+> deposundan alınır; GitHub token'ı veya
+> yerel framework kaynak kodu gerekmez.
 
 Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
 doğrulamış olacaksın: kalıcı SQL Server verisini oluşturacak, sınırlı arşiv
@@ -108,10 +116,10 @@ yolunu okuyacak, karşılık gelen Redis projection'ını hazırlayacak, aktif y
 çağıracak ve kapsam ile kalıcılık sinyallerini inceleyeceksin. Redis'te kayıt
 bulunmaması arka planda gizli bir SQL Server sorgusu başlatmaz.
 
-## CacheDB 0.17.0'e Yükseltme
+## CacheDB 0.18.0 Sürümüne Geçiş
 
 Örnek POM; BOM, sağlayıcı starter'ı, annotation processor ve doctor plugin'ini
-`0.17.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
+`0.18.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
 POM ayrıca `jedis.version=5.2.0` ayarını içerir. Bu ayar olmadan Spring Boot parent,
 gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 
@@ -123,13 +131,13 @@ gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 - SQL kolonunuz NULL alabiliyorsa `Boolean` kullanın; primitive `boolean`, SQL NULL değerini reddeder.
 - Atomik katalog aktarımı ve indeksli snapshot sayfaları açık endpoint'lerle gösterilir. Redis Cluster dağılımı isteğe bağlı framework altyapısıdır; yerel Compose tek Redis kullanır.
 
-Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.17.0.md)
+Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.18.0.md)
 ve [sınırlı çalışma sözleşmelerini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/sinirli-calisma-islemleri.md)
 okuyun. Paketin kullanılabilir olması, uygulamanızın canlı ortam topolojisini doğrulamaz.
 
-## 0.17.0'de Kolon Güvenliği
+## Kolon Güvenliği
 
-Mevcut sample entity'leri bilerek dar tutulur. Yeni kontroller, 0.17.0 bağımlılığı
+Örnek uygulamadaki entity'ler bilerek dar tutulur. Sağlayıcıya göre belirlenen kontroller, 0.18.0 bağımlılığı
 ile devrededir; ek cache politikası veya iş tablosu değişikliği gerekmez.
 Redis'te daha geniş veri kabul edilmesi, SQL tablosunun sınırını kaldırmaz.
 
@@ -288,7 +296,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.17.0</cachedb.version>
+<cachedb.version>0.18.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -379,8 +387,8 @@ herkese açıktır; Maven `settings.xml`, kullanıcı adı veya token gerekmez.
 
 ### 1. Yayımlanmış CacheDB paketini çözümle
 
-Sample projesini doğrudan doğrula. Maven; BOM, starter, annotation processor ve
-doctor plugin'ini değişmez `0.17.0` paketinden kimlik bilgisi istemeden çözümler:
+Örnek projeyi doğrudan doğrulayın. Maven; BOM, starter,
+annotation processor ve doctor plugin'ini bu paketten kimlik bilgisi istemeden alır:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -1064,7 +1072,7 @@ kullan. Örnek kanıtları başarılı gibi işaretleme.
 <!-- BEGIN COMPILED FEATURE EXAMPLES -->
 ## Bildirimsel Katalog Senaryoları
 
-Bu senaryolar **CacheDB 0.15.1** sürümünü kullanır. Mevcut sipariş,
+Bu senaryolar **CacheDB 0.18.0** sürümünü kullanır. Mevcut sipariş,
 destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar yalnızca anlatım
 için yazılmış taslaklar değildir; üç sağlayıcıda da derlenen ve test edilen
 örnek kaynak kodlarıdır. Her tam Java bloğunu, üstünde belirtilen dosyaya yerleştirin.

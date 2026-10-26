@@ -132,6 +132,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         ArrayList<CommandMethod> commandMethods = new ArrayList<>();
         ArrayList<PatchMethod> patchMethods = new ArrayList<>();
         ArrayList<AggregateMethod> aggregateMethods = new ArrayList<>();
+        ArrayList<FacetMethod> facetMethods = new ArrayList<>();
         ArrayList<WarmMethod> warmMethods = new ArrayList<>();
         ArrayList<LookupMethod> lookupMethods = new ArrayList<>();
         LinkedHashMap<String, ProjectionModel> projections = new LinkedHashMap<>();
@@ -157,6 +158,11 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 if (patch == null) return null;
                 patchMethods.add(patch);
                 continue;
+            }
+            if (method.getAnnotation(com.reactor.cachedb.annotations.CacheFacet.class) != null) {
+                var facet = resolveFacetMethod(method, entityModel);
+                if (facet == null) return null;
+                facetMethods.add(facet); continue;
             }
             if (method.getAnnotation(com.reactor.cachedb.annotations.CacheAggregate.class) != null || methodName.startsWith("countBy")) {
                 var aggregate = resolveAggregateMethod(method, entityModel);
@@ -302,6 +308,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 List.copyOf(commandMethods),
                 List.copyOf(patchMethods),
                 List.copyOf(aggregateMethods),
+                List.copyOf(facetMethods),
                 List.copyOf(warmMethods),
                 List.copyOf(lookupMethods),
                 List.copyOf(projections.values())
@@ -498,6 +505,62 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 || Set.of("SUM", "MIN", "MAX").contains(function) && result.equals("java.math.BigDecimal");
         if (!valid) { error(method, "Aggregate return type does not match function"); return null; }
         return new AggregateMethod(name, result, List.copyOf(params.values()), function, field, bindings);
+    }
+
+    private FacetMethod resolveFacetMethod(ExecutableElement method, EntityModel entity) {
+        var annotation = method.getAnnotation(com.reactor.cachedb.annotations.CacheFacet.class);
+        var group = entity.fields().values().stream().filter(f -> f.javaName().equals(annotation.groupBy()) || f.columnName().equals(annotation.groupBy())).findFirst().orElse(null);
+        if (group == null) { error(method, "Facet group must name an indexed entity field"); return null; }
+        var entityElement = processingEnv.getElementUtils().getTypeElement(entity.typeName());
+        var index = entityElement.getAnnotation(com.reactor.cachedb.annotations.CacheEntity.class);
+        boolean compositeColumn = java.util.Arrays.stream(entityElement.getAnnotationsByType(com.reactor.cachedb.annotations.CacheCompositeIndex.class))
+                .flatMap(value -> java.util.Arrays.stream(value.columns())).anyMatch(value -> value.equals(group.javaName()) || value.equals(group.columnName()));
+        if (!compositeColumn && java.util.Arrays.stream(index.indexedColumns()).noneMatch(value -> value.equals("*") || value.equals(group.javaName()) || value.equals(group.columnName()))) {
+            error(method, "Facet group must be an indexed entity field"); return null;
+        }
+        String function = annotation.function().name(), field = annotation.field();
+        if (!field.isBlank()) {
+            String name = field;
+            var target = entity.fields().values().stream().filter(f -> f.javaName().equals(name) || f.columnName().equals(name)).findFirst().orElse(null);
+            if (target == null) { error(method, "Unknown facet aggregate field"); return null; }
+            if (!function.equals("COUNT") && !Set.of("java.lang.Integer", "java.lang.Long", "java.lang.Short", "java.lang.Byte", "java.lang.Float", "java.lang.Double", "java.math.BigDecimal", "java.math.BigInteger").contains(boxed(target.type()).toString())) {
+                error(method, "Numeric facet requires a numeric field"); return null;
+            }
+            field = target.columnName();
+        } else if (!function.equals("COUNT")) { error(method, "Numeric facet requires a field"); return null; }
+        String result = method.getReturnType().toString();
+        if (!Set.of("java.util.Map<java.lang.String,java.lang.Long>", "java.util.Map<java.lang.String,java.math.BigDecimal>",
+                "java.util.Map<java.lang.String,com.reactor.cachedb.core.query.AggregateResult>").contains(result.replace(" ", ""))) {
+            error(method, "Facet return type must be Map<String, Long|BigDecimal|AggregateResult>"); return null;
+        }
+        var params = parameters(method);
+        var bindings = new LinkedHashMap<String, ParameterModel>();
+        String name = method.getSimpleName().toString(); int by = name.indexOf("By");
+        String[] predicates = by < 0 ? new String[0] : name.substring(by + 2).split("And", -1);
+        var constants = new ArrayList<String>();
+        var variablePredicates = new ArrayList<String>();
+        for (String predicate : predicates) {
+            boolean constantTrue = predicate.endsWith("True"), constantFalse = predicate.endsWith("False");
+            if (constantTrue || constantFalse) {
+                String property = predicate.substring(0, predicate.length() - (constantTrue ? 4 : 5));
+                var target = entity.fields().values().stream().filter(f ->
+                        (Character.toUpperCase(f.javaName().charAt(0)) + f.javaName().substring(1)).equals(property)).findFirst().orElse(null);
+                if (target == null || !boxed(target.type()).toString().equals("java.lang.Boolean")) { error(method, "Invalid boolean facet predicate"); return null; }
+                constants.add("com.reactor.cachedb.core.query.QueryFilter.eq(" + quote(target.columnName()) + ", " + constantTrue + ")");
+            } else variablePredicates.add(predicate);
+        }
+        if (variablePredicates.size() != params.size()) { error(method, "Facet parameters must match ByFieldAndField predicates"); return null; }
+        int position = 0;
+        for (var param : params.values()) {
+            String predicate = variablePredicates.get(position++);
+            var target = entity.fields().values().stream().filter(f ->
+                    (Character.toUpperCase(f.javaName().charAt(0)) + f.javaName().substring(1)).equals(predicate)).findFirst().orElse(null);
+            if (target == null || !processingEnv.getTypeUtils().isSameType(boxed(param.type()), boxed(target.type()))) {
+                error(method, "Invalid facet predicate: " + predicate); return null;
+            }
+            if (bindings.putIfAbsent(target.columnName(), param) != null) { error(method, "Duplicate facet predicate column"); return null; }
+        }
+        return new FacetMethod(name, result, List.copyOf(params.values()), function, field, group.columnName(), bindings, List.copyOf(constants));
     }
 
     private PatchMethod resolvePatchMethod(ExecutableElement method, EntityModel entity) {
@@ -1583,6 +1646,26 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                     case "MIN" -> "min"; case "MAX" -> "max"; default -> "average"; }).append("()");
             out.append(";\n    }\n");
         }
+        out.append("    @Override public java.util.Map<String, com.reactor.cachedb.core.query.AggregateResult> aggregateBy(String group, com.reactor.cachedb.core.query.AggregateSpec spec) { return hotRepository.aggregateBy(group, spec); }\n");
+        for (FacetMethod facet : model.facetMethods()) {
+            out.append("    @Override public ").append(facet.returnType()).append(' ').append(facet.name()).append('(')
+                    .append(renderParameters(facet.parameters())).append(") {\n        var filters = com.reactor.cachedb.core.query.QuerySpec.builder();\n");
+            facet.filters().forEach((column, param) -> out.append("        filters.filter(com.reactor.cachedb.core.query.QueryFilter.eq(")
+                    .append(quote(column)).append(", ").append(param.name()).append("));\n"));
+            facet.constants().forEach(filter -> out.append("        filters.filter(").append(filter).append(");\n"));
+            out.append("        var result = hotRepository.aggregateBy(").append(quote(facet.group())).append(", new com.reactor.cachedb.core.query.AggregateSpec(com.reactor.cachedb.core.query.AggregateFunction.")
+                    .append(facet.function()).append(", ").append(quote(facet.field())).append(", filters.build().rootGroup()));\n");
+            if (facet.returnType().contains("AggregateResult")) out.append("        return result;\n");
+            else {
+                String type = facet.returnType().contains("BigDecimal") ? "java.math.BigDecimal" : "java.lang.Long";
+                out.append("        var mapped = new java.util.LinkedHashMap<String, ").append(type).append(">();\n")
+                        .append("        result.forEach((key, value) -> { var number = value.numericValue(com.reactor.cachedb.core.query.AggregateFunction.")
+                        .append(facet.function()).append("); mapped.put(key, number == null ? null : number")
+                        .append(type.equals("java.lang.Long") ? ".longValueExact()" : "").append("); });\n")
+                        .append("        return java.util.Collections.unmodifiableMap(mapped);\n");
+            }
+            out.append("    }\n");
+        }
         for (WarmMethod warm : model.warmMethods()) {
             RouteMethod source = model.routes().stream().filter(route -> route.name().equals(warm.fromMethod())).findFirst().orElseThrow();
             renderWarmMethod(out, model, warm, source);
@@ -2194,6 +2277,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 aggregate.name(), "AGGREGATE", aggregate.name(), quote(""), 0,
                 com.reactor.cachedb.core.query.QuerySpec.MAX_LIMIT, 0, 0, 0L,
                 false, false, "function=" + aggregate.function() + ";field=" + aggregate.field() + ";scope=active-set", "NOT_APPLICABLE"));
+        for (FacetMethod facet : model.facetMethods()) definitions.add(routeDefinition(
+                facet.name(), "AGGREGATE", facet.name(), quote(""), 0, 256, 0, 0, 0L,
+                false, false, "function=" + facet.function() + ";group=" + facet.group() + ";scope=active-set", "NOT_APPLICABLE"));
 
         out.append("    private static final com.reactor.cachedb.core.route.RepositoryRouteCatalog ROUTE_CATALOG = new ")
                 .append("com.reactor.cachedb.core.route.RepositoryRouteCatalog(\n")
@@ -2539,6 +2625,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             List<CommandMethod> commandMethods,
             List<PatchMethod> patchMethods,
             List<AggregateMethod> aggregateMethods,
+            List<FacetMethod> facetMethods,
             List<WarmMethod> warmMethods,
             List<LookupMethod> lookupMethods,
             List<ProjectionModel> projections
@@ -2549,4 +2636,6 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             ParameterModel id, Map<String, ParameterModel> columns, Map<String, com.reactor.cachedb.annotations.CacheDelta> deltas) {}
     private record AggregateMethod(String name, String returnType, List<ParameterModel> parameters,
             String function, String field, Map<String, ParameterModel> filters) {}
+    private record FacetMethod(String name, String returnType, List<ParameterModel> parameters,
+            String function, String field, String group, Map<String, ParameterModel> filters, List<String> constants) {}
 }

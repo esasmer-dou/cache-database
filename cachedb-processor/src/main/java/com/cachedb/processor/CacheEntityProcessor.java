@@ -436,6 +436,11 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         }
 
         java.util.Set<String> indexedColumns = new java.util.LinkedHashSet<>();
+        Map<String, List<String>> compositeIndexes;
+        try { compositeIndexes = compositeIndexes(typeElement, persistedFields); }
+        catch (IllegalArgumentException invalid) {
+            messager.printMessage(Diagnostic.Kind.ERROR, invalid.getMessage(), typeElement); return null;
+        }
         List<String> declaredIndexes = List.of(cacheEntity.indexedColumns());
         if (declaredIndexes.contains("*")) {
             persistedFields.forEach(field -> indexedColumns.add(field.columnName()));
@@ -453,6 +458,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             });
         }
 
+        compositeIndexes.values().forEach(indexedColumns::addAll);
         LoaderModel relationLoader = resolveLoaderModel(typeElement, relationLoaderTypeName, RELATION_BATCH_LOADER_TYPE, "relationLoader");
         if (relationLoaderTypeName != null && relationLoader == null) {
             return null;
@@ -506,7 +512,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         }
         var near = typeElement.getAnnotation(com.reactor.cachedb.annotations.CacheNearPolicy.class);
         if (near != null) try {
-            new com.reactor.cachedb.core.cache.NearCachePolicy(near.maxEntries(), near.ttlSeconds(), near.maxBytes());
+            new com.reactor.cachedb.core.cache.NearCachePolicy(near.maxEntries(), near.ttlSeconds(), near.maxBytes(), near.softTtlSeconds());
         } catch (IllegalArgumentException invalid) {
             messager.printMessage(Diagnostic.Kind.ERROR, invalid.getMessage(), typeElement); return null;
         }
@@ -2183,10 +2189,26 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         var near = element == null ? null : element.getAnnotation(com.reactor.cachedb.annotations.CacheNearPolicy.class);
         if (near != null) builder.append("    private static final com.reactor.cachedb.core.cache.NearCachePolicy NEAR_POLICY = new com.reactor.cachedb.core.cache.NearCachePolicy(")
                 .append(near.maxEntries()).append(", ").append(near.ttlSeconds()).append(", ")
-                .append(near.maxBytes()).append("L);\n");
+                .append(near.maxBytes()).append("L, ").append(near.softTtlSeconds()).append(");\n");
         builder.append("    private static final class Metadata implements EntityMetadata<")
                 .append(model.simpleName()).append(", ").append(model.idField().typeName()).append("> {\n");
+        if (element != null && element.getAnnotation(CacheEntity.class).independentWriteReordering())
+            builder.append("        public boolean independentWriteReordering() { return true; }\n");
         if (near != null) builder.append("        public com.reactor.cachedb.core.cache.NearCachePolicy nearCachePolicy() { return NEAR_POLICY; }\n");
+        if (element != null) {
+            var indexes = compositeIndexes(element, model.persistedFields());
+            if (!indexes.isEmpty()) {
+                builder.append("        public java.util.Map<String, java.util.List<String>> compositeExactIndexes() { return COMPOSITE_INDEXES; }\n")
+                        .append("        private static final java.util.Map<String, java.util.List<String>> COMPOSITE_INDEXES = java.util.Map.ofEntries(");
+                boolean first = true;
+                for (var index : indexes.entrySet()) {
+                    if (!first) builder.append(", "); first = false;
+                    builder.append("java.util.Map.entry(").append(javaStringLiteral(index.getKey())).append(", java.util.List.of(");
+                    appendQuotedList(builder, index.getValue()); builder.append("))");
+                }
+                builder.append(");\n");
+            }
+        }
         if (tenant != null) builder.append("        public String tenantFieldName() { return ")
                 .append(javaStringLiteral(tenant.columnName())).append("; }\n")
                 .append("        public String extractTenantId(").append(model.simpleName())
@@ -3725,6 +3747,26 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 "java.math.BigDecimal", "java.math.BigInteger", "java.util.UUID", "java.time.Instant",
                 "java.time.LocalDate", "java.time.LocalTime", "java.time.LocalDateTime", "java.time.OffsetDateTime",
                 "java.time.ZonedDateTime", "java.time.Duration", "java.time.Period").contains(field.typeName());
+    }
+
+    private Map<String, List<String>> compositeIndexes(TypeElement element, List<FieldModel> fields) {
+        var result = new java.util.LinkedHashMap<String, List<String>>();
+        var annotations = element.getAnnotationsByType(com.reactor.cachedb.annotations.CacheCompositeIndex.class);
+        if (annotations.length > 32) throw new IllegalArgumentException("At most 32 composite indexes per entity");
+        for (var annotation : annotations) {
+            if (annotation.columns().length < 2 || annotation.columns().length > 4)
+                throw new IllegalArgumentException("Composite index requires 2..4 distinct columns");
+            var columns = new java.util.ArrayList<String>();
+            for (String declared : annotation.columns()) {
+                var field = fields.stream().filter(value -> value.columnName().equals(declared) || value.fieldName().equals(declared)).findFirst().orElse(null);
+                if (field == null || columns.contains(field.columnName())) throw new IllegalArgumentException("Unknown or duplicate composite index column: " + declared);
+                columns.add(field.columnName());
+            }
+            String name = annotation.name().isBlank() ? String.join("_", columns) : annotation.name();
+            if (!name.matches("[A-Za-z_][A-Za-z0-9_]{0,127}") || result.putIfAbsent(name, List.copyOf(columns)) != null)
+                throw new IllegalArgumentException("Invalid or duplicate composite index name: " + name);
+        }
+        return result;
     }
 
     private record FieldModel(

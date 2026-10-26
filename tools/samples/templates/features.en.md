@@ -1,6 +1,6 @@
 ## Declarative Catalog Scenarios
 
-These scenarios use **CacheDB 0.15.1**. Existing commerce,
+These scenarios use **CacheDB 0.18.0**. Existing commerce,
 support, logistics and archive routes are unchanged. Unlike a release-note link,
 the classes below are actual sample sources, compiled and tested for all three
 providers. Each complete Java block belongs at the path printed above it.

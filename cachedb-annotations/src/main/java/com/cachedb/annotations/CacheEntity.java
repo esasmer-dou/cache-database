@@ -15,4 +15,6 @@ public @interface CacheEntity {
     /** Explicit index contract; the wildcard preserves historical all-column indexes. */
     String[] indexedColumns() default {"*"};
     int compressionThresholdBytes() default 0;
+    /** Opt in only after checking foreign keys, unique constraints, triggers and business ordering. */
+    boolean independentWriteReordering() default false;
 }

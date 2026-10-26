@@ -1,6 +1,6 @@
 ## Bildirimsel Katalog Senaryoları
 
-Bu senaryolar **CacheDB 0.15.1** sürümünü kullanır. Mevcut sipariş,
+Bu senaryolar **CacheDB 0.18.0** sürümünü kullanır. Mevcut sipariş,
 destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar yalnızca anlatım
 için yazılmış taslaklar değildir; üç sağlayıcıda da derlenen ve test edilen
 örnek kaynak kodlarıdır. Her tam Java bloğunu, üstünde belirtilen dosyaya yerleştirin.

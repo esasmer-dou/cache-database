@@ -18,9 +18,13 @@ public final class ProjectionEntityMetadata<P, ID> implements EntityMetadata<P, 
     private final Function<P, ID> idAccessor;
     private final List<String> columns;
     private final Map<String, String> columnTypes;
+    private final String tenantOwnerNamespace;
+    /** Internal index ownership; projected payloads need not expose the base tenant field. */
+    public String tenantOwnerNamespace() { return tenantOwnerNamespace; }
 
     @SuppressWarnings("unchecked")
     public ProjectionEntityMetadata(EntityMetadata<?, ID> baseMetadata, EntityProjection<?, P, ID> projection) {
+        this.tenantOwnerNamespace = baseMetadata.tenantFieldName() == null ? null : baseMetadata.redisNamespace();
         this.entityName = baseMetadata.entityName() + "#" + projection.name();
         this.tableName = baseMetadata.tableName() + "__projection__" + projection.name().replace('-', '_');
         this.redisNamespace = baseMetadata.redisNamespace() + ":projection:" + projection.name();

@@ -14,6 +14,36 @@ import redis.clients.jedis.*;
 
 @EnabledIfSystemProperty(named="cachedb.snapshot.redis", matches="true")
 class RedisQueryIndexDiffRedisTest {
+    @Test void compositeSetResolvesWithoutIntersectionAndMovesOnMutation() {
+        EntityMetadata<Row,Long> metadata = new EntityMetadata<>() {
+            public String entityName() { return METADATA.entityName(); }
+            public String tableName() { return METADATA.tableName(); }
+            public String redisNamespace() { return METADATA.redisNamespace(); }
+            public String idColumn() { return "id"; }
+            public Class<Row> entityType() { return Row.class; }
+            public Function<Row,Long> idAccessor() { return Row::id; }
+            public List<String> columns() { return METADATA.columns(); }
+            public Map<String,String> columnTypes() { return METADATA.columnTypes(); }
+            public Map<String,List<String>> compositeExactIndexes() { return Map.of("tenant_name",List.of("tenant_id","name")); }
+            public List<RelationDefinition> relations() { return List.of(); }
+        };
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
+            var keys = new RedisKeyStrategy("composite-" + UUID.randomUUID());
+            var manager = new RedisQueryIndexManager<>(redis,metadata,CODEC,keys,null,QueryIndexConfig.defaults(),RelationConfig.defaults(),new QueryEvaluator(),null);
+            manager.reindex(new Row(1L,7L,"a|b:c Ş",10L));
+            long intersections = calls(redis,"sinter");
+            assertEquals(List.of("1"),manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("tenant_id",7L),QueryFilter.eq("name","a|b:c Ş"))));
+            assertEquals(intersections,calls(redis,"sinter"));
+            manager.reindex(new Row(1L,8L,"new",10L));
+            assertTrue(manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("tenant_id",7L),QueryFilter.eq("name","a|b:c Ş"))).isEmpty());
+            assertEquals(List.of("1"),manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("tenant_id",8L),QueryFilter.eq("name","new"))));
+            manager.removeById(1L);
+            assertTrue(manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("tenant_id",8L),QueryFilter.eq("name","new"))).isEmpty());
+            assertNotEquals(RedisCompositeIndexes.key(keys,"rows","pair",List.of("a","b"),Map.of("a","x|y","b","z")),
+                    RedisCompositeIndexes.key(keys,"rows","pair",List.of("a","b"),Map.of("a","x","b","y|z")));
+            assertNull(RedisCompositeIndexes.key(keys,"rows","pair",List.of("a","b"),Map.of("a","x")));
+        }
+    }
     record Row(Long id, Long tenant, String name, Long score) {}
     private static final EntityMetadata<Row,Long> METADATA = new EntityMetadata<>() {
         public String entityName() { return "Row"; }

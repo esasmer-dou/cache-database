@@ -72,6 +72,12 @@ class RedisClusterOperationsTest {
                     assertEquals(
                             Integer.toString(i),
                             redis.fcall("cachedb_cluster_echo", List.of(keys.get(i)), List.of()));
+                String aggregateEntity = prefix + ":{aggregation}:entity", aggregateDeleted = prefix + ":{aggregation}:deleted", aggregateMeta = prefix + ":{aggregation}:meta";
+                redis.commands().set(aggregateEntity,"payload"); redis.commands().hset(aggregateMeta,Map.of("amount","1234567890123456789.01"));
+                var aggregate = redis.aggregateIndexBatch(List.of(aggregateEntity),List.of(aggregateDeleted),List.of(aggregateMeta),"amount",false).orElseThrow();
+                assertEquals(List.of("1234567890123456789.01"),aggregate.values());
+                assertTrue(redis.aggregateIndexBatch(List.of(keys.get(0)),List.of(keys.get(1)),List.of(keys.get(2)),null,true).isEmpty());
+                redis.delete(aggregateEntity,aggregateDeleted,aggregateMeta);
                 Set<String> found = new HashSet<>();
                 String cursor = "0";
                 do {

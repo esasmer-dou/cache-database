@@ -64,6 +64,8 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
         lock.lock();
         try {
             Objects.requireNonNull(id, "id");
+            long required = com.reactor.cachedb.core.causal.CacheCausalContext.requiredVersion(metadata.redisNamespace(), id);
+            if (required > version(id)) throw new IllegalStateException("Causal version is not available for " + metadata.entityName());
             String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
             String owner = tenantOwners.get(id);
             if (tenant != null && owner != null && !tenant.equals(owner))
@@ -112,6 +114,7 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
         try {
             List<T> result = new ArrayList<>();
             for (ID id : ids) {
+                if (id == null) continue;
                 Optional<T> value = findById(id);
                 if (value.isPresent()) result.add(value.get());
             }
@@ -293,6 +296,29 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
     @Override public T patch(ID id, Map<String, Object> updates) { return patchWithReceipt(id, updates).entity(); }
     @Override public Object aggregateFieldValue(T entity, String column) { return codec.entityColumnValue(entity, column); }
 
+    @Override public Map<String, AggregateResult> aggregateBy(String group, AggregateSpec spec) {
+        try {
+            return aggregateByScoped(group, spec);
+        } catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) {
+            throw new IllegalStateException("Tenant facet access denied", denied);
+        }
+    }
+
+    private Map<String, AggregateResult> aggregateByScoped(String group, AggregateSpec spec) {
+        if (group == null || group.isBlank() || !metadata.indexedColumns().contains(group))
+            throw new IllegalArgumentException("Facet group must be an indexed column");
+        Objects.requireNonNull(spec);
+        if (spec.fieldName() != null && !spec.fieldName().isBlank() && !spec.fieldName().equals("*")
+                && !metadata.columns().contains(spec.fieldName())) throw new IllegalArgumentException("Unknown aggregate column");
+        var rows = query(QuerySpec.where(spec.filter()).limitTo(QuerySpec.MAX_LIMIT));
+        if (rows.size() == QuerySpec.MAX_LIMIT) throw new IllegalStateException("Facet fallback candidate capacity reached");
+        var result = new FacetAccumulator();
+        boolean fieldCount = spec.function() == AggregateFunction.COUNT && spec.fieldName() != null && !spec.fieldName().isBlank() && !spec.fieldName().equals("*");
+        for (T row : rows) result.add(codec.entityColumnValue(row, group),
+                spec.fieldName() == null || spec.fieldName().isBlank() || spec.fieldName().equals("*") ? null : codec.entityColumnValue(row, spec.fieldName()), fieldCount);
+        return result.result();
+    }
+
     @Override public WriteReceipt<T, ID> patchWithReceipt(ID id, Map<String, Object> updates) {
         lock.lock();
         try {
@@ -463,7 +489,7 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
             new HashMap<>(versions),
             new HashSet<>(tombstones),
             new HashSet<>(rejected),
-            new LinkedHashSet<>(order)
+            new LinkedHashSet<>(order), new HashMap<>(tenantOwners)
         };
     }
 
@@ -480,5 +506,20 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
         rejected.addAll((Set<ID>) state[3]);
         order.clear();
         order.addAll((Set<ID>) state[4]);
+        tenantOwners.clear(); tenantOwners.putAll((Map<ID, String>) state[5]);
+    }
+
+    void verifyBatchTenant(Object id, String payload, String expectedTenant) {
+        if (metadata.tenantFieldName() == null) return;
+        String active;
+        try { active = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata); }
+        catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) { throw new IllegalStateException("Atomic batch tenant scope changed", denied); }
+        if (active == null || !active.equals(expectedTenant)) throw new IllegalStateException("Atomic batch tenant scope changed");
+        @SuppressWarnings("unchecked") ID identity = (ID) id;
+        String owner = tenantOwners.get(identity);
+        if (owner != null && !owner.equals(active) || payload == null && owner == null)
+            throw new IllegalStateException("Atomic batch tenant mismatch");
+        if (payload != null) try { com.reactor.cachedb.core.tenant.TenantAccess.verify(metadata, codec.fromRedisValue(payload)); }
+        catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) { throw new IllegalStateException("Atomic batch tenant mismatch", denied); }
     }
 }

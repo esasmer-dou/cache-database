@@ -42,6 +42,26 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
     private final ReadShapeGuardrailConfig readShapeGuardrailConfig;
     private final ProjectionQueryCache<P> queryCache =
             new ProjectionQueryCache<>(HOT_QUERY_CACHE_LIMIT, HOT_QUERY_CACHE_TTL_MILLIS);
+    private com.reactor.cachedb.core.model.EntityMetadata<?, ?> tenantMetadata;
+    private Function<Collection<String>, Map<String, String>> tenantOwners;
+
+    RedisProjectionRepository<T, ID, P> withTenantScope(com.reactor.cachedb.core.model.EntityMetadata<?, ?> metadata,
+            Function<Collection<String>, Map<String, String>> owners) {
+        if (metadata.tenantFieldName() != null) { tenantMetadata = metadata; tenantOwners = owners; }
+        return this;
+    }
+
+    private String activeTenant() {
+        try { return tenantMetadata == null ? null : com.reactor.cachedb.core.tenant.TenantAccess.active(tenantMetadata); }
+        catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) {
+            throw new IllegalStateException("Tenant projection requires an explicit scope", denied);
+        }
+    }
+
+    private void verifyOwner(String id, String tenant) {
+        if (tenant != null && !tenant.equals(tenantOwners.apply(List.of(id)).get(id)))
+            throw new IllegalStateException("Tenant projection access denied");
+    }
 
     public RedisProjectionRepository(
             RedisProjectionRuntime<P, ID> readRuntime,
@@ -68,6 +88,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
 
     @Override
     public Optional<P> findById(ID id) {
+        verifyOwner(String.valueOf(id), activeTenant());
         long startedAt = System.nanoTime();
         try {
             String rawId = String.valueOf(id);
@@ -92,6 +113,13 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
 
     @Override
     public List<P> findAll(Collection<ID> ids) {
+        String tenant = activeTenant();
+        if (tenant != null) {
+            if (ids.size() > 10_000) throw new IllegalArgumentException("Projection bulk limit exceeded");
+            var owners = tenantOwners.apply(ids.stream().map(String::valueOf).toList());
+            for (ID id : ids) if (!tenant.equals(owners.get(String.valueOf(id))))
+                throw new IllegalStateException("Tenant projection access denied");
+        }
         long startedAt = System.nanoTime();
         try {
             if (ids.isEmpty()) {
@@ -116,6 +144,8 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
 
     @Override
     public List<P> query(QuerySpec querySpec) {
+        String tenant = activeTenant();
+        if (tenant != null) return tenantQuery(querySpec, tenant);
         long startedAt = System.nanoTime();
         try {
             if (querySpec != null) {
@@ -201,6 +231,49 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         } finally {
             recordRedisRead(startedAt);
         }
+    }
+
+    private List<P> tenantQuery(QuerySpec spec, String tenant) {
+        Objects.requireNonNull(spec, "querySpec");
+        try { com.reactor.cachedb.core.tenant.TenantAccess.scoped(tenantMetadata,spec); }
+        catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) { throw new IllegalStateException("Tenant projection predicate denied", denied); }
+        validateProjectionRouteContract("Tenant projection query", spec.limit());
+        ReadShapeGuardrails.validateProjectionQuery(readRuntime.binding().projection().name(), spec, readShapeGuardrailConfig);
+        // Filter ownership before applying any page window; a shared query cache is never consulted.
+        var candidates = readRuntime.queryIndexManager().projectionTenantCandidates(tenant);
+        if (candidates.size() > 10_000) throw new IllegalStateException("Tenant projection candidate limit exceeded; declare a tenant-indexed read model");
+        var owners = tenantOwners.apply(candidates);
+        var ids = candidates.stream().filter(id -> tenant.equals(owners.get(id))).toList();
+        var rows = new ArrayList<P>();
+        Map<P, Map<String, Object>> columnsByRow = new IdentityHashMap<>();
+        long bytes = 0;
+        for (int start = 0; start < ids.size(); start += 128) {
+            var batch = ids.subList(start, Math.min(ids.size(), start + 128));
+            var keys = new ArrayList<String>();
+            for (String id : batch) keys.add(readRuntime.payloadKey(id));
+            for (String id : batch) keys.add(readRuntime.tombstoneKey(id));
+            var payloads = readRuntime.jedis().boundedMget(keys,16L * 1024 * 1024);
+            for (int i = 0; i < batch.size(); i++) {
+                String raw = payloads.get(i);
+                if (raw == null || payloads.get(batch.size() + i) != null) continue;
+                bytes += 2L * raw.length();
+                if (bytes > 16L * 1024 * 1024) throw new IllegalStateException("Tenant projection byte budget exceeded");
+                P row = readRuntime.codec().fromRedisValue(raw);
+                Map<String, Object> columns = readRuntime.codec().toColumns(row);
+                if (queryEvaluator.matches(columns, spec.rootGroup())) {
+                    rows.add(row);
+                    columnsByRow.put(row, columns);
+                }
+            }
+        }
+        rows.sort((left, right) -> {
+            int compared = compareBySorts(columnsByRow.get(left), columnsByRow.get(right), spec.sorts());
+            if (compared != 0) return compared;
+            return String.valueOf(readRuntime.metadata().idAccessor().apply(left))
+                    .compareTo(String.valueOf(readRuntime.metadata().idAccessor().apply(right)));
+        });
+        int from = Math.min(spec.offset(), rows.size()), end = (int) Math.min(rows.size(), (long) from + spec.limit());
+        return List.copyOf(rows.subList(from, end));
     }
 
     private void cacheHotQuery(String key, List<P> result) {

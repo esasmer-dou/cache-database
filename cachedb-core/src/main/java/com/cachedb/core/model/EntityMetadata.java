@@ -47,6 +47,9 @@ public interface EntityMetadata<T, ID> {
     default Map<String, String> columnTypes() {
         return Map.of();
     }
+    default Map<String, List<String>> compositeExactIndexes() { return Map.of(); }
+    /** Explicit schema/business contract: distinct IDs have no cross-row ordering constraints. */
+    default boolean independentWriteReordering() { return false; }
     default Map<String, List<String>> partitionedSortIndexes() {
         return Map.of();
     }
