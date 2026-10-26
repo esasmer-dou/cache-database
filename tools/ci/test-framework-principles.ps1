@@ -51,3 +51,5 @@ try {
     }
     Remove-Item -LiteralPath $fixture -Recurse -Force
 }
+# Expected failing child probes must not become the surrounding CI shell's exit code.
+exit 0
