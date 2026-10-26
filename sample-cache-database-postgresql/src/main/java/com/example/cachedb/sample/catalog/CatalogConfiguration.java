@@ -16,7 +16,7 @@ public class CatalogConfiguration {
     SnapshotPlan<ProductEntity, CatalogCard> stockCatalog() {
         var source =
                 SnapshotSource.entity("products", ProductEntityCacheBinding.SOURCE)
-                        .where(SnapshotPredicate.eq("active_status", "ACTIVE"));
+                        .where(SnapshotPredicate.eq(ProductEntityCacheBinding.Columns.ACTIVE_STATUS, "ACTIVE"));
         return SnapshotPlan.streaming(
                         PLAN,
                         source,
@@ -27,7 +27,8 @@ public class CatalogConfiguration {
                         SnapshotIndexSpec.of(
                                 row -> row.category,
                                 row -> Math.max(0, row.stockQuantity - row.reservedQuantity)))
-                .scopedBy(source, "product_id", Long::valueOf)
+                .scopedBy(source, ProductEntityCacheBinding.Columns.PRODUCT_ID)
+                .autoDirtyOnRootEntity()
                 .withGeneratedJsonCodec()
                 .withContentReuse();
     }

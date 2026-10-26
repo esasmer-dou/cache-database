@@ -25,6 +25,14 @@ import com.reactor.cachedb.starter.CacheWarmTarget;
         sourceMaxRows = 500, sourceTimeoutSeconds = 15)
 public interface ProductRepository extends CacheDbRepository<ProductEntity, Long> {
 
+    @com.reactor.cachedb.annotations.CachePatch
+    com.reactor.cachedb.core.model.WriteReceipt<ProductEntity, Long> patchStockValues(
+            @com.reactor.cachedb.annotations.CacheId Long productId,
+            @com.reactor.cachedb.annotations.CacheColumn("stock_quantity") Integer stockQuantity,
+            @com.reactor.cachedb.annotations.CacheColumn("reserved_quantity") Integer reservedQuantity,
+            @com.reactor.cachedb.annotations.CacheColumn("stock_status") String stockStatus,
+            @com.reactor.cachedb.annotations.CacheColumn("updated_at") Long updatedAt);
+
     @CacheLookup
     HotLookup<ProductEntity> detail(Long productId);
 

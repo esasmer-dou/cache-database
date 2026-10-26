@@ -29,6 +29,10 @@ import java.util.Map;
 import java.util.Optional;
 
 public final class RedisDeadLetterManagement implements DeadLetterManagement {
+    private com.reactor.cachedb.core.trace.TraceContextPropagator trace = com.reactor.cachedb.core.trace.TraceContexts.threadLocal();
+    private java.util.function.Consumer<QueuedWriteOperation> durableListener = operation -> {};
+    public RedisDeadLetterManagement withTraceContextPropagator(com.reactor.cachedb.core.trace.TraceContextPropagator value) { trace = java.util.Objects.requireNonNull(value); return this; }
+    public RedisDeadLetterManagement withDurableListener(java.util.function.Consumer<QueuedWriteOperation> listener) { durableListener = java.util.Objects.requireNonNull(listener); return this; }
 
     private final RedisClientOperations jedis;
     private final WriteBehindFlusher flusher;
@@ -144,8 +148,14 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
             return new DeadLetterActionResult(entryId, "replay", true, "MANUAL_REPLAY_STALE");
         }
 
-        try {
+        try (var scope = trace.restore(operation.traceMetadata())) {
             flusher.flush(operation);
+            var durability = new RedisDurabilityTracker(jedis, keyStrategy);
+            var operations = operation.atomicBatch() ? operation.batchOperations() : java.util.List.of(operation);
+            for (var member : operations) {
+                durability.advance(member.redisNamespace(), member.id(), member.version());
+                durableListener.accept(member);
+            }
             publishReconciliation("MANUAL_REPLAYED", failureRecord, null, 1, note);
             resolveDeadLetter(deadLetterEntry, "MANUAL_REPLAYED", note);
             return new DeadLetterActionResult(entryId, "replay", true, "MANUAL_REPLAYED");
@@ -190,7 +200,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
     private boolean isStale(QueuedWriteOperation operation) {
         String currentVersion =
                 jedis.commands()
-                        .get(keyStrategy.versionKey(operation.redisNamespace(), operation.id()));
+                        .get(keyStrategy.durabilityKey(operation.redisNamespace(), operation.id()));
         if (currentVersion == null || currentVersion.isBlank()) {
             return false;
         }

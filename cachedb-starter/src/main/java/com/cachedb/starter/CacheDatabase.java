@@ -91,6 +91,27 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             new java.util.concurrent.CopyOnWriteArrayList<>();
     private final String instanceId;
     private final DefaultCacheSession session;
+    private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<com.reactor.cachedb.core.queue.QueuedWriteOperation>> durableListeners
+            = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** Listeners must only perform bounded, non-blocking notification; SQL has already committed. */
+    public synchronized AutoCloseable onDurableEntityChange(
+            java.util.function.Consumer<com.reactor.cachedb.core.queue.QueuedWriteOperation> listener) {
+        java.util.Objects.requireNonNull(listener);
+        if (durableListeners.size() >= 64) throw new IllegalStateException("At most 64 entity change listeners");
+        durableListeners.add(listener);
+        return () -> durableListeners.remove(listener);
+    }
+
+    private void publishDurableChange(com.reactor.cachedb.core.queue.QueuedWriteOperation operation) {
+        for (var listener : durableListeners) {
+            try { listener.accept(operation); }
+            catch (RuntimeException failure) {
+                System.getLogger(CacheDatabase.class.getName()).log(System.Logger.Level.WARNING,
+                        "Durable entity change listener failed for " + operation.entityName(), failure);
+            }
+        }
+    }
     private final EntityRegistry entityRegistry;
     private final RedisWriteBehindWorker writeBehindWorker;
     private final RedisDeadLetterRecoveryWorker deadLetterRecoveryWorker;
@@ -239,7 +260,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         : RedisStoragePerformanceMirror.disabled(
                                 storagePerformanceCollector, effectiveAdminMonitoringConfig);
 
-        RedisWriteOperationMapper mapper = new RedisWriteOperationMapper();
+        RedisWriteOperationMapper mapper = new RedisWriteOperationMapper(config.traceContextPropagator());
         RedisKeyStrategy keyStrategy =
                 foregroundJedis.clustered() || backgroundJedis.clustered()
                 ? new com.reactor.cachedb.redis.ClusterHashTagKeyStrategy(config.keyspace())
@@ -268,14 +289,14 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         config.redisFunctions(),
                         config.redisGuardrail(),
                         effectiveWriteBehindConfig,
-                        new RedisFunctionArgsMapper());
+                        new RedisFunctionArgsMapper(config.traceContextPropagator()).withNearInvalidationChannel(keyStrategy.nearInvalidationChannel()));
         RedisFunctionExecutor backgroundFunctionExecutor =
                 new RedisFunctionExecutor(
                         backgroundJedis,
                         config.redisFunctions(),
                         config.redisGuardrail(),
                         effectiveWriteBehindConfig,
-                        new RedisFunctionArgsMapper());
+                        new RedisFunctionArgsMapper(config.traceContextPropagator()).withNearInvalidationChannel(keyStrategy.nearInvalidationChannel()));
         RedisWriteBehindQueue queue =
                 new RedisWriteBehindQueue(
                         foregroundJedis,
@@ -342,6 +363,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         .runtimeCoordination(effectiveRuntimeCoordination)
                         .build();
         this.config = runtimeConfig;
+        var nearCaches = new com.reactor.cachedb.redis.RedisNearCacheCoordinator(backgroundJedis, keyStrategy);
+        ownResource(nearCaches);
         this.session =
                 new DefaultCacheSession(
                         foregroundJedis,
@@ -356,7 +379,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         queryEvaluator,
                         storagePerformanceCollector,
                         projectionRefreshDispatcher,
-                        projectionRefreshQueue);
+                        projectionRefreshQueue).withNearCacheCoordinator(nearCaches);
         this.writeBehindWorker =
                 new RedisWriteBehindWorker(
                         backgroundJedis,
@@ -364,7 +387,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         effectiveWriteBehindConfig,
                         mapper,
                         keyStrategy,
-                        backgroundFunctionExecutor);
+                        backgroundFunctionExecutor).withTraceContextPropagator(config.traceContextPropagator())
+                        .withDurableListener(this::publishDurableChange);
         this.deadLetterRecoveryWorker =
                 new RedisDeadLetterRecoveryWorker(
                         backgroundJedis,
@@ -372,7 +396,9 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         effectiveDeadLetterRecoveryConfig,
                         mapper,
                         keyStrategy,
-                        effectiveWriteBehindConfig.deadLetterStreamKey());
+                        effectiveWriteBehindConfig.deadLetterStreamKey())
+                        .withTraceContextPropagator(config.traceContextPropagator())
+                        .withDurableListener(this::publishDurableChange);
         RedisLeaderLease recoveryCleanupLeaderLease =
                 !config.runtimeRole().runsWorkers() ? null : RuntimeCoordinationSupport.leaderLease(
                         backgroundJedis,
@@ -393,7 +419,9 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         effectiveDeadLetterRecoveryConfig,
                         mapper,
                         keyStrategy,
-                        effectiveWriteBehindConfig.deadLetterStreamKey());
+                        effectiveWriteBehindConfig.deadLetterStreamKey())
+                        .withTraceContextPropagator(config.traceContextPropagator())
+                        .withDurableListener(this::publishDurableChange);
         if (adminMonitoringEnabled) {
             RedisLeaderLease adminReportLeaderLease =
                     RuntimeCoordinationSupport.leaderLease(
@@ -800,12 +828,12 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
 
     public boolean awaitDurable(WriteReceipt<?, ?> receipt, Duration timeout) {
         requireDurabilityArguments(receipt, timeout);
-        return com.reactor.cachedb.core.api.CacheSession.super.awaitDurable(receipt, timeout);
+        return durabilityTracker.await(receipt, timeout, null);
     }
 
     public boolean awaitDurable(com.reactor.cachedb.core.api.CacheWriteBatchReceipt receipt, Duration timeout) {
         requireDurabilityArguments(receipt, timeout);
-        return com.reactor.cachedb.core.api.CacheSession.super.awaitDurable(receipt, timeout);
+        return durabilityTracker.awaitBatch(receipt, timeout);
     }
 
     public <T, ID> WriteReceipt<T, ID> awaitDurableOrThrow(
@@ -821,7 +849,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     public boolean awaitDurable(
             Collection<? extends WriteReceipt<?, ?>> receipts, Duration timeout) {
         requireDurabilityArguments(receipts, timeout);
-        return com.reactor.cachedb.core.api.DurabilityWait.await(() -> durabilityTracker.areDurable(receipts), timeout);
+        return durabilityTracker.awaitAll(receipts, timeout, null);
     }
 
     @Override public boolean areDurable(Collection<? extends WriteReceipt<?, ?>> receipts) {
@@ -1095,6 +1123,11 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
         return writeBatch(java.util.UUID.randomUUID().toString());
     }
 
+    public com.reactor.cachedb.core.api.CacheWriteBatchReceipt inTransaction(
+            java.util.function.Consumer<com.reactor.cachedb.core.api.CacheUnitOfWork> commands) {
+        return new CacheTransactionTemplate(this).execute(commands);
+    }
+
     public com.reactor.cachedb.core.api.CacheWriteBatch writeBatch(String batchId) {
         return new com.reactor.cachedb.redis.RedisAtomicWriteBatch(
                         foregroundJedis,
@@ -1105,7 +1138,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         producerGuard,
                         batchId)
                 .withMaxColumnsPerOperation(config.resourceLimits().maxColumnsPerOperation())
-                .withQueryIndexConfig(config.queryIndex());
+                .withQueryIndexConfig(config.queryIndex())
+                .withTraceContextPropagator(config.traceContextPropagator());
     }
 
     public String instanceId() {
@@ -1130,6 +1164,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     public void close() {
         RuntimeException closeFailure = null;
         closeFailure = closeResource(writeBehindWorker, closeFailure);
+        durableListeners.clear();
         closeFailure = closeResource(deadLetterRecoveryWorker, closeFailure);
         closeFailure = closeResource(recoveryCleanupWorker, closeFailure);
         closeFailure = closeResource(adminIncidentDeliveryManager, closeFailure);

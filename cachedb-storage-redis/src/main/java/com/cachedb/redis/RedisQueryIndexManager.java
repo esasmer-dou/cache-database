@@ -60,6 +60,7 @@ public final class RedisQueryIndexManager<T, ID> {
     private final RelationConfig relationConfig;
     private final QueryEvaluator queryEvaluator;
     private final RedisProducerGuard producerGuard;
+    private final Set<String> indexedColumns;
     private final Map<String, CachedEstimate> cardinalityCache = new ConcurrentHashMap<>();
     private final Map<String, CachedHistogram> histogramCache = new ConcurrentHashMap<>();
     private final Map<String, CachedLearnedStats> learnedStatsCache = new ConcurrentHashMap<>();
@@ -105,6 +106,14 @@ public final class RedisQueryIndexManager<T, ID> {
         this.relationConfig = relationConfig;
         this.queryEvaluator = queryEvaluator;
         this.producerGuard = producerGuard;
+        this.indexedColumns = config.sparseIndexMetadata()
+                ? Set.copyOf(metadata.indexedColumns()) : Set.copyOf(metadata.columns());
+        if (!metadata.columns().containsAll(indexedColumns))
+            throw new IllegalArgumentException("Indexed columns must be persisted columns");
+        metadata.partitionedSortIndexes().forEach((partition, sorts) -> {
+            if (!indexedColumns.contains(partition) || !indexedColumns.containsAll(sorts))
+                throw new IllegalArgumentException("Partitioned index columns must be present in indexedColumns");
+        });
     }
 
     public void reindex(T entity) {
@@ -121,6 +130,20 @@ public final class RedisQueryIndexManager<T, ID> {
         }
         try {
             reindexEntities(entities, true);
+        } catch (RuntimeException exception) {
+            markIndexFeaturesDegradedSafely();
+        }
+    }
+
+    public void reindexBatchWithColumns(Map<ID, T> entities, Map<ID, Map<String, Object>> precomputedColumns) {
+        if (entities == null || precomputedColumns == null || !precomputedColumns.keySet().containsAll(entities.keySet()))
+            throw new IllegalArgumentException("Precomputed columns must cover every indexed entity");
+        if (entities.size() > 10_000) throw new IllegalArgumentException("At most 10000 index rows per batch");
+        for (Map<String, Object> columns : precomputedColumns.values())
+            if (columns == null || !columns.keySet().containsAll(indexedColumns))
+                throw new IllegalArgumentException("Precomputed columns omit an indexed column");
+        try {
+            reindexEntities(entities.values(), true, precomputedColumns);
         } catch (RuntimeException exception) {
             markIndexFeaturesDegradedSafely();
         }
@@ -199,6 +222,11 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private void reindexEntities(Collection<T> entities, boolean respectShedding) {
+        reindexEntities(entities, respectShedding, null);
+    }
+
+    private void reindexEntities(Collection<T> entities, boolean respectShedding,
+            Map<ID, Map<String, Object>> precomputedColumns) {
         if (entities.size() > 10000) throw new IllegalArgumentException("At most 10000 index rows per batch");
         Map<ID, T> unique = new LinkedHashMap<>();
         for (T entity : entities) if (entity != null) unique.put(metadata.idAccessor().apply(entity), entity);
@@ -214,7 +242,7 @@ public final class RedisQueryIndexManager<T, ID> {
         List<Response<Map<String, String>>> responses = new ArrayList<>(ids.size());
         try (AbstractPipeline read = jedis.pipeline()) {
             for (ID id : ids) {
-                columns.add(codec.toColumns(unique.get(id)));
+                columns.add(precomputedColumns == null ? codec.toColumns(unique.get(id)) : precomputedColumns.get(id));
                 responses.add(read.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
             }
             read.sync();
@@ -223,7 +251,7 @@ public final class RedisQueryIndexManager<T, ID> {
         boolean changed = false;
         for (int i = 0; i < ids.size(); i++) {
             Map<String, String> next = new LinkedHashMap<>();
-            for (String column : metadata.columns()) next.put(column, serializeValue(columns.get(i).get(column)));
+            for (String column : indexedColumns) next.put(column, serializeValue(columns.get(i).get(column)));
             var plan = RedisIndexMutationPlanner.plan(responses.get(i).get(), next, !respectShedding);
             plans.add(plan);
             changed |= !plan.unchanged();
@@ -291,7 +319,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 String idValue = idValues.get(index);
                 Map<String, Object> columns = entityColumns.get(index);
                 LinkedHashMap<String, String> metaValues = new LinkedHashMap<>();
-                for (String column : metadata.columns()) {
+                for (String column : indexedColumns) {
                     metaValues.put(column, serializeValue(columns.get(column)));
                 }
                 upsertPartitionedSortIndexes(writePipeline, idValue, columns);
@@ -1043,8 +1071,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 continue;
             }
             T entity = codec.fromRedisValue(payload);
-            Map<String, Object> columns = codec.toColumns(entity);
-            if (queryEvaluator.matches(columns, filterNode)) {
+            if (queryEvaluator.matches(entity, codec, filterNode)) {
                 matches.add(orderedIds.get(index));
             }
         }
@@ -1268,6 +1295,7 @@ public final class RedisQueryIndexManager<T, ID> {
                             candidate ->
                                     candidate.name().equals(filter.column().split("\\.", 2)[0]));
         }
+        if (!indexedColumns.contains(filter.column())) return false;
         return switch (filter.operator()) {
             case EQ, IN -> config.exactIndexEnabled();
             case GT, GTE, LT, LTE -> config.rangeIndexEnabled();
@@ -1357,7 +1385,7 @@ public final class RedisQueryIndexManager<T, ID> {
         }
         int count = 0;
         for (QuerySort sort : sorts) {
-            if (!metadata.columns().contains(sort.column())
+            if (!indexedColumns.contains(sort.column())
                     || !config.rangeIndexEnabled()
                     || !supportsScoreOrdering(sort.column())) {
                 break;
@@ -1389,6 +1417,7 @@ public final class RedisQueryIndexManager<T, ID> {
         if (filter.column().contains(".")) {
             return resolveRelationMatches(filter);
         }
+        if (!indexedColumns.contains(filter.column())) return null;
         return switch (filter.operator()) {
             case EQ -> membersForExact(filter.column(), filter.value());
             case IN -> membersForIn(filter.column(), filter.values());
@@ -1643,8 +1672,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 continue;
             }
             T entity = codec.fromRedisValue(payload);
-            Map<String, Object> columns = codec.toColumns(entity);
-            if (queryEvaluator.matches(columns, residualNode)) {
+            if (queryEvaluator.matches(entity, codec, residualNode)) {
                 matches.add(orderedIds.get(index));
             }
             index++;
@@ -2221,6 +2249,7 @@ public final class RedisQueryIndexManager<T, ID> {
     private String toSnakeCase(String value) { return RedisIndexKeySpace.toSnakeCase(value); }
 
     private boolean supportsScoreOrdering(String column) {
+        if (!indexedColumns.contains(column)) return false;
         String declaredType = metadata.columnTypes().get(column);
         if (declaredType == null || declaredType.isBlank()) {
             return false;

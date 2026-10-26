@@ -72,6 +72,98 @@ return 1
     private volatile boolean running;
     private volatile boolean closed;
     private boolean schedulingEnabled = true;
+    private AutoCloseable changeRegistration;
+    private com.reactor.cachedb.starter.CacheDatabase changeDatabase;
+
+    /** SQL-backed snapshots observe committed changes, never a producer's not-yet-durable receipt. */
+    public synchronized SnapshotJobs withDatabase(com.reactor.cachedb.starter.CacheDatabase database) {
+        if (running || changeRegistration != null) throw new IllegalStateException("Configure the dirty bridge before start");
+        changeDatabase = Objects.requireNonNull(database);
+        Map<String, List<DirtyTarget>> targets = new LinkedHashMap<>();
+        for (Job job : jobs.values()) for (SnapshotDirtyBinding binding : job.plan.autoDirtyBindings()) {
+            if (job.plan.rootScope() == null)
+                throw new IllegalArgumentException("Auto-dirty requires an explicit scopedBy/rootScope for " + job.plan.name());
+            if (database.entityRegistry().find(binding.entityName()).isEmpty())
+                throw new IllegalArgumentException("Unknown auto-dirty entity: " + binding.entityName());
+            targets.computeIfAbsent(binding.entityName(), ignored -> new ArrayList<>()).add(new DirtyTarget(job, binding));
+        }
+        if (!targets.isEmpty()) changeRegistration = database.onDurableEntityChange(operation -> {
+            if (closed) return;
+            for (DirtyTarget target : targets.getOrDefault(operation.entityName(), List.of())) {
+                Job job = target.job();
+                if (!job.settings.enabled()) continue;
+                try {
+                    String id;
+                    if (target.binding().rootEntity()) id = operation.id();
+                    else {
+                        // A partial/delete event cannot reconstruct a complete child or its previous parent.
+                        // Keep reconciliation authoritative rather than guessing a root ID or issuing N point loads.
+                        job.forceFull.set(true);
+                        var entity = database.entityRegistry().find(operation.entityName()).orElseThrow();
+                        if (operation.type() != com.reactor.cachedb.core.model.OperationType.UPSERT
+                                || !operation.columns().keySet().containsAll(entity.metadata().columns())) continue;
+                        Object changed = entity.codec().fromColumns(new LinkedHashMap<>(operation.columns()));
+                        id = target.binding().rootIdExtractor().apply(changed);
+                    }
+                    queueDirtyRoot(job, id);
+                } catch (RuntimeException failure) {
+                    job.forceFull.set(true);
+                    LOG.warn("Auto-dirty mapping requires reconciliation: plan={}", job.plan.name());
+                }
+            }
+        });
+        return this;
+    }
+
+    private record DirtyTarget(Job job, SnapshotDirtyBinding binding) {}
+
+    private void queueDirtyRoot(Job job, String id) {
+        if (id == null || id.isBlank() || id.length() > 512 || id.indexOf('\n') >= 0) {
+            job.forceFull.set(true);
+            return;
+        }
+        if (job.changedRoots.contains(id)) return;
+        int current;
+        do {
+            current = job.queuedRoots.get();
+            if (current >= job.settings.batchRows()) { job.forceFull.set(true); return; }
+        } while (!job.queuedRoots.compareAndSet(current, current + 1));
+        if (!job.changedRoots.add(id)) job.queuedRoots.decrementAndGet();
+    }
+
+    private void dirtyTick(Job job) {
+        if (closed || !job.dirtyBusy.compareAndSet(false, true)) return;
+        try {
+            var roots = new ArrayList<String>();
+            for (String id : job.changedRoots) {
+                if (roots.size() >= job.settings.batchRows()) break;
+                if (job.changedRoots.remove(id)) { job.queuedRoots.decrementAndGet(); roots.add(id); }
+            }
+            if (!roots.isEmpty()) {
+                try { markDirty(job.plan.name(), roots); }
+                catch (RuntimeException capacityOrRedisFailure) {
+                    job.forceFull.set(true);
+                    LOG.warn("Auto-dirty admission failed; full reconciliation is due: plan={}", job.plan.name());
+                }
+            }
+            boolean automatic = !job.settings.dirtyFlushInterval().isZero() || job.settings.dirtyFlushThreshold() > 0;
+            if (!automatic || job.busy.get()) return;
+            if (job.forceFull.getAndSet(false)) {
+                var result = refresh(job.plan.name(), true);
+                if (!"COMPLETED".equals(result.status())) job.forceFull.set(true);
+                return;
+            }
+            long now = clock.millis();
+            boolean interval = !job.settings.dirtyFlushInterval().isZero()
+                    && now - job.lastDirtyFlushMillis >= job.settings.dirtyFlushInterval().toMillis();
+            boolean threshold = job.settings.dirtyFlushThreshold() > 0
+                    && new SnapshotDirtyRoots(redis, job.prefix, job.settings).pendingCount() >= job.settings.dirtyFlushThreshold();
+            if (interval || threshold) { flushDirty(job.plan.name()); job.lastDirtyFlushMillis = now; }
+        } catch (RuntimeException failure) {
+            job.forceFull.set(true);
+            LOG.warn("Auto-dirty execution failed; reconciliation remains due: plan={}", job.plan.name());
+        } finally { job.dirtyBusy.set(false); }
+    }
 
     public SnapshotJobs withSchedulingEnabled(boolean enabled) {
         if (running)
@@ -656,6 +748,8 @@ return 1
     @Override
     public synchronized void start() {
         if (!schedulingEnabled) return;
+        if (changeDatabase == null && jobs.values().stream().anyMatch(job -> !job.plan.autoDirtyBindings().isEmpty()))
+            throw new IllegalStateException("Auto-dirty plans require withDatabase or Spring auto-configuration");
         if (closed) throw new IllegalStateException("Snapshot jobs are closed");
         if (running) return;
         if (jobs.values().stream().anyMatch(job -> job.settings.enabled()))
@@ -670,15 +764,20 @@ return 1
                 schedules.add(
                         scheduler.scheduleWithFixedDelay(
                                 () -> {
+                                    boolean forced = job.forceFull.getAndSet(false);
                                     try {
-                                        refresh(job.plan.name(), false);
+                                        var result = refresh(job.plan.name(), forced);
+                                        if (forced && !"COMPLETED".equals(result.status())) job.forceFull.set(true);
                                     } catch (RuntimeException ignored) {
-                                        /* Already logged. */
+                                        if (forced) job.forceFull.set(true);
                                     }
                                 },
                                 0,
                                 job.settings.interval().toMillis(),
                                 TimeUnit.MILLISECONDS));
+                if (!job.plan.autoDirtyBindings().isEmpty() || !job.settings.dirtyFlushInterval().isZero()
+                        || job.settings.dirtyFlushThreshold() > 0)
+                    schedules.add(scheduler.scheduleWithFixedDelay(() -> dirtyTick(job), 250, 250, TimeUnit.MILLISECONDS));
             }
     }
 
@@ -701,6 +800,8 @@ return 1
     public synchronized void close() {
         closed = true;
         running = false;
+        if (changeRegistration != null) try { changeRegistration.close(); }
+        catch (Exception failure) { LOG.warn("Snapshot dirty bridge close failed"); }
         for (Job job : jobs.values())
             synchronized (job) {
                 if (job.worker != null) job.worker.interrupt();
@@ -711,6 +812,11 @@ return 1
     }
 
     private static final class Job {
+        final Set<String> changedRoots = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        final java.util.concurrent.atomic.AtomicInteger queuedRoots = new java.util.concurrent.atomic.AtomicInteger();
+        final AtomicBoolean forceFull = new AtomicBoolean();
+        final AtomicBoolean dirtyBusy = new AtomicBoolean();
+        long lastDirtyFlushMillis;
         final SnapshotPlan<?, ?> plan;
         final SnapshotSettings settings;
         final String prefix;

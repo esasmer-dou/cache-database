@@ -13,8 +13,8 @@ foreach ($provider in @('postgresql','mssql','oracle')) {
     $collection = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     $requests = @(Get-Requests $collection.item)
     $names = @($requests | ForEach-Object { $_.name })
-    if ($names.Count -ne 59 -or @($names | Sort-Object -Unique).Count -ne $names.Count -or $poll -notin $names) {
-        throw 'Business flow requires 59 uniquely named requests and one saved status request.'
+    if ($names.Count -ne 61 -or @($names | Sort-Object -Unique).Count -ne $names.Count -or $poll -notin $names) {
+        throw 'Business flow requires 61 uniquely named requests and one saved status request.'
     }
     $sequence = $names | ConvertTo-Json -Compress
     $collection.variable = @($collection.variable | Where-Object { $_.key -ne 'businessSequence' }) +
@@ -23,7 +23,11 @@ foreach ($provider in @('postgresql','mssql','oracle')) {
         listen='test'; script=[pscustomobject]@{type='text/javascript';exec=@(
             "const pollName = '$poll';",
             "if (pm.info.requestName !== pollName) {",
-            "  pm.test('Expected successful HTTP response: ' + pm.info.requestName, () => pm.expect(pm.response.code).to.be.within(200, 299));",
+            "  if (pm.info.requestName === 'Reject Incomplete Absolute Stock Values') {",
+            "    pm.test('Incomplete absolute stock command is rejected', () => pm.response.to.have.status(400));",
+            "  } else {",
+            "    pm.test('Expected successful HTTP response: ' + pm.info.requestName, () => pm.expect(pm.response.code).to.be.within(200, 299));",
+            "  }",
             "  if (pm.response.code === 202 && pm.response.json().jobId) {",
             "    const sequence = JSON.parse(pm.collectionVariables.get('businessSequence'));",
             "    const index = sequence.indexOf(pm.info.requestName);",

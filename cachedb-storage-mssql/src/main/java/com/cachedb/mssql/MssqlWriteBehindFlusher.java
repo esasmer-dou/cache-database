@@ -163,6 +163,11 @@ public final class MssqlWriteBehindFlusher extends AbstractJdbcWriteBehindFlushe
                 int index = 0;
                 while (index < accepted.size()) {
                     QueuedWriteOperation operation = accepted.get(index);
+                    if (operation.type() == OperationType.PATCH) {
+                        patch(connection, operation);
+                        index++;
+                        continue;
+                    }
                     index = operation.type() == OperationType.DELETE
                             ? deleteConsecutiveBatch(statements, accepted, index)
                             : upsertConsecutiveBatch(statements, accepted, index);
@@ -234,7 +239,7 @@ public final class MssqlWriteBehindFlusher extends AbstractJdbcWriteBehindFlushe
         int index = startIndex;
         while (index < operations.size() && batch.size() < maxProbeRows) {
             QueuedWriteOperation candidate = operations.get(index);
-            if (candidate.type() == OperationType.DELETE) {
+            if (candidate.type() != OperationType.UPSERT) {
                 break;
             }
             List<Map.Entry<String, String>> candidateEntries = entries(candidate);

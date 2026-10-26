@@ -660,7 +660,13 @@ public final class RedisProducerGuard {
         }
 
         private CachePolicy apply(CachePolicy basePolicy) {
+            if (this == STANDARD && basePolicy.pageSize() >= 1
+                    && basePolicy.entityTtlSeconds() <= Integer.MAX_VALUE
+                    && basePolicy.pageTtlSeconds() <= Integer.MAX_VALUE) return basePolicy;
             return CachePolicy.builder()
+                    .accessDebounceMillis(basePolicy.accessDebounceMillis())
+                    .recentTouchSlots(basePolicy.recentTouchSlots())
+                    .nearCachePolicy(basePolicy.nearCachePolicy())
                     .hotEntityLimit(
                             basePolicy.hotEntityLimit() <= 0
                                     ? basePolicy.hotEntityLimit()

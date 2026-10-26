@@ -2,8 +2,89 @@
 
 [English](README.md) | Türkçe
 
+## 0.16.0 ile Okuma ve Yazma Kontrolleri
+
+Bu örnek SQL Server kullanır. BOM, processor, starter ve doctor eklentisini aynı
+sürümden indirir. Java 21 gerekir; framework kaynak kodunu indirip derlemek
+gerekmez. Geçiş ve tutarlılık sınırları için
+[kontrol rehberini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/aktif-veri-performans-kontrolleri.md)
+inceleyin.
+
+Önce mevcut hızlı başlangıç, seed ve ön yükleme adımlarını tamamlayın. Ardından:
+
+1. `CatalogConfiguration`, aktif ürünleri
+   `ProductEntityCacheBinding.Columns.ACTIVE_STATUS` ile seçer,
+   `Columns.PRODUCT_ID` ile kapsamı belirler ve
+   `autoDirtyOnRootEntity()` ile değişiklikleri izler.
+2. Repository'deki dar güncelleme derleme sırasında doğrulanır:
+
+```java
+@CachePatch
+WriteReceipt<ProductEntity, Long> patchStockValues(
+        @CacheId Long productId,
+        @CacheColumn("stock_quantity") Integer stockQuantity,
+        @CacheColumn("reserved_quantity") Integer reservedQuantity,
+        @CacheColumn("stock_status") String stockStatus,
+        @CacheColumn("updated_at") Long updatedAt);
+```
+
+3. `ProductApplicationService.replaceStock`, `0 <= reserved <= stock`
+   kuralını denetler, stok durumunu hesaplar ve bu metodu çağırır. Ürün adı,
+   kategori ve fiyat değişmez; SQL'e tam satır UPSERT gönderilmez.
+
+```java
+return products.patchStockValues(productId, stock, reserved, status,
+        Instant.now(clock).getEpochSecond());
+```
+
+4. Artırma komutu değil, **yeni mutlak değerleri** gönderin:
+
+```http
+PATCH http://127.0.0.1:8092/api/products/1/stock-values
+Content-Type: application/json
+
+{"stock": 20, "reserved": 2}
+```
+
+HTTP 202, Redis'in komutu kabul ettiğini belirtir; SQL'e aktarımın bittiği
+anlamına gelmez. Redis'te tam kayıt yoksa receipt içinde `entity: null` olabilir.
+Eksik alanlardan ürün uydurulmaz. İsteğe bağlı alanlarla çalışan eski `/stock`
+endpoint'i korunur. `/stock-values` için iki alan da zorunludur; eksik veya
+geçersiz istek 400 döndürür.
+
+5. Kataloğun otomatik yenilenmesi için uygulamayı
+   `SAMPLE_CATALOG_SCHEDULE_ENABLED=true` ile başlatın. Örnekte aralık bir
+   saniye, eşik 20 kayıttır. SQL'e aktarım tamamlanınca ürünün kök kimliği
+   yenileme listesine alınır ve yalnızca ilgili katalog kaydı hazırlanır.
+   `GET /api/catalog/items/1` ile sonucu izleyin. Zamanlamayı açmadıysanız
+   mevcut elle yenileme endpoint'lerini kullanın. Uygulama dışı SQL değişiklikleri
+   için açık yenileme, CDC veya periyodik tam uzlaştırma gerekir.
+
+`ProductEntity` için L1 de açıkça etkinleştirilmiştir: 1024 kayıt, iki saniye,
+tahmini 4 MiB sınırı. Tekrarlanan ürün detayı okumaları Redis isteği yapmadan
+yanıtlanabilir; her yanıtta ayrı bir nesne çözülür. Pod'lar arası geçersiz kılma
+asenkron çalışır, anlık tutarlılık garantisi vermez. Her okuma Redis'e gitmeli ise
+`@CacheNearPolicy` tanımını kaldırın. Framework uygulama başına tek bir abonelik
+bağlantısı açar; arka plan havuzunda bu bağlantı için yer bırakın.
+
+Birden fazla kaydı birlikte değiştirmek için:
+
+```java
+var receipt = database.inTransaction(tx -> {
+    tx.put(product);
+    tx.putAll(otherProducts);
+});
+boolean durable = database.awaitDurable(receipt, Duration.ofSeconds(5));
+```
+
+Bu ertelenmiş kapsamda receipt döndüren `saveAll` yerine `tx.putAll` kullanın.
+Gerçek kabul sonucu ancak commit sonrasında oluşur. Commit öncesi hata yazmaları
+iptal eder; kabulden sonra SQL bekleme süresinin dolması rollback değildir.
+Sınırlar 100 kimlik, 4 MiB ve 2000 kuyruk alanıdır. Cluster aynı hash-tag kapsamını
+ister; sınırlı tenant kabul kuralları atomik işlemle atlanamaz.
+
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.15.1](https://img.shields.io/badge/CacheDB-0.15.1-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.15.1)
+[![CacheDB 0.16.0](https://img.shields.io/badge/CacheDB-0.16.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.16.0)
 
 Bu proje, CacheDB'nin Redis 8 ve SQL Server ile nasıl kullanılacağını gösteren
 bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
@@ -11,7 +92,7 @@ açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
 kullanır, kalıcı geçmiş SQL Server'da tutulur, büyüyen listeler ise bütün nesne
 ağacı yerine projection üzerinden okunur.
 
-> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.15.1`
+> Bu sürüm, genel kullanıma açık CacheDB Maven deposundaki değişmez `0.16.0`
 > paketini kullanır. GitHub token'ı veya yerel CacheDB kaynak kodu gerekmez.
 
 Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
@@ -20,10 +101,10 @@ yolunu okuyacak, karşılık gelen Redis projection'ını hazırlayacak, aktif y
 çağıracak ve kapsam ile kalıcılık sinyallerini inceleyeceksin. Redis'te kayıt
 bulunmaması arka planda gizli bir SQL Server sorgusu başlatmaz.
 
-## CacheDB 0.15.1'e Yükseltme
+## CacheDB 0.16.0'e Yükseltme
 
 Örnek POM; BOM, sağlayıcı starter'ı, annotation processor ve doctor plugin'ini
-`0.15.1` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
+`0.16.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
 POM ayrıca `jedis.version=5.2.0` ayarını içerir. Bu ayar olmadan Spring Boot parent,
 gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 
@@ -35,13 +116,13 @@ gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 - SQL kolonunuz NULL alabiliyorsa `Boolean` kullanın; primitive `boolean`, SQL NULL değerini reddeder.
 - Atomik katalog aktarımı ve indeksli snapshot sayfaları açık endpoint'lerle gösterilir. Redis Cluster dağılımı isteğe bağlı framework altyapısıdır; yerel Compose tek Redis kullanır.
 
-Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.15.1.md)
+Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.16.0.md)
 ve [sınırlı çalışma sözleşmelerini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/sinirli-calisma-islemleri.md)
 okuyun. Paketin kullanılabilir olması, uygulamanızın canlı ortam topolojisini doğrulamaz.
 
-## 0.15.1'de Kolon Güvenliği
+## 0.16.0'de Kolon Güvenliği
 
-Mevcut sample entity'leri bilerek dar tutulur. Yeni kontroller, 0.15.1 bağımlılığı
+Mevcut sample entity'leri bilerek dar tutulur. Yeni kontroller, 0.16.0 bağımlılığı
 ile devrededir; ek cache politikası veya iş tablosu değişikliği gerekmez.
 Redis'te daha geniş veri kabul edilmesi, SQL tablosunun sınırını kaldırmaz.
 
@@ -200,7 +281,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.15.1</cachedb.version>
+<cachedb.version>0.16.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -292,7 +373,7 @@ herkese açıktır; Maven `settings.xml`, kullanıcı adı veya token gerekmez.
 ### 1. Yayımlanmış CacheDB paketini çözümle
 
 Sample projesini doğrudan doğrula. Maven; BOM, starter, annotation processor ve
-doctor plugin'ini değişmez `0.15.1` paketinden kimlik bilgisi istemeden çözümler:
+doctor plugin'ini değişmez `0.16.0` paketinden kimlik bilgisi istemeden çözümler:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -1164,7 +1245,7 @@ public class CatalogConfiguration {
     SnapshotPlan<ProductEntity, CatalogCard> stockCatalog() {
         var source =
                 SnapshotSource.entity("products", ProductEntityCacheBinding.SOURCE)
-                        .where(SnapshotPredicate.eq("active_status", "ACTIVE"));
+                        .where(SnapshotPredicate.eq(ProductEntityCacheBinding.Columns.ACTIVE_STATUS, "ACTIVE"));
         return SnapshotPlan.streaming(
                         PLAN,
                         source,
@@ -1175,7 +1256,8 @@ public class CatalogConfiguration {
                         SnapshotIndexSpec.of(
                                 row -> row.category,
                                 row -> Math.max(0, row.stockQuantity - row.reservedQuantity)))
-                .scopedBy(source, "product_id", Long::valueOf)
+                .scopedBy(source, ProductEntityCacheBinding.Columns.PRODUCT_ID)
+                .autoDirtyOnRootEntity()
                 .withGeneratedJsonCodec()
                 .withContentReuse();
     }

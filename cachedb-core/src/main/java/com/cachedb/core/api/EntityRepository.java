@@ -36,6 +36,15 @@ public interface EntityRepository<T, ID> {
     QueryExplainPlan explain(QuerySpec querySpec);
     List<T> query(QuerySpec querySpec);
     T save(T entity);
+    /** Returns the merged hot entity; fails before acceptance when a full hot entity is unavailable. */
+    default T patch(ID id, Map<String, Object> columnUpdates) {
+        throw unsupported(RepositoryCapability.PARTIAL_UPDATE);
+    }
+
+    /** Cold SQL-only updates may return a receipt without an entity payload. */
+    default WriteReceipt<T, ID> patchWithReceipt(ID id, Map<String, Object> columnUpdates) {
+        throw unsupported(RepositoryCapability.PARTIAL_UPDATE);
+    }
     default WriteReceipt<T, ID> saveWithReceipt(T entity) {
         throw unsupported(RepositoryCapability.WRITE_RECEIPT);
     }

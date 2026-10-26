@@ -163,9 +163,10 @@ public final class OracleWriteBehindFlusher extends AbstractJdbcWriteBehindFlush
             Connection connection, List<QueuedWriteOperation> operations, boolean preserveOrder)
             throws SQLException {
         inTransaction(connection, operations, options.transactionIsolation(), null, accepted -> {
-            if (preserveOrder) {
+            if (preserveOrder || accepted.stream().anyMatch(op -> op.type() == OperationType.PATCH)) {
                 for (var operation : accepted) {
-                    executeGroup(connection, StatementKey.of(operation, dialect), List.of(operation));
+                    if (operation.type() == OperationType.PATCH) patch(connection, operation);
+                    else executeGroup(connection, StatementKey.of(operation, dialect), List.of(operation));
                 }
                 return;
             }
@@ -210,6 +211,11 @@ public final class OracleWriteBehindFlusher extends AbstractJdbcWriteBehindFlush
                 columnType(operation, operation.idColumn()),
                 options.emptyStringPolicy());
         statement.setLong(2, operation.version());
+    }
+
+    @Override
+    protected void bindPatchValue(PreparedStatement statement, int index, String value, String type) throws SQLException {
+        OracleValueBinder.bind(statement, index, value, type, options.emptyStringPolicy());
     }
 
     private void bindUpsert(

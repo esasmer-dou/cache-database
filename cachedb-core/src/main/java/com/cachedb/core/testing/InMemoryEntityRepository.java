@@ -275,6 +275,25 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
         return List.copyOf(result);
     }
 
+    @Override public T patch(ID id, Map<String, Object> updates) { return patchWithReceipt(id, updates).entity(); }
+
+    @Override public WriteReceipt<T, ID> patchWithReceipt(ID id, Map<String, Object> updates) {
+        lock.lock();
+        try {
+            if (updates == null || updates.isEmpty()) throw new IllegalArgumentException("Empty PATCH");
+            for (String column : updates.keySet())
+                if (!metadata.columns().contains(column) || column.equals(metadata.idColumn())
+                        || column.equals(metadata.versionColumn()) || column.equals(metadata.deletedColumn()))
+                    throw new IllegalArgumentException("Invalid PATCH column: " + column);
+            T previous = findById(id).orElseThrow(() -> new IllegalStateException("No hot PATCH target"));
+            var values = new LinkedHashMap<>(codec.toColumns(previous));
+            values.putAll(codec.normalizePatchColumns(updates));
+            var receipt = saveWithReceipt(codec.fromColumns(values));
+            return new WriteReceipt<>(receipt.entity(), id, receipt.redisNamespace(), OperationType.PATCH,
+                    receipt.version(), receipt.acceptedAt());
+        } finally { lock.unlock(); }
+    }
+
     public void deleteById(ID id) {
         deleteWithReceipt(id);
     }

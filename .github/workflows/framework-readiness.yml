@@ -96,6 +96,9 @@ on:
       - "tools/ci/**"
       - "tools/samples/**"
 
+permissions:
+  contents: read
+
 jobs:
   framework-readiness:
     runs-on: ubuntu-latest
@@ -147,6 +150,10 @@ jobs:
       - name: Validate framework architecture principles
         shell: pwsh
         run: ./tools/ci/check-framework-principles.ps1 -SummaryPath ./target/framework-principles-summary.md
+
+      - name: Verify architecture reflection guard rejects unsafe hot paths
+        shell: pwsh
+        run: ./tools/ci/test-framework-principles.ps1
 
       - name: Verify OSS release packaging
         shell: pwsh

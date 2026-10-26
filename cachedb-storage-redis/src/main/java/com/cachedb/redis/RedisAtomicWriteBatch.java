@@ -64,6 +64,16 @@ for i=1,viewCount do
 end
 local fields={}
 for i=pos,#ARGV do table.insert(fields,ARGV[i]) end
+local channel=''
+for i=1,#fields,2 do if fields[i] == 'nearInvalidationChannel' then channel=fields[i+1] end end
+if channel ~= '' then
+  for i=1,#fields,2 do
+    if string.match(fields[i], '^b%d+:nearInvalidation$')
+      and not redis.acl_check_cmd('PUBLISH',channel,fields[i+1]) then
+      return redis.error_reply('Near-cache requires PUBLISH permission before batch acceptance')
+    end
+  end
+end
 local result={}
 for i,item in ipairs(items) do
   local base=item[1]
@@ -105,6 +115,11 @@ for _,view in ipairs(views) do
   if view[6] == '1' or redis.call('EXISTS',KEYS[base+3]) == 1 then redis.call('SET',KEYS[base+2],'atomic-batch') end
 end
 local stream=redis.call('XADD',KEYS[1],'*',unpack(fields))
+if channel ~= '' then
+  for i=1,#fields,2 do
+    if string.match(fields[i], '^b%d+:nearInvalidation$') then redis.call('PUBLISH',channel,fields[i+1]) end
+  end
+end
 redis.call('HSET',KEYS[2],'fingerprint',ARGV[1],'stream',stream)
 redis.call('EXPIRE',KEYS[2],86400)
 table.insert(result,1,stream)
@@ -133,6 +148,11 @@ return result
     private boolean committed;
     private int maxColumns = 256;
     private boolean queryIndexesEnabled = true;
+    private com.reactor.cachedb.core.trace.TraceContextPropagator trace = com.reactor.cachedb.core.trace.TraceContexts.threadLocal();
+
+    public RedisAtomicWriteBatch withTraceContextPropagator(com.reactor.cachedb.core.trace.TraceContextPropagator value) {
+        trace = Objects.requireNonNull(value); return this;
+    }
 
     public RedisAtomicWriteBatch withQueryIndexConfig(QueryIndexConfig config) {
         if (!items.isEmpty()) throw new IllegalStateException("Configure indexes before adding operations");
@@ -233,6 +253,29 @@ return result
         return this;
     }
 
+    public <T, ID> CacheWriteBatch patch(Class<T> type, ID id, Map<String, Object> updates) {
+        var binding = binding(type); var metadata = binding.metadata();
+        Objects.requireNonNull(id, "id");
+        if (updates == null || updates.isEmpty() || updates.size() > maxColumns)
+            throw new IllegalArgumentException("Atomic PATCH requires a bounded nonempty column set");
+        for (String column : updates.keySet()) if (!metadata.columns().contains(column)
+                || column.equals(metadata.idColumn()) || column.equals(metadata.versionColumn())
+                || column.equals(metadata.deletedColumn())) throw new IllegalArgumentException("Invalid PATCH column: " + column);
+        var delta = binding.codec().normalizePatchColumns(updates);
+        var values = redis.mget(keys.entityKey(metadata.redisNamespace(), id),
+                keys.versionKey(metadata.redisNamespace(), id), keys.tombstoneKey(metadata.redisNamespace(), id));
+        if (values.get(0) == null || values.get(1) == null || values.get(2) != null)
+            throw new IllegalStateException("Atomic PATCH requires a complete hot, versioned, nondeleted entity");
+        var full = new LinkedHashMap<>(binding.codec().toColumns(binding.codec().fromRedisValue(values.get(0))));
+        full.putAll(delta);
+        Object entity = binding.codec().fromColumns(full);
+        var columns = new LinkedHashMap<String, String>();
+        delta.forEach((column, value) -> columns.put(column, value == null ? null : value.toString()));
+        add(new Item(binding, id, binding.codec().toRedisValue(entity), columns, full,
+                projectionPayloads(binding, entity, id), OperationType.PATCH, Long.parseLong(values.get(1))));
+        return this;
+    }
+
     private void add(Item item) {
         var route = com.reactor.cachedb.core.route.RouteCacheContext.currentContract();
         if (route != null && route.tenantQuota().bounded())
@@ -291,7 +334,9 @@ return result
                                                 : 0),
                                 Long.toString(System.currentTimeMillis())));
         var mapper = new RedisWriteOperationMapper();
+        var traceMetadata = com.reactor.cachedb.core.trace.TraceContexts.boundedCopy(trace.capture());
         Map<String, String> fields = new LinkedHashMap<>();
+        if (!traceMetadata.isEmpty()) fields.put("traceMetadata", com.reactor.cachedb.core.trace.TraceMetadataCodec.encode(traceMetadata));
         fields.put("type", "UPSERT");
         fields.put("entity", "__atomic_batch");
         fields.put("table", "__atomic_batch");
@@ -320,8 +365,14 @@ return result
                     producer == null
                             ? item.binding.cachePolicy()
                             : producer.effectiveCachePolicy(item.binding.cachePolicy());
+            if (!policy.nearCachePolicy().enabled() && metadata.nearCachePolicy().enabled())
+                policy = policy.withNearCachePolicy(metadata.nearCachePolicy());
+            if (policy.nearCachePolicy().enabled()) {
+                fields.put("nearInvalidationChannel", keys.nearInvalidationChannel());
+                fields.put("b" + i + ":nearInvalidation", RedisNearCacheCoordinator.message(ns, item.id));
+            }
             boolean admit =
-                    item.type == OperationType.UPSERT
+                    item.type != OperationType.DELETE
                             && policy.shouldAdmit(
                                     item.admissionColumns, CacheAdmissionSource.WRITE);
             String payloadKey = keys.entityKey(ns, item.id);
@@ -356,7 +407,7 @@ return result
                 viewCount++;
             }
             var columns = new LinkedHashMap<>(item.columns);
-            if (metadata.deletedColumn() != null)
+            if (metadata.deletedColumn() != null && item.type != OperationType.PATCH)
                 columns.put(
                         metadata.deletedColumn(),
                         item.type == OperationType.DELETE
@@ -376,7 +427,11 @@ return result
                                     item.id.toString(),
                                     columns,
                                     0,
-                                    Instant.now())
+                                    Instant.now(),
+                                    item.type == OperationType.PATCH ? ns : "",
+                                    item.type == OperationType.PATCH ? item.id.toString() : "",
+                                    item.type == OperationType.PATCH ? item.expected : 0,
+                                    "", List.of(), traceMetadata)
                             .inTransaction(batchId);
             for (var field : mapper.toBody(operation).entrySet())
                 fields.put("b" + i + ":" + field.getKey(), field.getValue());
@@ -402,6 +457,7 @@ return result
         arguments.addAll(viewArguments);
         if (fields.size() > 2000)
             throw new IllegalArgumentException("Atomic batch exceeds 2000 stream fields");
+        int streamFieldsStart = arguments.size();
         for (var field : fields.entrySet()) {
             arguments.add(field.getKey());
             arguments.add(field.getValue());
@@ -409,7 +465,7 @@ return result
         long bytes = 0;
         for (String argument : arguments) bytes += argument.getBytes(StandardCharsets.UTF_8).length;
         if (bytes > MAX_BYTES) throw new IllegalArgumentException("Atomic batch exceeds 4 MiB");
-        arguments.set(0, fingerprint(redisKeys, arguments));
+        arguments.set(0, fingerprint(redisKeys, arguments, streamFieldsStart));
         if (redis.clustered()) {
             try { redis.requireSameSlot(redisKeys); }
             catch (IllegalArgumentException crossSlot) {
@@ -433,7 +489,7 @@ return result
         return new CacheWriteBatchReceipt(batchId, reply.get(0).toString(), versions, dependencies);
     }
 
-    private static String fingerprint(List<String> keys, List<String> args) {
+    private static String fingerprint(List<String> keys, List<String> args, int streamFieldsStart) {
         try {
             var hash = MessageDigest.getInstance("SHA-256");
             for (String key : keys) {
@@ -441,6 +497,9 @@ return result
                 hash.update((byte) 0);
             }
             for (int i = 1; i < args.size(); i++) {
+                if (i >= streamFieldsStart && (i - streamFieldsStart) % 2 == 0
+                        && (args.get(i).equals("traceMetadata") || args.get(i).endsWith(":traceMetadata")
+                            || args.get(i).equals("nearInvalidationChannel") || args.get(i).endsWith(":nearInvalidation"))) { i++; continue; }
                 if (i == 3) continue; // Acceptance clock is not part of the retry identity.
                 if (i > 0 && args.get(i - 1).endsWith("createdAt")) continue;
                 hash.update(args.get(i).getBytes(StandardCharsets.UTF_8));

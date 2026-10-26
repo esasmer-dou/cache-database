@@ -32,6 +32,47 @@ import org.junit.jupiter.params.provider.ValueSource;
 class WriteFenceProvidersIntegrationTest {
     @ParameterizedTest
     @ValueSource(strings = {"postgres", "mssql", "oracle"})
+    void patchesPreserveOtherColumnsRejectGapsAndNeverResurrectDeletes(String provider) throws Exception {
+        try (Fixture fixture = new Fixture(provider)) {
+            try (var connection = fixture.source.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE " + fixture.table + " ADD untouched_text VARCHAR(100)");
+            }
+            var flusher = fixture.flusher();
+            flusher.flush(fixture.operation("patch", OperationType.UPSERT, 1, "original"));
+            try (var connection = fixture.source.getConnection(); var statement = connection.createStatement()) {
+                statement.executeUpdate("UPDATE " + fixture.table + " SET untouched_text='keep'");
+            }
+            flusher.flush(patch(fixture, "value_text", "changed", 2));
+            assertThat(fixture.version("patch")).isEqualTo(2);
+            assertThatThrownBy(() -> flusher.flush(patch(fixture, "untouched_text", "late", 4)))
+                    .isInstanceOf(SQLException.class).hasMessageContaining("predecessor");
+            assertThat(fixture.version("patch")).isEqualTo(2);
+            flusher.flushBatch(List.of(patch(fixture, "untouched_text", "next", 3), patch(fixture, "value_text", null, 4)));
+            try (var connection = fixture.source.getConnection(); var statement = connection.createStatement();
+                    var rows = statement.executeQuery("SELECT value_text, untouched_text FROM " + fixture.table)) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getString(1)).isNull();
+                assertThat(rows.getString(2)).isEqualTo("next");
+            }
+            flusher.flush(fixture.operation("patch", OperationType.DELETE, 5));
+            flusher.flush(patch(fixture, "value_text", "stale", 4));
+            assertThatThrownBy(() -> flusher.flush(patch(fixture, "value_text", "revived", 6)))
+                    .isInstanceOf(SQLException.class).hasMessageContaining("deleted");
+            assertThat(fixture.rows()).isZero();
+        }
+    }
+
+    private static QueuedWriteOperation patch(Fixture fixture, String column, String value, long version) {
+        var changes = new LinkedHashMap<String, String>();
+        changes.put("id", "patch");
+        changes.put(column, value);
+        changes.put("entity_version", Long.toString(version));
+        return new QueuedWriteOperation(OperationType.PATCH, "WriteFenceFixture", fixture.table, fixture.table,
+                "", "id", "entity_version", null, "patch", changes, version, Instant.EPOCH);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"postgres", "mssql", "oracle"})
     void coalescingIsExplicitAndTombstonesWinEqualVersions(String provider) throws Exception {
         try (Fixture fixture = new Fixture(provider)) {
             var fence = new JdbcWriteFence(fixture.source, fixture.registry,
@@ -314,7 +355,7 @@ class WriteFenceProvidersIntegrationTest {
         }
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final String provider;
         final String table = "wf_" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
         final HikariDataSource source;

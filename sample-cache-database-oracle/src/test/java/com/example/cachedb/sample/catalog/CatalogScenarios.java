@@ -141,6 +141,20 @@ public final class CatalogScenarios {
         complete(http, base, post(http, base + "/api/catalog/dirty/flush", Map.of()));
         var updated = http.getForObject(base + "/api/catalog/items/9000001", Map.class);
         assertEquals(12, ((Number) ((Map<?, ?>) ((List<?>) updated.get("values")).getFirst()).get("available")).intValue());
+        var patchTransport = new org.springframework.http.client.JdkClientHttpRequestFactory(
+                java.net.http.HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build());
+        patchTransport.setReadTimeout(Duration.ofSeconds(10));
+        http.getRestTemplate().setRequestFactory(patchTransport);
+        var patched = http.exchange(RequestEntity.patch(URI.create(base + "/api/products/9000001/stock-values"))
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("stock", 20, "reserved", 2)), Map.class);
+        assertEquals(HttpStatus.ACCEPTED, patched.getStatusCode());
+        assertEquals("PATCH", patched.getBody().get("operation"));
+        await(() -> sql.queryForObject("SELECT stock_quantity FROM sample_products WHERE product_id = 9000001", Integer.class) == 20);
+        assertEquals("\u0130\u011fne \u00e7elik", sql.queryForObject(
+                "SELECT product_name FROM sample_products WHERE product_id = 9000001", String.class));
+        var incomplete = http.exchange(RequestEntity.patch(URI.create(base + "/api/products/9000001/stock-values"))
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("stock", 20)), Map.class);
+        assertEquals(HttpStatus.BAD_REQUEST, incomplete.getStatusCode());
     }
 
     private static Map<String, Object> row(long id, String category) {

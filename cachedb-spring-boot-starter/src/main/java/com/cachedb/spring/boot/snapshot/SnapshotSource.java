@@ -67,6 +67,8 @@ public final class SnapshotSource<T> implements SnapshotInput {
         return name;
     }
 
+    public EntityMetadata<T, ?> entityMetadata() { return mapping == null ? null : mapping.entityMetadata(); }
+
     @Override
     public SnapshotSource<T> source() {
         return this;
@@ -141,6 +143,15 @@ public final class SnapshotSource<T> implements SnapshotInput {
     }
 
     public <V> SnapshotSelection select(CacheField<T, V> field) {
+        return select(field.columnName());
+    }
+
+    public <V> SnapshotSource<T> where(com.reactor.cachedb.core.query.TypedColumn<T, V> field, V value) {
+        checkColumn(field.columnName());
+        return where(SnapshotPredicate.eq(field, value));
+    }
+
+    public <V> SnapshotSelection select(com.reactor.cachedb.core.query.TypedColumn<T, V> field) {
         return select(field.columnName());
     }
 

@@ -58,6 +58,9 @@ final class CachePolicyCatalogFactory {
                 .entityTtlSeconds(entityTtlSeconds)
                 .pageTtlSeconds(pageTtlSeconds)
                 .hotPolicy(hotPolicy)
+                .accessDebounceMillis(fallback.accessDebounceMillis())
+                .recentTouchSlots(fallback.recentTouchSlots())
+                .nearCachePolicy(fallback.nearCachePolicy())
                 .build();
     }
 

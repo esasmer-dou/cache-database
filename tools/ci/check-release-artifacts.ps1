@@ -105,6 +105,23 @@ foreach ($module in $publicJarModules) {
                 }
             }
         }
+        if ([version]$Version -ge [version]'0.16.0' -and $suffix -ne '-javadoc.jar') {
+            $types = switch ($module) {
+                'cachedb-annotations' { @('annotations/CachePatch', 'annotations/CacheNearPolicy', 'annotations/CacheTransactional') }
+                'cachedb-core' { @('core/api/CacheUnitOfWork', 'core/query/TypedColumn', 'core/cache/NearCachePolicy', 'core/cache/SingleFlightLoader', 'core/config/MutationConfig', 'core/trace/TraceContextPropagator') }
+                'cachedb-storage-redis' { @('redis/RedisNearCacheCoordinator', 'redis/LocalDurabilitySignals') }
+                'cachedb-starter' { @('starter/CacheTransactionTemplate') }
+                'cachedb-spring-boot-starter' { @('spring/boot/CacheTransactionAutoConfiguration', 'spring/boot/CacheTraceAutoConfiguration', 'spring/boot/CacheDatabaseMetricsMeterBinder', 'spring/boot/snapshot/SnapshotDirtyBinding') }
+                default { @() }
+            }
+            $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }
+            $prefix = if ($suffix -eq '.jar') { 'com/reactor/cachedb' } else { 'com/cachedb' }
+            foreach ($type in $types) {
+                if ($entries -notcontains "$prefix/$type.$extension") {
+                    $invalid.Add("${module}: required 0.16 type is missing: $type.$extension")
+                }
+            }
+        }
         if ($module -eq 'cachedb-json' -and $suffix -ne '-javadoc.jar' -and
             [version]$Version -ge [version]'0.14.0') {
             $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }

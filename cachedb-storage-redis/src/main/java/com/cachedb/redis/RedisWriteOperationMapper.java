@@ -10,6 +10,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class RedisWriteOperationMapper {
+    private final com.reactor.cachedb.core.trace.TraceContextPropagator trace;
+    public RedisWriteOperationMapper() { this(com.reactor.cachedb.core.trace.TraceContexts.threadLocal()); }
+    public RedisWriteOperationMapper(com.reactor.cachedb.core.trace.TraceContextPropagator trace) {
+        this.trace = java.util.Objects.requireNonNull(trace);
+    }
 
     public <T, ID> Map<String, String> toBody(WriteOperation<T, ID> operation) {
         Map<String, String> body = new LinkedHashMap<>();
@@ -28,6 +33,9 @@ public final class RedisWriteOperationMapper {
         body.put("id", String.valueOf(operation.id()));
         body.put("version", String.valueOf(operation.version()));
         body.put("createdAt", operation.createdAt().toString());
+        String encodedTrace = com.reactor.cachedb.core.trace.TraceMetadataCodec.encode(
+                operation.traceMetadata().isEmpty() ? trace.capture() : operation.traceMetadata());
+        if (!encodedTrace.isEmpty()) body.put("traceMetadata", encodedTrace);
         if (operation.dependency() != null) {
             body.put("dependencyNamespace", operation.dependency().redisNamespace());
             body.put("dependencyId", operation.dependency().id());
@@ -37,7 +45,8 @@ public final class RedisWriteOperationMapper {
         for (Map.Entry<String, Object> entry : operation.columns().entrySet()) {
             body.put(
                     "col:" + entry.getKey(),
-                    entry.getValue() == null ? "__NULL__" : String.valueOf(entry.getValue()));
+                    operation.type() == OperationType.PATCH ? PatchColumnValues.encode(entry.getValue())
+                            : entry.getValue() == null ? "__NULL__" : String.valueOf(entry.getValue()));
         }
         return body;
     }
@@ -61,6 +70,8 @@ public final class RedisWriteOperationMapper {
         body.put("createdAt", operation.createdAt().toString());
         if (operation.transactionGroupId() != null)
             body.put("transactionGroupId", operation.transactionGroupId());
+        if (!operation.traceMetadata().isEmpty()) body.put("traceMetadata",
+                com.reactor.cachedb.core.trace.TraceMetadataCodec.encode(operation.traceMetadata()));
         if (operation.atomicBatch()) {
             body.put("batchCount", Integer.toString(operation.batchOperations().size()));
             for (int i = 0; i < operation.batchOperations().size(); i++)
@@ -75,7 +86,8 @@ public final class RedisWriteOperationMapper {
         for (Map.Entry<String, String> entry : operation.columns().entrySet()) {
             body.put(
                     "col:" + entry.getKey(),
-                    entry.getValue() == null ? "__NULL__" : entry.getValue());
+                    operation.type() == OperationType.PATCH ? PatchColumnValues.encode(entry.getValue())
+                            : entry.getValue() == null ? "__NULL__" : entry.getValue());
         }
         return body;
     }
@@ -84,7 +96,9 @@ public final class RedisWriteOperationMapper {
         Map<String, String> columns = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : body.entrySet()) {
             if (entry.getKey().startsWith("col:")) {
-                String value = "__NULL__".equals(entry.getValue()) ? null : entry.getValue();
+                boolean patch = "PATCH".equals(firstNonBlank(body.get("type"), body.get("operationType")));
+                String value = patch ? PatchColumnValues.decode(entry.getValue())
+                        : "__NULL__".equals(entry.getValue()) ? null : entry.getValue();
                 columns.put(entry.getKey().substring(4), value);
             }
         }
@@ -127,7 +141,8 @@ public final class RedisWriteOperationMapper {
                 emptyToNull(body.get("dependencyId")),
                 parseLong(body.get("dependencyVersion")),
                 emptyToNull(body.get("transactionGroupId")),
-                members);
+                members,
+                com.reactor.cachedb.core.trace.TraceMetadataCodec.decode(body.get("traceMetadata")));
     }
 
     private String emptyToNull(String value) {

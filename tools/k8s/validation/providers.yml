@@ -1,14 +1,14 @@
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: redis, namespace: cachedb-v015-validation}
+metadata: {name: redis, namespace: cachedb-v016-validation}
 spec:
   selector: {app.kubernetes.io/name: cachedb-redis}
   ports: [{port: 6379, targetPort: 6379}]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: redis, namespace: cachedb-v015-validation}
+metadata: {name: redis, namespace: cachedb-v016-validation}
 spec:
   replicas: 1
   strategy: {type: Recreate}
@@ -55,14 +55,14 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: postgres, namespace: cachedb-v015-validation}
+metadata: {name: postgres, namespace: cachedb-v016-validation}
 spec:
   selector: {app.kubernetes.io/name: cachedb-postgres}
   ports: [{port: 5432, targetPort: 5432}]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: postgres, namespace: cachedb-v015-validation}
+metadata: {name: postgres, namespace: cachedb-v016-validation}
 spec:
   replicas: 1
   strategy: {type: Recreate}
@@ -119,14 +119,14 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: mssql, namespace: cachedb-v015-validation}
+metadata: {name: mssql, namespace: cachedb-v016-validation}
 spec:
   selector: {app.kubernetes.io/name: cachedb-mssql}
   ports: [{port: 1433, targetPort: 1433}]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: mssql, namespace: cachedb-v015-validation}
+metadata: {name: mssql, namespace: cachedb-v016-validation}
 spec:
   replicas: 1
   strategy: {type: Recreate}
@@ -184,14 +184,14 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: oracle, namespace: cachedb-v015-validation}
+metadata: {name: oracle, namespace: cachedb-v016-validation}
 spec:
   selector: {app.kubernetes.io/name: cachedb-oracle}
   ports: [{port: 1521, targetPort: 1521}]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: oracle, namespace: cachedb-v015-validation}
+metadata: {name: oracle, namespace: cachedb-v016-validation}
 spec:
   replicas: 1
   strategy: {type: Recreate}

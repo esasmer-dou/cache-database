@@ -36,6 +36,16 @@ import redis.clients.jedis.JedisPooled;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class DefaultCacheSession implements CacheSession {
+    private com.reactor.cachedb.redis.RedisNearCacheCoordinator nearCacheCoordinator;
+    DefaultCacheSession withNearCacheCoordinator(com.reactor.cachedb.redis.RedisNearCacheCoordinator coordinator) {
+        nearCacheCoordinator = coordinator; return this;
+    }
+    @Override public boolean awaitDurable(com.reactor.cachedb.core.model.WriteReceipt<?, ?> receipt, java.time.Duration timeout) {
+        return durabilityTracker.await(receipt, timeout, null);
+    }
+    @Override public boolean awaitDurable(com.reactor.cachedb.core.api.CacheWriteBatchReceipt receipt, java.time.Duration timeout) {
+        return durabilityTracker.awaitBatch(receipt, timeout);
+    }
     private final com.reactor.cachedb.redis.RedisDurabilityTracker durabilityTracker;
     @Override public boolean isDurable(com.reactor.cachedb.core.model.WriteReceipt<?, ?> receipt) {
         return durabilityTracker.isDurable(receipt);
@@ -233,7 +243,8 @@ public final class DefaultCacheSession implements CacheSession {
                 performanceCollector,
                 backgroundJedis,
                 projectionRefreshDispatcher,
-                projectionRefreshQueue);
+                projectionRefreshQueue).withMutationConfig(config.mutations())
+                .withNearCache(nearCacheCoordinator);
     }
 
     private record RepositoryKey(String entityName, CachePolicy cachePolicy) {}

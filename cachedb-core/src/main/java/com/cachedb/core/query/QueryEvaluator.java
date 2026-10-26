@@ -7,6 +7,33 @@ import java.util.Objects;
 
 public final class QueryEvaluator {
 
+    public <T> boolean matches(T entity, com.reactor.cachedb.core.model.EntityCodec<T> codec, QueryNode node) {
+        if (!codec.directColumnAccess()) return matches(codec.toColumns(entity), node);
+        return matchesDirect(entity, codec, node);
+    }
+
+    private <T> boolean matchesDirect(T entity, com.reactor.cachedb.core.model.EntityCodec<T> codec, QueryNode node) {
+        if (node instanceof QueryFilter filter) return matchesValue(codec.entityColumnValue(entity, filter.column()), filter);
+        QueryGroup group = (QueryGroup) node;
+        boolean and = Objects.requireNonNull(group.operator(), "operator") == QueryGroupOperator.AND;
+        for (QueryNode child : group.nodes())
+            if (matchesDirect(entity, codec, child) != and) return !and;
+        return and;
+    }
+
+    public <T> int compareColumns(T left, T right, com.reactor.cachedb.core.model.EntityCodec<T> codec, QuerySort sort) {
+        if (sort.direction() == QuerySortDirection.DESC) { T swap = left; left = right; right = swap; }
+        return compareSortValues(codec.entityColumnValue(left, sort.column()), codec.entityColumnValue(right, sort.column()));
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private int compareSortValues(Object left, Object right) {
+        Comparable a = comparableValue(left);
+        Comparable b = comparableValue(right);
+        if (a == null) return b == null ? 0 : 1;
+        return b == null ? -1 : a.compareTo(b);
+    }
+
     public boolean matches(Map<String, Object> columns, QueryNode node) {
         if (node instanceof QueryFilter filter) {
             return matches(columns, filter);
@@ -21,7 +48,10 @@ public final class QueryEvaluator {
     }
 
     public boolean matches(Map<String, Object> columns, QueryFilter filter) {
-        Object left = columns.get(filter.column());
+        return matchesValue(columns.get(filter.column()), filter);
+    }
+
+    private boolean matchesValue(Object left, QueryFilter filter) {
         return switch (filter.operator()) {
             case EQ -> Objects.equals(left, filter.value());
             case NE -> !Objects.equals(left, filter.value());

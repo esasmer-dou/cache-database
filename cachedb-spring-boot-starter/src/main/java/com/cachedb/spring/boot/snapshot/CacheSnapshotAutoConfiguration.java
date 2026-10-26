@@ -45,7 +45,7 @@ public class CacheSnapshotAutoConfiguration {
                             database.config().keyspace().keyPrefix(),
                             plans,
                             settings)
-                    .withSchedulingEnabled(database.config().runtimeRole().runsWorkers());
+                    .withSchedulingEnabled(database.config().runtimeRole().runsWorkers()).withDatabase(database);
         }
         return new SnapshotJobs(
                         source,
@@ -56,6 +56,6 @@ public class CacheSnapshotAutoConfiguration {
                         database.config().keyspace().keyPrefix(),
                         plans,
                         settings)
-                .withSchedulingEnabled(database.config().runtimeRole().runsWorkers());
+                .withSchedulingEnabled(database.config().runtimeRole().runsWorkers()).withDatabase(database);
     }
 }

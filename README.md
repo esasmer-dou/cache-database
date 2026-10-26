@@ -2,6 +2,10 @@
 
 English | [Türkçe](tr/README.md)
 
+**0.16.0:** [Bounded read/write controls](docs/hot-path-controls.md) covers typed
+columns, partial updates, automatic catalog refresh, atomic units of work,
+trace propagation, and opt-in L1 caching. [Release notes](docs/releases/v0.16.0.md).
+
 [![Latest release](https://img.shields.io/github/v/release/esasmer-dou/cache-database?display_name=tag&sort=semver)](https://github.com/esasmer-dou/cache-database/releases/latest)
 [![Production evidence](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
 [![Release checks](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml/badge.svg)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-ga-release-readiness.yml)
@@ -41,24 +45,24 @@ application's own staging topology.
 | Release information | Value |
 | --- | --- |
 | Latest published release | [GitHub release](https://github.com/esasmer-dou/cache-database/releases/latest) |
-| Repository version | `0.15.1` |
+| Repository version | `0.16.0` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local provider test topology | Redis 8, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
 
-## Current Release: 0.15.1
+## Current Release: 0.16.0
 
-`0.15.1` makes column limits database-aware. Connected schema and write checks
+`0.16.0` makes column limits database-aware. Connected schema and write checks
 use bounded JDBC capabilities, with provider-specific fallbacks. The payload
 ceiling rises to 4096 fields without removing SQL table, parameter or byte budgets.
 Wide mutable entities use chunked generated code; ordinary entity codecs and
 existing SQL durability/delete fences keep their contracts.
-See the [v0.15.1 release notes](docs/releases/v0.15.1.md) and
+See the [v0.16.0 release notes](docs/releases/v0.16.0.md) and
 [bounded runtime operations](docs/bounded-runtime-operations.md) for contracts and
 upgrade precautions.
 
-Keep the BOM, annotation processor and provider starter at `0.15.1`. Recompile
+Keep the BOM, annotation processor and provider starter at `0.16.0`. Recompile
 generated bindings, provision the [durable version metadata](docs/durable-write-fences.md)
 and drain old workers before upgrading. A framework package does not certify an
 application's production routes, Oracle Data Guard or SQL Server Always On topology.
@@ -116,7 +120,7 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the current release?" | [v0.15.1 Release Notes](docs/releases/v0.15.1.md) |
+| "What changed in the current release?" | [v0.16.0 Release Notes](docs/releases/v0.16.0.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "What is the Oracle provider contract?" | [Oracle Provider](docs/oracle-provider.md) |
@@ -168,13 +172,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the release you use. Version `0.15.1` is an
+Keep `cachedb.version` aligned with the release you use. Version `0.16.0` is an
 immutable release available from the anonymous CacheDB Maven repository and
 the GitHub Release bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.15.1</cachedb.version>
+    <cachedb.version>0.16.0</cachedb.version>
     <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -392,7 +396,7 @@ Behavior:
 
 - `save` writes the entity to Redis when its policy admits it.
 - Durable persistence is sent to the selected SQL write-behind path.
-- For a 0.15.1 upgrade, provision the separate [durable version table](docs/durable-write-fences.md) before starting upgraded workers; business tables are unchanged.
+- For a 0.16.0 upgrade, provision the separate [durable version table](docs/durable-write-fences.md) before starting upgraded workers; business tables are unchanged.
 - `detail` is Redis-only; `NOT_CACHED` does not mean the SQL row is absent.
 - If the entity does not satisfy the hot policy, it may be rejected or evicted
   from Redis.

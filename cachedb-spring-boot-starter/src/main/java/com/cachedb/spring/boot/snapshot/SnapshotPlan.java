@@ -14,7 +14,32 @@ public record SnapshotPlan<R, V>(
         Function<SnapshotRows, Function<R, Iterable<V>>> projection,
         SnapshotIndexSpec<R> indexSpec,
         SnapshotRootScope rootScope,
-        boolean contentReuse) {
+        boolean contentReuse,
+        List<SnapshotDirtyBinding> autoDirtyBindings) {
+    public SnapshotPlan(String name, SnapshotSource<R> roots, Function<R, String> id,
+            List<SnapshotSource<?>> sources, Class<V> valueType,
+            Function<SnapshotRows, Function<R, Iterable<V>>> projection, SnapshotIndexSpec<R> indexSpec,
+            SnapshotRootScope rootScope, boolean contentReuse) {
+        this(name, roots, id, sources, valueType, projection, indexSpec, rootScope, contentReuse, List.of());
+    }
+
+    public SnapshotPlan<R, V> autoDirtyOn(String entityName, Function<Object, String> extractor) {
+        return addDirtyBinding(new SnapshotDirtyBinding(entityName, extractor, false));
+    }
+
+    public SnapshotPlan<R, V> autoDirtyOnRootEntity() {
+        var metadata = roots.entityMetadata();
+        if (metadata == null) throw new IllegalArgumentException("Auto-dirty roots require a generated entity source");
+        return addDirtyBinding(new SnapshotDirtyBinding(metadata.entityName(), String::valueOf, true));
+    }
+
+    private SnapshotPlan<R, V> addDirtyBinding(SnapshotDirtyBinding binding) {
+        var bindings = new ArrayList<>(autoDirtyBindings);
+        if (bindings.size() >= 64 || bindings.stream().anyMatch(value -> value.entityName().equals(binding.entityName())))
+            throw new IllegalArgumentException("Auto-dirty registrations must be unique and bounded to 64");
+        bindings.add(binding);
+        return new SnapshotPlan<>(name, roots, id, sources, valueType, projection, indexSpec, rootScope, contentReuse, bindings);
+    }
     public SnapshotPlan<R, V> withGeneratedJsonCodec() {
         return withJsonCodec(com.reactor.cachedb.core.codec.GeneratedJsonCodecs.require(valueType));
     }
@@ -55,7 +80,7 @@ public record SnapshotPlan<R, V>(
                 new JsonSnapshotProjection<>(delegate, codec),
                 indexSpec,
                 rootScope,
-                contentReuse);
+                contentReuse, autoDirtyBindings);
     }
 
     @SuppressWarnings("unchecked")
@@ -85,7 +110,7 @@ public record SnapshotPlan<R, V>(
                 projection,
                 Objects.requireNonNull(spec),
                 rootScope,
-                contentReuse);
+                contentReuse, autoDirtyBindings);
     }
 
     public SnapshotPlan<R, V> scoped(SnapshotRootScope scope) {
@@ -99,14 +124,24 @@ public record SnapshotPlan<R, V>(
                         projection,
                         indexSpec,
                         Objects.requireNonNull(scope),
-                        contentReuse);
+                        contentReuse, autoDirtyBindings);
         scope.validate(plan);
         return plan;
     }
 
+    public <E, T> SnapshotPlan<R, V> scopedBy(SnapshotSource<E> source,
+            com.reactor.cachedb.core.query.TypedColumn<E, T> column, Function<String, T> parser) {
+        return scoped(SnapshotRootScope.byColumn(source, column.columnName(), parser));
+    }
+
+    public <E, T> SnapshotPlan<R, V> scopedBy(SnapshotSource<E> source,
+            com.reactor.cachedb.core.query.TypedColumn<E, T> column) {
+        return scopedBy(source, column, column.parser());
+    }
+
     public SnapshotPlan<R, V> withContentReuse() {
         return new SnapshotPlan<>(
-                name, roots, id, sources, valueType, projection, indexSpec, rootScope, true);
+                name, roots, id, sources, valueType, projection, indexSpec, rootScope, true, autoDirtyBindings);
     }
 
     /** Opt-in row-local mapping: roots are decoded and spooled without retaining a root list. */
@@ -159,10 +194,11 @@ public record SnapshotPlan<R, V>(
                         },
                 indexSpec,
                 rootScope,
-                contentReuse);
+                contentReuse, autoDirtyBindings);
     }
 
     public SnapshotPlan {
+        autoDirtyBindings = List.copyOf(autoDirtyBindings);
         if (name == null || !name.matches("[a-z][a-z0-9-]{0,63}"))
             throw new IllegalArgumentException("Invalid snapshot plan name");
         Objects.requireNonNull(roots);

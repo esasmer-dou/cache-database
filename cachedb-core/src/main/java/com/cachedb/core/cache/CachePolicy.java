@@ -6,7 +6,10 @@ public record CachePolicy(
         boolean lruEvictionEnabled,
         long entityTtlSeconds,
         long pageTtlSeconds,
-        EntityHotPolicy hotPolicy) {
+        EntityHotPolicy hotPolicy,
+        long accessDebounceMillis,
+        int recentTouchSlots,
+        NearCachePolicy nearCachePolicy) {
     public static final int UNBOUNDED = -1;
     public static final int DISABLED = 0;
 
@@ -19,7 +22,10 @@ public record CachePolicy(
                 && lruEvictionEnabled == value.lruEvictionEnabled
                 && entityTtlSeconds == value.entityTtlSeconds
                 && pageTtlSeconds == value.pageTtlSeconds
-                && java.util.Objects.equals(hotPolicy, value.hotPolicy);
+                && java.util.Objects.equals(hotPolicy, value.hotPolicy)
+                && accessDebounceMillis == value.accessDebounceMillis
+                && recentTouchSlots == value.recentTouchSlots
+                && nearCachePolicy.equals(value.nearCachePolicy);
     }
 
     @Override
@@ -29,7 +35,26 @@ public record CachePolicy(
         hash = 31 * hash + Boolean.hashCode(lruEvictionEnabled);
         hash = 31 * hash + Long.hashCode(entityTtlSeconds);
         hash = 31 * hash + Long.hashCode(pageTtlSeconds);
-        return 31 * hash + java.util.Objects.hashCode(hotPolicy);
+        hash = 31 * hash + java.util.Objects.hashCode(hotPolicy);
+        // Preserve the historical six-component hash; extension fields still participate in equals.
+        return hash;
+    }
+
+    public CachePolicy(int hotEntityLimit, int pageSize, boolean lruEvictionEnabled,
+            long entityTtlSeconds, long pageTtlSeconds, EntityHotPolicy hotPolicy,
+            long accessDebounceMillis, int recentTouchSlots) {
+        this(hotEntityLimit, pageSize, lruEvictionEnabled, entityTtlSeconds, pageTtlSeconds,
+                hotPolicy, accessDebounceMillis, recentTouchSlots, NearCachePolicy.disabled());
+    }
+
+    public CachePolicy withNearCachePolicy(NearCachePolicy policy) {
+        return new CachePolicy(hotEntityLimit, pageSize, lruEvictionEnabled, entityTtlSeconds,
+                pageTtlSeconds, hotPolicy, accessDebounceMillis, recentTouchSlots, policy);
+    }
+
+    public CachePolicy(int hotEntityLimit, int pageSize, boolean lruEvictionEnabled,
+            long entityTtlSeconds, long pageTtlSeconds, EntityHotPolicy hotPolicy) {
+        this(hotEntityLimit, pageSize, lruEvictionEnabled, entityTtlSeconds, pageTtlSeconds, hotPolicy, 500, 8192);
     }
 
     public CachePolicy(
@@ -48,8 +73,11 @@ public record CachePolicy(
     }
 
     public CachePolicy {
+        nearCachePolicy = java.util.Objects.requireNonNull(nearCachePolicy, "nearCachePolicy");
         if (hotEntityLimit < UNBOUNDED)
             throw new IllegalArgumentException("hotEntityLimit must be -1, 0, or positive");
+        if (accessDebounceMillis < 0 || accessDebounceMillis > 60_000 || recentTouchSlots < 1 || recentTouchSlots > 65_536)
+            throw new IllegalArgumentException("Invalid bounded access tracking configuration");
         hotPolicy = hotPolicy == null ? EntityHotPolicy.countWindow() : hotPolicy;
         if (hotEntityLimit == DISABLED) hotPolicy = EntityHotPolicy.disabled();
     }
@@ -77,6 +105,15 @@ public record CachePolicy(
         private long entityTtlSeconds = 0;
         private long pageTtlSeconds = 60;
         private EntityHotPolicy hotPolicy = EntityHotPolicy.countWindow();
+        private long accessDebounceMillis = 500;
+        private int recentTouchSlots = 8192;
+        private NearCachePolicy nearCachePolicy = NearCachePolicy.disabled();
+
+        public Builder nearCachePolicy(NearCachePolicy policy) { nearCachePolicy = policy; return this; }
+
+        /** Zero retains strict every-read LRU tracking. */
+        public Builder accessDebounceMillis(long millis) { accessDebounceMillis = millis; return this; }
+        public Builder recentTouchSlots(int slots) { recentTouchSlots = slots; return this; }
 
         public Builder hotEntityLimit(int hotEntityLimit) {
             this.hotEntityLimit = hotEntityLimit;
@@ -152,7 +189,10 @@ public record CachePolicy(
                     lruEvictionEnabled,
                     entityTtlSeconds,
                     pageTtlSeconds,
-                    hotPolicy);
+                    hotPolicy,
+                    accessDebounceMillis,
+                    recentTouchSlots,
+                    nearCachePolicy);
         }
     }
 }

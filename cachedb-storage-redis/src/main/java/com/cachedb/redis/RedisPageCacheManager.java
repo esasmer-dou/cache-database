@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -130,6 +131,7 @@ public final class RedisPageCacheManager<T, ID> {
         this.metadata = metadata;
         this.codec = codec;
         this.cachePolicy = cachePolicy;
+        this.recentTouches = new com.reactor.cachedb.core.cache.RecentTouchFilter(cachePolicy.recentTouchSlots());
         this.keyStrategy = keyStrategy;
         this.hotSetManager = hotSetManager;
         this.queryIndexManager = queryIndexManager;
@@ -139,8 +141,15 @@ public final class RedisPageCacheManager<T, ID> {
     }
 
     public void recordEntityAccess(ID id) {
-        recordEntityAccess(id, null, 0L);
+        RouteCacheContract contract = RouteCacheContext.currentContract();
+        CachePolicy policy = effectiveCachePolicy();
+        boolean debounce = contract == null || !contract.tenantQuota().bounded();
+        if (debounce && !recentTouches.acquire(id, policy.accessDebounceMillis())) return;
+        try { recordEntityAccess(id, null, 0L); }
+        catch (RuntimeException failure) { recentTouches.forget(id); throw failure; }
     }
+
+    private final com.reactor.cachedb.core.cache.RecentTouchFilter recentTouches;
 
     public void recordEntityAccessBatch(java.util.Collection<ID> ids) {
         if (ids.isEmpty()) return;
@@ -149,6 +158,70 @@ public final class RedisPageCacheManager<T, ID> {
         recordEviction(evicted.size());
         for (String id : evicted) removeEntity((ID) id);
     }
+
+    public void recordEntityAccessBatch(Map<ID, Map<String, Object>> columns, Map<ID, Long> payloadBytes) {
+        if (columns.size() > 10_000 || !payloadBytes.keySet().containsAll(columns.keySet()))
+            throw new IllegalArgumentException("Invalid bounded entity access batch");
+        recordEntityAccessBatch(columns.keySet());
+        RouteCacheContract contract = RouteCacheContext.currentContract();
+        if (contract != null && contract.tenantQuota().bounded()) {
+            var quota = contract.tenantQuota();
+            var tenants = new LinkedHashMap<Object, List<ID>>();
+            columns.forEach((id, values) -> {
+                Object tenant = columnValue(values, quota.tenantColumn());
+                if (tenant != null) tenants.computeIfAbsent(tenant, ignored -> new ArrayList<>()).add(id);
+            });
+            tenants.forEach((tenant, ids) -> {
+                String setKey = keyStrategy.tenantHotSetKey(metadata.redisNamespace(), quota.tenantColumn(), tenant);
+                String bytesKey = keyStrategy.tenantHotPayloadBytesKey(metadata.redisNamespace(), quota.tenantColumn(), tenant);
+                var keys = new ArrayList<String>(2 + ids.size() * 2);
+                keys.add(setKey); keys.add(bytesKey);
+                var args = new ArrayList<String>(3 + ids.size());
+                args.add(Long.toString(System.currentTimeMillis())); args.add(Long.toString(quota.memoryBudgetBytes()));
+                args.add(Integer.toString(ids.size()));
+                for (ID id : ids) {
+                    keys.add(keyStrategy.tenantHotOwnerKey(metadata.redisNamespace(), id));
+                    keys.add(keyStrategy.entityKey(metadata.redisNamespace(), id)); args.add(String.valueOf(id));
+                }
+                boolean sameSlot = true;
+                if (jedis.clustered()) try { jedis.requireSameSlot(keys); } catch (IllegalArgumentException crossSlot) { sameSlot = false; }
+                if (!sameSlot) { ids.forEach(id -> recordTenantAccess(id, columns.get(id), measuredPayloadBytes(id, payloadBytes.get(id)))); return; }
+                try {
+                    withTenantAdmissionLock(setKey, () -> {
+                        long updated = ((Number) jedis.eval(TENANT_BATCH_TOUCH, keys, args)).longValue();
+                        // Ownership changes and pressure retain the existing locked admission/eviction path.
+                        if (updated == 0) for (ID id : ids) recordTenantAccessLocked(id, contract, quota, tenant,
+                                setKey, bytesKey, measuredPayloadBytes(id, payloadBytes.get(id)));
+                        return null;
+                    });
+                } catch (TenantAdmissionBusyException busy) { recordTenantAdmission(contract, String.valueOf(tenant), false); }
+            });
+        }
+    }
+
+    private static final String TENANT_BATCH_TOUCH = """
+            local total=tonumber(redis.call('GET',KEYS[2]) or '0')
+            local count=tonumber(ARGV[3])
+            local prefix=KEYS[1]..string.char(10)..KEYS[2]..string.char(10)
+            local sizes={}
+            for i=1,count do
+              local owner=redis.call('GET',KEYS[2*i+1])
+              if not owner or string.sub(owner,1,#prefix) ~= prefix then return 0 end
+              local previous=tonumber(string.sub(owner,#prefix+1))
+              local measured=redis.call('MEMORY','USAGE',KEYS[2*i+2])
+              if not previous or not measured then return 0 end
+              total=total-previous+measured
+              sizes[i]=measured
+            end
+            local budget=tonumber(ARGV[2])
+            if total < 0 or (budget > 0 and total > budget) then return 0 end
+            for i=1,count do
+              redis.call('ZADD',KEYS[1],ARGV[1],ARGV[i+3])
+              redis.call('SET',KEYS[2*i+1],prefix..tostring(sizes[i]))
+            end
+            redis.call('SET',KEYS[2],tostring(total))
+            return 1
+            """;
 
     public void recordEntityAccess(ID id, Map<String, Object> columns) {
         recordEntityAccess(id, columns, 0L);
@@ -165,7 +238,8 @@ public final class RedisPageCacheManager<T, ID> {
         for (String evictedId : evictedIds) {
             removeEntity((ID) evictedId);
         }
-        if (columns != null && !columns.isEmpty()) {
+        RouteCacheContract contract = RouteCacheContext.currentContract();
+        if (columns != null && !columns.isEmpty() && contract != null && contract.tenantQuota().bounded()) {
             recordTenantAccess(id, columns, measuredPayloadBytes(id, payloadBytesFallback));
         }
     }
@@ -197,6 +271,7 @@ public final class RedisPageCacheManager<T, ID> {
     }
 
     public void removeEntity(ID id) {
+        recentTouches.forget(id);
         jedis.commands().del(keyStrategy.entityKey(metadata.redisNamespace(), id));
         hotSetManager.remove(metadata.redisNamespace(), id);
         removeTenantMembership(id);
@@ -339,8 +414,11 @@ public final class RedisPageCacheManager<T, ID> {
     }
 
     public boolean shouldServeCachedEntity(T entity) {
+        CachePolicy policy = effectiveCachePolicy();
+        if (policy.hotPolicy().mode() == com.reactor.cachedb.core.cache.EntityHotPolicyMode.COUNT_WINDOW)
+            return policy.admissionEnabled();
         return shouldCacheEntity(
-                codec.toColumns(entity), CacheAdmissionSource.SERVE, effectiveCachePolicy());
+                codec.toColumns(entity), CacheAdmissionSource.SERVE, policy);
     }
 
     boolean allowTenantQuota(ID id, Map<String, Object> columns) {

@@ -38,6 +38,16 @@ public final class SnapshotRootScope {
         return byColumn(source, column, Function.identity());
     }
 
+    public static <E, T> SnapshotRootScope byColumn(SnapshotSource<E> source,
+            com.reactor.cachedb.core.query.TypedColumn<E, T> column, Function<String, T> parser) {
+        return byColumn(source, column.columnName(), parser);
+    }
+
+    public static <E, T> SnapshotRootScope byColumn(SnapshotSource<E> source,
+            com.reactor.cachedb.core.query.TypedColumn<E, T> column) {
+        return byColumn(source, column.columnName(), column.parser());
+    }
+
     SnapshotSource<?> narrow(SnapshotSource<?> source, List<String> ids) {
         if (shared.contains(source)) return source;
         var filter = filters.get(source);

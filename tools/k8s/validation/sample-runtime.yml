@@ -1,21 +1,21 @@
 # Disposable validation only: configure sample-runtime and initialize its dedicated SQL schema first.
 apiVersion: v1
 kind: Service
-metadata: {name: artifacts, namespace: cachedb-v015-validation}
+metadata: {name: artifacts, namespace: cachedb-v016-validation}
 spec:
   selector: {app.kubernetes.io/component: workspace}
   ports: [{port: 8080, targetPort: 8080}]
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: sample-api, namespace: cachedb-v015-validation}
+metadata: {name: sample-api, namespace: cachedb-v016-validation}
 spec:
   selector: {app.kubernetes.io/name: cachedb-sample-api}
   ports: [{port: 8091, targetPort: 8091}]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: sample-api, namespace: cachedb-v015-validation}
+metadata: {name: sample-api, namespace: cachedb-v016-validation}
 spec:
   replicas: 1
   strategy: {type: Recreate}
@@ -73,7 +73,7 @@ spec:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: sample-worker, namespace: cachedb-v015-validation}
+metadata: {name: sample-worker, namespace: cachedb-v016-validation}
 spec:
   replicas: 2
   strategy: {type: Recreate}

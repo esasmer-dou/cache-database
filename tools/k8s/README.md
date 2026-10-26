@@ -7,7 +7,7 @@ Source synchronization is not a local Maven build.
 ## Safety Contract
 
 - Choose an explicit kube context on every command; never change its global default.
-- The example namespace is `cachedb-v015-validation`. All services are ClusterIP.
+- The example namespace is `cachedb-v016-validation`. All services are ClusterIP.
 - Only fixture data belongs here. SQL storage is `emptyDir`, not production persistence.
 - Namespace separation alone is not network isolation. A CNI must enforce NetworkPolicy
   before a policy can provide that guarantee; do not assume Flannel enforces it.
@@ -84,10 +84,10 @@ name and port, not a Docker port mapper:
 ```sh
 mvn -B -ntp -pl cachedb-spring-boot-starter -am test \
   -Dcachedb.snapshot.redis=true \
-  -Dcachedb.snapshot.redis.host=redis.cachedb-v015-validation.svc.cluster.local \
+  -Dcachedb.snapshot.redis.host=redis.cachedb-v016-validation.svc.cluster.local \
   -Dcachedb.snapshot.redis.port=6379 \
   -Dcachedb.redis.cluster=true \
-  -Dcachedb.redis.cluster.host=redis-cluster-0.redis-cluster.cachedb-v015-validation.svc.cluster.local \
+  -Dcachedb.redis.cluster.host=redis-cluster-0.redis-cluster.cachedb-v016-validation.svc.cluster.local \
   -Dcachedb.redis.cluster.port=6379
 ```
 

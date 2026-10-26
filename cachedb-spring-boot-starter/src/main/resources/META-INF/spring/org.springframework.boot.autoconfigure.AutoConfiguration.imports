@@ -1,2 +1,4 @@
 com.reactor.cachedb.spring.boot.CacheDatabaseSpringBootAutoConfiguration
+com.reactor.cachedb.spring.boot.CacheTraceAutoConfiguration
+com.reactor.cachedb.spring.boot.CacheTransactionAutoConfiguration
 com.reactor.cachedb.spring.boot.snapshot.CacheSnapshotAutoConfiguration

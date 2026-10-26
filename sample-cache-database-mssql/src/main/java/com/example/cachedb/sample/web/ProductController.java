@@ -80,4 +80,15 @@ public class ProductController {
             @Size(max = 32) String stockStatus
     ) {
     }
+
+    @PatchMapping("/{productId}/stock-values")
+    public ResponseEntity<WriteAccepted<ProductEntity>> replaceStock(
+            @PathVariable @Positive long productId, @Valid @RequestBody StockValues request) {
+        var receipt = products.replaceStock(productId, request.stock(), request.reserved());
+        return ResponseEntity.accepted().body(WriteAccepted.from("PATCH", "ProductEntity", receipt));
+    }
+
+    public record StockValues(
+            @jakarta.validation.constraints.NotNull @Min(0) Integer stock,
+            @jakarta.validation.constraints.NotNull @Min(0) Integer reserved) { }
 }

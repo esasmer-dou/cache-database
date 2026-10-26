@@ -7,6 +7,7 @@ import com.reactor.cachedb.annotations.CacheId;
 import java.math.BigDecimal;
 
 @CacheEntity(table = "sample_products", redisNamespace = "sample-products")
+@com.reactor.cachedb.annotations.CacheNearPolicy(maxEntries = 1024, ttlSeconds = 2)
 public class ProductEntity {
 
     @CacheId(column = "product_id")

@@ -5,10 +5,16 @@ public record ReadThroughConfig(
         boolean failOnMissingLoader,
         boolean hydrateLoadedEntities,
         int maxQueryLoadRows,
-        int queryTimeoutSeconds
+        int queryTimeoutSeconds,
+        SingleFlightConfig singleFlight
 ) {
+    public ReadThroughConfig(ReadThroughMode mode, boolean failOnMissingLoader, boolean hydrateLoadedEntities,
+            int maxQueryLoadRows, int queryTimeoutSeconds) {
+        this(mode, failOnMissingLoader, hydrateLoadedEntities, maxQueryLoadRows, queryTimeoutSeconds, SingleFlightConfig.defaults());
+    }
     public ReadThroughConfig {
         mode = mode == null ? ReadThroughMode.REDIS_ONLY : mode;
+        singleFlight = java.util.Objects.requireNonNull(singleFlight, "singleFlight");
         maxQueryLoadRows = Math.max(1, maxQueryLoadRows);
         if (queryTimeoutSeconds <= 0) {
             throw new IllegalArgumentException("Read-through queryTimeoutSeconds must be greater than zero");
@@ -29,6 +35,12 @@ public record ReadThroughConfig(
         private boolean hydrateLoadedEntities = true;
         private int maxQueryLoadRows = 500;
         private int queryTimeoutSeconds = 30;
+        private SingleFlightConfig singleFlight = SingleFlightConfig.defaults();
+
+        public Builder singleFlight(SingleFlightConfig config) {
+            singleFlight = java.util.Objects.requireNonNull(config);
+            return this;
+        }
 
         public Builder mode(ReadThroughMode mode) {
             this.mode = mode;
@@ -61,7 +73,8 @@ public record ReadThroughConfig(
                     failOnMissingLoader,
                     hydrateLoadedEntities,
                     maxQueryLoadRows,
-                    queryTimeoutSeconds
+                    queryTimeoutSeconds,
+                    singleFlight
             );
         }
     }

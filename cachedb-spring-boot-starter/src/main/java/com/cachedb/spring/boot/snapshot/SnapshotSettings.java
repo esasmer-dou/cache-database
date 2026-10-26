@@ -24,8 +24,30 @@ public record SnapshotSettings(
         @DefaultValue("4MB") DataSize batchTargetSize,
         @DefaultValue("1MB") DataSize payloadWarningSize,
         @DefaultValue("64MB") DataSize catalogWarningSize,
-        @DefaultValue("") String spoolDirectory) {
+        @DefaultValue("") String spoolDirectory,
+        @DefaultValue("PT0S") Duration dirtyFlushInterval,
+        @DefaultValue("0") int dirtyFlushThreshold) {
+    public SnapshotSettings(boolean enabled, Duration interval, Duration warnAge, Duration maxAge, Duration retention,
+            Duration timeout, Duration preparationTimeout, Duration leaseDuration, int batchRows, int fetchRows,
+            int maxSourceRows, int maxRowsPerSource, DataSize maxSourceSize, DataSize batchTargetSize,
+            DataSize payloadWarningSize, DataSize catalogWarningSize, String spoolDirectory) {
+        this(enabled, interval, warnAge, maxAge, retention, timeout, preparationTimeout, leaseDuration, batchRows,
+                fetchRows, maxSourceRows, maxRowsPerSource, maxSourceSize, batchTargetSize, payloadWarningSize,
+                catalogWarningSize, spoolDirectory, Duration.ZERO, 0);
+    }
+
+    public SnapshotSettings withDirtyFlush(Duration interval, int threshold) {
+        return new SnapshotSettings(enabled, this.interval, warnAge, maxAge, retention, timeout, preparationTimeout,
+                leaseDuration, batchRows, fetchRows, maxSourceRows, maxRowsPerSource, maxSourceSize, batchTargetSize,
+                payloadWarningSize, catalogWarningSize, spoolDirectory, interval, threshold);
+    }
+    @org.springframework.boot.context.properties.bind.ConstructorBinding
     public SnapshotSettings {
+        if (dirtyFlushInterval == null || dirtyFlushInterval.isNegative()
+                || (!dirtyFlushInterval.isZero() && dirtyFlushInterval.toMillis() < 250)
+                || dirtyFlushInterval.compareTo(Duration.ofDays(1)) > 0
+                || dirtyFlushThreshold < 0 || dirtyFlushThreshold > batchRows)
+            throw new IllegalArgumentException("Dirty flush interval must be disabled or 250ms..1d; threshold must be 0..batchRows");
         for (Duration d :
                 new Duration[] {
                     interval, maxAge, retention, timeout, preparationTimeout, leaseDuration

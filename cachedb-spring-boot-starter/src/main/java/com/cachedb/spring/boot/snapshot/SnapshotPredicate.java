@@ -25,6 +25,50 @@ public final class SnapshotPredicate {
         return eq(column.columnName(), value);
     }
 
+    public static <E, V> SnapshotPredicate eq(com.reactor.cachedb.core.query.TypedColumn<E, V> column, V value) {
+        return eq(column.columnName(), value);
+    }
+
+    public static <E, V> SnapshotPredicate ne(com.reactor.cachedb.core.query.TypedColumn<E, V> column, V value) {
+        return ne(column.columnName(), value);
+    }
+
+    public static <E, V> SnapshotPredicate gt(com.reactor.cachedb.core.query.TypedColumn<E, V> column, V value) {
+        return gt(column.columnName(), value);
+    }
+
+    public static <E, V> SnapshotPredicate gte(com.reactor.cachedb.core.query.TypedColumn<E, V> column, V value) {
+        return gte(column.columnName(), value);
+    }
+
+    public static <E, V> SnapshotPredicate lt(com.reactor.cachedb.core.query.TypedColumn<E, V> column, V value) {
+        return lt(column.columnName(), value);
+    }
+
+    public static <E, V> SnapshotPredicate lte(com.reactor.cachedb.core.query.TypedColumn<E, V> column, V value) {
+        return lte(column.columnName(), value);
+    }
+
+    public static <E, V> SnapshotPredicate isNull(com.reactor.cachedb.core.query.TypedColumn<E, V> column) {
+        return isNull(column.columnName());
+    }
+
+    public static <E, V> SnapshotPredicate isNotNull(com.reactor.cachedb.core.query.TypedColumn<E, V> column) {
+        return isNotNull(column.columnName());
+    }
+
+    public static <E, V> SnapshotPredicate between(com.reactor.cachedb.core.query.TypedColumn<E, V> column, V lower, V upper) {
+        return between(column.columnName(), lower, upper);
+    }
+
+    public static <E, V> SnapshotPredicate inValues(com.reactor.cachedb.core.query.TypedColumn<E, V> column, Collection<V> values) {
+        return inValues(column.columnName(), values);
+    }
+
+    public static <E, V> SnapshotPredicate in(com.reactor.cachedb.core.query.TypedColumn<E, V> column, SnapshotSelection selection) {
+        return in(column.columnName(), selection);
+    }
+
     public static SnapshotPredicate eq(String column, Object value) {
         SnapshotSource.quote(column);
         validateScalar(value);

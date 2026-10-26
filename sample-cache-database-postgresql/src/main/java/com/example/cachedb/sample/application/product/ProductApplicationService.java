@@ -57,4 +57,13 @@ public final class ProductApplicationService {
 
     public record UpdateStock(Integer stockQuantity, Integer reservedQuantity, String stockStatus) {
     }
+
+    /** Absolute values, not an increment command; unrelated SQL columns stay unchanged. */
+    public WriteReceipt<ProductEntity, Long> replaceStock(long productId, int stock, int reserved) {
+        if (stock < 0 || reserved < 0 || reserved > stock)
+            throw new IllegalArgumentException("Stock must be nonnegative and reserved must not exceed stock");
+        int available = stock - reserved;
+        String status = available == 0 ? "OUT_OF_STOCK" : available <= 10 ? "LOW_STOCK" : "IN_STOCK";
+        return products.patchStockValues(productId, stock, reserved, status, Instant.now(clock).getEpochSecond());
+    }
 }

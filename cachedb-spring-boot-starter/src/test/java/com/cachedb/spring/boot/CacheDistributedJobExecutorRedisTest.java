@@ -189,6 +189,26 @@ class CacheDistributedJobExecutorRedisTest {
         return new CacheDistributedJobExecutor(jedis, new ObjectMapper(), instanceId, properties, List.of(handler));
     }
 
+    @Test
+    void producerTraceContextIsRestoredOnTheJobWorkerAndDoesNotLeak() throws Exception {
+        var contexts = new java.util.concurrent.CopyOnWriteArrayList<Map<String, String>>();
+        var handler = handler((arguments, context) -> {
+            contexts.add(com.reactor.cachedb.core.trace.TraceContexts.current()); return Map.of("ok", true);
+        });
+        try (var redis = jedis(); var executor = executor(redis, "traced", properties("traced", 4), handler)) {
+            String first;
+            try (var scope = com.reactor.cachedb.core.trace.TraceContexts.withMetadata(Map.of("correlationId", "command-42"))) {
+                first = executor.submit(RESUMABLE_WARM, new JobArguments(1)).jobId();
+            }
+            awaitSnapshot(executor, first, job -> job.status() == CacheDistributedJobState.COMPLETED);
+            String second = executor.submit(RESUMABLE_WARM, new JobArguments(2)).jobId();
+            awaitSnapshot(executor, second, job -> job.status() == CacheDistributedJobState.COMPLETED);
+            assertEquals("command-42", contexts.get(0).get("correlationId"));
+            assertTrue(contexts.get(1).isEmpty());
+            assertTrue(com.reactor.cachedb.core.trace.TraceContexts.current().isEmpty());
+        }
+    }
+
     private CacheDbSpringProperties.JobExecutorProperties properties(String suffix, int capacity) {
         CacheDbSpringProperties.JobExecutorProperties properties = new CacheDbSpringProperties.JobExecutorProperties();
         properties.setWorkerThreads(1);

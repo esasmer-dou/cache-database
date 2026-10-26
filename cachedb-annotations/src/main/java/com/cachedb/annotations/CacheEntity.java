@@ -12,4 +12,6 @@ public @interface CacheEntity {
     String redisNamespace() default "";
     Class<?> relationLoader() default Void.class;
     Class<?> pageLoader() default Void.class;
+    /** Explicit index contract; the wildcard preserves historical all-column indexes. */
+    String[] indexedColumns() default {"*"};
 }

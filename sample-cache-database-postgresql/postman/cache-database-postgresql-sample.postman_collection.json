@@ -39,7 +39,7 @@
     },
     {
       "key": "businessSequence",
-      "value": "[\"Ready\",\"Seed Demo Data\",\"Latest Background Job Status (repeat until COMPLETED)\",\"Current Tuning Summary\",\"Route Tuning Profiles\",\"Scheduled Warm Status (local pod)\",\"Warm Active Customers\",\"Active Customers\",\"Customer Detail With Order Preview\",\"Warm Customer Orders Dry Run\",\"Warm Customer Orders Projection\",\"Customer Order Timeline Projection\",\"Warm Customer Orders Entity\",\"Warm Order Lines\",\"Order Detail With Line Preview\",\"Warm High Value Orders\",\"High Value Orders Projection\",\"Warm Highlighted Orders For Commerce Dashboard\",\"Archive Orders From SQL\",\"Create Customer\",\"Create Order\",\"Update Order Status\",\"Delete Order\",\"Warm Active Products Projection\",\"Active Products Projection\",\"Warm Low Stock Products\",\"Low Stock Products Projection\",\"Product Detail From Active Set\",\"Inactive Product Archive From SQL\",\"Update Product Stock\",\"Warm Open Tickets\",\"Open Tickets\",\"Ticket Detail From Active Set\",\"Create Support Ticket\",\"Escalate Support Ticket\",\"Warm Active Shipments Projection\",\"Active Shipments Projection\",\"Warm Shipment Exceptions\",\"Shipment Exceptions Projection\",\"Warm Customer Shipments\",\"Customer Shipments Projection\",\"Warm Shipment Events\",\"Shipment Detail With Event Preview\",\"Shipment Events\",\"Delivered Shipment Archive From SQL\",\"Create Shipment\",\"Add Shipment Event\",\"Update Shipment Status\",\"Warm Live Report Jobs\",\"Live Report Jobs\",\"Warm Report Jobs By Type\",\"Report Jobs By Type\",\"Create Report Job\",\"Complete Report Job\",\"Warm Security Audit Events\",\"Security Audit Events From Active Set\",\"Audit Archive From SQL\",\"Commerce Dashboard\",\"Operations Dashboard\"]"
+      "value": "[\"Ready\",\"Seed Demo Data\",\"Latest Background Job Status (repeat until COMPLETED)\",\"Current Tuning Summary\",\"Route Tuning Profiles\",\"Scheduled Warm Status (local pod)\",\"Warm Active Customers\",\"Active Customers\",\"Customer Detail With Order Preview\",\"Warm Customer Orders Dry Run\",\"Warm Customer Orders Projection\",\"Customer Order Timeline Projection\",\"Warm Customer Orders Entity\",\"Warm Order Lines\",\"Order Detail With Line Preview\",\"Warm High Value Orders\",\"High Value Orders Projection\",\"Warm Highlighted Orders For Commerce Dashboard\",\"Archive Orders From SQL\",\"Create Customer\",\"Create Order\",\"Update Order Status\",\"Delete Order\",\"Warm Active Products Projection\",\"Active Products Projection\",\"Warm Low Stock Products\",\"Low Stock Products Projection\",\"Product Detail From Active Set\",\"Inactive Product Archive From SQL\",\"Replace Absolute Stock Values (0.16)\",\"Reject Incomplete Absolute Stock Values\",\"Update Product Stock\",\"Warm Open Tickets\",\"Open Tickets\",\"Ticket Detail From Active Set\",\"Create Support Ticket\",\"Escalate Support Ticket\",\"Warm Active Shipments Projection\",\"Active Shipments Projection\",\"Warm Shipment Exceptions\",\"Shipment Exceptions Projection\",\"Warm Customer Shipments\",\"Customer Shipments Projection\",\"Warm Shipment Events\",\"Shipment Detail With Event Preview\",\"Shipment Events\",\"Delivered Shipment Archive From SQL\",\"Create Shipment\",\"Add Shipment Event\",\"Update Shipment Status\",\"Warm Live Report Jobs\",\"Live Report Jobs\",\"Warm Report Jobs By Type\",\"Report Jobs By Type\",\"Create Report Job\",\"Complete Report Job\",\"Warm Security Audit Events\",\"Security Audit Events From Active Set\",\"Audit Archive From SQL\",\"Commerce Dashboard\",\"Operations Dashboard\"]"
     }
   ],
   "event": [
@@ -50,7 +50,11 @@
         "exec": [
           "const pollName = 'Latest Background Job Status (repeat until COMPLETED)';",
           "if (pm.info.requestName !== pollName) {",
-          "  pm.test('Expected successful HTTP response: ' + pm.info.requestName, () => pm.expect(pm.response.code).to.be.within(200, 299));",
+          "  if (pm.info.requestName === 'Reject Incomplete Absolute Stock Values') {",
+          "    pm.test('Incomplete absolute stock command is rejected', () => pm.response.to.have.status(400));",
+          "  } else {",
+          "    pm.test('Expected successful HTTP response: ' + pm.info.requestName, () => pm.expect(pm.response.code).to.be.within(200, 299));",
+          "  }",
           "  if (pm.response.code === 202 && pm.response.json().jobId) {",
           "    const sequence = JSON.parse(pm.collectionVariables.get('businessSequence'));",
           "    const index = sequence.indexOf(pm.info.requestName);",
@@ -341,6 +345,62 @@
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/api/products/archive?limit=25"
+          }
+        },
+        {
+          "name": "Replace Absolute Stock Values (0.16)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Redis accepted the patch', () => pm.response.to.have.status(202));",
+                  "pm.test('Partial update, not a full-row replacement', () => pm.expect(pm.response.json().operation).to.eql('PATCH'));",
+                  "pm.test('Acceptance is versioned', () => pm.expect(pm.response.json().version).to.be.above(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"stock\": 20, \"reserved\": 2}"
+            },
+            "url": "{{baseUrl}}/api/products/{{productId}}/stock-values"
+          }
+        },
+        {
+          "name": "Reject Incomplete Absolute Stock Values",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Both absolute values are required', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"stock\": 20}"
+            },
+            "url": "{{baseUrl}}/api/products/{{productId}}/stock-values"
           }
         },
         {

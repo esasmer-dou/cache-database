@@ -8,7 +8,7 @@ mkdir -p target
 exec 9>target/kubernetes-validation.lock
 flock -n 9 || { echo 'Validation already running in this checkout; use a separate source directory' >&2; exit 2; }
 date -u '+%Y-%m-%dT%H:%M:%SZ' > target/kubernetes-validation-start.txt
-namespace=${CACHEDB_TEST_NAMESPACE:-cachedb-v015-validation}
+namespace=${CACHEDB_TEST_NAMESPACE:-cachedb-v016-validation}
 case "$namespace" in cachedb-*) ;; *) echo 'Dedicated namespace required' >&2; exit 2;; esac
 export CACHEDB_TEST_NAMESPACE="$namespace"
 password=$(tr -d '\r\n' < /workspace/fixture-password)

@@ -7,6 +7,19 @@ public interface EntityCodec<T> {
     T fromRedisValue(String encoded);
     Map<String, Object> toColumns(T entity);
 
+    default boolean directColumnAccess() {
+        return false;
+    }
+
+    default Map<String, Object> normalizePatchColumns(Map<String, Object> updates) {
+        return new java.util.LinkedHashMap<>(updates);
+    }
+
+    /** Generated codecs override this without materializing an entity-wide map. */
+    default Object entityColumnValue(T entity, String columnName) {
+        return columnValue(toColumns(entity), columnName);
+    }
+
     default T fromColumns(Map<String, Object> columns) {
         throw new UnsupportedOperationException(
                 getClass().getName() + " does not support JDBC row hydration. "

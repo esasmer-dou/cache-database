@@ -435,6 +435,24 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             return null;
         }
 
+        java.util.Set<String> indexedColumns = new java.util.LinkedHashSet<>();
+        List<String> declaredIndexes = List.of(cacheEntity.indexedColumns());
+        if (declaredIndexes.contains("*")) {
+            persistedFields.forEach(field -> indexedColumns.add(field.columnName()));
+        } else {
+            for (String column : declaredIndexes) {
+                if (persistedFields.stream().noneMatch(field -> field.columnName().equals(column))) {
+                    messager.printMessage(Diagnostic.Kind.ERROR, "Unknown indexed column: " + column, typeElement);
+                    return null;
+                }
+                indexedColumns.add(column);
+            }
+            partitionedSortIndexes.forEach((partition, sorts) -> {
+                indexedColumns.add(partition);
+                indexedColumns.addAll(sorts);
+            });
+        }
+
         LoaderModel relationLoader = resolveLoaderModel(typeElement, relationLoaderTypeName, RELATION_BATCH_LOADER_TYPE, "relationLoader");
         if (relationLoaderTypeName != null && relationLoader == null) {
             return null;
@@ -481,6 +499,17 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                     + com.reactor.cachedb.core.codec.LengthPrefixedPayloadCodec.MAX_FIELDS + " persisted fields", typeElement);
             return null;
         }
+        var constants = new java.util.HashSet<String>();
+        for (var field : persistedFields) if (!constants.add(columnConstant(field))) {
+            messager.printMessage(Diagnostic.Kind.ERROR, "Typed column constant names collide: " + field.columnName(), typeElement);
+            return null;
+        }
+        var near = typeElement.getAnnotation(com.reactor.cachedb.annotations.CacheNearPolicy.class);
+        if (near != null) try {
+            new com.reactor.cachedb.core.cache.NearCachePolicy(near.maxEntries(), near.ttlSeconds(), near.maxBytes());
+        } catch (IllegalArgumentException invalid) {
+            messager.printMessage(Diagnostic.Kind.ERROR, invalid.getMessage(), typeElement); return null;
+        }
         if (persistedFields.size() > 1000) {
             messager.printMessage(Diagnostic.Kind.NOTE,
                     "Entity has more than 1000 columns; verify target SQL database dictionary limit "
@@ -499,6 +528,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 deletedMarkerValue,
                 idField,
                 persistedFields,
+                java.util.Set.copyOf(indexedColumns),
                 partitionedSortIndexes,
                 relations,
                 projections,
@@ -1672,6 +1702,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         renderWithIdHelper(builder, model);
         builder.append('\n');
 
+        renderTypedColumns(builder, model);
+
         renderMetadata(builder, model);
         builder.append('\n');
         renderCodec(builder, model);
@@ -1841,6 +1873,96 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             case "byte" -> "java.lang.Byte.class";
             default -> field.typeName() + ".class";
         };
+    }
+
+    private void renderTypedColumns(StringBuilder builder, EntityModel model) {
+        builder.append("    public static final class Columns {\n");
+        for (int index = 0; index < model.persistedFields().size(); index++) {
+            FieldModel field = model.persistedFields().get(index);
+            String constant = columnConstant(field);
+            builder.append("        public static final com.reactor.cachedb.core.query.TypedColumn<")
+                    .append(model.simpleName()).append(", ").append(boxedTypeName(field.typeName()))
+                    .append("> ").append(constant).append(" = Chunk").append(index / 128)
+                    .append('.').append(constant).append(";\n");
+        }
+        for (int start = 0; start < model.persistedFields().size(); start += 128) {
+            builder.append("        private static final class Chunk").append(start / 128).append(" {\n");
+            for (FieldModel field : model.persistedFields().subList(start, Math.min(start + 128, model.persistedFields().size()))) {
+                builder.append("            static final com.reactor.cachedb.core.query.TypedColumn<")
+                        .append(model.simpleName()).append(", ").append(boxedTypeName(field.typeName()))
+                        .append("> ").append(columnConstant(field))
+                        .append(" = new com.reactor.cachedb.core.query.TypedColumn<>(")
+                        .append(model.simpleName()).append(".class, ").append(javaStringLiteral(field.columnName()))
+                        .append(", ").append(javaStringLiteral(field.fieldName())).append(", ")
+                        .append(classLiteral(field)).append(");\n");
+            }
+            builder.append("        }\n");
+        }
+        builder.append("        private Columns() {}\n    }\n");
+    }
+
+    private String columnConstant(FieldModel field) {
+        return field.columnName().replaceAll("([a-z0-9])([A-Z])", "$1_$2").toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private void renderColumnAccessor(StringBuilder builder, EntityModel model) {
+        boolean wide = model.persistedFields().size() > 256;
+        builder.append("        public boolean directColumnAccess() { return true; }\n")
+                .append("        public Object entityColumnValue(").append(model.simpleName()).append(" entity, String column) {\n")
+                .append("            if (column == null) return null;\n");
+        if (wide) {
+            builder.append("            Integer index = FIELD_INDEX.get(column);\n")
+                    .append("            if (index == null) return null;\n")
+                    .append("            return switch (index / 128) {\n");
+            for (int start = 0; start < model.persistedFields().size(); start += 128)
+                builder.append("                case ").append(start / 128).append(" -> value")
+                        .append(start / 128).append("(entity, index);\n");
+            builder.append("                default -> null;\n            };\n        }\n");
+            for (int start = 0; start < model.persistedFields().size(); start += 128) {
+                builder.append("        private Object value").append(start / 128).append('(')
+                        .append(model.simpleName()).append(" entity, int index) {\n")
+                        .append("            return switch (index) {\n");
+                for (int index = start; index < Math.min(start + 128, model.persistedFields().size()); index++)
+                    builder.append("                case ").append(index).append(" -> ")
+                            .append(toColumnValueExpression(model, model.persistedFields().get(index))).append(";\n");
+                builder.append("                default -> null;\n            };\n        }\n");
+            }
+        } else {
+            builder.append("            return switch (column) {\n");
+            for (FieldModel field : model.persistedFields())
+                builder.append("                case ").append(javaStringLiteral(field.columnName())).append(" -> ")
+                        .append(toColumnValueExpression(model, field)).append(";\n");
+            builder.append("                default -> null;\n            };\n        }\n");
+        }
+        builder.append("        public Map<String, Object> normalizePatchColumns(Map<String, Object> updates) {\n")
+                .append("            Map<String, Object> result = new LinkedHashMap<>();\n")
+                .append("            for (var entry : updates.entrySet()) {\n");
+        if (wide) {
+            builder.append("                Integer index = FIELD_INDEX.get(entry.getKey());\n")
+                    .append("                if (index == null) throw new IllegalArgumentException(\"Unknown patch column\");\n")
+                    .append("                Object value = switch (index / 128) {\n");
+            for (int start = 0; start < model.persistedFields().size(); start += 128)
+                builder.append("                    case ").append(start / 128).append(" -> normalize")
+                        .append(start / 128).append("(entry.getKey(), entry.getValue());\n");
+            builder.append("                    default -> throw new IllegalArgumentException(\"Unknown patch column\");\n                };\n");
+        } else builder.append("                Object value = normalize0(entry.getKey(), entry.getValue());\n");
+        builder.append("                result.put(entry.getKey(), value);\n            }\n            return result;\n        }\n");
+        int chunkSize = wide ? 128 : Math.max(1, model.persistedFields().size());
+        for (int start = 0; start < model.persistedFields().size(); start += chunkSize) {
+            builder.append("        private Object normalize").append(start / chunkSize)
+                    .append("(String column, Object raw) {\n            return switch (column) {\n");
+            for (FieldModel field : model.persistedFields().subList(start, Math.min(start + chunkSize, model.persistedFields().size()))) {
+                builder.append("                case ").append(javaStringLiteral(field.columnName())).append(" -> {\n");
+                if (!boxedTypeName(field.typeName()).equals(field.typeName()))
+                    builder.append("                    if (raw == null) throw new IllegalArgumentException(\"Primitive patch column cannot be null\");\n");
+                builder.append("                    ").append(field.typeName()).append(" value = ")
+                        .append(fromColumnExpression("raw", field)).append(";\n                    yield ")
+                        .append(field.codecTypeName() != null ? field.fieldName().toUpperCase() + "_CODEC.toColumnValue(value)"
+                                : field.enumType() ? "value == null ? null : value.name()" : "value")
+                        .append(";\n                }\n");
+            }
+            builder.append("                default -> throw new IllegalArgumentException(\"Unknown patch column: \" + column);\n            };\n        }\n");
+        }
     }
 
     private void writePackageSpringConfigurationClass(String packageName) {
@@ -2034,8 +2156,14 @@ public final class CacheEntityProcessor extends AbstractProcessor {
     }
 
     private void renderMetadata(StringBuilder builder, EntityModel model) {
+        var element = processingEnv.getElementUtils().getTypeElement(model.packageName() + "." + model.simpleName());
+        var near = element == null ? null : element.getAnnotation(com.reactor.cachedb.annotations.CacheNearPolicy.class);
+        if (near != null) builder.append("    private static final com.reactor.cachedb.core.cache.NearCachePolicy NEAR_POLICY = new com.reactor.cachedb.core.cache.NearCachePolicy(")
+                .append(near.maxEntries()).append(", ").append(near.ttlSeconds()).append(", ")
+                .append(near.maxBytes()).append("L);\n");
         builder.append("    private static final class Metadata implements EntityMetadata<")
                 .append(model.simpleName()).append(", ").append(model.idField().typeName()).append("> {\n");
+        if (near != null) builder.append("        public com.reactor.cachedb.core.cache.NearCachePolicy nearCachePolicy() { return NEAR_POLICY; }\n");
         builder.append("        @Override\n");
         builder.append("        public String entityName() {\n");
         builder.append("            return ").append(javaStringLiteral(model.simpleName())).append(";\n");
@@ -2086,6 +2214,10 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("        public Map<String, String> columnTypes() {\n");
         builder.append("            return COLUMN_TYPES;\n");
         builder.append("        }\n\n");
+        builder.append("        public java.util.Set<String> indexedColumns() { return INDEXED_COLUMNS; }\n")
+                .append("        private static final java.util.Set<String> INDEXED_COLUMNS = java.util.Set.of(");
+        appendQuotedList(builder, model.indexedColumns().stream().sorted().toList());
+        builder.append(");\n");
         builder.append("        private static final Map<String, String> COLUMN_TYPES = createColumnTypes();\n");
         builder.append("        private static Map<String, String> createColumnTypes() {\n");
         builder.append("            LinkedHashMap<String, String> columnTypes = new LinkedHashMap<>();\n");
@@ -2141,6 +2273,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             return;
         }
         builder.append("    private static final class Codec implements EntityCodec<").append(model.simpleName()).append("> {\n");
+        renderColumnAccessor(builder, model);
         builder.append("        @Override\n");
         builder.append("        public String toRedisValue(").append(model.simpleName()).append(" entity) {\n");
         builder.append("            StringBuilder payload = new StringBuilder();\n");
@@ -2250,6 +2383,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 .append("            Map<String, Object> columns = new LinkedHashMap<>();\n");
         for (int chunk = 0; chunk < chunks; chunk++) builder.append("            writeColumns").append(chunk).append("(entity, columns);\n");
         builder.append("            return columns;\n        }\n");
+        renderColumnAccessor(builder, model);
         for (int chunk = 0; chunk < chunks; chunk++) {
             int start = chunk * 128;
             int end = Math.min(start + 128, count);
@@ -3512,6 +3646,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             String deletedMarkerValue,
             FieldModel idField,
             List<FieldModel> persistedFields,
+            java.util.Set<String> indexedColumns,
             Map<String, List<String>> partitionedSortIndexes,
             List<RelationModel> relations,
             List<ProjectionModel> projections,

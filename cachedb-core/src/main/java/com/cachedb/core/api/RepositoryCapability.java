@@ -9,5 +9,6 @@ public enum RepositoryCapability {
     BULK_WRITE,
     PARTITIONED_QUERY,
     DELETE_RECEIPT,
-    PROJECTION
+    PROJECTION,
+    PARTIAL_UPDATE
 }

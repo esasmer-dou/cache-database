@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.reactor.cachedb</groupId>
         <artifactId>cache-database</artifactId>
-        <version>0.15.1</version>
+        <version>0.16.0</version>
     </parent>
 
     <artifactId>cachedb-spring-boot-starter</artifactId>
@@ -44,6 +44,17 @@
     </build>
 
     <dependencies>
+        <dependency>
+            <groupId>com.reactor.cachedb</groupId>
+            <artifactId>cachedb-annotations</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aop</artifactId>
+            <version>6.1.14</version>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>com.reactor.cachedb</groupId>
             <artifactId>cachedb-json</artifactId>

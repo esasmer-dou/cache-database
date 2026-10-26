@@ -33,6 +33,21 @@ public final class RedisProjectionRefreshQueue {
         enqueue("DELETE", entityName, projectionName, id);
     }
 
+    public void enqueueSourceUpsert(String entityName, String projectionName, Object id, long requiredVersion) {
+        if (requiredVersion <= 0) throw new IllegalArgumentException("Positive source refresh version required");
+        var fields = newEventFields("SOURCE_UPSERT", entityName, projectionName, id, 1, "", "");
+        fields.put("requiredVersion", Long.toString(requiredVersion));
+        jedis.commands().xadd(config.streamKey(), XAddParams.xAddParams(), fields);
+        if (config.maxStreamLength() > 0) jedis.commands().xtrim(config.streamKey(), config.maxStreamLength(), true);
+    }
+
+    String enqueueSourceRetry(java.util.Map<String, String> original, int attempt, String originalId) {
+        var fields = newEventFields("SOURCE_UPSERT", original.get("entity"), original.get("projection"),
+                original.get("id"), attempt, originalId, "");
+        fields.put("requiredVersion", original.get("requiredVersion"));
+        return jedis.commands().xadd(config.streamKey(), XAddParams.xAddParams(), fields).toString();
+    }
+
     public void enqueueUpsertBatch(
             String entityName, Collection<String> projectionNames, Collection<?> ids) {
         enqueueBatch("UPSERT", entityName, projectionNames, ids);

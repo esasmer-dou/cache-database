@@ -30,6 +30,13 @@ public class StoragePerformanceCollector {
         return NO_OP;
     }
 
+    public long redisReadOperationCount() { return redisRead.operationCount.get(); }
+    public long redisReadTotalMicros() { return redisRead.totalMicros.get(); }
+    public long redisWriteOperationCount() { return redisWrite.operationCount.get(); }
+    public long redisWriteTotalMicros() { return redisWrite.totalMicros.get(); }
+    public long sqlWriteOperationCount() { return postgresWrite.operationCount.get(); }
+    public long sqlWriteTotalMicros() { return postgresWrite.totalMicros.get(); }
+
     public void recordRedisRead(long elapsedMicros) {
         record(redisRead, redisReadBreakdown, PerformanceObservationContext.currentTag(), elapsedMicros);
     }

@@ -11,6 +11,15 @@ import java.util.List;
 import java.util.Map;
 
 public final class RedisFunctionArgsMapper {
+    private String nearInvalidationChannel = "cachedb:near-invalidation";
+    public RedisFunctionArgsMapper withNearInvalidationChannel(String channel) {
+        nearInvalidationChannel = java.util.Objects.requireNonNull(channel); return this;
+    }
+    private final com.reactor.cachedb.core.trace.TraceContextPropagator trace;
+    public RedisFunctionArgsMapper() { this(com.reactor.cachedb.core.trace.TraceContexts.threadLocal()); }
+    public RedisFunctionArgsMapper(com.reactor.cachedb.core.trace.TraceContextPropagator trace) {
+        this.trace = java.util.Objects.requireNonNull(trace);
+    }
 
     public <T, ID> List<String> upsertArgs(
             WriteOperation<T, ID> operation,
@@ -48,7 +57,7 @@ public final class RedisFunctionArgsMapper {
         args.add("0");
         args.add("0");
         args.add(String.valueOf(guardrailConfig.tombstoneTtlSeconds()));
-        args.add(writeBehindConfig.compactionActive() ? "1" : "0");
+        args.add(writeBehindConfig.compactionActive() && operation.type() != com.reactor.cachedb.core.model.OperationType.PATCH ? "1" : "0");
         args.add(normalizeObservationTag(PerformanceObservationContext.currentTag()));
         args.add(operation.type().name());
         args.add(operation.metadata().entityName());
@@ -64,7 +73,9 @@ public final class RedisFunctionArgsMapper {
 
         for (Map.Entry<String, Object> entry : columns.entrySet()) {
             args.add(entry.getKey());
-            args.add(entry.getValue() == null ? "__NULL__" : String.valueOf(entry.getValue()));
+            args.add(operation.type() == com.reactor.cachedb.core.model.OperationType.PATCH
+                    ? PatchColumnValues.encode(entry.getValue())
+                    : entry.getValue() == null ? "__NULL__" : String.valueOf(entry.getValue()));
         }
         args.add(String.valueOf(expectedVersion));
         if (operation.dependency() == null) {
@@ -75,6 +86,22 @@ public final class RedisFunctionArgsMapper {
             args.add(operation.dependency().redisNamespace());
             args.add(operation.dependency().id());
             args.add(String.valueOf(operation.dependency().version()));
+        }
+        args.add(com.reactor.cachedb.core.trace.TraceMetadataCodec.encode(
+                operation.traceMetadata().isEmpty() ? trace.capture() : operation.traceMetadata()));
+        if (cachePolicy.nearCachePolicy().enabled()) {
+            args.add(nearInvalidationChannel);
+            args.add(RedisNearCacheCoordinator.message(operation.metadata().redisNamespace(), operation.id()));
+        }
+        return args;
+    }
+
+    public <T, ID> List<String> deleteArgs(WriteOperation<T, ID> operation,
+            RedisGuardrailConfig guardrails, WriteBehindConfig writeBehind, CachePolicy policy) {
+        var args = new ArrayList<>(deleteArgs(operation, guardrails, writeBehind));
+        if (policy.nearCachePolicy().enabled()) {
+            args.add(nearInvalidationChannel);
+            args.add(RedisNearCacheCoordinator.message(operation.metadata().redisNamespace(), operation.id()));
         }
         return args;
     }
@@ -99,7 +126,9 @@ public final class RedisFunctionArgsMapper {
                 operation.metadata().deletedColumn() == null ? "" : operation.metadata().deletedColumn(),
                 operation.metadata().deletedMarkerValue(),
                 String.valueOf(operation.id()),
-                operation.createdAt().toString()
+                operation.createdAt().toString(),
+                com.reactor.cachedb.core.trace.TraceMetadataCodec.encode(
+                        operation.traceMetadata().isEmpty() ? trace.capture() : operation.traceMetadata())
         );
     }
 

@@ -28,6 +28,13 @@ public interface EntityMetadata<T, ID> {
     Class<T> entityType();
     Function<T, ID> idAccessor();
     List<String> columns();
+    default com.reactor.cachedb.core.cache.NearCachePolicy nearCachePolicy() {
+        return com.reactor.cachedb.core.cache.NearCachePolicy.disabled();
+    }
+    /** Legacy metadata continues indexing every persisted column. */
+    default java.util.Set<String> indexedColumns() {
+        return java.util.Set.copyOf(columns());
+    }
     default Map<String, String> columnTypes() {
         return Map.of();
     }

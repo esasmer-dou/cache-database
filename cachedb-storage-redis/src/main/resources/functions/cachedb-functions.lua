@@ -33,11 +33,24 @@ redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
     local dependencyNamespace = args[trailerIndex + 1] or ''
     local dependencyId = args[trailerIndex + 2] or ''
     local dependencyVersion = tonumber(args[trailerIndex + 3] or '0')
+    local traceMetadata = args[trailerIndex + 4] or ''
+    local invalidationChannel = args[trailerIndex + 5] or ''
+    local invalidationMessage = args[trailerIndex + 6] or ''
+    if invalidationChannel ~= '' and not redis.acl_check_cmd('PUBLISH', invalidationChannel, invalidationMessage) then
+        return redis.error_reply('Near-cache requires PUBLISH permission before write acceptance')
+    end
     local currentVersion = tonumber(redis.call('GET', versionKey) or '0')
     if expectedVersion ~= nil and expectedVersion >= 0 and currentVersion ~= expectedVersion then
         return -(currentVersion + 1)
     end
+    if operationType == 'PATCH' and redis.call('EXISTS', tombstoneKey) == 1 then
+        return redis.error_reply('PATCH cannot recreate a deleted entity')
+    end
     local version = redis.call('INCR', versionKey)
+
+    if operationType == 'PATCH' and keys[9] ~= nil then
+        redis.call('SET', keys[9], 'patch')
+    end
 
     if versionKeyTtl ~= nil and versionKeyTtl > 0 then
         redis.call('EXPIRE', versionKey, versionKeyTtl)
@@ -71,7 +84,7 @@ redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
     table.insert(fields, 'col:' .. versionColumn)
     table.insert(fields, tostring(version))
 
-    if deletedColumn ~= nil and deletedColumn ~= '' then
+    if operationType ~= 'PATCH' and deletedColumn ~= nil and deletedColumn ~= '' then
         table.insert(fields, 'col:' .. deletedColumn)
         table.insert(fields, activeMarkerValue)
     end
@@ -94,8 +107,14 @@ redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
         index = index + 2
     end
 
+    if traceMetadata ~= '' then
+        table.insert(fields, 'traceMetadata')
+        table.insert(fields, traceMetadata)
+    end
+
     if durableCompaction then
         local payloadExists = redis.call('EXISTS', compactionPayloadKey)
+        if traceMetadata == '' then redis.call('HDEL', compactionPayloadKey, 'traceMetadata') end
         redis.call('HSET', compactionPayloadKey, unpack(fields))
         if payloadExists == 0 then
             redis.call('HINCRBY', compactionStatsKey, 'payloadCount', 1)
@@ -115,6 +134,7 @@ redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
     else
         redis.call('XADD', streamKey, '*', unpack(fields))
     end
+    if invalidationChannel ~= '' then redis.call('PUBLISH', invalidationChannel, invalidationMessage) end
     return version
 end)
 
@@ -142,6 +162,12 @@ redis.register_function('__DELETE_FUNCTION__', function(keys, args)
     local deletedMarkerValue = args[13]
     local id = args[14]
     local createdAt = args[15]
+    local traceMetadata = args[16] or ''
+    local invalidationChannel = args[17] or ''
+    local invalidationMessage = args[18] or ''
+    if invalidationChannel ~= '' and not redis.acl_check_cmd('PUBLISH', invalidationChannel, invalidationMessage) then
+        return redis.error_reply('Near-cache requires PUBLISH permission before write acceptance')
+    end
     local version = redis.call('INCR', versionKey)
 
     if versionKeyTtl ~= nil and versionKeyTtl > 0 then
@@ -176,8 +202,14 @@ redis.register_function('__DELETE_FUNCTION__', function(keys, args)
         table.insert(fields, deletedMarkerValue)
     end
 
+    if traceMetadata ~= '' then
+        table.insert(fields, 'traceMetadata')
+        table.insert(fields, traceMetadata)
+    end
+
     if durableCompaction then
         local payloadExists = redis.call('EXISTS', compactionPayloadKey)
+        if traceMetadata == '' then redis.call('HDEL', compactionPayloadKey, 'traceMetadata') end
         redis.call('HSET', compactionPayloadKey, unpack(fields))
         if payloadExists == 0 then
             redis.call('HINCRBY', compactionStatsKey, 'payloadCount', 1)
@@ -197,6 +229,7 @@ redis.register_function('__DELETE_FUNCTION__', function(keys, args)
     else
         redis.call('XADD', streamKey, '*', unpack(fields))
     end
+    if invalidationChannel ~= '' then redis.call('PUBLISH', invalidationChannel, invalidationMessage) end
     return version
 end)
 

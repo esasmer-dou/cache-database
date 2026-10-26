@@ -21,9 +21,41 @@ public record CacheDatabaseConfig(
         AdminReportJobConfig adminReportJob,
         AdminHttpConfig adminHttp,
         SchemaBootstrapConfig schemaBootstrap,
-        CacheRuntimeRole runtimeRole) {
+        CacheRuntimeRole runtimeRole,
+        MutationConfig mutations,
+        com.reactor.cachedb.core.trace.TraceContextPropagator traceContextPropagator) {
     public CacheDatabaseConfig {
         java.util.Objects.requireNonNull(runtimeRole, "runtimeRole");
+        java.util.Objects.requireNonNull(mutations, "mutations");
+        java.util.Objects.requireNonNull(traceContextPropagator, "traceContextPropagator");
+    }
+
+    public CacheDatabaseConfig(WriteBehindConfig writeBehind, WriteBehindFlusherFactory writeBehindFlusherFactory,
+            ResourceLimits resourceLimits, KeyspaceConfig keyspace, RuntimeCoordinationConfig runtimeCoordination,
+            RedisFunctionsConfig redisFunctions, RelationConfig relations, PageCacheConfig pageCache,
+            ReadThroughConfig readThrough, ReadShapeGuardrailConfig readShapeGuardrail, QueryIndexConfig queryIndex,
+            ProjectionRefreshConfig projectionRefresh, RedisGuardrailConfig redisGuardrail,
+            DeadLetterRecoveryConfig deadLetterRecovery, AdminMonitoringConfig adminMonitoring,
+            AdminReportJobConfig adminReportJob, AdminHttpConfig adminHttp, SchemaBootstrapConfig schemaBootstrap,
+            CacheRuntimeRole runtimeRole, MutationConfig mutations) {
+        this(writeBehind, writeBehindFlusherFactory, resourceLimits, keyspace, runtimeCoordination,
+                redisFunctions, relations, pageCache, readThrough, readShapeGuardrail, queryIndex,
+                projectionRefresh, redisGuardrail, deadLetterRecovery, adminMonitoring, adminReportJob,
+                adminHttp, schemaBootstrap, runtimeRole, mutations, com.reactor.cachedb.core.trace.TraceContexts.threadLocal());
+    }
+
+    public CacheDatabaseConfig(WriteBehindConfig writeBehind, WriteBehindFlusherFactory writeBehindFlusherFactory,
+            ResourceLimits resourceLimits, KeyspaceConfig keyspace, RuntimeCoordinationConfig runtimeCoordination,
+            RedisFunctionsConfig redisFunctions, RelationConfig relations, PageCacheConfig pageCache,
+            ReadThroughConfig readThrough, ReadShapeGuardrailConfig readShapeGuardrail, QueryIndexConfig queryIndex,
+            ProjectionRefreshConfig projectionRefresh, RedisGuardrailConfig redisGuardrail,
+            DeadLetterRecoveryConfig deadLetterRecovery, AdminMonitoringConfig adminMonitoring,
+            AdminReportJobConfig adminReportJob, AdminHttpConfig adminHttp, SchemaBootstrapConfig schemaBootstrap,
+            CacheRuntimeRole runtimeRole) {
+        this(writeBehind, writeBehindFlusherFactory, resourceLimits, keyspace, runtimeCoordination,
+                redisFunctions, relations, pageCache, readThrough, readShapeGuardrail, queryIndex,
+                projectionRefresh, redisGuardrail, deadLetterRecovery, adminMonitoring, adminReportJob,
+                adminHttp, schemaBootstrap, runtimeRole, MutationConfig.defaults());
     }
 
     /** Retains the 0.13 canonical constructor. */
@@ -204,6 +236,8 @@ public record CacheDatabaseConfig(
                 .relations(relations)
                 .pageCache(pageCache)
                 .readThrough(readThrough)
+                .mutations(mutations)
+                .traceContextPropagator(traceContextPropagator)
                 .readShapeGuardrail(readShapeGuardrail)
                 .queryIndex(queryIndex)
                 .projectionRefresh(projectionRefresh)
@@ -233,6 +267,14 @@ public record CacheDatabaseConfig(
         private RelationConfig relations = RelationConfig.defaults();
         private PageCacheConfig pageCache = PageCacheConfig.defaults();
         private ReadThroughConfig readThrough = ReadThroughConfig.defaults();
+        private MutationConfig mutations = MutationConfig.defaults();
+        private com.reactor.cachedb.core.trace.TraceContextPropagator traceContextPropagator = com.reactor.cachedb.core.trace.TraceContexts.threadLocal();
+
+        public Builder traceContextPropagator(com.reactor.cachedb.core.trace.TraceContextPropagator value) {
+            traceContextPropagator = java.util.Objects.requireNonNull(value); return this;
+        }
+
+        public Builder mutations(MutationConfig value) { mutations = java.util.Objects.requireNonNull(value); return this; }
         private ReadShapeGuardrailConfig readShapeGuardrail = ReadShapeGuardrailConfig.defaults();
         private QueryIndexConfig queryIndex = QueryIndexConfig.defaults();
         private ProjectionRefreshConfig projectionRefresh = ProjectionRefreshConfig.defaults();
@@ -354,7 +396,9 @@ public record CacheDatabaseConfig(
                     adminReportJob,
                     adminHttp,
                     schemaBootstrap,
-                    runtimeRole);
+                    runtimeRole,
+                    mutations,
+                    traceContextPropagator);
         }
     }
 }

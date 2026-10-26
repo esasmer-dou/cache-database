@@ -4,6 +4,16 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.16.0 - 2026-10-26
+
+- Added bounded source single-flight, debounced access tracking, sparse index
+  metadata, typed columns, and generated direct residual access.
+- Added fenced partial updates, post-durability snapshot dirtying, immediate
+  local durability signals, explicit/declarative atomic units of work, bounded
+  trace propagation, Micrometer timers, and opt-in bounded L1 caching.
+- Preserved old constructors and payload contracts; PATCH requires coordinated
+  worker upgrades. See the release notes for consistency and transaction limits.
+
 ## 0.15.1 - 2026-10-24
 
 ### Added

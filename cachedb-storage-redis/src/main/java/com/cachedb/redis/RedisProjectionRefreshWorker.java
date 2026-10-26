@@ -347,6 +347,33 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
     private <T, ID> boolean processWithHandler(
             StreamEntry entry, ProjectionHandler<?, ?> rawHandler, String rawId, String operation) {
         ProjectionHandler<T, ID> handler = (ProjectionHandler<T, ID>) rawHandler;
+        if ("SOURCE_UPSERT".equals(operation)) {
+            long required = Long.parseLong(entry.getFields().getOrDefault("requiredVersion", "0"));
+            if (required <= 0) throw new IllegalArgumentException("Source refresh requires a durable version");
+            String namespace = handler.baseMetadata().redisNamespace();
+            var state = jedis.mget(keyStrategy.tombstoneKey(namespace, rawId),
+                    keyStrategy.versionKey(namespace, rawId), keyStrategy.durabilityKey(namespace, rawId));
+            if (state.get(0) != null) {
+                handler.runtime().delete(handler.parseId(rawId));
+                markProcessed();
+                return true;
+            }
+            long accepted = parseLong(state.get(1), 0);
+            long durable = parseLong(state.get(2), 0);
+            if (durable < Math.max(accepted, required)) return false;
+            var entityBinding = entityRegistry.find(handler.baseMetadata().entityName()).orElseThrow();
+            @SuppressWarnings("unchecked")
+            var source = (com.reactor.cachedb.core.page.EntityByIdLoader<T, ID>) entityBinding.byIdLoader();
+            var loaded = source.load(handler.parseId(rawId));
+            if (loaded.isEmpty()) handler.runtime().delete(handler.parseId(rawId));
+            else {
+                Object projected = handler.binding().projection().projector().apply(loaded.get());
+                if (projected == null) handler.runtime().delete(handler.parseId(rawId));
+                else upsertProjection(handler, projected);
+            }
+            markProcessed();
+            return true;
+        }
         if ("DELETE".equalsIgnoreCase(operation)) {
             handler.runtime().delete(handler.parseId(rawId));
             markProcessed();
@@ -449,7 +476,10 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
             return false;
         }
         String originalEntryId = defaultString(entry.getFields().get("originalEntryId"));
-        queue.enqueueRetry(
+        if ("SOURCE_UPSERT".equals(operation)) {
+            queue.enqueueSourceRetry(entry.getFields(), nextAttempt,
+                    originalEntryId.isBlank() ? entry.getID().toString() : originalEntryId);
+        } else queue.enqueueRetry(
                 operation,
                 entityName,
                 projectionName,

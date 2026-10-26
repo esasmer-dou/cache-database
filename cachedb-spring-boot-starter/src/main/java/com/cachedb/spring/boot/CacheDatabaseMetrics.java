@@ -31,19 +31,7 @@ public final class CacheDatabaseMetrics implements MeterBinder {
 
     @Override
     public void bindTo(MeterRegistry registry) {
-        Gauge.builder("cachedb.writebehind.backlog", cacheDatabase,
-                        database -> database.workerSnapshot().lastObservedBacklog())
-                .description("Last observed CacheDB write-behind stream backlog")
-                .strongReference(true)
-                .register(registry);
-        FunctionCounter.builder("cachedb.writebehind.flushed", cacheDatabase,
-                        database -> database.workerSnapshot().flushedCount())
-                .description("Writes durably flushed to SQL")
-                .register(registry);
-        FunctionCounter.builder("cachedb.writebehind.deadletters", cacheDatabase,
-                        database -> database.workerSnapshot().deadLetterCount())
-                .description("Writes moved to the dead-letter stream")
-                .register(registry);
+        new CacheDatabaseMetricsMeterBinder(cacheDatabase).bindTo(registry);
         Gauge.builder("cachedb.redis.memory.used.bytes", cacheDatabase,
                         database -> database.redisGuardrailSnapshot().usedMemoryBytes())
                 .baseUnit("bytes")

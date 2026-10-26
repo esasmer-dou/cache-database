@@ -959,6 +959,9 @@ class CacheRepositoryProcessorTest {
             org.junit.jupiter.api.Assertions.assertEquals("last", type.getField("c4095").get(decoded));
             org.junit.jupiter.api.Assertions.assertEquals("last", type.getField("c4095").get(codec.fromColumns(codec.toColumns(value))));
             org.junit.jupiter.api.Assertions.assertNotNull(loader.loadClass("wide.RowFields").getField("c4095").get(null));
+            assertTrue(codec.directColumnAccess());
+            org.junit.jupiter.api.Assertions.assertEquals("last", codec.entityColumnValue(value, "c4095"));
+            org.junit.jupiter.api.Assertions.assertNotNull(loader.loadClass("wide.RowCacheBinding$Columns").getField("C4095").get(null));
             Object duplicate = codec.fromRedisValue("2:id7:invalid2:id2:42");
             org.junit.jupiter.api.Assertions.assertEquals(42L, type.getField("id").get(duplicate));
         }
@@ -982,6 +985,95 @@ class CacheRepositoryProcessorTest {
         var result = compile(source("wide/WideRecord.java", "package wide; @com.reactor.cachedb.annotations.CacheEntity(table=\"wide\", redisNamespace=\"wide\") public record WideRecord(" + fields + ") {}"));
         assertFalse(result.success());
         assertTrue(result.diagnosticsText().contains("JVM 255-slot limit"), result.diagnosticsText());
+    }
+
+    @Test
+    void typedColumnsAndExplicitSparseContractCompileWithoutRemovingLegacyFields() throws Exception {
+        var result = compile(source("typed/Product.java", """
+                package typed;
+                import com.reactor.cachedb.annotations.*;
+                @CacheEntity(table="products", indexedColumns={"status"})
+                public record Product(@CacheId(column="product_id") Long productId,
+                        @CacheColumn("status") String status, @CacheColumn("description") String description) {}
+                """), source("typed/Usage.java", """
+                package typed;
+                import com.reactor.cachedb.core.query.*;
+                public class Usage {
+                    QueryFilter filter = ProductCacheBinding.Columns.STATUS.eq("ACTIVE");
+                    QuerySort sort = ProductCacheBinding.Columns.PRODUCT_ID.desc();
+                }
+                """));
+        assertTrue(result.success(), result.diagnosticsText());
+        try (var loader = new java.net.URLClassLoader(new java.net.URL[]{result.classes().toUri().toURL()}, getClass().getClassLoader())) {
+            var binding = loader.loadClass("typed.ProductCacheBinding");
+            var metadata = (com.reactor.cachedb.core.model.EntityMetadata<?, ?>) binding.getField("METADATA").get(null);
+            org.junit.jupiter.api.Assertions.assertEquals(java.util.Set.of("status"), metadata.indexedColumns());
+            var codec = (com.reactor.cachedb.core.model.EntityCodec<Object>) binding.getField("CODEC").get(null);
+            Object row = loader.loadClass("typed.Product").getConstructor(Long.class, String.class, String.class).newInstance(1L, "ACTIVE", "text");
+            org.junit.jupiter.api.Assertions.assertEquals("text", codec.entityColumnValue(row, "description"));
+            assertTrue(new com.reactor.cachedb.core.query.QueryEvaluator().matches(row, codec,
+                    com.reactor.cachedb.core.query.QueryFilter.eq("status", "ACTIVE")));
+        }
+        var invalid = compile(source("invalid/BadIndex.java", """
+                package invalid;
+                @com.reactor.cachedb.annotations.CacheEntity(table="bad", indexedColumns={"typo"})
+                public record BadIndex(@com.reactor.cachedb.annotations.CacheId(column="id") Long id) {}
+                """));
+        assertFalse(invalid.success());
+        assertTrue(invalid.diagnosticsText().contains("Unknown indexed column"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void declarativePatchIsTypedAndPreservesUnchangedColumns() throws Exception {
+        var entity = source("patch/Product.java", """
+                package patch;
+                import com.reactor.cachedb.annotations.*;
+                @CacheEntity(table="products")
+                public record Product(@CacheId(column="id") Long id,
+                        @CacheColumn("stock_quantity") int stock, @CacheColumn("updated_at") long updatedAt,
+                        @CacheColumn("name") String name) {}
+                """);
+        var result = compile(entity, source("patch/Products.java", """
+                package patch;
+                import com.reactor.cachedb.annotations.*;
+                import com.reactor.cachedb.core.repository.*;
+                import com.reactor.cachedb.core.model.WriteReceipt;
+                @CacheRepository(entity=Product.class)
+                public interface Products extends CacheDbRepository<Product, Long> {
+                    @CachePatch WriteReceipt<Product, Long> changeStock(@CacheId Long id,
+                            @CacheColumn("stock_quantity") int stock, long updatedAt);
+                }
+                """));
+        assertTrue(result.success(), result.diagnosticsText());
+        try (var loader = new java.net.URLClassLoader(new java.net.URL[]{result.classes().toUri().toURL()}, getClass().getClassLoader())) {
+            var memory = new com.reactor.cachedb.core.testing.InMemoryCacheDatabase();
+            Object repository = loader.loadClass("patch.ProductsCacheDbImplementation")
+                    .getConstructor(com.reactor.cachedb.core.api.CacheSession.class).newInstance(memory);
+            var base = (com.reactor.cachedb.core.repository.CacheDbRepository<Object, Long>) repository;
+            var type = loader.loadClass("patch.Product");
+            base.save(type.getConstructor(Long.class, int.class, long.class, String.class).newInstance(1L, 20, 1L, "Şehir"));
+            var receipt = (com.reactor.cachedb.core.model.WriteReceipt<?, ?>) repository.getClass()
+                    .getMethod("changeStock", Long.class, int.class, long.class).invoke(repository, 1L, 30, 2L);
+            org.junit.jupiter.api.Assertions.assertEquals(com.reactor.cachedb.core.model.OperationType.PATCH, receipt.operationType());
+            Object changed = receipt.entity();
+            org.junit.jupiter.api.Assertions.assertEquals(30, type.getMethod("stock").invoke(changed));
+            org.junit.jupiter.api.Assertions.assertEquals("Şehir", type.getMethod("name").invoke(changed));
+        }
+        for (String declaration : List.of("@CacheColumn(\"typo\") int stock", "@CacheColumn(\"stock_quantity\") String stock",
+                "@CacheColumn(\"id\") Long stock")) {
+            var invalid = compile(entity, source("patch/Invalid.java", """
+                    package patch;
+                    import com.reactor.cachedb.annotations.*;
+                    import com.reactor.cachedb.core.repository.*;
+                    @CacheRepository(entity=Product.class)
+                    public interface Invalid extends CacheDbRepository<Product, Long> {
+                        @CachePatch void invalid(@CacheId Long id, %s);
+                    }
+                    """.formatted(declaration)));
+            assertFalse(invalid.success());
+            assertTrue(invalid.diagnosticsText().contains("Invalid @CacheColumn PATCH"), invalid.diagnosticsText());
+        }
     }
 
     private Compilation compile(Source... sources) throws IOException {

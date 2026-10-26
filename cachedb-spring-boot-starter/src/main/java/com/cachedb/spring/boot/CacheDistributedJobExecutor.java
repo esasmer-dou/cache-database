@@ -47,9 +47,9 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
     private static final String FIELD_PAYLOAD = "payloadJson";
     private static final String SUBMIT_ATOMIC_SCRIPT = """
             if redis.call('XLEN', KEYS[1]) >= tonumber(ARGV[1]) then return false end
-            redis.call('HSET', KEYS[2], unpack(ARGV, 6))
+            redis.call('HSET', KEYS[2], unpack(ARGV, 7))
             redis.call('PEXPIRE', KEYS[2], tonumber(ARGV[5]) * 1000)
-            return redis.call('XADD', KEYS[1], '*', 'jobId', ARGV[2], 'route', ARGV[3], 'payloadJson', ARGV[4])
+            return redis.call('XADD', KEYS[1], '*', 'jobId', ARGV[2], 'route', ARGV[3], 'payloadJson', ARGV[4], 'traceMetadata', ARGV[6])
             """;
     private static final String ENQUEUE_IF_CAPACITY_SCRIPT =
             """
@@ -60,11 +60,12 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
                 'XADD', KEYS[1], '*',
                 'jobId', ARGV[2],
                 'route', ARGV[3],
-                'payloadJson', ARGV[4]
+                'payloadJson', ARGV[4], 'traceMetadata', ARGV[5] or ''
             )
             """;
 
     private final RedisClientOperations jedis;
+    private final com.reactor.cachedb.core.trace.TraceContextPropagator trace;
     private final ObjectMapper objectMapper;
     private final String ownerInstanceId;
     private final String keyPrefix;
@@ -123,6 +124,16 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
             RedisClientOperations jedis, ObjectMapper objectMapper, String ownerInstanceId,
             CacheDbSpringProperties.JobExecutorProperties properties,
             Collection<? extends CacheDistributedJobHandler<?>> handlers, boolean consumeJobs) {
+        this(jedis, objectMapper, ownerInstanceId, properties, handlers, consumeJobs,
+                com.reactor.cachedb.core.trace.TraceContexts.threadLocal());
+    }
+
+    public CacheDistributedJobExecutor(
+            RedisClientOperations jedis, ObjectMapper objectMapper, String ownerInstanceId,
+            CacheDbSpringProperties.JobExecutorProperties properties,
+            Collection<? extends CacheDistributedJobHandler<?>> handlers, boolean consumeJobs,
+            com.reactor.cachedb.core.trace.TraceContextPropagator trace) {
+        this.trace = Objects.requireNonNull(trace);
         this.jedis = Objects.requireNonNull(jedis, "jedis");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.ownerInstanceId = requireText(ownerInstanceId, "ownerInstanceId");
@@ -190,15 +201,17 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
         String jobId = UUID.randomUUID().toString();
         long submittedAt = Instant.now().toEpochMilli();
         CacheDistributedJobSnapshot queued = queued(jobId, normalizedRoute, submittedAt);
+        String traceMetadata = com.reactor.cachedb.core.trace.TraceMetadataCodec.encode(trace.capture());
         if (!jedis.clustered() || redis.clients.jedis.util.JedisClusterCRC16.getSlot(streamKey)
                 == redis.clients.jedis.util.JedisClusterCRC16.getSlot(key(jobId))) {
             List<String> args = new java.util.ArrayList<>(List.of(
                     Integer.toString(queueCapacity), jobId, normalizedRoute, payloadJson,
                     Integer.toString(statusTtlSeconds),
+                    traceMetadata,
                     FIELD_JOB_ID, jobId, FIELD_ROUTE, normalizedRoute,
                     "status", queued.status().name(), "ownerInstanceId", queued.ownerInstanceId(),
                     "submittedAtEpochMillis", Long.toString(submittedAt), "attempt", "0",
-                    FIELD_PAYLOAD, payloadJson));
+                    FIELD_PAYLOAD, payloadJson, "traceMetadata", traceMetadata));
             Object accepted = jedis.eval(SUBMIT_ATOMIC_SCRIPT, List.of(streamKey, key(jobId)), args);
             if (accepted == null) throw queueFull();
             return queued;
@@ -209,7 +222,7 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
                         FIELD_JOB_ID, jobId, FIELD_ROUTE, normalizedRoute,
                         "status", queued.status().name(), "ownerInstanceId", queued.ownerInstanceId(),
                         "submittedAtEpochMillis", Long.toString(submittedAt), "attempt", "0",
-                        FIELD_PAYLOAD, payloadJson));
+                        FIELD_PAYLOAD, payloadJson, "traceMetadata", traceMetadata));
                 pipeline.expire(key(jobId), statusTtlSeconds);
                 pipeline.sync();
             }
@@ -221,7 +234,7 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
                                     Integer.toString(queueCapacity),
                                     jobId,
                                     normalizedRoute,
-                                    payloadJson));
+                                    payloadJson, traceMetadata));
             if (streamEntryId == null) {
                 throw queueFull();
             }
@@ -259,13 +272,16 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
     @Deprecated(since = "0.6.0", forRemoval = false)
     public CacheDistributedJobSnapshot submit(String route, Supplier<?> operation) {
         Objects.requireNonNull(operation, "operation");
+        var traceMetadata = com.reactor.cachedb.core.trace.TraceContexts.boundedCopy(trace.capture());
         String normalizedRoute = requireText(route, "route");
         String jobId = UUID.randomUUID().toString();
         long submittedAt = Instant.now().toEpochMilli();
         CacheDistributedJobSnapshot queued = queued(jobId, normalizedRoute, submittedAt);
         store(queued, null, null, 0, null);
         try {
-            localExecutor().execute(() -> runLocal(queued, operation));
+            localExecutor().execute(() -> {
+                try (var scope = trace.restore(traceMetadata)) { runLocal(queued, operation); }
+            });
         } catch (RejectedExecutionException exception) {
             jedis.commands().del(key(jobId));
             throw queueFull();
@@ -392,7 +408,8 @@ public final class CacheDistributedJobExecutor implements AutoCloseable {
                         null);
         store(runningSnapshot, null, payloadJson, attempt, storedFields.get("checkpointJson"));
         ScheduledFuture<?> heartbeat = heartbeat(entry, jobId);
-        try {
+        try (var scope = trace.restore(com.reactor.cachedb.core.trace.TraceMetadataCodec.decode(
+                storedFields.getOrDefault("traceMetadata", fields.get("traceMetadata"))))) {
             Object result =
                     execute(handler, payloadJson, new RedisJobContext(jobId, route, attempt));
             String resultJson = writeJson(result);

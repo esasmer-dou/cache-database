@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
 public class RedisKeyStrategy {
+    public String nearInvalidationChannel() { return keyPrefix + ":near-invalidation"; }
     private final String keyPrefix;
     private final String entitySegment;
     private final String pageSegment;

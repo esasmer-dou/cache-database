@@ -115,6 +115,26 @@ public final class JdbcEntitySourceLoader<T, ID>
     }
 
     @Override
+    public java.util.OptionalLong loadVersionById(ID id) {
+        Objects.requireNonNull(id, "id");
+        var parameters = new ArrayList<Object>();
+        parameters.add(id);
+        String sql = "SELECT " + requireAllowedColumn(metadata.versionColumn()) + " FROM " + tableName
+                + " WHERE " + requireAllowedColumn(metadata.idColumn()) + "=?" + activePredicate(parameters);
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(sql)) {
+            statement.setQueryTimeout(queryTimeoutSeconds);
+            statement.setMaxRows(1);
+            for (int i = 0; i < parameters.size(); i++) dialect.bindParameter(statement, i + 1, parameters.get(i));
+            try (var rows = statement.executeQuery()) {
+                if (!rows.next()) return java.util.OptionalLong.empty();
+                long version = rows.getLong(1);
+                if (version < 0) throw new IllegalStateException("Negative source entity version");
+                return java.util.OptionalLong.of(Math.max(1, version));
+            }
+        } catch (SQLException failure) { throw new IllegalStateException("Source version probe failed for " + metadata.entityName(), failure); }
+    }
+
+    @Override
     public List<VersionedEntity<T>> loadVersionedPage(PageWindow pageWindow) {
         PageWindow normalized = pageWindow == null ? new PageWindow(0, Math.min(maxRows, 100)) : pageWindow;
         int pageSize = boundedLimit(normalized.pageSize());

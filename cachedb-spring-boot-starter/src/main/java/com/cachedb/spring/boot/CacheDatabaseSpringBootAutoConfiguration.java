@@ -297,6 +297,14 @@ public class CacheDatabaseSpringBootAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnClass(MeterRegistry.class)
+    @ConditionalOnBean({CacheDatabase.class, MeterRegistry.class})
+    @ConditionalOnMissingBean(CacheDatabaseMetricsMeterBinder.class)
+    public CacheDatabaseMetricsMeterBinder cacheDatabaseMetricsMeterBinder(CacheDatabase database) {
+        return new CacheDatabaseMetricsMeterBinder(database);
+    }
+
+    @Bean
     @ConditionalOnClass(Endpoint.class)
     @ConditionalOnBean(CacheDatabase.class)
     @ConditionalOnMissingBean
@@ -378,7 +386,8 @@ public class CacheDatabaseSpringBootAutoConfiguration {
                 objectMapperProvider.getIfAvailable(ObjectMapper::new),
                 cacheDatabase.instanceId(),
                 properties.getJobs(),
-                handlerProvider.orderedStream().toList(), cacheDatabase.config().runtimeRole().runsWorkers());
+                handlerProvider.orderedStream().toList(), cacheDatabase.config().runtimeRole().runsWorkers(),
+                cacheDatabase.config().traceContextPropagator());
     }
 
     /**

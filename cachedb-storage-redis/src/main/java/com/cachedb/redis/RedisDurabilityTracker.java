@@ -13,6 +13,15 @@ import java.util.Objects;
 
 /** Shared, monotonic SQL-durability markers written by write-behind workers. */
 public final class RedisDurabilityTracker {
+    public boolean awaitBatch(com.reactor.cachedb.core.api.CacheWriteBatchReceipt receipt, Duration timeout) {
+        if (receipt.dependencies().isEmpty()) throw new IllegalArgumentException("Batch receipt has no durability dependencies");
+        if (receipt.dependencies().size() > 100) throw new IllegalArgumentException("Batch exceeds 100 dependencies");
+        var receipts = new java.util.ArrayList<WriteReceipt<?, ?>>(receipt.dependencies().size());
+        for (var dependency : receipt.dependencies()) receipts.add(new WriteReceipt<>(null,
+                dependency.id(), dependency.redisNamespace(), com.reactor.cachedb.core.model.OperationType.UPSERT,
+                dependency.version(), java.time.Instant.EPOCH));
+        return awaitAll(receipts, timeout, null);
+    }
 
     private static final String ADVANCE_SCRIPT =
             """
@@ -46,9 +55,11 @@ public final class RedisDurabilityTracker {
                         ADVANCE_SCRIPT,
                         List.of(keyStrategy.durabilityKey(namespace, id)),
                         List.of(String.valueOf(version)));
-        return result instanceof Number number
+        long advanced = result instanceof Number number
                 ? number.longValue()
                 : Long.parseLong(String.valueOf(result));
+        LocalDurabilitySignals.advance(jedis.commands(), keyStrategy.durabilityKey(namespace, id), advanced);
+        return advanced;
     }
 
     public void advanceBatch(String namespace, List<?> ids, List<Long> versions) {
@@ -58,6 +69,7 @@ public final class RedisDurabilityTracker {
         if (versions == null || versions.size() != ids.size()) {
             throw new IllegalArgumentException("versions must align with ids");
         }
+        if (ids.size() > 10_000) throw new IllegalArgumentException("At most 10000 durability advances per batch");
         ArrayList<String> keys = new ArrayList<>(ids.size());
         ArrayList<String> args = new ArrayList<>(ids.size());
         for (int index = 0; index < ids.size(); index++) {
@@ -68,7 +80,14 @@ public final class RedisDurabilityTracker {
             keys.add(keyStrategy.durabilityKey(namespace, ids.get(index)));
             args.add(String.valueOf(version));
         }
-        jedis.eval(
+        if (jedis.clustered()) {
+            // Each marker is monotonic independently; a pipeline is safe across Cluster slots.
+            try (var pipeline = jedis.pipeline()) {
+                for (int i = 0; i < keys.size(); i++)
+                    pipeline.eval(ADVANCE_SCRIPT, List.of(keys.get(i)), List.of(args.get(i)));
+                pipeline.sync();
+            }
+        } else jedis.eval(
                 """
                 for i = 1, #KEYS do
                     local current = tonumber(redis.call('GET', KEYS[i]) or '0')
@@ -81,6 +100,8 @@ public final class RedisDurabilityTracker {
                 """,
                 keys,
                 args);
+        for (int index = 0; index < keys.size(); index++)
+            LocalDurabilitySignals.advance(jedis.commands(), keys.get(index), versions.get(index));
     }
 
     public boolean isDurable(WriteDependency dependency) {
@@ -143,23 +164,13 @@ public final class RedisDurabilityTracker {
     public boolean await(WriteReceipt<?, ?> receipt, Duration timeout, Duration pollInterval) {
         Objects.requireNonNull(receipt, "receipt");
         Duration effectiveTimeout = timeout == null ? Duration.ofSeconds(30) : timeout;
-        Duration effectivePoll = pollInterval == null ? Duration.ofMillis(25) : pollInterval;
         if (effectiveTimeout.isNegative() || effectiveTimeout.isZero()) {
             return isDurable(receipt);
         }
-        long deadline = System.nanoTime() + effectiveTimeout.toNanos();
-        while (System.nanoTime() < deadline) {
-            if (isDurable(receipt)) {
-                return true;
-            }
-            try {
-                Thread.sleep(Math.max(1L, effectivePoll.toMillis()));
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
+        try (var waiter = LocalDurabilitySignals.register(jedis.commands(),
+                keyStrategy.durabilityKey(receipt.redisNamespace(), receipt.id()), receipt.version())) {
+            return awaitSignal(waiter.future(), () -> isDurable(receipt), effectiveTimeout, pollInterval);
         }
-        return isDurable(receipt);
     }
 
     public boolean awaitAll(
@@ -167,23 +178,49 @@ public final class RedisDurabilityTracker {
             Duration timeout,
             Duration pollInterval) {
         Duration effectiveTimeout = timeout == null ? Duration.ofSeconds(30) : timeout;
-        Duration effectivePoll = pollInterval == null ? Duration.ofMillis(25) : pollInterval;
         if (effectiveTimeout.isNegative() || effectiveTimeout.isZero()) {
             return areDurable(receipts);
         }
-        long deadline = System.nanoTime() + effectiveTimeout.toNanos();
-        while (System.nanoTime() < deadline) {
-            if (areDurable(receipts)) {
-                return true;
-            }
+        if (receipts == null || receipts.isEmpty()) return true;
+        if (receipts.size() > 16_384) throw new IllegalArgumentException("Too many durability receipts");
+        var registrations = new ArrayList<LocalDurabilitySignals.Registration>();
+        try {
+            for (var receipt : receipts) if (receipt != null)
+                registrations.add(LocalDurabilitySignals.register(jedis.commands(),
+                        keyStrategy.durabilityKey(receipt.redisNamespace(), receipt.id()), receipt.version()));
+            var signal = java.util.concurrent.CompletableFuture.allOf(registrations.stream()
+                    .map(LocalDurabilitySignals.Registration::future).toArray(java.util.concurrent.CompletableFuture[]::new));
+            return awaitSignal(signal, () -> areDurable(receipts), effectiveTimeout, pollInterval);
+        } finally {
+            registrations.forEach(LocalDurabilitySignals.Registration::close);
+        }
+    }
+
+    private boolean awaitSignal(java.util.concurrent.CompletableFuture<?> signal,
+            java.util.function.BooleanSupplier durable, Duration timeout, Duration pollInterval) {
+        long timeoutNanos = timeout.toNanos();
+        if (timeoutNanos > java.util.concurrent.TimeUnit.MINUTES.toNanos(5))
+            throw new IllegalArgumentException("Durability timeout exceeds five minutes");
+        long deadline = System.nanoTime() + timeoutNanos;
+        long cap = pollInterval == null ? 25 : Math.max(1, pollInterval.toMillis());
+        long delay = Math.min(2, cap);
+        while (true) {
+            if (durable.getAsBoolean()) return true;
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) return false;
             try {
-                Thread.sleep(Math.max(1L, effectivePoll.toMillis()));
-            } catch (InterruptedException exception) {
+                signal.get(Math.min(remaining, java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(delay)),
+                        java.util.concurrent.TimeUnit.NANOSECONDS);
+                if (signal.isDone()) signal = new java.util.concurrent.CompletableFuture<>();
+            } catch (java.util.concurrent.TimeoutException expected) {
+                delay = Math.min(cap, delay < 8 ? delay * 2 : (delay < 15 ? 15 : (delay < 25 ? 25 : delay * 2)));
+            } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return false;
+            } catch (java.util.concurrent.ExecutionException failure) {
+                throw new IllegalStateException("Durability signal failed", failure.getCause());
             }
         }
-        return areDurable(receipts);
     }
 
     private long parseVersion(String value) {

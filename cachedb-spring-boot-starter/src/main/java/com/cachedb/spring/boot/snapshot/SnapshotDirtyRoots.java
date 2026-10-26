@@ -6,6 +6,7 @@ import java.util.function.Function;
 
 /** Bounded pending/in-flight reservations prevent lost updates and make crashed claims recoverable. */
 final class SnapshotDirtyRoots {
+    long pendingCount() { return redis.commands().scard(keys.get(0)); }
     private static final String MARK = """
             local cap=tonumber(ARGV[2])
             if redis.call('SCARD',KEYS[1]) > cap or redis.call('SCARD',KEYS[2]) > cap then return -2 end

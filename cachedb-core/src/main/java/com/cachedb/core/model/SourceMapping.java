@@ -7,7 +7,11 @@ import java.util.function.Function;
 
 /** Read-only table mapping, independent of Spring and CRUD registration. */
 public record SourceMapping<T>(
-        String table, List<String> columns, Function<Map<String, Object>, T> decoder) {
+        String table, List<String> columns, Function<Map<String, Object>, T> decoder,
+        EntityMetadata<T, ?> entityMetadata) {
+    public SourceMapping(String table, List<String> columns, Function<Map<String, Object>, T> decoder) {
+        this(table, columns, decoder, null);
+    }
     public SourceMapping {
         Objects.requireNonNull(table, "table");
         Objects.requireNonNull(decoder, "decoder");
@@ -19,6 +23,6 @@ public record SourceMapping<T>(
     public static <T, ID> SourceMapping<T> entity(
             EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
         Objects.requireNonNull(codec, "codec");
-        return new SourceMapping<>(metadata.tableName(), metadata.columns(), codec::fromColumns);
+        return new SourceMapping<>(metadata.tableName(), metadata.columns(), codec::fromColumns, metadata);
     }
 }

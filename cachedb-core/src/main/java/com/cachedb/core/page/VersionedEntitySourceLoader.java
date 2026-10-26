@@ -11,6 +11,12 @@ public interface VersionedEntitySourceLoader<T, ID>
 
     Optional<VersionedEntity<T>> loadVersionedById(ID id);
 
+    /** A JDBC implementation can override this with a narrow ID/version probe. */
+    default java.util.OptionalLong loadVersionById(ID id) {
+        var row = loadVersionedById(id);
+        return row.isEmpty() ? java.util.OptionalLong.empty() : java.util.OptionalLong.of(row.get().version());
+    }
+
     List<VersionedEntity<T>> loadVersionedPage(PageWindow pageWindow);
 
     List<VersionedEntity<T>> loadVersionedQuery(QuerySpec querySpec);

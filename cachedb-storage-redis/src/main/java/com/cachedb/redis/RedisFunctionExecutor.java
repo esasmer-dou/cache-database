@@ -183,6 +183,13 @@ public final class RedisFunctionExecutor {
             String compactionStreamKey,
             String compactionStatsKey,
             WriteOperation<T, ID> operation) {
+        return delete(entityKey, versionKey, tombstoneKey, streamKey, compactionPayloadKey,
+                compactionPendingKey, compactionStreamKey, compactionStatsKey, operation, CachePolicy.defaults());
+    }
+
+    public <T, ID> long delete(String entityKey, String versionKey, String tombstoneKey, String streamKey,
+            String compactionPayloadKey, String compactionPendingKey, String compactionStreamKey,
+            String compactionStatsKey, WriteOperation<T, ID> operation, CachePolicy policy) {
         Object result =
                 call(
                         config.deleteFunctionName(),
@@ -195,7 +202,7 @@ public final class RedisFunctionExecutor {
                                 compactionPendingKey,
                                 compactionStreamKey,
                                 compactionStatsKey),
-                        argsMapper.deleteArgs(operation, guardrailConfig, writeBehindConfig));
+                        argsMapper.deleteArgs(operation, guardrailConfig, writeBehindConfig, policy));
         return toLong(result);
     }
 
@@ -248,6 +255,23 @@ public final class RedisFunctionExecutor {
             versions.add(version);
         }
         return List.copyOf(versions);
+    }
+
+    public <T, ID> long patch(List<String> keys, WriteOperation<T, ID> operation,
+            CachePolicy policy, boolean cacheEntity, long expectedVersion) {
+        if (keys.size() != 9 || operation.type() != com.reactor.cachedb.core.model.OperationType.PATCH)
+            throw new IllegalArgumentException("Invalid PATCH function request");
+        // Deltas cannot replace the compaction payload, but must reach its consumers.
+        List<String> routedKeys = keys;
+        if (writeBehindConfig.compactionActive()) {
+            routedKeys = new ArrayList<>(keys);
+            routedKeys.set(3, keys.get(6));
+        }
+        long version = toLong(call(config.upsertFunctionName(), routedKeys,
+                argsMapper.upsertArgs(operation, policy, guardrailConfig, writeBehindConfig, cacheEntity, expectedVersion)));
+        if (version < 0) throw new OptimisticWriteConflictException(operation.metadata().entityName(), operation.id(),
+                expectedVersion, -(version + 1));
+        return version;
     }
 
     public String compactionComplete(

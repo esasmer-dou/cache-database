@@ -130,6 +130,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         LinkedHashMap<String, RouteMethod> routeMethods = new LinkedHashMap<>();
         ArrayList<SourceSqlMethod> sourceSqlMethods = new ArrayList<>();
         ArrayList<CommandMethod> commandMethods = new ArrayList<>();
+        ArrayList<PatchMethod> patchMethods = new ArrayList<>();
         ArrayList<WarmMethod> warmMethods = new ArrayList<>();
         ArrayList<LookupMethod> lookupMethods = new ArrayList<>();
         LinkedHashMap<String, ProjectionModel> projections = new LinkedHashMap<>();
@@ -149,6 +150,12 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             if (!abstractMethodNames.add(methodName)) {
                 error(method, "Overloaded abstract repository methods are not supported; use a distinct method name");
                 return null;
+            }
+            if (method.getAnnotation(com.reactor.cachedb.annotations.CachePatch.class) != null) {
+                PatchMethod patch = resolvePatchMethod(method, entityModel);
+                if (patch == null) return null;
+                patchMethods.add(patch);
+                continue;
             }
             CacheLookup lookup = method.getAnnotation(CacheLookup.class);
             if (lookup != null) {
@@ -287,6 +294,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 List.copyOf(routeMethods.values()),
                 List.copyOf(sourceSqlMethods),
                 List.copyOf(commandMethods),
+                List.copyOf(patchMethods),
                 List.copyOf(warmMethods),
                 List.copyOf(lookupMethods),
                 List.copyOf(projections.values())
@@ -446,6 +454,52 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 .anyMatch(element -> element.getKind() == ElementKind.FIELD
                         && element.getSimpleName().contentEquals(relationName)
                         && element.getAnnotation(CacheRelation.class) != null);
+    }
+
+    private PatchMethod resolvePatchMethod(ExecutableElement method, EntityModel entity) {
+        var parameters = parameters(method);
+        ParameterModel id = null;
+        var columns = new LinkedHashMap<String, ParameterModel>();
+        for (var parameter : method.getParameters()) {
+            ParameterModel value = parameters.get(parameter.getSimpleName().toString());
+            if (parameter.getAnnotation(CacheId.class) != null) {
+                if (id != null || !processingEnv.getTypeUtils().isSameType(boxed(value.type()), boxed(entity.idField().type()))) {
+                    error(parameter, "PATCH requires exactly one @CacheId parameter with the entity ID type");
+                    return null;
+                }
+                id = value;
+                continue;
+            }
+            var annotation = parameter.getAnnotation(CacheColumn.class);
+            String name = annotation == null ? value.name() : annotation.value();
+            FieldModel field = entity.fields().values().stream()
+                    .filter(candidate -> candidate.javaName().equals(name) || candidate.columnName().equals(name)).findFirst().orElse(null);
+            if (field == null || field.id() || field.columnName().equals("entity_version")
+                    || protectedPatchColumn(entity.type(), field.javaName())
+                    || !processingEnv.getTypeUtils().isSameType(boxed(value.type()), boxed(field.type()))) {
+                error(parameter, "Invalid @CacheColumn PATCH name or type: " + name);
+                return null;
+            }
+            if (columns.put(field.columnName(), value) != null) {
+                error(parameter, "Duplicate PATCH column: " + name);
+                return null;
+            }
+        }
+        String result = method.getReturnType().toString();
+        if (id == null || columns.isEmpty() || !(isWriteReceipt(method.getReturnType(), entity)
+                || result.equals("boolean") || result.equals("void") || result.equals(entity.typeName()))) {
+            error(method, "PATCH needs @CacheId, changed columns and WriteReceipt, boolean, entity or void return");
+            return null;
+        }
+        return new PatchMethod(method.getSimpleName().toString(), result, List.copyOf(parameters.values()), id, Map.copyOf(columns));
+    }
+
+    private boolean protectedPatchColumn(TypeElement entity, String field) {
+        for (var element : entity.getEnclosedElements())
+            if (element.getSimpleName().contentEquals(field)
+                    && (element.getAnnotation(com.reactor.cachedb.annotations.CacheVersion.class) != null
+                    || element.getAnnotation(com.reactor.cachedb.annotations.CacheSoftDelete.class) != null)) return true;
+        return false;
     }
 
     private CommandMethod resolveCommandMethod(
@@ -1435,6 +1489,19 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         for (CommandMethod command : model.commandMethods()) {
             renderCommandMethod(out, model, command);
         }
+        for (PatchMethod patch : model.patchMethods()) {
+            out.append("    @Override public ").append(patch.returnType()).append(' ').append(patch.name())
+                    .append('(').append(renderParameters(patch.parameters())).append(") {\n")
+                    .append("        java.util.Map<String, Object> changes = new java.util.LinkedHashMap<>();\n");
+            patch.columns().forEach((column, parameter) -> out.append("        changes.put(")
+                    .append(quote(column)).append(", ").append(parameter.name()).append(");\n"));
+            String invocation = "hotRepository." + (patch.returnType().equals(model.entity().typeName()) ? "patch(" : "patchWithReceipt(")
+                    + patch.id().name() + ", changes)";
+            if (patch.returnType().equals("void")) out.append("        ").append(invocation).append(";\n");
+            else if (patch.returnType().equals("boolean")) out.append("        ").append(invocation).append(";\n        return true;\n");
+            else out.append("        return ").append(invocation).append(";\n");
+            out.append("    }\n");
+        }
         for (WarmMethod warm : model.warmMethods()) {
             RouteMethod source = model.routes().stream().filter(route -> route.name().equals(warm.fromMethod())).findFirst().orElseThrow();
             renderWarmMethod(out, model, warm, source);
@@ -1571,6 +1638,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         out.append("    @Override\n    public boolean awaitDurable(com.reactor.cachedb.core.model.WriteReceipt<?, ?> receipt, java.time.Duration timeout) {\n")
                 .append("        return cacheDatabase.awaitDurable(receipt, timeout);\n    }\n\n");
         renderGeneratedIdHelper(out, model);
+        out.append("    @Override public com.reactor.cachedb.core.model.WriteReceipt<").append(entityType).append(", ")
+                .append(idType).append("> patch(").append(idType).append(" id, java.util.Map<String, Object> changes) {\n")
+                .append("        return hotRepository.patchWithReceipt(id, changes);\n    }\n");
     }
 
     private void renderGeneratedIdHelper(StringBuilder out, RepositoryModel model) {
@@ -1954,6 +2024,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         model.warmMethods().forEach(route -> methodNames.add(route.name()));
         model.lookupMethods().forEach(route -> methodNames.add(route.name()));
         model.commandMethods().forEach(route -> methodNames.add(route.name()));
+        model.patchMethods().forEach(route -> methodNames.add(route.name()));
         for (int index = 0; index < methodNames.size(); index++) {
             out.append("    private static final com.reactor.cachedb.core.route.RepositoryRouteRef ROUTE_")
                     .append(index).append(" = CATALOG.requireMethod(")
@@ -2032,6 +2103,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                     "NOT_APPLICABLE"
             ));
         }
+        for (PatchMethod patch : model.patchMethods()) definitions.add(routeDefinition(
+                patch.name(), "COMMAND", patch.name(), quote(""), 0, 1, 0, 0, 0L,
+                false, false, "operation=PATCH;acknowledgement=REDIS_ACCEPTED", "NOT_APPLICABLE"));
 
         out.append("    private static final com.reactor.cachedb.core.route.RepositoryRouteCatalog ROUTE_CATALOG = new ")
                 .append("com.reactor.cachedb.core.route.RepositoryRouteCatalog(\n")
@@ -2375,9 +2449,13 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             List<RouteMethod> routes,
             List<SourceSqlMethod> sourceSqlMethods,
             List<CommandMethod> commandMethods,
+            List<PatchMethod> patchMethods,
             List<WarmMethod> warmMethods,
             List<LookupMethod> lookupMethods,
             List<ProjectionModel> projections
     ) {
     }
+
+    private record PatchMethod(String name, String returnType, List<ParameterModel> parameters,
+            ParameterModel id, Map<String, ParameterModel> columns) {}
 }

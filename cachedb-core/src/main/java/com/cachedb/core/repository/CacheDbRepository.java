@@ -27,6 +27,10 @@ public interface CacheDbRepository<T, ID> {
 
     WriteReceipt<T, ID> save(T entity);
 
+    default WriteReceipt<T, ID> patch(ID id, java.util.Map<String, Object> columns) {
+        throw new UnsupportedOperationException("Partial updates require a 0.16 generated repository");
+    }
+
     WriteReceipt<T, ID> save(T entity, long expectedVersion);
 
     WriteReceipt<T, ID> saveAfter(T entity, WriteDependency dependency);

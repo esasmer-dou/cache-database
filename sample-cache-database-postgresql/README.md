@@ -2,15 +2,93 @@
 
 English | [Türkçe](README.tr.md)
 
+## Read and Write Controls in 0.16.0
+
+The sample is a PostgreSQL consumer: it resolves the published BOM, processor,
+starter, and doctor plugin at the same version. Java 21 is required; no framework
+checkout is needed. For the consistency and upgrade rules, read the framework
+[bounded controls guide](https://github.com/esasmer-dou/cache-database/blob/main/docs/hot-path-controls.md).
+
+Follow the existing quick start and seed/warm steps first. Then use this flow:
+
+1. `CatalogConfiguration` selects active products using
+   `ProductEntityCacheBinding.Columns.ACTIVE_STATUS`, scopes by
+   `Columns.PRODUCT_ID`, and registers `autoDirtyOnRootEntity()`.
+2. The generated repository validates this narrow write at compile time:
+
+```java
+@CachePatch
+WriteReceipt<ProductEntity, Long> patchStockValues(
+        @CacheId Long productId,
+        @CacheColumn("stock_quantity") Integer stockQuantity,
+        @CacheColumn("reserved_quantity") Integer reservedQuantity,
+        @CacheColumn("stock_status") String stockStatus,
+        @CacheColumn("updated_at") Long updatedAt);
+```
+
+3. `ProductApplicationService.replaceStock` validates `0 <= reserved <= stock`,
+   derives the stock status, and calls that method. It does not issue a full-row
+   SQL UPSERT or alter the product's name, category, or price.
+
+```java
+return products.patchStockValues(productId, stock, reserved, status,
+        Instant.now(clock).getEpochSecond());
+```
+
+4. Send an **absolute replacement**, not an increment:
+
+```http
+PATCH http://127.0.0.1:8091/api/products/1/stock-values
+Content-Type: application/json
+
+{"stock": 20, "reserved": 2}
+```
+
+The response is HTTP 202: Redis acceptance, not SQL commit. A cold patch receipt
+can have `entity: null`; the framework must not fabricate a partial product.
+The original optional-field `/stock` endpoint remains unchanged.
+Both fields are mandatory on `/stock-values`; invalid or incomplete bodies are 400.
+
+5. To observe automatic catalog refresh, start with
+   `SAMPLE_CATALOG_SCHEDULE_ENABLED=true`. The sample uses a one-second dirty
+   flush interval and threshold 20. After SQL durability, the product is marked
+   dirty and its scoped catalog payload is rebuilt. Check
+   `GET /api/catalog/items/1`. Without this scheduling opt-in, use the existing
+   manual catalog refresh endpoints. External SQL updates still need explicit
+   refresh/CDC or periodic full reconciliation.
+
+`ProductEntity` also opts into a bounded L1: 1024 entries, two-second TTL and
+4 MiB estimated budget. Repeated product detail reads can avoid Redis requests;
+returned objects are decoded copies. Cross-pod invalidation is eventual, not an
+immediate-consistency guarantee. Remove `@CacheNearPolicy` if every read must go
+to Redis. The framework uses one invalidation connection per application, not per
+repository. Reserve that connection in the background pool.
+
+For multi-row commands, prefer:
+
+```java
+var receipt = database.inTransaction(tx -> {
+    tx.put(product);
+    tx.putAll(otherProducts);
+});
+boolean durable = database.awaitDurable(receipt, Duration.ofSeconds(5));
+```
+
+Do not call receipt-returning `saveAll` inside this deferred scope: a truthful
+receipt exists only after commit. Use `tx.putAll`. Exceptions before commit
+discard the staged writes; a durability timeout after acceptance is not rollback.
+Limits are 100 identities, 4 MiB and 2000 stream fields. Cluster requires one
+hash-tag scope; bounded tenant admission cannot be bypassed with atomic batches.
+
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.15.1](https://img.shields.io/badge/CacheDB-0.15.1-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.15.1)
+[![CacheDB 0.16.0](https://img.shields.io/badge/CacheDB-0.16.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.16.0)
 
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and PostgreSQL. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in PostgreSQL, and
 growing lists use projections instead of full aggregates.
 
-> This release consumes the immutable CacheDB `0.15.1` package from the public
+> This release consumes the immutable CacheDB `0.16.0` package from the public
 > CacheDB Maven repository. It requires no GitHub token and does not require a
 > local CacheDB source checkout.
 
@@ -20,10 +98,10 @@ matching Redis projection, read the active route, and inspect coverage and
 durability signals. The sample does not hide a PostgreSQL query behind a Redis
 miss.
 
-## CacheDB 0.15.1 Upgrade
+## CacheDB 0.16.0 Upgrade
 
 The sample POM aligns the BOM, provider starter, annotation processor and doctor
-plugin at `0.15.1`. Rebuild the sample to regenerate its bindings.
+plugin at `0.16.0`. Rebuild the sample to regenerate its bindings.
 The POM also sets `jedis.version=5.2.0`; the Spring Boot parent would otherwise
 select an older driver that lacks the required pipeline API.
 
@@ -35,14 +113,14 @@ select an older driver that lacks the required pipeline API.
 - Use `Boolean` for nullable SQL booleans; primitive `boolean` rejects SQL NULL.
 - Atomic catalog imports and indexed snapshot pages have explicit endpoints. Redis Cluster distribution remains an optional framework infrastructure capability; local Compose uses standalone Redis.
 
-Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.15.1.md)
+Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.16.0.md)
 and [bounded operation contracts](https://github.com/esasmer-dou/cache-database/blob/main/docs/bounded-runtime-operations.md)
 before adding those APIs. Package availability does not certify your application's production topology.
 
-## Column Safety in 0.15.1
+## Column Safety in 0.16.0
 
 The existing sample entities stay deliberately narrow. The new limits are active
-through the 0.15.1 dependency; no additional cache policy or business-table change
+through the 0.16.0 dependency; no additional cache policy or business-table change
 is required. A wider Redis payload is not permission to create a wider SQL table.
 
 | Surface | Default count limit |
@@ -198,7 +276,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.15.1</cachedb.version>
+<cachedb.version>0.16.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -289,7 +367,7 @@ no Maven `settings.xml`, username, or token is required.
 ### 1. Resolve the published CacheDB package
 
 Validate the sample directly. Maven resolves the BOM, starter, annotation
-processor, and doctor plugin anonymously from the immutable `0.15.1` package:
+processor, and doctor plugin anonymously from the immutable `0.16.0` package:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -1111,7 +1189,7 @@ public class CatalogConfiguration {
     SnapshotPlan<ProductEntity, CatalogCard> stockCatalog() {
         var source =
                 SnapshotSource.entity("products", ProductEntityCacheBinding.SOURCE)
-                        .where(SnapshotPredicate.eq("active_status", "ACTIVE"));
+                        .where(SnapshotPredicate.eq(ProductEntityCacheBinding.Columns.ACTIVE_STATUS, "ACTIVE"));
         return SnapshotPlan.streaming(
                         PLAN,
                         source,
@@ -1122,7 +1200,8 @@ public class CatalogConfiguration {
                         SnapshotIndexSpec.of(
                                 row -> row.category,
                                 row -> Math.max(0, row.stockQuantity - row.reservedQuantity)))
-                .scopedBy(source, "product_id", Long::valueOf)
+                .scopedBy(source, ProductEntityCacheBinding.Columns.PRODUCT_ID)
+                .autoDirtyOnRootEntity()
                 .withGeneratedJsonCodec()
                 .withContentReuse();
     }

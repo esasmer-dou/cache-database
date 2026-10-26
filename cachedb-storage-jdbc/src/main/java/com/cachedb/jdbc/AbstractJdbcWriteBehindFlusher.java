@@ -19,6 +19,7 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
     protected final JdbcWriteFence writeFence;
     private final com.reactor.cachedb.core.config.WriteBehindConfig flushConfig;
     private final JdbcSchemaDialect columnDialect;
+    private final int statementTimeoutSeconds;
 
     protected AbstractJdbcWriteBehindFlusher(
             DataSource dataSource, EntityRegistry entityRegistry,
@@ -33,6 +34,7 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
         this.entityRegistry = entityRegistry;
         this.writeFence = new JdbcWriteFence(dataSource, entityRegistry, provider, timeoutSeconds);
         this.flushConfig = config;
+        this.statementTimeoutSeconds = Math.max(1, timeoutSeconds);
         this.columnDialect = switch (provider) {
             case POSTGRES -> JdbcSchemaDialects.postgres();
             case MSSQL -> JdbcSchemaDialects.mssql();
@@ -52,6 +54,12 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
             if (operation.atomicBatch()) throw new IllegalArgumentException("Atomic envelopes must be expanded before JDBC flush");
             var columns = operation.columns();
             JdbcColumnLimits.validate(columns.size(), maxColumns, columnDialect.name());
+            if (operation.type() == com.reactor.cachedb.core.model.OperationType.PATCH) {
+                if (columns.isEmpty() || operation.versionColumn() == null || operation.versionColumn().isBlank())
+                    throw new IllegalArgumentException("PATCH requires changed columns and a version column");
+                if (dialect != null) dialect.safeStatementRowLimit(1, columns.size() + 3);
+                continue;
+            }
             if (operation.type() == com.reactor.cachedb.core.model.OperationType.DELETE) {
                 if (dialect != null) dialect.safeStatementRowLimit(1, 2);
                 continue;
@@ -91,7 +99,8 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
         try {
             if (settings != null) settings.apply(connection);
             if (isolation != null) connection.setTransactionIsolation(isolation);
-            writer.write(writeFence.filter(connection, operations, coalesceWrites(operations)));
+            boolean hasPatch = operations.stream().anyMatch(op -> op.type() == com.reactor.cachedb.core.model.OperationType.PATCH);
+            writer.write(writeFence.filter(connection, operations, !hasPatch && coalesceWrites(operations)));
             connection.commit();
         } catch (SQLException | RuntimeException | Error failure) {
             primary = failure;
@@ -141,6 +150,49 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
             if (selected == null || !selected.effectivePersistenceSemantics().stateCompactionEnabled()) return false;
         }
         return true;
+    }
+
+    protected final void patch(Connection connection, QueuedWriteOperation operation) throws SQLException {
+        var changes = new ArrayList<>(operation.columns().entrySet());
+        changes.removeIf(entry -> entry.getKey().equals(operation.idColumn()) || entry.getKey().equals(operation.versionColumn()));
+        if (changes.isEmpty()) throw new IllegalArgumentException("PATCH has no changed columns");
+        String table = checkedIdentifier(operation.tableName(), true);
+        String version = checkedIdentifier(operation.versionColumn(), false);
+        String id = checkedIdentifier(operation.idColumn(), false);
+        var sql = new StringBuilder("UPDATE ").append(table).append(" SET ");
+        for (var change : changes) {
+            if (change.getKey().equals(operation.deletedColumn()))
+                throw new IllegalArgumentException("PATCH cannot change the deletion marker");
+            sql.append(checkedIdentifier(change.getKey(), false)).append("=?,");
+        }
+        sql.append(version).append("=? WHERE ").append(id).append("=? AND (")
+                .append(version).append(" IS NULL OR ").append(version).append("<=?)");
+        try (var statement = connection.prepareStatement(sql.toString())) {
+            statement.setQueryTimeout(statementTimeoutSeconds);
+            int index = 1;
+            for (var change : changes)
+                bindPatchValue(statement, index++, change.getValue(),
+                        JdbcWriteBehindSupport.columnType(entityRegistry, operation, change.getKey()));
+            statement.setLong(index++, operation.version());
+            bindPatchValue(statement, index++, operation.id(), JdbcWriteBehindSupport.columnType(entityRegistry, operation, operation.idColumn()));
+            statement.setLong(index, operation.version());
+            VersionGuardedWriteSupport.verifySingleOutcome(connection, entityRegistry, operation,
+                    statement.executeUpdate(), statementTimeoutSeconds);
+        }
+    }
+
+    protected void bindPatchValue(java.sql.PreparedStatement statement, int index, String value, String type) throws SQLException {
+        Object converted = JdbcWriteBehindSupport.convertValue(value, type == null ? "java.lang.String" : type);
+        if (converted instanceof java.time.Instant instant) converted = java.sql.Timestamp.from(instant);
+        else if (converted instanceof java.time.LocalDateTime local) converted = java.sql.Timestamp.valueOf(local);
+        else if (converted instanceof java.time.LocalDate local) converted = java.sql.Date.valueOf(local);
+        statement.setObject(index, converted);
+    }
+
+    private static String checkedIdentifier(String value, boolean qualified) {
+        if (value == null || !value.matches(qualified ? "[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*){0,2}" : "[A-Za-z_][A-Za-z0-9_]*"))
+            throw new IllegalArgumentException("Invalid SQL identifier for PATCH");
+        return value;
     }
 
     protected static <K> LinkedHashMap<K, List<QueuedWriteOperation>> groupOperations(

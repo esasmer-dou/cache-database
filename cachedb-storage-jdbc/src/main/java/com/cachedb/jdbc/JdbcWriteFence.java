@@ -107,6 +107,17 @@ public final class JdbcWriteFence {
         }
     }
 
+    private Long patchBaseline(Connection connection, QueuedWriteOperation operation) throws SQLException {
+        try (var statement = prepare(connection, "SELECT " + operation.versionColumn() + " FROM "
+                + operation.tableName() + " WHERE " + operation.idColumn() + "=?")) {
+            statement.setObject(1, JdbcWriteBehindSupport.convertValue(operation.id(),
+                    JdbcWriteBehindSupport.columnType(registry, operation, operation.idColumn())));
+            try (var rows = statement.executeQuery()) {
+                return rows.next() ? Math.max(1, rows.getLong(1)) : null;
+            }
+        }
+    }
+
     public static String createTableSql(Provider provider) {
         String text =
                 switch (provider) {
@@ -174,6 +185,7 @@ public final class JdbcWriteFence {
                             + " writing",
                     "CDB03");
         if (operations.isEmpty()) return operations;
+        if (operations.stream().anyMatch(operation -> operation.type() == OperationType.PATCH)) coalesce = false;
         TreeMap<String, Entry> entries = new TreeMap<>();
         Map<String, Entry> identities = new java.util.LinkedHashMap<>();
         Map<QueuedWriteOperation, Entry> operationEntries = new java.util.IdentityHashMap<>();
@@ -214,6 +226,16 @@ public final class JdbcWriteFence {
             boolean delete = operation.type() == OperationType.DELETE;
             if (entry.version == null || operation.version() > entry.version
                     || operation.version() == entry.version && delete && !entry.deleted) {
+                if (operation.type() == OperationType.PATCH) {
+                    if (entry.deleted) throw new SQLException("PATCH cannot recreate a deleted entity", "CDB04");
+                    Long predecessor = entry.version == null
+                            ? patchBaseline(connection, operation)
+                            : entry.version;
+                    if (predecessor == null)
+                        throw new SQLException("PATCH target does not exist", "CDB04");
+                    if (Math.max(operation.dependencyVersion(), operation.version() - 1) > predecessor)
+                        throw new java.sql.SQLTransientException("PATCH predecessor has not committed", "CDB02");
+                }
                 accepted.add(operation);
                 entry.version = operation.version();
                 entry.deleted = delete;

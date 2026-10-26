@@ -34,6 +34,10 @@ public final class CacheDatabaseConfigOverrides {
         Objects.requireNonNull(properties, "properties");
         Lookup root = new Lookup(properties, prefix);
         return CacheDatabaseConfig.builder()
+                .traceContextPropagator(baseConfig.traceContextPropagator())
+                .mutations(new MutationConfig(
+                        root.integer("mutations.maxPatchAttempts", baseConfig.mutations().maxPatchAttempts()),
+                        root.bool("mutations.coldPatchEnabled", baseConfig.mutations().coldPatchEnabled())))
                 .writeBehindFlusherFactory(baseConfig.writeBehindFlusherFactory())
                 .runtimeRole(root.enumValue("runtimeRole", CacheRuntimeRole.class, baseConfig.runtimeRole()))
                 .writeBehind(applyWriteBehind(baseConfig.writeBehind(), root.child("writeBehind.")))
@@ -137,6 +141,12 @@ public final class CacheDatabaseConfigOverrides {
                 .entityTtlSeconds(lookup.longValue("entityTtlSeconds", base.entityTtlSeconds()))
                 .pageTtlSeconds(lookup.longValue("pageTtlSeconds", base.pageTtlSeconds()))
                 .hotPolicy(applyEntityHotPolicy(base.hotPolicy(), lookup.child("hotPolicy.")))
+                .accessDebounceMillis(lookup.longValue("accessDebounceMillis", base.accessDebounceMillis()))
+                .recentTouchSlots(lookup.integer("recentTouchSlots", base.recentTouchSlots()))
+                .nearCachePolicy(new com.reactor.cachedb.core.cache.NearCachePolicy(
+                        lookup.integer("nearCache.maxEntries", base.nearCachePolicy().maxEntries()),
+                        lookup.integer("nearCache.ttlSeconds", base.nearCachePolicy().ttlSeconds()),
+                        lookup.longValue("nearCache.maxBytes", base.nearCachePolicy().maxBytes())))
                 .build();
     }
 
@@ -211,6 +221,12 @@ public final class CacheDatabaseConfigOverrides {
 
     private static ReadThroughConfig applyReadThrough(ReadThroughConfig base, Lookup lookup) {
         return ReadThroughConfig.builder()
+                .singleFlight(new SingleFlightConfig(
+                        lookup.bool("singleFlight.enabled", base.singleFlight().enabled()),
+                        lookup.integer("singleFlight.maxInFlightKeys", base.singleFlight().maxInFlightKeys()),
+                        lookup.integer("singleFlight.maxWaiters", base.singleFlight().maxWaiters()),
+                        lookup.longValue("singleFlight.timeoutMillis", base.singleFlight().timeoutMillis()),
+                        lookup.integer("singleFlight.maxResultCharacters", base.singleFlight().maxResultCharacters())))
                 .mode(lookup.enumValue("mode", ReadThroughMode.class, base.mode()))
                 .failOnMissingLoader(lookup.bool("failOnMissingLoader", base.failOnMissingLoader()))
                 .hydrateLoadedEntities(lookup.bool("hydrateLoadedEntities", base.hydrateLoadedEntities()))
@@ -237,6 +253,7 @@ public final class CacheDatabaseConfigOverrides {
 
     private static QueryIndexConfig applyQueryIndex(QueryIndexConfig base, Lookup lookup) {
         return QueryIndexConfig.builder()
+                .sparseIndexMetadata(lookup.bool("sparseIndexMetadata", base.sparseIndexMetadata()))
                 .exactIndexEnabled(lookup.bool("exactIndexEnabled", base.exactIndexEnabled()))
                 .rangeIndexEnabled(lookup.bool("rangeIndexEnabled", base.rangeIndexEnabled()))
                 .prefixIndexEnabled(lookup.bool("prefixIndexEnabled", base.prefixIndexEnabled()))

@@ -34,6 +34,10 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
+    private com.reactor.cachedb.core.trace.TraceContextPropagator trace = com.reactor.cachedb.core.trace.TraceContexts.threadLocal();
+    private java.util.function.Consumer<QueuedWriteOperation> durableListener = operation -> {};
+    public RedisDeadLetterRecoveryWorker withTraceContextPropagator(com.reactor.cachedb.core.trace.TraceContextPropagator value) { trace = java.util.Objects.requireNonNull(value); return this; }
+    public RedisDeadLetterRecoveryWorker withDurableListener(java.util.function.Consumer<QueuedWriteOperation> listener) { durableListener = java.util.Objects.requireNonNull(listener); return this; }
 
     private final RedisClientOperations jedis;
     private final WriteBehindFlusher flusher;
@@ -221,12 +225,17 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
 
         int attempts = 0;
         while (attempts <= retryPolicy.maxRetries()) {
-            try {
+            try (var scope = trace.restore(operation.traceMetadata())) {
                 flusher.flush(operation);
+                var durability = new RedisDurabilityTracker(jedis, keyStrategy);
                 if (operation.atomicBatch()) {
-                    var durability = new RedisDurabilityTracker(jedis, keyStrategy);
-                    for (var member : operation.batchOperations())
+                    for (var member : operation.batchOperations()) {
                         durability.advance(member.redisNamespace(), member.id(), member.version());
+                        durableListener.accept(member);
+                    }
+                } else {
+                    durability.advance(operation.redisNamespace(), operation.id(), operation.version());
+                    durableListener.accept(operation);
                 }
                 publishReconciliation("REPLAYED", failureRecord, null, attempts);
                 resolveDeadLetter(entry, "REPLAYED", "");
@@ -321,7 +330,7 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
         if (operation.atomicBatch()) return false;
         String currentVersion =
                 jedis.commands()
-                        .get(keyStrategy.versionKey(operation.redisNamespace(), operation.id()));
+                        .get(keyStrategy.durabilityKey(operation.redisNamespace(), operation.id()));
         if (currentVersion == null || currentVersion.isBlank()) {
             return false;
         }

@@ -22,7 +22,16 @@ public record QueuedWriteOperation(
         String dependencyId,
         long dependencyVersion,
         String transactionGroupId,
-        java.util.List<QueuedWriteOperation> batchOperations) {
+        java.util.List<QueuedWriteOperation> batchOperations,
+        Map<String, String> traceMetadata) {
+    public QueuedWriteOperation(OperationType type, String entityName, String tableName, String redisNamespace,
+            String observationTag, String idColumn, String versionColumn, String deletedColumn, String id,
+            Map<String, String> columns, long version, Instant createdAt, String dependencyNamespace,
+            String dependencyId, long dependencyVersion, String transactionGroupId, java.util.List<QueuedWriteOperation> batchOperations) {
+        this(type, entityName, tableName, redisNamespace, observationTag, idColumn, versionColumn,
+                deletedColumn, id, columns, version, createdAt, dependencyNamespace, dependencyId,
+                dependencyVersion, transactionGroupId, batchOperations, Map.of());
+    }
     public QueuedWriteOperation(
             OperationType type,
             String entityName,
@@ -60,6 +69,7 @@ public record QueuedWriteOperation(
     }
 
     public QueuedWriteOperation {
+        traceMetadata = com.reactor.cachedb.core.trace.TraceContexts.boundedCopy(traceMetadata);
         batchOperations =
                 batchOperations == null
                         ? java.util.List.of()
@@ -97,7 +107,7 @@ public record QueuedWriteOperation(
                 dependencyId,
                 dependencyVersion,
                 group,
-                java.util.List.of());
+                java.util.List.of(), traceMetadata);
     }
 
     public QueuedWriteOperation(

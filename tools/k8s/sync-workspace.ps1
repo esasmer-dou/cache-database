@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Kubectl,
     [Parameter(Mandatory=$true)][string]$Context,
-    [string]$Namespace = 'cachedb-v015-validation',
+    [string]$Namespace = 'cachedb-v016-validation',
     [Parameter(Mandatory=$true)][ValidatePattern('^[a-zA-Z0-9-]{1,60}$')][string]$SourceId
 )
 $ErrorActionPreference = 'Stop'

@@ -17,8 +17,21 @@ public record QueryIndexConfig(
         int textTokenMinLength,
         int textTokenMaxLength,
         int textMaxTokensPerValue,
-        int maxMaterializedCandidateIds
+        int maxMaterializedCandidateIds,
+        boolean sparseIndexMetadata
 ) {
+    public QueryIndexConfig(boolean exactIndexEnabled, boolean rangeIndexEnabled,
+            boolean prefixIndexEnabled, boolean textIndexEnabled, boolean plannerStatisticsEnabled,
+            boolean plannerStatisticsPersisted, long plannerStatisticsTtlMillis, int plannerStatisticsSampleSize,
+            boolean learnedStatisticsEnabled, double learnedStatisticsWeight, boolean cacheWarmingEnabled,
+            int rangeHistogramBuckets, int prefixMaxLength, int textTokenMinLength,
+            int textTokenMaxLength, int textMaxTokensPerValue, int maxMaterializedCandidateIds) {
+        this(exactIndexEnabled, rangeIndexEnabled, prefixIndexEnabled, textIndexEnabled,
+                plannerStatisticsEnabled, plannerStatisticsPersisted, plannerStatisticsTtlMillis,
+                plannerStatisticsSampleSize, learnedStatisticsEnabled, learnedStatisticsWeight,
+                cacheWarmingEnabled, rangeHistogramBuckets, prefixMaxLength, textTokenMinLength,
+                textTokenMaxLength, textMaxTokensPerValue, maxMaterializedCandidateIds, true);
+    }
     public QueryIndexConfig(
             boolean exactIndexEnabled,
             boolean rangeIndexEnabled,
@@ -72,6 +85,12 @@ public record QueryIndexConfig(
         private int textTokenMaxLength = 32;
         private int textMaxTokensPerValue = 16;
         private int maxMaterializedCandidateIds = 10_000;
+        private boolean sparseIndexMetadata = true;
+
+        public Builder sparseIndexMetadata(boolean enabled) {
+            sparseIndexMetadata = enabled;
+            return this;
+        }
 
         public Builder exactIndexEnabled(boolean exactIndexEnabled) {
             this.exactIndexEnabled = exactIndexEnabled;
@@ -179,7 +198,8 @@ public record QueryIndexConfig(
                     textTokenMinLength,
                     textTokenMaxLength,
                     textMaxTokensPerValue,
-                    maxMaterializedCandidateIds
+                    maxMaterializedCandidateIds,
+                    sparseIndexMetadata
             );
         }
     }

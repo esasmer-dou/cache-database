@@ -93,6 +93,7 @@ public final class PostgresWriteBehindFlusher extends AbstractJdbcWriteBehindFlu
             inTransaction(connection, operations, null, null, accepted -> {
                 for (var operation : accepted) {
                     if (operation.type() == OperationType.DELETE) delete(connection, operation);
+                    else if (operation.type() == OperationType.PATCH) patch(connection, operation);
                     else upsert(connection, operation);
                 }
             });
@@ -101,6 +102,10 @@ public final class PostgresWriteBehindFlusher extends AbstractJdbcWriteBehindFlu
 
     private void flushBatchInternal(List<QueuedWriteOperation> operations) throws SQLException {
         if (operations.isEmpty()) return;
+        if (operations.stream().anyMatch(op -> op.type() == OperationType.PATCH)) {
+            flushAtomicBatch(operations);
+            return;
+        }
         List<QueuedWriteOperation> batchOperations = config.entityFlushPolicies().isEmpty()
                 ? operations : normalizeOperations(operations);
         if (batchOperations.size() == 1) {

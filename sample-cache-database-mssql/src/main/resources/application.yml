@@ -33,6 +33,8 @@ cachedb:
         preparation-timeout: PT20S
         lease-duration: PT45S
         batch-rows: 100
+        dirty-flush-interval: PT1S
+        dirty-flush-threshold: 20
         fetch-rows: 128
         max-source-rows: 10000
         max-rows-per-source: 10000
