@@ -105,8 +105,8 @@ class MssqlWriteBehindFlusherSqlServerTest {
                     start.await();
                     for (int iteration = 1; iteration <= iterationsPerWorker; iteration++) {
                         long version = workerIndex * 1_000L + iteration;
-                        flusher.flush(upsert("42", "worker-" + workerIndex + "-" + iteration, version));
-                        flusher.flush(upsert("42", "stale-" + workerIndex + "-" + iteration, version - 1));
+                        flushWithLockRetry(flusher, upsert("42", "worker-" + workerIndex + "-" + iteration, version));
+                        flushWithLockRetry(flusher, upsert("42", "stale-" + workerIndex + "-" + iteration, version - 1));
                     }
                 } catch (Throwable failure) {
                     failures.add(failure);
@@ -126,6 +126,25 @@ class MssqlWriteBehindFlusherSqlServerTest {
         assertEquals(1L, scalarLong("SELECT COUNT(*) FROM cachedb_it_entity WHERE id = 42"));
         long expectedVersion = (long) (workerCount - 1) * 1_000L + iterationsPerWorker;
         assertEquals(expectedVersion, scalarLong("SELECT entity_version FROM cachedb_it_entity WHERE id = 42"));
+    }
+
+    private static void flushWithLockRetry(MssqlWriteBehindFlusher flusher, QueuedWriteOperation operation)
+            throws SQLException, InterruptedException {
+        // The flusher rolls back and reports transient conflicts; the stream worker owns retries in production.
+        for (int attempt = 0; ; attempt++) {
+            try {
+                flusher.flush(operation);
+                return;
+            } catch (SQLException failure) {
+                WriteFailureDetails details = flusher.classify(failure);
+                boolean lockConflict = details.category() == WriteFailureCategory.DEADLOCK
+                        || details.category() == WriteFailureCategory.LOCK_CONFLICT;
+                if (!details.retryable() || !lockConflict || attempt >= 7) {
+                    throw failure;
+                }
+                TimeUnit.MILLISECONDS.sleep(java.util.concurrent.ThreadLocalRandom.current().nextLong(10, 51));
+            }
+        }
     }
 
     @Test
