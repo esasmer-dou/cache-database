@@ -211,8 +211,9 @@ public final class RedisEntityRepository<T, ID>
         String deleted = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
         if (!versioned) return jedis.mget(entity, deleted);
         String version = keyStrategy.versionKey(metadata.redisNamespace(), id);
-        if (jedis.clustered()) jedis.requireSameSlot(List.of(entity, deleted, version));
-        return jedis.mget(entity, deleted, version);
+        if (!jedis.clustered()) return jedis.mget(entity, deleted, version);
+        return RedisCausalReads.read(jedis, List.of(entity), List.of(deleted), List.of(version),
+                (index, observed) -> verifyCausalVersion(id, observed));
     }
 
     private void refreshNear(ID id) {
@@ -706,9 +707,11 @@ public final class RedisEntityRepository<T, ID>
                 for (ID id : batch) keys.add(keyStrategy.tombstoneKey(metadata.redisNamespace(), id));
                 if (causal) {
                     for (ID id : batch) keys.add(keyStrategy.versionKey(metadata.redisNamespace(), id));
-                    if (jedis.clustered()) jedis.requireSameSlot(keys);
                 }
-                var values = jedis.mget(keys.toArray(String[]::new));
+                var values = causal && jedis.clustered() ? RedisCausalReads.read(jedis, keys.subList(0, batch.size()),
+                        keys.subList(batch.size(), batch.size() * 2), keys.subList(batch.size() * 2, keys.size()),
+                        (index, observed) -> verifyCausalVersion(batch.get(index), observed))
+                        : jedis.mget(keys.toArray(String[]::new));
                 var ttls = new ArrayList<redis.clients.jedis.Response<Long>>();
                 if (local) try (var pipeline = jedis.pipeline()) {
                     for (int i = 0; i < batch.size(); i++) ttls.add(pipeline.pttl(keys.get(i)));

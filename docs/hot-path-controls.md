@@ -201,6 +201,22 @@ that require observing every remote write immediately.
 
 ## Upgrade Safely
 
+### Enable Independent JDBC Regrouping
+
+```java
+@CacheEntity(table = "supplier_offers", redisNamespace = "supplier-offers",
+        independentWriteReordering = true)
+public class SupplierOffer { /* persisted fields */ }
+```
+
+Every entity in a flush batch must opt in. Distinct `(table,id)` operations may
+be grouped by SQL shape; same-key causal order is preserved. Keep default `false`
+for parent/child inserts, triggers reading sibling rows, unique values swapped
+between rows, and other cross-row order dependencies. The flusher exposes
+`reorderedBatches()`, `reorderedOperations()` and `reorderSkippedMixedOptIn()`;
+the last explains mixed-opt-in batches that retained order. First-use INFO
+messages retain at most 1024 names per flusher. Counters measure planning, not SQL commit.
+
 Align the BOM, processor, starters, workers, and samples at the same version and
 regenerate bindings. Existing constructors and smaller Redis payloads remain
 supported. Drain old workers before enabling PATCH producers: old workers cannot

@@ -8,6 +8,52 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import redis.clients.jedis.JedisPooled;
 
 class RedisNearCacheTest {
+    @Test void unusedCoordinatorNeverCreatesRefreshThreadsAndCloseIsIdempotent() {
+        RedisClientOperations unused = new RedisClientOperations() {
+            public redis.clients.jedis.UnifiedJedis commands() { throw new AssertionError("No Redis access expected"); }
+        };
+        var coordinator = new RedisNearCacheCoordinator(unused,new RedisKeyStrategy());
+        String prefix = coordinator.refreshThreadPrefix();
+        assertTrue(Thread.getAllStackTraces().keySet().stream().noneMatch(thread -> thread.getName().startsWith(prefix)));
+        coordinator.close(); coordinator.close();
+        coordinator.refresh(null,"ignored",() -> fail("Closed coordinator executed task"));
+        assertEquals(0,coordinator.rejectedRefreshes());
+    }
+
+    @Test @EnabledIfSystemProperty(named="cachedb.snapshot.redis",matches="true")
+    void refreshBudgetsAreIndependentAndShutdownCancelsQueuedWork() throws Exception {
+        try (var redis = new JedisPooled(RedisTestEndpoint.uri());
+                var first = new RedisNearCacheCoordinator(JedisPooledOperations.of(redis),new RedisKeyStrategy("budget-a-"+UUID.randomUUID()));
+                var second = new RedisNearCacheCoordinator(JedisPooledOperations.of(redis),new RedisKeyStrategy("budget-b-"+UUID.randomUUID()))) {
+            var policy = new NearCachePolicy(32,10,65536,1);
+            var a = first.register("rows",policy); var b = second.register("rows",policy);
+            long deadline = System.nanoTime()+5_000_000_000L;
+            while ((!first.connected() || !second.connected()) && System.nanoTime()<deadline) Thread.sleep(2);
+            assertTrue(first.connected()); assertTrue(second.connected());
+            var gate = new java.util.concurrent.CountDownLatch(1);
+            var starts = new java.util.concurrent.atomic.AtomicInteger();
+            try {
+                for (int i=0;i<600;i++) first.refresh(a,"key"+i,() -> {
+                    starts.incrementAndGet();
+                    try { gate.await(5,java.util.concurrent.TimeUnit.SECONDS); }
+                    catch (InterruptedException stopped) { Thread.currentThread().interrupt(); }
+                });
+                assertTrue(first.rejectedRefreshes()>0);
+                var independent = new java.util.concurrent.CountDownLatch(1);
+                second.refresh(b,"works",independent::countDown);
+                assertTrue(independent.await(2,java.util.concurrent.TimeUnit.SECONDS));
+                assertEquals(0,second.rejectedRefreshes());
+                String prefix = first.refreshThreadPrefix(); first.close(); first.close();
+                deadline = System.nanoTime()+2_000_000_000L;
+                while (Thread.getAllStackTraces().keySet().stream().anyMatch(thread -> thread.isAlive() && thread.getName().startsWith(prefix))
+                        && System.nanoTime()<deadline) Thread.sleep(2);
+                assertTrue(Thread.getAllStackTraces().keySet().stream().noneMatch(thread -> thread.isAlive() && thread.getName().startsWith(prefix)));
+                int before = starts.get();
+                first.refresh(a,"after-close",starts::incrementAndGet);
+                assertEquals(before,starts.get());
+            } finally { gate.countDown(); }
+        }
+    }
     @Test void sampledFrequencyProtectsHotKeysDuringBoundedColdScan() {
         var cache = new RedisNearCacheCoordinator.Store(new NearCachePolicy(64, 10, 1_048_576));
         var ids = java.util.stream.IntStream.range(0, 10000).mapToObj(i -> "key" + i)

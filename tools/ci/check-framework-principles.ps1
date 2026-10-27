@@ -17,6 +17,11 @@ $mainSources = Get-ChildItem -LiteralPath $root -Recurse -Filter "*.java" -File 
         $_.FullName -notmatch '[\\/]target[\\/]'
     }
 
+foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -Filter '*.java' -File |
+        Where-Object { $_.FullName -match '[\\/]src[\\/](main|test)[\\/]java[\\/]com[\\/]reactor[\\/]' -and $_.FullName -notmatch '[\\/]target[\\/]' }) {
+    Add-Violation "[source-layout] use com/cachedb source directories without changing packages: $($file.FullName)"
+}
+
 $transactionConfiguration = 'cachedb-spring-boot-starter/src/main/java/com/cachedb/spring/boot/CacheTransactionAutoConfiguration.java'
 $transactionSource = Get-Content -LiteralPath (Join-Path $root $transactionConfiguration) -Raw
 $transactionInvocation = [regex]::Match($transactionSource,

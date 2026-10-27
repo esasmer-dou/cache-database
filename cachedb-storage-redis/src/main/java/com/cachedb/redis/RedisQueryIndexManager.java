@@ -48,6 +48,53 @@ import redis.clients.jedis.params.SetParams;
 import redis.clients.jedis.resps.Tuple;
 
 public final class RedisQueryIndexManager<T, ID> {
+    public enum CompositeIndexState { VERIFIED, PENDING_REBUILD, NONE }
+    private final String compositeSignature;
+    private volatile CompositeIndexState compositeState = CompositeIndexState.NONE;
+    private volatile long compositeCheckAt;
+    private boolean compositeWarningLogged;
+
+    /** Signature checks are bounded to one per five seconds, except after a rebuild. */
+    public CompositeIndexState compositeIndexState() {
+        if (metadata.compositeExactIndexes().isEmpty()) return CompositeIndexState.NONE;
+        if (compositeCheckAt == 0 || System.nanoTime() - compositeCheckAt >= 0) checkCompositeSignature();
+        return compositeState;
+    }
+
+    private synchronized void checkCompositeSignature() {
+        if (compositeCheckAt != 0 && System.nanoTime() - compositeCheckAt < 0) return;
+        String namespace = metadata.redisNamespace();
+        String signatureKey = keyStrategy.compositeIndexSignatureKey(namespace);
+        String stored = jedis.commands().get(signatureKey);
+        if (!compositeSignature.equals(stored)) {
+            var keys = List.of(signatureKey, keyStrategy.indexAllKey(namespace), keyStrategy.hotSetKey(namespace));
+            boolean atomic = true;
+            try { jedis.requireSameSlot(keys); } catch (IllegalArgumentException crossSlot) { atomic = false; }
+            if (atomic) {
+                Object result = jedis.eval("""
+                        if redis.call('SCARD',KEYS[2]) == 0 and redis.call('ZCARD',KEYS[3]) == 0 then
+                          redis.call('SET',KEYS[1],ARGV[1]); return ARGV[1]
+                        end
+                        return redis.call('GET',KEYS[1])
+                        """, keys, List.of(compositeSignature));
+                stored = result instanceof String value ? value : null;
+            }
+        }
+        compositeState = compositeSignature.equals(stored)
+                ? CompositeIndexState.VERIFIED : CompositeIndexState.PENDING_REBUILD;
+        compositeCheckAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        if (compositeState == CompositeIndexState.PENDING_REBUILD && !compositeWarningLogged) {
+            compositeWarningLogged = true;
+            System.getLogger(getClass().getName()).log(System.Logger.Level.WARNING,
+                    "Composite indexes pending rebuild for " + metadata.entityName() + "; stored=" + shortSignature(stored)
+                    + "; local=" + shortSignature(compositeSignature)
+                    + "; run rebuildIndexes after all writers are on the new bindings");
+        }
+    }
+
+    private static String shortSignature(String signature) {
+        return signature == null ? "<missing>" : signature.substring(0, Math.min(512, signature.length()));
+    }
     static final String PROJECTION_TENANT_MARKER = "$cachedb:projection-tenant";
 
     private String projectionOwnerNamespace() {
@@ -128,6 +175,8 @@ public final class RedisQueryIndexManager<T, ID> {
                 throw new IllegalArgumentException("Partitioned index columns must be present in indexedColumns");
         });
         RedisCompositeIndexes.validate(metadata);
+        this.compositeSignature = RedisCompositeIndexes.signature(metadata);
+        if (!metadata.compositeExactIndexes().isEmpty()) checkCompositeSignature();
         if (metadata.columns().contains(PROJECTION_TENANT_MARKER)) throw new IllegalArgumentException("Reserved projection tenant metadata column");
     }
 
@@ -180,7 +229,7 @@ public final class RedisQueryIndexManager<T, ID> {
         }
     }
 
-    public QueryIndexRebuildResult rebuildFromEntityStore(boolean automatic, String note) {
+    public synchronized QueryIndexRebuildResult rebuildFromEntityStore(boolean automatic, String note) {
         String namespace = metadata.redisNamespace();
         String lockKey = keyStrategy.indexRebuildLockKey(namespace);
         if (automatic && !acquireRebuildSlot(lockKey)) {
@@ -195,16 +244,22 @@ public final class RedisQueryIndexManager<T, ID> {
                     "Skipped automatic rebuild because cooldown is active");
         }
 
+        markIndexFeaturesDegraded();
+        jedis.commands().del(keyStrategy.compositeIndexSignatureKey(namespace));
+        compositeState = metadata.compositeExactIndexes().isEmpty() ? CompositeIndexState.NONE : CompositeIndexState.PENDING_REBUILD;
+        compositeCheckAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
         long clearedKeyCount = clearIndexKeys(lockKey);
         long rebuiltEntityCount = 0L;
         String cursor = "0";
+        int iterations = 0;
         do {
+            if (++iterations > 100_000) throw new IllegalStateException("Index rebuild scan exceeds 100000 iterations; indexes remain degraded");
             redis.clients.jedis.resps.ScanResult<String> scan =
                     jedis.scan(
                             cursor,
                             new redis.clients.jedis.params.ScanParams()
                                     .match(keyStrategy.entityPattern(namespace))
-                                    .count(Math.max(64, config.plannerStatisticsSampleSize() * 4)));
+                                    .count(Math.min(1000, Math.max(64, config.plannerStatisticsSampleSize() * 4))));
             for (String entityKey : scan.getResult()) {
                 String id = entityKey.substring(entityKey.lastIndexOf(':') + 1);
                 if (jedis.commands().exists(keyStrategy.tombstoneKey(namespace, id))) {
@@ -220,6 +275,9 @@ public final class RedisQueryIndexManager<T, ID> {
             }
             cursor = scan.getCursor();
         } while (!"0".equals(cursor));
+        jedis.commands().set(keyStrategy.compositeIndexSignatureKey(namespace), compositeSignature);
+        compositeState = metadata.compositeExactIndexes().isEmpty() ? CompositeIndexState.NONE : CompositeIndexState.VERIFIED;
+        compositeCheckAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
         jedis.commands().del(keyStrategy.indexDegradedKey(namespace));
         invalidatePlannerStatistics();
         return new QueryIndexRebuildResult(
@@ -1525,7 +1583,7 @@ public final class RedisQueryIndexManager<T, ID> {
 
     private Resolution resolveAndGroup(QueryGroup group) {
         boolean fullyIndexed = fullyIndexed(group);
-        if (config.exactIndexEnabled() && !metadata.compositeExactIndexes().isEmpty()) {
+        if (config.exactIndexEnabled() && compositeIndexState() == CompositeIndexState.VERIFIED) {
             var equals = new LinkedHashMap<String, Object>();
             for (var node : group.nodes()) if (node instanceof QueryFilter filter && filter.operator() == QueryOperator.EQ && filter.value() != null)
                 equals.putIfAbsent(filter.column(), filter.value());
@@ -2853,7 +2911,9 @@ public final class RedisQueryIndexManager<T, ID> {
     private long clearIndexKeys(String lockKey) {
         long clearedCount = 0L;
         String cursor = "0";
+        int iterations = 0;
         do {
+            if (++iterations > 100_000) throw new IllegalStateException("Index cleanup scan exceeds 100000 iterations; indexes remain degraded");
             redis.clients.jedis.resps.ScanResult<String> scan =
                     jedis.scan(
                             cursor,
@@ -2861,7 +2921,7 @@ public final class RedisQueryIndexManager<T, ID> {
                                     .match(keyStrategy.indexPattern(metadata.redisNamespace()))
                                     .count(256));
             for (String key : scan.getResult()) {
-                if (lockKey.equals(key)) {
+                if (lockKey.equals(key) || keyStrategy.indexDegradedKey(metadata.redisNamespace()).equals(key)) {
                     continue;
                 }
                 clearedCount += jedis.commands().del(key);

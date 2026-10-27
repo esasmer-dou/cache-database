@@ -11,6 +11,19 @@ import java.util.Objects;
 final class RedisCompositeIndexes {
     static final String MARKER = "$cachedb:cidx:";
     private RedisCompositeIndexes() {}
+    static String signature(EntityMetadata<?, ?> metadata) {
+        if (metadata.compositeExactIndexes().size() > 32) throw new IllegalArgumentException("At most 32 composite indexes");
+        long length = 3;
+        for (var index : metadata.compositeExactIndexes().entrySet()) {
+            length += index.getKey().length() + 2L;
+            for (String column : index.getValue()) length += column.length() + 1L;
+            if (length > 65_536) throw new IllegalArgumentException("Composite signature exceeds 64 KiB");
+        }
+        return "v1|" + metadata.compositeExactIndexes().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(index -> index.getKey() + "=" + String.join(",", index.getValue()))
+                .collect(java.util.stream.Collectors.joining(";"));
+    }
     static String key(RedisKeyStrategy keys, String namespace, String name, List<String> columns, Map<String, ?> values) {
         StringBuilder tuple = new StringBuilder();
         for (String column : columns) {

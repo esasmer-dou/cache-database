@@ -87,7 +87,10 @@ public final class RedisIndexMaintenance {
         ArrayList<String> degraded = new ArrayList<>();
         for (EntityBinding<?, ?> binding : entityRegistry.all()) {
             if (jedis.commands()
-                    .exists(keyStrategy.indexDegradedKey(binding.metadata().redisNamespace()))) {
+                    .exists(keyStrategy.indexDegradedKey(binding.metadata().redisNamespace()))
+                    || (!binding.metadata().compositeExactIndexes().isEmpty()
+                    && !RedisCompositeIndexes.signature(binding.metadata()).equals(jedis.commands().get(
+                            keyStrategy.compositeIndexSignatureKey(binding.metadata().redisNamespace()))))) {
                 degraded.add(binding.metadata().entityName());
             }
         }

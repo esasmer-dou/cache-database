@@ -2,7 +2,7 @@
 
 ## Declarative Catalog Scenarios
 
-These scenarios use **CacheDB 0.18.0**. Existing commerce,
+These scenarios use **CacheDB 0.18.1**. Existing commerce,
 support, logistics and archive routes are unchanged. Unlike a release-note link,
 the classes below are actual sample sources, compiled and tested for all three
 providers. Each complete Java block belongs at the path printed above it.
@@ -112,10 +112,10 @@ puts low-stock items first; equal quantities use the textual product ID order.
 
 The sample explicitly pins Gson **2.13.2**, because the Spring Boot parent can
 otherwise select an older Gson without `Strictness`. The POM includes
-`cachedb-json`, the annotation dependency and the 0.18.0 processor. Do not remove
+`cachedb-json`, the annotation dependency and the 0.18.1 processor. Do not remove
 the Gson override or mix framework versions.
 
-With the 0.18.0 BOM and annotation processor already configured, these are the
+With the 0.18.1 BOM and annotation processor already configured, these are the
 additional runtime dependencies used by the compiled sample:
 
 ```xml

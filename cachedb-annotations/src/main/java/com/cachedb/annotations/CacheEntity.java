@@ -16,5 +16,12 @@ public @interface CacheEntity {
     String[] indexedColumns() default {"*"};
     int compressionThresholdBytes() default 0;
     /** Opt in only after checking foreign keys, unique constraints, triggers and business ordering. */
+    /**
+     * Opts into regrouping distinct (table,id) writes when every entity in a flush batch opts in.
+     * Same-key causal order is always preserved. Safe only when statement order across keys is
+     * independent: no foreign keys, triggers or cross-row constraints depend on that order.
+     * Do not enable for parent/child inserts across tables, triggers reading sibling rows, or
+     * unique values swapped between rows in one flush window. Default false preserves order.
+     */
     boolean independentWriteReordering() default false;
 }

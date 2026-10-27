@@ -207,6 +207,24 @@ Her uzak yazmayı hemen görmesi gereken okumalarda L1'i açmayın.
 
 ## Güvenli Sürüm Geçişi
 
+### Bağımsız JDBC Yazmalarını Gruplama
+
+```java
+@CacheEntity(table = "supplier_offers", redisNamespace = "supplier-offers",
+        independentWriteReordering = true)
+public class SupplierOffer { /* kalıcı alanlar */ }
+```
+
+Bir flush batch'indeki bütün entity'ler bu ayarı açmış olmalıdır. Farklı
+`(tablo,id)` işlemleri SQL yapısına göre gruplanabilir; aynı kaydın işlem sırası
+korunur. Üst/alt tablo eklemeleri, kardeş satır okuyan trigger'lar, satırlar
+arasında unique değer değişimi veya başka sıra bağımlılıkları varsa varsayılan
+`false` değerini koruyun. Flusher'daki `reorderedBatches()`,
+`reorderedOperations()` ve `reorderSkippedMixedOptIn()` sayaçlarını izleyin.
+Son sayaç, bazı entity'ler izin vermediği için sırası korunan batch'leri açıklar.
+İlk kullanım INFO kaydı flusher başına en fazla 1024 entity adı tutar. Sayaçlar
+planlama davranışını gösterir; SQL commit kanıtı değildir.
+
 BOM, processor, starter, işçi ve örnek sürümlerini hizalayıp üretilen sınıfları
 yeniden derleyin. Eski kurucular ve mevcut küçük Redis payload'ları korunur.
 PATCH üreten uygulamaları açmadan önce eski işçileri durdurup kuyruğu boşaltın;

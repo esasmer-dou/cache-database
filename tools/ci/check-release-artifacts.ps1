@@ -85,7 +85,7 @@ foreach ($module in $publicJarModules) {
                 default { @() }
             }
             $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }
-            $prefix = if ($suffix -eq '.jar' -or $module -eq 'cachedb-annotations') { 'com/reactor/cachedb' } else { 'com/cachedb' }
+            $prefix = if ($suffix -eq '.jar' -or ($module -eq 'cachedb-annotations' -and [version]$Version -lt [version]'0.18.1')) { 'com/reactor/cachedb' } else { 'com/cachedb' }
             foreach ($type in $requiredTypes) {
                 if ($entries -notcontains "$prefix/$type.$extension") {
                     $invalid.Add("${module}: required 0.15 type is missing: $type.$extension")
@@ -156,7 +156,8 @@ foreach ($module in $publicJarModules) {
             [version]$Version -ge [version]'0.14.0') {
             $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }
             foreach ($type in @('StreamingJsonCodec', 'JsonTokenWriter', 'JsonUtf8Writer')) {
-                $entry = "com/reactor/cachedb/json/$type.$extension"
+                $prefix = if ($suffix -eq '.jar' -or [version]$Version -lt [version]'0.18.1') { 'com/reactor/cachedb' } else { 'com/cachedb' }
+                $entry = "$prefix/json/$type.$extension"
                 if ($entries -notcontains $entry) {
                     $invalid.Add("$([System.IO.Path]::GetRelativePath($repoRoot, $artifact)): required JSON implementation is missing: $entry")
                 }

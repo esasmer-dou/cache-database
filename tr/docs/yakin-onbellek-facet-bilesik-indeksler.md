@@ -151,6 +151,26 @@ yazılma kanıtı veya projection güncellik belgesi değildir. HTTP başlığı
 koyun ve çağıranı ayrıca doğrulayın. Kapsamlar ters sırayla kapatılır; executor
 thread'lerine kendiliğinden taşınmaz.
 
+0.18.1 ile `CacheCausalContext.wrap`, mevcut sürüm gereksinimlerini göreve taşır:
+
+```java
+Runnable task = CacheCausalContext.wrap((Runnable) () -> repository.findById(id));
+executor.execute(task);
+java.util.function.Supplier<Order> read = () -> repository.findById(id).orElseThrow();
+var future = java.util.concurrent.CompletableFuture.supplyAsync(
+        CacheCausalContext.wrap(read), executor);
+```
+
+Runnable, Callable ve Supplier görevleri, hata durumunda da çalışan thread'in
+önceki kapsamını geri yükler. Boş kapsam yakalanmışsa görev boyunca thread'deki
+eski kapsam gizlenir. Callable/Supplier belirsizliğini önlemek için görev tipini
+açıkça belirtin. Mevcut boyut ve iç içe kapsam sınırları korunur. Kimliği doğrulanmış
+tenant kapsamını ayrıca taşıyın; causal sarmalayıcı yetki vermez.
+Cluster'da en fazla 512 ID slotlarına göre gruplanır. Aynı slotta bulunan
+payload/silme işareti/sürüm birlikte okunur. Anahtarlar farklı slotlardaysa önce
+sürüm doğrulanır, sonra payload ve silme işareti okunur. Bu, birden fazla satırın
+aynı ana ait görüntüsü değildir. Atomik yazmalar yine ortak hash tag gerektirir.
+
 ## Bileşik İndeks ve JDBC Geçişi
 
 Bileşik indeks, 2–4 farklı kalıcı alan içerir. Alanlar generated indeks tanımına
@@ -159,7 +179,18 @@ eklenir; entity başına en fazla 32 bileşik indeks bulunabilir. Değerler uzun
 indekse eklenmez. Kodlanmış tuple en fazla 4096 karakterdir.
 
 Binding'leri yeniden üretin, tüm yazıcıları güncelleyin, ardından mevcut verinin
-indekslerini yeniden kurun. Güncellemede eski üyelik kaldırılır ve yeni üyelik
+indekslerini `rebuildIndexes` ile yeniden kurun. 0.18.1, bu gereksinimi namespace
+imzasıyla uygular: veri varken imza yoksa veya tanımla uyuşmuyorsa durum
+`PENDING_REBUILD` olur. Sorgu eksik bileşik kümeyi kullanmaz; mevcut tek kolon
+indeksleri ve kesişim yolu üzerinden doğru sonucu üretir. Yazmalar bileşik indeksi
+güncellemeyi sürdürür. Başarılı yeniden kurma imzayı yayımlar ve durumu `VERIFIED`
+yapar. İmza en sık beş saniyede bir kontrol edilir. Boş namespace'te ilgili
+anahtarlar aynı slottaysa imza atomik oluşturulur; değilse açık yeniden kurma
+beklenir. İndeks kaldırılması da yeniden kurma gerektirir. Eski kümeler sınırlı
+indeks taramasıyla temizlenir; tarama sınırı aşılırsa indeksler hazır sayılmaz.
+Eski binding kullanan yazıcılar varken yeniden kurma çalıştırmayın; imza, dağıtık
+yazıcı sürümü takibinin yerine geçmez.
+Güncellemede eski üyelik kaldırılır ve yeni üyelik
 eklenir. Temizleme ve yeniden kurma işlemleri bileşik kümeleri de kapsar. Bileşik
 indeksler mevcut indeks bakım ve degraded-index recovery sözleşmesini izler;
 çok anahtarlı sorguyu transaction snapshot'ına dönüştürmez. Atomik batch'ler,
@@ -170,3 +201,13 @@ FK, unique constraint, trigger ve iş sırası kuralları uygunsa entity üzerin
 `independentWriteReordering = true` seçebilirsiniz. Aynı kayda ait UPSERT/PATCH/DELETE
 sırası bu modda da korunur. Farklı satırların veya tabloların transaction bağımlılıklarını
 gizlemek için bu ayarı açmayın.
+
+Soft TTL yenilemesi her coordinator'ın kendi kaynaklarını kullanır: en fazla iki
+daemon thread, 256 kuyruk girdisi ve 258 rezervasyon. Thread'ler ilk yenilemede
+oluşturulur. `close()` kuyruktaki işleri iptal eder, çalışan işleri keser ve en
+fazla iki saniye bekler; sonraki yenileme çağrıları çalıştırılmaz. Java, interrupt
+isteğini yok sayan uygulama kodunu zorla durduramaz; Redis/I/O zaman aşımları
+sonlu kalmalıdır. Runtime'lar ortak statik havuz veya bütçe kullanmaz.
+
+Tenant aggregate ve facet Lua optimizasyonu **0.19.0'a ertelendi**.
+0.18.1 bu sorgular için mevcut sınırlı ve doğru pipeline yolunu korur.

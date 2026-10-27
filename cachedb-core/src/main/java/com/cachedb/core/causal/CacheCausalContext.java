@@ -72,6 +72,39 @@ public final class CacheCausalContext {
         CURRENT.set(scope);
         return scope;
     }
+
+    /** Captures bounded immutable requirements; an empty capture masks the worker's scope too. */
+    public static Runnable wrap(Runnable task) {
+        Objects.requireNonNull(task, "task");
+        Map<Key, Long> captured = Map.copyOf(currentValues());
+        return () -> {
+            Scope scope = bind(captured);
+            try { task.run(); } finally { restore(scope); }
+        };
+    }
+
+    public static <V> java.util.concurrent.Callable<V> wrap(java.util.concurrent.Callable<V> task) {
+        Objects.requireNonNull(task, "task");
+        Map<Key, Long> captured = Map.copyOf(currentValues());
+        return () -> {
+            Scope scope = bind(captured);
+            try { return task.call(); } finally { restore(scope); }
+        };
+    }
+
+    public static <V> java.util.function.Supplier<V> wrap(java.util.function.Supplier<V> task) {
+        Objects.requireNonNull(task, "task");
+        Map<Key, Long> captured = Map.copyOf(currentValues());
+        return () -> {
+            Scope scope = bind(captured);
+            try { return task.get(); } finally { restore(scope); }
+        };
+    }
+
+    private static void restore(Scope scope) {
+        scope.closed = true;
+        if (scope.previous == null) CURRENT.remove(); else CURRENT.set(scope.previous);
+    }
     private static String encode(Map<Key, Long> values) {
         StringBuilder token = new StringBuilder();
         values.entrySet().stream().sorted(Map.Entry.comparingByKey(

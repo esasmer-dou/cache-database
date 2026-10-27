@@ -139,6 +139,25 @@ not an authentication credential, not proof of SQL durability and not a projecti
 freshness certificate. Bound transport headers and authenticate the caller first.
 Scopes close in reverse order and do not propagate automatically to executors.
 
+Since 0.18.1, `CacheCausalContext.wrap` captures the current requirements:
+
+```java
+Runnable task = CacheCausalContext.wrap((Runnable) () -> repository.findById(id));
+executor.execute(task);
+java.util.function.Supplier<Order> read = () -> repository.findById(id).orElseThrow();
+var future = java.util.concurrent.CompletableFuture.supplyAsync(
+        CacheCausalContext.wrap(read), executor);
+```
+
+Runnable, Callable and Supplier overloads restore the worker's prior scope even
+on failure. An empty capture masks any worker scope for the call. Use a typed
+task or cast to disambiguate Callable/Supplier. Existing size/nesting limits apply.
+Cluster causal bulk reads group at most 512 IDs by slot. Co-located triples use
+atomic MGET; split triples verify the version before reading payload/tombstone.
+This is a minimum entity-version contract, not a multi-row snapshot. Atomic
+writes still require a shared hash tag. Propagate authenticated tenant scope
+separately; the causal wrapper does not grant or transfer authorization.
+
 ## Composite Index and JDBC Upgrade Safety
 
 A composite declaration contains 2–4 distinct persisted columns and automatically
@@ -147,8 +166,18 @@ Tuples use length-prefixed URL-encoded components, skip null components and cap
 encoded tuple length at 4096 characters. Updates move membership from the old
 tuple to the new one. Index rebuild/clear includes composite sets.
 
-Regenerate bindings, deploy all writers, then rebuild indexes before using a new
-composite declaration on existing data. Composite indexes follow the framework's
+Regenerate bindings, deploy all writers, then run `rebuildIndexes`. From 0.18.1,
+a deterministic namespace signature enforces this requirement: a missing or
+different signature on non-empty data means `PENDING_REBUILD`. Reads use the
+existing single-column/intersection path, not an incomplete composite SET.
+Writes continue maintaining composites. Successful rebuild publishes the signature
+and enables `VERIFIED`; signature checks occur at most once per five seconds.
+An empty namespace initializes atomically when signature/index/hot-set keys share
+a slot; otherwise it remains pending until rebuild. Any declaration change,
+including removal, requires rebuild. Bounded index cleanup removes stale SETs;
+a scan-budget failure leaves indexes degraded. Do not rebuild while old bindings
+still write: the signature is not a distributed writer-version registry.
+Composite indexes follow the framework's
 existing index-maintenance/degraded-index recovery contract; they do not turn a
 multi-key query into a transactionally consistent snapshot or make all Cluster
 slots atomic. Atomic write batches mark indexes for recovery before serving them.
@@ -159,3 +188,12 @@ keys, unique constraints, triggers and business rules permit independent writes
 across distinct IDs. Default behavior preserves order. Same-key UPSERT/PATCH/DELETE
 chains retain causal barriers even after opt-in. Do not enable this to hide
 transaction dependencies between different rows or tables.
+
+Soft-TTL refresh workers are lazy and coordinator-owned: at most two daemon
+threads, 256 queued tasks and 258 reservations. `close()` cancels queued work,
+interrupts workers and waits up to two seconds; later refresh calls are ignored.
+Java cannot forcibly terminate application tasks that ignore interruption;
+retain finite Redis/I/O timeouts. No static executor or budget spans runtimes.
+
+Tenant aggregate and facet Lua optimization is **Deferred to 0.19.0**. These
+routes retain the bounded, correct pipeline implementation in 0.18.1.

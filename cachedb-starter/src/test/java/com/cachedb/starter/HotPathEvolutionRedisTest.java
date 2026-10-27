@@ -267,6 +267,8 @@ class HotPathEvolutionRedisTest {
         volatile CountDownLatch refreshGate;
         volatile List<String> lastMget = List.of();
         volatile Runnable beforeEval;
+        volatile boolean emulateCluster;
+        final List<List<String>> causalReadCalls = new CopyOnWriteArrayList<>();
         final CacheDatabase database;
         final EntityRepository<Row, Long> repository;
         Fixture(CachePolicy policy, Source source) {
@@ -277,9 +279,11 @@ class HotPathEvolutionRedisTest {
             var jdbc = new JdbcDataSource(); jdbc.setURL("jdbc:h2:mem:" + prefix);
             RedisClientOperations client = new RedisClientOperations() {
                 public redis.clients.jedis.UnifiedJedis commands() { return redis; }
+                public boolean clustered() { return emulateCluster; }
                 public List<String> mget(String... keys) {
+                    if (emulateCluster) { requireSameSlot(List.of(keys)); causalReadCalls.add(List.of(keys)); }
                     lastMget = List.of(keys);
-                    if (Thread.currentThread().getName().equals("cachedb-near-refresh") && refreshGate != null) {
+                    if (Thread.currentThread().getName().startsWith("cachedb-near-refresh-") && refreshGate != null) {
                         try { if (!refreshGate.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Refresh test gate timed out"); }
                         catch (InterruptedException stopped) { Thread.currentThread().interrupt(); throw new IllegalStateException(stopped); }
                     }
@@ -568,6 +572,26 @@ class HotPathEvolutionRedisTest {
             deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
             while (second.repository.findById(1L).isPresent() && System.nanoTime() < deadline) Thread.sleep(2);
             assertTrue(second.repository.findById(1L).isEmpty());
+        }
+    }
+
+    @Test void causalBulkReadsSupportDifferentSlotsAndReadSplitVersionsBeforePayloads() {
+        try (var fixture = new Fixture(CachePolicy.defaults(),new Source())) {
+            for (long id=1;id<=3;id++) fixture.repository.save(new Row(id,"row"+id,id));
+            fixture.emulateCluster = true;
+            try (var a = com.reactor.cachedb.core.causal.CacheCausalContext.withMinVersion("evolution",1L,1);
+                    var b = com.reactor.cachedb.core.causal.CacheCausalContext.withMinVersion("evolution",2L,1);
+                    var c = com.reactor.cachedb.core.causal.CacheCausalContext.withMinVersion("evolution",3L,1)) {
+                assertEquals(List.of(3L,1L,2L,1L),fixture.repository.findAll(List.of(3L,1L,2L,1L)).stream().map(row -> row.id).toList());
+                var calls = fixture.causalReadCalls.stream().flatMap(List::stream).toList();
+                for (long id=1;id<=3;id++) assertTrue(calls.indexOf(fixture.keys.versionKey("evolution",id))
+                        < calls.indexOf(fixture.keys.entityKey("evolution",id)));
+            }
+            fixture.causalReadCalls.clear();
+            try (var unavailable = com.reactor.cachedb.core.causal.CacheCausalContext.withMinVersion("evolution",2L,2)) {
+                assertThrows(IllegalStateException.class,() -> fixture.repository.findAll(List.of(1L,2L,3L)));
+                assertTrue(fixture.causalReadCalls.stream().flatMap(List::stream).noneMatch(key -> key.contains(":entity:")));
+            }
         }
     }
 

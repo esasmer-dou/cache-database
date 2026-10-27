@@ -2,7 +2,7 @@
 
 ## Bildirimsel Katalog Senaryoları
 
-Bu senaryolar **CacheDB 0.18.0** sürümünü kullanır. Mevcut sipariş,
+Bu senaryolar **CacheDB 0.18.1** sürümünü kullanır. Mevcut sipariş,
 destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar yalnızca anlatım
 için yazılmış taslaklar değildir; üç sağlayıcıda da derlenen ve test edilen
 örnek kaynak kodlarıdır. Her tam Java bloğunu, üstünde belirtilen dosyaya yerleştirin.
@@ -121,10 +121,10 @@ küçükten büyüğe sıralanır. Eşit stokta ürün kimliğinin metinsel sır
 
 Örneğin POM dosyasında Gson **2.13.2** açıkça sabitlenmiştir. Aksi hâlde Spring
 Boot parent, gerekli `Strictness` sınıfını içermeyen eski Gson sürümünü seçebilir.
-POM'da `cachedb-json`, annotation bağımlılığı ve 0.18.0 processor birlikte bulunur.
+POM'da `cachedb-json`, annotation bağımlılığı ve 0.18.1 processor birlikte bulunur.
 Gson sürüm ayarını kaldırmayın; farklı framework sürümlerini karıştırmayın.
 
-0.18.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
+0.18.1 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
 zamanı bağımlılıkları şunlardır:
 
 ```xml

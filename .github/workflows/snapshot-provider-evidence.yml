@@ -121,9 +121,17 @@ jobs:
       - name: Verify Cluster routing, publication and envelope retry
         run: >-
           mvn -B -ntp -pl cachedb-spring-boot-starter -am test
-          "-Dtest=RedisClusterOperationsTest,ClusterNamespaceShardingTest,CacheRuntimeRoleTest,AtomicWriteBatchEnvelopeCleanTest,RedisAtomicWriteBatchTest,TypedSnapshotRepositoryTest,SnapshotPartitionCursorIsolationTest,SnapshotStreamingTest,SnapshotIndexDeltaRedisTest,JacksonFreeSnapshotTest,JacksonFreeSnapshotRedisTest,StreamingJsonCodecTest,JsonTokenWriterTest,InMemoryCacheRepositoryTest,JdbcPooledSequenceIdGeneratorTest"
+          "-Dtest=RedisClusterOperationsTest,RedisCausalReadsTest,RedisCompositeSignatureTest,RedisNearCacheTest,CacheCausalContextTest,JdbcReorderingMetricsTest,ClusterNamespaceShardingTest,CacheRuntimeRoleTest,AtomicWriteBatchEnvelopeCleanTest,RedisAtomicWriteBatchTest,TypedSnapshotRepositoryTest,SnapshotPartitionCursorIsolationTest,SnapshotStreamingTest,SnapshotIndexDeltaRedisTest,JacksonFreeSnapshotTest,JacksonFreeSnapshotRedisTest,StreamingJsonCodecTest,JsonTokenWriterTest,InMemoryCacheRepositoryTest,JdbcPooledSequenceIdGeneratorTest"
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dcachedb.snapshot.redis=true -Dcachedb.redis.cluster=true
+      - name: Require the live causal Cluster contract to execute
+        shell: pwsh
+        run: |
+          [xml]$report = Get-Content cachedb-storage-redis/target/surefire-reports/TEST-com.reactor.cachedb.redis.RedisCausalReadsTest.xml -Raw
+          $cases = @($report.SelectNodes('//testcase[@name="liveClusterReadsCoLocatedAndSplitTriplesWithoutCrossSlotCommands"]'))
+          if ($cases.Count -ne 1 -or $cases[0].SelectSingleNode('skipped')) {
+            throw 'Live causal Cluster contract was missing or skipped.'
+          }
       - name: Upload Cluster results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -145,7 +153,7 @@ jobs:
     services:
       redis:
         image: redis:8-alpine
-        ports: ["16383:6379"]
+        ports: ["16383:6379", "6379:6379"]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
       postgres:
         image: postgres:16-alpine
@@ -186,19 +194,36 @@ jobs:
           docker exec "$CONTAINER" /opt/mssql-tools18/bin/sqlcmd
           -S localhost -U sa -P CacheDbSnapshot123 -C -b
           -Q "CREATE DATABASE cachedb_snapshot; ALTER DATABASE cachedb_snapshot SET ALLOW_SNAPSHOT_ISOLATION ON;"
-      - name: Require three-provider consistency and publication tests
+      - name: Require full reactor with live Redis and all three SQL providers
         env:
           MAVEN_OPTS: -Xmx512m
+          CACHEDB_IT_POSTGRES_URL: jdbc:postgresql://127.0.0.1:15435/postgres
+          CACHEDB_IT_POSTGRES_USER: postgres
+          CACHEDB_IT_POSTGRES_PASSWORD: LocalFixture_7p92_test
+          CACHEDB_IT_REDIS_URI: redis://127.0.0.1:16383/10
+          CACHEDB_IT_MSSQL_URL: jdbc:sqlserver://127.0.0.1:14331;databaseName=cachedb_snapshot;encrypt=false;trustServerCertificate=true
+          CACHEDB_IT_MSSQL_USER: sa
+          CACHEDB_IT_MSSQL_PASSWORD: CacheDbSnapshot123
+          CACHEDB_IT_ORACLE_URL: jdbc:oracle:thin:@//127.0.0.1:15211/FREEPDB1
+          CACHEDB_IT_ORACLE_USER: cachedb
+          CACHEDB_IT_ORACLE_PASSWORD: CacheDbOracle123
         run: >-
-          mvn -B -ntp -pl cachedb-spring-boot-starter -am test
-          "-Dtest=Snapshot*Test,JacksonFreeSnapshot*Test,StreamingJsonCodecTest,JsonTokenWriterTest,TypedSnapshotRepositoryTest,InMemoryCacheRepositoryTest,CacheRuntimeRoleTest,AtomicWriteBatchEnvelopeCleanTest,FrameworkV013ProvidersTest,WriteFenceProvidersIntegrationTest,RedisAtomicWriteBatchTest,CacheScheduledWarmCoordinatorTest,JdbcPooledSequenceIdGeneratorTest,JdbcOutboxPartitionTest"
-          -Dsurefire.failIfNoSpecifiedTests=false
+          mvn -B -ntp clean verify
           -Dcachedb.snapshot.providers=true -Dcachedb.snapshot.redis=true
+          -Dcachedb.snapshot.redis.port=16383
+          -Dcachedb.it.mssql.required=true -Dcachedb.it.oracle.required=true
           -Dcachedb.test.redis.uri=redis://127.0.0.1:16383 -Dcachedb.test.redis.required=true
+      - name: Reject missing or skipped release-blocking suites
+        shell: pwsh
+        run: |
+          ./tools/ci/test-full-environment-gate.ps1
+          ./tools/ci/check-full-environment-tests.ps1
       - name: Upload provider results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: snapshot-provider-evidence
-          path: cachedb-spring-boot-starter/target/surefire-reports/
+          path: |
+            **/target/surefire-reports/
+            target/full-environment-tests.md
           if-no-files-found: error

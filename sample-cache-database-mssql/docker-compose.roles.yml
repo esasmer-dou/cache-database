@@ -1,7 +1,7 @@
 x-application: &application
   image: eclipse-temurin:21-jre@sha256:227118764cccd3c3294617061aaa93a08309c63a395eefa83e6b35032992ea99
   volumes:
-    - ./target/sample-cache-database-mssql-0.18.0.jar:/app/sample.jar:ro
+    - ./target/sample-cache-database-mssql-0.18.1.jar:/app/sample.jar:ro
   mem_limit: 768m
   cpus: 2
   environment:

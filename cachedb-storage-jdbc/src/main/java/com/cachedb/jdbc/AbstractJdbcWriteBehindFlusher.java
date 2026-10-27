@@ -20,6 +20,14 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
     private final com.reactor.cachedb.core.config.WriteBehindConfig flushConfig;
     private final JdbcSchemaDialect columnDialect;
     private final int statementTimeoutSeconds;
+    private final java.util.concurrent.atomic.AtomicLong reorderedBatches = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong reorderedOperations = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong reorderSkippedMixedOptIn = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.Set<String> reorderLoggedEntities = new java.util.HashSet<>();
+
+    public long reorderedBatches() { return reorderedBatches.get(); }
+    public long reorderedOperations() { return reorderedOperations.get(); }
+    public long reorderSkippedMixedOptIn() { return reorderSkippedMixedOptIn.get(); }
 
     protected AbstractJdbcWriteBehindFlusher(
             DataSource dataSource, EntityRegistry entityRegistry,
@@ -180,14 +188,32 @@ public abstract class AbstractJdbcWriteBehindFlusher implements FailureClassifyi
         return runs.stream().map(List::copyOf).toList();
     }
 
-    private List<QueuedWriteOperation> compactIndependentWrites(List<QueuedWriteOperation> operations) {
+    final List<QueuedWriteOperation> compactIndependentWrites(List<QueuedWriteOperation> operations) {
         if (entityRegistry == null || operations.size() < 2) return operations;
+        boolean optedIn = false, excluded = false;
         for (var operation : operations) {
             var binding = entityRegistry.find(operation.entityName());
-            if (binding.isEmpty() || !binding.get().metadata().independentWriteReordering()) return operations;
+            if (binding.isPresent() && binding.get().metadata().independentWriteReordering()) optedIn = true;
+            else excluded = true;
+        }
+        if (excluded) {
+            if (optedIn) reorderSkippedMixedOptIn.incrementAndGet();
+            return operations;
         }
         var result = new ArrayList<QueuedWriteOperation>(operations.size());
         for (var run : planOrderPreservingRuns(operations)) result.addAll(run);
+        reorderedBatches.incrementAndGet();
+        reorderedOperations.addAndGet(operations.size());
+        synchronized (reorderLoggedEntities) {
+            for (var operation : operations) {
+                String name = operation.entityName();
+                if (name.length() > 512) name = name.substring(0, 512);
+                if (reorderLoggedEntities.size() < 1024 && reorderLoggedEntities.add(name))
+                    System.getLogger(getClass().getName()).log(System.Logger.Level.INFO,
+                            "Independent write regrouping enabled for " + name
+                            + "; same-key order preserved; cross-row independence is the application's contract");
+            }
+        }
         return result;
     }
 

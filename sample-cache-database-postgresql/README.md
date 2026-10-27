@@ -1,8 +1,10 @@
 # CacheDB PostgreSQL Sample
 
+> This source targets 0.18.1. Confirm package availability in GitHub Releases and the Maven repository; a source version alone is not publication evidence. If unavailable, use tag v0.18.0 for the downloadable quick start.
+
 English | [Türkçe](README.tr.md)
 
-## Read and Write Controls in 0.18.0
+## Read and Write Controls in 0.18.1
 
 Runnable [0.18 scenarios](#cachedb-018-running-scenarios) demonstrate supplier
 offers, bulk L1, soft TTL, facets, composite indexes, independent mixed writes,
@@ -93,14 +95,14 @@ Limits are 100 identities, 4 MiB and 2000 stream fields. Cluster requires one
 hash-tag scope; bounded tenant admission cannot be bypassed with atomic batches.
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-postgresql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.18.0](https://img.shields.io/badge/CacheDB-0.18.0-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.0)
+[![CacheDB 0.18.1](https://img.shields.io/badge/CacheDB-0.18.1-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1)
 
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and PostgreSQL. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in PostgreSQL, and
 growing lists use projections instead of full aggregates.
 
-> This sample uses CacheDB `0.18.0`. The public CacheDB Maven repository
+> This sample uses CacheDB `0.18.1`. The public CacheDB Maven repository
 > resolves its immutable packages without a
 > GitHub token or a local framework source checkout.
 
@@ -110,10 +112,10 @@ matching Redis projection, read the active route, and inspect coverage and
 durability signals. The sample does not hide a PostgreSQL query behind a Redis
 miss.
 
-## CacheDB 0.18.0 Upgrade
+## CacheDB 0.18.1 Upgrade
 
 The sample POM aligns the BOM, provider starter, annotation processor and doctor
-plugin at `0.18.0`. Rebuild the sample to regenerate its bindings.
+plugin at `0.18.1`. Rebuild the sample to regenerate its bindings.
 The POM also sets `jedis.version=5.2.0`; the Spring Boot parent would otherwise
 select an older driver that lacks the required pipeline API.
 
@@ -125,14 +127,14 @@ select an older driver that lacks the required pipeline API.
 - Use `Boolean` for nullable SQL booleans; primitive `boolean` rejects SQL NULL.
 - Atomic catalog imports and indexed snapshot pages have explicit endpoints. Redis Cluster distribution remains an optional framework infrastructure capability; local Compose uses standalone Redis.
 
-Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.18.0.md)
+Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.18.1.md)
 and [bounded operation contracts](https://github.com/esasmer-dou/cache-database/blob/main/docs/bounded-runtime-operations.md)
 before adding those APIs. Package availability does not certify your application's production topology.
 
 ## Column Safety
 
 The existing sample entities stay deliberately narrow. Provider-aware limits are active
-through the 0.18.0 dependency; no additional cache policy or business-table change
+through the 0.18.1 dependency; no additional cache policy or business-table change
 is required. A wider Redis payload is not permission to create a wider SQL table.
 
 | Surface | Default count limit |
@@ -288,7 +290,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.18.0</cachedb.version>
+<cachedb.version>0.18.1</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -1031,7 +1033,7 @@ never copy placeholder evidence and mark it as passed.
 ## CacheDB 0.18: Running Scenarios
 
 This section uses real classes in this sample, not pseudocode. Start with the
-existing Quick Start and `demo` profile. Maven downloads CacheDB **0.18.0**
+existing Quick Start and `demo` profile. Maven downloads CacheDB **0.18.1**
 without building the framework. Run the Postman collection
 `postman/cache-database-postgresql-v018.postman_collection.json` in its saved order.
 
@@ -1710,7 +1712,7 @@ The framework's 50 ms codec gate is not a guarantee for these REST/SQL requests.
 
 ## Declarative Catalog Scenarios
 
-These scenarios use **CacheDB 0.18.0**. Existing commerce,
+These scenarios use **CacheDB 0.18.1**. Existing commerce,
 support, logistics and archive routes are unchanged. Unlike a release-note link,
 the classes below are actual sample sources, compiled and tested for all three
 providers. Each complete Java block belongs at the path printed above it.
@@ -1913,10 +1915,10 @@ public class CatalogConfiguration {
 
 The sample explicitly pins Gson **2.13.2**, because the Spring Boot parent can
 otherwise select an older Gson without `Strictness`. The POM includes
-`cachedb-json`, the annotation dependency and the 0.18.0 processor. Do not remove
+`cachedb-json`, the annotation dependency and the 0.18.1 processor. Do not remove
 the Gson override or mix framework versions.
 
-With the 0.18.0 BOM and annotation processor already configured, these are the
+With the 0.18.1 BOM and annotation processor already configured, these are the
 additional runtime dependencies used by the compiled sample:
 
 ```xml

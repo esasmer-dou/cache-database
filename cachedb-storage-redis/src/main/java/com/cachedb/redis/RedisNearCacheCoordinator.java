@@ -15,13 +15,12 @@ import redis.clients.jedis.JedisPubSub;
 /** One opt-in subscription per runtime. Disconnects invalidate all entries before reconnect. */
 public final class RedisNearCacheCoordinator implements AutoCloseable {
     private static final long MAX_BYTES = 64L * 1024 * 1024;
-    private static final Semaphore REFRESH_BUDGET = new Semaphore(258);
-    private static final ThreadPoolExecutor REFRESHES = new ThreadPoolExecutor(0, 2, 30, TimeUnit.SECONDS,
-            new ArrayBlockingQueue<>(256), task -> {
-                Thread thread = new Thread(task, "cachedb-near-refresh"); thread.setDaemon(true); return thread;
-            }, new ThreadPoolExecutor.AbortPolicy());
+    private static final AtomicLong COORDINATOR_SEQUENCE = new AtomicLong();
+    private final String refreshThreadPrefix = "cachedb-near-refresh-" + COORDINATOR_SEQUENCE.incrementAndGet() + "-";
+    private final Semaphore refreshBudget = new Semaphore(258);
+    private volatile ThreadPoolExecutor refreshes;
     private record RefreshKey(Store store, String id) {}
-    private static final Set<RefreshKey> REFRESHING = ConcurrentHashMap.newKeySet();
+    private final Set<RefreshKey> refreshing = ConcurrentHashMap.newKeySet();
     private final RedisClientOperations redis;
     private final String channel;
     private final Map<String, Store> stores = new ConcurrentHashMap<>();
@@ -65,19 +64,46 @@ public final class RedisNearCacheCoordinator implements AutoCloseable {
 
     public void refresh(Store store, String id, Runnable task) {
         if (!connected()) return;
-        if (!REFRESH_BUDGET.tryAcquire()) { refreshRejected.incrementAndGet(); return; }
+        Objects.requireNonNull(store, "store"); Objects.requireNonNull(task, "task");
+        if (id == null || id.length() > 4096) throw new IllegalArgumentException("Invalid refresh identity");
+        if (!refreshBudget.tryAcquire()) { refreshRejected.incrementAndGet(); return; }
         var key = new RefreshKey(store, id);
-        if (!REFRESHING.add(key)) { REFRESH_BUDGET.release(); return; }
+        if (!refreshing.add(key)) { refreshBudget.release(); return; }
+        var work = new RefreshTask(key, task);
         try {
-            REFRESHES.execute(() -> {
-                try { if (connected()) task.run(); }
-                catch (RuntimeException failure) {
-                    refreshFailures.incrementAndGet();
-                    System.getLogger(getClass().getName()).log(System.Logger.Level.WARNING,
-                            "Near-cache refresh failed; hard TTL remains active (" + failure.getClass().getSimpleName() + ")");
-                } finally { REFRESHING.remove(key); REFRESH_BUDGET.release(); }
-            });
-        } catch (RejectedExecutionException full) { REFRESHING.remove(key); REFRESH_BUDGET.release(); refreshRejected.incrementAndGet(); }
+            synchronized (this) {
+                if (closed) { work.release(); return; }
+                if (refreshes == null) {
+                    var sequence = new AtomicLong();
+                    refreshes = new ThreadPoolExecutor(0, 2, 30, TimeUnit.SECONDS,
+                            new ArrayBlockingQueue<>(256), command -> {
+                                Thread worker = new Thread(command, refreshThreadPrefix + sequence.incrementAndGet());
+                                worker.setDaemon(true); return worker;
+                            }, new ThreadPoolExecutor.AbortPolicy());
+                }
+                refreshes.execute(work);
+            }
+        } catch (RejectedExecutionException full) { work.release(); refreshRejected.incrementAndGet(); }
+    }
+
+    String refreshThreadPrefix() { return refreshThreadPrefix; }
+
+    private final class RefreshTask implements Runnable {
+        private final RefreshKey key;
+        private final Runnable task;
+        private final java.util.concurrent.atomic.AtomicBoolean released = new java.util.concurrent.atomic.AtomicBoolean();
+        private RefreshTask(RefreshKey key, Runnable task) { this.key = key; this.task = task; }
+        @Override public void run() {
+            try { if (connected()) task.run(); }
+            catch (RuntimeException failure) {
+                refreshFailures.incrementAndGet();
+                System.getLogger(getClass().getName()).log(System.Logger.Level.WARNING,
+                        "Near-cache refresh failed; hard TTL remains active (" + failure.getClass().getSimpleName() + ")");
+            } finally { release(); }
+        }
+        private void release() {
+            if (released.compareAndSet(false, true)) { refreshing.remove(key); refreshBudget.release(); }
+        }
     }
 
     private void listen() {
@@ -119,7 +145,18 @@ public final class RedisNearCacheCoordinator implements AutoCloseable {
     private static String decode(String value) { return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8); }
     private void clear() { stores.values().forEach(Store::clear); }
     @Override public void close() {
-        closed = true; connected = false; clear();
+        ThreadPoolExecutor executor;
+        synchronized (this) {
+            if (closed) return;
+            closed = true; connected = false; executor = refreshes;
+        }
+        clear();
+        if (executor != null) {
+            for (Runnable pending : executor.shutdownNow()) ((RefreshTask) pending).release();
+            try { executor.awaitTermination(2, TimeUnit.SECONDS); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+        }
+        refreshing.clear();
         var listener = subscription;
         if (listener != null) try { listener.unsubscribe(); } catch (RuntimeException ignored) { }
         if (thread != null) thread.interrupt();

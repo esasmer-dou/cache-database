@@ -4,6 +4,17 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
+## 0.18.1 - Unreleased
+
+- Composite-index signatures disable incomplete fast paths until rebuild; existing single-column queries remain available. Index maintenance exposes pending namespaces.
+- Causal bulk reads group by Redis Cluster slot; split triples verify versions before reading payloads. Bounded Runnable/Callable/Supplier wrappers capture and restore requirements.
+- Soft-TTL refresh executors and reservations belong to one coordinator, start lazily and close with bounded cancellation/termination waiting.
+- Independent JDBC regrouping exposes planning counters and bounded first-use logs. Opt-in and same-key order contracts remain unchanged.
+- Source/test directories use the established `com/cachedb` layout without changing Java package names or removing tests.
+- The full-environment CI gate rejects missing, failed and entirely skipped required suites, including live near-cache methods.
+- Tenant aggregate/facet Lua optimization: **Deferred to 0.19.0**. Existing bounded pipelines remain unchanged.
+- See [0.18.1 preparation and verification](docs/releases/v0.18.1.md). Existing 0.18.0 release assets remain immutable.
+
 ## 0.18.0 - 2026-10-27
 
 - Bulk L1 reads fetch only unique misses while preserving result order and duplicates; soft TTL and sampled frequency protection are optional bounded controls.

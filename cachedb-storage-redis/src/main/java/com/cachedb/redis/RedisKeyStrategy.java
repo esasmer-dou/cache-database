@@ -149,6 +149,10 @@ public class RedisKeyStrategy {
         return keyPrefix + ":" + namespacePart(namespace) + ":" + indexSegment + ":all";
     }
 
+    public String compositeIndexSignatureKey(String namespace) {
+        return namespacePrefix(namespace) + ":cidx:signature";
+    }
+
     public String indexMetaKey(String namespace, Object id) {
         return keyPrefix + ":" + namespacePart(namespace) + ":" + indexSegment + ":meta:" + id;
     }

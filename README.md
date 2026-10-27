@@ -1,11 +1,13 @@
 # CacheDB
 
+> This source targets 0.18.1. Confirm package availability in GitHub Releases and the Maven repository; a source version alone is not publication evidence. If unavailable, use tag v0.18.0 for the downloadable quick start.
+
 English | [Türkçe](tr/README.md)
 
-**0.18.0:** [Near cache, facets and composite indexes](docs/near-cache-facets-indexes.md)
+**0.18.1:** [Near cache, facets and composite indexes](docs/near-cache-facets-indexes.md)
 covers bulk L1 reads, soft-TTL refresh, minimum-version entity reads, tenant-scoped
 atomic batches and projections, grouped aggregates, and explicit JDBC compaction.
-[Release notes and acceptance status](docs/releases/v0.18.0.md).
+[Release notes and acceptance status](docs/releases/v0.18.1.md).
 
 [![Latest release](https://img.shields.io/github/v/release/esasmer-dou/cache-database?display_name=tag&sort=semver)](https://github.com/esasmer-dou/cache-database/releases/latest)
 [![Production evidence](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/cache-database/actions/workflows/production-evidence.yml)
@@ -46,32 +48,34 @@ application's own staging topology.
 | Release information | Value |
 | --- | --- |
 | Latest published release | [GitHub release](https://github.com/esasmer-dou/cache-database/releases/latest) |
-| Repository version | `0.18.0` |
+| Repository version | `0.18.1` |
 | Library bytecode | Java 17 |
 | Runnable samples | Java 21 |
 | Local provider test topology | Redis 8, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
 
-## Release 0.18.0
+## Release 0.18.1
 
-`0.18.0` adds bulk L1 reuse, bounded soft-TTL refresh, minimum-version entity reads,
-declarative facets, composite indexes and tenant-scoped advanced operations.
-Mixed JDBC write compaction is explicitly opt-in. Existing numeric deltas,
-watchers, schema upcasting and optional compression remain available.
+`0.18.1` hardens the bulk L1, soft-TTL, causal-read and composite-index contracts
+introduced in 0.18.0. It adds composite schema guards, per-slot causal reads,
+explicit executor context capture, runtime-owned refresh pools and JDBC regrouping
+diagnostics. Existing facets, tenant operations, numeric deltas, watchers,
+schema upcasting and optional compression remain available.
 These are not transparent SQL caching, distributed XA, durable CDC or automatic
 cross-version application compatibility. Existing SQL capacity and durable-delete
 fences remain in force.
-See the [v0.18.0 release notes](docs/releases/v0.18.0.md) and
+See the [v0.18.1 release notes](docs/releases/v0.18.1.md) and
 [bounded runtime operations](docs/bounded-runtime-operations.md) for contracts and
 upgrade precautions.
 
-Keep the BOM, annotation processor and provider starter at `0.18.0`. Recompile
+Keep the BOM, annotation processor and provider starter at `0.18.1`. Recompile
 generated bindings, provision the [durable version metadata](docs/durable-write-fences.md)
 and drain old workers before upgrading. A framework package does not certify an
 application's production routes, Oracle Data Guard or SQL Server Always On topology.
 
-Download [0.18.0 packages and checksums](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.0)
-or resolve the immutable artifacts from the public CacheDB Maven repository.
+After publication, use [0.18.1 packages and checksums](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1)
+or the immutable artifacts in the public CacheDB Maven repository. Until then,
+use the published 0.18.0 tag for the downloadable quick start.
 
 The strict 50 ms test target covers the Jackson-free generated-codec/snapshot
 scenarios, including first use. Legacy mapper compatibility remains tested;
@@ -126,7 +130,7 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the current release?" | [v0.18.0 Release Notes](docs/releases/v0.18.0.md) |
+| "What changed in the current release?" | [v0.18.1 Release Notes](docs/releases/v0.18.1.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "What is the Oracle provider contract?" | [Oracle Provider](docs/oracle-provider.md) |
@@ -179,12 +183,12 @@ unbounded CRUD methods.
 ## Install In 5 Minutes: Spring Boot
 
 Keep `cachedb.version` aligned with the published release you use. The example below
-targets `0.18.0`, available from the anonymous CacheDB Maven repository
+targets `0.18.1`, available from the anonymous CacheDB Maven repository
 and the GitHub Release bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.18.0</cachedb.version>
+    <cachedb.version>0.18.1</cachedb.version>
     <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -402,7 +406,7 @@ Behavior:
 
 - `save` writes the entity to Redis when its policy admits it.
 - Durable persistence is sent to the selected SQL write-behind path.
-- For a 0.18.0 upgrade, provision the separate [durable version table](docs/durable-write-fences.md) before starting upgraded workers; business tables are unchanged.
+- For a 0.18.1 upgrade, provision the separate [durable version table](docs/durable-write-fences.md) before starting upgraded workers; business tables are unchanged.
 - `detail` is Redis-only; `NOT_CACHED` does not mean the SQL row is absent.
 - If the entity does not satisfy the hot policy, it may be rejected or evicted
   from Redis.

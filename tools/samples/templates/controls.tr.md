@@ -2,7 +2,7 @@
 
 Bu bölümdeki sınıflar örnek projede gerçekten bulunur; taslak kod değildir.
 Önce mevcut Hızlı Başlangıç adımlarını `demo` profiliyle tamamlayın. Maven,
-framework kaynak kodunu derlemeden **CacheDB 0.18.0** paketlerini indirir.
+framework kaynak kodunu derlemeden **CacheDB 0.18.1** paketlerini indirir.
 `postman/cache-database-{{PROVIDER}}-v018.postman_collection.json` koleksiyonunu
 kayıtlı sırasıyla çalıştırın.
 
