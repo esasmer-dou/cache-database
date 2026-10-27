@@ -93,6 +93,11 @@ try {
         --reporters cli,json,junit --reporter-json-export "$output/results.json" `
         --reporter-junit-export "$output/results.xml"
     if ($LASTEXITCODE -ne 0) { throw 'Catalog Postman assertions failed.' }
+    & $npx.Source --yes newman@6.2.1 run "postman/cache-database-$p-v018.postman_collection.json" `
+        --env-var "baseUrl=$base" --env-var "peerBaseUrl=$base" --timeout 180000 --timeout-request 10000 --timeout-script 5000 `
+        --reporters cli,json,junit --reporter-json-export "$output/v018-results.json" `
+        --reporter-junit-export "$output/v018-results.xml"
+    if ($LASTEXITCODE -ne 0) { throw '0.18 controls Postman assertions failed.' }
 } finally {
     if ($null -ne $process) {
         if (!$process.HasExited) { $process.Kill($true) }

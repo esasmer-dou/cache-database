@@ -15,6 +15,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 class CatalogRequestSizeFilterTest {
     @Test
+    void controlsCommandsAlsoRejectOversizedChunkedBodiesBeforeJsonDecoding() throws Exception {
+        for (String method : java.util.List.of("PUT", "PATCH", "POST")) {
+            var request = new MockHttpServletRequest(method, "/api/examples/v018/stock/batch");
+            request.setContent(new byte[65_537]);
+            var chunked = new HttpServletRequestWrapper(request) {
+                @Override public long getContentLengthLong() { return -1; }
+            };
+            var response = new MockHttpServletResponse();
+            var reached = new AtomicBoolean();
+            new CatalogRequestSizeFilter().doFilter(chunked, response, (a, b) -> reached.set(true));
+            assertEquals(413, response.getStatus());
+            assertFalse(reached.get());
+        }
+    }
+    @Test
     void oversizedFixedAndChunkedBodiesNeverReachTheController() throws Exception {
         for (boolean chunked : new boolean[] {false, true}) {
             var request = new MockHttpServletRequest("POST", "/api/catalog/imports");

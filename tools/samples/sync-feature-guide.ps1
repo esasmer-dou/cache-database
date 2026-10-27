@@ -12,6 +12,8 @@ foreach ($provider in @('postgresql', 'mssql', 'oracle')) {
         $notePath = Join-Path $PSScriptRoot "templates/features.$provider.$language.md"
         $note = if (Test-Path $notePath) { [IO.File]::ReadAllText($notePath, $utf8).TrimEnd() } else { '' }
         $template = $template.Replace('{{PROVIDER_NOTE}}', $note)
+        $controls = [IO.File]::ReadAllText((Join-Path $PSScriptRoot "templates/controls.$language.md"), $utf8)
+        $template = $template.Replace('{{CONTROLS_GUIDE}}', $controls)
         $body = [regex]::Replace($template, '\{\{CODE:([^}]+)\}\}', {
             param($match)
             $source = [IO.Path]::GetFullPath((Join-Path $sample $match.Groups[1].Value))

@@ -4,12 +4,12 @@
 
 ## 0.18.0 ile Okuma ve Yazma Kontrolleri
 
-L1 etkinse toplu okumalar artık mevcut L1 kayıtlarını kullanır. Soft TTL, minimum
-entity sürümü taşıyan token, gruplama, bileşik indeks ve bağımsız JDBC gruplama
-özellikleri açık uygulama tanımları ister; örneğin sürümünü yükseltmek bu ayarları
-kendiliğinden açmaz. Mevcut REST yolları ve yetkilendirme davranışı değişmez.
-[Ayar ve sınırlı kullanım örneklerini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/yakin-onbellek-facet-bilesik-indeksler.md)
-inceleyin. Tenant kapsamını doğrulanmış kullanıcı kimliğinden üretin.
+[Çalışan 0.18 senaryoları](#cachedb-018-çalışan-senaryolar); tedarikçi tekliflerini,
+toplu L1 okumayı, soft TTL'yi, gruplamayı, bileşik indeksleri ve bağımsız karma
+yazmaları gösterir. Depo örneği tenant kapsamında batch, partition, projection
+ve minimum sürüm okumasını kapsar. Yeni demo API'si ayrı kimlik eşleştirmesi kullanır;
+mevcut REST sözleşmeleri değişmez. Tam Java kaynakları, beklenen sonuçlar ve
+Postman istekleri aşağıdadır.
 
 Bu örnek Oracle Database kullanır. BOM, processor, starter ve doctor eklentisini aynı
 sürümden indirir. Java 21 gerekir; framework kaynak kodunu indirip derlemek
@@ -125,7 +125,7 @@ gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 
 - Mevcut REST, arşiv, projection ve ön yükleme yollarının açık davranışı korunur.
 - Mevcut SQL worker'larını yükseltmeden önce sağlayıcınıza ait `cachedb_write_fence` migration'ını uygulayın, eski worker'ları devreden çıkarın ve sürüm sayaçlarını koruyun. Ayrı metadata tablosu, geciken eski yazmanın silinmiş kaydı yeniden oluşturmasını engeller; iş tabloları değişmez. [Kalıcı yazma sürümleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/kalici-yazma-surumleri.md) rehberini izleyin.
-- Tipli snapshot, Jackson'sız codec ve atomik ürün aktarımı çalışan katalog senaryosunda kullanılır. Ayrı API/worker profilleri de bulunur. [Çalışan 0.14 senaryolarını](#bildirimsel-katalog-senaryoları) adım adım izleyin.
+- Tipli snapshot, Jackson'sız codec ve atomik ürün aktarımı çalışan katalog senaryosunda kullanılır. Ayrı API/worker profilleri de bulunur. [Katalog senaryolarını](#bildirimsel-katalog-senaryoları) adım adım izleyin.
 - Katı 50 ms CI hedefi, ilk kullanım dâhil üretilen codec/snapshot senaryosu içindir. REST, SQL, ağ veya canlı sistem SLA'sı değildir; eski mapper API'lerinin uyumluluğu ve tüm JUnit metot süreleri ayrıca raporlanır.
 - `hotEntityLimit=0` entity kabulünü kapatır. `-1` değerini yalnızca bilinçli bir sınırsız kayıt politikası için kullanın. Varsayılan 1.000 olarak korunur.
 - SQL kolonunuz NULL alabiliyorsa `Boolean` kullanın; primitive `boolean`, SQL NULL değerini reddeder.
@@ -535,7 +535,7 @@ operasyon metadata'sıyla birlikte hesaplamalısın.
 ## Kod Üzerinden Akış
 
 Bu bölümdeki kısa parçalar öğretici kesitlerdir; tam kaynak dosyaları bağlantılarda bulunur.
-[Çalışan 0.14 senaryolarında](#bildirimsel-katalog-senaryoları) ise import ve constructor'ları dâhil tam, derlenen Java dosyaları yer alır.
+[Katalog senaryolarında](#bildirimsel-katalog-senaryoları) ise import ve constructor'ları dâhil tam, derlenen Java dosyaları yer alır.
 
 ### 1. Entity: kalıcı veri şekli
 
@@ -1073,6 +1073,700 @@ kullan. Örnek kanıtları başarılı gibi işaretleme.
 - [Production reçeteleri](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/production-recipes.md)
 
 <!-- BEGIN COMPILED FEATURE EXAMPLES -->
+## CacheDB 0.18: Çalışan Senaryolar
+
+Bu bölümdeki sınıflar örnek projede gerçekten bulunur; taslak kod değildir.
+Önce mevcut Hızlı Başlangıç adımlarını `demo` profiliyle tamamlayın. Maven,
+framework kaynak kodunu derlemeden **CacheDB 0.18.0** paketlerini indirir.
+`postman/cache-database-oracle-v018.postman_collection.json` koleksiyonunu
+kayıtlı sırasıyla çalıştırın.
+
+### 1. Kurulum, Kimlik ve Veri Akışı
+
+Demo, `schema.sql` ile sağlayıcıya özel `schema-controls.sql` dosyalarını uygular.
+Yeni tablolar `sample_supplier_offers` ve `sample_tenant_stock` adını taşır.
+Mevcut veritabanında yeni DDL dosyasını inceleyip kendi migration sürecinizle
+uygulayın; canlı ortamda demo şema kurulumunu açmayın.
+SQL Server/Oracle dosyalarında Spring'in `@@` komut ayırıcısı kullanılır.
+
+| Demo profilindeki kimlik bilgisi | Sunucunun belirlediği yetki |
+| --- | --- |
+| `Bearer demo-supplier` | Tedarikçi teklifleri, açık SQL okuması ve sınırlı ön yükleme |
+| `Bearer demo-shop-a` | Yalnızca `shop-a` kurumunun depo kayıtları |
+| `Bearer demo-shop-b` | Yalnızca `shop-b` kurumunun depo kayıtları |
+
+Bunlar herkese açık **demo kimlik bilgileridir**; canlı ortam sırrı değildir.
+Endpoint'ler yalnızca `sample.demo.write-tools-enabled=true` olduğunda açılır.
+Demo profilindeki değerleri `SAMPLE_CONTROLS_SUPPLIER_TOKEN`,
+`SAMPLE_CONTROLS_TENANT_A_TOKEN` ve `SAMPLE_CONTROLS_TENANT_B_TOKEN` ile değiştirebilirsiniz.
+Normal production profili bu endpoint'leri açmaz ve token sağlamaz.
+Gerçek uygulamada bu küçük eşleştiricinin yerine doğrulanmış JWT/oturum kimliğini
+kullanın. İstekten gelen serbest bir tenant başlığına güvenilmez.
+
+| İşlem | SQL ve Redis davranışı |
+| --- | --- |
+| Teklif PUT / tenant batch | Önce Redis kabul eder. HTTP 202, **SQL commit anlamına gelmez**. Worker daha sonra kalıcılaştırır. |
+| Teklif / depo / toplu GET | Seçilen aktif Redis kümesini okur; uygun kayıtlarda L1 kullanır. Bulunamayan kayıt için SQL çalıştırmaz. |
+| GET `/offers/{id}/source` | Açık SQL okumasıdır; Redis'i kendiliğinden doldurmaz. |
+| POST `/offers/warm` | Tedarikçiye göre filtrelenmiş, 1–100 satırlık açık ön yükleme işini arka planda başlatır. |
+| Dashboard / projection | Seçilmiş Redis verisini kapsar; bütün SQL geçmişini kapsamaz. |
+
+Yalnızca SQL'de bulunan kayıtta beklenen sıra şöyledir: GET 404 döner; source GET
+SQL kaydını gösterebilir; normal GET hâlâ 404 döner; warm işini gönderin;
+`/api/warm/jobs/{jobId}` üzerinden `COMPLETED` durumunu bekleyin; ardından normal
+GET ön yüklenen kaydı döndürebilir. Sınıra sığan bir pencere seçin; bu akış sınırsız
+tablo aktarımı değildir. Teklif okumaları bilgilendirme amaçlıdır; fiyat sabitleme
+veya stok rezervasyonu garantisi vermez.
+
+### 2. Tedarikçi Teklifleri: Toplu L1, Soft TTL ve Bileşik İndeks
+
+Tedarikçi kimliğiyle `PUT /api/examples/v018/offers/9600001` çağrısını yapın:
+
+```json
+{"supplier":"postman-window","status":"ACTIVE","unitPrice":12.1250,"availableUnits":20}
+```
+
+Yanıtta `version`, `causalToken`, `redisAccepted=true` ve
+`sqlDurabilityConfirmed=false` bulunur. PUT için tam teklif gönderilir.
+Yalnızca miktarı değiştirmek için `PATCH /offers/{id}/units` adresine
+`{"availableUnits":25}` gönderin. Aşağıdaki yolların başına
+`/api/examples/v018` eklenir.
+
+| İstek | Beklenen sonuç |
+| --- | --- |
+| GET `/offers?ids=9600001,9600002,9600001` | Giriş sırası ve tekrarlar korunur. Redis'ten yalnızca L1'de bulunmayan benzersiz ID'ler istenir; bulunamayanlar sonuçtan çıkarılır. |
+| GET `/offers/search?supplier=postman-window&status=ACTIVE` | Tedarikçi/durum bileşik eşitlik indeksini kullanır; en fazla 50 sonuç verir. |
+| Aynı ID için PAUSED durumuyla PUT | İndeks üyeliği taşınır; kayıt ACTIVE sonucundan çıkar. |
+| Tekrarlanan tekil/toplu okumalar | Sınırlı L1 kullanılabilir. Erişim sıklığına dayalı tahliye, yoğun taramalarda sık okunan kayıtları korumaya yardımcı olur. |
+
+Teklif politikası her JVM için en fazla **256 L1 kaydı / 1 MiB mantıksal veri
+rezervasyonu**, **2 saniye soft TTL / 10 saniye hard TTL** tanımlar.
+Bu iki süre arasında mevcut değer döndürülebilir; arka planda yalnızca Redis'ten
+yenilenir. Ortak havuz iki worker ve 256 kuyruk öğesiyle sınırlıdır; aynı yenileme
+tekilleştirilir, reddedilen ve başarısız yenilemeler ölçülebilir.
+Hard TTL, Redis'te kalan süre ve bağlantı kesilince geçersizleştirme kuralları
+devam eder. Bu davranış güncel stok kararı garantisi değildir.
+Tenant depo örneğinde soft TTL bilerek kapalı bırakılmıştır.
+
+Bu sayılar toplam JVM veya Redis belleği değildir: sıklık metaverisi, nesne
+maliyeti, Redis entity/indeks/projection/sürüm anahtarları ve yazma kuyrukları da
+yer kaplar. Pod sayısı arttıkça toplam L1 belleği artar. Redis komut ve bağlantı
+havuzu bekleme sürelerini sınırlayın. Ayarları gerçek erişim oranına, yenileme
+baskısına ve bellek ölçümüne göre değiştirin.
+
+<details>
+<summary>Tedarikçi entity'si ve üretilen repository için tam tanımlar</summary>
+
+`src/main/java/com/example/cachedb/sample/domain/SupplierOffer.java`
+```java
+package com.example.cachedb.sample.domain;
+
+import com.reactor.cachedb.annotations.*;
+import java.math.BigDecimal;
+
+/** Independent supplier quotes: no FK, secondary UNIQUE constraint or cross-row trigger. */
+@CacheEntity(table = "sample_supplier_offers", redisNamespace = "sample-supplier-offers",
+        indexedColumns = {"supplier", "status", "unit_price", "available_units"},
+        independentWriteReordering = true)
+@CacheCompositeIndex(columns = {"supplier", "status"})
+@CacheNearPolicy(maxEntries = 256, maxBytes = 1_048_576, ttlSeconds = 10, softTtlSeconds = 2)
+public record SupplierOffer(
+        @CacheId(column = "offer_id") Long offerId,
+        @CacheColumn("supplier") String supplier,
+        @CacheColumn("status") String status,
+        @CacheColumn("unit_price") BigDecimal unitPrice,
+        @CacheColumn("available_units") Integer availableUnits) {
+    public SupplierOffer {
+        if (offerId == null || offerId <= 0 || supplier == null || supplier.isBlank() || supplier.length() > 32
+                || !("ACTIVE".equals(status) || "PAUSED".equals(status))
+                || unitPrice == null || unitPrice.signum() < 0 || unitPrice.scale() > 4
+                || (long) unitPrice.precision() - unitPrice.scale() > 15
+                || availableUnits == null || availableUnits < 0 || availableUnits > 1_000_000)
+            throw new IllegalArgumentException("Invalid bounded supplier offer");
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/repository/SupplierOfferRepository.java`
+```java
+package com.example.cachedb.sample.repository;
+
+import com.example.cachedb.sample.domain.SupplierOffer;
+import com.reactor.cachedb.annotations.*;
+import com.reactor.cachedb.core.query.AggregateFunction;
+import com.reactor.cachedb.core.repository.CacheDbRepository;
+import java.math.BigDecimal;
+import java.util.Map;
+
+@CacheRepository(entity = SupplierOffer.class)
+public interface SupplierOfferRepository extends CacheDbRepository<SupplierOffer, Long> {
+    @CacheFacet(groupBy = "status")
+    Map<String, Long> countsBySupplier(String supplier);
+
+    @CacheFacet(groupBy = "status", function = AggregateFunction.SUM, field = "unit_price")
+    Map<String, BigDecimal> priceTotalsBySupplier(String supplier);
+
+    @CacheAggregate(function = AggregateFunction.SUM, field = "unit_price")
+    BigDecimal sumPriceBySupplierAndStatus(String supplier, String status);
+
+    @CachePatch
+    com.reactor.cachedb.core.model.WriteReceipt<SupplierOffer, Long> replaceUnits(
+            @CacheId Long offerId, @CacheColumn("available_units") Integer units);
+}
+```
+</details>
+
+### 3. Satın Alma Ekranı: Gruplama ve Hassas Tutarlar
+
+`postman-window` için 12.1250 ve 7.8750 fiyatlı iki ACTIVE teklif,
+1.0050 fiyatlı bir PAUSED teklif oluşturun.
+`GET /offers/dashboard?supplier=postman-window` şu bilgileri verir:
+
+- `counts`: ACTIVE = 2, PAUSED = 1.
+- `activePriceTotal`: 20.0000.
+- `priceTotals`: her durumun fiyat toplamı.
+- `decimalAverage`: bu tedarikçinin önbellekteki teklifleri için DECIMAL128 ortalama.
+
+Aktif önbellek kümesi, saklama politikasını anlatır; ACTIVE iş durumuyla aynı şey
+değildir. PAUSED teklifler de önbellekte tutulup sayılabilir. İstemcide tutarları
+ondalık hassasiyetini koruyan bir türle işleyin; fiyat toplamları adetle ağırlıklandırılmış
+stok değeri değildir.
+
+`@CacheFacet` ve `@CacheAggregate`, doğrudan repository çağrıları üretir.
+Kayıt sayısına dayalı politika ve indeks kapsamı uygun olduğunda, tekil toplam
+işlemleri her salt okunur Lua çağrısında en fazla 512 adayı işler. Farklı Cluster
+slot'larına dağılan sorgular sınırlı alternatif yolu kullanır. İndeks ve erişim
+kayıtları için ek çağrılar yapılabilir. Ondalık hesap Java'da yapılır;
+Lua'nın kayan noktalı hesabına bırakılmaz. Gruplama en fazla 256 grup ve açık
+aday/bayt bütçeleriyle sınırlıdır. Sınır aşılırsa eksik toplam yerine hata verilir.
+Bu sonuçlar aktif kümenin operasyonel göstergeleridir; yasal mali rapor değildir.
+
+### 4. Tedarikçi Akışı: Bağımsız Karma Yazmalar
+
+`POST /offers/changes`, tek ve sınırlı bir Redis transaction'ı gönderir:
+
+```json
+{"putId":9600006,"put":{"supplier":"postman-window","status":"ACTIVE","unitPrice":3.5000,"availableUnits":9},"patchId":9600002,"units":77,"secondPutId":9600007,"secondPut":{"supplier":"postman-window","status":"ACTIVE","unitPrice":4.2500,"availableUnits":10},"secondPatchId":9600001,"secondUnits":78,"deleteId":9600003}
+```
+
+Beş ID farklı olmalıdır; PATCH için tam kayıt Redis'te bulunmalıdır.
+Bu sırada aynı yapıdaki PUT ve PATCH işlemleri farklı konumlarda yer alır;
+worker bağımsız kayıtlar için bunları gruplayabilir.
+Komutların tümü Redis kabulünde birlikte başarılı olur veya reddedilir.
+Worker daha sonra bu grubu SQL'e kalıcılaştırır. HTTP isteğini yinelemek için
+**idempotency garantisi verilmez**. Yanıt belirsizse karma komutu körlemesine
+tekrarlamak yerine durumu ve receipt'leri kontrol edin.
+
+Yalnızca `SupplierOffer`, `independentWriteReordering=true` kullanır.
+Tabloda foreign key, ek UNIQUE kısıtı veya satırlar arası trigger yoktur.
+Bu sözleşme, aynı kaydın işlem sırasını koruyarak uyumlu karma yazmaları
+gruplamaya izin verir. Bu ayarı ödeme, sipariş/FK veya trigger bağımlı tablolara
+kopyalamayın. Böyle bir kural eklerseniz ayarı kaldırıp sıralamayı yeniden inceleyin.
+Batch sayısındaki azalma yüke bağlıdır; örnek belirli bir hız çarpanı vaat etmez
+ve Redis/SQL işlemlerini dağıtık XA transaction'ına dönüştürmez.
+
+### 5. Depolar: Tenant Batch, Partition ve Projection
+
+`demo-shop-a` kimliğiyle `POST /stock/batch` çağrısını yapın:
+
+```json
+[{"stockId":9700001,"warehouse":"PM1","status":"AVAILABLE","availableUnits":40},{"stockId":9700002,"warehouse":"PM1","status":"AVAILABLE","availableUnits":80},{"stockId":9700003,"warehouse":"PM2","status":"AVAILABLE","availableUnits":20}]
+```
+
+`demo-shop-b` ile farklı ID'lere daha yüksek miktarlar yazın.
+Bu örnekte depo kaydı ID'si bütün kurumlar arasında benzersizdir.
+`tenantId` sunucuda doldurulur; istek gövdesinden alınmaz.
+Başka kurumun kaydını okuma, üzerine yazma veya PATCH isteği 403 döner.
+Batch içinde başka kuruma ait ID varsa **gruptaki hiçbir satır değişmez**.
+
+Shop A için `GET /stock/top?warehouses=PM1,PM2&limit=1`, shop B'nin miktarları
+daha yüksek olsa bile her deponun shop A'ya ait ilk kaydını verir.
+`GET /stock/cards?limit=1`, kurum kapsamında bir özet döndürür;
+tenant işaretinin yanıtta gösterilmesi gerekmez. Filtreleme sayfalama öncesindedir.
+Aday ve bayt sınırları geçerlidir; bu yollar SQL'in tamamını taramaz.
+Daha büyük ekranlarda açık tenant indeksli read-model tasarımına geçin.
+
+<details>
+<summary>Tam tenant entity'si ve özet projection</summary>
+
+`src/main/java/com/example/cachedb/sample/domain/TenantStock.java`
+```java
+package com.example.cachedb.sample.domain;
+
+import com.reactor.cachedb.annotations.*;
+
+/** Advisory warehouse availability, not an inventory reservation or payment ledger. */
+@CacheEntity(table = "sample_tenant_stock", redisNamespace = "sample-tenant-stock",
+        indexedColumns = {"tenant_id", "warehouse", "status", "available_units"})
+@CacheCompositeIndex(columns = {"tenant_id", "status"})
+@CachePartitionedIndex(partitionBy = "warehouse", sortBy = "available_units")
+@CacheNearPolicy(maxEntries = 256, maxBytes = 1_048_576, ttlSeconds = 10)
+public record TenantStock(
+        @CacheId(column = "stock_id") Long stockId,
+        @CacheTenantId @CacheColumn("tenant_id") String tenantId,
+        @CacheColumn("warehouse") String warehouse,
+        @CacheColumn("status") String status,
+        @CacheColumn("available_units") Integer availableUnits) {
+    public TenantStock {
+        if (stockId == null || stockId <= 0 || tenantId == null || tenantId.isBlank() || tenantId.length() > 32
+                || warehouse == null || warehouse.isBlank() || warehouse.length() > 32
+                || !("AVAILABLE".equals(status) || "HELD".equals(status))
+                || availableUnits == null || availableUnits < 0 || availableUnits > 1_000_000)
+            throw new IllegalArgumentException("Invalid bounded tenant stock");
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/readmodel/TenantStockCard.java`
+```java
+package com.example.cachedb.sample.readmodel;
+
+import com.example.cachedb.sample.domain.TenantStock;
+import com.reactor.cachedb.annotations.CacheProjectionRecord;
+
+@CacheProjectionRecord(source = TenantStock.class, id = "stockId", name = "tenant-stock-card")
+public record TenantStockCard(Long stockId, String warehouse, String status, Integer availableUnits) {}
+```
+</details>
+
+### 6. Yazdığınız Sürümü Başka Bir Uygulama Örneğinden Okuma
+
+Başarılı PUT/PATCH yanıtındaki `X-CacheDB-Causal` değerini alın.
+Normal kimlik doğrulamasını yaparak sonraki entity GET isteğinde bu başlığı gönderin.
+`CacheCausalContext`, sürümü eski veya bilinmeyen L1 kaydını kullanmaz.
+İstenen minimum sürüm yoksa eski SQL kaydına sessizce geçmek yerine 409 döner.
+Bozuk token 400 döner.
+
+Token en fazla 128 kimlik / 4096 karakter taşır. İmzalı değildir; kimlik doğrulama
+bilgisi, SQL kalıcılığı kanıtı veya projection güncelliği garantisi değildir.
+Koleksiyonda `peerBaseUrl` değerini aynı uygulamanın ikinci çalışan örneğine
+(instance) yönlendirebilirsiniz. Tek örnek çalıştırırken `baseUrl` ile aynı değeri verin.
+İki uygulama örneği aynı Redis/SQL kaynaklarını, entity tanımlarını ve doğrulanmış
+kimlik düzenini kullanmalıdır.
+
+<details>
+<summary>Tam adaptör, HTTP sözleşmesi ve kimlik eşleştirmesi</summary>
+
+`src/main/java/com/example/cachedb/sample/controls/ControlsStore.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import com.example.cachedb.sample.domain.*;
+import com.example.cachedb.sample.readmodel.*;
+import com.example.cachedb.sample.repository.SupplierOfferRepository;
+import com.reactor.cachedb.core.api.EntityRepository;
+import com.reactor.cachedb.core.api.ProjectionRepository;
+import com.reactor.cachedb.core.api.CacheWriteBatchReceipt;
+import com.reactor.cachedb.core.causal.CacheCausalContext;
+import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.query.*;
+import com.reactor.cachedb.starter.CacheDatabase;
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.*;
+import org.springframework.stereotype.Service;
+
+/** Small infrastructure adapter for the bulk/partition APIs; generated facets stay in the repository. */
+@Service
+public final class ControlsStore {
+    private final CacheDatabase database;
+    private final SupplierOfferRepository generatedOffers;
+    private final EntityRepository<SupplierOffer, Long> offers;
+    private final EntityRepository<TenantStock, Long> stock;
+    private final ProjectionRepository<TenantStockCard, Long> cards;
+
+    public ControlsStore(CacheDatabase database, SupplierOfferRepository generatedOffers) {
+        this.database = database;
+        this.generatedOffers = generatedOffers;
+        offers = SupplierOfferCacheBinding.repository(database);
+        stock = TenantStockCacheBinding.repository(database);
+        // Bootstrap registers metadata only; request reads still require an authenticated tenant scope.
+        try (var bootstrap = com.reactor.cachedb.core.tenant.CacheTenantContext.administrative()) {
+            cards = stock.projected(TenantStockCardProjection.PROJECTION);
+        }
+    }
+
+    public WriteReceipt<SupplierOffer, Long> saveOffer(SupplierOffer offer) { return generatedOffers.save(offer); }
+    public SupplierOffer source(long id) {
+        return generatedOffers.findSourceById(id).orElseThrow(() -> new NoSuchElementException("Offer is not in SQL"));
+    }
+    public WriteReceipt<SupplierOffer, Long> replaceUnits(long id, int units) { return generatedOffers.replaceUnits(id, units); }
+    public SupplierOffer offer(long id) {
+        return offers.findById(id).orElseThrow(() -> new NoSuchElementException("Offer is not in the active set"));
+    }
+    public List<SupplierOffer> bulk(List<Long> ids) { return offers.findAll(ids); }
+    public List<SupplierOffer> search(String supplier, String status) {
+        return offers.query(QuerySpec.where(QueryFilter.eq("supplier", supplier))
+                .and(QueryFilter.eq("status", status)).orderBy(QuerySort.asc("offer_id")).limitTo(50));
+    }
+    public Dashboard dashboard(String supplier) {
+        var stats = offers.aggregate(AggregateSpec.sum("unit_price", QueryFilter.eq("supplier", supplier)));
+        return new Dashboard(generatedOffers.countsBySupplier(supplier), generatedOffers.priceTotalsBySupplier(supplier),
+                generatedOffers.sumPriceBySupplierAndStatus(supplier, "ACTIVE"), stats.decimalAverage());
+    }
+    public record Dashboard(Map<String, Long> counts, Map<String, BigDecimal> priceTotals,
+            BigDecimal activePriceTotal, BigDecimal decimalAverage) {}
+
+    /** A real mixed PUT/PATCH/DELETE transaction; only the independent offer table opts into regrouping. */
+    public CacheWriteBatchReceipt changes(SupplierOffer put, long patchId, int units,
+            SupplierOffer secondPut, long secondPatchId, int secondUnits, long deleteId) {
+        return database.inTransaction(tx -> {
+            tx.put(put);
+            tx.patch(SupplierOffer.class, patchId, Map.of("available_units", units));
+            tx.put(secondPut);
+            tx.patch(SupplierOffer.class, secondPatchId, Map.of("available_units", secondUnits));
+            tx.delete(SupplierOffer.class, deleteId);
+        });
+    }
+    public WriteReceipt<TenantStock, Long> saveStock(TenantStock row) { return stock.saveWithReceipt(row); }
+    public WriteReceipt<TenantStock, Long> patchStock(long id, int units) {
+        return stock.patchWithReceipt(id, Map.of("available_units", units));
+    }
+    public CacheWriteBatchReceipt stockBatch(List<TenantStock> rows) {
+        return database.inTransaction(tx -> tx.putAll(rows));
+    }
+    public TenantStock stock(long id) {
+        return stock.findById(id).orElseThrow(() -> new NoSuchElementException("Stock is not in the active set"));
+    }
+    public Map<String, List<TenantStock>> top(List<String> warehouses, int limit) {
+        return stock.queryPartitions(PartitionedQuerySpec.top("warehouse", warehouses, limit,
+                QuerySort.desc("available_units")));
+    }
+    public List<TenantStockCard> cards(int limit) {
+        return cards.query(QuerySpec.allOf().orderBy(QuerySort.desc("available_units")).limitTo(limit));
+    }
+    public static String token(WriteReceipt<?, ?> receipt) {
+        try (var causal = CacheCausalContext.withReceipt(receipt.redisNamespace(), receipt)) {
+            return CacheCausalContext.encodeToken();
+        }
+    }
+}
+```
+
+Adaptör yalnızca birkaç toplu okuma/partition işlemini taşır; normal facet
+metotları deklaratif kalır. Başlangıçtaki administrative scope yalnızca projection
+metaverisini kaydeder; HTTP kullanıcısına yönetici yetkisi vermez.
+
+`src/main/java/com/example/cachedb/sample/controls/ControlsController.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import com.example.cachedb.sample.domain.*;
+import com.example.cachedb.sample.readmodel.TenantStockCard;
+import com.reactor.cachedb.core.causal.CacheCausalContext;
+import com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException;
+import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.tenant.CacheTenantContext;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.*;
+import java.math.BigDecimal;
+import java.util.*;
+import java.util.function.Supplier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.*;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+@RestController
+@RequestMapping("/api/examples/v018")
+@ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
+@Validated
+public class ControlsController {
+    private final ControlsAccess access;
+    private final ControlsStore store;
+    private final com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor jobs;
+    public ControlsController(ControlsAccess access, ControlsStore store,
+            com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor jobs) {
+        this.access = access; this.store = store; this.jobs = jobs;
+    }
+
+    @PostMapping("/offers/warm")
+    public ResponseEntity<com.reactor.cachedb.spring.boot.CacheDistributedJobSnapshot> warm(
+            @RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestBody OfferWarmCommand command) {
+        access.supplier(auth);
+        return ResponseEntity.accepted().body(jobs.submit(OfferWarmHandler.DEFINITION, command));
+    }
+    @GetMapping("/offers/{id}/source")
+    public SupplierOffer source(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id) {
+        access.supplier(auth); return store.source(id);
+    }
+
+    public record OfferInput(@NotBlank @Size(max = 32) String supplier,
+            @NotBlank @Pattern(regexp = "ACTIVE|PAUSED") String status,
+            @NotNull @DecimalMin("0.0000") @Digits(integer = 15, fraction = 4) BigDecimal unitPrice,
+            @NotNull @Min(0) @Max(1_000_000) Integer availableUnits) {
+        public SupplierOffer entity(long id) { return new SupplierOffer(id, supplier, status, unitPrice, availableUnits); }
+    }
+    public record StockInput(@NotNull @Positive Long stockId, @NotBlank @Size(max = 32) String warehouse,
+            @NotBlank @Pattern(regexp = "AVAILABLE|HELD") String status,
+            @NotNull @Min(0) @Max(1_000_000) Integer availableUnits) {
+        public TenantStock entity(String tenant) { return new TenantStock(stockId, tenant, warehouse, status, availableUnits); }
+    }
+    public record Units(@NotNull @Min(0) @Max(1_000_000) Integer availableUnits) {}
+    public record Changes(@NotNull @Positive Long putId, @NotNull @Valid OfferInput put,
+            @NotNull @Positive Long patchId, @NotNull @Min(0) @Max(1_000_000) Integer units,
+            @NotNull @Positive Long secondPutId, @NotNull @Valid OfferInput secondPut,
+            @NotNull @Positive Long secondPatchId, @NotNull @Min(0) @Max(1_000_000) Integer secondUnits,
+            @NotNull @Positive Long deleteId) {}
+    public record Accepted(Object id, long version, String causalToken, boolean redisAccepted, boolean sqlDurabilityConfirmed) {}
+    public record BatchAccepted(List<Long> versions, boolean redisAccepted, boolean sqlDurabilityConfirmed) {}
+
+    @PutMapping("/offers/{id}")
+    public ResponseEntity<Accepted> put(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id, @Valid @RequestBody OfferInput input) {
+        access.supplier(auth); return accepted(store.saveOffer(input.entity(id)));
+    }
+    @PatchMapping("/offers/{id}/units")
+    public ResponseEntity<Accepted> patch(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id, @Valid @RequestBody Units input) {
+        access.supplier(auth); return accepted(store.replaceUnits(id, input.availableUnits()));
+    }
+    @GetMapping("/offers/{id}")
+    public SupplierOffer offer(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id,
+            @RequestHeader(value = "X-CacheDB-Causal", defaultValue = "") @Size(max = 4096) String token) {
+        access.supplier(auth); return causal(token, () -> store.offer(id));
+    }
+    @GetMapping("/offers")
+    public List<SupplierOffer> bulk(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam @Size(min = 1, max = 64) List<@NotNull @Positive Long> ids) {
+        access.supplier(auth); return store.bulk(ids);
+    }
+    @GetMapping("/offers/search")
+    public List<SupplierOffer> search(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam @NotBlank @Size(max = 32) String supplier,
+            @RequestParam @Pattern(regexp = "ACTIVE|PAUSED") String status) {
+        access.supplier(auth); return store.search(supplier, status);
+    }
+    @GetMapping("/offers/dashboard")
+    public ControlsStore.Dashboard dashboard(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam @NotBlank @Size(max = 32) String supplier) {
+        access.supplier(auth); return store.dashboard(supplier);
+    }
+    @PostMapping("/offers/changes")
+    public ResponseEntity<BatchAccepted> changes(@RequestHeader(value = "Authorization", required = false) String auth,
+            @Valid @RequestBody Changes input) {
+        access.supplier(auth);
+        if (new HashSet<>(List.of(input.putId(), input.patchId(), input.secondPutId(), input.secondPatchId(), input.deleteId())).size() != 5)
+            throw new IllegalArgumentException("Mixed changes require five distinct IDs");
+        var receipt = store.changes(input.put().entity(input.putId()), input.patchId(), input.units(),
+                input.secondPut().entity(input.secondPutId()), input.secondPatchId(), input.secondUnits(), input.deleteId());
+        return ResponseEntity.accepted().body(new BatchAccepted(receipt.versions(), true, false));
+    }
+    @PostMapping("/stock/batch")
+    public ResponseEntity<BatchAccepted> stockBatch(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestBody @Size(min = 1, max = 32) List<@NotNull @Valid StockInput> input) {
+        String tenant = access.tenant(auth);
+        if (input.stream().map(StockInput::stockId).distinct().count() != input.size())
+            throw new IllegalArgumentException("Stock batch IDs must be distinct");
+        return tenant(tenant, () -> {
+            var receipt = store.stockBatch(input.stream().map(row -> row.entity(tenant)).toList());
+            return ResponseEntity.accepted().body(new BatchAccepted(receipt.versions(), true, false));
+        });
+    }
+    @PatchMapping("/stock/{id}/units")
+    public ResponseEntity<Accepted> stockPatch(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id, @RequestBody @Valid Units input) {
+        return tenant(access.tenant(auth), () -> accepted(store.patchStock(id, input.availableUnits())));
+    }
+    @GetMapping("/stock/{id}")
+    public TenantStock stock(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id,
+            @RequestHeader(value = "X-CacheDB-Causal", defaultValue = "") @Size(max = 4096) String token) {
+        return tenant(access.tenant(auth), () -> causal(token, () -> store.stock(id)));
+    }
+    @PutMapping("/stock/{id}")
+    public ResponseEntity<Accepted> stockPut(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id, @RequestBody @Valid StockInput input) {
+        if (id != input.stockId()) throw new IllegalArgumentException("Path and body IDs must match");
+        String tenant = access.tenant(auth);
+        return tenant(tenant, () -> accepted(store.saveStock(input.entity(tenant))));
+    }
+    @GetMapping("/stock/top")
+    public Map<String, List<TenantStock>> top(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam @Size(min = 1, max = 8) List<@NotBlank @Size(max = 32) String> warehouses,
+            @RequestParam(defaultValue = "2") @Min(1) @Max(10) int limit) {
+        return tenant(access.tenant(auth), () -> store.top(warehouses, limit));
+    }
+    @GetMapping("/stock/cards")
+    public List<TenantStockCard> cards(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(50) int limit) {
+        return tenant(access.tenant(auth), () -> store.cards(limit));
+    }
+    private static ResponseEntity<Accepted> accepted(WriteReceipt<?, ?> receipt) {
+        String token = ControlsStore.token(receipt);
+        return ResponseEntity.accepted().header("X-CacheDB-Causal", token)
+                .body(new Accepted(receipt.id(), receipt.version(), token, true, false));
+    }
+    private static <T> T causal(String token, Supplier<T> read) {
+        try (var scope = CacheCausalContext.withToken(token)) { return read.get(); }
+        catch (IllegalStateException failure) {
+            if (failure.getMessage() != null && failure.getMessage().startsWith("Causal "))
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Required Redis version is unavailable", failure);
+            throw failure;
+        }
+    }
+    private static <T> T tenant(String tenant, Supplier<T> work) {
+        try (var scope = CacheTenantContext.withTenant(tenant)) { return work.get(); }
+        catch (CacheTenantAccessDeniedException denied) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tenant access denied", denied);
+        } catch (IllegalStateException denied) {
+            if (denied.getMessage() != null && denied.getMessage().startsWith("Atomic batch") && denied.getMessage().contains("tenant"))
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tenant batch denied", denied);
+            throw denied;
+        }
+    }
+    @ExceptionHandler(NoSuchElementException.class)
+    ResponseEntity<ProblemDetail> notCached(NoSuchElementException missing) {
+        return ResponseEntity.status(404).body(ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, missing.getMessage()));
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/controls/ControlsAccess.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
+
+/** Demo credential mapping only. Replace with the application's verified identity provider. */
+@Component
+public final class ControlsAccess {
+    private final String supplierToken;
+    private final String tenantAToken;
+    private final String tenantBToken;
+
+    public ControlsAccess(@Value("${sample.controls.supplier-token:}") String supplierToken,
+            @Value("${sample.controls.tenant-a-token:}") String tenantAToken,
+            @Value("${sample.controls.tenant-b-token:}") String tenantBToken) {
+        this.supplierToken = supplierToken;
+        this.tenantAToken = tenantAToken;
+        this.tenantBToken = tenantBToken;
+        var values = java.util.stream.Stream.of(supplierToken, tenantAToken, tenantBToken)
+                .filter(value -> !value.isBlank()).toList();
+        if (values.stream().anyMatch(value -> value.length() > 256)
+                || values.stream().distinct().count() != values.size())
+            throw new IllegalArgumentException("Controls tokens must be distinct and at most 256 characters");
+    }
+
+    public String tenant(String authorization) {
+        String token = bearer(authorization);
+        if (same(token, tenantAToken)) return "shop-a";
+        if (same(token, tenantBToken)) return "shop-b";
+        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tenant credential required");
+    }
+
+    public void supplier(String authorization) {
+        if (!same(bearer(authorization), supplierToken))
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Supplier credential required");
+    }
+
+    private String bearer(String authorization) {
+        if (supplierToken.isBlank() && tenantAToken.isBlank() && tenantBToken.isBlank())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Controls credentials are not configured");
+        if (authorization == null || !authorization.startsWith("Bearer ") || authorization.length() > 263)
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Bearer credential required");
+        String token = authorization.substring(7);
+        if (!same(token, supplierToken) && !same(token, tenantAToken) && !same(token, tenantBToken))
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unknown credential");
+        return token;
+    }
+
+    private static boolean same(String actual, String expected) {
+        return !expected.isBlank() && MessageDigest.isEqual(
+                actual.getBytes(StandardCharsets.UTF_8), expected.getBytes(StandardCharsets.UTF_8));
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/controls/OfferWarmCommand.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import com.reactor.cachedb.annotations.CacheJsonRecord;
+
+@CacheJsonRecord
+public record OfferWarmCommand(String supplier, int maxRows) {
+    public OfferWarmCommand {
+        if (supplier == null || supplier.isBlank() || supplier.length() > 32 || maxRows < 1 || maxRows > 100)
+            throw new IllegalArgumentException("A supplier and maxRows between 1 and 100 are required");
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/controls/OfferWarmHandler.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import com.example.cachedb.sample.domain.SupplierOfferCacheBinding;
+import com.reactor.cachedb.annotations.CacheJobHandler;
+import com.reactor.cachedb.core.query.*;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobContext;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition;
+import com.reactor.cachedb.starter.*;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+@Component
+@ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
+public final class OfferWarmHandler {
+    public static final CacheDistributedJobDefinition<OfferWarmCommand> DEFINITION =
+            CacheDistributedJobDefinition.of("sample.offers.warm", OfferWarmCommand.class);
+    private final CacheDatabase database;
+    public OfferWarmHandler(CacheDatabase database) { this.database = database; }
+    @CacheJobHandler("sample.offers.warm")
+    public CacheWarmResult execute(CacheDistributedJobContext context, OfferWarmCommand command) {
+        return database.warm(CacheWarmPlan.builder(SupplierOfferCacheBinding.METADATA.entityName())
+                .name("supplier-offer-window")
+                .querySpec(QuerySpec.where(QueryFilter.eq("supplier", command.supplier()))
+                        .orderBy(QuerySort.asc("offer_id")).limitTo(command.maxRows()).withQueryTimeoutSeconds(15))
+                .maxRows(command.maxRows()).build());
+    }
+}
+```
+</details>
+
+### 7. Doğrulama ve Hatalı İstekler
+
+`mvn clean verify -Pprovider-integration`, önceki sözleşmelerin yanında
+`ControlsContractTest` ve iki yeni sağlayıcı entegrasyon testini çalıştırır.
+Hassas ondalık hesap, sıra/tekrarlar, bileşik indeks üyeliği, karma SQL yazmaları,
+SQL'de bulunan kaydın Redis'te bulunmaması ve açık warm akışı doğrulanır.
+Tenant reddinde kısmi değişiklik olmaması, partition/projection pencereleri ve
+minimum sürüm hataları da kontrol edilir.
+
+Soft-TTL testi yalnızca yalıtılmış test ortamında kaçırılmış Redis geçersizleştirmesi
+oluşturur; önce eski, ardından yenilenmiş veriyi doğrular.
+Bu, uygulamanın Redis'e doğrudan yazması için bir öneri değildir.
+Ayrı sınırlı önbellek kontrolü, sıklık korumasını ve kapasiteyi doğrular.
+REST yanıtları için duvar saati temelli bir SLA iddiası yoktur.
+
+Yeni Postman koleksiyonu başarılı istekleri, 400/401/403/404/409 yanıtlarını ve
+sınırlı SQL/iş durumu beklemelerini kapsar. Chunked gövdeler dâhil komutlar,
+JSON nesneleri oluşturulmadan önce 64 KiB ile sınırlanır; ID, sayfa ve batch
+sayıları da sınırlıdır. `scripts/test-catalog-postman.ps1`, katalog ve 0.18
+koleksiyonlarını birlikte çalıştırır. Çalışan, yalıtılmış demo için:
+
+```sh
+npx --yes newman@6.2.1 run postman/cache-database-oracle-v018.postman_collection.json --env-var baseUrl=http://127.0.0.1:8093 --env-var peerBaseUrl=http://127.0.0.1:8093 --bail
+```
+
+Yalnızca size ait test verisini kullanın. SQL/Redis/HTTP zaman aşımı sürelerini
+sınırlayın; yenileme hatalarını, kuyruk baskısını, belleği, tenant hatalarını ve
+kaynak veri eşleşmesini izleyin. Framework'ün 50 ms codec kapısı, bu REST/SQL
+istekleri için süre garantisi değildir.
+
+---
+
+
 ## Bildirimsel Katalog Senaryoları
 
 Bu senaryolar **CacheDB 0.18.0** sürümünü kullanır. Mevcut sipariş,
@@ -1287,10 +1981,10 @@ public class CatalogConfiguration {
 
 Örneğin POM dosyasında Gson **2.13.2** açıkça sabitlenmiştir. Aksi hâlde Spring
 Boot parent, gerekli `Strictness` sınıfını içermeyen eski Gson sürümünü seçebilir.
-POM'da `cachedb-json`, annotation bağımlılığı ve 0.15.1 processor birlikte bulunur.
+POM'da `cachedb-json`, annotation bağımlılığı ve 0.18.0 processor birlikte bulunur.
 Gson sürüm ayarını kaldırmayın; farklı framework sürümlerini karıştırmayın.
 
-0.15.1 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
+0.18.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
 zamanı bağımlılıkları şunlardır:
 
 ```xml
@@ -1844,7 +2538,7 @@ aktarın. **23 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed g
 Akış; ilk süre sınırlı bekleme yeterli değilse yalnızca aynı teslimatı tekrar
 göndererek SQL kalıcılığını, aynı receipt ile tekrarı, değişen içeriğin reddini,
 snapshot yayınını, Türkçe metin/ondalık sayıyı, tek nesilden okumayı, sayfalamayı
-ve geçersiz girdi yanıtlarını doğrular. Mevcut 59 istekli iş senaryosu koleksiyonu
+ve geçersiz girdi yanıtlarını doğrular. Mevcut 61 istekli iş senaryosu koleksiyonu
 ayrı kalır. İki koleksiyon da REST için 50 ms SLA'sı iddia etmez.
 
 ```powershell
@@ -1867,7 +2561,7 @@ Bu aracı üretim veritabanına bağlamayın.
 koleksiyonu bir API konteyneri ve **iki worker konteyneri** üzerinde çalıştırır.
 Örneklerin CI hattı bu modu kullanır; konteyner logları test kanıtına eklenir.
 
-Ayrı sunulan 59 istekli iş senaryoları koleksiyonu, kabul edilen her arka plan
+Ayrı sunulan 61 istekli iş senaryoları koleksiyonu, kabul edilen her arka plan
 işinden sonra kayıtlı durum isteğini otomatik sorgular ve tamamlanınca sıradaki
 isteğe geçer. Bekleme en fazla 30 saniye veya 150 denemedir. Her yanıtın HTTP
 kodu doğrulanır; başarısız işten sonra okumaya devam edilmez. HTTP yük kontrolünden

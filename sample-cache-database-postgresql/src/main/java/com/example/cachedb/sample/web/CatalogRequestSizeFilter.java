@@ -20,6 +20,7 @@ public final class CatalogRequestSizeFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI().substring(request.getContextPath().length());
+        if (path.startsWith("/api/examples/v018/") && java.util.Set.of("POST", "PUT", "PATCH").contains(request.getMethod())) return false;
         return !"POST".equals(request.getMethod())
                 || !(path.equals("/api/catalog/imports") || path.equals("/api/catalog/refresh")
                         || path.equals("/api/catalog/dirty"));

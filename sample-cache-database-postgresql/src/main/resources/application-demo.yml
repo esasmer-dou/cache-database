@@ -1,6 +1,7 @@
 spring:
   sql:
     init:
+      schema-locations: classpath:schema.sql,classpath:schema-controls.sql
       mode: always
 
 cachedb:
@@ -11,6 +12,10 @@ cachedb:
     dashboard-enabled: true
 
 sample:
+  controls:
+    supplier-token: ${SAMPLE_CONTROLS_SUPPLIER_TOKEN:demo-supplier}
+    tenant-a-token: ${SAMPLE_CONTROLS_TENANT_A_TOKEN:demo-shop-a}
+    tenant-b-token: ${SAMPLE_CONTROLS_TENANT_B_TOKEN:demo-shop-b}
   scheduled-warm:
     enabled: true
   demo:

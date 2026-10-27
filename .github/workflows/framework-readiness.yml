@@ -139,6 +139,10 @@ jobs:
         shell: pwsh
         run: ./tools/ci/check-postman-collections.ps1 -SummaryPath ./target/postman-collection-summary.md
 
+      - name: Validate 0.18 sample capability coverage
+        shell: pwsh
+        run: ./tools/ci/check-v018-sample-coverage.ps1
+
       - name: Validate sample provider parity
         shell: pwsh
         run: ./tools/ci/check-sample-provider-parity.ps1

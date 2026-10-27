@@ -4,12 +4,11 @@ English | [Türkçe](README.tr.md)
 
 ## Read and Write Controls in 0.18.0
 
-Bulk reads now reuse L1 entries when enabled. Soft TTL, causal entity tokens,
-facets, composite indexes and independent JDBC grouping are explicit application
-contracts, not switches silently enabled by upgrading this sample. Existing REST
-routes and authorization behavior remain unchanged. Read the
-[configuration and bounded examples](https://github.com/esasmer-dou/cache-database/blob/main/docs/near-cache-facets-indexes.md)
-before adding these declarations; tenant scopes must come from authenticated users.
+Runnable [0.18 scenarios](#cachedb-018-running-scenarios) demonstrate supplier
+offers, bulk L1, soft TTL, facets, composite indexes, independent mixed writes,
+and tenant-scoped warehouse batches, partitions, projections and causal reads.
+The new demo-only API has its own identity mapping; existing REST contracts stay
+unchanged. Complete Java sources, expected results and Postman requests are below.
 
 The sample is a SQL Server consumer: it resolves the published BOM, processor,
 starter, and doctor plugin at the same version. Java 21 is required; no framework
@@ -379,7 +378,7 @@ no Maven `settings.xml`, username, or token is required.
 
 ### 1. Resolve the published CacheDB package
 
-After 0.18.0 is published, validate the sample directly. Maven resolves the BOM,
+Validate the sample directly. Maven resolves the published BOM,
 starter, annotation processor and doctor plugin anonymously from that package:
 
 ```powershell
@@ -1044,6 +1043,686 @@ never copy placeholder evidence and mark it as passed.
 - [Production recipes](https://github.com/esasmer-dou/cache-database/blob/main/docs/production-recipes.md)
 
 <!-- BEGIN COMPILED FEATURE EXAMPLES -->
+## CacheDB 0.18: Running Scenarios
+
+This section uses real classes in this sample, not pseudocode. Start with the
+existing Quick Start and `demo` profile. Maven downloads CacheDB **0.18.0**
+without building the framework. Run the Postman collection
+`postman/cache-database-mssql-v018.postman_collection.json` in its saved order.
+
+### 1. Setup, Identity and Data Flow
+
+The demo initializes `schema.sql` and the provider-specific `schema-controls.sql`.
+The two new tables are `sample_supplier_offers` and `sample_tenant_stock`.
+For an existing database, review and apply the new provider DDL through your own
+migration process before startup; do not enable demo initialization in production.
+SQL Server/Oracle scripts use Spring's `@@` statement delimiter.
+
+| Credential in the demo profile | Server-selected permission |
+| --- | --- |
+| `Bearer demo-supplier` | Supplier offer feed, its SQL source and bounded warm jobs |
+| `Bearer demo-shop-a` | Tenant `shop-a` stock only |
+| `Bearer demo-shop-b` | Tenant `shop-b` stock only |
+
+These are public **demo-only credentials**, not production secrets. The routes
+exist only with `sample.demo.write-tools-enabled=true`. The demo profile supplies
+the three credentials; override them with `SAMPLE_CONTROLS_SUPPLIER_TOKEN`,
+`SAMPLE_CONTROLS_TENANT_A_TOKEN` and `SAMPLE_CONTROLS_TENANT_B_TOKEN`.
+The ordinary production profile does not enable these endpoints or supply tokens.
+Replace this small credential adapter with your verified JWT/session principal
+before adopting the example in a real application. A raw tenant header is never trusted.
+
+| Operation | SQL and Redis behavior |
+| --- | --- |
+| PUT offer / tenant batch | Redis accepts first; HTTP 202 is **not SQL commit**. Workers persist asynchronously. |
+| GET offer / stock / bulk | Reads the bounded active Redis set, with eligible L1 reuse. A miss does not run SQL. |
+| GET `/offers/{id}/source` | Explicit SQL read; does not silently warm Redis. |
+| POST `/offers/warm` | Explicit background SQL-to-Redis warm, filtered by supplier and limited to 1–100 rows. |
+| Dashboard / projection | Covers the selected Redis set, not the full SQL history. |
+
+For a SQL-only row, the intended sequence is: GET gives 404; source GET can return
+the SQL row; GET is still 404; submit warm; poll `/api/warm/jobs/{jobId}` until
+`COMPLETED`; then GET can return the warmed row. Choose a window that fits the
+limit; this is not an unbounded full-table import. Offer reads are informational,
+not a price-lock or stock-reservation guarantee.
+
+### 2. Supplier Quotes: Bulk L1, Soft TTL and Composite Lookup
+
+Use `PUT /api/examples/v018/offers/9600001` with the supplier credential:
+
+```json
+{"supplier":"postman-window","status":"ACTIVE","unitPrice":12.1250,"availableUnits":20}
+```
+
+The response includes `version`, `causalToken`, `redisAccepted=true` and
+`sqlDurabilityConfirmed=false`. Send a complete offer to PUT; use
+`PATCH /offers/{id}/units` with `{"availableUnits":25}` for that column only.
+All paths in this section are relative to `/api/examples/v018`.
+
+| Request | Expected behavior |
+| --- | --- |
+| GET `/offers?ids=9600001,9600002,9600001` | Preserves order and duplicate results. Fetches only unique L1 misses from Redis; absent IDs are omitted. |
+| GET `/offers/search?supplier=postman-window&status=ACTIVE` | Uses the declared supplier/status composite equality index; at most 50 results. |
+| PUT same ID with PAUSED status | Moves its composite membership; it no longer appears in the ACTIVE lookup. |
+| Repeated point/bulk reads | May reuse the bounded L1. Frequency-aware eviction protects frequently read keys during cold scans. |
+
+The offer policy reserves at most **256 L1 entries / 1 MiB logical payload budget
+per JVM**, with **2 s soft TTL / 10 s hard TTL**. Between those times an old value
+can be returned while a Redis-only refresh runs. The shared refresh pool has two
+workers and 256 queued tasks, with deduplication and rejection/failure counters.
+Hard expiry, Redis TTL and disconnect invalidation still apply. This is not a
+guarantee of a fresh stock decision. Tenant stock deliberately keeps soft TTL off.
+
+These budgets are not total JVM or Redis memory: frequency metadata, object
+overhead, Redis entity/index/projection/version keys and write queues also consume
+space. More application pods multiply L1 memory. Keep Redis command/pool timeouts
+finite; tune policy from hit rate, refresh pressure, memory and real request data.
+
+<details>
+<summary>Complete supplier entity and generated repository declarations</summary>
+
+`src/main/java/com/example/cachedb/sample/domain/SupplierOffer.java`
+```java
+package com.example.cachedb.sample.domain;
+
+import com.reactor.cachedb.annotations.*;
+import java.math.BigDecimal;
+
+/** Independent supplier quotes: no FK, secondary UNIQUE constraint or cross-row trigger. */
+@CacheEntity(table = "sample_supplier_offers", redisNamespace = "sample-supplier-offers",
+        indexedColumns = {"supplier", "status", "unit_price", "available_units"},
+        independentWriteReordering = true)
+@CacheCompositeIndex(columns = {"supplier", "status"})
+@CacheNearPolicy(maxEntries = 256, maxBytes = 1_048_576, ttlSeconds = 10, softTtlSeconds = 2)
+public record SupplierOffer(
+        @CacheId(column = "offer_id") Long offerId,
+        @CacheColumn("supplier") String supplier,
+        @CacheColumn("status") String status,
+        @CacheColumn("unit_price") BigDecimal unitPrice,
+        @CacheColumn("available_units") Integer availableUnits) {
+    public SupplierOffer {
+        if (offerId == null || offerId <= 0 || supplier == null || supplier.isBlank() || supplier.length() > 32
+                || !("ACTIVE".equals(status) || "PAUSED".equals(status))
+                || unitPrice == null || unitPrice.signum() < 0 || unitPrice.scale() > 4
+                || (long) unitPrice.precision() - unitPrice.scale() > 15
+                || availableUnits == null || availableUnits < 0 || availableUnits > 1_000_000)
+            throw new IllegalArgumentException("Invalid bounded supplier offer");
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/repository/SupplierOfferRepository.java`
+```java
+package com.example.cachedb.sample.repository;
+
+import com.example.cachedb.sample.domain.SupplierOffer;
+import com.reactor.cachedb.annotations.*;
+import com.reactor.cachedb.core.query.AggregateFunction;
+import com.reactor.cachedb.core.repository.CacheDbRepository;
+import java.math.BigDecimal;
+import java.util.Map;
+
+@CacheRepository(entity = SupplierOffer.class)
+public interface SupplierOfferRepository extends CacheDbRepository<SupplierOffer, Long> {
+    @CacheFacet(groupBy = "status")
+    Map<String, Long> countsBySupplier(String supplier);
+
+    @CacheFacet(groupBy = "status", function = AggregateFunction.SUM, field = "unit_price")
+    Map<String, BigDecimal> priceTotalsBySupplier(String supplier);
+
+    @CacheAggregate(function = AggregateFunction.SUM, field = "unit_price")
+    BigDecimal sumPriceBySupplierAndStatus(String supplier, String status);
+
+    @CachePatch
+    com.reactor.cachedb.core.model.WriteReceipt<SupplierOffer, Long> replaceUnits(
+            @CacheId Long offerId, @CacheColumn("available_units") Integer units);
+}
+```
+</details>
+
+### 3. Procurement Dashboard: Facets and Exact Money
+
+Create two ACTIVE offers priced `12.1250` and `7.8750`, and one PAUSED offer priced
+`1.0050`, all for `postman-window`. GET
+`/offers/dashboard?supplier=postman-window` returns:
+
+- `counts`: ACTIVE = 2, PAUSED = 1.
+- `activePriceTotal`: 20.0000.
+- `priceTotals`: totals per status.
+- `decimalAverage`: DECIMAL128 average over this supplier's cached offers.
+
+The active cache set is a retention concept, not the ACTIVE business status.
+PAUSED offers can also be cached and counted. Keep decimal precision when parsing
+money in a client; the price sums are not quantity-weighted inventory values.
+
+`@CacheFacet` and `@CacheAggregate` generate direct repository calls.
+For eligible count-window/index-covered scalar operations, the runtime processes
+up to 512 candidates per read-only Lua call; multi-slot Cluster shapes use bounded
+fallbacks. Additional index/bookkeeping calls can remain. Decimal arithmetic is
+performed in Java, not Lua floating point. Facets have at most 256 groups and
+candidate/byte budgets; overflow fails instead of returning incomplete totals.
+These are operational figures over the cached set, not statutory financial reports.
+
+### 4. Supplier Feed: Independent Mixed Writes
+
+POST `/offers/changes` submits one bounded Redis transaction:
+
+```json
+{"putId":9600006,"put":{"supplier":"postman-window","status":"ACTIVE","unitPrice":3.5000,"availableUnits":9},"patchId":9600002,"units":77,"secondPutId":9600007,"secondPut":{"supplier":"postman-window","status":"ACTIVE","unitPrice":4.2500,"availableUnits":10},"secondPatchId":9600001,"secondUnits":78,"deleteId":9600003}
+```
+
+The five IDs must be distinct; PATCH needs a complete hot row. Commands arrive as
+PUT, PATCH, PUT, PATCH, DELETE, providing repeated compatible shapes to compact.
+All commands succeed or fail together at Redis acceptance. The worker subsequently
+persists the batch in SQL. Repeating the HTTP request is **not an idempotency
+contract**; after an uncertain response, inspect state/receipts rather than blindly
+replaying this mixed command.
+
+Only `SupplierOffer` opts into `independentWriteReordering=true`. Its table has
+no foreign key, secondary UNIQUE constraint or cross-row trigger. This allows the
+worker to compact compatible mixed writes while preserving same-key barriers.
+Do not copy this flag to payment, order/FK or trigger-dependent tables.
+If you add such constraints, remove the flag and reassess write ordering.
+A lower batch count is workload-dependent; this example does not promise a
+throughput multiplier or make Redis/SQL a distributed XA transaction.
+
+### 5. Warehouses: Tenant Batch, Partition and Projection
+
+POST `/stock/batch` as `demo-shop-a`:
+
+```json
+[{"stockId":9700001,"warehouse":"PM1","status":"AVAILABLE","availableUnits":40},{"stockId":9700002,"warehouse":"PM1","status":"AVAILABLE","availableUnits":80},{"stockId":9700003,"warehouse":"PM2","status":"AVAILABLE","availableUnits":20}]
+```
+
+Create different stock IDs as `demo-shop-b` with larger quantities.
+Stock IDs are globally unique in this example. The server fills `tenantId`;
+it is not accepted from the request body. A cross-tenant overwrite/read/PATCH
+returns 403. If a batch includes a foreign-owned ID, **none of its rows changes**.
+
+GET `/stock/top?warehouses=PM1,PM2&limit=1` as shop A returns its own top row
+per warehouse, even if shop B has larger quantities. GET `/stock/cards?limit=1`
+returns a tenant-scoped summary; the response does not need to expose the tenant
+marker. Filtering occurs before pagination. These paths still have bounded
+candidate/byte limits; they are not global SQL scans. Explicit tenant-indexed
+read models are the next step for larger screens.
+
+<details>
+<summary>Complete tenant entity and summary projection</summary>
+
+`src/main/java/com/example/cachedb/sample/domain/TenantStock.java`
+```java
+package com.example.cachedb.sample.domain;
+
+import com.reactor.cachedb.annotations.*;
+
+/** Advisory warehouse availability, not an inventory reservation or payment ledger. */
+@CacheEntity(table = "sample_tenant_stock", redisNamespace = "sample-tenant-stock",
+        indexedColumns = {"tenant_id", "warehouse", "status", "available_units"})
+@CacheCompositeIndex(columns = {"tenant_id", "status"})
+@CachePartitionedIndex(partitionBy = "warehouse", sortBy = "available_units")
+@CacheNearPolicy(maxEntries = 256, maxBytes = 1_048_576, ttlSeconds = 10)
+public record TenantStock(
+        @CacheId(column = "stock_id") Long stockId,
+        @CacheTenantId @CacheColumn("tenant_id") String tenantId,
+        @CacheColumn("warehouse") String warehouse,
+        @CacheColumn("status") String status,
+        @CacheColumn("available_units") Integer availableUnits) {
+    public TenantStock {
+        if (stockId == null || stockId <= 0 || tenantId == null || tenantId.isBlank() || tenantId.length() > 32
+                || warehouse == null || warehouse.isBlank() || warehouse.length() > 32
+                || !("AVAILABLE".equals(status) || "HELD".equals(status))
+                || availableUnits == null || availableUnits < 0 || availableUnits > 1_000_000)
+            throw new IllegalArgumentException("Invalid bounded tenant stock");
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/readmodel/TenantStockCard.java`
+```java
+package com.example.cachedb.sample.readmodel;
+
+import com.example.cachedb.sample.domain.TenantStock;
+import com.reactor.cachedb.annotations.CacheProjectionRecord;
+
+@CacheProjectionRecord(source = TenantStock.class, id = "stockId", name = "tenant-stock-card")
+public record TenantStockCard(Long stockId, String warehouse, String status, Integer availableUnits) {}
+```
+</details>
+
+### 6. Read Your Write on a Different Application Instance
+
+Capture `X-CacheDB-Causal` from a successful PUT/PATCH and send it on the next
+entity GET, after normal authentication. `CacheCausalContext` bypasses stale or
+unknown-version L1 entries. An unavailable minimum version returns 409 rather
+than silently serving an older SQL row. A malformed token returns 400.
+
+The token is bounded to 128 identities / 4096 characters. It is not signed,
+not an authentication credential, not proof of SQL durability, and not a projection
+freshness guarantee. In the collection, set `peerBaseUrl` to a second application
+instance to exercise cross-instance reads; for a single instance set it to
+the same value as `baseUrl`. The peer must share Redis/SQL and have the same
+entity definitions and verified identity setup.
+
+<details>
+<summary>Complete adapter, HTTP contract and identity mapping</summary>
+
+`src/main/java/com/example/cachedb/sample/controls/ControlsStore.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import com.example.cachedb.sample.domain.*;
+import com.example.cachedb.sample.readmodel.*;
+import com.example.cachedb.sample.repository.SupplierOfferRepository;
+import com.reactor.cachedb.core.api.EntityRepository;
+import com.reactor.cachedb.core.api.ProjectionRepository;
+import com.reactor.cachedb.core.api.CacheWriteBatchReceipt;
+import com.reactor.cachedb.core.causal.CacheCausalContext;
+import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.query.*;
+import com.reactor.cachedb.starter.CacheDatabase;
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.*;
+import org.springframework.stereotype.Service;
+
+/** Small infrastructure adapter for the bulk/partition APIs; generated facets stay in the repository. */
+@Service
+public final class ControlsStore {
+    private final CacheDatabase database;
+    private final SupplierOfferRepository generatedOffers;
+    private final EntityRepository<SupplierOffer, Long> offers;
+    private final EntityRepository<TenantStock, Long> stock;
+    private final ProjectionRepository<TenantStockCard, Long> cards;
+
+    public ControlsStore(CacheDatabase database, SupplierOfferRepository generatedOffers) {
+        this.database = database;
+        this.generatedOffers = generatedOffers;
+        offers = SupplierOfferCacheBinding.repository(database);
+        stock = TenantStockCacheBinding.repository(database);
+        // Bootstrap registers metadata only; request reads still require an authenticated tenant scope.
+        try (var bootstrap = com.reactor.cachedb.core.tenant.CacheTenantContext.administrative()) {
+            cards = stock.projected(TenantStockCardProjection.PROJECTION);
+        }
+    }
+
+    public WriteReceipt<SupplierOffer, Long> saveOffer(SupplierOffer offer) { return generatedOffers.save(offer); }
+    public SupplierOffer source(long id) {
+        return generatedOffers.findSourceById(id).orElseThrow(() -> new NoSuchElementException("Offer is not in SQL"));
+    }
+    public WriteReceipt<SupplierOffer, Long> replaceUnits(long id, int units) { return generatedOffers.replaceUnits(id, units); }
+    public SupplierOffer offer(long id) {
+        return offers.findById(id).orElseThrow(() -> new NoSuchElementException("Offer is not in the active set"));
+    }
+    public List<SupplierOffer> bulk(List<Long> ids) { return offers.findAll(ids); }
+    public List<SupplierOffer> search(String supplier, String status) {
+        return offers.query(QuerySpec.where(QueryFilter.eq("supplier", supplier))
+                .and(QueryFilter.eq("status", status)).orderBy(QuerySort.asc("offer_id")).limitTo(50));
+    }
+    public Dashboard dashboard(String supplier) {
+        var stats = offers.aggregate(AggregateSpec.sum("unit_price", QueryFilter.eq("supplier", supplier)));
+        return new Dashboard(generatedOffers.countsBySupplier(supplier), generatedOffers.priceTotalsBySupplier(supplier),
+                generatedOffers.sumPriceBySupplierAndStatus(supplier, "ACTIVE"), stats.decimalAverage());
+    }
+    public record Dashboard(Map<String, Long> counts, Map<String, BigDecimal> priceTotals,
+            BigDecimal activePriceTotal, BigDecimal decimalAverage) {}
+
+    /** A real mixed PUT/PATCH/DELETE transaction; only the independent offer table opts into regrouping. */
+    public CacheWriteBatchReceipt changes(SupplierOffer put, long patchId, int units,
+            SupplierOffer secondPut, long secondPatchId, int secondUnits, long deleteId) {
+        return database.inTransaction(tx -> {
+            tx.put(put);
+            tx.patch(SupplierOffer.class, patchId, Map.of("available_units", units));
+            tx.put(secondPut);
+            tx.patch(SupplierOffer.class, secondPatchId, Map.of("available_units", secondUnits));
+            tx.delete(SupplierOffer.class, deleteId);
+        });
+    }
+    public WriteReceipt<TenantStock, Long> saveStock(TenantStock row) { return stock.saveWithReceipt(row); }
+    public WriteReceipt<TenantStock, Long> patchStock(long id, int units) {
+        return stock.patchWithReceipt(id, Map.of("available_units", units));
+    }
+    public CacheWriteBatchReceipt stockBatch(List<TenantStock> rows) {
+        return database.inTransaction(tx -> tx.putAll(rows));
+    }
+    public TenantStock stock(long id) {
+        return stock.findById(id).orElseThrow(() -> new NoSuchElementException("Stock is not in the active set"));
+    }
+    public Map<String, List<TenantStock>> top(List<String> warehouses, int limit) {
+        return stock.queryPartitions(PartitionedQuerySpec.top("warehouse", warehouses, limit,
+                QuerySort.desc("available_units")));
+    }
+    public List<TenantStockCard> cards(int limit) {
+        return cards.query(QuerySpec.allOf().orderBy(QuerySort.desc("available_units")).limitTo(limit));
+    }
+    public static String token(WriteReceipt<?, ?> receipt) {
+        try (var causal = CacheCausalContext.withReceipt(receipt.redisNamespace(), receipt)) {
+            return CacheCausalContext.encodeToken();
+        }
+    }
+}
+```
+
+The adapter owns the few bulk/partition primitives; normal facet methods stay
+declarative. Its administrative scope only registers projection metadata during
+startup; it never grants an HTTP caller administrative access.
+
+`src/main/java/com/example/cachedb/sample/controls/ControlsController.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import com.example.cachedb.sample.domain.*;
+import com.example.cachedb.sample.readmodel.TenantStockCard;
+import com.reactor.cachedb.core.causal.CacheCausalContext;
+import com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException;
+import com.reactor.cachedb.core.model.WriteReceipt;
+import com.reactor.cachedb.core.tenant.CacheTenantContext;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.*;
+import java.math.BigDecimal;
+import java.util.*;
+import java.util.function.Supplier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.*;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+@RestController
+@RequestMapping("/api/examples/v018")
+@ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
+@Validated
+public class ControlsController {
+    private final ControlsAccess access;
+    private final ControlsStore store;
+    private final com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor jobs;
+    public ControlsController(ControlsAccess access, ControlsStore store,
+            com.reactor.cachedb.spring.boot.CacheDistributedJobExecutor jobs) {
+        this.access = access; this.store = store; this.jobs = jobs;
+    }
+
+    @PostMapping("/offers/warm")
+    public ResponseEntity<com.reactor.cachedb.spring.boot.CacheDistributedJobSnapshot> warm(
+            @RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestBody OfferWarmCommand command) {
+        access.supplier(auth);
+        return ResponseEntity.accepted().body(jobs.submit(OfferWarmHandler.DEFINITION, command));
+    }
+    @GetMapping("/offers/{id}/source")
+    public SupplierOffer source(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id) {
+        access.supplier(auth); return store.source(id);
+    }
+
+    public record OfferInput(@NotBlank @Size(max = 32) String supplier,
+            @NotBlank @Pattern(regexp = "ACTIVE|PAUSED") String status,
+            @NotNull @DecimalMin("0.0000") @Digits(integer = 15, fraction = 4) BigDecimal unitPrice,
+            @NotNull @Min(0) @Max(1_000_000) Integer availableUnits) {
+        public SupplierOffer entity(long id) { return new SupplierOffer(id, supplier, status, unitPrice, availableUnits); }
+    }
+    public record StockInput(@NotNull @Positive Long stockId, @NotBlank @Size(max = 32) String warehouse,
+            @NotBlank @Pattern(regexp = "AVAILABLE|HELD") String status,
+            @NotNull @Min(0) @Max(1_000_000) Integer availableUnits) {
+        public TenantStock entity(String tenant) { return new TenantStock(stockId, tenant, warehouse, status, availableUnits); }
+    }
+    public record Units(@NotNull @Min(0) @Max(1_000_000) Integer availableUnits) {}
+    public record Changes(@NotNull @Positive Long putId, @NotNull @Valid OfferInput put,
+            @NotNull @Positive Long patchId, @NotNull @Min(0) @Max(1_000_000) Integer units,
+            @NotNull @Positive Long secondPutId, @NotNull @Valid OfferInput secondPut,
+            @NotNull @Positive Long secondPatchId, @NotNull @Min(0) @Max(1_000_000) Integer secondUnits,
+            @NotNull @Positive Long deleteId) {}
+    public record Accepted(Object id, long version, String causalToken, boolean redisAccepted, boolean sqlDurabilityConfirmed) {}
+    public record BatchAccepted(List<Long> versions, boolean redisAccepted, boolean sqlDurabilityConfirmed) {}
+
+    @PutMapping("/offers/{id}")
+    public ResponseEntity<Accepted> put(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id, @Valid @RequestBody OfferInput input) {
+        access.supplier(auth); return accepted(store.saveOffer(input.entity(id)));
+    }
+    @PatchMapping("/offers/{id}/units")
+    public ResponseEntity<Accepted> patch(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id, @Valid @RequestBody Units input) {
+        access.supplier(auth); return accepted(store.replaceUnits(id, input.availableUnits()));
+    }
+    @GetMapping("/offers/{id}")
+    public SupplierOffer offer(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id,
+            @RequestHeader(value = "X-CacheDB-Causal", defaultValue = "") @Size(max = 4096) String token) {
+        access.supplier(auth); return causal(token, () -> store.offer(id));
+    }
+    @GetMapping("/offers")
+    public List<SupplierOffer> bulk(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam @Size(min = 1, max = 64) List<@NotNull @Positive Long> ids) {
+        access.supplier(auth); return store.bulk(ids);
+    }
+    @GetMapping("/offers/search")
+    public List<SupplierOffer> search(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam @NotBlank @Size(max = 32) String supplier,
+            @RequestParam @Pattern(regexp = "ACTIVE|PAUSED") String status) {
+        access.supplier(auth); return store.search(supplier, status);
+    }
+    @GetMapping("/offers/dashboard")
+    public ControlsStore.Dashboard dashboard(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam @NotBlank @Size(max = 32) String supplier) {
+        access.supplier(auth); return store.dashboard(supplier);
+    }
+    @PostMapping("/offers/changes")
+    public ResponseEntity<BatchAccepted> changes(@RequestHeader(value = "Authorization", required = false) String auth,
+            @Valid @RequestBody Changes input) {
+        access.supplier(auth);
+        if (new HashSet<>(List.of(input.putId(), input.patchId(), input.secondPutId(), input.secondPatchId(), input.deleteId())).size() != 5)
+            throw new IllegalArgumentException("Mixed changes require five distinct IDs");
+        var receipt = store.changes(input.put().entity(input.putId()), input.patchId(), input.units(),
+                input.secondPut().entity(input.secondPutId()), input.secondPatchId(), input.secondUnits(), input.deleteId());
+        return ResponseEntity.accepted().body(new BatchAccepted(receipt.versions(), true, false));
+    }
+    @PostMapping("/stock/batch")
+    public ResponseEntity<BatchAccepted> stockBatch(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestBody @Size(min = 1, max = 32) List<@NotNull @Valid StockInput> input) {
+        String tenant = access.tenant(auth);
+        if (input.stream().map(StockInput::stockId).distinct().count() != input.size())
+            throw new IllegalArgumentException("Stock batch IDs must be distinct");
+        return tenant(tenant, () -> {
+            var receipt = store.stockBatch(input.stream().map(row -> row.entity(tenant)).toList());
+            return ResponseEntity.accepted().body(new BatchAccepted(receipt.versions(), true, false));
+        });
+    }
+    @PatchMapping("/stock/{id}/units")
+    public ResponseEntity<Accepted> stockPatch(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id, @RequestBody @Valid Units input) {
+        return tenant(access.tenant(auth), () -> accepted(store.patchStock(id, input.availableUnits())));
+    }
+    @GetMapping("/stock/{id}")
+    public TenantStock stock(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id,
+            @RequestHeader(value = "X-CacheDB-Causal", defaultValue = "") @Size(max = 4096) String token) {
+        return tenant(access.tenant(auth), () -> causal(token, () -> store.stock(id)));
+    }
+    @PutMapping("/stock/{id}")
+    public ResponseEntity<Accepted> stockPut(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable @Positive long id, @RequestBody @Valid StockInput input) {
+        if (id != input.stockId()) throw new IllegalArgumentException("Path and body IDs must match");
+        String tenant = access.tenant(auth);
+        return tenant(tenant, () -> accepted(store.saveStock(input.entity(tenant))));
+    }
+    @GetMapping("/stock/top")
+    public Map<String, List<TenantStock>> top(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam @Size(min = 1, max = 8) List<@NotBlank @Size(max = 32) String> warehouses,
+            @RequestParam(defaultValue = "2") @Min(1) @Max(10) int limit) {
+        return tenant(access.tenant(auth), () -> store.top(warehouses, limit));
+    }
+    @GetMapping("/stock/cards")
+    public List<TenantStockCard> cards(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(50) int limit) {
+        return tenant(access.tenant(auth), () -> store.cards(limit));
+    }
+    private static ResponseEntity<Accepted> accepted(WriteReceipt<?, ?> receipt) {
+        String token = ControlsStore.token(receipt);
+        return ResponseEntity.accepted().header("X-CacheDB-Causal", token)
+                .body(new Accepted(receipt.id(), receipt.version(), token, true, false));
+    }
+    private static <T> T causal(String token, Supplier<T> read) {
+        try (var scope = CacheCausalContext.withToken(token)) { return read.get(); }
+        catch (IllegalStateException failure) {
+            if (failure.getMessage() != null && failure.getMessage().startsWith("Causal "))
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Required Redis version is unavailable", failure);
+            throw failure;
+        }
+    }
+    private static <T> T tenant(String tenant, Supplier<T> work) {
+        try (var scope = CacheTenantContext.withTenant(tenant)) { return work.get(); }
+        catch (CacheTenantAccessDeniedException denied) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tenant access denied", denied);
+        } catch (IllegalStateException denied) {
+            if (denied.getMessage() != null && denied.getMessage().startsWith("Atomic batch") && denied.getMessage().contains("tenant"))
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tenant batch denied", denied);
+            throw denied;
+        }
+    }
+    @ExceptionHandler(NoSuchElementException.class)
+    ResponseEntity<ProblemDetail> notCached(NoSuchElementException missing) {
+        return ResponseEntity.status(404).body(ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, missing.getMessage()));
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/controls/ControlsAccess.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
+
+/** Demo credential mapping only. Replace with the application's verified identity provider. */
+@Component
+public final class ControlsAccess {
+    private final String supplierToken;
+    private final String tenantAToken;
+    private final String tenantBToken;
+
+    public ControlsAccess(@Value("${sample.controls.supplier-token:}") String supplierToken,
+            @Value("${sample.controls.tenant-a-token:}") String tenantAToken,
+            @Value("${sample.controls.tenant-b-token:}") String tenantBToken) {
+        this.supplierToken = supplierToken;
+        this.tenantAToken = tenantAToken;
+        this.tenantBToken = tenantBToken;
+        var values = java.util.stream.Stream.of(supplierToken, tenantAToken, tenantBToken)
+                .filter(value -> !value.isBlank()).toList();
+        if (values.stream().anyMatch(value -> value.length() > 256)
+                || values.stream().distinct().count() != values.size())
+            throw new IllegalArgumentException("Controls tokens must be distinct and at most 256 characters");
+    }
+
+    public String tenant(String authorization) {
+        String token = bearer(authorization);
+        if (same(token, tenantAToken)) return "shop-a";
+        if (same(token, tenantBToken)) return "shop-b";
+        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tenant credential required");
+    }
+
+    public void supplier(String authorization) {
+        if (!same(bearer(authorization), supplierToken))
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Supplier credential required");
+    }
+
+    private String bearer(String authorization) {
+        if (supplierToken.isBlank() && tenantAToken.isBlank() && tenantBToken.isBlank())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Controls credentials are not configured");
+        if (authorization == null || !authorization.startsWith("Bearer ") || authorization.length() > 263)
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Bearer credential required");
+        String token = authorization.substring(7);
+        if (!same(token, supplierToken) && !same(token, tenantAToken) && !same(token, tenantBToken))
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unknown credential");
+        return token;
+    }
+
+    private static boolean same(String actual, String expected) {
+        return !expected.isBlank() && MessageDigest.isEqual(
+                actual.getBytes(StandardCharsets.UTF_8), expected.getBytes(StandardCharsets.UTF_8));
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/controls/OfferWarmCommand.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import com.reactor.cachedb.annotations.CacheJsonRecord;
+
+@CacheJsonRecord
+public record OfferWarmCommand(String supplier, int maxRows) {
+    public OfferWarmCommand {
+        if (supplier == null || supplier.isBlank() || supplier.length() > 32 || maxRows < 1 || maxRows > 100)
+            throw new IllegalArgumentException("A supplier and maxRows between 1 and 100 are required");
+    }
+}
+```
+
+`src/main/java/com/example/cachedb/sample/controls/OfferWarmHandler.java`
+```java
+package com.example.cachedb.sample.controls;
+
+import com.example.cachedb.sample.domain.SupplierOfferCacheBinding;
+import com.reactor.cachedb.annotations.CacheJobHandler;
+import com.reactor.cachedb.core.query.*;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobContext;
+import com.reactor.cachedb.spring.boot.CacheDistributedJobDefinition;
+import com.reactor.cachedb.starter.*;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+@Component
+@ConditionalOnProperty(prefix = "sample.demo", name = "write-tools-enabled", havingValue = "true")
+public final class OfferWarmHandler {
+    public static final CacheDistributedJobDefinition<OfferWarmCommand> DEFINITION =
+            CacheDistributedJobDefinition.of("sample.offers.warm", OfferWarmCommand.class);
+    private final CacheDatabase database;
+    public OfferWarmHandler(CacheDatabase database) { this.database = database; }
+    @CacheJobHandler("sample.offers.warm")
+    public CacheWarmResult execute(CacheDistributedJobContext context, OfferWarmCommand command) {
+        return database.warm(CacheWarmPlan.builder(SupplierOfferCacheBinding.METADATA.entityName())
+                .name("supplier-offer-window")
+                .querySpec(QuerySpec.where(QueryFilter.eq("supplier", command.supplier()))
+                        .orderBy(QuerySort.asc("offer_id")).limitTo(command.maxRows()).withQueryTimeoutSeconds(15))
+                .maxRows(command.maxRows()).build());
+    }
+}
+```
+</details>
+
+### 7. Verification and Failure Cases
+
+`mvn clean verify -Pprovider-integration` includes the old contracts plus
+`ControlsContractTest` and the two additional provider integration tests.
+They verify exact decimals, duplicate/order behavior, composite membership updates,
+mixed SQL persistence, SQL-only misses and explicit warm, tenant rejection without
+partial mutation, partition/projection windows, and minimum-version errors.
+
+The soft-TTL test injects a missed Redis invalidation **only in the disposable test
+fixture** and verifies old-then-refreshed data. It does not endorse direct Redis
+writes in application code. A bounded cache probe separately verifies frequency
+protection and capacity. No wall-clock REST latency SLA is asserted.
+
+The additional Postman collection covers successful requests, 400/401/403/404/409
+responses and bounded SQL/job polling. Command bodies, including chunked bodies,
+are limited to 64 KiB before JSON materialization; ID/page/batch sizes are bounded.
+`scripts/test-catalog-postman.ps1` runs both catalog and 0.18 collections.
+For an already running isolated demo:
+
+```sh
+npx --yes newman@6.2.1 run postman/cache-database-mssql-v018.postman_collection.json --env-var baseUrl=http://127.0.0.1:8092 --env-var peerBaseUrl=http://127.0.0.1:8092 --bail
+```
+
+Use only owned test data. Keep finite SQL/Redis/HTTP timeouts and observe refresh
+failures, queue/backlog pressure, memory, tenant errors and source parity.
+The framework's 50 ms codec gate is not a guarantee for these REST/SQL requests.
+
+---
+
+
 ## Declarative Catalog Scenarios
 
 These scenarios use **CacheDB 0.18.0**. Existing commerce,
@@ -1256,10 +1935,10 @@ public class CatalogConfiguration {
 
 The sample explicitly pins Gson **2.13.2**, because the Spring Boot parent can
 otherwise select an older Gson without `Strictness`. The POM includes
-`cachedb-json`, the annotation dependency and the 0.15.1 processor. Do not remove
+`cachedb-json`, the annotation dependency and the 0.18.0 processor. Do not remove
 the Gson override or mix framework versions.
 
-With the 0.15.1 BOM and annotation processor already configured, these are the
+With the 0.18.0 BOM and annotation processor already configured, these are the
 additional runtime dependencies used by the compiled sample:
 
 ```xml
@@ -1805,7 +2484,7 @@ Run all **23 requests** in order; no demo seed is required after schema setup.
 They assert import durability (retrying only the identical delivery if the
 initial bounded wait returns pending), identical replay, changed-payload rejection,
 snapshot publication, Unicode/decimal data, single-generation reads, pagination
-and invalid-input responses. The existing 59-request business collection remains
+and invalid-input responses. The existing 61-request business collection remains
 separate. Neither collection asserts a 50 ms REST SLA.
 
 ```powershell
@@ -1827,7 +2506,7 @@ Pass `-SplitRoles` to bootstrap the local schema, stop the bootstrap JVM, and ru
 the same collection against one API container plus **two worker containers**.
 The sample CI uses this mode; container logs are included in the test evidence.
 
-The separate 59-request business collection automatically polls the saved job
+The separate 61-request business collection automatically polls the saved job
 status request after each accepted background command, then resumes its original
 sequence. Polling stops after 30 seconds or 150 attempts. Every business response
 has an HTTP assertion; a failed job stops the flow instead of racing the next

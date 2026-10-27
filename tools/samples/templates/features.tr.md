@@ -1,3 +1,5 @@
+{{CONTROLS_GUIDE}}
+
 ## Bildirimsel Katalog Senaryoları
 
 Bu senaryolar **CacheDB 0.18.0** sürümünü kullanır. Mevcut sipariş,
@@ -119,10 +121,10 @@ küçükten büyüğe sıralanır. Eşit stokta ürün kimliğinin metinsel sır
 
 Örneğin POM dosyasında Gson **2.13.2** açıkça sabitlenmiştir. Aksi hâlde Spring
 Boot parent, gerekli `Strictness` sınıfını içermeyen eski Gson sürümünü seçebilir.
-POM'da `cachedb-json`, annotation bağımlılığı ve 0.15.1 processor birlikte bulunur.
+POM'da `cachedb-json`, annotation bağımlılığı ve 0.18.0 processor birlikte bulunur.
 Gson sürüm ayarını kaldırmayın; farklı framework sürümlerini karıştırmayın.
 
-0.15.1 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
+0.18.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
 zamanı bağımlılıkları şunlardır:
 
 ```xml
@@ -341,7 +343,7 @@ aktarın. **23 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed g
 Akış; ilk süre sınırlı bekleme yeterli değilse yalnızca aynı teslimatı tekrar
 göndererek SQL kalıcılığını, aynı receipt ile tekrarı, değişen içeriğin reddini,
 snapshot yayınını, Türkçe metin/ondalık sayıyı, tek nesilden okumayı, sayfalamayı
-ve geçersiz girdi yanıtlarını doğrular. Mevcut 59 istekli iş senaryosu koleksiyonu
+ve geçersiz girdi yanıtlarını doğrular. Mevcut 61 istekli iş senaryosu koleksiyonu
 ayrı kalır. İki koleksiyon da REST için 50 ms SLA'sı iddia etmez.
 
 ```powershell
@@ -364,7 +366,7 @@ Bu aracı üretim veritabanına bağlamayın.
 koleksiyonu bir API konteyneri ve **iki worker konteyneri** üzerinde çalıştırır.
 Örneklerin CI hattı bu modu kullanır; konteyner logları test kanıtına eklenir.
 
-Ayrı sunulan 59 istekli iş senaryoları koleksiyonu, kabul edilen her arka plan
+Ayrı sunulan 61 istekli iş senaryoları koleksiyonu, kabul edilen her arka plan
 işinden sonra kayıtlı durum isteğini otomatik sorgular ve tamamlanınca sıradaki
 isteğe geçer. Bekleme en fazla 30 saniye veya 150 denemedir. Her yanıtın HTTP
 kodu doğrulanır; başarısız işten sonra okumaya devam edilmez. HTTP yük kontrolünden

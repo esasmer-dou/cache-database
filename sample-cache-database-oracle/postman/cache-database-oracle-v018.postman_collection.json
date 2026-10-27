@@ -1,0 +1,1227 @@
+{
+  "info": {
+    "name": "CacheDB oracle 0.18 controls",
+    "description": "Run against owned demo fixtures only. Known demo tokens are NOT production credentials. Demonstrates explicit Redis/SQL routes and bounded 0.18 controls; no latency SLA or global SQL-history totals.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [{"listen":"test","script":{"type":"text/javascript","exec":["if (pm.info.requestName === '12 Move composite membership' && pm.response.code === 202) pm.collectionVariables.set('offerToken',pm.response.json().causalToken);"]}}],
+  "variable": [
+    {"key":"peerBaseUrl","value":"http://127.0.0.1:8093"},
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8093"
+    },
+    {
+      "key": "supplierToken",
+      "value": "demo-supplier"
+    },
+    {
+      "key": "tenantAToken",
+      "value": "demo-shop-a"
+    },
+    {
+      "key": "tenantBToken",
+      "value": "demo-shop-b"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Reject missing identity",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Supplier offer A",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600001",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"supplier\":\"postman-window\",\"status\":\"ACTIVE\",\"unitPrice\":12.125,\"availableUnits\":20}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', () => pm.response.to.have.status(202));",
+              "pm.test('Redis receipt is not SQL commit', () => { pm.expect(pm.response.json().redisAccepted).to.eql(true); pm.expect(pm.response.json().sqlDurabilityConfirmed).to.eql(false); });",
+              "pm.collectionVariables.set('offerToken',pm.response.json().causalToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Supplier offer B",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600002",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"supplier\":\"postman-window\",\"status\":\"ACTIVE\",\"unitPrice\":7.875,\"availableUnits\":30}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Paused supplier offer",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600003",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"supplier\":\"postman-window\",\"status\":\"PAUSED\",\"unitPrice\":1.005,\"availableUnits\":40}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Read your accepted version",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "X-CacheDB-Causal",
+            "value": "{{offerToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Accepted value', () => pm.expect(pm.response.json().availableUnits).to.eql(20));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Reject malformed causal token",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "X-CacheDB-Causal",
+            "value": "malformed"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 Do not serve older data for an unavailable version",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "X-CacheDB-Causal",
+            "value": "sample-supplier-offers|9600001|9223372036854775807"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 Bulk order and repeated IDs",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers?ids=9600001,9600002,9600001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Caller order and duplicates survive', () => pm.expect(pm.response.json().map(r=>r.offerId)).to.eql([9600001,9600002,9600001]));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 Repeat bounded L1 bulk read",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers?ids=9600001,9600002,9600001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Same complete result', () => pm.expect(pm.response.json()).to.have.lengthOf(3));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 Facets and indexed scalar sums",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/dashboard?supplier=postman-window"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Dashboard covers only this active supplier window', () => { const r=pm.response.json(); pm.expect(r.counts).to.eql({ACTIVE:2,PAUSED:1}); pm.expect(r.activePriceTotal).to.eql(20); pm.expect(r.priceTotals.PAUSED).to.eql(1.005); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 Composite supplier and status lookup",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/search?supplier=postman-window&status=ACTIVE"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Two active offers',()=>pm.expect(pm.response.json().map(r=>r.offerId)).to.eql([9600001,9600002]));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 Move composite membership",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600001",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"supplier\":\"postman-window\",\"status\":\"PAUSED\",\"unitPrice\":12.125,\"availableUnits\":20}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 Previous composite set no longer contains moved row",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/search?supplier=postman-window&status=ACTIVE"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Only B remains',()=>pm.expect(pm.response.json().map(r=>r.offerId)).to.eql([9600002]));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13b Peer minimum version after state change",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "X-CacheDB-Causal",
+            "value": "{{offerToken}}"
+          }
+        ],
+        "url": "{{peerBaseUrl}}/api/examples/v018/offers/9600001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200',()=>pm.response.to.have.status(200));",
+              "pm.test('Peer cannot serve pre-update status',()=>pm.expect(pm.response.json().status).to.eql('PAUSED'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 Mixed independent offer writes",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/changes",
+        "body": {
+          "mode": "raw",
+            "raw": "{\"putId\":9600006,\"put\":{\"supplier\":\"postman-window\",\"status\":\"ACTIVE\",\"unitPrice\":3.5,\"availableUnits\":9},\"patchId\":9600002,\"units\":77,\"secondPutId\":9600007,\"secondPut\":{\"supplier\":\"postman-window\",\"status\":\"ACTIVE\",\"unitPrice\":4.25,\"availableUnits\":10},\"secondPatchId\":9600001,\"secondUnits\":78,\"deleteId\":9600003}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', () => pm.response.to.have.status(202));",
+              "pm.test('Five actual Redis versions',()=>pm.expect(pm.response.json().versions).to.have.lengthOf(5));",
+              "pm.collectionVariables.set('patchToken','sample-supplier-offers|9600002|'+pm.response.json().versions[1]);",
+              "pm.collectionVariables.set('sqlDeadline',Date.now()+30000); pm.collectionVariables.set('sqlAttempts',0);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 Read mixed batch PATCH causally",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "X-CacheDB-Causal",
+            "value": "{{patchToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600002"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('PATCH changed only units',()=>{const r=pm.response.json();pm.expect(r.availableUnits).to.eql(77);pm.expect(r.unitPrice).to.eql(7.875);});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "16 Deleted offer stays absent",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600003"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+              "pm.execution.setNextRequest('19 Explicit SQL source after persistence');"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "17 Explicit bounded supplier warm",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/warm",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"supplier\":\"postman-window\",\"maxRows\":100}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', () => pm.response.to.have.status(202));",
+              "pm.collectionVariables.set('controlsWarmJobId',pm.response.json().jobId); pm.collectionVariables.set('warmDeadline',Date.now()+30000); pm.collectionVariables.set('warmAttempts',0);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "18 Wait for supplier warm",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/warm/jobs/{{controlsWarmJobId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200',()=>pm.response.to.have.status(200));",
+              "const r=pm.response.json(), n=Number(pm.collectionVariables.get('warmAttempts')||0)+1;pm.collectionVariables.set('warmAttempts',n);",
+              "if (!['COMPLETED','FAILED'].includes(r.status) && n<150 && Date.now()<Number(pm.collectionVariables.get('warmDeadline'))) { setTimeout(()=>pm.execution.setNextRequest(pm.info.requestName),200); } else { pm.test('Warm completed',()=>pm.expect(r.status).to.eql('COMPLETED')); pm.execution.setNextRequest('20 Reject unbounded warm'); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "19 Explicit SQL source after persistence",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600002/source"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Source is present or pending SQL persistence',()=>pm.expect(pm.response.code).to.be.oneOf([200,404]));",
+              "const ready=pm.response.code===200 && pm.response.json().availableUnits===77, n=Number(pm.collectionVariables.get('sqlAttempts')||0)+1;pm.collectionVariables.set('sqlAttempts',n);",
+              "if (!ready && n<150 && Date.now()<Number(pm.collectionVariables.get('sqlDeadline'))) { setTimeout(()=>pm.execution.setNextRequest(pm.info.requestName),200); } else { pm.test('Durable source reflects PATCH',()=>pm.expect(ready).to.eql(true)); pm.execution.setNextRequest('17 Explicit bounded supplier warm'); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "20 Reject unbounded warm",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/warm",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"supplier\":\"postman-window\",\"maxRows\":101}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "21 Tenant A atomic stock batch",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/batch",
+        "body": {
+          "mode": "raw",
+          "raw": "[{\"stockId\":9700001,\"warehouse\":\"PM1\",\"status\":\"AVAILABLE\",\"availableUnits\":40},{\"stockId\":9700002,\"warehouse\":\"PM1\",\"status\":\"AVAILABLE\",\"availableUnits\":80},{\"stockId\":9700003,\"warehouse\":\"PM2\",\"status\":\"AVAILABLE\",\"availableUnits\":20}]",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', () => pm.response.to.have.status(202));",
+              "pm.test('Three accepted operations',()=>pm.expect(pm.response.json().versions).to.have.lengthOf(3));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "22 Tenant B high-rank stock batch",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantBToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/batch",
+        "body": {
+          "mode": "raw",
+          "raw": "[{\"stockId\":9700004,\"warehouse\":\"PM1\",\"status\":\"AVAILABLE\",\"availableUnits\":100000},{\"stockId\":9700005,\"warehouse\":\"PM2\",\"status\":\"AVAILABLE\",\"availableUnits\":100000}]",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "23 Foreign entity read is denied",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantBToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/9700001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "24 Tenant A PATCH and causal receipt",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/9700001/units",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"availableUnits\":60}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', () => pm.response.to.have.status(202));",
+              "pm.collectionVariables.set('stockToken',pm.response.json().causalToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "25 Tenant A minimum version read",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          },
+          {
+            "key": "X-CacheDB-Causal",
+            "value": "{{stockToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/9700001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Own scope and version',()=>{const r=pm.response.json();pm.expect(r.tenantId).to.eql('shop-a');pm.expect(r.availableUnits).to.eql(60);});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "26 Foreign PATCH is denied",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantBToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/9700001/units",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"availableUnits\":999}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "27 Cross-tenant batch must mutate nothing",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/batch",
+        "body": {
+          "mode": "raw",
+          "raw": "[{\"stockId\":9700001,\"warehouse\":\"PM1\",\"status\":\"AVAILABLE\",\"availableUnits\":999},{\"stockId\":9700004,\"warehouse\":\"PM1\",\"status\":\"AVAILABLE\",\"availableUnits\":999}]",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "28 Verify rejected batch did not change own row",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/9700001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Own row remains 60',()=>pm.expect(pm.response.json().availableUnits).to.eql(60));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "29 Tenant filter precedes each partition window",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/top?warehouses=PM1,PM2&limit=1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Foreign higher scores cannot consume the page',()=>{const r=pm.response.json();pm.expect(r.PM1.map(x=>x.stockId)).to.eql([9700002]);pm.expect(r.PM2.map(x=>x.stockId)).to.eql([9700003]);});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "30 Tenant projection top page",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/cards?limit=1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('Scoped summary without exposed tenant marker',()=>{const r=pm.response.json();pm.expect(r).to.have.lengthOf(1);pm.expect(r[0].stockId).to.eql(9700002);pm.expect(r[0]).not.to.have.property('tenantId');});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "31 Tenant credential cannot administer supplier feed",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/dashboard?supplier=postman-window"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "32 Reject duplicate batch identities",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/batch",
+        "body": {
+          "mode": "raw",
+          "raw": "[{\"stockId\":9700001,\"warehouse\":\"PM1\",\"status\":\"AVAILABLE\",\"availableUnits\":1},{\"stockId\":9700001,\"warehouse\":\"PM1\",\"status\":\"AVAILABLE\",\"availableUnits\":2}]",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "33 Reject negative bulk ID",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers?ids=-1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "34 Reject oversized projection page",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/cards?limit=51"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "35 Reject excessive decimal precision",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600099",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"supplier\":\"postman-window\",\"status\":\"ACTIVE\",\"unitPrice\":0.12345,\"availableUnits\":1}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "36 Reject unknown credential",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer not-a-demo-identity"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    }
+    ,
+    {
+      "name": "38 Reject null stock entry",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tenantAToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/stock/batch",
+        "body": {
+          "mode": "raw",
+          "raw": "[null]"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400',()=>pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "39 Reject extreme decimal exponent without expanding it",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers/9600099",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"supplier\":\"postman-window\",\"status\":\"ACTIVE\",\"unitPrice\":1e2147483647,\"availableUnits\":1}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400',()=>pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "40 Reject empty bulk identity",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{supplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v018/offers?ids=9600001,,9600002"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400',()=>pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

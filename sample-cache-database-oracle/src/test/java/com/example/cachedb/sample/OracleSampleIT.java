@@ -106,6 +106,17 @@ class OracleSampleIT {
     }
 
     @Test
+    void v018ControlsRespectSqlAndTenantBoundaries() {
+        com.example.cachedb.sample.controls.ControlsScenarios.verify(rest, url(""), jdbcTemplate);
+    }
+
+    @Test
+    void v018SoftRefreshAndScanResistanceAreBounded() throws Exception {
+        com.example.cachedb.sample.controls.ControlsScenarios.nearCache(rest, url(""),
+                environment.getProperty("cachedb.redis.uri"), cacheDatabase);
+    }
+
+    @Test
     void durableDeleteReplayAndRollback() throws Exception {
         com.example.cachedb.sample.catalog.WriteFenceScenarios.verify(EXPECTED_PROVIDER,
                 jdbcTemplate.getDataSource(), cacheDatabase);

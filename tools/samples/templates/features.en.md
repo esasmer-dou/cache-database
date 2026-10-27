@@ -1,3 +1,5 @@
+{{CONTROLS_GUIDE}}
+
 ## Declarative Catalog Scenarios
 
 These scenarios use **CacheDB 0.18.0**. Existing commerce,
@@ -110,10 +112,10 @@ puts low-stock items first; equal quantities use the textual product ID order.
 
 The sample explicitly pins Gson **2.13.2**, because the Spring Boot parent can
 otherwise select an older Gson without `Strictness`. The POM includes
-`cachedb-json`, the annotation dependency and the 0.15.1 processor. Do not remove
+`cachedb-json`, the annotation dependency and the 0.18.0 processor. Do not remove
 the Gson override or mix framework versions.
 
-With the 0.15.1 BOM and annotation processor already configured, these are the
+With the 0.18.0 BOM and annotation processor already configured, these are the
 additional runtime dependencies used by the compiled sample:
 
 ```xml
@@ -324,7 +326,7 @@ Run all **23 requests** in order; no demo seed is required after schema setup.
 They assert import durability (retrying only the identical delivery if the
 initial bounded wait returns pending), identical replay, changed-payload rejection,
 snapshot publication, Unicode/decimal data, single-generation reads, pagination
-and invalid-input responses. The existing 59-request business collection remains
+and invalid-input responses. The existing 61-request business collection remains
 separate. Neither collection asserts a 50 ms REST SLA.
 
 ```powershell
@@ -346,7 +348,7 @@ Pass `-SplitRoles` to bootstrap the local schema, stop the bootstrap JVM, and ru
 the same collection against one API container plus **two worker containers**.
 The sample CI uses this mode; container logs are included in the test evidence.
 
-The separate 59-request business collection automatically polls the saved job
+The separate 61-request business collection automatically polls the saved job
 status request after each accepted background command, then resumes its original
 sequence. Polling stops after 30 seconds or 150 attempts. Every business response
 has an HTTP assertion; a failed job stops the flow instead of racing the next
