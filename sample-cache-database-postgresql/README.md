@@ -1,6 +1,6 @@
 # CacheDB PostgreSQL Sample
 
-> This source targets 0.18.1. Confirm package availability in GitHub Releases and the Maven repository; a source version alone is not publication evidence. If unavailable, use tag v0.18.0 for the downloadable quick start.
+> CacheDB 0.18.1: [release and downloads](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1) | [public Maven repository](https://esasmer-dou.github.io/cache-database/maven2). Maven downloads do not require a GitHub token or a framework source build.
 
 English | [Türkçe](README.tr.md)
 

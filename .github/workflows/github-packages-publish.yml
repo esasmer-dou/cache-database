@@ -6,7 +6,7 @@ on:
       targetRef:
         description: Published stable release tag
         required: false
-        default: v0.18.0
+        default: v0.18.1
       skipTests:
         description: Compatibility input; published release artifacts are not rebuilt
         required: false

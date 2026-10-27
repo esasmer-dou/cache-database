@@ -1,6 +1,6 @@
 # CacheDB SQL Server Örneği
 
-> Bu kaynak kod 0.18.1 sürümünü hedefler. Paketlerin erişilebilirliğini GitHub sürüm listesi ve Maven deposundan doğrulayın; kaynak sürümü tek başına yayın kanıtı değildir. Paket henüz yoksa hızlı başlangıç için v0.18.0 tag'ini kullanın.
+> CacheDB 0.18.1: [sürüm ve indirmeler](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1) | [herkese açık Maven deposu](https://esasmer-dou.github.io/cache-database/maven2). Maven ile indirmek için GitHub token'ı veya framework kaynak kodunu derlemek gerekmez.
 
 [English](README.md) | Türkçe
 
