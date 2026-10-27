@@ -1,9 +1,14 @@
 param([switch]$SkipInfrastructure, [switch]$SplitRoles)
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 [xml]$pom = Get-Content (Join-Path $root 'pom.xml') -Raw
 $provider = ([string]$pom.project.artifactId).Replace('sample-cache-database-', '')
 if ($provider -notin @('postgresql', 'mssql', 'oracle')) { throw 'Unknown sample provider.' }
+$collections = @{
+    catalog = (Resolve-Path -LiteralPath (Join-Path $root "postman/cache-database-$provider-catalog.postman_collection.json")).Path
+    controls = (Resolve-Path -LiteralPath (Join-Path $root "postman/cache-database-$provider-v018.postman_collection.json")).Path
+}
 if ($SkipInfrastructure -and $SplitRoles) { throw 'Split-role testing requires owned disposable infrastructure.' }
 $project = "cachedb-$provider-catalog-check"
 $jar = Join-Path $root "target/sample-cache-database-$provider-$($pom.project.version).jar"
@@ -88,12 +93,12 @@ try {
             throw 'Expected two running worker containers before executing the API contract.'
         }
     }
-    & $npx.Source --yes newman@6.2.1 run "postman/cache-database-$provider-catalog.postman_collection.json" `
+    & $npx.Source --yes newman@6.2.1 run $collections.catalog `
         --env-var "baseUrl=$base" --timeout 120000 --timeout-request 10000 --timeout-script 5000 `
         --reporters cli,json,junit --reporter-json-export "$output/results.json" `
         --reporter-junit-export "$output/results.xml"
     if ($LASTEXITCODE -ne 0) { throw 'Catalog Postman assertions failed.' }
-    & $npx.Source --yes newman@6.2.1 run "postman/cache-database-$p-v018.postman_collection.json" `
+    & $npx.Source --yes newman@6.2.1 run $collections.controls `
         --env-var "baseUrl=$base" --env-var "peerBaseUrl=$base" --timeout 180000 --timeout-request 10000 --timeout-script 5000 `
         --reporters cli,json,junit --reporter-json-export "$output/v018-results.json" `
         --reporter-junit-export "$output/v018-results.xml"

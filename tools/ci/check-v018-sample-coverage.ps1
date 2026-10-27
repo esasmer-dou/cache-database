@@ -26,6 +26,10 @@ foreach ($provider in @('postgresql','mssql','oracle')) {
         }
     }
     $collection = Get-Content (Join-Path $sample "postman/cache-database-$provider-v018.postman_collection.json") -Raw | ConvertFrom-Json
+    $runner = Get-Content (Join-Path $sample 'scripts/test-catalog-postman.ps1') -Raw
+    foreach ($needle in @('Set-StrictMode -Version Latest', 'Resolve-Path -LiteralPath', 'cache-database-$provider-v018', 'run $collections.controls')) {
+        if (!$runner.Contains($needle)) { throw "Unsafe or incomplete Postman runner for ${provider}: $needle" }
+    }
     if ($collection.item.Count -ne 40) { throw "Expected 40 0.18 requests for $provider" }
     if (@($collection.item | Group-Object name | Where-Object Count -gt 1).Count) { throw 'Duplicate request name' }
     $scripts = ($collection.item | ForEach-Object { $_.event.script.exec }) -join "`n"
