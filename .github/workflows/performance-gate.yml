@@ -1,0 +1,93 @@
+name: Redis Performance Gate
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '20 3 * * 1'
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: redis-performance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  redis-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      redis:
+        image: redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
+        ports: ['16383:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+          --memory 384m --cpus 1
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Verify benchmark comparator
+        shell: pwsh
+        run: ./tools/ci/compare-benchmarks.ps1 -SelfTest
+      - name: Configure bounded benchmark-only Redis
+        run: |
+          docker exec '${{ job.services.redis.id }}' redis-cli CONFIG SET maxmemory 268435456
+          docker exec '${{ job.services.redis.id }}' redis-cli CONFIG SET maxmemory-policy noeviction
+      - name: Build Redis benchmark tool
+        run: |
+          mkdir -p target
+          mvn -B -ntp -f tools/benchmarks/redis/pom.xml -Dcachedb.benchmark.runtime.version=0.18.1 -DskipTests package
+          cp tools/benchmarks/redis/target/benchmarks.jar target/baseline-benchmarks.jar
+      - name: Record runner environment
+        run: |
+          mkdir -p target
+          java -version 2> target/benchmark-java.txt
+          lscpu > target/benchmark-cpu.txt
+          docker inspect '${{ job.services.redis.id }}' > target/benchmark-redis-container.json
+      - name: Measure published baseline on the same runner
+        run: >-
+          java -Dcachedb.bench.redis=127.0.0.1:16383
+          -Dcachedb.bench.output=target/jmh-v0181.json
+          -jar target/baseline-benchmarks.jar
+      - name: Build candidate benchmark tool
+        run: mvn -B -ntp -Predis-benchmarks -pl tools/benchmarks/redis -am -DskipTests package
+      - name: Run candidate acceptance benchmark matrix
+        run: >-
+          java -Dcachedb.bench.redis=127.0.0.1:16383
+          -Dcachedb.bench.output=target/jmh-result.json
+          -jar tools/benchmarks/redis/target/benchmarks.jar
+      - name: Check paired reference thresholds
+        shell: pwsh
+        run: |
+          ./tools/ci/check-jmh-evidence.ps1 -Path target/jmh-v0181.json
+          ./tools/ci/check-jmh-evidence.ps1 -Path target/jmh-result.json
+          ./tools/ci/compare-benchmarks.ps1 -Baseline target/jmh-v0181.json -Current target/jmh-result.json -Summary target/benchmark-summary.md
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          if test -f target/benchmark-summary.md; then
+            cat target/benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve performance evidence
+        if: always()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: redis-performance-${{ github.sha }}
+          path: |
+            target/jmh-result.json
+            target/jmh-v0181.json
+            target/benchmark-summary.md
+            target/benchmark-java.txt
+            target/benchmark-cpu.txt
+            target/benchmark-redis-container.json
+          if-no-files-found: error

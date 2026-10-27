@@ -162,6 +162,12 @@
             </modules>
         </profile>
         <profile>
+            <id>redis-benchmarks</id>
+            <modules>
+                <module>tools/benchmarks/redis</module>
+            </modules>
+        </profile>
+        <profile>
             <id>oss-release</id>
             <build>
                 <plugins>
