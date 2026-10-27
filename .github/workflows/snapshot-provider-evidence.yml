@@ -197,6 +197,15 @@ jobs:
       - name: Require full reactor with live Redis and all three SQL providers
         env:
           MAVEN_OPTS: -Xmx512m
+          CACHEDB_SNAPSHOT_POSTGRES_URL: jdbc:postgresql://127.0.0.1:15435/postgres
+          CACHEDB_SNAPSHOT_POSTGRES_USER: postgres
+          CACHEDB_SNAPSHOT_POSTGRES_PASSWORD: LocalFixture_7p92_test
+          CACHEDB_SNAPSHOT_MSSQL_URL: jdbc:sqlserver://127.0.0.1:14331;databaseName=cachedb_snapshot;encrypt=false;trustServerCertificate=true
+          CACHEDB_SNAPSHOT_MSSQL_USER: sa
+          CACHEDB_SNAPSHOT_MSSQL_PASSWORD: CacheDbSnapshot123
+          CACHEDB_SNAPSHOT_ORACLE_URL: jdbc:oracle:thin:@//127.0.0.1:15211/FREEPDB1
+          CACHEDB_SNAPSHOT_ORACLE_USER: cachedb
+          CACHEDB_SNAPSHOT_ORACLE_PASSWORD: CacheDbOracle123
           CACHEDB_IT_POSTGRES_URL: jdbc:postgresql://127.0.0.1:15435/postgres
           CACHEDB_IT_POSTGRES_USER: postgres
           CACHEDB_IT_POSTGRES_PASSWORD: LocalFixture_7p92_test
