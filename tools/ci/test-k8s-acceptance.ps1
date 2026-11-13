@@ -1032,7 +1032,7 @@ function Refresh-OriginalCaseFixture($Value, [switch]$PreserveCustody) {
                     bytes=(Get-Item -LiteralPath $path).Length}
             })
             $custody = Write-OriginalCaseFixture ("original/custody/" + $prefix.Split('/')[-1] + '.json') `
-                ([ordered]@{status='SELECTED_ORIGINALS_HASH_VERIFIED'; podUid=$physical.podUid; files=$capturedFiles})
+                ([ordered]@{schema='cachedb.selected-original-custody/v1'; status='SELECTED_ORIGINALS_HASH_VERIFIED'; podUid=$physical.podUid; files=$capturedFiles})
             $physical.originalCustody = @{receipt=$custody; prefix=$prefix}
             # Synthetic admissions are private to these fixtures, never product custody authority.
             $v3Policy.ReviewedOriginalReceipts[$custody.sha256] = $physical.podUid
@@ -1086,7 +1086,7 @@ $combinedCustodyFiles = @(foreach ($physical in $v3CombinedCustody.physicalExecu
     }
 })
 $combinedCustodyRef = Write-OriginalCaseFixture 'original/custody/combined.json' @{
-    status='SELECTED_ORIGINALS_HASH_VERIFIED'; podUid=$uid; files=$combinedCustodyFiles}
+    schema='cachedb.selected-original-custody/v1'; status='SELECTED_ORIGINALS_HASH_VERIFIED'; podUid=$uid; files=$combinedCustodyFiles}
 $v3Policy.ReviewedOriginalReceipts[$combinedCustodyRef.sha256] = $uid
 foreach ($physical in $v3CombinedCustody.physicalExecutions) {
     $physical.originalCustody = @{receipt=$combinedCustodyRef; prefix='original'}
