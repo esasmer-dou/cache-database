@@ -37,7 +37,7 @@ function Test-OracleConfigurationControls {
     $policy = Import-PowerShellDataFile (Join-Path $PSScriptRoot 'k8s-acceptance-contract.psd1')
     $configurationPath = 'sample-cache-database-oracle/src/purge/resources/application-purge.yml'
     $loggingPaths = @('tools/k8s/SampleRuntimeEvidence.java','tools/k8s/run-sample-runtime-evidence.sh')
-    $matrixPaths = $loggingPaths + @('tools/ci/test-v019-sample-matrix.mjs')
+    $matrixPaths = $loggingPaths + @('tools/ci/test-v019-sample-matrix.mjs','tools/ci/check-v019-sample-coverage.mjs')
     $otherToolingPath = 'tools/ci/test-k8s-export-staging.ps1'
     $actualPin = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot ('../../' + $configurationPath))).Hash.ToLowerInvariant()
     if ((Get-K8sOverlayClassification $configurationPath $policy $actualPin) -cne 'scoped-runtime-configuration') {
@@ -123,7 +123,7 @@ function Test-OracleConfigurationControls {
             [IO.File]::WriteAllText((Join-Path $root ($stem + '.json')), ($record | ConvertTo-Json -Depth 12))
             [IO.File]::WriteAllText((Join-Path $root ($stem + '.log')), 'SYNTHETIC TOOLING ONLY')
             [IO.File]::WriteAllText((Join-Path $root ($stem + '.exit')), '0')
-            $controlFiles += @($stem + '.json', $stem + '.log', $stem + '.exit')
+            $controlFiles += @(($stem + '.json'), ($stem + '.log'), ($stem + '.exit'))
         }
         $candidate.files = @($controlFiles +
             @($records.Keys | ForEach-Object { $_ + '.json' }) | ForEach-Object {

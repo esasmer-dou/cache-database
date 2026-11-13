@@ -152,7 +152,8 @@ function Assert-K8sToolingQualification($Proof, [string]$Root, $Target, $Policy)
         foreach ($path in $binding.paths) {
             if (!$names.Add($path) -or !$required.Contains($path)) { throw 'Tooling evidence mapping is duplicate or unrelated.' }
             $matrixSurface = $path -cin @('tools/k8s/SampleRuntimeEvidence.java','tools/k8s/run-sample-runtime-evidence.sh') -or
-                ($path -ceq 'tools/ci/test-v019-sample-matrix.mjs' -and ($loggerDelta -or $Policy.Controls[$index] -ceq $matrixCommand))
+                ($path -cin @('tools/ci/test-v019-sample-matrix.mjs','tools/ci/check-v019-sample-coverage.mjs') -and
+                    ($loggerDelta -or $Policy.Controls[$index] -ceq $matrixCommand))
             if ($matrixSurface -ne ($Policy.Controls[$index] -ceq $matrixCommand)) {
                 throw 'Sample logger and its matrix guard must be qualified by their exact matrix control.'
             }
