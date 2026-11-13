@@ -60,7 +60,7 @@ function Copy-K8sAssemblyFile([string]$From, [string]$To, [long]$Bytes, [string]
         } finally { $outputStream.Dispose() }
     } finally { $inputStream.Dispose() }
     Assert-K8sAssemblyPath $From
-    if ((Get-Item -LiteralPath $To).Length -ne $Bytes -or
+    if ((Get-Item -LiteralPath $To -Force).Length -ne $Bytes -or
         (Get-FileHash -LiteralPath $To -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Pin) {
         throw 'Supplied evidence bytes differ from their pin.'
     }

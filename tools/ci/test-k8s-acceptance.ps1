@@ -412,6 +412,34 @@ foreach ($definition in $assemblerAst.FindAll({param($node) $node -is [Managemen
         Set-Item -Path "Function:$($definition.Name)" -Value ($definition.Body.GetScriptBlock())
     }
 }
+$copyRoot = Join-Path $EvidenceDirectory 'evidence-copy-controls'
+$null = [IO.Directory]::CreateDirectory($copyRoot)
+foreach ($fixture in @(
+    @{name='.gitattributes'; bytes=[Text.Encoding]::UTF8.GetBytes('*.ps1 text eol=lf')},
+    @{name='.empty-stderr'; bytes=[byte[]]::new(0)},
+    @{name='opaque.jar'; bytes=[byte[]]@(0, 255, 80, 75, 13, 10)}
+)) {
+    $from = Join-Path $copyRoot ('input/' + $fixture.name)
+    $to = Join-Path $copyRoot ('output/' + $fixture.name)
+    $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $from))
+    [IO.File]::WriteAllBytes($from, $fixture.bytes)
+    $pin = (Get-FileHash -LiteralPath $from).Hash.ToLowerInvariant()
+    Copy-K8sAssemblyFile $from $to $fixture.bytes.Length $pin
+    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($to)) -cne [Convert]::ToBase64String($fixture.bytes)) {
+        throw 'Hidden, empty or opaque evidence bytes changed during copy.'
+    }
+    Reject ('copy-rejects-existing-output-' + $fixture.name) {
+        Copy-K8sAssemblyFile $from $to $fixture.bytes.Length $pin
+    }
+    Reject ('copy-rejects-length-mismatch-' + $fixture.name) {
+        Copy-K8sAssemblyFile $from ($to + '.wrong-length') ($fixture.bytes.Length + 1) $pin
+    }
+    $wrongPin = if ($pin -ceq ('a' * 64)) { 'b' * 64 } else { 'a' * 64 }
+    Reject ('copy-rejects-digest-mismatch-' + $fixture.name) {
+        Copy-K8sAssemblyFile $from ($to + '.wrong-digest') $fixture.bytes.Length $wrongPin
+    }
+}
+Pass 'hidden-empty-and-opaque-evidence-copied-without-reinterpretation'
 $assemblyRoot = Join-Path $EvidenceDirectory 'assembly-controls'
 $assemblyData = Join-Path $assemblyRoot 'data'
 $null = [IO.Directory]::CreateDirectory($assemblyData)
