@@ -1079,7 +1079,7 @@ try {
     $api = 'https://api.github.com/repos/' + $env:EVIDENCE_REPOSITORY
     $repositoryFile = Join-Path $work 'repository.json'
     Receive-SampleRuntimeArchive $api $env:GH_TOKEN $repositoryFile 'application/vnd.github+json'
-    Assert-PrivateSampleRuntimeRepository (Read-K8sJson $repositoryFile) $env:EVIDENCE_REPOSITORY $env:EVIDENCE_REPOSITORY_ID
+    Assert-PrivateSampleRuntimeRepository ([pscustomobject](Read-K8sJson $repositoryFile)) $env:EVIDENCE_REPOSITORY $env:EVIDENCE_REPOSITORY_ID
     $metadataFile = Join-Path $work 'artifact.json'
     Receive-SampleRuntimeArchive "$api/actions/artifacts/$($env:K8S_ARTIFACT_ID)" $env:GH_TOKEN $metadataFile 'application/vnd.github+json'
     $metadata = Read-K8sJson $metadataFile

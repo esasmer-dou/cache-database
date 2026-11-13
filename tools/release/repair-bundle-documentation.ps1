@@ -13,6 +13,34 @@ $staging = [IO.Path]::GetFullPath($StagingRoot)
 $sourcePrefix = $repository.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 $stagingPrefix = $staging.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 $samples = @('sample-cache-database-postgresql', 'sample-cache-database-mssql', 'sample-cache-database-oracle')
+# These public source targets are intentionally absent from the binary/sample bundle.
+$externalSourceTargets = [Collections.Generic.HashSet[string]]::new(
+    [string[]]@(
+        'cachedb-storage-jdbc/src/main/resources/com/reactor/cachedb/jdbc/migrations/postgres/V014__durable_write_fence.sql'
+        'cachedb-storage-jdbc/src/main/resources/com/reactor/cachedb/jdbc/migrations/mssql/V014__durable_write_fence.sql'
+        'cachedb-storage-jdbc/src/main/resources/com/reactor/cachedb/jdbc/migrations/oracle/V014__durable_write_fence.sql'
+        'pom.xml'
+        '.github/workflows/production-evidence.yml'
+        'cachedb-examples/src/main/java/com/cachedb/examples/demo/DemoOrderReadModelPatterns.java'
+        'cachedb-storage-redis/src/main/java/com/cachedb/redis/RedisNearCacheCoordinator.java'
+        'cachedb-storage-redis/src/main/java/com/cachedb/redis/RedisWatchRegistry.java'
+        'cachedb-storage-redis/src/main/java/com/cachedb/redis/RedisEntityRepository.java'
+        'cachedb-storage-redis/src/main/java/com/cachedb/redis/RedisProducerGuard.java'
+        'cachedb-storage-redis/src/main/java/com/cachedb/redis/RedisProjectionRepository.java'
+        'cachedb-storage-redis/src/main/java/com/cachedb/redis/RedisQueryIndexManager.java'
+        'cachedb-storage-jdbc/src/main/java/com/cachedb/jdbc/AbstractJdbcWriteBehindFlusher.java'
+        'cachedb-core/src/main/java/com/cachedb/core/registry/DefaultEntityRegistry.java'
+        'cachedb-core/src/main/java/com/cachedb/core/queue/StoragePerformanceCollector.java'
+        'cachedb-starter/src/main/java/com/cachedb/starter/AdminConsistencyInspector.java'
+        'cachedb-starter/src/main/java/com/cachedb/starter/CacheDatabase.java'
+        'cachedb-starter/src/main/java/com/cachedb/starter/CacheDatabaseAdminHttpServer.java'
+        'cachedb-starter/src/main/java/com/cachedb/starter/CacheDatabaseSchemaAdmin.java'
+        'cachedb-spring-boot-starter/src/main/java/com/cachedb/spring/boot/CacheDistributedJobExecutor.java'
+        'cachedb-spring-boot-starter/src/main/java/com/cachedb/spring/boot/snapshot/JacksonJsonArrayCodec.java'
+        'cachedb-spring-boot-starter/src/main/java/com/cachedb/spring/boot/snapshot/SnapshotJobs.java'
+    ),
+    [StringComparer]::Ordinal
+)
 if (!(Test-Path -LiteralPath $repository -PathType Container) -or
     !(Test-Path -LiteralPath $staging -PathType Container) -or $repository -eq $staging) {
     throw 'Repository and staging must be distinct existing directories.'
@@ -62,7 +90,8 @@ foreach ($file in Get-ChildItem -LiteralPath $staging -Filter '*.md' -File -Recu
             $replacement = [IO.Path]::GetRelativePath($destinationDirectory, $stagedTarget).Replace('\', '/')
             $replacement = ($replacement.Split('/') | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
         } elseif (($targetRelative.StartsWith('tools/', [StringComparison]::Ordinal) -or
-                   $targetRelative -match '^cachedb-[A-Za-z0-9-]+/README\.md$') -and
+                   $targetRelative -match '^cachedb-[A-Za-z0-9-]+/README\.md$' -or
+                   $externalSourceTargets.Contains($targetRelative)) -and
                   (Test-Path -LiteralPath $target -PathType Leaf)) {
             $encoded = ($targetRelative.Split('/') | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
             $replacement = "https://github.com/esasmer-dou/cache-database/blob/v$Version/$encoded"

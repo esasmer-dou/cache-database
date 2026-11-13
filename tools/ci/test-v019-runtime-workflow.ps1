@@ -527,6 +527,47 @@ foreach ($mutation in @('public', 'private-string', 'wrong-name', 'wrong-id', 'i
     }
     Reject "reject-private-repository-$mutation" { Assert-PrivateSampleRuntimeRepository $repository 'approved/private-mirror' '42' } 'exact approved private'
 }
+function Test-K8sRepositoryMetadataBoundary([string]$PrivateJson) {
+    $checker = Join-Path $RepositoryRoot 'tools/ci/check-k8s-acceptance.ps1'
+    $readerTokens = $readerErrors = $null
+    $checkerAst = [Management.Automation.Language.Parser]::ParseFile($checker, [ref]$readerTokens, [ref]$readerErrors)
+    $readers = @($checkerAst.FindAll({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Read-K8sJson'
+    }, $true))
+    $guardCalls = @($checkerAst.FindAll({ param($node)
+        $node -is [Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -ceq 'Assert-PrivateSampleRuntimeRepository'
+    }, $true))
+    Check 'k8s-repository-reader-and-boundary-unique' (!$readerErrors.Count -and $readers.Count -eq 1 -and
+        $guardCalls.Count -eq 1 -and $guardCalls[0].CommandElements.Count -eq 4)
+    # Execute only the actual bounded reader and repository argument, never the network entry point.
+    . ([scriptblock]::Create($readers[0].Extent.Text))
+    $boundary = [scriptblock]::Create($guardCalls[0].CommandElements[1].Extent.Text)
+    $repositoryFile = Join-Path $EvidenceDirectory 'k8s-repository-metadata.json'
+    [IO.File]::WriteAllText($repositoryFile, $PrivateJson, [Text.UTF8Encoding]::new($false))
+    Check 'k8s-repository-reader-preserves-dictionary' ((Read-K8sJson $repositoryFile) -is [Collections.IDictionary])
+    Assert-PrivateSampleRuntimeRepository (& $boundary) 'approved/private-mirror' '42'
+    Check 'k8s-repository-reader-boundary-accepts-private' $true
+    foreach ($mutation in @('public', 'private-string', 'wrong-name', 'wrong-id', 'internal', 'unknown-visibility', 'fork', 'fork-string', 'fork-missing')) {
+        $metadata = $PrivateJson | ConvertFrom-Json -AsHashtable
+        switch ($mutation) {
+            'public' { $metadata.private = $false; $metadata.visibility = 'public' }
+            'private-string' { $metadata.private = 'true' }
+            'wrong-name' { $metadata.full_name = 'other/private-mirror' }
+            'wrong-id' { $metadata.id = 43 }
+            'internal' { $metadata.visibility = 'internal' }
+            'unknown-visibility' { $metadata.visibility = '' }
+            'fork' { $metadata.fork = $true }
+            'fork-string' { $metadata.fork = 'false' }
+            'fork-missing' { $null = $metadata.Remove('fork') }
+        }
+        [IO.File]::WriteAllText($repositoryFile, ($metadata | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+        Reject "reject-k8s-repository-reader-boundary-$mutation" {
+            Assert-PrivateSampleRuntimeRepository (& $boundary) 'approved/private-mirror' '42'
+        } 'exact approved private'
+    }
+}
+Test-K8sRepositoryMetadataBoundary $privateJson
 $metadataJson = '{"id":123,"expired":false,"size_in_bytes":512,"digest":"sha256:' + $archivePin +
     '","workflow_run":{"repository_id":42,"head_repository_id":42,"head_sha":"' + $head + '"}}'
 Assert-SampleRuntimeArtifact ($metadataJson | ConvertFrom-Json) '123' $archivePin '42' $head
