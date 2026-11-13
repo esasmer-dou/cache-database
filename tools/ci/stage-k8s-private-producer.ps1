@@ -118,9 +118,12 @@ try {
     # stage-k8s-acceptance's framework-readiness-only admission remains unchanged.
     foreach ($name in @('import-v019-private-owned-runtime.ps1', 'stage-v019-private-evidence.ps1',
         'check-k8s-acceptance.ps1', 'stage-k8s-acceptance.ps1')) {
-        foreach ($definition in Import-K8sGuardFunctions (Join-Path $PSScriptRoot $name)) {
-            . ([scriptblock]::Create($definition))
-        }
+        $guardPath = Join-Path $PSScriptRoot $name
+        $tokens = $parseErrors = $null
+        $guardAst = [Management.Automation.Language.Parser]::ParseInput(
+            ((Import-K8sGuardFunctions $guardPath) -join "`n"), $guardPath, [ref]$tokens, [ref]$parseErrors)
+        if ($parseErrors.Count) { throw 'Imported private producer guards have parse errors.' }
+        . $guardAst.GetScriptBlock()
     }
     foreach ($definition in Read-PrivateOwnedImportFunctions (Join-Path $SourceRoot '.github/workflows/framework-readiness.yml')) {
         . ([scriptblock]::Create($definition))
