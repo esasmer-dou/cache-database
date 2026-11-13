@@ -90,7 +90,8 @@ function Wait-PrivateProducerHandoff([string]$ReleaseUri, [hashtable]$Headers, [
         $remaining = 840 - $clock.Elapsed.TotalSeconds
         if ($remaining -lt 1) { break }
         $timeout = [int][Math]::Min(20, [Math]::Floor($remaining))
-        $assets = @(Invoke-PrivateProducerMetadata ($ReleaseUri + '/assets?per_page=100') $Headers $timeout)
+        $listed = Invoke-PrivateProducerMetadata ($ReleaseUri + '/assets?per_page=100') $Headers $timeout
+        $assets = @($listed)
         if ($clock.Elapsed.TotalSeconds -ge 840) { break }
         if ($assets.Count -ge 100) { throw 'Dedicated release asset listing exceeded its one-page budget.' }
         $handoffs = @($assets | Where-Object { $_.name -ceq $HandoffName })

@@ -220,6 +220,42 @@ function Test-PrivateProducer {
     Reject 'producer-transfer-digest-mismatch' { Save-PrivateProducerAsset $corrupt $context.repository $context.token (Join-Path $fixture 'corrupt.bin') } 'Downloaded asset bytes'
     $corrupt=$transport.Clone(); $corrupt.size++
     Reject 'producer-transfer-length-mismatch' { Save-PrivateProducerAsset $corrupt $context.repository $context.token (Join-Path $fixture 'length.bin') } 'Downloaded asset bytes'
+    $waitAst=(Get-Command Wait-PrivateProducerHandoff).ScriptBlock.Ast
+    $listingStatements=@($waitAst.FindAll({ param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+        $node.Left.VariablePath.UserPath -cin @('listed','assets','handoffs')
+    },$true))
+    Check 'producer-wait-array-normalization-source-statements' ($listingStatements.Count -eq 3 -and
+        ($listingStatements.Left.VariablePath.UserPath -join ',') -ceq 'listed,assets,handoffs')
+    $listingSource=($listingStatements | ForEach-Object { $_.Extent.Text }) -join "`n"
+    function Assert-ProducerAssetArrayNormalization([scriptblock]$Listing) {
+        $ReleaseUri='https://api.github.com/repos/synthetic/private/releases/333'
+        $Headers=@{}; $timeout=20; $HandoffName='synthetic.handoff.json'
+        $fixture=@{json='';calls=0}
+        function Invoke-RestMethod([string]$Uri,[hashtable]$Headers,[int]$TimeoutSec,[int]$MaximumRedirection) {
+            if ($Uri -cne ($ReleaseUri+'/assets?per_page=100') -or $Headers.Count -ne 0 -or
+                $TimeoutSec -ne 20 -or $MaximumRedirection -ne 0) { throw 'Unexpected synthetic metadata request.' }
+            $fixture.calls++
+            # IRM preserves the response array as one pipeline object, including [].
+            return ,(ConvertFrom-Json -InputObject $fixture.json -NoEnumerate)
+        }
+        foreach ($count in @(0,1,2)) {
+            $rows=@(for ($index=0;$index -lt $count;$index++) {
+                [pscustomobject]@{name=$HandoffName;state='uploaded'}
+            })
+            $fixture.json=ConvertTo-Json -InputObject $rows -Compress
+            . $Listing
+            Check ('producer-wait-preserved-json-array-count-'+$count) ($assets.Count -eq $count -and
+                @($assets | Where-Object { $_ -is [array] }).Count -eq 0 -and $fixture.calls -eq $count+1)
+            Check ('producer-wait-preserved-json-array-name-matches-'+$count) ($handoffs.Count -eq $count)
+        }
+        foreach ($json in @('[null]','[{}]')) {
+            $fixture.json=$json
+            Reject ('producer-wait-malformed-preserved-json-array-'+$controls.Count) { . $Listing } 'name|property'
+        }
+    }
+    Assert-ProducerAssetArrayNormalization ([scriptblock]::Create($listingSource))
     $ready=$asset.Clone(); $ready.id=445; $ready.name='canonical52-111-2.handoff.json'
     $waitAssets=@($asset,$ready); $metadataCalls=0; $metadataFailure=$false
     function Invoke-PrivateProducerMetadata([string]$Uri,[hashtable]$Headers,[int]$TimeoutSeconds=20) {
@@ -227,7 +263,7 @@ function Test-PrivateProducer {
         if ($Uri -cne 'https://api.github.com/repos/synthetic/private/releases/333/assets?per_page=100' -or
             $TimeoutSeconds -lt 1 -or $TimeoutSeconds -gt 20) { throw 'Unbounded fixture request.' }
         if ($metadataFailure) { throw 'SYNTHETIC API FAILURE' }
-        return $waitAssets
+        return ,$waitAssets
     }
     $observed=Wait-PrivateProducerHandoff $release.url @{} $ready.name $asset.name
     Check 'producer-wait-accepts-completed-own-zip-before-handoff' ($observed.Count -eq 2)
