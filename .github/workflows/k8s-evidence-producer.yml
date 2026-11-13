@@ -31,6 +31,9 @@ permissions:
 jobs:
   private-producer:
     if: github.event_name == 'workflow_dispatch' && github.event.repository.private == true
+    # GitHub requires push access even to read draft releases in this private repository.
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 26
     outputs:

@@ -107,6 +107,7 @@ function Wait-PrivateProducerHandoff([string]$ReleaseUri, [hashtable]$Headers, [
     throw 'Own-run Kubernetes handoff did not arrive within the fixed fourteen-minute wait.'
 }
 
+$phase = 'trusted-source'
 try {
     if (![OperatingSystem]::IsLinux()) { throw 'Linux private metadata runner required.' }
     $SourceRoot = (Resolve-Path -LiteralPath $SourceRoot).ProviderPath
@@ -134,22 +135,30 @@ try {
     $inputs = @{repositoryPrivate=$env:EVENT_REPOSITORY_PRIVATE; releaseId=$env:PRIVATE_RELEASE_ID
         runAttempt=$env:GITHUB_RUN_ATTEMPT; sourceManifestPin=$env:K8S_SOURCE_MANIFEST_PIN
         sdkPin=$env:K8S_SDK_PIN; frozenPlanPin=$env:K8S_FROZEN_PLAN_PIN}
+    $phase = 'dispatch-context'
     $workflow = Assert-PrivateProducerInputs $context $inputs
+    $phase = 'checkout'
     Assert-PrivateOwnedCheckout $SourceRoot $context.sourceSha $workflow
+    $phase = 'runner-output'
     $output = Assert-PrivateOwnedOutput $env:RUNNER_TEMP $SourceRoot $SourceRoot
     $api = 'https://api.github.com/repos/' + $context.repository
     $headers = @{Authorization=('Bearer ' + $context.token); Accept='application/vnd.github+json'; 'X-GitHub-Api-Version'='2022-11-28'}
+    $phase = 'private-repository'
     Assert-PrivateOwnedRepository (Invoke-PrivateProducerMetadata $api $headers) $context.repository $context.repositoryId
     $publicApi = 'https://api.github.com/repos/' + $context.publicRepository
     $publicHeaders = @{Accept='application/vnd.github+json'; 'X-GitHub-Api-Version'='2022-11-28'}
+    $phase = 'public-repository'
     Assert-PrivateOwnedPublicSource (Invoke-PrivateProducerMetadata $publicApi $publicHeaders) $context.publicRepository $context.publicRepositoryId
+    $phase = 'public-commit'
     $commit = Invoke-PrivateProducerMetadata ($publicApi + '/commits/' + $context.sourceSha) $publicHeaders
     if ($commit.sha -cne $context.sourceSha) { throw 'Final public commit S must exist before dispatch.' }
     $releaseUri = $api + '/releases/' + $inputs.releaseId
+    $phase = 'private-release'
     Assert-PrivateProducerRelease (Invoke-PrivateProducerMetadata $releaseUri $headers) $inputs.releaseId $context.sourceSha $context.repository
     $stem = 'canonical52-' + $context.runId + '-' + $inputs.runAttempt
     $archiveName = $stem + '.zip'; $handoffName = $stem + '.handoff.json'
     Write-Host ('PRIVATE_PRODUCER_WAITING; RUN=' + $context.runId + '; ATTEMPT=' + $inputs.runAttempt + '; WAIT_LIMIT_SECONDS=840')
+    $phase = 'sealed-handoff'
     $assets = Wait-PrivateProducerHandoff $releaseUri $headers $handoffName $archiveName
     $handoffAsset = Get-PrivateProducerAsset $assets $handoffName $context.repository 64KB
     $archiveAsset = Get-PrivateProducerAsset $assets $archiveName $context.repository
@@ -161,6 +170,7 @@ try {
     Assert-PrivateProducerHandoff $handoff $context $inputs $archiveName
     if ([string]$archiveAsset.id -cne [string]$handoff.archive.id -or
         $archiveAsset.digest -cne ('sha256:' + $handoff.archive.sha256)) { throw 'Handoff archive pin differs from GitHub asset metadata.' }
+    $phase = 'sealed-archive'
     $archive = Join-Path $output 'existing-evidence.zip'
     Save-PrivateProducerAsset $archiveAsset $context.repository $context.token $archive
     $package = Join-Path $output 'evidence'
@@ -170,6 +180,7 @@ try {
     $authority = @{publicRepository=$context.publicRepository; publicRepositoryId=$context.publicRepositoryId
         sha=$context.sourceSha; sdkPin=$inputs.sdkPin; privateRepositoryId=$context.repositoryId
         runId=$context.runId; runAttempt=$inputs.runAttempt; workflowPath=$workflow}
+    $phase = 'acceptance-metadata'
     Assert-K8sDistributionEnvelope $envelope $authority
     $accepted = Resolve-K8sAcceptance $envelope $package $SourceRoot $authority $policy
     # Unlike retained-evidence redistribution, this coordinator must own the inner producer too.
@@ -192,11 +203,13 @@ try {
     $privateResults = Join-Path $output 'verification'; $null = [IO.Directory]::CreateDirectory($privateResults)
     # Trusted final-checkout report parsers only. No credentials reach their child processes.
     $env:GH_TOKEN = ''; $env:GITHUB_TOKEN = ''
+    $phase = 'retained-reports'
     & { Assert-K8sReports $accepted.receipt $accepted.root $SourceRoot $privateResults $policy $accepted.sourceQualification } *> (Join-Path $output 'report-validation.private.log')
     Assert-PrivateEvidenceMembersUnchanged $package $original
     $null = Assert-K8sInventory $envelope $package
     Assert-PrivateOwnedCheckout $SourceRoot $context.sourceSha $workflow
     # Re-check the exact release and asset IDs after verification, before artifact publication.
+    $phase = 'final-asset-custody'
     Assert-PrivateProducerRelease (Invoke-PrivateProducerMetadata $releaseUri $headers) $inputs.releaseId $context.sourceSha $context.repository
     foreach ($asset in @($handoffAsset, $archiveAsset)) {
         $current = Invoke-PrivateProducerMetadata $asset.url $headers
@@ -209,6 +222,12 @@ try {
     [IO.File]::AppendAllText($env:GITHUB_OUTPUT, ('receipt-sha256=' + $handoff.receiptSha256 + "`n"), [Text.UTF8Encoding]::new($false))
     Write-Host 'PRIVATE_K8S_PRODUCER_VALIDATED; NO_WORKLOADS_EXECUTED; PUBLIC_ACCEPTANCE_AND_RELEASE_STILL_REQUIRED'
 } catch {
+    # Log only fixed phase/type/status fields, never headers, response bodies or command arguments.
+    Write-Host ('PRIVATE_PRODUCER_FAILED_PHASE=' + $phase)
+    Write-Host ('EXCEPTION_TYPE=' + $_.Exception.GetType().FullName)
+    if ($_.Exception.PSObject.Properties['Response'] -and $null -ne $_.Exception.Response) {
+        Write-Host ('HTTP_STATUS=' + [int]$_.Exception.Response.StatusCode)
+    }
     Write-Error 'Private Kubernetes producer failed closed; no evidence may be uploaded or accepted for release.'
     exit 1
 }

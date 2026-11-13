@@ -44,8 +44,38 @@ function Test-PrivateProducer {
     foreach ($definition in Read-PrivateOwnedImportFunctions (Join-Path $RepositoryRoot '.github/workflows/framework-readiness.yml')) {
         . ([scriptblock]::Create($definition))
     }
-    Check 'private-producer-manual-private-read-only-workflow' ($producerYaml.Contains("    if: github.event_name == 'workflow_dispatch' && github.event.repository.private == true") -and
-        $producerYaml.Contains("permissions:`n  contents: read") -and $producerYaml -notmatch '(?m)^  (push|pull_request|schedule):|contents: write|packages: write|continue-on-error|secrets\.')
+    Check 'private-producer-manual-private-default-read-workflow' ($producerYaml.Contains("    if: github.event_name == 'workflow_dispatch' && github.event.repository.private == true") -and
+        $producerYaml -notmatch '(?m)^  (push|pull_request|schedule):|packages: write|continue-on-error|secrets\.')
+    function Assert-PrivateProducerPermissions([string]$Text) {
+        $Text = $Text.Replace("`r`n", "`n")
+        $defaults = [regex]::Matches($Text, '(?m)^permissions:\n  contents: read(?=\n(?:\n|\S)|\n?\z)')
+        $jobs = [regex]::Matches($Text, '(?ms)^  private-producer:\n(?<body>.*?)(?=^  [A-Za-z0-9_-]+:|^\S|\z)')
+        if ($defaults.Count -ne 1 -or $jobs.Count -ne 1) { throw 'Private producer permission scope differs.' }
+        $allowed = [regex]::Matches($jobs[0].Groups['body'].Value,
+            '(?m)^    permissions:\n      contents: write(?=\n(?:\n|    \S)|\n?\z)')
+        if ($allowed.Count -ne 1) { throw 'Private producer permission scope differs.' }
+        $offset = $jobs[0].Groups['body'].Index + $allowed[0].Index
+        $remainder = $Text.Remove($offset, $allowed[0].Length)
+        if ($remainder -match '(?m)^[ \t]*[a-z][a-z-]*:[ \t]*write(?:[ \t]*(?:#.*)?)?$|permissions:[ \t]*(?:write-all|\{)') {
+            throw 'Private producer permission scope differs.'
+        }
+    }
+    Assert-PrivateProducerPermissions $producerYaml
+    Check 'private-producer-only-exact-job-has-contents-write' $true
+    $jobPermission = "    permissions:`n      contents: write"
+    $mutations = [ordered]@{
+        'global-write' = $producerYaml.Replace("permissions:`n  contents: read", "permissions:`n  contents: write")
+        'global-write-all' = $producerYaml.Replace("permissions:`n  contents: read", 'permissions: write-all')
+        'missing-job-write' = $producerYaml.Replace($jobPermission, "    permissions:`n      contents: read")
+        'extra-job-permission' = $producerYaml.Replace($jobPermission, ($jobPermission + "`n      actions: write"))
+        'duplicate-job-permission' = $producerYaml.Replace($jobPermission, ($jobPermission + "`n" + $jobPermission))
+        'other-job-write' = $producerYaml + "`n  unexpected-job:`n    permissions:`n      contents: write`n    runs-on: ubuntu-latest`n"
+        'other-job-write-all' = $producerYaml + "`n  unexpected-job:`n    permissions: write-all`n    runs-on: ubuntu-latest`n"
+        'other-job-inline-write' = $producerYaml + "`n  unexpected-job:`n    permissions: { contents: write }`n    runs-on: ubuntu-latest`n"
+    }
+    foreach ($mutation in $mutations.GetEnumerator()) {
+        Reject ('producer-permissions-reject-' + $mutation.Key) { Assert-PrivateProducerPermissions $mutation.Value } 'permission scope differs'
+    }
     Check 'private-producer-fixed-workflow-and-stage-deadlines' ($producerYaml.Contains('    timeout-minutes: 26') -and
         $producerYaml.Contains('        timeout-minutes: 24'))
     Check 'private-producer-checkout-actual-source-no-retained-credentials' ($producerYaml.Contains('          ref: ${{ github.sha }}') -and
@@ -74,7 +104,7 @@ function Test-PrivateProducer {
         }
         if (!$Text.Contains("`$env:GH_TOKEN = ''; `$env:GITHUB_TOKEN = ''") -or
             !$Text.Contains("Resolve-K8sMember `$package 'handoff/frozen-plan'") -or
-            !$Text.Contains('Original execution source manifest differs dispatch pin.') -or
+            !$Text.Contains('(Get-FileHash -LiteralPath $sourceManifest).Hash.ToLowerInvariant() -cne $inputs.sourceManifestPin') -or
             !$Text.Contains('$Inputs.runAttempt') -or $Text -match 'Invoke-Expression|Start-Process|&\s*\$receipt') {
             throw 'Producer validation/publication ordering differs.'
         }
@@ -83,8 +113,47 @@ function Test-PrivateProducer {
     Check 'private-producer-inner-outer-authority-before-output' $true
     foreach ($line in @('Assert-K8sHeader $accepted.receipt $runtimeAuthority $policy',
         'Assert-K8sReports $accepted.receipt $accepted.root $SourceRoot $privateResults $policy $accepted.sourceQualification',
-        'Assert-PrivateEvidenceMembersUnchanged $package $original', "`$env:GH_TOKEN = ''; `$env:GITHUB_TOKEN = ''")) {
+        'Assert-PrivateEvidenceMembersUnchanged $package $original', "`$env:GH_TOKEN = ''; `$env:GITHUB_TOKEN = ''",
+        '(Get-FileHash -LiteralPath $sourceManifest).Hash.ToLowerInvariant() -cne $inputs.sourceManifestPin')) {
         Reject ('producer-rejects-removed-validation-' + $controls.Count) { Assert-ProducerWiring ($producerSource.Replace($line, '')) } 'ordering differs'
+    }
+    $producerTokens = $null; $producerErrors = $null
+    $producerAst = [Management.Automation.Language.Parser]::ParseInput($producerSource, [ref]$producerTokens, [ref]$producerErrors)
+    Check 'private-producer-diagnostics-source-parses' (!$producerErrors.Count)
+    $catches = @($producerAst.FindAll({ param($node) $node -is [Management.Automation.Language.CatchClauseAst] }, $true))
+    Check 'private-producer-one-fail-closed-diagnostic-handler' ($catches.Count -eq 1)
+    $diagnosticStatements = @($catches[0].Body.Statements)
+    Check 'private-producer-diagnostics-exit-failure' ($diagnosticStatements[-1].Extent.Text -ceq 'exit 1')
+    # Exercise the actual reporting statements, excluding only the separately asserted process exit.
+    $diagnosticSource = ($diagnosticStatements[0..($diagnosticStatements.Count - 2)] | ForEach-Object { $_.Extent.Text }) -join "`n"
+    function Assert-ProducerDiagnosticOutput([scriptblock]$Body, [string]$ResponseKind) {
+        $marker = 'SYNTHETIC-PRIVATE-REPORTING-SENTINEL'
+        $failure = [InvalidOperationException]::new($marker)
+        if ($ResponseKind -ne 'missing') {
+            $response = if ($ResponseKind -eq 'present') {
+                [pscustomobject]@{ StatusCode = 403; Headers = @{ Authorization = $marker }; Content = $marker }
+            } else { $null }
+            Add-Member -InputObject $failure -NotePropertyName Response -NotePropertyValue $response
+        }
+        $phase = 'private-release'
+        $ErrorActionPreference = 'Continue'
+        try { throw $failure } catch { $records = @(& $Body *>&1) }
+        $expected = @('PRIVATE_PRODUCER_FAILED_PHASE=private-release', 'EXCEPTION_TYPE=System.InvalidOperationException')
+        if ($ResponseKind -eq 'present') { $expected += 'HTTP_STATUS=403' }
+        $expected += 'Private Kubernetes producer failed closed; no evidence may be uploaded or accepted for release.'
+        $actual = ($records | ForEach-Object { $_.ToString() }) -join "`n"
+        if ($actual -cne ($expected -join "`n")) { throw 'Producer diagnostic fields differ or expose private details.' }
+    }
+    foreach ($kind in @('present', 'missing', 'null')) {
+        Assert-ProducerDiagnosticOutput ([scriptblock]::Create($diagnosticSource)) $kind
+        Check ('private-producer-diagnostics-fixed-fields-' + $kind) $true
+    }
+    foreach ($leak in @('Write-Host $_.Exception.Message', 'Write-Host $_.Exception.Response.Content',
+        'Write-Host $_.Exception.Response.Headers.Authorization', 'Write-Host $_')) {
+        $unsafeDiagnostics = [scriptblock]::Create($diagnosticSource + "`n" + $leak)
+        Reject ('producer-diagnostics-reject-private-output-' + $controls.Count) {
+            Assert-ProducerDiagnosticOutput $unsafeDiagnostics 'present'
+        } 'diagnostic fields differ'
     }
     $context = @{actions='true'; event='workflow_dispatch'; api='https://api.github.com'; server='https://github.com'
         repository='synthetic/private'; repositoryId='42'; approvedRepository='synthetic/private'; approvedRepositoryId='42'
