@@ -229,7 +229,8 @@ function New-K8sAcceptanceReceipt {
     $feature = Get-K8sExecution $receipt 'sample-features'
     if (!$feature.ContainsKey('receipt')) { throw 'Actual feature runtime receipt is required.' }
     Assert-K8sFeatureBinding (Read-K8sJson (Resolve-K8sMember $pending $feature.receipt)) $receipt $pending
-    $json = ($receipt | ConvertTo-Json -Depth 32) + "`n"
+    # Whitespace must not consume the verifier budget for complete original inventories.
+    $json = ($receipt | ConvertTo-Json -Depth 32 -Compress) + "`n"
     if ([Text.Encoding]::UTF8.GetByteCount($json) -gt 1MB) { throw 'Receipt exceeds the verifier byte budget.' }
     [IO.File]::WriteAllText((Join-Path $pending 'receipt.json'), $json, [Text.UTF8Encoding]::new($false))
     $null = Assert-K8sInventory (Read-K8sJson (Join-Path $pending 'receipt.json')) $pending

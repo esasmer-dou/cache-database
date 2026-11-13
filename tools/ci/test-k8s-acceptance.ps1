@@ -628,7 +628,12 @@ if ($assembled.status -cne 'ASSEMBLED_NOT_RUNTIME_ACCEPTANCE' -or
         (Get-FileHash -LiteralPath (Join-Path $assemblyRoot 'valid/origin/execution-inventory.json')).Hash) {
     throw 'Assembler changed the original inventory or claimed runtime acceptance.'
 }
-$assembledDocument = [Text.Json.JsonDocument]::Parse([IO.File]::ReadAllText($assembled.receiptPath))
+$assembledText = [IO.File]::ReadAllText($assembled.receiptPath)
+if ($assembledText.IndexOf("`n") -ne $assembledText.Length - 1 -or
+    [Text.Encoding]::UTF8.GetByteCount($assembledText) -gt 1MB) {
+    throw 'Receipt serialization must preserve the verifier budget without formatting overhead.'
+}
+$assembledDocument = [Text.Json.JsonDocument]::Parse($assembledText)
 try {
     if ($assembledDocument.RootElement.GetProperty('runs')[0].GetProperty('createdAt').GetString() -cne '2026-01-01T03:00:00+03:00' -or
         $assembledDocument.RootElement.GetProperty('executions')[0].GetProperty('startedAt').GetString() -cne '2025-12-31T19:01:00-05:00') {
