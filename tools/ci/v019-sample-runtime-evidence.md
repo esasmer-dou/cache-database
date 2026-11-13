@@ -448,6 +448,10 @@ write/execute separation to work around the limit.
 Raw Maven/Newman/app logs and reports, phase exits, distinct before/after source
 and SDK manifests, fixture identity hashes and completed-cell records stay under
 the fresh evidence root on failure. Do not overwrite it or rerun unchanged inputs.
+The launcher also streams compiler and adapter diagnostics to the parent process.
+The adapter emits one start line per cell and a completion line only after both
+phases succeed and their checkpoint is written. A nonempty log is not proof of
+success: retain the native exit code, reports and receipt checks.
 On complete execution, the existing checker validates a candidate receipt against
 all raw reports; only a successful checker and final preservation check publish
 `receipt.json` and `receipt.sha256`. These files do not create external provenance:

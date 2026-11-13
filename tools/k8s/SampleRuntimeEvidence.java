@@ -78,6 +78,7 @@ public final class SampleRuntimeEvidence {
             String lane=LANES.get(laneIndex);JsonNode contract=lanes.get(laneIndex);
             need(lane.equals(contract.path("id").asText())&&contract.path("maximumSecondsPerProvider").asInt()==900);
             stage=provider+"/"+lane;
+            System.out.println("SAMPLE_CELL_START " + stage);
             Path sample=work.resolve(provider).resolve(lane).resolve("sample-cache-database-"+provider);
             String prefix="sample-cache-database-"+provider+"/";var members=new TreeMap<String,String>();
             sourceFiles.forEach((name,digest)->{if(name.startsWith(prefix))members.put(name.substring(prefix.length()),digest);});
@@ -90,6 +91,7 @@ public final class SampleRuntimeEvidence {
                 cell.put("tests",phase(provider,lane,contract,sample,members,false));
                 cell.put("http",phase(provider,lane,contract,sample,members,true));cells.add(cell);
                 write(out.resolve("completed-cell-"+cells.size()+".json"),cell);
+                System.out.println("SAMPLE_CELL_COMPLETE " + stage);
             }
         }
         var receipt=new LinkedHashMap<String,Object>();receipt.put("schema",1);receipt.put("kind","cachedb-v019-sample-runtime");

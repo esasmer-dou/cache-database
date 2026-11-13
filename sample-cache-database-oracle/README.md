@@ -3336,6 +3336,8 @@ java -XX:ActiveProcessorCount=1 -Xmx512m -jar target/sample-cache-database-oracl
 # In a second shell in the same locked K8s cohort; approved offline Newman 6.2.1 cache required:
 pwsh -NoProfile -File scripts/test-tenant-purge-postman.ps1 -BaseUrl http://127.0.0.1:8080 -RunId "$SAMPLE_PURGE_RUN_ID" -ConfirmDisposableDemo
 ```
+The Oracle purge demo allows 5 seconds to connect and 15 seconds to receive a JDBC socket response. Startup checks the Oracle dictionary for foreign keys before it allows a purge. That check can take longer than a connection attempt, even for an empty table. The socket limit does not extend the guard's 2-second statement timeout, retry a purge or skip the foreign-key check.
+
 The fixed API root is `/api/examples/v019/tenant-purge`: GET `/status`,
 GET `/rows/1`.. `/rows/7`, POST `/purge`. It requires
 `Authorization: Bearer <private-token>` and `X-Purge-Run: <run>`.

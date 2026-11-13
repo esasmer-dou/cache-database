@@ -14,7 +14,7 @@ function Get-K8sOverlayClassification([string]$Path, $Policy = $null, [string]$A
     if ($Path -cmatch '^(README|CHANGELOG|DOCUMENTATION_MAP|PRODUCTION_GA_CRITERIA)\.md$' -or
         $Path -cmatch '^tr/(README|DOKUMAN_HARITASI)\.md$' -or
         $Path -cmatch '^(tr/)?docs/[A-Za-z0-9_./-]+\.md$' -or
-        $Path -ceq '.github/actions/cachedb-v019-performance/README.md' -or
+        $Path -cin @('.github/actions/cachedb-v019-performance/README.md','tools/ci/v019-sample-runtime-evidence.md') -or
         $Path -cmatch '^sample-cache-database-(postgresql|mssql|oracle)/(README(\.tr)?\.md|tr/README\.md)$') {
         return 'documentation'
     }
@@ -24,7 +24,13 @@ function Get-K8sOverlayClassification([string]$Path, $Policy = $null, [string]$A
         $Path -cin @('.github/actions/cachedb-v019-performance/action.yml',
             '.github/actions/cachedb-redis-performance/action.yml',
             'tools/ci/prepare-ematech-resource-guard.sh',
-            'tools/ci/run-ematech-redis-performance.sh')) { return 'execution-tooling' }
+            'tools/ci/run-ematech-redis-performance.sh','tools/k8s/SampleRuntimeEvidence.java',
+            'tools/k8s/run-sample-runtime-evidence.sh')) { return 'execution-tooling' }
+    if ($Path -ceq 'sample-cache-database-oracle/src/purge/resources/application-purge.yml' -and
+        $Policy -is [Collections.IDictionary] -and $Policy.Contains('ReviewedOraclePurgeConfiguration') -and
+        $AfterSha256 -cmatch '^[a-f0-9]{64}$' -and $Policy.ReviewedOraclePurgeConfiguration.after -ceq $AfterSha256) {
+        return 'scoped-runtime-configuration'
+    }
     if ($Path -cin @(
             'cachedb-starter/src/test/java/com/cachedb/starter/RedisReadWiringRedisTest.java',
             'cachedb-storage-redis/src/test/java/com/cachedb/redis/RedisReadRedirectServer.java') -and
@@ -43,6 +49,43 @@ function Get-K8sOverlayClassification([string]$Path, $Policy = $null, [string]$A
     throw 'Only explicitly pinned documentation, CI/release tooling and reviewed test fixtures are eligible.'
 }
 
+function Assert-K8sOraclePurgeConfiguration($Proof, [string]$Root, $Policy) {
+    $review = $Policy.ReviewedOraclePurgeConfiguration
+    $changes = @($Proof.changes | Where-Object classification -CEQ 'scoped-runtime-configuration')
+    if ($changes.Count -ne 1 -or $changes[0].path -cne 'sample-cache-database-oracle/src/purge/resources/application-purge.yml' -or
+        $changes[0].beforeSha256 -cne $review.before -or $changes[0].afterSha256 -cne $review.after -or
+        $Proof.sourceManifestSha256 -cne $review.source -or $Proof.sdkManifestSha256 -cne $review.sdk) {
+        throw 'Oracle purge configuration is not the exact independently qualified source/SDK change.'
+    }
+    $refs = $Proof.oraclePurgeConfiguration
+    if ($refs -isnot [Collections.IDictionary] -or $refs.Count -ne 4) { throw 'Four original Oracle qualification references required.' }
+    foreach ($name in @('scopedReceipt','nativeProcess','testsConfiguration','httpConfiguration')) {
+        $ref = $refs[$name]
+        if ($ref -isnot [Collections.IDictionary] -or $ref.Count -ne 2 -or $ref.sha256 -cne $review[$name]) {
+            throw 'Unreviewed Oracle qualification reference.'
+        }
+        $record = Read-K8sJson (Assert-K8sSealedReference $ref @{files=$Proof.files} $Root 2MB)
+        switch ($name) {
+            scopedReceipt {
+                if ($record.kind -cne 'cachedb-oracle-tenant-purge-scoped-runtime' -or $record.execution.runnerPodUid -cne $review.pod -or
+                    $record.sdk.manifest.sha256 -cne $review.sdk -or $record.sdk.sourceManifestSha256 -cne $review.source -or
+                    $record.cells.Count -ne 1 -or $record.cells[0].provider -cne 'oracle' -or $record.cells[0].lane -cne 'tenant-purge') {
+                    throw 'Oracle qualification does not identify the original scoped runtime.'
+                }
+            }
+            nativeProcess {
+                if ($record.podUid -cne $review.pod -or $record.exitCode -ne 0 -or $record.teeExit -ne 0 -or
+                    $record.timedOut -ne $false -or $record.stdout.bytes -le 0) { throw 'Unsuccessful Oracle native process.' }
+            }
+            default {
+                $phase = if ($name -ceq 'testsConfiguration') { 'tests' } else { 'http' }
+                if ($record.phase -cne $phase -or $record.readTimeoutMs -ne 15000 -or $record.connectTimeoutMsUnchanged -ne 5000 -or
+                    $record.guardStatementTimeoutSecondsUnchanged -ne 2) { throw 'Different Oracle configuration used in the original phase.' }
+            }
+        }
+    }
+}
+
 function Read-K8sExactManifest([string]$Path) {
     $result = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
     $manifest = Read-K8sManifest $Path
@@ -56,6 +99,7 @@ function Assert-K8sToolingQualification($Proof, [string]$Root, $Target, $Policy)
     foreach ($change in $Proof.changes) {
         if ($change.classification -ceq 'execution-tooling') { $null = $required.Add($change.path) }
     }
+    $loggerDelta = $required.Contains('tools/k8s/SampleRuntimeEvidence.java') -or $required.Contains('tools/k8s/run-sample-runtime-evidence.sh')
     $covered = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $identities = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     if ($Proof.toolingEvidence -isnot [array] -or $Proof.toolingEvidence.Count -gt 128) { throw 'Bounded explicit tooling evidence required.' }
@@ -66,7 +110,11 @@ function Assert-K8sToolingQualification($Proof, [string]$Root, $Target, $Policy)
             throw 'Explicit control-to-delta mapping required; unsupported mappings remain pending.'
         }
         $index = [int]$binding.obligation.Split('/')[1]
-        if ($index -ge $Policy.Controls.Count -or $Policy.Controls[$index] -cnotlike './tools/ci/*') { throw 'Only declared tooling controls can qualify tooling deltas.' }
+        $matrixCommand = 'node ./tools/ci/test-v019-sample-matrix.mjs'
+        if ($index -ge $Policy.Controls.Count -or
+            ($Policy.Controls[$index] -cnotlike './tools/ci/*' -and $Policy.Controls[$index] -cne $matrixCommand)) {
+            throw 'Only declared tooling controls can qualify tooling deltas.'
+        }
         $record = Read-K8sJson (Assert-K8sSealedReference $binding.receipt $sealed $Root)
         if ($record.schema -cne 'cachedb.k8s-tooling-control/v1' -or $record.Count -ne 5 -or
             $record.kind -cne 'TOOLING_ONLY_NOT_PRODUCT_RUNTIME_COVERAGE') { throw 'Separate tooling execution evidence required.' }
@@ -103,6 +151,11 @@ function Assert-K8sToolingQualification($Proof, [string]$Root, $Target, $Policy)
         $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($path in $binding.paths) {
             if (!$names.Add($path) -or !$required.Contains($path)) { throw 'Tooling evidence mapping is duplicate or unrelated.' }
+            $matrixSurface = $path -cin @('tools/k8s/SampleRuntimeEvidence.java','tools/k8s/run-sample-runtime-evidence.sh') -or
+                ($path -ceq 'tools/ci/test-v019-sample-matrix.mjs' -and ($loggerDelta -or $Policy.Controls[$index] -ceq $matrixCommand))
+            if ($matrixSurface -ne ($Policy.Controls[$index] -ceq $matrixCommand)) {
+                throw 'Sample logger and its matrix guard must be qualified by their exact matrix control.'
+            }
             $null = $covered.Add($path)
         }
     }
@@ -125,11 +178,13 @@ function Assert-K8sSourceEquivalence(
         throw 'Source equivalence is not the independently approved proof.'
     }
     $proof = Read-K8sJson $ProofPath
+    $scoped = $snapshot -and $proof.schema -ceq 'cachedb.k8s-source-equivalence/v3'
     if ($snapshot) {
         Assert-K8sSnapshotIdentity $SnapshotIdentity
         Assert-K8sSnapshotIdentity $proof.sourceIdentity
         Assert-K8sPin $OriginalReceiptSha256
-        if ($null -eq $Policy -or $proof.schema -cne 'cachedb.k8s-source-equivalence/v2' -or $proof.Count -ne 11 -or
+        if ($null -eq $Policy -or (!$scoped -and $proof.schema -cne 'cachedb.k8s-source-equivalence/v2') -or
+            $proof.Count -ne (11 + [int]$scoped) -or
             $proof.ContainsKey('sourceSha') -or $proof.sourceIdentity.manifestSha256 -cne $SnapshotIdentity.manifestSha256 -or
             $proof.originalReceiptSha256 -cne $OriginalReceiptSha256 -or
             $proof.sourceManifestSha256 -cne $SnapshotIdentity.manifestSha256 -or
@@ -140,7 +195,7 @@ function Assert-K8sSourceEquivalence(
         $null = Assert-K8sInventory @{files=@($proof.files) + @($proofEntry)} $proofRoot
     }
     if ((!$snapshot -and ($proof.schema -cne 'cachedb.k8s-source-equivalence/v1' -or $proof.sourceSha -cne $SourceSha)) -or
-        $proof.kind -cne 'DOCUMENTATION_TOOLING_ONLY_NOT_RUNTIME_ACCEPTANCE' -or
+        $proof.kind -cne $(if ($scoped) { 'SEPARATELY_QUALIFIED_ORACLE_PURGE_CONFIGURATION' } else { 'DOCUMENTATION_TOOLING_ONLY_NOT_RUNTIME_ACCEPTANCE' }) -or
         $proof.targetSha -cne $TargetSha -or
         $proof.sdkManifestSha256 -cne $SdkPin -or
         $proof.sourceManifestSha256 -cne (Get-FileHash -LiteralPath $OriginalManifest).Hash.ToLowerInvariant()) {
@@ -161,6 +216,10 @@ function Assert-K8sSourceEquivalence(
         }
     }
     $changes = @($proof.changes)
+    if ($scoped) { Assert-K8sOraclePurgeConfiguration $proof $proofRoot $Policy }
+    elseif (@($changes | Where-Object classification -CEQ 'scoped-runtime-configuration').Count) {
+        throw 'Oracle configuration requires separate runtime qualification, not a tooling-only proof.'
+    }
     if (!$changes.Count -or $changes.Count -gt 128) { throw 'Explicit bounded source deltas are required.' }
     $approved = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $classificationPolicy = if ($snapshot) { $Policy } else { $null }
@@ -195,6 +254,6 @@ function Assert-K8sSourceEquivalence(
         }
         Assert-K8sToolingQualification $proof $proofRoot $after $Policy
     }
-    # Every non-overlay byte, including all POMs, processor sources, unreviewed tests and sample code, remains identical.
+    # SDK sources/build inputs remain identical; any scoped configuration delta has independent runtime proof.
     return $proof
 }

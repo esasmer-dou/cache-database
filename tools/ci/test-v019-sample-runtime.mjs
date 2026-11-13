@@ -10,7 +10,8 @@ import { sampleRuntimeContracts, verifySampleRuntime, verifyExecutionToolingOver
 
 const overlayOnly = process.argv.slice(2).length === 1 && process.argv[2] === '--execution-tooling-overlay';
 const finalSourceOnly = process.argv.slice(2).length === 1 && process.argv[2] === '--final-source-overlay';
-assert(process.argv.length === 2 || overlayOnly || finalSourceOnly, 'Only --execution-tooling-overlay or --final-source-overlay is supported');
+const originalCellsOnly = process.argv.slice(2).length === 1 && process.argv[2] === '--original-cell-controls';
+assert(process.argv.length === 2 || overlayOnly || finalSourceOnly || originalCellsOnly, 'Unsupported fixture selection');
 
 // Synthetic parser fixtures only: these bytes must never become release/runtime evidence.
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -344,9 +345,187 @@ function publicQualificationControls() {
     });
     fs.rmSync(checkout, { recursive: true });
 }
+function originalCellControls(base, options) {
+    function fixture() {
+        const receipt = { schema: 2, kind: 'cachedb-v019-sample-runtime-original-cells', source: structuredClone(base.source),
+            sdk: structuredClone(base.sdk), origins: [], cells: [] };
+        const states = [];
+        for (let index = 0; index < 2; index++) {
+            const oracle = index === 1, id = oracle ? 'original/oracle-tenant-purge' : 'original/feature9-child04';
+            const podUid = '00000000-0000-0000-0000-00000000000' + (index + 1);
+            const inventory = new Map();
+            function captured(name, value) {
+                const bytes = Buffer.isBuffer(value) || typeof value === 'string' ? value : JSON.stringify(value);
+                const reference = write(evidence, id + '/' + name, bytes);
+                inventory.set(name, { name, sha256: reference.sha256, bytes: Buffer.byteLength(bytes) }); return reference;
+            }
+            const external = (name, value) => write(evidence, 'authority-' + index + '/' + name, JSON.stringify(value));
+            const script = captured('direct-overlay/run-feature9.sh', '# SYNTHETIC FIXTURE ONLY\n');
+            const process = { schema: 'cachedb.feature9-native-process/v1', executionId: podUid, logicalExecutionId: oracle ? 'oracle-tenant-purge' : 'sample-features',
+                podUid, pid: 123, executable: '/usr/bin/bash', argv: ['/workspace/direct-overlay/run-feature9.sh'], workingDirectory: '/workspace',
+                startedAt: base.execution.startedAt, finishedAt: base.execution.finishedAt, exitCode: oracle ? 0 : 1,
+                timedOut: false, stdoutComplete: true, stderrComplete: true };
+            for (const [name, value] of [['stdout', 'SYNTHETIC native output\n'], ['stderr', ''], ['exit', process.exitCode + '\n'], ...(oracle ? [['tee', '0\n']] : [])]) {
+                const member = 'evidence/feature9/' + name;
+                const reference = captured(member, value);
+                process[name] = { path: member, sha256: reference.sha256, bytes: Buffer.byteLength(value) };
+            }
+            if (oracle) process.teeExit = 0;
+            const createdAt = base.execution.startedAt, cutoffAt = '2026-11-07T00:56:00Z';
+            // Keep every physical envelope finite; the original schema1 fixture deliberately has a longer envelope.
+            process.finishedAt = '2026-11-07T00:30:00Z';
+            const admission = { namespace: base.execution.namespace, runId: 'SYNTHETIC_FIXTURE-' + podUid,
+                runnerPodUid: podUid, serviceRunnerPodUid: podUid, runnerCreatedAt: createdAt, originalCutoff: cutoffAt,
+                activeDeadlineSeconds: '3360', cpuMillicores: '2000', memoryBytes: '4294967296' };
+            const epoch = Date.parse(createdAt) / 1000;
+            const origin = { id, prefix: id, custody: null,
+                pod: external('pod.json', { kind: 'Pod', metadata: { uid: podUid, namespace: admission.namespace, name: 'synthetic', creationTimestamp: createdAt }, spec: { activeDeadlineSeconds: 3360 } }),
+                authority: external('authority.json', { schema: 'cachedb.feature9-authority/v1', context: 'kubernetes-admin@EmaTech',
+                    namespace: admission.namespace, pod: 'synthetic', podUid, maximumRunSeconds: 3360, deadlineMaximumSeconds: 3360,
+                    extensionAllowed: false, authorizedByUser: true, baselineRun: false, retriesAllowed: false, podDeadlineSeconds: 3360,
+                    firstResourceEpoch: epoch, firstResourceCutoffEpoch: epoch + 3360, cutoffEpoch: epoch + 3360 }),
+                preparation: external('preparation.json', { scriptSha256: script.sha256 }), scriptPinPointer: '/scriptSha256',
+                admission: captured('input/authority.json', admission), process: captured('evidence/feature9/process.json', process), executedScript: script };
+            const selected = base.cells.filter(cell => (cell.provider === 'oracle' && cell.lane === 'tenant-purge') === oracle);
+            for (const cell of selected) {
+                const ordinal = oracle ? 1 : base.cells.indexOf(cell) + 1;
+                for (const phase of [cell.tests, cell.http]) {
+                    const references = [phase.exit, phase.preservationExit, phase.sourceBefore, phase.sourceAfter, phase.sdkBefore, phase.sdkAfter,
+                        ...(phase.reports || [phase.junit, ...(phase.newman ? [phase.newman] : [])])];
+                    for (const reference of references) captured('sample-runtime-evidence/' + reference.path, fs.readFileSync(path.join(evidence, reference.path)));
+                }
+                const prefix = 'sample-runtime-evidence/' + cell.provider + '/' + cell.lane + '/http/';
+                const log = captured(prefix + 'app.log', 'SYNTHETIC app lifecycle\n');
+                const lifecycle = { schema: 'cachedb.feature9-cell-lifecycle/v1', podUid, lane: cell.lane, pid: 234,
+                    postmanNativeExit: 0, aliveAfterStop: false, nativeExit: 143, stdoutBytes: Buffer.byteLength('SYNTHETIC app lifecycle\n'),
+                    startedObservedAt: '2026-11-07T00:00:01.000000001Z', readyObservedAt: '2026-11-07T00:00:02Z',
+                    aliveAfterRequestsObservedAt: '2026-11-07T00:00:03Z', stopRequestedAt: '2026-11-07T00:00:04Z', stoppedObservedAt: '2026-11-07T00:00:05Z' };
+                receipt.cells.push({ originId: id, checkpoint: captured('sample-runtime-evidence/completed-cell-' + ordinal + '.json', cell),
+                    lifecycle: { record: captured(prefix + 'app-lifecycle.json', lifecycle), log } });
+            }
+            if (oracle) {
+                const environmentValue = '{"spring.datasource.hikari.data-source-properties[oracle.jdbc.ReadTimeout]":"15000"}';
+                origin.runtimeConfiguration = { policy: external('runtime-configuration.json', {
+                    schema: 'cachedb.oracle-tenant-purge-runtime-configuration/v1', scope: 'oracle/tenant-purge', phases: ['tests', 'http'],
+                    environmentVariable: 'SPRING_APPLICATION_JSON', environmentValue,
+                    property: 'spring.datasource.hikari.data-source-properties[oracle.jdbc.ReadTimeout]', oracleDataSourceProperty: 'oracle.jdbc.ReadTimeout',
+                    readTimeoutMs: 15000, connectTimeoutMsUnchanged: 5000, guardStatementTimeoutSecondsUnchanged: 2,
+                    productSourceOverlay: false, sdkRebuilt: false, effectiveConnectionValueObserved: false }) };
+                for (const phase of ['tests', 'http']) origin.runtimeConfiguration[phase] = captured(
+                    'sample-runtime-evidence/oracle/tenant-purge/' + phase + '/read-timeout-override.json', {
+                        schema: 'cachedb.oracle-read-timeout-child-environment/v1', provider: 'oracle', lane: 'tenant-purge', phase,
+                        variable: 'SPRING_APPLICATION_JSON', value: environmentValue, readTimeoutMs: 15000,
+                        connectTimeoutMsUnchanged: 5000, guardStatementTimeoutSecondsUnchanged: 2, effectiveConnectionValueObserved: false });
+                for (const binding of [base.source, base.sdk]) captured('sample-runtime-evidence/' + binding.manifest.path,
+                    fs.readFileSync(path.join(evidence, binding.manifest.path)));
+                origin.scopedReceipt = captured('sample-runtime-evidence/scoped-receipt.json', { schema: 1,
+                    kind: 'cachedb-oracle-tenant-purge-scoped-runtime', source: base.source, sdk: base.sdk,
+                    execution: { ...base.execution, runId: admission.runId, runnerPodUid: podUid, finishedAt: process.finishedAt, cutoffAt }, cells: selected });
+            }
+            function refresh() {
+                origin.custody = external('custody.json', { schema: 'cachedb.feature9-original-custody/v1', status: 'ORIGINALS_CAPTURED',
+                    podUid, sourceSdkTreesExcludedForExactReuse: true, cutoffEpoch: epoch + 3360, files: [...inventory.values()] });
+            }
+            refresh(); receipt.origins.push(origin); states.push({ origin, process, captured, refresh });
+        }
+        return { receipt, states };
+    }
+    function check(name, mutate, expected) {
+        test('original cells: ' + name, () => {
+            const state = fixture(); if (mutate) mutate(state);
+            const pin = write(evidence, 'receipt.json', JSON.stringify(state.receipt)).sha256;
+            if (expected) assert.throws(() => verifySampleRuntime(options(pin)), expected);
+            else {
+                const result = verifySampleRuntime(options(pin));
+                assert.equal(result.schema, 2); assert.equal(result.tests, 141); assert.equal(result.requests, 180);
+                assert.equal(result.cells.length, 9); assert.equal(Object.hasOwn(result, 'runId'), false);
+                assert.deepEqual(result.originalExecutions.map(origin => origin.observedExit), [1, 0]);
+                assert.notEqual(result.originalExecutions[0].podUid, result.originalExecutions[1].podUid);
+                assert.equal(result.originalExecutions[1].runtimeConfiguration.baselineReadTimeoutMs, 5000);
+                assert.equal(result.originalExecutions[1].runtimeConfiguration.readTimeoutMs, 15000);
+                assert.deepEqual(result.originalExecutions[1].runtimeConfiguration.phases, ['tests', 'http']);
+            }
+        });
+    }
+    const mutateProcess = (state, action) => {
+        const origin = state.states[0]; action(origin.process);
+        origin.origin.process = origin.captured('evidence/feature9/process.json', origin.process); origin.refresh();
+    };
+    const mutateCheckpoint = (state, action) => {
+        const selection = state.receipt.cells[0], original = state.states[0];
+        const cell = JSON.parse(fs.readFileSync(path.join(evidence, selection.checkpoint.path), 'utf8')); action(cell, original);
+        selection.checkpoint = original.captured('sample-runtime-evidence/completed-cell-1.json', cell); original.refresh();
+    };
+    check('preserves native1 and qualifies only eight-plus-one originals');
+    check('rejects synthetic common execution', ({ receipt }) => { receipt.execution = base.execution; }, /Runtime receipt/);
+    check('rejects missing origin', ({ receipt }) => receipt.origins.pop(), /two original/);
+    check('rejects original native1 rewritten to zero', state => mutateProcess(state, value => { value.exitCode = 0; }), /native process/);
+    check('rejects partial stdout', state => mutateProcess(state, value => { value.stdoutComplete = false; }), /native process/);
+    check('rejects timeout', state => mutateProcess(state, value => { value.timedOut = true; }), /native process/);
+    check('rejects process beyond original cutoff', state => mutateProcess(state, value => { value.finishedAt = '2026-11-07T01:00:00Z'; }), /ordering/);
+    check('rejects physical process beyond original 2400s workload cap', state => mutateProcess(state, value => { value.finishedAt = '2026-11-07T00:40:00.001Z'; }), /ordering/);
+    check('rejects a foreign origin partition', ({ receipt }) => { receipt.cells[0].originId = receipt.origins[1].id; }, /prefix|partition/);
+    check('rejects original-prefix alias', ({ receipt }) => { receipt.origins[0].prefix += '-alias'; }, /prefix/);
+    check('rejects a duplicate checkpoint', ({ receipt }) => { receipt.cells[1] = receipt.cells[0]; }, /Reused|Duplicate/);
+    check('rejects a freshly repinned uncaptured record', ({ receipt }) => {
+        receipt.origins[0].process = write(evidence, receipt.origins[0].process.path, '{}');
+    }, /captured custody/);
+    check('rejects freshly repinned uncaptured report', state => mutateCheckpoint(state, (cell) => {
+        cell.tests.reports[0] = write(evidence, state.receipt.origins[0].prefix + '/sample-runtime-evidence/' + cell.tests.reports[0].path, '<testsuite/>');
+        cell.tests.reports[0].path = cell.tests.reports[0].path.split('/sample-runtime-evidence/')[1];
+    }), /captured custody/);
+    check('rejects original native exit stream replaced by success', state => {
+        const origin = state.states[0], member = origin.process.exit.path;
+        const ref = origin.captured(member, '0\n'); origin.process.exit.sha256 = ref.sha256;
+        origin.origin.process = origin.captured('evidence/feature9/process.json', origin.process); origin.refresh();
+    }, /native\/tee exit/);
+    check('rejects Oracle native success with tee failure', state => {
+        const origin = state.states[1]; origin.process.teeExit = 1;
+        origin.origin.process = origin.captured('evidence/feature9/process.json', origin.process); origin.refresh();
+    }, /tee failed/);
+    check('rejects changed independently captured preparation pin', state => {
+        const origin = state.states[0].origin; origin.preparation = write(evidence, origin.preparation.path, JSON.stringify({ scriptSha256: '0'.repeat(64) }));
+    }, /original preparation/);
+    check('rejects failed preservation under genuine refreshed custody', state => mutateCheckpoint(state, (cell, origin) => {
+        const ref = origin.captured('sample-runtime-evidence/' + cell.tests.preservationExit.path, '1\n'); cell.tests.preservationExit.sha256 = ref.sha256;
+    }), /phase exit/);
+    check('rejects phase cutoff overrun', state => mutateCheckpoint(state, cell => { cell.tests.finishedAt = '2026-11-07T00:51:00Z'; }), /timing/);
+    check('rejects skipped original JUnit under refreshed custody', state => mutateCheckpoint(state, (cell, origin) => {
+        const report = cell.tests.reports[0], bytes = fs.readFileSync(path.join(evidence, origin.origin.prefix, 'sample-runtime-evidence', report.path), 'utf8');
+        report.sha256 = origin.captured('sample-runtime-evidence/' + report.path, bytes.replace('skipped="0"', 'skipped="1"')).sha256;
+    }), /JUnit|skipped|counters/);
+    check('rejects lifecycle outside original HTTP phase', state => {
+        const selection = state.receipt.cells[0], origin = state.states[0];
+        const value = JSON.parse(fs.readFileSync(path.join(evidence, selection.lifecycle.record.path), 'utf8'));
+        value.stoppedObservedAt = '2026-11-07T00:01:01.000000001Z';
+        selection.lifecycle.record = origin.captured('sample-runtime-evidence/postgresql/audit-derived-delete/http/app-lifecycle.json', value); origin.refresh();
+    }, /lifecycle time/);
+    check('rejects missing Oracle runtime configuration', ({ receipt }) => { delete receipt.origins[1].runtimeConfiguration; }, /Original cell origin/);
+    check('rejects broader Oracle runtime configuration policy', ({ receipt }) => {
+        const origin = receipt.origins[1], ref = origin.runtimeConfiguration.policy;
+        const value = JSON.parse(fs.readFileSync(path.join(evidence, ref.path), 'utf8')); value.phases.push('application');
+        origin.runtimeConfiguration.policy = write(evidence, ref.path, JSON.stringify(value));
+    }, /Unapproved Oracle/);
+    check('rejects SDK rebuild configuration claim', ({ receipt }) => {
+        const ref = receipt.origins[1].runtimeConfiguration.policy;
+        const value = JSON.parse(fs.readFileSync(path.join(evidence, ref.path), 'utf8')); value.sdkRebuilt = true;
+        receipt.origins[1].runtimeConfiguration.policy = write(evidence, ref.path, JSON.stringify(value));
+    }, /Unapproved Oracle/);
+    check('rejects uncaptured Oracle configuration phase record', ({ receipt }) => {
+        const ref = receipt.origins[1].runtimeConfiguration.tests;
+        receipt.origins[1].runtimeConfiguration.tests = write(evidence, ref.path, '{}');
+    }, /captured custody/);
+    check('rejects changed captured Oracle timeout', state => {
+        const original = state.states[1], ref = original.origin.runtimeConfiguration.http;
+        const value = JSON.parse(fs.readFileSync(path.join(evidence, ref.path), 'utf8')); value.readTimeoutMs = 5000;
+        original.origin.runtimeConfiguration.http = original.captured('sample-runtime-evidence/oracle/tenant-purge/http/read-timeout-override.json', value); original.refresh();
+    }, /Original Oracle runtime configuration differs/);
+    fs.writeFileSync(path.join(evidence, 'receipt.json'), JSON.stringify(base));
+}
+
 try {
-    toolingOverlayControls(finalSourceOnly);
-    if (!finalSourceOnly) publicQualificationControls();
+    if (!originalCellsOnly) toolingOverlayControls(finalSourceOnly);
+    if (!finalSourceOnly && !originalCellsOnly) publicQualificationControls();
     if (!overlayOnly && !finalSourceOnly) {
     const structural = validateSampleMatrix(read);
     assert.deepEqual(structural.errors, [], 'Actual source must satisfy the static contract before generating fixtures');
@@ -416,6 +595,8 @@ try {
     const receiptPath = path.join(evidence, 'receipt.json');
     const options = receiptSha256 => ({ repositoryRoot: checkout, receiptPath, receiptSha256, contracts, requiredSourceFiles });
     const pristine = JSON.stringify(base), pin = write(evidence, 'receipt.json', pristine).sha256;
+    originalCellControls(base, options);
+    if (!originalCellsOnly) {
     test('complete raw fixture qualifies exactly the intended scope', () => {
         assert(!fs.existsSync(path.join(checkout, 'cachedb-bom/src')), 'The actual POM-only module has no source tree');
         const result = verifySampleRuntime(options(pin));
@@ -816,7 +997,8 @@ try {
         });
     }
     }
-    process.stdout.write(cases + (finalSourceOnly ? ' isolated E-to-final-source tooling overlay contract controls' :
+    }
+    process.stdout.write(cases + (originalCellsOnly ? ' isolated original-cell composite controls' : finalSourceOnly ? ' isolated E-to-final-source tooling overlay contract controls' :
         overlayOnly ? ' isolated E-to-G tooling overlay contract controls' : ' synthetic runtime ingestion checks') +
         ' passed; no live product acceptance is implied.\n');
 } finally {

@@ -3418,6 +3418,8 @@ java -XX:ActiveProcessorCount=1 -Xmx512m -jar target/sample-cache-database-oracl
 # Aynı kilitli K8s kohortunda ikinci kabuk; onaylı offline Newman 6.2.1 önbelleği gerekir:
 pwsh -NoProfile -File scripts/test-tenant-purge-postman.ps1 -BaseUrl http://127.0.0.1:8080 -RunId "$SAMPLE_PURGE_RUN_ID" -ConfirmDisposableDemo
 ```
+Oracle silme örneğinde bağlantı kurmak için 5 saniye, JDBC bağlantısı üzerinden yanıt almak için 15 saniye tanınır. Uygulama, silmeye izin vermeden önce tabloya bağlı yabancı anahtarları Oracle veri sözlüğünden denetler. Tablo boş olsa bile bu sorgu bağlantı kurmaktan uzun sürebilir. Bu ayar, koruma amaçlı SQL komutlarının 2 saniyelik sınırını değiştirmez; silmeyi yeniden denemez ve yabancı anahtar denetimini atlamaz.
+
 Sabit API kökü `/api/examples/v019/tenant-purge`: GET `/status`,
 GET `/rows/1`.. `/rows/7`, POST `/purge`.
 `Authorization: Bearer <özel-token>` ve `X-Purge-Run: <run>` zorunludur.

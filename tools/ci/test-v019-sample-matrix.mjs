@@ -13,6 +13,16 @@ function checkProducerSummary(source){
         'Runtime producer summary must stay below target');
 }
 const producer=read('tools/k8s/SampleRuntimeEvidence.java');
+const launcher=read('tools/k8s/run-sample-runtime-evidence.sh');
+assert.match(launcher,/^set -euo pipefail$/m,'Logger must preserve a failed producer exit');
+for (const channel of ['compile','adapter']) {
+    assert(launcher.includes('2>&1 | tee -- "$out/'+channel+'.log"'),'Missing parent-visible '+channel+' log');
+}
+const startMarker=producer.indexOf('System.out.println("SAMPLE_CELL_START "');
+const checkpoint=producer.indexOf('write(out.resolve("completed-cell-"');
+const completionMarker=producer.indexOf('System.out.println("SAMPLE_CELL_COMPLETE "');
+assert(startMarker>=0 && checkpoint>startMarker && completionMarker>checkpoint,
+    'A completion marker must not precede a successful persisted checkpoint');
 checkProducerSummary(producer);
 assert.throws(()=>checkProducerSummary(producer.replace(
     'source.resolve("target/sample-runtime-coverage.md")','out.resolve("coverage.md")')));

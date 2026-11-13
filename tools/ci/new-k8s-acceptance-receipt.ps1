@@ -134,7 +134,7 @@ function New-K8sAcceptanceReceipt {
             for ($i=0; $i -lt $inventory[$group].Count; $i++) {
                 if ($group -ceq 'executions' -and $inventory[$group][$i].ContainsKey('executionRef')) { continue }
                 if ($group -ceq 'executions' -and $inventory[$group][$i].ContainsKey('kind') -and
-                    $inventory[$group][$i].kind -ceq 'ORIGINAL_CASES') { continue }
+                    $inventory[$group][$i].kind -cin @('ORIGINAL_CASES', 'ORIGINAL_CELLS')) { continue }
                 foreach ($field in $fields) { $inventory[$group][$i][$field] = $records[$i].GetProperty($field).GetString() }
             }
         }

@@ -464,6 +464,207 @@ export function verifyExecutionToolingOverlay({ evidence, reference, original, d
     return { current, record: { ...proof, manifest: { ...reference } } };
 }
 
+const originalCellIds = ['original/feature9-child04', 'original/oracle-tenant-purge'];
+const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+function originalInstant(value) {
+    need(typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(value), 'Original UTC timestamp required');
+    const [seconds, fraction = ''] = value.slice(0, -1).split('.');
+    return BigInt(instant(seconds + 'Z')) * 1000000n + BigInt(fraction.padEnd(9, '0'));
+}
+
+// A schema2 receipt is an index, never a replacement historical process or runtime receipt.
+function originalCells(evidence, receipt) {
+    need(Array.isArray(receipt.origins) && receipt.origins.length === 2, 'Exact two original cell origins required');
+    sameMembers(receipt.origins.map(origin => origin.id), originalCellIds, 'Original cell origins');
+    need(Array.isArray(receipt.cells) && receipt.cells.length === 9, 'Exact nine original checkpoints required');
+    const origins = new Map(), pods = new Set(), processes = new Set(), claimed = new Set();
+    for (const origin of receipt.origins) {
+        const oracle = origin.id === originalCellIds[1];
+        keys(origin, ['id', 'prefix', 'custody', 'pod', 'authority', 'preparation', 'scriptPinPointer',
+            'admission', 'process', 'executedScript', ...(oracle ? ['scopedReceipt', 'runtimeConfiguration'] : [])], 'Original cell origin');
+        need(origin.prefix === origin.id, 'Original cell path prefix mismatch');
+        const custody = evidence.json(origin.custody, 2 * 1024 * 1024, true);
+        need(custody.schema === 'cachedb.feature9-original-custody/v1' && custody.status === 'ORIGINALS_CAPTURED' &&
+            custody.sourceSdkTreesExcludedForExactReuse === true && uuid(custody.podUid) &&
+            Array.isArray(custody.files) && custody.files.length > 0 && custody.files.length <= 1000,
+            'Captured original cell custody required');
+        const inventory = new Map();
+        for (const row of custody.files) {
+            keys(row, ['name', 'sha256', 'bytes'], 'Original custody member');
+            relative(row.name);
+            need(hex(row.sha256) && Number.isSafeInteger(row.bytes) && row.bytes >= 0 && row.bytes <= 32 * 1024 * 1024 &&
+                !inventory.has(row.name.toLowerCase()), 'Invalid/aliased original custody member');
+            inventory.set(row.name.toLowerCase(), row);
+        }
+        function captured(ref, maximum = 32 * 1024 * 1024, exclusive = false) {
+            keys(ref, ['path', 'sha256'], 'Captured original reference');
+            const member = relative(ref.path);
+            need(member.startsWith(origin.prefix + '/'), 'Original cell path prefix mismatch');
+            const name = member.slice(origin.prefix.length + 1), row = inventory.get(name.toLowerCase());
+            need(row && row.name === name && row.sha256 === ref.sha256, 'Original cell reference absent from captured custody');
+            const observed = evidence.file(ref, maximum, exclusive);
+            need(fs.statSync(observed).size === row.bytes, 'Original custody member length mismatch');
+            return ref;
+        }
+        const json = (ref, exclusive = false) => evidence.json(captured(ref), 2 * 1024 * 1024, exclusive);
+        const process = json(origin.process, true), pod = evidence.json(origin.pod, 2 * 1024 * 1024, true);
+        const authority = evidence.json(origin.authority, 2 * 1024 * 1024, true);
+        const preparation = evidence.json(origin.preparation, 2 * 1024 * 1024, true);
+        const admission = json(origin.admission, true);
+        const expectedExit = oracle ? 0 : 1;
+        keys(process, ['schema', 'executionId', 'logicalExecutionId', 'podUid', 'pid', 'executable', 'argv', 'workingDirectory',
+            'startedAt', 'finishedAt', 'exitCode', 'timedOut', 'stdoutComplete', 'stderrComplete', 'stdout', 'stderr', 'exit',
+            ...(oracle ? ['teeExit', 'tee'] : [])], 'Original native process');
+        need(process.schema === 'cachedb.feature9-native-process/v1' && uuid(process.executionId) &&
+            !processes.has(process.executionId) && !pods.has(process.podUid) && process.podUid === custody.podUid &&
+            process.logicalExecutionId === (oracle ? 'oracle-tenant-purge' : 'sample-features') &&
+            Number.isSafeInteger(process.pid) && process.pid > 0 && process.executable === '/usr/bin/bash' &&
+            equal(process.argv, ['/workspace/direct-overlay/run-feature9.sh']) && process.workingDirectory === '/workspace' &&
+            process.exitCode === expectedExit && process.timedOut === false && process.stdoutComplete === true && process.stderrComplete === true,
+            'Original native process identity/exit/output differs');
+        pods.add(process.podUid); processes.add(process.executionId);
+        const start = instant(process.startedAt), finish = instant(process.finishedAt);
+        const created = instant(pod.metadata?.creationTimestamp), cutoff = instant(admission.originalCutoff);
+        need(pod.kind === 'Pod' && pod.metadata.uid === process.podUid && pod.metadata.namespace === admission.namespace &&
+            /^cachedb-[a-z0-9-]+$/.test(admission.namespace) && admission.runnerPodUid === process.podUid &&
+            admission.serviceRunnerPodUid === process.podUid && typeof admission.runId === 'string' &&
+            admission.runId.endsWith('-' + process.podUid) && instant(admission.runnerCreatedAt) === created &&
+            Number(admission.cpuMillicores) === 2000 && Number(admission.memoryBytes) === 4294967296,
+            'Original Pod/admission identity/resources differ');
+        need(authority.schema === 'cachedb.feature9-authority/v1' && authority.context === 'kubernetes-admin@EmaTech' &&
+            authority.podUid === process.podUid && authority.pod === pod.metadata.name && authority.namespace === admission.namespace &&
+            authority.maximumRunSeconds === 3360 && authority.deadlineMaximumSeconds === 3360 && authority.extensionAllowed === false &&
+            authority.authorizedByUser === true && authority.baselineRun === false && authority.retriesAllowed === false &&
+            Number.isSafeInteger(authority.cutoffEpoch) && authority.cutoffEpoch * 1000 === cutoff &&
+            Number.isSafeInteger(authority.firstResourceEpoch) && Number.isSafeInteger(authority.firstResourceCutoffEpoch) &&
+            authority.firstResourceCutoffEpoch - authority.firstResourceEpoch === 3360 &&
+            cutoff <= authority.firstResourceCutoffEpoch * 1000 && created >= authority.firstResourceEpoch * 1000 &&
+            Number.isSafeInteger(authority.podDeadlineSeconds) && authority.podDeadlineSeconds > 0 &&
+            authority.podDeadlineSeconds === Number(admission.activeDeadlineSeconds) &&
+            pod.spec?.activeDeadlineSeconds === authority.podDeadlineSeconds &&
+            cutoff <= created + authority.podDeadlineSeconds * 1000 && created <= start && start <= finish &&
+            finish - start <= 2400000 && finish <= cutoff,
+            'Original authority/cutoff/process ordering differs');
+        need(custody.cutoffEpoch * 1000 <= cutoff && finish <= custody.cutoffEpoch * 1000,
+            'Original custody cutoff differs');
+        for (const name of ['stdout', 'stderr', 'exit', ...(oracle ? ['tee'] : [])]) {
+            const stream = process[name]; keys(stream, ['path', 'sha256', 'bytes'], 'Native stream');
+            need(Number.isSafeInteger(stream.bytes) && stream.bytes >= 0, 'Invalid native stream length');
+            const ref = captured({ path: origin.prefix + '/' + relative(stream.path), sha256: stream.sha256 },
+                name === 'exit' || name === 'tee' ? 16 : 32 * 1024 * 1024, true);
+            need(fs.statSync(evidence.file(ref)).size === stream.bytes, 'Native stream length differs');
+            if (name === 'stdout') need(stream.bytes > 0, 'Original stdout must be nonempty');
+            if (name === 'exit' || name === 'tee') need(new RegExp('^' + (name === 'exit' ? expectedExit : 0) + '\\r?\\n?$').test(evidence.text(ref, 16)),
+                'Original native/tee exit file differs');
+        }
+        if (oracle) need(process.teeExit === 0, 'Original tee failed');
+        need(origin.executedScript.path === origin.prefix + '/direct-overlay/run-feature9.sh', 'Original executed script path differs');
+        captured(origin.executedScript);
+        need(typeof origin.scriptPinPointer === 'string' && /^\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+$/.test(origin.scriptPinPointer),
+            'Original preparation script pin pointer required');
+        let pin = preparation;
+        for (const part of origin.scriptPinPointer.slice(1).split('/')) {
+            need(pin && Object.hasOwn(pin, part), 'Original preparation script pin missing'); pin = pin[part];
+        }
+        need(pin === origin.executedScript.sha256, 'Executed script differs from original preparation');
+        let scoped = null;
+        if (oracle) {
+            const configuration = origin.runtimeConfiguration;
+            keys(configuration, ['policy', 'tests', 'http'], 'Oracle runtime configuration');
+            const policy = evidence.json(configuration.policy, 64 * 1024, true);
+            const environmentValue = '{"spring.datasource.hikari.data-source-properties[oracle.jdbc.ReadTimeout]":"15000"}';
+            need(policy.schema === 'cachedb.oracle-tenant-purge-runtime-configuration/v1' && policy.scope === 'oracle/tenant-purge' &&
+                equal(policy.phases, ['tests', 'http']) && policy.environmentVariable === 'SPRING_APPLICATION_JSON' &&
+                policy.environmentValue === environmentValue && policy.property === 'spring.datasource.hikari.data-source-properties[oracle.jdbc.ReadTimeout]' &&
+                policy.oracleDataSourceProperty === 'oracle.jdbc.ReadTimeout' && policy.readTimeoutMs === 15000 &&
+                policy.connectTimeoutMsUnchanged === 5000 && policy.guardStatementTimeoutSecondsUnchanged === 2 &&
+                policy.productSourceOverlay === false && policy.sdkRebuilt === false && policy.effectiveConnectionValueObserved === false,
+                'Unapproved Oracle runtime configuration');
+            for (const phase of ['tests', 'http']) {
+                need(configuration[phase].path === origin.prefix + '/sample-runtime-evidence/oracle/tenant-purge/' + phase + '/read-timeout-override.json',
+                    'Oracle runtime configuration phase path differs');
+                const applied = json(configuration[phase], true);
+                keys(applied, ['schema', 'provider', 'lane', 'phase', 'variable', 'value', 'readTimeoutMs',
+                    'connectTimeoutMsUnchanged', 'guardStatementTimeoutSecondsUnchanged', 'effectiveConnectionValueObserved'], 'Original Oracle runtime configuration');
+                need(applied.schema === 'cachedb.oracle-read-timeout-child-environment/v1' && applied.provider === 'oracle' &&
+                    applied.lane === 'tenant-purge' && applied.phase === phase && applied.variable === policy.environmentVariable &&
+                    applied.value === policy.environmentValue && applied.readTimeoutMs === 15000 && applied.connectTimeoutMsUnchanged === 5000 &&
+                    applied.guardStatementTimeoutSecondsUnchanged === 2 && applied.effectiveConnectionValueObserved === false,
+                    'Original Oracle runtime configuration differs');
+            }
+            scoped = json(origin.scopedReceipt, true);
+            keys(scoped, ['schema', 'kind', 'source', 'sdk', 'execution', 'cells'], 'Original scoped receipt');
+            keys(scoped.source, ['root', 'manifest'], 'Scoped source binding');
+            keys(scoped.sdk, ['root', 'manifest', 'sourceManifestSha256'], 'Scoped SDK binding');
+            keys(scoped.execution, ['runId', 'namespace', 'runnerPodUid', 'startedAt', 'finishedAt', 'cutoffAt', 'cpuMillicores', 'memoryBytes'], 'Scoped execution');
+            need(scoped.schema === 1 && scoped.kind === 'cachedb-oracle-tenant-purge-scoped-runtime' &&
+                scoped.source.manifest.sha256 === receipt.source.manifest.sha256 && scoped.sdk.manifest.sha256 === receipt.sdk.manifest.sha256 &&
+                scoped.sdk.sourceManifestSha256 === receipt.sdk.sourceManifestSha256 &&
+                scoped.source.root === 'source' && scoped.sdk.root === 'sdk' && scoped.execution.runId === admission.runId &&
+                scoped.execution.cpuMillicores === 2000 && scoped.execution.memoryBytes === 4294967296 &&
+                scoped.execution.runnerPodUid === process.podUid && scoped.execution.namespace === admission.namespace &&
+                instant(scoped.execution.startedAt) >= start && instant(scoped.execution.finishedAt) <= finish &&
+                instant(scoped.execution.finishedAt) >= instant(scoped.execution.startedAt) && instant(scoped.execution.cutoffAt) <= cutoff &&
+                instant(scoped.execution.finishedAt) <= instant(scoped.execution.cutoffAt) &&
+                Array.isArray(scoped.cells) && scoped.cells.length === 1, 'Original scoped Oracle receipt differs');
+            for (const binding of [scoped.source, scoped.sdk]) {
+                const member = path.posix.dirname(origin.scopedReceipt.path) + '/' + relative(binding.manifest.path);
+                captured({ path: member, sha256: binding.manifest.sha256 });
+            }
+        }
+        origins.set(origin.id, { origin, process, start, finish, cutoff, captured, json, scoped, count: 0 });
+    }
+    const cells = receipt.cells.map(selection => {
+        keys(selection, ['originId', 'checkpoint', 'lifecycle'], 'Original cell selection');
+        const origin = origins.get(selection.originId); need(origin, 'Unknown original cell origin');
+        keys(selection.lifecycle, ['record', 'log'], 'Original lifecycle binding');
+        const cell = origin.json(selection.checkpoint, true), cellId = cell.provider + '/' + cell.lane;
+        const oracle = selection.originId === originalCellIds[1];
+        need((cellId === 'oracle/tenant-purge') === oracle, 'Original eight-plus-one cell partition differs');
+        const expected = providers.flatMap(provider => Object.keys(lanes).map(lane => provider + '/' + lane)).indexOf(cellId) + 1;
+        need(expected > 0 && selection.checkpoint.path === origin.origin.prefix + '/sample-runtime-evidence/completed-cell-' +
+            (oracle ? 1 : expected) + '.json', 'Original checkpoint ordinal differs');
+        if (oracle) need(equal(cell, origin.scoped.cells[0]), 'Oracle checkpoint differs from original scoped receipt');
+        const directory = path.posix.dirname(selection.checkpoint.path);
+        const ref = value => {
+            keys(value, ['path', 'sha256'], 'Original phase reference');
+            return origin.captured({ path: directory + '/' + relative(value.path), sha256: value.sha256 });
+        };
+        const phaseCells = { ...cell };
+        for (const purpose of ['tests', 'http']) {
+            const phase = cell[purpose];
+            phaseCells[purpose] = { ...phase };
+            for (const name of ['exit', 'preservationExit', 'sourceBefore', 'sourceAfter', 'sdkBefore', 'sdkAfter']) phaseCells[purpose][name] = ref(phase[name]);
+            if (purpose === 'tests') {
+                need(Array.isArray(phase.reports), 'Original reports required'); phaseCells.tests.reports = phase.reports.map(ref);
+            } else {
+                phaseCells.http.junit = ref(phase.junit);
+                if (cell.lane !== 'tenant-purge') phaseCells.http.newman = ref(phase.newman);
+            }
+        }
+        const lifecycle = origin.json(selection.lifecycle.record, true);
+        const app = origin.captured(selection.lifecycle.log, 32 * 1024 * 1024, true);
+        const lifecyclePrefix = directory + '/' + cell.provider + '/' + cell.lane + '/http/';
+        need(selection.lifecycle.record.path === lifecyclePrefix + 'app-lifecycle.json' && selection.lifecycle.log.path === lifecyclePrefix + 'app.log' &&
+            lifecycle.schema === 'cachedb.feature9-cell-lifecycle/v1' && lifecycle.podUid === origin.process.podUid && lifecycle.lane === cell.lane &&
+            Number.isSafeInteger(lifecycle.pid) && lifecycle.pid > 0 && lifecycle.postmanNativeExit === 0 && lifecycle.aliveAfterStop === false &&
+            Number.isSafeInteger(lifecycle.nativeExit) && Number.isSafeInteger(lifecycle.stdoutBytes) && lifecycle.stdoutBytes > 0 &&
+            fs.statSync(evidence.file(app)).size === lifecycle.stdoutBytes, 'Original cell lifecycle/log incomplete');
+        let previous = originalInstant(cell.http.startedAt);
+        for (const name of ['startedObservedAt', 'readyObservedAt', 'aliveAfterRequestsObservedAt', 'stopRequestedAt', 'stoppedObservedAt']) {
+            const time = originalInstant(lifecycle[name]); need(time >= previous && time <= originalInstant(cell.http.finishedAt), 'Original lifecycle time ordering differs'); previous = time;
+        }
+        need(!claimed.has(cellId), 'Duplicate original cell'); claimed.add(cellId); origin.count++;
+        return { cell: phaseCells, origin };
+    });
+    need(origins.get(originalCellIds[0]).count === 8 && origins.get(originalCellIds[1]).count === 1, 'Exact eight-plus-one original selection required');
+    return { cells, origins: [...origins.values()].map(({ origin, process }) => ({ id: origin.id, podUid: process.podUid,
+        originalPhysicalExecutionId: process.executionId, observedExit: process.exitCode, startedAt: process.startedAt, finishedAt: process.finishedAt,
+        ...(origin.runtimeConfiguration ? { runtimeConfiguration: { policy: origin.runtimeConfiguration.policy,
+            property: 'oracle.jdbc.ReadTimeout', baselineReadTimeoutMs: 5000, readTimeoutMs: 15000,
+            scope: 'oracle/tenant-purge', phases: ['tests', 'http'], sdkRebuilt: false, effectiveConnectionValueObserved: false } } : {}) })) };
+}
+
 // sourceEquivalence is a coordinator-pinned { path, sha256 } reference relative to the receipt directory.
 // It qualifies only the current checkout; all original SDK/phase/source evidence remains bound to the receipt.
 export function verifySampleRuntime({ repositoryRoot, receiptPath, receiptSha256, contracts, requiredSourceFiles = [],
@@ -473,8 +674,9 @@ export function verifySampleRuntime({ repositoryRoot, receiptPath, receiptSha256
     need(fs.realpathSync(root) === root && !fs.lstatSync(absolute).isSymbolicLink(), 'Canonical non-symlink evidence root required');
     const evidence = new Evidence(root), receiptRef = { path: path.basename(absolute), sha256: receiptSha256 };
     const receipt = evidence.json(receiptRef, 1024 * 1024);
-    keys(receipt, ['schema', 'kind', 'source', 'sdk', 'execution', 'cells'], 'Runtime receipt');
-    need(receipt.schema === 1 && receipt.kind === 'cachedb-v019-sample-runtime', 'Unsupported runtime receipt schema');
+    const composite = receipt.schema === 2 && receipt.kind === 'cachedb-v019-sample-runtime-original-cells';
+    keys(receipt, ['schema', 'kind', 'source', 'sdk', composite ? 'origins' : 'execution', 'cells'], 'Runtime receipt');
+    need(composite || receipt.schema === 1 && receipt.kind === 'cachedb-v019-sample-runtime', 'Unsupported runtime receipt schema');
     keys(receipt.source, ['root', 'manifest'], 'Source binding');
     const overlay = Object.hasOwn(receipt.sdk, 'executionOverlay');
     keys(receipt.sdk, ['root', 'manifest', 'sourceManifestSha256', ...(overlay ? ['executionOverlay'] : [])], 'SDK binding');
@@ -557,20 +759,26 @@ export function verifySampleRuntime({ repositoryRoot, receiptPath, receiptSha256
     for (const member of required) need(source.has(member), 'Frozen source manifest omits required input: ' + member);
     sameMembers([...sdk.keys()], sdkMembers, 'Final SDK coordinate/classifier roster');
     for (const [member, sha256] of sdk) evidence.file({ path: sdkRoot + '/' + member, sha256 });
+    const originals = composite ? originalCells(evidence, receipt) : null;
     const run = receipt.execution;
+    let start, finish;
+    if (!composite) {
     keys(run, ['runId', 'namespace', 'runnerPodUid', 'startedAt', 'finishedAt', 'cutoffAt', 'cpuMillicores', 'memoryBytes'], 'Execution binding');
     need(typeof run.runId === 'string' && /^[a-zA-Z0-9_-]{8,128}$/.test(run.runId) &&
         /^cachedb-[a-z0-9-]+$/.test(run.namespace) && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(run.runnerPodUid) &&
         Number.isSafeInteger(run.cpuMillicores) && run.cpuMillicores > 0 &&
         Number.isSafeInteger(run.memoryBytes) && run.memoryBytes > 0, 'Invalid execution identity/resources');
-    const start = instant(run.startedAt), finish = instant(run.finishedAt), cutoff = instant(run.cutoffAt);
+    start = instant(run.startedAt); finish = instant(run.finishedAt); const cutoff = instant(run.cutoffAt);
     need(start <= finish && finish <= cutoff, 'Execution exceeded its original cutoff');
+    }
     need(Array.isArray(contracts) && contracts.length === 9 && Array.isArray(receipt.cells) && receipt.cells.length === 9, 'Exact nine provider/lane cells required');
     const expectedCells = providers.flatMap(provider => Object.keys(lanes).map(lane => provider + '/' + lane));
     sameMembers(contracts.map(cell => cell.provider + '/' + cell.lane), expectedCells, 'Source contracts');
-    sameMembers(receipt.cells.map(cell => cell.provider + '/' + cell.lane), expectedCells, 'Runtime cells');
+    const runtimeCells = composite ? originals.cells.map(entry => entry.cell) : receipt.cells;
+    sameMembers(runtimeCells.map(cell => cell.provider + '/' + cell.lane), expectedCells, 'Runtime cells');
     const fixtures = new Set(), qualified = [];
-    for (const cell of receipt.cells) {
+    for (const cell of runtimeCells) {
+        if (composite) ({ start, finish } = originals.cells.find(entry => entry.cell === cell).origin);
         keys(cell, ['provider', 'lane', 'sourceManifestSha256', 'sdkManifestSha256', 'tests', 'http'], 'Runtime cell');
         need(cell.sourceManifestSha256 === receipt.source.manifest.sha256 && cell.sdkManifestSha256 === receipt.sdk.manifest.sha256,
             'Mixed source/SDK cell binding');
@@ -604,11 +812,11 @@ export function verifySampleRuntime({ repositoryRoot, receiptPath, receiptSha256
     evidence.unchanged();
     // Also fence the live checkout for the complete inspection, not just its first read.
     for (const [member, sha256] of currentSource) need(fileHash(safeFile(checkout, member), 64 * 1024 * 1024).sha256 === sha256, 'Checkout changed during verification');
-    return { schema: 1, evidence: 'PINNED_FINAL_SAMPLE_RUNTIME', receiptSha256, sourceManifestSha256: receipt.source.manifest.sha256,
+    return { schema: composite ? 2 : 1, evidence: composite ? 'PINNED_ORIGINAL_CELL_COMPOSITE' : 'PINNED_FINAL_SAMPLE_RUNTIME', receiptSha256, sourceManifestSha256: receipt.source.manifest.sha256,
         ...(equivalence ? { currentSourceManifestSha256: (toolingQualification || equivalence).record.currentSourceManifest.sha256,
             sourceRequalification: equivalence.record } : {}),
         ...(toolingQualification ? { sourceQualificationChain: { schema: 1, kind: 'cachedb-v019-source-qualification-chain',
             stages: [equivalence.record, toolingQualification.record] } } : {}),
-        sdkManifestSha256: receipt.sdk.manifest.sha256, runId: run.runId, tests: 141, requests: 180, cells: qualified,
+        sdkManifestSha256: receipt.sdk.manifest.sha256, ...(composite ? { originalExecutions: originals.origins } : { runId: run.runId }), tests: 141, requests: 180, cells: qualified,
         scope: 'FOUR_PENDING_FEATURES_ONLY_NOT_FULL_RELEASE_OR_BASELINE_HTTP_ACCEPTANCE' };
 }

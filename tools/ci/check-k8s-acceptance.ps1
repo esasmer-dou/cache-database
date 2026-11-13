@@ -206,7 +206,22 @@ function Assert-K8sExactStrings($Actual, $Expected) {
     }
 }
 
+function Test-K8sOriginalCellObligation($Execution, $Receipt) {
+    if (!$Execution.Contains('kind') -or $Execution.kind -cne 'ORIGINAL_CELLS') { return $false }
+    if ($Receipt.schema -cne 'cachedb.k8s-acceptance/v3' -or $Execution.id -cne 'sample-features' -or
+        $Execution.Count -ne 4 -or @($Execution.Keys | Where-Object { $_ -cnotin @('id', 'kind', 'physicalExecutionIds', 'receipt') }).Count -or
+        $Execution.physicalExecutionIds -isnot [array] -or $Execution.physicalExecutionIds.Count -ne 2 -or
+        @($Execution.physicalExecutionIds | Sort-Object -Unique).Count -ne 2 -or
+        @($Execution.physicalExecutionIds | Where-Object { $_ -cnotin @('original/feature9-child04', 'original/oracle-tenant-purge') }).Count -or
+        $Execution.receipt -isnot [string] -or !$Execution.receipt) {
+        throw 'Exact v3 sample-features original-cell binding required; synthetic process fields are forbidden.'
+    }
+    return $true
+}
+
 function Test-K8sOriginalCaseObligation($Execution, $Receipt) {
+    # Both logical-only forms must be skipped by the receipt builder's physical-process loop.
+    if (Test-K8sOriginalCellObligation $Execution $Receipt) { return $true }
     if (!$Execution.Contains('kind') -or $Execution.kind -cne 'ORIGINAL_CASES') { return $false }
     if ($Receipt.schema -cne 'cachedb.k8s-acceptance/v3' -or
         $Execution.id -cnotin @('standalone', 'cluster', 'provider/postgresql', 'provider/mssql', 'provider/oracle') -or
@@ -316,7 +331,7 @@ function Assert-K8sOriginalCaseExecutions($Obligation, $Receipt, [string]$Root, 
     }
     if (!$reported.SetEquals([string[]]$Obligation.physicalExecutionIds)) { throw 'Every bound physical original must contribute its original report.' }
     foreach ($other in $Receipt.executions) {
-        if ($other.id -ceq $Obligation.id -or !(Test-K8sOriginalCaseObligation $other $Receipt)) { continue }
+        if ($other.id -ceq $Obligation.id -or (Test-K8sOriginalCellObligation $other $Receipt) -or !(Test-K8sOriginalCaseObligation $other $Receipt)) { continue }
         $shared = @($Obligation.physicalExecutionIds | Where-Object { $_ -cin $other.physicalExecutionIds })
         if (!$shared.Count) { continue }
         $otherIndex = Read-K8sJson (Assert-K8sSealedReference $other.originalCases $Receipt $Root 4MB) 4MB
@@ -458,7 +473,7 @@ function Assert-K8sOriginalCustody($Execution, $Index, $Receipt, [string]$Root, 
     }
     $indexedOriginalReportPaths = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
     foreach ($obligation in $Receipt.executions) {
-        if (!(Test-K8sOriginalCaseObligation $obligation $Receipt)) { continue }
+        if ((Test-K8sOriginalCellObligation $obligation $Receipt) -or !(Test-K8sOriginalCaseObligation $obligation $Receipt)) { continue }
         $ownedIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($physical in $Receipt.physicalExecutions) {
             if ($physical.id -cnotin $obligation.physicalExecutionIds -or
@@ -816,6 +831,10 @@ function Assert-K8sExecutionRoster($Receipt, [string]$Root, $Policy) {
     $validatedOriginals = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($id in $required) {
         $execution = Get-K8sExecution $Receipt $id
+        if (Test-K8sOriginalCellObligation $execution $Receipt) {
+            Assert-K8sOriginalCellExecutions $execution $Receipt $Root $Policy $processFiles
+            continue
+        }
         if (Test-K8sOriginalCaseObligation $execution $Receipt) {
             Assert-K8sOriginalCaseExecutions $execution $Receipt $Root $Policy $processFiles $validatedOriginals
             continue
@@ -926,6 +945,100 @@ function Resolve-K8sAcceptance($Envelope, [string]$EvidenceRoot, [string]$Source
     return @{receipt=$receipt; root=$runtime; sourceQualification=$qualification}
 }
 
+function Assert-K8sOriginalCellExecutions($Execution, $Receipt, [string]$Root, $Policy, $ProcessFiles = $null) {
+    if (!(Test-K8sOriginalCellObligation $Execution $Receipt)) { throw 'Original-cell obligation required.' }
+    $member = $Execution.receipt
+    $entries = @($Receipt.files | Where-Object { $_.path -ceq $member })
+    if ($entries.Count -ne 1) { throw 'Sealed original-cell composite receipt required.' }
+    $header = Read-K8sJson (Assert-K8sSealedReference @{path=$member;sha256=$entries[0].sha256} $Receipt $Root 1MB)
+    if ($header.schema -ne 2 -or $header.kind -cne 'cachedb-v019-sample-runtime-original-cells' -or
+        $header.Count -ne 6 -or @($header.Keys | Where-Object { $_ -cnotin @('schema','kind','source','sdk','origins','cells') }).Count -or
+        $header.origins -isnot [array] -or $header.origins.Count -ne 2 -or $header.cells -isnot [array] -or $header.cells.Count -ne 9) {
+        throw 'Versioned two-origin nine-checkpoint composite required; no synthetic execution envelope.'
+    }
+    Assert-K8sFeatureBinding $header $Receipt $Root
+    $directory = [IO.Path]::GetDirectoryName($member).Replace('\','/')
+    $origins = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $seenProcesses = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $pods = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($origin in $header.origins) {
+        if ($origin.id -cnotin $Execution.physicalExecutionIds -or !$origins.Add($origin.id) -or $origin.prefix -cne $origin.id) {
+            throw 'Original cell identity/prefix mismatch.'
+        }
+        $oracle = $origin.id -ceq 'original/oracle-tenant-purge'
+        $expectedExit = if ($oracle) { 0 } else { 1 }
+        $matches = @($Receipt.physicalExecutions | Where-Object { $_.id -ceq $origin.id })
+        if ($matches.Count -ne 1) { throw 'Unique original cell physical process required.' }
+        $physical = $matches[0]
+        # Review authority is outside the new composite: a self-sealed originalRecord is not custody.
+        $reviewedReferences = @($origin.custody,$origin.pod,$origin.authority,$origin.preparation)
+        if ($oracle) { $reviewedReferences += $origin.runtimeConfiguration.policy }
+        foreach ($reference in $reviewedReferences) {
+            $fullMember = if ($directory) { $directory+'/'+$reference.path } else { $reference.path }
+            $null = Assert-K8sSealedReference @{path=$fullMember;sha256=$reference.sha256} $Receipt $Root 2MB
+            if (!$Policy.Contains('ReviewedOriginalReceipts') -or !$Policy.ReviewedOriginalReceipts.Contains($reference.sha256) -or
+                $Policy.ReviewedOriginalReceipts[$reference.sha256] -cne $physical.podUid) {
+                throw 'Original cell custody/Pod/authority/preparation/runtime configuration lacks independent policy admission.'
+            }
+        }
+        $custodyMember = if ($directory) { $directory+'/'+$origin.custody.path } else { $origin.custody.path }
+        $custody = Read-K8sJson (Resolve-K8sMember $Root $custodyMember)
+        if ($custody.schema -cne 'cachedb.feature9-original-custody/v1' -or $custody.status -cne 'ORIGINALS_CAPTURED' -or
+            $custody.podUid -cne $physical.podUid -or $custody.sourceSdkTreesExcludedForExactReuse -cne $true -or
+            $custody.files -isnot [array] -or !$custody.files.Count -or $custody.files.Count -gt 1000) {
+            throw 'Captured original cell custody required.'
+        }
+        $inventory = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($row in $custody.files) {
+            $null = Resolve-K8sMember $Root $row.name
+            if ($row.Count -ne 3 -or $row.sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+                ($row.bytes -isnot [int] -and $row.bytes -isnot [long]) -or $row.bytes -lt 0 -or $row.bytes -gt 32MB -or
+                !$inventory.TryAdd($row.name,$row)) { throw 'Invalid/aliased original cell custody member.' }
+        }
+        $processRelative = $origin.process.path
+        if (!$processRelative.StartsWith($origin.prefix+'/',[StringComparison]::Ordinal)) { throw 'Original process prefix mismatch.' }
+        $name = $processRelative.Substring($origin.prefix.Length+1)
+        if (!$inventory.ContainsKey($name) -or $inventory[$name].name -cne $name -or
+            $inventory[$name].sha256 -cne $origin.process.sha256) { throw 'Original process absent from custody.' }
+        $recordMember = if ($directory) { $directory+'/'+$processRelative } else { $processRelative }
+        $recordPath = Assert-K8sSealedReference @{path=$recordMember;sha256=$origin.process.sha256} $Receipt $Root 2MB
+        if ((Get-Item -LiteralPath $recordPath).Length -ne $inventory[$name].bytes) { throw 'Original process custody length differs.' }
+        $record = Read-K8sJson $recordPath
+        if ($record.schema -cne 'cachedb.feature9-native-process/v1' -or $record.podUid -cne $physical.podUid -or
+            $record.logicalExecutionId -cne $(if($oracle){'oracle-tenant-purge'}else{'sample-features'}) -or
+            $record.executionId -cne $physical.originalPhysicalExecutionId -or !$seenProcesses.Add($record.executionId) -or !$pods.Add($record.podUid) -or
+            $record.exitCode -ne $expectedExit -or $physical.observedExit -ne $expectedExit -or
+            $record.timedOut -cne $false -or $record.stdoutComplete -cne $true -or $record.stderrComplete -cne $true -or
+            $record.executable -cne '/usr/bin/bash' -or $record.argv -isnot [array] -or $record.argv.Count -ne 1 -or
+            $record.argv[0] -cne '/workspace/direct-overlay/run-feature9.sh' -or $record.workingDirectory -cne '/workspace' -or
+            $physical.command -cne '/usr/bin/bash /workspace/direct-overlay/run-feature9.sh' -or $physical.workingDirectory -cne '/workspace' -or
+            $physical.originalRecord.path -cne $recordMember -or $physical.originalRecord.sha256 -cne $origin.process.sha256 -or
+            $physical.originalRecordId -cne $record.logicalExecutionId -or
+            (ConvertTo-K8sTimestamp $record.startedAt).UtcDateTime.Ticks -ne (ConvertTo-K8sTimestamp $physical.startedAt).UtcDateTime.Ticks -or
+            (ConvertTo-K8sTimestamp $record.finishedAt).UtcDateTime.Ticks -ne (ConvertTo-K8sTimestamp $physical.finishedAt).UtcDateTime.Ticks) {
+            throw 'Original cell process/physical identity, invocation, time or native exit differs.'
+        }
+        foreach ($streamName in @('stdout','stderr','exit') + $(if($oracle){@('tee')}else{@()})) {
+            $stream = $record[$streamName]
+            if (!$inventory.ContainsKey($stream.path) -or $inventory[$stream.path].name -cne $stream.path -or
+                $inventory[$stream.path].sha256 -cne $stream.sha256 -or $inventory[$stream.path].bytes -ne $stream.bytes) {
+                throw 'Original process stream absent from custody.'
+            }
+            $streamMember = $(if($directory){$directory+'/'}else{''})+$origin.prefix+'/'+$stream.path
+            $streamPath = Assert-K8sSealedReference @{path=$streamMember;sha256=$stream.sha256} $Receipt $Root 32MB
+            if ((Get-Item -LiteralPath $streamPath).Length -ne $stream.bytes) { throw 'Original stream length differs.' }
+            if ($streamName -cin @('stdout','exit') -and $null -ne $ProcessFiles -and !$ProcessFiles.Add($streamMember)) { throw 'Original cell process evidence aliases.' }
+            if ($streamName -ceq 'stdout' -and $physical.log -cne $streamMember -or $streamName -ceq 'exit' -and $physical.exitFile -cne $streamMember) { throw 'Original physical process stream differs.' }
+            if ($streamName -ceq 'tee' -and ($record.teeExit -ne 0 -or $stream.bytes -gt 16 -or [IO.File]::ReadAllText($streamPath).Trim() -cne '0')) { throw 'Original tee exit failed.' }
+        }
+        if ($physical.sourceIdentity.manifestSha256 -cne $header.source.manifest.sha256 -or $physical.sdkManifestSha256 -cne $header.sdk.manifest.sha256) {
+            throw 'Original cell source/SDK differs.'
+        }
+        Assert-K8sExecution $physical $Receipt $Root $expectedExit
+    }
+    # Trusted Node validation below proves checkpoint/report/lifecycle custody and exact 8+1 semantics.
+}
+
 function Assert-K8sFeatureBinding($FeatureHeader, $Receipt, [string]$Root) {
     if ($FeatureHeader.source.manifest.sha256 -cne (Get-FileHash -LiteralPath (Resolve-K8sMember $Root $Receipt.source.manifest)).Hash.ToLowerInvariant() -or
         $FeatureHeader.sdk.manifest.sha256 -cne $Receipt.sdk.manifestSha256 -or
@@ -950,9 +1063,13 @@ function Assert-K8sReports($Receipt, [string]$Root, [string]$SourceRoot, [string
         & (Join-Path $SourceRoot 'tools/ci/check-full-environment-tests.ps1') @arguments | Out-Null
     }
     $feature = Get-K8sExecution $Receipt 'sample-features'
-    Assert-K8sExecution $feature $Receipt $Root
+    if (Test-K8sOriginalCellObligation $feature $Receipt) { Assert-K8sOriginalCellExecutions $feature $Receipt $Root $Policy }
+    else { Assert-K8sExecution $feature $Receipt $Root }
     $featureReceipt = Resolve-K8sMember $Root $feature.receipt
     $featureHeader = Read-K8sJson $featureReceipt
+    if ($featureHeader.Contains('schema') -and $featureHeader.schema -eq 2 -and !(Test-K8sOriginalCellObligation $feature $Receipt)) {
+        throw 'Composite features require the explicit original-cell canonical obligation and independent custody policy.'
+    }
     Assert-K8sFeatureBinding $featureHeader $Receipt $Root
     $featureSource = $SourceRoot
     if ($null -ne $SourceQualification) {

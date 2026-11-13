@@ -1,6 +1,6 @@
 #requires -Version 7.3
 [CmdletBinding()]
-param([string]$EvidenceDirectory)
+param([string]$EvidenceDirectory, [switch]$OracleConfigurationControlsOnly)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'k8s-source-equivalence.ps1')
@@ -32,6 +32,146 @@ function Put([string]$Path, [string]$Value) {
     $file = Resolve-K8sMember $source $Path
     $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($file))
     [IO.File]::WriteAllText($file, $Value, [Text.UTF8Encoding]::new($false))
+}
+function Test-OracleConfigurationControls {
+    $policy = Import-PowerShellDataFile (Join-Path $PSScriptRoot 'k8s-acceptance-contract.psd1')
+    $configurationPath = 'sample-cache-database-oracle/src/purge/resources/application-purge.yml'
+    $loggingPaths = @('tools/k8s/SampleRuntimeEvidence.java','tools/k8s/run-sample-runtime-evidence.sh')
+    $matrixPaths = $loggingPaths + @('tools/ci/test-v019-sample-matrix.mjs')
+    $otherToolingPath = 'tools/ci/test-k8s-export-staging.ps1'
+    $actualPin = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot ('../../' + $configurationPath))).Hash.ToLowerInvariant()
+    if ((Get-K8sOverlayClassification $configurationPath $policy $actualPin) -cne 'scoped-runtime-configuration') {
+        throw 'Actual reviewed Oracle configuration is not classified by its exact policy pin.'
+    }
+    $fixtureChecks.Add('actual-oracle-configuration-policy-pin')
+    foreach ($pin in @('', ('0' * 64))) {
+        Reject-Overlay ('oracle-classification-wrong-after-pin-' + $pin.Length) {
+            Get-K8sOverlayClassification $configurationPath $policy $pin
+        } 'Only explicitly pinned'
+    }
+    foreach ($path in @($configurationPath.ToUpperInvariant(),
+            'sample-cache-database-oracle/src/main/resources/application.yml',
+            'sample-cache-database-postgresql/src/purge/resources/application-purge.yml')) {
+        Reject-Overlay ('oracle-classification-wrong-path-' + $path) {
+            Get-K8sOverlayClassification $path $policy $actualPin
+        } 'Only explicitly pinned'
+    }
+    $script:paths = @($configurationPath) + $matrixPaths + @($otherToolingPath)
+    function Invoke-PrivateOwnedGit([string]$Root, [string[]]$Arguments) {
+        if ($Root -cne $source -or ($Arguments -join ',') -cne 'ls-files') { throw 'Unexpected scoped synthetic source inspection.' }
+        return $script:paths -join "`n"
+    }
+    $targetSha = '2' * 40; $sdkPin = '3' * 64
+    function Assert-PrivateOwnedCheckout([string]$Root, [string]$Sha) {
+        if ($Root -cne $source -or $Sha -cne $targetSha) { throw 'Unexpected scoped synthetic checkout authority.' }
+    }
+    $before = @{}
+    foreach ($path in $script:paths) {
+        Put $path ('SYNTHETIC ORIGINAL ' + $path)
+        $before[$path] = (Get-FileHash -LiteralPath (Resolve-K8sMember $source $path)).Hash.ToLowerInvariant()
+    }
+    $manifest = Join-Path $EvidenceDirectory 'oracle-source.sha256'
+    [IO.File]::WriteAllLines($manifest, [string[]]@($script:paths | ForEach-Object { $before[$_] + '  ' + $_ }))
+    $sourcePin = (Get-FileHash -LiteralPath $manifest).Hash.ToLowerInvariant()
+    $identity = @{kind='SOURCE_SNAPSHOT'; manifestSha256=$sourcePin}
+    foreach ($path in $script:paths) { Put $path ('SYNTHETIC QUALIFIED ' + $path) }
+    $lines = @($script:paths | ForEach-Object {
+        (Get-FileHash -LiteralPath (Resolve-K8sMember $source $_)).Hash.ToLowerInvariant() + '  ' + $_
+    })
+    $root = Join-Path $EvidenceDirectory 'oracle-qualification'; $null = [IO.Directory]::CreateDirectory((Join-Path $root 'controls'))
+    $pod = '11111111-2222-3333-4444-555555555555'
+    $records = @{
+        scopedReceipt=@{kind='cachedb-oracle-tenant-purge-scoped-runtime'; execution=@{runnerPodUid=$pod}
+            sdk=@{manifest=@{sha256=$sdkPin}; sourceManifestSha256=$sourcePin}; cells=@(@{provider='oracle'; lane='tenant-purge'})}
+        nativeProcess=@{podUid=$pod; exitCode=0; teeExit=0; timedOut=$false; stdout=@{bytes=100}}
+        testsConfiguration=@{phase='tests'; readTimeoutMs=15000; connectTimeoutMsUnchanged=5000; guardStatementTimeoutSecondsUnchanged=2}
+        httpConfiguration=@{phase='http'; readTimeoutMs=15000; connectTimeoutMsUnchanged=5000; guardStatementTimeoutSecondsUnchanged=2}
+    }
+    $review = @{before=$before[$configurationPath]; after=($lines[0] -split '  ')[0]; source=$sourcePin; sdk=$sdkPin; pod=$pod}
+    $refs = @{}
+    foreach ($name in $records.Keys) {
+        $path = $name + '.json'; [IO.File]::WriteAllText((Join-Path $root $path), ($records[$name] | ConvertTo-Json -Depth 12))
+        $pin = (Get-FileHash -LiteralPath (Join-Path $root $path)).Hash.ToLowerInvariant()
+        $review[$name] = $pin; $refs[$name] = @{path=$path; sha256=$pin}
+    }
+    # Synthetic policy authority tests the contract; these are not replacements for original runtime records.
+    $fixturePolicy = Clone $policy; $fixturePolicy.ReviewedOraclePurgeConfiguration = $review
+    $proof = @{schema='cachedb.k8s-source-equivalence/v3'; kind='SEPARATELY_QUALIFIED_ORACLE_PURGE_CONFIGURATION'
+        sourceIdentity=$identity; originalReceiptSha256=('4' * 64); targetSha=$targetSha; sdkManifestSha256=$sdkPin; sourceManifestSha256=$sourcePin
+        targetManifest=@{path='target.sha256'; sha256=$sourcePin}; oraclePurgeConfiguration=$refs
+        changes=@($script:paths | ForEach-Object {
+            @{path=$_; classification=(Get-K8sOverlayClassification $_ $fixturePolicy (($lines[$script:paths.IndexOf($_)] -split '  ')[0]))
+                beforeSha256=$before[$_]; afterSha256=(Get-FileHash -LiteralPath (Resolve-K8sMember $source $_)).Hash.ToLowerInvariant()}
+        }); toolingEvidence=@(
+            @{obligation='control/09'; paths=$matrixPaths; receipt=@{path='controls/matrix.json'; sha256=$sourcePin}},
+            @{obligation='control/29'; paths=@($otherToolingPath); receipt=@{path='controls/other.json'; sha256=$sourcePin}}
+        ); files=@()}
+    function Check-Oracle($Value = $proof, $PolicyValue = $fixturePolicy, [string[]]$ControlLines = $lines, [int]$MatrixControlIndex = 9) {
+        $candidate = Clone $Value
+        [IO.File]::WriteAllLines((Join-Path $root 'target.sha256'), [string[]]$lines)
+        [IO.File]::WriteAllLines((Join-Path $root 'control-source.sha256'), $ControlLines)
+        $controlPin = (Get-FileHash -LiteralPath (Join-Path $root 'control-source.sha256')).Hash.ToLowerInvariant()
+        if ($candidate.toolingEvidence.Count) { $candidate.toolingEvidence[0].obligation = 'control/{0:D2}' -f $MatrixControlIndex }
+        $controlFiles = @('target.sha256','control-source.sha256')
+        foreach ($control in @(@{name='matrix'; index=$MatrixControlIndex},@{name='other'; index=29})) {
+            $stem = 'controls/' + $control.name
+            $record = @{schema='cachedb.k8s-tooling-control/v1'; kind='TOOLING_ONLY_NOT_PRODUCT_RUNTIME_COVERAGE'
+                execution=@{id=('oracle-source-' + $control.name); command=$policy.Controls[$control.index]; workingDirectory='.'; sourceIdentity=@{kind='SOURCE_SNAPSHOT'; manifestSha256=$controlPin}
+                    podUid=$pod; startedAt='2026-11-13T10:00:01Z'; finishedAt='2026-11-13T10:00:20Z'; log=($stem + '.log'); exitFile=($stem + '.exit')}
+                run=@{cluster='EmaTech'; namespace='synthetic-controls'; podUid=$pod; createdAt='2026-11-13T10:00:00Z'; originalCutoff='2026-11-13T10:02:00Z'; finishedAt='2026-11-13T10:00:21Z'}
+                sourceManifest=@{path='control-source.sha256'; sha256=$controlPin}}
+            [IO.File]::WriteAllText((Join-Path $root ($stem + '.json')), ($record | ConvertTo-Json -Depth 12))
+            [IO.File]::WriteAllText((Join-Path $root ($stem + '.log')), 'SYNTHETIC TOOLING ONLY')
+            [IO.File]::WriteAllText((Join-Path $root ($stem + '.exit')), '0')
+            $controlFiles += @($stem + '.json', $stem + '.log', $stem + '.exit')
+        }
+        $candidate.files = @($controlFiles +
+            @($records.Keys | ForEach-Object { $_ + '.json' }) | ForEach-Object {
+                $file = Get-Item -LiteralPath (Join-Path $root $_)
+                @{path=$_; bytes=$file.Length; sha256=(Get-FileHash -LiteralPath $file.FullName).Hash.ToLowerInvariant()}
+            })
+        $candidate.targetManifest.sha256 = (Get-FileHash -LiteralPath (Join-Path $root 'target.sha256')).Hash.ToLowerInvariant()
+        foreach ($binding in $candidate.toolingEvidence) { $binding.receipt.sha256 = (Get-FileHash -LiteralPath (Join-Path $root $binding.receipt.path)).Hash.ToLowerInvariant() }
+        $file = Join-Path $root 'source-equivalence.json'; [IO.File]::WriteAllText($file, ($candidate | ConvertTo-Json -Depth 20))
+        $pin = (Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
+        $null = Assert-K8sSourceEquivalence $file $pin $manifest $source '' $targetSha $sdkPin $identity $proof.originalReceiptSha256 $PolicyValue
+    }
+    Check-Oracle; $fixtureChecks.Add('v3-exact-oracle-runtime-qualification-and-mapped-logging')
+    foreach ($path in $matrixPaths) {
+        $bad = Clone $proof; $bad.toolingEvidence[0].paths = @($path)
+        Reject-Overlay ('matrix-surface-cannot-use-unrelated-command-' + $path) { Check-Oracle $bad -MatrixControlIndex 29 } 'must be qualified by their exact matrix control'
+    }
+    $bad = Clone $proof; $bad.toolingEvidence[0].paths += @($otherToolingPath)
+    Reject-Overlay 'matrix-command-cannot-qualify-unrelated-tooling' { Check-Oracle $bad } 'must be qualified by their exact matrix control'
+    $legacy = Clone $proof; $legacy.schema = 'cachedb.k8s-source-equivalence/v2'; $legacy.kind = 'DOCUMENTATION_TOOLING_ONLY_NOT_RUNTIME_ACCEPTANCE'; $null = $legacy.Remove('oraclePurgeConfiguration')
+    Reject-Overlay 'v2-cannot-carry-scoped-runtime-delta' { Check-Oracle $legacy } 'Oracle configuration requires separate runtime qualification'
+    foreach ($name in @('before','after','source','sdk')) {
+        $badPolicy = Clone $fixturePolicy; $badPolicy.ReviewedOraclePurgeConfiguration[$name] = '0' * 64
+        Reject-Overlay ('oracle-wrong-policy-' + $name) { Check-Oracle -PolicyValue $badPolicy } 'exact independently qualified source/SDK change'
+    }
+    foreach ($name in $records.Keys) {
+        $bad = Clone $proof; $bad.oraclePurgeConfiguration[$name].sha256 = '0' * 64
+        Reject-Overlay ('oracle-unreviewed-original-' + $name) { Check-Oracle $bad } 'Unreviewed Oracle qualification reference'
+    }
+    $bad = Clone $proof; $null = $bad.oraclePurgeConfiguration.Remove('httpConfiguration')
+    Reject-Overlay 'oracle-missing-original-phase' { Check-Oracle $bad } 'Four original Oracle qualification references'
+    $bad = Clone $proof; $bad.toolingEvidence = @()
+    Reject-Overlay 'logging-files-require-tooling-execution' { Check-Oracle $bad } 'Changed tooling lacks separately pinned execution coverage'
+    foreach ($path in $loggingPaths) {
+        if ((Get-K8sOverlayClassification $path) -cne 'execution-tooling') { throw 'Logging file is not execution tooling.' }
+        $bad = Clone $proof; $bad.toolingEvidence[0].paths = @($loggingPaths | Where-Object { $_ -cne $path })
+        Reject-Overlay ('logging-file-without-mapped-control-' + $path) { Check-Oracle $bad } 'Changed tooling lacks separately pinned execution coverage'
+        $partial = @($lines | Where-Object { !$_.EndsWith('  ' + $path, [StringComparison]::Ordinal) })
+        Reject-Overlay ('logging-file-missing-from-control-source-' + $path) { Check-Oracle -ControlLines $partial } 'different non-documentation source bytes'
+    }
+    $fixtureChecks.Add('two-logging-files-are-execution-tooling-not-runtime-configuration')
+}
+if ($OracleConfigurationControlsOnly) {
+    Test-OracleConfigurationControls
+    @{syntheticOnly=$true; actualKubernetesAcceptance=$false; result='PASS'; checks=$fixtureChecks} |
+        ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'summary.json') -Encoding utf8
+    Write-Host "ORACLE_CONFIGURATION_SYNTHETIC_CONTROLS_PASS=$($fixtureChecks.Count); NOT_RUNTIME_ACCEPTANCE"
+    return
 }
 $reviewedPaths = @('cachedb-starter/src/test/java/com/cachedb/starter/RedisReadWiringRedisTest.java',
     'cachedb-storage-redis/src/test/java/com/cachedb/redis/RedisReadRedirectServer.java')
@@ -303,6 +443,7 @@ try {
     foreach ($path in @($reviewedPaths + $sampleWorkflowPaths)) { Put $path 'ORIGINAL' }
 }
 Check-Snapshot
+Test-OracleConfigurationControls
 if ($controls.Count -ne 59) { throw 'Existing 59 top-level export control groups must remain unchanged.' }
 if ((Get-FileHash -LiteralPath $originalReceipt).Hash.ToLowerInvariant() -cne $originalReceiptPin) { throw 'Synthetic original receipt changed.' }
 [ordered]@{syntheticOnly=$true; actualKubernetesAcceptance=$false; controls=$controls; result='PASS'

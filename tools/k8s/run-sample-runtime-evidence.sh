@@ -92,9 +92,9 @@ test "$remaining" -gt 0
 timeout --signal=TERM --kill-after=10s "$remaining" \
   "$javac" -J-Xmx192m -J-XX:ActiveProcessorCount=1 --release 21 -proc:none -cp "$cp" -d "$work/classes" \
   "$source_root/cachedb-spring-boot-starter/src/test/java/com/cachedb/jdbc/InitialSqlSandbox.java" \
-  "$source_root/tools/k8s/SampleRuntimeEvidence.java" > "$out/compile.log" 2>&1
+  "$source_root/tools/k8s/SampleRuntimeEvidence.java" 2>&1 | tee -- "$out/compile.log"
 remaining=$(( $(date -u -d "$(get originalCutoff)" +%s) - $(date -u +%s) - 10 ))
 test "$remaining" -gt 0
 timeout --signal=TERM --kill-after=10s "$remaining" \
   "$java" -Xms32m -Xmx192m -XX:ActiveProcessorCount=1 -cp "$work/classes:$cp" \
-  SampleRuntimeEvidence "$admission" "$2" > "$out/adapter.log" 2>&1
+  SampleRuntimeEvidence "$admission" "$2" 2>&1 | tee -- "$out/adapter.log"

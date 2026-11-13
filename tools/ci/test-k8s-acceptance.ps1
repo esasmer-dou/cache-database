@@ -2,7 +2,9 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
-    [string]$EvidenceDirectory = ''
+    [string]$EvidenceDirectory = '',
+    [switch]$OriginalCellControlsOnly,
+    [switch]$OriginalCellWriterControlsOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -27,6 +29,212 @@ function Reject([string]$Name, [scriptblock]$Action) {
     Pass $Name
 }
 function Clone($Value) { $Value | ConvertTo-Json -Depth 32 -Compress | ConvertFrom-Json -AsHashtable -Depth 32 }
+function Invoke-OriginalCellWriterControls($Fixture) {
+    $assembler = Join-Path $PSScriptRoot 'new-k8s-acceptance-receipt.ps1'
+    $tokens = $errors = $null
+    $assemblerAst = [Management.Automation.Language.Parser]::ParseFile($assembler, [ref]$tokens, [ref]$errors)
+    if ($errors.Count) { throw 'Receipt assembler has parse errors.' }
+    foreach ($definition in $assemblerAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]}, $true)) {
+        if ($null -ne $definition.Parameters) { . ([scriptblock]::Create($definition.Extent.Text)) }
+        else { Set-Item -Path "Function:$($definition.Name)" -Value ($definition.Body.GetScriptBlock()) }
+    }
+    function Write-WriterFixture([string]$Member, $Value) {
+        $full = Resolve-K8sMember $Fixture.root $Member
+        $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $full))
+        $text = if ($Value -is [string]) { $Value } else { $Value | ConvertTo-Json -Depth 32 }
+        [IO.File]::WriteAllText($full, $text, [Text.UTF8Encoding]::new($false))
+    }
+    # A small synthetic roster exercises the complete writer, never the runtime verifier.
+    $fixturePolicy = Import-PowerShellDataFile (Join-Path $PSScriptRoot 'k8s-acceptance-contract.psd1')
+    $fixturePolicy.Providers = @(); $fixturePolicy.Baseline = @(); $fixturePolicy.Controls = @()
+    $fixturePolicy.ReviewedOriginalReceipts = $Fixture.policy.ReviewedOriginalReceipts
+    $sourceText = ('a' * 64) + "  synthetic-source.txt`n"
+    $sdkText = ((1..$fixturePolicy.SdkFiles | ForEach-Object { ('b' * 64) + ('  lib/{0:d3}.jar' -f $_) }) -join "`n") + "`n"
+    foreach ($member in @('source.sha256','source-before.sha256','source-after.sha256')) { Write-WriterFixture $member $sourceText }
+    foreach ($member in @('sdk.sha256','sdk-before.sha256','sdk-after.sha256')) { Write-WriterFixture $member $sdkText }
+    $sourcePin = (Get-FileHash -LiteralPath (Join-Path $Fixture.root 'source.sha256')).Hash.ToLowerInvariant()
+    $sdkPin = (Get-FileHash -LiteralPath (Join-Path $Fixture.root 'sdk.sha256')).Hash.ToLowerInvariant()
+    $input = Clone $Fixture.receipt
+    $input.schema = 'cachedb.k8s-acceptance-input/v3'
+    $input.source = @{repository='synthetic/public';repositoryId='10';identity=@{kind='SOURCE_SNAPSHOT';manifestSha256=$sourcePin}
+        manifest='source.sha256';before='source-before.sha256';after='source-after.sha256'}
+    $input.sdk = @{manifestSha256=$sdkPin;manifest='sdk.sha256';before='sdk-before.sha256';after='sdk-after.sha256'}
+    $input.producer = @{repositoryId='20';runId='30';runAttempt='1';workflowPath='.github/workflows/synthetic.yml'}
+    $input.executions = @((Clone $Fixture.obligation))
+    foreach ($run in $input.runs) { $run.cluster='EmaTech'; $run.namespace='synthetic-owned' }
+    foreach ($physical in $input.physicalExecutions) {
+        $physical.sourceIdentity=(Clone $input.source.identity); $physical.sdkManifestSha256=$sdkPin
+        $physical.startedAt='2026-11-13T00:01:00Z'; $physical.finishedAt='2026-11-13T00:02:00Z'
+    }
+    $input.physicalExecutions[0].startedAt='2026-11-13T03:01:00+03:00'
+    $input.physicalExecutions[0].finishedAt='2026-11-12T19:02:00-05:00'
+    $header = Clone $Fixture.header
+    $header.source.manifest.sha256=$sourcePin
+    $header.sdk.manifest.sha256=$sdkPin; $header.sdk.sourceManifestSha256=$sourcePin
+    Write-WriterFixture 'features.json' $header
+    foreach ($id in @('sdk-build','standalone','cluster')) {
+        $execution = @{id=$id;podUid=$input.runs[0].podUid;sourceIdentity=(Clone $input.source.identity);sdkManifestSha256=$sdkPin
+            command="SYNTHETIC invocation $id";workingDirectory='.';startedAt='2026-11-13T00:01:00Z';finishedAt='2026-11-13T00:02:00Z'
+            log="writer/$id.log";exitFile="writer/$id.exit"}
+        Write-WriterFixture $execution.log 'SYNTHETIC WRITER FIXTURE ONLY'
+        Write-WriterFixture $execution.exitFile "0`n"
+        if ($id -cin @('standalone','cluster')) {
+            $execution.reportsRoot="writer/$id-reports"
+            Write-WriterFixture ($execution.reportsRoot+'/TEST-synthetic.xml') '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="synthetic" /></testsuite>'
+        }
+        $input.executions += $execution
+    }
+    $input.files = @(Get-ChildItem -LiteralPath $Fixture.root -Recurse -File | ForEach-Object {
+        @{path=[IO.Path]::GetRelativePath($Fixture.root,$_.FullName).Replace('\','/');bytes=$_.Length
+            sha256=(Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant()}
+    })
+    function Invoke-WriterFixture($Value, [string]$Name) {
+        $path=Join-Path $EvidenceDirectory ('writer-'+$Name+'.json')
+        [IO.File]::WriteAllText($path,($Value | ConvertTo-Json -Depth 32),[Text.UTF8Encoding]::new($false))
+        New-K8sAcceptanceReceipt -InventoryPath $path -InventorySha256 (Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant() `
+            -EvidenceRoot $Fixture.root -OutputDirectory (Join-Path $EvidenceDirectory ('writer-'+$Name)) -Policy $fixturePolicy
+    }
+    $result = Invoke-WriterFixture $input 'valid'
+    $actual = Read-K8sJson $result.receiptPath
+    $logical = Get-K8sExecution $actual 'sample-features'
+    if ($result.status -cne 'ASSEMBLED_NOT_RUNTIME_ACCEPTANCE' -or $logical.Count -ne 4 -or
+        $logical.Contains('startedAt') -or $logical.Contains('finishedAt') -or
+        $actual.physicalExecutions[0].observedExit -ne 1 -or $actual.physicalExecutions[1].observedExit -ne 0) {
+        throw 'Writer fabricated a logical process or lost the distinct native outcomes.'
+    }
+    $document = [Text.Json.JsonDocument]::Parse([IO.File]::ReadAllText($result.receiptPath))
+    try {
+        for ($i=0; $i -lt 2; $i++) {
+            foreach ($field in @('startedAt','finishedAt')) {
+                if ($document.RootElement.GetProperty('physicalExecutions')[$i].GetProperty($field).GetString() -cne $input.physicalExecutions[$i][$field]) {
+                    throw 'Writer changed an original physical timestamp offset.'
+                }
+            }
+        }
+    } finally { $document.Dispose() }
+    $originPath=Join-Path (Split-Path -Parent $result.receiptPath) 'origin/execution-inventory.json'
+    if ((Get-FileHash -LiteralPath $originPath).Hash -cne (Get-FileHash -LiteralPath (Join-Path $EvidenceDirectory 'writer-valid.json')).Hash) {
+        throw 'Writer changed its original input inventory.'
+    }
+    Pass 'original-cells-writer-whole-assembly-no-logical-times-preserves-physical-offsets-native-exits-and-input'
+    foreach ($case in @('logical-start','logical-finish','unknown-kind','physical-missing-start','physical-missing-finish',
+        'physical-no-offset','physical-changed-instant','physical-overrun','physical-logical-kind')) {
+        $bad=Clone $input
+        switch ($case) {
+            logical-start { $bad.executions[0].startedAt='2026-11-13T00:01:00Z' }
+            logical-finish { $bad.executions[0].finishedAt='2026-11-13T00:02:00Z' }
+            unknown-kind { $bad.executions[0].kind='original_cells' }
+            physical-missing-start { $bad.physicalExecutions[0].Remove('startedAt') }
+            physical-missing-finish { $bad.physicalExecutions[0].Remove('finishedAt') }
+            physical-no-offset { $bad.physicalExecutions[0].startedAt='2026-11-13T00:01:00' }
+            physical-changed-instant { $bad.physicalExecutions[0].startedAt='2026-11-13T00:01:01Z' }
+            physical-overrun { $bad.physicalExecutions[0].finishedAt='2026-11-13T00:04:00Z' }
+            physical-logical-kind { $bad.physicalExecutions[0].kind='ORIGINAL_CELLS' }
+        }
+        Reject ('original-cells-writer-'+$case) { Invoke-WriterFixture $bad $case }
+        if (Test-Path -LiteralPath (Join-Path $EvidenceDirectory ('writer-'+$case))) { throw 'Invalid writer input published an output.' }
+    }
+}
+function Invoke-OriginalCellControls {
+    function New-CellFixture {
+        $root = Join-Path $EvidenceDirectory ('cells-'+[guid]::NewGuid().ToString('N'))
+        $null = [IO.Directory]::CreateDirectory($root)
+        $files = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+        function Write-CellFile($Name,$Value) {
+            $full = Resolve-K8sMember $root $Name
+            $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $full))
+            $text = if ($Value -is [string]) { $Value } else { $Value | ConvertTo-Json -Depth 32 -Compress }
+            [IO.File]::WriteAllText($full,$text)
+            $sha = (Get-FileHash -LiteralPath $full).Hash.ToLowerInvariant()
+            $files[$Name] = @{path=$Name;sha256=$sha;bytes=(Get-Item -LiteralPath $full).Length}
+            return @{path=$Name;sha256=$sha}
+        }
+        $source = Write-CellFile 'source.sha256' "SYNTHETIC SOURCE MANIFEST ONLY`n"
+        $sdk = '1'*64
+        $receipt = @{schema='cachedb.k8s-acceptance/v3';source=@{manifest=$source.path;identity=@{kind='SOURCE_SNAPSHOT';manifestSha256=$source.sha256}}
+            sdk=@{manifestSha256=$sdk};executionSources=@();physicalExecutions=@();runs=@();files=@()}
+        $obligation = @{id='sample-features';kind='ORIGINAL_CELLS';physicalExecutionIds=@('original/feature9-child04','original/oracle-tenant-purge');receipt='features.json'}
+        $header = @{schema=2;kind='cachedb-v019-sample-runtime-original-cells';source=@{root='source';manifest=$source}
+            sdk=@{root='sdk';manifest=@{path='sdk.sha256';sha256=$sdk};sourceManifestSha256=$source.sha256};origins=@();cells=@(1..9)}
+        $policy = @{ReviewedOriginalReceipts=@{}}
+        for ($i=0;$i -lt 2;$i++) {
+            $id = $obligation.physicalExecutionIds[$i];$uid='00000000-0000-0000-0000-00000000000'+($i+1)
+            $exit = if($i -eq 0){1}else{0}
+            $members = [Collections.Generic.List[object]]::new()
+            $record = @{schema='cachedb.feature9-native-process/v1';executionId=$uid;logicalExecutionId=$(if($i -eq 0){'sample-features'}else{'oracle-tenant-purge'})
+                podUid=$uid;pid=123;executable='/usr/bin/bash';argv=@('/workspace/direct-overlay/run-feature9.sh');workingDirectory='/workspace'
+                startedAt='2026-11-13T00:01:00Z';finishedAt='2026-11-13T00:02:00Z';exitCode=$exit;timedOut=$false;stdoutComplete=$true;stderrComplete=$true}
+            foreach ($name in @('stdout','stderr','exit') + $(if($i -eq 1){@('tee')}else{@()})) {
+                $member = 'evidence/feature9/'+$name
+                $value = switch($name){stdout{"SYNTHETIC ORIGINAL OUTPUT`n"} stderr{''} exit{"$exit`n"} tee{"0`n"}}
+                $ref = Write-CellFile ($id+'/'+$member) $value
+                $bytes = $files[$ref.path].bytes
+                $record[$name]=@{path=$member;sha256=$ref.sha256;bytes=$bytes}
+                $members.Add(@{name=$member;sha256=$ref.sha256;bytes=$bytes})
+            }
+            if ($i -eq 1) {$record.teeExit=0}
+            $process = Write-CellFile ($id+'/evidence/feature9/process.json') $record
+            $members.Add(@{name='evidence/feature9/process.json';sha256=$process.sha256;bytes=$files[$process.path].bytes})
+            $origin = @{id=$id;prefix=$id;process=$process}
+            $origin.custody=Write-CellFile ('custody-'+$i+'.json') @{schema='cachedb.feature9-original-custody/v1';status='ORIGINALS_CAPTURED'
+                podUid=$uid;sourceSdkTreesExcludedForExactReuse=$true;files=$members.ToArray()}
+            foreach($name in @('pod','authority','preparation')) {$origin[$name]=Write-CellFile ($name+'-'+$i+'.json') @{syntheticOnly=$true;podUid=$uid;name=$name}}
+            foreach($name in @('custody','pod','authority','preparation')) {$policy.ReviewedOriginalReceipts[$origin[$name].sha256]=$uid}
+            if ($i -eq 1) {
+                $origin.runtimeConfiguration=@{policy=(Write-CellFile 'oracle-configuration.json' @{syntheticOnly=$true;readTimeoutMs=15000})}
+                $policy.ReviewedOriginalReceipts[$origin.runtimeConfiguration.policy.sha256]=$uid
+            }
+            $header.origins += $origin
+            $receipt.physicalExecutions += @{id=$id;podUid=$uid;sourceIdentity=$receipt.source.identity;sdkManifestSha256=$sdk
+                command='/usr/bin/bash /workspace/direct-overlay/run-feature9.sh';workingDirectory='/workspace';startedAt=$record.startedAt;finishedAt=$record.finishedAt
+                log=$id+'/'+$record.stdout.path;exitFile=$id+'/'+$record.exit.path;observedExit=$exit;originalRecord=$process
+                originalRecordId=$record.logicalExecutionId;originalPhysicalExecutionId=$uid}
+            $receipt.runs += @{podUid=$uid;createdAt='2026-11-13T00:00:00Z';finishedAt=$record.finishedAt;originalCutoff='2026-11-13T00:03:00Z'}
+        }
+        $null=Write-CellFile 'features.json' $header
+        $receipt.files=@($files.Values)
+        return @{root=$root;receipt=$receipt;obligation=$obligation;policy=$policy;header=$header}
+    }
+    $valid=New-CellFixture
+    if ($OriginalCellWriterControlsOnly) { Invoke-OriginalCellWriterControls $valid; return }
+    Assert-K8sOriginalCellExecutions $valid.obligation $valid.receipt $valid.root $valid.policy
+    Pass 'original-cells-physical-custody-native1-and-native0-remain-distinct'
+    foreach($version in @('cachedb.k8s-acceptance/v1','cachedb.k8s-acceptance/v2')) {
+        $bad=Clone $valid.receipt;$bad.schema=$version
+        Reject ('original-cells-forbidden-in-'+$version.Split('/')[-1]) {Test-K8sOriginalCellObligation $valid.obligation $bad}
+    }
+    $bad=Clone $valid.obligation;$bad.command='synthetic combined process'
+    Reject 'original-cells-cannot-claim-common-process' {Test-K8sOriginalCellObligation $bad $valid.receipt}
+    $bad=Clone $valid.obligation;$bad.id='standalone'
+    Reject 'original-cells-only-sample-features' {Test-K8sOriginalCellObligation $bad $valid.receipt}
+    $bad=Clone $valid.obligation;$bad.physicalExecutionIds[1]=$bad.physicalExecutionIds[0]
+    Reject 'original-cells-duplicate-physical-origin' {Test-K8sOriginalCellObligation $bad $valid.receipt}
+    foreach($name in @('custody','pod','authority','preparation')) {
+        $bad=Clone $valid.policy;$bad.ReviewedOriginalReceipts.Remove($valid.header.origins[0][$name].sha256)
+        Reject ('original-cells-unapproved-'+$name) {Assert-K8sOriginalCellExecutions $valid.obligation $valid.receipt $valid.root $bad}
+    }
+    $bad=Clone $valid.policy;$bad.ReviewedOriginalReceipts.Remove($valid.header.origins[1].runtimeConfiguration.policy.sha256)
+    Reject 'original-cells-unapproved-oracle-runtime-configuration' {Assert-K8sOriginalCellExecutions $valid.obligation $valid.receipt $valid.root $bad}
+    $bad=Clone $valid.policy;$bad.ReviewedOriginalReceipts[$valid.header.origins[0].custody.sha256]='00000000-0000-0000-0000-000000000099'
+    Reject 'original-cells-custody-foreign-pod' {Assert-K8sOriginalCellExecutions $valid.obligation $valid.receipt $valid.root $bad}
+    foreach($name in @('observedExit','originalPhysicalExecutionId','log','exitFile','startedAt','finishedAt','command','workingDirectory')) {
+        $bad=Clone $valid.receipt
+        $bad.physicalExecutions[0][$name]=switch($name){observedExit{0} startedAt{'2026-11-13T00:01:01Z'} finishedAt{'2026-11-13T00:02:01Z'} default{'unverifiable'}}
+        Reject ('original-cells-physical-'+$name+'-cannot-replace-original') {Assert-K8sOriginalCellExecutions $valid.obligation $bad $valid.root $valid.policy}
+    }
+    $sameInstant=Clone $valid.receipt
+    $sameInstant.physicalExecutions[0].startedAt='2026-11-13T03:01:00+03:00'
+    Assert-K8sOriginalCellExecutions $valid.obligation $sameInstant $valid.root $valid.policy
+    Pass 'original-cells-physical-times-compare-UTC-instant-not-local-culture'
+}
+if ($OriginalCellControlsOnly -or $OriginalCellWriterControlsOnly) {
+    Invoke-OriginalCellControls
+    [ordered]@{result='PASS';syntheticOnly=$true;actualKubernetesAcceptance=$false;controls=$controls} |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'summary.json') -Encoding utf8
+    Write-Output ('PASS '+$controls.Count+' isolated original-cell custody controls; no product acceptance.')
+    return
+}
+Invoke-OriginalCellControls
 function Assert-K8sExportChildResult([int]$ExitCode, [bool]$TimedOut, [string]$SummaryPath) {
     if ($TimedOut -or $ExitCode -ne 0) { throw 'Export child failed or exceeded the original control budget.' }
     $summary = [IO.File]::ReadAllText($SummaryPath) | ConvertFrom-Json -AsHashtable -Depth 16

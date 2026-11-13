@@ -14,6 +14,18 @@
             'cachedb-storage-redis/src/test/java/com/cachedb/redis/RedisReadRedirectServer.java' = '5e23dbb31d5cb39f683ac304fcf3062d7446e6024b748f154fb6dae09b9b203a'
         }
     }
+    # Exact separately tested Oracle sample configuration; never a generic source-overlay permission.
+    ReviewedOraclePurgeConfiguration = @{
+        before = '56dccca6d2f16c36af67a84123c2e047da8f588e79a701daac22dbbe010af14f'
+        after = '7131dc6e36af52f2a4a20e017209be19c98162d3162c7ab172d22e96b601afec'
+        source = '456ef8ad0a32a571ec52a345dbeb0a3e5f2dcaf742a7eb3d840f49c831a69a11'
+        sdk = '474527305300767b9d6ba35f24e5c5085505680653aea9137cf9524044d116a3'
+        pod = '7d9fcc03-d0a9-4973-9a97-b8864c8c75f8'
+        scopedReceipt = '29bdd14e7b9caf0b12b3aacb12da65e75b29ac59fd3f3fde9b13cf01a5e07b23'
+        nativeProcess = '20e16779f01ab1ad6c3cea36b94d1ac45512746b149e07ac83786ced6af1db6a'
+        testsConfiguration = '9fd7258252039809970162349cd5b0943f0b37494fb87f4c8f38cc8463acd15f'
+        httpConfiguration = 'bcc2aac0e29f2a791dc9d73c1768cad8637198722255ee651e2c596c22bf92dd'
+    }
     # Original transport receipts, not reconstructed summaries or aggregate receipts.
     ReviewedOriginalReceipts = @{
         '765307e4742afcc42d887e63927306889760135a3fc43fa41b6d32fa63740019' = 'df21bb8a-a92f-4473-8f7a-f6742ceb7884'
@@ -25,6 +37,15 @@
         'a7b914cdadef3ea6625901e6b1e0e0e90747047620f6956a9af5e5e4536fed64' = 'a97e8b1e-9a50-4f2f-bdbf-f2eac24c3228'
         '614709961b8f08a388c3678f04d2eee3d55969d1fe8cbd9b10e86e0b96b7a8c5' = 'e1128e7e-41dc-4816-94a5-2a232b992164'
         '92efb2b7b0796582e4fca44fca44a515e2b5b79210dc2b00a7e50fee5fb2a029' = 'ed2d3c93-f24f-4133-bbae-c3cf709563c6'
+        '578aabbe22bbd815f9f17f061cc070f6b146f4733c41f10339b4840820ee0725' = '8f7e02c3-2b98-4acb-a9bc-c66d6dddc0ee'
+        'a84429a4c34c520a0db20c6b7b1c0ec52b6fac51367ab483926910f3dbd82f85' = '8f7e02c3-2b98-4acb-a9bc-c66d6dddc0ee'
+        'c0af9bf36ce2cbf2bfde629e9ced204ac0096bf0aeecac39ea20c1632a0952c9' = '8f7e02c3-2b98-4acb-a9bc-c66d6dddc0ee'
+        '8c96b2b5b89a07b1f1dd8f6d8c9dde6345d04b1ee87609cae953a47e352471d8' = '8f7e02c3-2b98-4acb-a9bc-c66d6dddc0ee'
+        '12a46d3534fa96f53a7161b92443ba290d6301374174d04e05092e3ec7d2a559' = '7d9fcc03-d0a9-4973-9a97-b8864c8c75f8'
+        '00d371de27b29322d4fbab22c7837a5008677acfa0bf6470955cf88656351f33' = '7d9fcc03-d0a9-4973-9a97-b8864c8c75f8'
+        '9f00a709a3751ff61d5f7b419ff26dd64cf79acad9ce6d2c8878a71f81b627e5' = '7d9fcc03-d0a9-4973-9a97-b8864c8c75f8'
+        'e2a858860e1bd275e10c4c4381d0d6d45106fd2b7d6db48b28f7139a9de5bcd5' = '7d9fcc03-d0a9-4973-9a97-b8864c8c75f8'
+        'da3e6b7d7f5dee5e9762afe0113a4b4e8f2cdcd351b5059f21e363bd4a8ccbfc' = '7d9fcc03-d0a9-4973-9a97-b8864c8c75f8'
     }
     ReviewedPrefixOriginals = @{
         'f1fce3ee1ec153e2826bdad4faef0ad95a2a3924e1d1edfa85c687b29e217dc2' = @{
