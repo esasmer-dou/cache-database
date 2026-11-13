@@ -5,7 +5,8 @@ param(
     [string]$EvidenceDirectory = '',
     [switch]$OriginalCellControlsOnly,
     [switch]$OriginalCellWriterControlsOnly,
-    [switch]$GuardImportControlsOnly
+    [switch]$GuardImportControlsOnly,
+    [switch]$CustodyProfileControlsOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -32,6 +33,64 @@ function Reject([string]$Name, [scriptblock]$Action) {
     Pass $Name
 }
 function Clone($Value) { $Value | ConvertTo-Json -Depth 32 -Compress | ConvertFrom-Json -AsHashtable -Depth 32 }
+if ($CustodyProfileControlsOnly) {
+    if ([string]::IsNullOrWhiteSpace($env:KUBERNETES_SERVICE_HOST)) { throw 'Custody profile controls require Kubernetes.' }
+    $fixtureRoot = Join-Path $EvidenceDirectory 'original'
+    $null = [IO.Directory]::CreateDirectory($fixtureRoot)
+    $capturedFiles = @(foreach ($name in @('record.json','process.log','process.exit','TEST-original.xml')) {
+        $path = Join-Path $fixtureRoot $name
+        [IO.File]::WriteAllText($path, 'synthetic custody profile fixture')
+        @{name=$name; bytes=(Get-Item $path).Length; sha256=(Get-FileHash $path).Hash.ToLowerInvariant()}
+    })
+    $profile = @{schema='cachedb.selected-original-custody/v1'; status='SELECTED_ORIGINALS_HASH_VERIFIED'
+        podUid='synthetic-pod'; files=$capturedFiles}
+    $physical = @{id='original/process'; podUid=$profile.podUid; originalRecord=@{path='original/record.json'}
+        log='original/process.log'; exitFile='original/process.exit'}
+    $index = @{obligationId='standalone'; schemaVersion='cachedb.k8s-original-case-provenance/v1'
+        reports=@(@{executionId=$physical.id; path='original/TEST-original.xml'; sha256=$capturedFiles[3].sha256})}
+    function Assert-CustodyProfileFixture($Value) {
+        $path = Join-Path $EvidenceDirectory 'custody.json'
+        [IO.File]::WriteAllText($path, ($Value | ConvertTo-Json -Depth 10))
+        $pin = (Get-FileHash $path).Hash.ToLowerInvariant()
+        $physical.originalCustody = @{prefix='original'; receipt=@{path='custody.json';sha256=$pin}}
+        $receipt = @{schema='cachedb.k8s-acceptance/v3'; physicalExecutions=@($physical)
+            executions=@(@{id='standalone';kind='ORIGINAL_CASES';physicalExecutionIds=@($physical.id);originalCases=@{}})
+            files=@(@{path='custody.json';sha256=$pin;bytes=(Get-Item $path).Length}) + @(
+                $capturedFiles | ForEach-Object { @{path=('original/'+$_.name);sha256=$_.sha256;bytes=$_.bytes} })}
+        Assert-K8sOriginalCustody $physical $index $receipt $EvidenceDirectory @{ReviewedOriginalReceipts=@{$pin=$physical.podUid}}
+    }
+    Assert-CustodyProfileFixture $profile
+    Pass 'selected-capture-shared-schema-does-not-require-recovery-fields'
+    $legacy = Clone $profile; $legacy.Remove('schema')
+    Assert-CustodyProfileFixture $legacy
+    Pass 'legacy-selected-capture-remains-compatible'
+    $recovery = Clone $profile; $recovery.Remove('status')
+    $recovery.allSelectedOriginalsRetained=$true; $recovery.testsReexecuted=$false; $recovery.fileCount=$capturedFiles.Count
+    Assert-CustodyProfileFixture $recovery
+    Pass 'complete-recovery-remains-compatible'
+    foreach ($field in @('allSelectedOriginalsRetained','testsReexecuted','fileCount','files','podUid')) {
+        $bad = Clone $recovery; $bad.Remove($field)
+        Reject ('incomplete-recovery-'+$field) { Assert-CustodyProfileFixture $bad }
+    }
+    foreach ($field in @('allSelectedOriginalsRetained','testsReexecuted','fileCount')) {
+        $bad = Clone $recovery; $bad[$field]='invalid'
+        Reject ('wrong-recovery-type-'+$field) { Assert-CustodyProfileFixture $bad }
+    }
+    $bad = Clone $recovery; $bad.testsReexecuted=$true
+    Reject 'reexecuted-originals-still-rejected' { Assert-CustodyProfileFixture $bad }
+    $bad = Clone $recovery; $bad.fileCount++
+    Reject 'incorrect-complete-roster-count-still-rejected' { Assert-CustodyProfileFixture $bad }
+    $bad = Clone $profile; $bad.podUid='foreign-pod'
+    Reject 'selected-capture-foreign-pod-still-rejected' { Assert-CustodyProfileFixture $bad }
+    $bad = Clone $profile; $bad.files += (Clone $bad.files[0])
+    Reject 'selected-capture-duplicate-member-still-rejected' { Assert-CustodyProfileFixture $bad }
+    $bad = Clone $profile; $bad.files[0].sha256='a'*64
+    Reject 'selected-capture-file-tampering-still-rejected' { Assert-CustodyProfileFixture $bad }
+    [ordered]@{result='PASS';syntheticOnly=$true;actualKubernetesAcceptance=$false;controls=$controls} |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'summary.json') -Encoding utf8
+    Write-Output ('PASS '+$controls.Count+' custody profile controls; no product acceptance.')
+    return
+}
 if ($GuardImportControlsOnly) {
     if ([string]::IsNullOrWhiteSpace($env:KUBERNETES_SERVICE_HOST)) { throw 'Guard import controls require Kubernetes.' }
     foreach ($name in @('Resolve-K8sMember','Assert-K8sOriginalCustody','Assert-K8sOriginalExecutionSources')) {

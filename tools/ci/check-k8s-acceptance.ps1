@@ -444,11 +444,15 @@ function Assert-K8sOriginalCustody($Execution, $Index, $Receipt, [string]$Root, 
     $captured = Read-K8sJson (Assert-K8sSealedReference $binding.receipt $Receipt $Root 4MB) 4MB
     $completeRecovery = $captured.Contains('schema') -and
         $captured.schema -ceq 'cachedb.selected-original-custody/v1' -and
+        $captured.Contains('allSelectedOriginalsRetained') -and $captured.Contains('testsReexecuted') -and
+        $captured.Contains('fileCount') -and $captured.Contains('files') -and
         $captured.allSelectedOriginalsRetained -is [bool] -and $captured.allSelectedOriginalsRetained -and
         $captured.testsReexecuted -is [bool] -and !$captured.testsReexecuted -and
+        ($captured.fileCount -is [int] -or $captured.fileCount -is [long]) -and
         $captured.fileCount -eq @($captured.files).Count
     $selectedCapture = $captured.Contains('status') -and $captured.status -ceq 'SELECTED_ORIGINALS_HASH_VERIFIED'
     if ((!$selectedCapture -and !$completeRecovery) -or
+        !$captured.Contains('podUid') -or !$captured.Contains('files') -or
         $captured.podUid -cne $Execution.podUid -or
         $captured.podUid -cne $Policy.ReviewedOriginalReceipts[$binding.receipt.sha256] -or
         $captured.files -isnot [array] -or !$captured.files.Count -or $captured.files.Count -gt 5000) {
