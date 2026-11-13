@@ -12,6 +12,7 @@ param(
     [switch]$RequireManagedStagingHa,
     [switch]$RequireApplicationMigrationCoverage,
     [switch]$RequireMavenCentralPublish,
+    [switch]$PrePublication,
     [switch]$SkipRemoteWorkflowChecks,
     [switch]$SkipSecretChecks,
     [switch]$SkipMavenCentralPublishCheck
@@ -117,13 +118,113 @@ function Resolve-CommitSha {
     return ([string]$sha).Trim()
 }
 
+function Assert-PublicationSource {
+    param([string]$Version, [string]$ReleaseTag, [string]$HeadSha, [string]$TagSha, [string]$WorkingTreeStatus)
+    if ($ReleaseTag -notmatch '^v\d+\.\d+\.\d+$' -or $Version -cne $ReleaseTag.Substring(1)) {
+        throw 'Publication requires a stable tag matching the source POM version.'
+    }
+    if ($HeadSha -notmatch '^[0-9a-fA-F]{40}$' -or $TagSha -notmatch '^[0-9a-fA-F]{40}$' -or $HeadSha -ine $TagSha) {
+        throw 'Publication HEAD must equal the exact immutable release tag commit.'
+    }
+    if (![string]::IsNullOrWhiteSpace($WorkingTreeStatus)) { throw 'Publication source must have a clean working tree.' }
+}
+
+function Get-RequiredPerformanceWorkflows {
+    param([string]$StableReleaseTag)
+    if ($StableReleaseTag -notmatch '^v\d+\.\d+\.\d+$') { throw 'Performance workflow requirements need a stable release tag.' }
+    if ([version]$StableReleaseTag.Substring(1) -ge [version]'0.19.0') {
+        'Redis Performance Gate'
+        'EmaTech T1 and v019 Feature Performance Gates'
+    }
+}
+
+function Test-CanonicalK8sRelease {
+    param([string]$StableReleaseTag)
+    if ($StableReleaseTag -cnotmatch '^v\d+\.\d+\.\d+$') { throw 'Canonical evidence selection requires a stable release tag.' }
+    return [version]$StableReleaseTag.Substring(1) -ge [version]'0.19.0'
+}
+
+function Assert-CanonicalK8sArtifact {
+    param([object[]]$Artifacts, $Run, [string]$SourceSha, [string]$Repository)
+    if ($SourceSha -cnotmatch '^[a-f0-9]{40}$' -or $Run.headSha -cne $SourceSha -or
+        [string]$Run.databaseId -cnotmatch '^[1-9][0-9]{0,18}$' -or
+        $Run.workflowName -cne 'Framework Readiness' -or $Run.status -cne 'completed' -or
+        $Run.conclusion -cne 'success' -or $Run.event -cnotin @('push', 'workflow_dispatch')) {
+        throw 'Canonical K8s proof requires its successful trusted exact-S public verifier run.'
+    }
+    if ($Artifacts.Count -ge 100) { throw 'Canonical K8s proof exceeds the one-page artifact bound.' }
+    $matches = @($Artifacts | Where-Object { $_.name -ceq 'k8s-acceptance-verification' })
+    if ($matches.Count -ne 1) { throw 'Exactly one canonical K8s verification artifact is required.' }
+    $artifact = $matches[0]
+    $api = 'https://api.github.com/repos/' + $Repository + '/actions/artifacts/' + [string]$artifact.id
+    if ([string]$artifact.id -cnotmatch '^[1-9][0-9]{0,18}$' -or
+        $artifact.expired -isnot [bool] -or $artifact.expired -or
+        ($artifact.size_in_bytes -isnot [int] -and $artifact.size_in_bytes -isnot [long]) -or
+        $artifact.size_in_bytes -le 0 -or $artifact.size_in_bytes -gt 1MB -or
+        $artifact.digest -cnotmatch '^sha256:[a-f0-9]{64}$' -or
+        [string]$artifact.workflow_run.id -cne [string]$Run.databaseId -or
+        $artifact.workflow_run.head_sha -cne $SourceSha -or
+        $artifact.url -cne $api -or $artifact.archive_download_url -cne ($api + '/zip')) {
+        throw 'Canonical K8s verification artifact is expired, unpinned, oversized or from a different run/source.'
+    }
+    return $artifact
+}
+
+function Select-SuccessfulWorkflowRun {
+    param(
+        [object[]]$Runs,
+        [string]$WorkflowName,
+        [string]$HeadBranch = '',
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$HeadSha,
+        [string]$RequiredEvent = ''
+    )
+    if (!$Runs.Count) { throw "No GitHub Actions runs found for workflow '$WorkflowName'." }
+    if ($Runs.Count -gt 50) { throw 'Workflow evidence exceeds the 50-run query bound.' }
+    $matches = @($Runs | Where-Object {
+        $_.workflowName -ceq $WorkflowName -and
+        $_.status -ceq 'completed' -and $_.conclusion -ceq 'success' -and
+        $_.headSha -eq $HeadSha -and
+        ([string]::IsNullOrWhiteSpace($HeadBranch) -or $_.headBranch -eq $HeadBranch) -and
+        ([string]::IsNullOrWhiteSpace($RequiredEvent) -or $_.event -eq $RequiredEvent)
+    })
+    if (!$matches.Count) {
+        throw "No completed successful '$WorkflowName' run matched exact release SHA '$HeadSha', branch='$HeadBranch', event='$RequiredEvent'."
+    }
+    return $matches[0]
+}
+
+function Assert-SuccessfulWorkflowJob {
+    param([object[]]$Jobs, [string]$RequiredJobName)
+    if ($Jobs.Count -gt 50) { throw 'Workflow job evidence exceeds the 50-job bound.' }
+    $matches = @($Jobs | Where-Object { $_.name -ceq $RequiredJobName })
+    if ($matches.Count -ne 1 -or $matches[0].status -cne 'completed' -or $matches[0].conclusion -cne 'success') {
+        throw "Required workflow job '$RequiredJobName' is missing, duplicated, skipped, failed, or incomplete."
+    }
+}
+
 function Get-LatestSuccessfulRun {
     param(
         [string]$WorkflowName,
         [string]$HeadBranch,
         [string]$HeadSha,
-        [string]$RequiredEvent = ""
+        [string]$RequiredEvent = "",
+        [string]$RequiredJobName = "",
+        [string[]]$RequiredJobNames = @()
     )
+    if ($PSBoundParameters.ContainsKey('RequiredJobNames')) {
+        if ($RequiredJobName) { throw 'Use either RequiredJobName or RequiredJobNames, not both.' }
+        if (!$RequiredJobNames -or $RequiredJobNames.Count -gt 50) {
+            throw 'RequiredJobNames must contain between 1 and 50 job names.'
+        }
+    }
+    $jobNames = @($RequiredJobNames)
+    if ($RequiredJobName) { $jobNames = @($RequiredJobName) }
+    $uniqueNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($jobName in $jobNames) {
+        if ([string]::IsNullOrWhiteSpace($jobName) -or !$uniqueNames.Add($jobName)) {
+            throw 'Required workflow job names must be nonblank and unique.'
+        }
+    }
     $json = (Invoke-Native -Command "gh" -Arguments @(
         "run", "list",
         "--repo", $Repository,
@@ -132,24 +233,16 @@ function Get-LatestSuccessfulRun {
         "--json", "databaseId,workflowName,headBranch,headSha,conclusion,status,event,url,createdAt"
     )) -join [Environment]::NewLine
     $runs = @($json | ConvertFrom-Json)
-    if ($runs.Count -eq 0) {
-        throw "No GitHub Actions runs found for workflow '$WorkflowName'."
+    $selected = Select-SuccessfulWorkflowRun -Runs $runs -WorkflowName $WorkflowName -HeadBranch $HeadBranch -HeadSha $HeadSha -RequiredEvent $RequiredEvent
+    if ($jobNames.Count) {
+        $jobJson = (Invoke-Native -Command 'gh' -Arguments @('run', 'view', [string]$selected.databaseId,
+            '--repo', $Repository, '--json', 'jobs')) -join [Environment]::NewLine
+        $jobEvidence = $jobJson | ConvertFrom-Json
+        foreach ($jobName in $jobNames) {
+            Assert-SuccessfulWorkflowJob -Jobs @($jobEvidence.jobs) -RequiredJobName $jobName
+        }
     }
-
-    $matches = @($runs | Where-Object {
-        $_.status -eq "completed" -and
-        $_.conclusion -eq "success" -and
-        ([string]::IsNullOrWhiteSpace($HeadBranch) -or $_.headBranch -eq $HeadBranch) -and
-        ([string]::IsNullOrWhiteSpace($HeadSha) -or $_.headSha -eq $HeadSha) -and
-        ([string]::IsNullOrWhiteSpace($RequiredEvent) -or $_.event -eq $RequiredEvent)
-    })
-
-    if ($matches.Count -eq 0) {
-        $latest = $runs | Select-Object -First 1
-        throw "No successful '$WorkflowName' run matched headBranch='$HeadBranch' headSha='$HeadSha' event='$RequiredEvent'. Latest run: status=$($latest.status), conclusion=$($latest.conclusion), branch=$($latest.headBranch), sha=$($latest.headSha), url=$($latest.url)"
-    }
-
-    return $matches[0]
+    return $selected
 }
 
 $releaseTagValue = $ReleaseTag.Trim()
@@ -158,7 +251,7 @@ $releaseCommitSha = ""
 
 if (-not [string]::IsNullOrWhiteSpace($releaseTagValue)) {
     try {
-        $releaseCommitSha = Resolve-CommitSha -Ref $releaseTagValue
+        $releaseCommitSha = Resolve-CommitSha -Ref $(if ($PrePublication) { "refs/tags/$releaseTagValue" } else { $releaseTagValue })
     } catch {
         $releaseCommitSha = ""
     }
@@ -192,6 +285,16 @@ Invoke-ReadinessCheck -Name "No public codex branches" -Check {
         throw "Remote still contains public codex branch refs: $($codexBranches -join '; ')"
     }
     "No refs/heads/codex or refs/heads/codex/* branches found on origin."
+}
+
+if ($PrePublication) {
+    Invoke-ReadinessCheck -Name 'Publication source identity' -Check {
+        $head = Resolve-CommitSha -Ref 'HEAD'
+        $status = (Invoke-Native -Command 'git' -Arguments @('status', '--porcelain', '--untracked-files=all')) -join "`n"
+        Assert-PublicationSource -Version (Get-RootPomVersion) -ReleaseTag $releaseTagValue -HeadSha $head `
+            -TagSha $releaseCommitSha -WorkingTreeStatus $status
+        "Clean HEAD $head matches refs/tags/$releaseTagValue."
+    }
 }
 
 if ($SkipSecretChecks) {
@@ -285,18 +388,40 @@ if ($SkipRemoteWorkflowChecks) {
     $targetSha = $releaseCommitSha
 
     Invoke-ReadinessCheck -Name "Framework Readiness workflow" -Check {
-        $run = Get-LatestSuccessfulRun -WorkflowName "Framework Readiness" -HeadBranch $targetRefValue -HeadSha $targetSha
+        $run = Get-LatestSuccessfulRun -WorkflowName "Framework Readiness" -HeadBranch $targetRefValue -HeadSha $targetSha `
+            -RequiredJobNames @('K8s Acceptance Verification')
+        if (Test-CanonicalK8sRelease $releaseTagValue) {
+            # This exact-S job runs the unchanged full receipt/producer/report guard, not workloads.
+            $json = (Invoke-Native -Command 'gh' -Arguments @('api', '--method', 'GET',
+                "repos/$Repository/actions/runs/$($run.databaseId)/artifacts?per_page=100")) -join [Environment]::NewLine
+            $metadata = $json | ConvertFrom-Json
+            $artifact = Assert-CanonicalK8sArtifact @($metadata.artifacts) $run $targetSha $Repository
+            return "Run $($run.databaseId): $($run.url); canonical K8s proof artifact $($artifact.id), $($artifact.digest)."
+        }
         "Run $($run.databaseId): $($run.url)"
     }
 
-    Invoke-ReadinessCheck -Name "Production Evidence workflow" -Check {
-        $run = Get-LatestSuccessfulRun -WorkflowName "Production Evidence" -HeadBranch $targetRefValue -HeadSha $targetSha
-        "Run $($run.databaseId): $($run.url)"
-    }
+    if (!(Test-CanonicalK8sRelease $releaseTagValue)) {
+        # Immutable older releases retain their original workflow requirements.
+        Invoke-ReadinessCheck -Name "Production Evidence workflow" -Check {
+            $run = Get-LatestSuccessfulRun -WorkflowName "Production Evidence" -HeadBranch $targetRefValue -HeadSha $targetSha
+            "Run $($run.databaseId): $($run.url)"
+        }
 
-    Invoke-ReadinessCheck -Name "Snapshot Provider Evidence workflow" -Check {
-        $run = Get-LatestSuccessfulRun -WorkflowName "Snapshot Provider Evidence" -HeadBranch $targetRefValue -HeadSha $targetSha
-        "Run $($run.databaseId): $($run.url)"
+        Invoke-ReadinessCheck -Name "Snapshot Provider Evidence workflow" -Check {
+            $run = Get-LatestSuccessfulRun -WorkflowName "Snapshot Provider Evidence" -HeadBranch $targetRefValue -HeadSha $targetSha
+            "Run $($run.databaseId): $($run.url)"
+        }
+
+        if ($releaseTagValue -match '^v\d+\.\d+\.\d+$') {
+            foreach ($workflowName in @(Get-RequiredPerformanceWorkflows -StableReleaseTag $releaseTagValue)) {
+                Invoke-ReadinessCheck -Name "$workflowName workflow" -Check {
+                    $jobName = if ($workflowName -ceq 'Redis Performance Gate') { 'redis-performance' } else { 'feature-performance' }
+                    $run = Get-LatestSuccessfulRun -WorkflowName $workflowName -HeadSha $targetSha -RequiredJobName $jobName
+                    "Run $($run.databaseId): $($run.url)"
+                }
+            }
+        }
     }
 
     if ($EvidenceScope -eq "ProductionGA") {
@@ -308,16 +433,20 @@ if ($SkipRemoteWorkflowChecks) {
         Add-Check -Name "Oracle Data Guard Evidence workflow" -Status "SKIP" -Details "Framework package distribution only. Physical Data Guard evidence is not certified and full Production GA is not approved by this check."
     }
 
-    Invoke-ReadinessCheck -Name "Anonymous public Maven repository" -Check {
-        $version = $releaseTagValue.Substring(1)
-        $validatorPath = Join-Path $repoRoot "tools/ci/check-public-maven-repository.ps1"
-        Invoke-Native -Command "pwsh" -Arguments @(
-            $validatorPath,
-            "-Version", $version,
-            "-BaseUrl", $PublicMavenBaseUrl,
-            "-SummaryPath", "target/public-maven-repository-summary.md"
-        ) | Out-Null
-        "Version $version resolved without authentication from $PublicMavenBaseUrl"
+    if ($PrePublication) {
+        Add-Check -Name 'Anonymous public Maven repository' -Status 'SKIP' -Details 'Post-publication distribution check; not a pre-publication dependency.'
+    } else {
+        Invoke-ReadinessCheck -Name "Anonymous public Maven repository" -Check {
+            $version = $releaseTagValue.Substring(1)
+            $validatorPath = Join-Path $repoRoot "tools/ci/check-public-maven-repository.ps1"
+            Invoke-Native -Command "pwsh" -Arguments @(
+                $validatorPath,
+                "-Version", $version,
+                "-BaseUrl", $PublicMavenBaseUrl,
+                "-SummaryPath", "target/public-maven-repository-summary.md"
+            ) | Out-Null
+            "Version $version resolved without authentication from $PublicMavenBaseUrl"
+        }
     }
 
     if ($RequireManagedStagingHa) {
@@ -331,6 +460,8 @@ if ($SkipRemoteWorkflowChecks) {
 
     if (-not $RequireMavenCentralPublish) {
         Add-Check -Name "Maven Central Publish workflow" -Status "SKIP" -Details "Maven Central publish was not requested. The anonymous public Maven repository and GitHub Release are the official distribution channels."
+    } elseif ($PrePublication) {
+        Add-Check -Name 'Maven Central Publish workflow' -Status 'SKIP' -Details 'The publication being gated cannot already be complete; verify distribution after publication.'
     } elseif ($SkipMavenCentralPublishCheck) {
         Add-Check -Name "Maven Central Publish workflow" -Status "SKIP" -Details "Skipped by caller before the publish job."
     } else {
@@ -354,6 +485,7 @@ $summaryLines.Add("- Repository: ``$Repository``")
 $summaryLines.Add("- Target ref: ``$targetRefValue``")
 $summaryLines.Add("- Release tag: ``$releaseTagValue``")
 $summaryLines.Add("- Evidence scope: ``$EvidenceScope``")
+$summaryLines.Add("- Phase: ``$(if ($PrePublication) { 'PRE_PUBLICATION_SOURCE_AND_WORKFLOWS_ONLY' } else { 'POST_PUBLICATION_WITH_DISTRIBUTION' })``")
 if ($EvidenceScope -eq "FrameworkPackage") {
     $summaryLines.Add("- Full Production GA: ``NOT_APPROVED_BY_THIS_CHECK``; requires all GA gates, including exact-commit physical Data Guard evidence.")
 }
@@ -379,4 +511,8 @@ if ($failedChecks.Count -gt 0) {
     throw "$readinessLabel release readiness failed. See $summaryFullPath"
 }
 
-Write-Host "$readinessLabel release readiness passed."
+if ($PrePublication) {
+    Write-Host 'Pre-publication source/workflow checks passed; distribution and release approval remain separate.'
+} else {
+    Write-Host "$readinessLabel release readiness passed."
+}

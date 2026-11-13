@@ -107,6 +107,23 @@ public class CacheDatabaseSpringBootAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean(com.reactor.cachedb.core.config.CacheRuntimeOptions.class)
+    public com.reactor.cachedb.core.config.CacheRuntimeOptions cacheRuntimeOptions(
+            CacheDbSpringProperties properties, ObjectProvider<CacheRuntimeOptionsCustomizer> customizers) {
+        var builder = cacheRuntimeOptions(properties).toBuilder();
+        for (var customizer : customizers.orderedStream().toList()) customizer.customize(builder, properties);
+        return builder.build();
+    }
+
+    /** Compatibility helper for direct factory callers without a Spring customizer provider. */
+    public com.reactor.cachedb.core.config.CacheRuntimeOptions cacheRuntimeOptions(CacheDbSpringProperties properties) {
+        return com.reactor.cachedb.core.config.CacheRuntimeOptions.builder()
+                .redisReadCoalescing(properties.getRedis().getReadCoalescing().toConfig())
+                .nearCacheInvalidation(properties.getNearCache().toConfig())
+                .asyncMaxConcurrent(properties.getAsync().getMaxConcurrent()).build();
+    }
+
+    @Bean
     @ConditionalOnMissingBean
     public CacheDatabaseConfig cacheDatabaseConfig(
             CacheDbSpringProperties properties,
@@ -223,6 +240,20 @@ public class CacheDatabaseSpringBootAutoConfiguration {
         return builder.build();
     }
 
+    public CacheDatabase cacheDatabase(
+            @Qualifier("cacheDbJedisPooled")
+                    ObjectProvider<JedisPooled> namedForegroundJedisProvider,
+            ObjectProvider<JedisPooled> jedisProvider,
+            @Qualifier("cacheDbBackgroundJedisPooled")
+                    ObjectProvider<JedisPooled> backgroundJedisProvider,
+            DataSource dataSource,
+            CacheDatabaseConfig config,
+            CachePolicyCatalog policyCatalog,
+            CacheDbSpringProperties properties) {
+        return cacheDatabase(namedForegroundJedisProvider, jedisProvider, backgroundJedisProvider,
+                dataSource, config, policyCatalog, properties, cacheRuntimeOptions(properties));
+    }
+
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
     @DependsOnDatabaseInitialization
@@ -235,29 +266,43 @@ public class CacheDatabaseSpringBootAutoConfiguration {
             DataSource dataSource,
             CacheDatabaseConfig config,
             CachePolicyCatalog policyCatalog,
-            CacheDbSpringProperties properties) {
+            CacheDbSpringProperties properties,
+            com.reactor.cachedb.core.config.CacheRuntimeOptions runtimeOptions) {
         JedisPooled jedisPooled =
                 namedForegroundJedisProvider.getIfAvailable(jedisProvider::getIfAvailable);
         JedisPooled backgroundJedis = backgroundJedisProvider.getIfAvailable(() -> jedisPooled);
         CacheDatabase cacheDatabase =
-                new CacheDatabase(jedisPooled, backgroundJedis, dataSource, config);
-        if (properties.getRegistration().isEnabled()) {
-            if (properties.getRegistration().getSource()
-                    == CacheDbSpringProperties.RegistrationSource.JDBC) {
-                GeneratedCacheBindingsDiscovery.registerDiscoveredJdbcBacked(
-                        cacheDatabase,
-                        policyCatalog,
-                        resolveRegistrationClassLoader(),
-                        properties.getRegistration().isFailOnUnknownEntity());
-            } else {
-                GeneratedCacheBindingsDiscovery.registerDiscovered(
-                        cacheDatabase,
-                        config.resourceLimits().defaultCachePolicy(),
-                        resolveRegistrationClassLoader());
+                new CacheDatabase(jedisPooled, backgroundJedis, dataSource, config, runtimeOptions);
+        return initializeCacheDatabase(cacheDatabase, config, policyCatalog, properties);
+    }
+
+    CacheDatabase initializeCacheDatabase(CacheDatabase cacheDatabase, CacheDatabaseConfig config,
+            CachePolicyCatalog policyCatalog, CacheDbSpringProperties properties) {
+        try {
+            if (properties.getRegistration().isEnabled()) {
+                if (properties.getRegistration().getSource()
+                        == CacheDbSpringProperties.RegistrationSource.JDBC) {
+                    GeneratedCacheBindingsDiscovery.registerDiscoveredJdbcBacked(
+                            cacheDatabase,
+                            policyCatalog,
+                            resolveRegistrationClassLoader(),
+                            properties.getRegistration().isFailOnUnknownEntity());
+                } else {
+                    GeneratedCacheBindingsDiscovery.registerDiscovered(
+                            cacheDatabase,
+                            config.resourceLimits().defaultCachePolicy(),
+                            resolveRegistrationClassLoader());
+                }
             }
+            cacheDatabase.start();
+            return cacheDatabase;
+        } catch (RuntimeException | Error failure) {
+            try { cacheDatabase.close(); }
+            catch (RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
+            throw failure;
         }
-        cacheDatabase.start();
-        return cacheDatabase;
     }
 
     public CacheDatabaseHealthIndicator cacheDatabaseHealthIndicator(

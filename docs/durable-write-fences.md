@@ -80,6 +80,21 @@ case/accent/trailing-space variants of a string ID as distinct Redis identities
 when the SQL primary-key collation treats them as equal. Prefer numeric IDs or
 canonical UUID strings. Write targets must be physical tables, not synonyms.
 
+### SQL Server Hash Parameters
+
+The technical `fence_key` is a 64-character ASCII hash stored as `CHAR(64)`.
+SQL Server statements cast only its bound parameters to `CHAR(64)`, so a Unicode
+JDBC parameter does not force conversion of the indexed column. This applies to
+seed, locked selection and version updates. It does not cast business IDs or
+`identity_value`, change the schema, disable Unicode JDBC bindings, remove locks
+or alter transaction/retry semantics. Do not set `sendStringParametersAsUnicode=false`
+globally as a workaround; business data must retain its Unicode behavior.
+
+Check actual plans and lock waits under the application's collation and load.
+An indexed column with `CONVERT_IMPLICIT` can turn a selective lookup into a
+scan as durable history grows. A scan chosen for a genuinely broad selection is
+a different case; this contract does not force an index hint on every query.
+
 ## Retention And Recovery
 
 Do not truncate this table, apply TTL cleanup, or delete tombstones when business

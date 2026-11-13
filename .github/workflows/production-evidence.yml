@@ -1,62 +1,9 @@
 name: Production Evidence
 
 on:
+  # EmaTech runtime evidence is canonical; this legacy workflow is manual-only.
+  # Do not dispatch this workflow to replay already-passed scopes.
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/production-evidence.yml"
-      - "cachedb-core/**"
-      - "cachedb-json/**"
-      - "cachedb-annotations/**"
-      - "cachedb-processor/**"
-      - "cachedb-storage-redis/**"
-      - "cachedb-storage-jdbc/**"
-      - "cachedb-storage-postgres/**"
-      - "cachedb-storage-mssql/**"
-      - "cachedb-storage-oracle/**"
-      - "cachedb-starter/**"
-      - "cachedb-spring-boot-starter/**"
-      - "cachedb-spring-boot-starter-oracle/**"
-      - "cachedb-examples/**"
-      - "cachedb-production-tests/**"
-      - "sample-cache-database-postgresql/**"
-      - "sample-cache-database-mssql/**"
-      - "sample-cache-database-oracle/**"
-      - "tools/ci/**"
-      - "tools/ops/cluster/**"
-      - "tools/samples/**"
-      - "docs/**"
-      - "tr/docs/**"
-      - "pom.xml"
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - ".github/workflows/production-evidence.yml"
-      - "cachedb-core/**"
-      - "cachedb-json/**"
-      - "cachedb-annotations/**"
-      - "cachedb-processor/**"
-      - "cachedb-storage-redis/**"
-      - "cachedb-storage-jdbc/**"
-      - "cachedb-storage-postgres/**"
-      - "cachedb-storage-mssql/**"
-      - "cachedb-storage-oracle/**"
-      - "cachedb-starter/**"
-      - "cachedb-spring-boot-starter/**"
-      - "cachedb-spring-boot-starter-oracle/**"
-      - "cachedb-examples/**"
-      - "cachedb-production-tests/**"
-      - "sample-cache-database-postgresql/**"
-      - "sample-cache-database-mssql/**"
-      - "sample-cache-database-oracle/**"
-      - "tools/ci/**"
-      - "tools/ops/cluster/**"
-      - "tools/samples/**"
-      - "docs/**"
-      - "tr/docs/**"
-      - "pom.xml"
 
 jobs:
   sample-provider-parity:

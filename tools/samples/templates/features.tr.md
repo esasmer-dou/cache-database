@@ -2,10 +2,9 @@
 
 ## Bildirimsel Katalog Senaryoları
 
-Bu senaryolar **CacheDB 0.18.1** sürümünü kullanır. Mevcut sipariş,
-destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar yalnızca anlatım
-için yazılmış taslaklar değildir; üç sağlayıcıda da derlenen ve test edilen
-örnek kaynak kodlarıdır. Her tam Java bloğunu, üstünde belirtilen dosyaya yerleştirin.
+Bu senaryolar **CacheDB 0.19.0** sürümünü kullanır. Mevcut sipariş,
+destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar gerçek örnek
+kaynak kodlarıdır; kod blokları üstlerinde belirtilen dosyalarla eşleşir.
 
 ### 0.15 ile Gelen Kolaylıklar
 
@@ -121,10 +120,10 @@ küçükten büyüğe sıralanır. Eşit stokta ürün kimliğinin metinsel sır
 
 Örneğin POM dosyasında Gson **2.13.2** açıkça sabitlenmiştir. Aksi hâlde Spring
 Boot parent, gerekli `Strictness` sınıfını içermeyen eski Gson sürümünü seçebilir.
-POM'da `cachedb-json`, annotation bağımlılığı ve 0.18.1 processor birlikte bulunur.
+POM'da `cachedb-json`, annotation bağımlılığı ve 0.19.0 processor birlikte bulunur.
 Gson sürüm ayarını kaldırmayın; farklı framework sürümlerini karıştırmayın.
 
-0.18.1 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
+0.19.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
 zamanı bağımlılıkları şunlardır:
 
 ```xml
@@ -343,8 +342,9 @@ aktarın. **23 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed g
 Akış; ilk süre sınırlı bekleme yeterli değilse yalnızca aynı teslimatı tekrar
 göndererek SQL kalıcılığını, aynı receipt ile tekrarı, değişen içeriğin reddini,
 snapshot yayınını, Türkçe metin/ondalık sayıyı, tek nesilden okumayı, sayfalamayı
-ve geçersiz girdi yanıtlarını doğrular. Mevcut 61 istekli iş senaryosu koleksiyonu
-ayrı kalır. İki koleksiyon da REST için 50 ms SLA'sı iddia etmez.
+ve geçersiz girdi yanıtlarını doğrular. Ayrı iş senaryosu koleksiyonu eski
+61 isteği korur ve 23 metot önbelleği/asenkron isteği ekler; toplam 84 istektir.
+İki koleksiyon da REST için 50 ms SLA'sı iddia etmez.
 
 ```powershell
 npx --yes newman@6.2.1 run postman/cache-database-{{PROVIDER}}-catalog.postman_collection.json --env-var baseUrl=$base
@@ -356,17 +356,18 @@ framework altyapı yeteneğidir; yerel Compose tek Redis kullanır ve Cluster/HA
 topolojisini doğruladığını iddia etmez. JSON ve rol seçimleri açıktır; ORM'nin
 kendiliğinden SQL'e geçmesi gibi bir davranış eklenmez.
 
-Yalıtılmış komut satırı testi için Node.js/npm ve PowerShell 7 kurulu olmalıdır.
+Yalıtılmış komut satırı testi için Node.js/npm ve PowerShell 7.3+ kurulu olmalıdır.
 JAR'ı derledikten sonra `./scripts/test-catalog-postman.ps1` çalıştırın. Araç;
-geçici sağlayıcı altyapısını ve boş yerel portta JAR'ı başlatır, kaydedilmiş
-koleksiyonu Newman ile çalıştırır, JSON/JUnit raporlarını `target/catalog-postman`
-altına yazar ve yalnızca kendi test projesini/volume'larını kaldırır.
+geçici sağlayıcı altyapısını ve boş yerel portta JAR'ı başlatır; katalog (23),
+denetim (40) ve iş akışı (84) koleksiyonlarını Newman ile çalıştırır.
+JSON/JUnit raporlarını `target/catalog-postman` ve `target/v019-postman` altına
+yazar; yalnızca kendi test projesini/volume'larını kaldırır.
 Bu aracı üretim veritabanına bağlamayın.
 `-SplitRoles` seçeneği, yerel şemayı hazırlayıp hazırlık JVM'ini durdurur; aynı
 koleksiyonu bir API konteyneri ve **iki worker konteyneri** üzerinde çalıştırır.
 Örneklerin CI hattı bu modu kullanır; konteyner logları test kanıtına eklenir.
 
-Ayrı sunulan 61 istekli iş senaryoları koleksiyonu, kabul edilen her arka plan
+İş senaryosu koleksiyonunun eski 61 istekli bölümü, kabul edilen her arka plan
 işinden sonra kayıtlı durum isteğini otomatik sorgular ve tamamlanınca sıradaki
 isteğe geçer. Bekleme en fazla 30 saniye veya 150 denemedir. Her yanıtın HTTP
 kodu doğrulanır; başarısız işten sonra okumaya devam edilmez. HTTP yük kontrolünden

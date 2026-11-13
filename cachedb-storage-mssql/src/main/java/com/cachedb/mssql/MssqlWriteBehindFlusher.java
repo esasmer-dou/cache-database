@@ -104,43 +104,53 @@ public final class MssqlWriteBehindFlusher extends AbstractJdbcWriteBehindFlushe
 
     @Override
     public void flush(QueuedWriteOperation operation) throws SQLException {
-        if (operation.atomicBatch()) {
-            flushAtomicBatch(operation.batchOperations());
-            return;
-        }
-        long startedAt = System.nanoTime();
         try {
-            writeFence.initialize();
-            try (Connection connection = dataSource.getConnection()) {
-                executeInTransaction(connection, List.of(operation));
+            if (operation.atomicBatch()) {
+                flushAtomicBatch(operation.batchOperations());
+                return;
             }
-        } finally {
-            recordWrite(startedAt, operation.observationTag());
+            long startedAt = System.nanoTime();
+            try {
+                var prepared = prepareWrites(List.of(operation));
+                initializeWriteFence(prepared);
+                try (Connection connection = dataSource.getConnection()) {
+                    executeInTransaction(connection, prepared);
+                }
+            } finally {
+                recordWrite(startedAt, operation.observationTag());
+            }
+        } catch (SQLException unsafe) {
+            throw safeSqlFailure(List.of(operation), unsafe);
         }
     }
 
     @Override
     public void flushBatch(List<QueuedWriteOperation> operations) throws SQLException {
-        long startedAt = System.nanoTime();
         try {
-            if (operations.isEmpty()) {
-                return;
-            }
-            writeFence.initialize();
-            try (Connection connection = dataSource.getConnection()) {
-                for (int start = 0; start < operations.size(); start += transactionBatchSize) {
-                    int end = Math.min(operations.size(), start + transactionBatchSize);
-                    executeInTransaction(connection, operations.subList(start, end));
+            long startedAt = System.nanoTime();
+            try {
+                if (operations.isEmpty()) {
+                    return;
+                }
+                var prepared = prepareWrites(operations);
+                initializeWriteFence(prepared);
+                try (Connection connection = dataSource.getConnection()) {
+                    for (int start = 0; start < operations.size(); start += transactionBatchSize) {
+                        int end = Math.min(operations.size(), start + transactionBatchSize);
+                        executeInTransaction(connection, prepared.slice(start, end));
+                    }
+                }
+            } finally {
+                if (!operations.isEmpty()) {
+                    recordWrite(startedAt, dominantObservationTag(operations));
                 }
             }
-        } finally {
-            if (!operations.isEmpty()) {
-                recordWrite(startedAt, dominantObservationTag(operations));
-            }
+        } catch (SQLException unsafe) {
+            throw safeSqlFailure(operations, unsafe);
         }
     }
 
-    private void executeInTransaction(Connection connection, List<QueuedWriteOperation> operations)
+    private void executeInTransaction(Connection connection, PreparedWrites operations)
             throws SQLException {
         SessionSettings settings = options.lockTimeoutEnabled() ? new SessionSettings() {
             private int previousTimeout;
@@ -177,10 +187,15 @@ public final class MssqlWriteBehindFlusher extends AbstractJdbcWriteBehindFlushe
 
     @Override
     public void flushAtomicBatch(List<QueuedWriteOperation> operations) throws SQLException {
-        if (operations.isEmpty()) return;
-        writeFence.initialize();
-        try (Connection connection = dataSource.getConnection()) {
-            executeInTransaction(connection, operations);
+        try {
+            if (operations.isEmpty()) return;
+            var prepared = prepareWrites(operations);
+            initializeWriteFence(prepared);
+            try (Connection connection = dataSource.getConnection()) {
+                executeInTransaction(connection, prepared);
+            }
+        } catch (SQLException unsafe) {
+            throw safeSqlFailure(operations, unsafe);
         }
     }
 

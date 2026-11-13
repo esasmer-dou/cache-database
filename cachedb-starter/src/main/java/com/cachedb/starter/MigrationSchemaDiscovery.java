@@ -116,6 +116,11 @@ final class MigrationSchemaDiscovery {
                 if (tableName == null || tableName.isBlank()) {
                     continue;
                 }
+                // Retained security decisions are never migration business surfaces.
+                if ("cachedb_empty_activation".equalsIgnoreCase(tableName)
+                        || "cachedb_identity_allocator".equalsIgnoreCase(tableName)) {
+                    continue;
+                }
                 TableKey key = new TableKey(schema, tableName);
                 tables.put(key, new MutableTable(
                         schema,

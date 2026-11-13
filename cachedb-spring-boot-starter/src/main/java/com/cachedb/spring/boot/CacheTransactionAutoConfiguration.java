@@ -21,6 +21,7 @@ import org.springframework.util.ReflectionUtils;
 /** Annotations are resolved once at startup, never scanned for each mutation. */
 @AutoConfiguration(after = CacheDatabaseSpringBootAutoConfiguration.class)
 @ConditionalOnClass(ProxyFactory.class)
+@ConditionalOnBean(CacheDatabase.class)
 public class CacheTransactionAutoConfiguration {
     @Bean @ConditionalOnMissingBean
     CacheTransactionTemplate cacheTransactionTemplate(CacheDatabase database) { return new CacheTransactionTemplate(database); }

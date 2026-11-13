@@ -4,7 +4,34 @@ All notable changes to `cache-database` will be tracked here.
 
 The format is intentionally simple and release-focused.
 
-## 0.18.1 - Unreleased
+## 0.19.0 - UNRELEASED
+
+Draft only: general release gates and application-specific protection onboarding remain open.
+Only the candidate identified in the draft release notes has bounded F3 acceptance:
+188 lifecycle tests and nine provider/sample cells for four features
+(141 Java tests, 381 HTTP assertions), not full sample or release acceptance.
+The mandatory 2x `rawT4target` is waived by explicit acceptance exception;
+other performance and regression gates still apply.
+No publication, full-green final artifact or measured 2x release improvement is claimed.
+
+- **BREAKING:** minimum runtime/compiler target Java 21; source builds require Maven 3.9+. Java 17 applications remain on 0.18.x. Historical artifacts and Java requirements are unchanged.
+- Lifecycle-owned virtual-thread execution and blocking-monitor hardening, with finite concurrency and shutdown contracts.
+- Opt-in bounded Redis point-read merging; default false, with bounded async FIFO admission even when merging is disabled.
+- Server-assisted L1 tracking, readiness/closure safety and mixed-fleet legacy-publication controls.
+- Bounded async repository APIs and optional Reactor adapters with explicit caller-context propagation.
+- Tenant-aware aggregate/facet Lua paths retaining owner/tombstone/null checks and bounded topology fallback.
+- Dependency-free observations and optional Micrometer/OTel integration with low-cardinality privacy boundaries.
+- Artifact-bound paired benchmark/regression tooling; remaining acceptance gates stay open, not performance claims.
+- Composite sort/range/seek indexes with guarded rebuild and exact typed fallback for unsafe score domains.
+- Optional compile-time Spring Data CRUD, derived queries and bounded complete-selection/bulk-delete semantics.
+- Explicit field encryption, resident-set retention and entity-scoped tenant-generation/purge contracts; legacy-data onboarding is not approved by this draft.
+- Opt-in synchronous Spring Cache method-value support; asynchronous/reactive annotation results remain unsupported.
+- Empty full snapshots initialize owner-checked generation metadata so later content-reuse refreshes can insert, delete or perform a no-op without treating the generation as missing; empty staging avoids an unnecessary Redis pipeline.
+
+See [draft release contracts](docs/releases/v0.19.0.md), [upgrade/rollback](docs/upgrading-to-0.19.md),
+[open release gates](docs/release-checklist.md) and [Türkçe sürüm notları](tr/docs/releases/v0.19.0.md).
+
+## 0.18.1
 
 - Composite-index signatures disable incomplete fast paths until rebuild; existing single-column queries remain available. Index maintenance exposes pending namespaces.
 - Causal bulk reads group by Redis Cluster slot; split triples verify versions before reading payloads. Bounded Runnable/Callable/Supplier wrappers capture and restore requirements.

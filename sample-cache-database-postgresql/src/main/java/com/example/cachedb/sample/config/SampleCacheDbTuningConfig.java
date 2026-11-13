@@ -17,7 +17,19 @@ import org.springframework.context.annotation.Configuration;
 public class SampleCacheDbTuningConfig {
 
     @Bean
-    CacheDatabaseConfigCustomizer sampleCacheDbTuning() {
+    CacheDatabaseConfigCustomizer sampleRedisNamespace(org.springframework.core.env.Environment environment) {
+        String prefix = environment.getProperty("SAMPLE_REDIS_PREFIX");
+        if (prefix != null && !prefix.matches("[A-Za-z0-9:_-]{1,100}"))
+            throw new IllegalArgumentException("SAMPLE_REDIS_PREFIX must be 1..100 bounded key-prefix characters");
+        return (builder, properties) -> {
+            if (prefix != null) builder.keyspace(com.reactor.cachedb.core.config.KeyspaceConfig.builder()
+                    .keyPrefix(prefix).build());
+        };
+    }
+
+    @Bean
+    CacheDatabaseConfigCustomizer sampleCacheDbTuning(org.springframework.core.env.Environment environment) {
+        String prefix = environment.getProperty("SAMPLE_REDIS_PREFIX");
         return (builder, properties) -> builder
                 .resourceLimits(ResourceLimits.builder()
                         .defaultCachePolicy(CachePolicy.builder()
@@ -59,6 +71,8 @@ public class SampleCacheDbTuningConfig {
                         .autoApplyOnStart(true)
                         .build())
                 .writeBehind(WriteBehindConfig.builder()
+                        .streamKey(prefix == null ? WriteBehindConfig.defaults().streamKey() : prefix + ":stream:write-behind")
+                        .deadLetterStreamKey(prefix == null ? WriteBehindConfig.defaults().deadLetterStreamKey() : prefix + ":stream:write-behind:dlq")
                         .workerThreads(2)
                         .batchSize(128)
                         .maxFlushBatchSize(128)

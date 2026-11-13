@@ -13,6 +13,16 @@ public final class FacetAccumulator {
     public void add(Object key, Object value, boolean countField) {
         if (++rows > 100_000) throw new IllegalStateException("Facet candidate limit exceeded: max 100000");
         if (key == null) return;
+        var accumulator = accumulator(key);
+        if (!countField || value != null) accumulator.add(countField ? null : value);
+    }
+    public void addCount(Object key, long count) {
+        if (count < 1 || count > 100_000 - rows)
+            throw new IllegalStateException("Facet count exceeds remaining candidate budget");
+        rows += (int) count;
+        if (key != null) accumulator(key).addCount(count);
+    }
+    private AggregateResult.Accumulator accumulator(Object key) {
         String group = key.toString();
         if (group.length() > 4096) throw new IllegalArgumentException("Facet group key exceeds 4096 characters");
         var accumulator = groups.get(group);
@@ -20,7 +30,7 @@ public final class FacetAccumulator {
             if (groups.size() == MAX_GROUPS) throw new IllegalStateException("Facet group limit exceeded: max 256");
             groups.put(group, accumulator = new AggregateResult.Accumulator());
         }
-        if (!countField || value != null) accumulator.add(countField ? null : value);
+        return accumulator;
     }
     public Map<String, AggregateResult> result() {
         var result = new LinkedHashMap<String, AggregateResult>();

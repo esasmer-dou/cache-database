@@ -5,6 +5,13 @@ Turkish version: [tr/DOKUMAN_HARITASI.md](tr/DOKUMAN_HARITASI.md)
 This page is the entry point for CacheDB documentation. It is organized by the
 questions a new user or technical lead is likely to ask.
 
+## 0.19.0 Draft
+
+0.19.0 is **UNRELEASED**. Benchmark release acceptance is FAIL / OPEN; protection onboarding is pending.
+Start with the [draft release notes](docs/releases/v0.19.0.md),
+[Java 21 and opt-in migration](docs/upgrading-to-0.19.md), and [release history](docs/release-history.md).
+Package versions, functional tests and guide availability do not establish publication or production acceptance.
+
 ## First-Time Reader Path
 
 Read in this order:
@@ -32,7 +39,7 @@ For bulk L1 reads, soft TTL, causal tokens, facets and composite indexes, see
 | How do I run a complete REST API sample? | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | How do I add it to a new project? | [Getting Started](docs/getting-started.md) |
 | How do I declare hot, source, warm, and command routes? | [Declarative Repositories](docs/declarative-repositories.md) |
-| What changed in the latest stable release? | [v0.15.1 Release Notes](docs/releases/v0.15.1.md) |
+| Where are release history and publication boundaries? | [Release History](docs/release-history.md) |
 | How are wide entities and SQL column limits checked? | [Database-Aware Column Limits](docs/schema-column-limits.md) |
 | How do I simplify snapshot sources and relationships? | [Source reference](docs/snapshot-source-reference.md) |
 | How do I use typed snapshots, client/worker roles and infrastructure-free tests in 0.14.0? | [Typed Snapshots, Runtime Roles and Consumer Tests](docs/typed-snapshots-runtime-testing.md) |

@@ -6,7 +6,7 @@
     <parent>
         <groupId>com.reactor.cachedb</groupId>
         <artifactId>cache-database</artifactId>
-        <version>0.18.1</version>
+        <version>0.19.0</version>
         <relativePath>../../../pom.xml</relativePath>
     </parent>
     <artifactId>cachedb-benchmarks-redis</artifactId>
@@ -16,6 +16,8 @@
         <maven.install.skip>true</maven.install.skip>
         <maven.deploy.skip>true</maven.deploy.skip>
         <cachedb.benchmark.runtime.version>${project.version}</cachedb.benchmark.runtime.version>
+        <cachedb.benchmark.shaded.name>benchmarks</cachedb.benchmark.shaded.name>
+        <cachedb.benchmark.main.class>com.reactor.cachedb.benchmarks.redis.RedisBenchmarkRunner</cachedb.benchmark.main.class>
     </properties>
     <dependencies>
         <dependency>
@@ -65,11 +67,11 @@
                         <phase>package</phase>
                         <goals><goal>shade</goal></goals>
                         <configuration>
-                            <finalName>benchmarks</finalName>
+                            <finalName>${cachedb.benchmark.shaded.name}</finalName>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>com.reactor.cachedb.benchmarks.redis.RedisBenchmarkRunner</mainClass>
+                                    <mainClass>${cachedb.benchmark.main.class}</mainClass>
                                 </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
@@ -91,4 +93,76 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <!-- Explicit new-API capability build; no activation and no change to the legacy source set. -->
+        <profile>
+            <id>redis-benchmarks-t1</id>
+            <properties>
+                <cachedb.benchmark.shaded.name>benchmarks-t1-coalescing</cachedb.benchmark.shaded.name>
+                <cachedb.benchmark.main.class>org.openjdk.jmh.Main</cachedb.benchmark.main.class>
+            </properties>
+            <build>
+                <directory>${project.basedir}/target/coalescing</directory>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.2</version>
+                        <executions>
+                            <execution>
+                                <id>redis-benchmarks-t1-source</id>
+                                <phase>generate-sources</phase>
+                                <goals><goal>add-source</goal></goals>
+                                <configuration>
+                                    <sources><source>${project.basedir}/src/coalescing/java</source></sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>redis-benchmarks-v019</id>
+            <properties>
+                <cachedb.benchmark.shaded.name>benchmarks-v019-features</cachedb.benchmark.shaded.name>
+                <cachedb.benchmark.main.class>org.openjdk.jmh.Main</cachedb.benchmark.main.class>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>com.reactor.cachedb</groupId>
+                    <artifactId>cachedb-spring-boot-starter</artifactId>
+                    <version>${cachedb.benchmark.runtime.version}</version>
+                </dependency>
+                <dependency>
+                    <groupId>io.micrometer</groupId>
+                    <artifactId>micrometer-observation</artifactId>
+                    <version>${micrometer.version}</version>
+                </dependency>
+            </dependencies>
+            <build>
+                <directory>${project.basedir}/target/features-v019</directory>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.2</version>
+                        <executions>
+                            <execution>
+                                <id>redis-benchmarks-v019-sources</id>
+                                <phase>generate-sources</phase>
+                                <goals><goal>add-source</goal></goals>
+                                <configuration>
+                                    <sources>
+                                        <source>${project.basedir}/src/coalescing/java</source>
+                                        <source>${project.basedir}/src/features/java</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

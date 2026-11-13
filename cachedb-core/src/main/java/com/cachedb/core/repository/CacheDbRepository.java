@@ -14,6 +14,28 @@ import java.util.function.UnaryOperator;
  * Primary application-facing repository contract. Hot reads and source reads are deliberately separate.
  */
 public interface CacheDbRepository<T, ID> {
+    default com.reactor.cachedb.core.async.CacheAsyncExecutor asyncExecutor() {
+        throw new UnsupportedOperationException("No runtime-owned async executor; use async(executor)");
+    }
+
+    /** Explicit receipt-preserving name; never maps save/delete receipts to entity payloads. */
+    default AsyncCacheDbRepository<T, ID> asyncWithReceipt() {
+        return async();
+    }
+
+    default AsyncCacheDbRepository<T, ID> asyncWithReceipt(com.reactor.cachedb.core.async.CacheAsyncExecutor executor) {
+        return async(executor);
+    }
+
+    /** Receipt-preserving API, intentionally not AsyncEntityRepository. */
+    default AsyncCacheDbRepository<T, ID> async() {
+        return async(asyncExecutor());
+    }
+
+    default AsyncCacheDbRepository<T, ID> async(com.reactor.cachedb.core.async.CacheAsyncExecutor executor) {
+        return new com.reactor.cachedb.core.async.OffloadingAsyncCacheDbRepository<>(this, executor);
+    }
+
     default java.util.Map<String, com.reactor.cachedb.core.query.AggregateResult> aggregateBy(String groupByColumn,
             com.reactor.cachedb.core.query.AggregateSpec spec) {
         throw new UnsupportedOperationException("aggregateBy requires a generated or explicit repository implementation");

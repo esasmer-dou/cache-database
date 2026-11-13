@@ -6,7 +6,7 @@ on:
       targetRef:
         description: Published stable release tag
         required: false
-        default: v0.18.1
+        default: v0.19.0
       skipTests:
         description: Compatibility input; published release artifacts are not rebuilt
         required: false
@@ -65,7 +65,8 @@ jobs:
           $url = "https://maven.pkg.github.com/$env:PACKAGE_REPOSITORY"
           $poms = @('pom.xml', 'cachedb-bom/pom.xml')
           $poms += Get-ChildItem -Directory -Filter 'cachedb-*' | Where-Object { Test-Path (Join-Path $_.FullName "target/$($_.Name)-$version.jar") } | ForEach-Object { Join-Path $_.Name 'pom.xml' }
-          if ($poms.Count -ne 21) { throw 'Expected the parent, BOM and 19 public modules.' }
+          $expectedPomCount = if ([version]$version -ge [version]'0.19.0') { 23 } else { 21 }
+          if ($poms.Count -ne $expectedPomCount) { throw "Expected the parent, BOM and $($expectedPomCount - 2) public modules." }
           foreach ($pom in $poms) {
             $arguments = @('-B', '-ntp', '-N', 'org.apache.maven.plugins:maven-deploy-plugin:3.1.2:deploy-file', "-DrepositoryId=github", "-Durl=$url", "-DpomFile=$pom", '-DgeneratePom=false', '-DretryFailedDeploymentCount=3')
             $module = Split-Path -Parent $pom

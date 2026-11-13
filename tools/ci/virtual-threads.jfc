@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Recording duration/size and VM stack depth belong to the coordinated test job. -->
+<configuration version="2.0" label="CacheDB Virtual Thread Pinning"
+               description="JDK 21 pinning evidence; not a general profiling configuration"
+               provider="CacheDB">
+  <event name="jdk.VirtualThreadPinned">
+    <setting name="enabled">true</setting>
+    <setting name="stackTrace">true</setting>
+    <setting name="threshold">20 ms</setting>
+  </event>
+  <event name="jdk.DataLoss">
+    <setting name="enabled">true</setting>
+  </event>
+  <event name="jdk.ActiveSetting">
+    <setting name="enabled">true</setting>
+  </event>
+  <event name="jdk.ActiveRecording">
+    <setting name="enabled">true</setting>
+  </event>
+</configuration>

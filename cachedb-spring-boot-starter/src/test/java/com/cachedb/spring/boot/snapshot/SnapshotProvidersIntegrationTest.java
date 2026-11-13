@@ -3,11 +3,12 @@ package com.reactor.cachedb.spring.boot.snapshot;
 import static org.assertj.core.api.Assertions.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.microsoft.sqlserver.jdbc.SQLServerDataSource;
+import com.reactor.cachedb.spring.boot.BoundedMssqlTestDatabase;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.time.Clock;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -277,28 +278,27 @@ class SnapshotProvidersIntegrationTest {
 
     @Test
     void sqlServerRefusesDisabledSnapshotIsolationWithoutAlteringDatabase() throws Exception {
-        try (var connection =
-                        DriverManager.getConnection(
-                                url("mssql")
-                                        .replaceAll("(?i)databaseName=[^;]+", "databaseName=master"),
-                                "sa",
-                                password("mssql"));
-                var statement = connection.createStatement()) {
-            String database = "snapshot_off_" + UUID.randomUUID().toString().replace("-", "");
-            statement.execute("CREATE DATABASE " + database);
-            try (var read =
-                    DriverManager.getConnection(
-                            url("mssql")
-                                    .replaceAll("(?i)databaseName=[^;]+", "databaseName=" + database),
-                            "sa",
-                            password("mssql"))) {
+        var admin = new SQLServerDataSource();
+        admin.setURL(url("mssql"));
+        admin.setDatabaseName("master");
+        admin.setUser(com.reactor.cachedb.spring.boot.TestFixtureSettings.value(
+                "cachedb.snapshot.mssql.user", "sa"));
+        admin.setPassword(password("mssql"));
+        admin.setLoginTimeout(5);
+        try (var database = BoundedMssqlTestDatabase.create(
+                admin, BoundedMssqlTestDatabase.Scope.SNAPSHOT_OFF, null)) {
+            var jdbc = new SQLServerDataSource();
+            jdbc.setURL(url("mssql"));
+            jdbc.setDatabaseName(database.name());
+            jdbc.setUser(admin.getUser());
+            jdbc.setPassword(password("mssql"));
+            jdbc.setLoginTimeout(5);
+            try (var read = jdbc.getConnection()) {
                 assertThatThrownBy(() -> SnapshotTransaction.begin(read))
                         .hasMessageContaining("ALLOW_SNAPSHOT_ISOLATION ON");
                 assertThat(read.getAutoCommit()).isTrue();
                 assertThat(read.getTransactionIsolation())
                         .isEqualTo(Connection.TRANSACTION_READ_COMMITTED);
-            } finally {
-                statement.execute("DROP DATABASE " + database);
             }
         }
     }
@@ -335,13 +335,37 @@ class SnapshotProvidersIntegrationTest {
         final String root = "snap_r_" + suffix;
         final String child = "snap_c_" + suffix;
         final String namespace = "snapshot-provider-" + suffix;
-        final HikariDataSource source;
-        final JedisPooled redis =
-                new JedisPooled(
-                        "redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1") + ":"
-                                + Integer.getInteger("cachedb.snapshot.redis.port", 16383));
+        HikariDataSource source;
+        JedisPooled redis;
+        private boolean rootOwned;
+        private boolean childOwned;
+        private boolean closed;
 
         Fixture(String provider) {
+            this(provider, () -> openSource(provider), () -> new JedisPooled(
+                    "redis://" + System.getProperty("cachedb.snapshot.redis.host", "127.0.0.1") + ":"
+                            + Integer.getInteger("cachedb.snapshot.redis.port", 16383)));
+        }
+
+        Fixture(String provider, java.util.function.Supplier<HikariDataSource> sourceFactory,
+                java.util.function.Supplier<JedisPooled> redisFactory) {
+            try {
+                source = Objects.requireNonNull(sourceFactory.get());
+                redis = Objects.requireNonNull(redisFactory.get());
+                createTable(provider, root);
+                createTable(provider, child);
+                execute("INSERT INTO " + root + " VALUES (1,'root')");
+                execute("INSERT INTO " + child + " VALUES (1,'old')");
+                if ("oracle".equals(provider)) {
+                    awaitOracleFixtureVisible();
+                }
+            } catch (RuntimeException | Error failure) {
+                closeOwned(failure);
+                throw failure;
+            }
+        }
+
+        private static HikariDataSource openSource(String provider) {
             var config = new HikariConfig();
             config.setJdbcUrl(url(provider));
             config.setUsername(
@@ -358,13 +382,28 @@ class SnapshotProvidersIntegrationTest {
             config.setMinimumIdle(1);
             config.setConnectionTimeout(5000);
             config.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
-            source = new HikariDataSource(config);
-            execute("CREATE TABLE " + root + " (id INTEGER PRIMARY KEY, payload VARCHAR(100))");
-            execute("CREATE TABLE " + child + " (id INTEGER PRIMARY KEY, payload VARCHAR(100))");
-            execute("INSERT INTO " + root + " VALUES (1,'root')");
-            execute("INSERT INTO " + child + " VALUES (1,'old')");
-            if ("oracle".equals(provider)) {
-                awaitOracleFixtureVisible();
+            return new HikariDataSource(config);
+        }
+
+        private void createTable(String provider, String table) {
+            // A timeout can arrive after CREATE succeeded; retain only this UUID-scoped attempt.
+            if (table.equals(root)) rootOwned = true;
+            else childOwned = true;
+            try {
+                execute("CREATE TABLE " + table + " (id INTEGER PRIMARY KEY, payload VARCHAR(100))");
+            } catch (RuntimeException failure) {
+                if (failure.getCause() instanceof java.sql.SQLException sql
+                        && switch (provider) {
+                            case "postgres" -> "42P07".equals(sql.getSQLState());
+                            case "mssql" -> sql.getErrorCode() == 2714;
+                            case "oracle" -> sql.getErrorCode() == 955;
+                            case "h2" -> sql.getErrorCode() == 42101;
+                            default -> false;
+                        }) {
+                    if (table.equals(root)) rootOwned = false;
+                    else childOwned = false;
+                }
+                throw failure;
             }
         }
 
@@ -455,21 +494,42 @@ class SnapshotProvidersIntegrationTest {
 
         @Override
         public void close() {
-            try {
-                execute("DROP TABLE " + child);
-                execute("DROP TABLE " + root);
-            } finally {
-                source.close();
-                String cursor = "0";
-                do {
-                    var page =
-                            redis.scan(cursor, new ScanParams().match(namespace + ":*").count(100));
-                    if (!page.getResult().isEmpty())
-                        redis.unlink(page.getResult().toArray(String[]::new));
-                    cursor = page.getCursor();
-                } while (!cursor.equals("0"));
-                redis.close();
+            Throwable failure = closeOwned(null);
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
+        }
+
+        private Throwable closeOwned(Throwable failure) {
+            if (closed) return failure;
+            closed = true;
+            if (childOwned) failure = attempt(failure, () -> execute("DROP TABLE " + child));
+            if (rootOwned) failure = attempt(failure, () -> execute("DROP TABLE " + root));
+            if (source != null) failure = attempt(failure, source::close);
+            if (redis != null) {
+                failure = attempt(failure, this::clearRedisKeys);
+                failure = attempt(failure, redis::close);
             }
+            return failure;
+        }
+
+        private static Throwable attempt(Throwable first, Runnable cleanup) {
+            try {
+                cleanup.run();
+            } catch (RuntimeException | Error failure) {
+                if (first == null) return failure;
+                if (first != failure) first.addSuppressed(failure);
+            }
+            return first;
+        }
+
+        private void clearRedisKeys() {
+            String cursor = "0";
+            do {
+                var page = redis.scan(cursor, new ScanParams().match(namespace + ":*").count(100));
+                if (!page.getResult().isEmpty())
+                    redis.unlink(page.getResult().toArray(String[]::new));
+                cursor = page.getCursor();
+            } while (!cursor.equals("0"));
         }
     }
 }

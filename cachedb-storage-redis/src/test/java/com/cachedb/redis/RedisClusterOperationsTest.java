@@ -45,6 +45,10 @@ class RedisClusterOperationsTest {
                                 Set.of(new HostAndPort(System.getProperty("cachedb.redis.cluster.host", "127.0.0.1"), Integer.getInteger("cachedb.redis.cluster.port", 17001))), configuration))) {
             String prefix = "cluster-test-" + UUID.randomUUID();
             var keys = List.of(prefix + ":{alpha}:1", prefix + ":{beta}:2", prefix + ":{gamma}:3");
+            String library = "cachedb_cluster_test_" + UUID.randomUUID().toString().replace("-", "");
+            String function = library + "_echo";
+            var ownedKeys = new ArrayList<>(keys);
+            Throwable primaryFailure = null;
             try {
                 try (var pipeline = redis.pipeline()) {
                     for (int i = 0; i < keys.size(); i++)
@@ -61,18 +65,18 @@ class RedisClusterOperationsTest {
                 assertThrows(
                         IllegalArgumentException.class,
                         () -> redis.eval("return 1", keys, List.of()));
-                String library = "cachedb_cluster_test";
                 redis.functionLoadReplace(
                         "#!lua name="
                                 + library
                                 + "\n"
-                                + "redis.register_function('cachedb_cluster_echo',"
+                                + "redis.register_function('" + function + "',"
                                 + " function(keys,args) return redis.call('GET',keys[1]) end)");
                 for (int i = 0; i < keys.size(); i++)
                     assertEquals(
                             Integer.toString(i),
-                            redis.fcall("cachedb_cluster_echo", List.of(keys.get(i)), List.of()));
+                            redis.fcall(function, List.of(keys.get(i)), List.of()));
                 String aggregateEntity = prefix + ":{aggregation}:entity", aggregateDeleted = prefix + ":{aggregation}:deleted", aggregateMeta = prefix + ":{aggregation}:meta";
+                ownedKeys.addAll(List.of(aggregateEntity, aggregateDeleted, aggregateMeta));
                 redis.commands().set(aggregateEntity,"payload"); redis.commands().hset(aggregateMeta,Map.of("amount","1234567890123456789.01"));
                 var aggregate = redis.aggregateIndexBatch(List.of(aggregateEntity),List.of(aggregateDeleted),List.of(aggregateMeta),"amount",false).orElseThrow();
                 assertEquals(List.of("1234567890123456789.01"),aggregate.values());
@@ -90,17 +94,49 @@ class RedisClusterOperationsTest {
                 String ordered = prefix + ":{alpha}:sorted";
                 String entity = prefix + ":{alpha}:entity:1";
                 String a = prefix + ":{alpha}:members", b = prefix + ":{beta}:members";
-                try {
-                    redis.commands().zadd(ordered, 1, "1"); redis.commands().set(entity, "payload");
-                    assertEquals(List.of("payload"), redis.zrangeWithPayloads(ordered, prefix + ":{alpha}:tomb:",
-                            prefix + ":{alpha}:entity:", true, 0, 1).orElseThrow());
-                    assertTrue(redis.zrangeWithPayloads(ordered, prefix + ":{beta}:tomb:", prefix + ":{alpha}:entity:", true, 0, 1).isEmpty());
-                    redis.commands().sadd(a, "1", "2"); redis.commands().sadd(b, "2", "3");
-                    assertEquals(Map.of(a, Set.of("1", "2"), b, Set.of("2", "3")), redis.smembersBatch(List.of(a, b), 10));
-                } finally { redis.delete(ordered, entity, a, b); }
+                ownedKeys.addAll(List.of(ordered, entity, a, b));
+                redis.commands().zadd(ordered, 1, "1"); redis.commands().set(entity, "payload");
+                assertEquals(List.of("payload"), redis.zrangeWithPayloads(ordered, prefix + ":{alpha}:tomb:",
+                        prefix + ":{alpha}:entity:", true, 0, 1).orElseThrow());
+                assertTrue(redis.zrangeWithPayloads(ordered, prefix + ":{beta}:tomb:", prefix + ":{alpha}:entity:", true, 0, 1).isEmpty());
+                redis.commands().sadd(a, "1", "2"); redis.commands().sadd(b, "2", "3");
+                assertEquals(Map.of(a, Set.of("1", "2"), b, Set.of("2", "3")), redis.smembersBatch(List.of(a, b), 10));
+            } catch (RuntimeException | Error failure) {
+                primaryFailure = failure;
+                throw failure;
             } finally {
-                for (String key : keys) redis.commands().unlink(key);
+                Throwable failure = primaryFailure;
+                for (String key : ownedKeys) {
+                    try { redis.commands().unlink(key); }
+                    catch (RuntimeException | Error cleanup) { failure = retainFailure(failure, cleanup); }
+                }
+                try {
+                    // Loading can succeed on only some primaries before failing; clean each owned copy.
+                    for (var pool : redis.commands().getClusterNodes().values()) {
+                        try (var node = new Jedis(pool.getResource())) {
+                            if (node.info("replication").contains("role:master")
+                                    && !node.functionList(library).isEmpty()) {
+                                assertEquals("OK", node.functionDelete(library));
+                                assertTrue(node.functionList(library).isEmpty());
+                            }
+                        } catch (RuntimeException | Error cleanup) {
+                            failure = retainFailure(failure, cleanup);
+                        }
+                    }
+                } catch (RuntimeException | Error cleanup) {
+                    failure = retainFailure(failure, cleanup);
+                }
+                if (primaryFailure == null) {
+                    if (failure instanceof RuntimeException runtime) throw runtime;
+                    if (failure instanceof Error error) throw error;
+                }
             }
         }
+    }
+
+    private static Throwable retainFailure(Throwable primary, Throwable cleanup) {
+        if (primary == null) return cleanup;
+        if (primary != cleanup) primary.addSuppressed(cleanup);
+        return primary;
     }
 }

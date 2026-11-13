@@ -16,7 +16,8 @@ public final class ExternalSampleFixtures {
         registry.add("spring.datasource.url", () -> url);
         registry.add("spring.datasource.username", () -> required("CACHEDB_TEST_DATASOURCE_USERNAME"));
         registry.add("spring.datasource.password", () -> required("CACHEDB_TEST_DATASOURCE_PASSWORD"));
-        registry.add("cachedb.redis.uri", () -> redis);
+        registry.add("cachedb.redis.uri", () -> SampleRedisAuth.withPassword(redis,
+                System.getenv("CACHEDB_TEST_REDIS_PASSWORD")));
         registry.add("cachedb.admin.enabled", () -> false);
         return true;
     }
@@ -25,7 +26,7 @@ public final class ExternalSampleFixtures {
         String value = required("CACHEDB_TEST_SPLIT_REDIS_URI");
         if (!value.contains("." + required("CACHEDB_TEST_NAMESPACE") + ".svc.cluster.local"))
             throw new IllegalStateException("Split-role Redis must stay in the dedicated test namespace");
-        return value;
+        return SampleRedisAuth.withPassword(value, System.getenv("CACHEDB_TEST_REDIS_PASSWORD"));
     }
     private static String required(String name) { return Objects.requireNonNull(System.getenv(name), "Missing test fixture variable " + name); }
     private ExternalSampleFixtures() {}

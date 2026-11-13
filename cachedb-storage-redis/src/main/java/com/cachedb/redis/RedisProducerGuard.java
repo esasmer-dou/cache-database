@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class RedisProducerGuard {
+    private final java.util.concurrent.locks.ReentrantLock profileLock = new java.util.concurrent.locks.ReentrantLock();
 
     private final RedisClientOperations jedis;
     private final RedisGuardrailConfig config;
@@ -110,6 +111,11 @@ public final class RedisProducerGuard {
     public CachePolicy effectiveCachePolicy(CachePolicy basePolicy) {
         RuntimeProfile profile = activeRuntimeProfile();
         return profile.apply(basePolicy);
+    }
+
+    /** Published profile only: capacity inspection must not initiate sampling I/O. */
+    CachePolicy cachedEffectiveCachePolicy(CachePolicy basePolicy) {
+        return RuntimeProfile.parse(runtimeProfileSnapshot.get().activeProfile()).apply(basePolicy);
     }
 
     public boolean shouldShedPageCacheWrites() {
@@ -220,28 +226,49 @@ public final class RedisProducerGuard {
         return config.autoRecoverDegradedIndexesEnabled();
     }
 
-    public synchronized List<RedisRuntimeProfileEvent> runtimeProfileEvents() {
-        return List.copyOf(recentRuntimeProfileEvents);
+    public List<RedisRuntimeProfileEvent> runtimeProfileEvents() {
+        profileLock.lock();
+        try {
+            return List.copyOf(recentRuntimeProfileEvents);
+        } finally {
+            profileLock.unlock();
+        }
     }
 
-    public synchronized String manualRuntimeProfileOverride() {
-        return manualRuntimeProfileOverride.get();
+    public String manualRuntimeProfileOverride() {
+        profileLock.lock();
+        try {
+            return manualRuntimeProfileOverride.get();
+        } finally {
+            profileLock.unlock();
+        }
     }
 
-    public synchronized void setManualRuntimeProfile(String profileName) {
-        RuntimeProfile selected = RuntimeProfile.parse(profileName);
-        manualRuntimeProfileOverride.set(selected.name());
-        applyRuntimeProfileOverride(selected, "MANUAL_OVERRIDE");
+    public void setManualRuntimeProfile(String profileName) {
+        profileLock.lock();
+        try {
+            RuntimeProfile selected = RuntimeProfile.parse(profileName);
+            manualRuntimeProfileOverride.set(selected.name());
+            applyRuntimeProfileOverride(selected, "MANUAL_OVERRIDE");
+        } finally {
+            profileLock.unlock();
+        }
     }
 
-    public synchronized void clearManualRuntimeProfileOverride() {
-        manualRuntimeProfileOverride.set(null);
-        updateRuntimeProfile(lastSnapshot.get());
+    public void clearManualRuntimeProfileOverride() {
+        profileLock.lock();
+        try {
+            manualRuntimeProfileOverride.set(null);
+            updateRuntimeProfile(lastSnapshot.get());
+        } finally {
+            profileLock.unlock();
+        }
     }
 
     public Map<String, String> activeRuntimeProfileProperties() {
         sampleSafely(); // Redis I/O must not run while holding the profile monitor.
-        synchronized (this) {
+        profileLock.lock();
+        try {
         RuntimeProfile profile = RuntimeProfile.parse(runtimeProfileSnapshot.get().activeProfile());
         LinkedHashMap<String, String> values = new LinkedHashMap<>();
         values.put("profile", profile.name());
@@ -262,6 +289,8 @@ public final class RedisProducerGuard {
                 "effectiveCriticalSleepMillis",
                 String.valueOf(profile.adjustCriticalSleep(config.criticalSleepMillis())));
         return values;
+        } finally {
+            profileLock.unlock();
         }
     }
 
@@ -374,75 +403,80 @@ public final class RedisProducerGuard {
         }
     }
 
-    private synchronized void updateRuntimeProfile(RedisGuardrailSnapshot snapshot) {
-        RedisRuntimeProfileSnapshot current = runtimeProfileSnapshot.get();
-        long normalSamples =
-                "NORMAL".equals(snapshot.pressureLevel())
-                        ? current.normalPressureSamples() + 1L
-                        : 0L;
-        long warnSamples =
-                "WARN".equals(snapshot.pressureLevel()) ? current.warnPressureSamples() + 1L : 0L;
-        long criticalSamples =
-                "CRITICAL".equals(snapshot.pressureLevel())
-                        ? current.criticalPressureSamples() + 1L
-                        : 0L;
-        RuntimeProfile activeProfile = RuntimeProfile.parse(current.activeProfile());
-        String manualOverride = manualRuntimeProfileOverride.get();
+    private void updateRuntimeProfile(RedisGuardrailSnapshot snapshot) {
+        profileLock.lock();
+        try {
+            RedisRuntimeProfileSnapshot current = runtimeProfileSnapshot.get();
+            long normalSamples =
+                    "NORMAL".equals(snapshot.pressureLevel())
+                            ? current.normalPressureSamples() + 1L
+                            : 0L;
+            long warnSamples =
+                    "WARN".equals(snapshot.pressureLevel()) ? current.warnPressureSamples() + 1L : 0L;
+            long criticalSamples =
+                    "CRITICAL".equals(snapshot.pressureLevel())
+                            ? current.criticalPressureSamples() + 1L
+                            : 0L;
+            RuntimeProfile activeProfile = RuntimeProfile.parse(current.activeProfile());
+            String manualOverride = manualRuntimeProfileOverride.get();
 
-        if (manualOverride != null && !manualOverride.isBlank()) {
-            applyRuntimeProfileOverride(
-                    RuntimeProfile.parse(manualOverride), snapshot.pressureLevel());
-            return;
-        }
-
-        if (config.automaticRuntimeProfileSwitchingEnabled()) {
-            if ("CRITICAL".equals(snapshot.pressureLevel())
-                    && criticalSamples >= Math.max(1, config.criticalSamplesToAggressive())) {
-                activeProfile = RuntimeProfile.AGGRESSIVE;
-            } else if ("WARN".equals(snapshot.pressureLevel())
-                    && warnSamples >= Math.max(1, config.warnSamplesToBalanced())) {
-                activeProfile =
-                        current.activeProfile().equals("AGGRESSIVE")
-                                ? RuntimeProfile.AGGRESSIVE
-                                : RuntimeProfile.BALANCED;
-            } else if ("WARN".equals(snapshot.pressureLevel())
-                    && current.activeProfile().equals("AGGRESSIVE")
-                    && warnSamples >= Math.max(1, config.warnSamplesToDeescalateAggressive())) {
-                activeProfile = RuntimeProfile.BALANCED;
-            } else if ("NORMAL".equals(snapshot.pressureLevel())
-                    && normalSamples >= Math.max(1, config.normalSamplesToStandard())) {
-                activeProfile = RuntimeProfile.STANDARD;
+            if (manualOverride != null && !manualOverride.isBlank()) {
+                applyRuntimeProfileOverride(
+                        RuntimeProfile.parse(manualOverride), snapshot.pressureLevel());
+                return;
             }
-        }
 
-        long switchCount = current.switchCount();
-        long lastSwitchedAtEpochMillis = current.lastSwitchedAtEpochMillis();
-        String previousProfile = current.activeProfile();
-        if (!activeProfile.name().equals(current.activeProfile())) {
-            switchCount++;
-            lastSwitchedAtEpochMillis = snapshot.lastSampleAtEpochMillis();
-            RedisRuntimeProfileEvent event =
-                    new RedisRuntimeProfileEvent(
-                            previousProfile,
+            if (config.automaticRuntimeProfileSwitchingEnabled()) {
+                if ("CRITICAL".equals(snapshot.pressureLevel())
+                        && criticalSamples >= Math.max(1, config.criticalSamplesToAggressive())) {
+                    activeProfile = RuntimeProfile.AGGRESSIVE;
+                } else if ("WARN".equals(snapshot.pressureLevel())
+                        && warnSamples >= Math.max(1, config.warnSamplesToBalanced())) {
+                    activeProfile =
+                            current.activeProfile().equals("AGGRESSIVE")
+                                    ? RuntimeProfile.AGGRESSIVE
+                                    : RuntimeProfile.BALANCED;
+                } else if ("WARN".equals(snapshot.pressureLevel())
+                        && current.activeProfile().equals("AGGRESSIVE")
+                        && warnSamples >= Math.max(1, config.warnSamplesToDeescalateAggressive())) {
+                    activeProfile = RuntimeProfile.BALANCED;
+                } else if ("NORMAL".equals(snapshot.pressureLevel())
+                        && normalSamples >= Math.max(1, config.normalSamplesToStandard())) {
+                    activeProfile = RuntimeProfile.STANDARD;
+                }
+            }
+
+            long switchCount = current.switchCount();
+            long lastSwitchedAtEpochMillis = current.lastSwitchedAtEpochMillis();
+            String previousProfile = current.activeProfile();
+            if (!activeProfile.name().equals(current.activeProfile())) {
+                switchCount++;
+                lastSwitchedAtEpochMillis = snapshot.lastSampleAtEpochMillis();
+                RedisRuntimeProfileEvent event =
+                        new RedisRuntimeProfileEvent(
+                                previousProfile,
+                                activeProfile.name(),
+                                snapshot.pressureLevel(),
+                                Instant.ofEpochMilli(snapshot.lastSampleAtEpochMillis()),
+                                switchCount,
+                                snapshot.usedMemoryBytes(),
+                                snapshot.writeBehindBacklog(),
+                                snapshot.compactionPendingCount());
+                recordRuntimeProfileEvent(event);
+            }
+
+            runtimeProfileSnapshot.set(
+                    new RedisRuntimeProfileSnapshot(
                             activeProfile.name(),
                             snapshot.pressureLevel(),
-                            Instant.ofEpochMilli(snapshot.lastSampleAtEpochMillis()),
                             switchCount,
-                            snapshot.usedMemoryBytes(),
-                            snapshot.writeBehindBacklog(),
-                            snapshot.compactionPendingCount());
-            recordRuntimeProfileEvent(event);
+                            lastSwitchedAtEpochMillis,
+                            normalSamples,
+                            warnSamples,
+                            criticalSamples));
+        } finally {
+            profileLock.unlock();
         }
-
-        runtimeProfileSnapshot.set(
-                new RedisRuntimeProfileSnapshot(
-                        activeProfile.name(),
-                        snapshot.pressureLevel(),
-                        switchCount,
-                        lastSwitchedAtEpochMillis,
-                        normalSamples,
-                        warnSamples,
-                        criticalSamples));
     }
 
     private void applyRuntimeProfileOverride(RuntimeProfile selectedProfile, String pressureLevel) {

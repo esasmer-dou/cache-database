@@ -225,27 +225,33 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
 
         int attempts = 0;
         while (attempts <= retryPolicy.maxRetries()) {
-            try (var scope = trace.restore(operation.traceMetadata())) {
+            try (var generations=com.reactor.cachedb.core.protection.TenantWriteStampContext.restore(
+                    java.util.List.of(mapper.fromStampedBody(entry.getFields())));
+                    var scope = trace.restore(operation.traceMetadata())) {
                 flusher.flush(operation);
                 var durability = new RedisDurabilityTracker(jedis, keyStrategy);
                 if (operation.atomicBatch()) {
                     for (var member : operation.batchOperations()) {
-                        durability.advance(member.redisNamespace(), member.id(), member.version());
-                        durableListener.accept(member);
+                        var stamp=com.reactor.cachedb.core.protection.TenantWriteStampContext.current(member);
+                        if(stamp==null){durability.advance(member.redisNamespace(),member.id(),member.version());durableListener.accept(member);}
+                        else if(RedisGuardedDurability.advanceOne(jedis,keyStrategy,member,stamp)>0)durableListener.accept(member);
                     }
                 } else {
-                    durability.advance(operation.redisNamespace(), operation.id(), operation.version());
-                    durableListener.accept(operation);
+                    var stamp=com.reactor.cachedb.core.protection.TenantWriteStampContext.current(operation);
+                    if(stamp==null){durability.advance(operation.redisNamespace(),operation.id(),operation.version());durableListener.accept(operation);}
+                    else if(RedisGuardedDurability.advanceOne(jedis,keyStrategy,operation,stamp)>0)durableListener.accept(operation);
                 }
                 publishReconciliation("REPLAYED", failureRecord, null, attempts);
                 resolveDeadLetter(entry, "REPLAYED", "");
                 replayedCount.incrementAndGet();
                 return;
             } catch (SQLException | RuntimeException exception) {
-                captureError(exception);
+                Exception safe = mapper.safeFailure(operation, exception);
+                captureError(safe);
+                if (safe instanceof com.reactor.cachedb.core.crypto.CacheEncryptionException) attempts = retryPolicy.maxRetries();
                 attempts++;
                 if (attempts > retryPolicy.maxRetries()) {
-                    publishReconciliation("FAILED", failureRecord, exception, attempts);
+                    publishReconciliation("FAILED", failureRecord, safe, attempts);
                     jedis.commands()
                             .xack(
                                     configAdapter.deadLetterStreamKey(),
@@ -261,6 +267,7 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
 
     private WriteBehindFailureRecord toFailureRecord(
             Map<String, String> fields, QueuedWriteOperation operation) {
+        fields = mapper.protectedStoredFields(operation, fields);
         return new WriteBehindFailureRecord(
                 operation,
                 fields.getOrDefault("deadLetterReason", ""),
@@ -283,6 +290,7 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
             WriteBehindFailureRecord failureRecord,
             Exception replayException,
             int replayAttempts) {
+        if (replayException != null) replayException = mapper.safeFailure(failureRecord.operation(), replayException);
         LinkedHashMap<String, String> fields = new LinkedHashMap<>();
         fields.put("status", status);
         fields.put("entity", failureRecord.operation().entityName());
@@ -304,7 +312,7 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
         fields.put("reconciledAt", Instant.now().toString());
         if (replayException != null) {
             WriteFailureDetails replayFailure =
-                    FailureClassifyingFlusher.classify(flusher, replayException);
+                    mapper.classifyFailure(failureRecord.operation(), flusher, replayException);
             fields.put("replayErrorType", replayException.getClass().getName());
             fields.put(
                     "replayErrorMessage",
@@ -315,12 +323,13 @@ public final class RedisDeadLetterRecoveryWorker implements AutoCloseable {
             fields.put("replayVendorCode", String.valueOf(replayFailure.vendorCode()));
             fields.put("replayRootType", replayFailure.errorType());
         }
-        RedisRecoveryStreams.publishReconciliation(jedis, config, fields);
+        RedisRecoveryStreams.publishReconciliation(jedis, config, fields, mapper.fromStampedBody(failureRecord.originalEvent()));
     }
 
     private void resolveDeadLetter(StreamEntry entry, String status, String note) {
         RedisRecoveryStreams.archiveResolved(
-                jedis, config, entry.getFields(), entry.getID().toString(), status, note);
+                jedis, config, mapper.protectedStoredFields(mapper.fromBody(entry.getFields()), entry.getFields()),
+                entry.getID().toString(), status, note, mapper.fromStampedBody(entry.getFields()));
         jedis.commands()
                 .xack(configAdapter.deadLetterStreamKey(), config.consumerGroup(), entry.getID());
         jedis.commands().xdel(configAdapter.deadLetterStreamKey(), entry.getID());

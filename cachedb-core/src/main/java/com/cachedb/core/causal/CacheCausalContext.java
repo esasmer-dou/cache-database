@@ -37,6 +37,8 @@ public final class CacheCausalContext {
         Scope scope = CURRENT.get();
         return scope == null ? 0 : scope.values.getOrDefault(key(namespace, id), 0L);
     }
+    /** Isolates subscriber requirements instead of merging a pooled worker's ambient token. */
+    public static Scope empty() { return bind(Map.of()); }
     public static Scope withToken(String token) {
         if (token == null || token.length() > MAX_TOKEN) throw new IllegalArgumentException("Invalid causal token size");
         var values = currentValues();
@@ -55,6 +57,21 @@ public final class CacheCausalContext {
         }
         return bind(values);
     }
+    public static boolean hasRequirements() {
+        Scope scope = CURRENT.get();
+        return scope != null && !scope.values.isEmpty();
+    }
+
+    /** Checks only the bounded current scope; does not encode or copy its requirements. */
+    public static boolean hasRequirements(String namespace) {
+        Objects.requireNonNull(namespace, "namespace");
+        Scope scope = CURRENT.get();
+        if (scope == null) return false;
+        for (Key identity : scope.values.keySet())
+            if (identity.namespace.equals(namespace)) return true;
+        return false;
+    }
+
     public static String encodeToken() {
         Scope scope = CURRENT.get();
         return scope == null ? "" : encode(scope.values);

@@ -1,6 +1,10 @@
 # CacheDB
 
-> CacheDB 0.18.1: [release and downloads](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1) | [public Maven repository](https://esasmer-dou.github.io/cache-database/maven2). Maven downloads do not require a GitHub token or a framework source build.
+> **Release documentation: 0.19.0.** [Release notes](docs/releases/v0.19.0.md) and
+> [upgrade guide](docs/upgrading-to-0.19.md). The release page is authoritative for
+> actual package availability and checksums; documentation alone does not establish publication or acceptance.
+
+> [Releases and downloads](https://github.com/esasmer-dou/cache-database/releases) | [public Maven repository](https://esasmer-dou.github.io/cache-database/maven2). Maven downloads do not require a GitHub token or a framework source build.
 
 English | [Türkçe](tr/README.md)
 
@@ -48,11 +52,30 @@ application's own staging topology.
 | Release information | Value |
 | --- | --- |
 | Latest published release | [GitHub release](https://github.com/esasmer-dou/cache-database/releases/latest) |
-| Repository version | `0.18.1` |
-| Library bytecode | Java 17 |
+| Release documentation | `0.19.0`; actual availability and checksums are authoritative on the release page |
+| Minimum Java and library bytecode for 0.19.0 | Java 21+ (LTS) |
 | Runnable samples | Java 21 |
 | Local provider test topology | Redis 8, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 |
 | Application API | Compile-time generated `@CacheRepository` interfaces |
+
+## 0.19.0 Release And Upgrade Boundary
+
+0.19.0 covers Java 21/virtual-thread readiness, opt-in point-read coalescing, server-assisted L1,
+async/optional Reactor APIs, tenant aggregates/facets, observations, reproducible performance gates,
+composite range/seek indexes, compile-time Spring Data, encryption/retention/entity-scoped purge,
+and Spring Cache. See the [eleven feature areas and limitations](docs/releases/v0.19.0.md).
+
+Acceptance is determined by CI for the exact release commit and evidence bound to its source,
+SDK and sample artifacts, not by this overview or historical candidate totals.
+`FrameworkPackage != universalGA`: real-application routes, protection onboarding, HA and
+restore require separate qualification. Raw COUNT/FACET T4 is `PASS_BY_ACCEPTANCE_EXCEPTION`;
+the numeric 2x `rawT4target` was not achieved. Historical failures remain unchanged;
+other performance and regression gates still apply.
+
+Java 17 applications stay on 0.18.x. Align and regenerate bindings only with matching approved artifacts.
+Do not enable protection over legacy data before verified onboarding, suppress invalidation publication
+in a mixed fleet, infer query causality from context propagation, or treat a 2x benchmark target as a result.
+The [upgrade guide](docs/upgrading-to-0.19.md) explains opt-ins, capacity failures and rollback boundaries.
 
 ## Release 0.18.1
 
@@ -73,14 +96,16 @@ generated bindings, provision the [durable version metadata](docs/durable-write-
 and drain old workers before upgrading. A framework package does not certify an
 application's production routes, Oracle Data Guard or SQL Server Always On topology.
 
-After publication, use [0.18.1 packages and checksums](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1)
-or the immutable artifacts in the public CacheDB Maven repository. Until then,
-use the published 0.18.0 tag for the downloadable quick start.
-
 The strict 50 ms test target covers the Jackson-free generated-codec/snapshot
 scenarios, including first use. Legacy mapper compatibility remains tested;
 caller mapper construction and complete JUnit method times are reported separately.
 This is not an environment-independent production latency guarantee.
+
+## Current Quick-Start Coordinates
+
+The quick start below targets 0.19.0. Check the [release page](https://github.com/esasmer-dou/cache-database/releases)
+for actual matching packages and checksums before adoption. Source versions do not establish publication
+or authorize a mixed-version rollout. The preceding 0.18.1 guidance remains historical.
 
 ## Product Positioning: What CacheDB Is And Is Not
 
@@ -130,11 +155,13 @@ happens when the requested data is outside the active set.
 | "Is CacheDB the right fit?" | [ORM Alternative Guide](docs/orm-alternative.md) |
 | "How do I start from zero?" | [Getting Started](docs/getting-started.md) |
 | "How do I declare and operate repositories safely?" | [Declarative Repositories](docs/declarative-repositories.md) |
-| "What changed in the current release?" | [v0.18.1 Release Notes](docs/releases/v0.18.1.md) |
+| "What changes in 0.19.0?" | [v0.19.0 release notes](docs/releases/v0.19.0.md) |
+| "How do I upgrade and review opt-ins?" | [0.19.0 upgrade guide](docs/upgrading-to-0.19.md) |
 | "Where is a runnable REST API sample?" | [PostgreSQL](sample-cache-database-postgresql/README.md), [SQL Server](sample-cache-database-mssql/README.md), or [Oracle](sample-cache-database-oracle/README.md) |
 | "Which Spring Boot dependency do I need?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "What is the Oracle provider contract?" | [Oracle Provider](docs/oracle-provider.md) |
 | "How do multiple pods refresh and clean a hot set periodically?" | [Scheduled Warm and Hot-Set Reconciliation](docs/scheduled-warm.md) |
+| "How do I serve explicit precomputed COUNT/FACET dashboards?" | [COUNT/FACET Read Models](docs/count-facet-read-model.md) |
 | "What are entity, relation, projection, and route contract?" | [Concepts and Assumptions](docs/concepts-and-assumptions.md) |
 | "How do I model real production cases?" | [Use Case Examples](docs/use-case-examples.md) |
 | "How should I tune Redis memory and performance?" | [Production Tuning Guide](docs/production-tuning-guide.md) |
@@ -182,13 +209,13 @@ unbounded CRUD methods.
 
 ## Install In 5 Minutes: Spring Boot
 
-Keep `cachedb.version` aligned with the published release you use. The example below
-targets `0.18.1`, available from the anonymous CacheDB Maven repository
-and the GitHub Release bundle.
+Keep the BOM, processor and provider starter aligned. The example below targets `0.19.0`;
+verify actual package availability and checksums on the release page before using the
+anonymous CacheDB Maven repository or a release bundle.
 
 ```xml
 <properties>
-    <cachedb.version>0.18.1</cachedb.version>
+    <cachedb.version>0.19.0</cachedb.version>
     <jedis.version>5.2.0</jedis.version>
 </properties>
 

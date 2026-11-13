@@ -1,8 +1,8 @@
 ## CacheDB 0.18: Çalışan Senaryolar
 
 Bu bölümdeki sınıflar örnek projede gerçekten bulunur; taslak kod değildir.
-Önce mevcut Hızlı Başlangıç adımlarını `demo` profiliyle tamamlayın. Maven,
-framework kaynak kodunu derlemeden **CacheDB 0.18.1** paketlerini indirir.
+Önce eşleşen **CacheDB 0.19.0** paketlerini edinin; ardından mevcut Hızlı
+Başlangıç adımlarını `demo` profiliyle tamamlayın.
 `postman/cache-database-{{PROVIDER}}-v018.postman_collection.json` koleksiyonunu
 kayıtlı sırasıyla çalıştırın.
 

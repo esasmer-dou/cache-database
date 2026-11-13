@@ -170,12 +170,12 @@ class CacheRepositoryProcessorTest {
         assertTrue(generated.contains(".projectionName(orderSummaryProjection.name())"));
         assertTrue(generated.contains(".coverage(\"customer-timeline\", java.lang.String.valueOf(customerId)"));
         assertTrue(generated.contains("hotRepository.saveWithReceipt(ensureGeneratedId(entity))"));
-        assertTrue(generated.contains("sourceSqlRepository.query(cachedb$query)"));
+        assertTrue(generated.contains("cachedb$sourceSqlRepository().query(cachedb$query)"));
         assertTrue(generated.contains(".withQueryTimeoutSeconds(7)"));
         assertTrue(generated.contains("new com.reactor.cachedb.core.repository.SourceSqlQuery"));
         assertTrue(generated.contains("cacheDatabase.awaitDurableOrThrow(cachedb$receipt, cachedb$timeout)"));
         assertTrue(generated.contains("new java.util.ArrayList<>(cachedb$sourceRows.size())"));
-        assertFalse(generated.contains("sourceRepository.query(cachedb$query).stream()"));
+        assertFalse(generated.contains("cachedb$sourceRepository().query(cachedb$query).stream()"));
         assertTrue(generated.contains("idGenerator().nextSequence(\"orders\", 64)"));
         assertTrue(generated.contains("RepositoryRouteCatalog ROUTE_CATALOG"));
         assertTrue(generated.contains("RepositoryRouteKind.HOT"));
@@ -1188,6 +1188,69 @@ class CacheRepositoryProcessorTest {
                 }
                 """));
         assertFalse(result.success()); assertTrue(result.diagnosticsText().contains("indexed"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void generatedAsyncAccessorUsesTheUnderlyingEntityRepositoryGate() throws Exception {
+        var compilation = compile(
+                source("asyncgen/Row.java", """
+                        package asyncgen;
+                        @com.reactor.cachedb.annotations.CacheEntity(table="async_rows", redisNamespace="async_rows")
+                        public record Row(@com.reactor.cachedb.annotations.CacheId(column="id") Long id) {}
+                        """),
+                source("asyncgen/Rows.java", """
+                        package asyncgen;
+                        @com.reactor.cachedb.annotations.CacheRepository(entity=Row.class)
+                        public interface Rows extends com.reactor.cachedb.core.repository.CacheDbRepository<Row, Long> {}
+                        """));
+        assertTrue(compilation.success(), compilation.diagnosticsText());
+        String generated = Files.readString(compilation.generated().resolve("asyncgen/RowsCacheDbImplementation.java"));
+        assertTrue(generated.contains("return hotRepository.asyncExecutor();"));
+        var memory = new com.reactor.cachedb.core.testing.InMemoryCacheDatabase();
+        try (var gate = new com.reactor.cachedb.core.async.CacheAsyncExecutor();
+                var loader = new java.net.URLClassLoader(new java.net.URL[] {compilation.classes().toUri().toURL()},
+                        getClass().getClassLoader())) {
+            var session = new com.reactor.cachedb.core.api.CacheSession() {
+                @Override public com.reactor.cachedb.core.async.CacheAsyncExecutor asyncExecutor() {
+                    throw new AssertionError("Generated repository must use the entity repository's gate");
+                }
+                @Override public <T, ID> com.reactor.cachedb.core.api.EntityRepository<T, ID> repository(
+                        com.reactor.cachedb.core.model.EntityMetadata<T, ID> metadata,
+                        com.reactor.cachedb.core.model.EntityCodec<T> codec) {
+                    return repository(metadata, codec, com.reactor.cachedb.core.cache.CachePolicy.defaults());
+                }
+                @Override public <T, ID> com.reactor.cachedb.core.api.EntityRepository<T, ID> repository(
+                        com.reactor.cachedb.core.model.EntityMetadata<T, ID> metadata,
+                        com.reactor.cachedb.core.model.EntityCodec<T> codec,
+                        com.reactor.cachedb.core.cache.CachePolicy policy) {
+                    var delegate = memory.repository(metadata, codec, policy);
+                    return new com.reactor.cachedb.core.api.EntityRepository<T, ID>() {
+                        @Override public com.reactor.cachedb.core.async.CacheAsyncExecutor asyncExecutor() { return gate; }
+                        @Override public java.util.Optional<T> findById(ID id) { return delegate.findById(id); }
+                        @Override public java.util.List<T> findAll(java.util.Collection<ID> ids) { return delegate.findAll(ids); }
+                        @Override public java.util.List<T> findPage(com.reactor.cachedb.core.cache.PageWindow page) { return delegate.findPage(page); }
+                        @Override public com.reactor.cachedb.core.query.QueryExplainPlan explain(com.reactor.cachedb.core.query.QuerySpec query) { return delegate.explain(query); }
+                        @Override public java.util.List<T> query(com.reactor.cachedb.core.query.QuerySpec query) { return delegate.query(query); }
+                        @Override public T save(T row) { return delegate.save(row); }
+                        @Override public void deleteById(ID id) { delegate.deleteById(id); }
+                        @Override public com.reactor.cachedb.core.api.EntityRepository<T, ID> withFetchPlan(
+                                com.reactor.cachedb.core.plan.FetchPlan plan) { return delegate.withFetchPlan(plan); }
+                    };
+                }
+                @Override public <T, ID> com.reactor.cachedb.core.api.SourceRepository<T, ID> sourceRepository(
+                        com.reactor.cachedb.core.model.EntityMetadata<T, ID> metadata,
+                        com.reactor.cachedb.core.model.EntityCodec<T> codec) {
+                    return memory.sourceRepository(metadata, codec);
+                }
+            };
+            var implementation = loader.loadClass("asyncgen.RowsCacheDbImplementation");
+            var repository = (com.reactor.cachedb.core.repository.CacheDbRepository<Object, Long>)
+                    implementation.getConstructor(com.reactor.cachedb.core.api.CacheSession.class).newInstance(session);
+            org.junit.jupiter.api.Assertions.assertSame(gate, repository.asyncExecutor());
+            assertFalse(repository.async().findHotByIdAsync(1L).get(5, java.util.concurrent.TimeUnit.SECONDS).isHit());
+            assertTrue(gate.awaitIdle(java.time.Duration.ofSeconds(2)));
+        }
     }
 
     private Compilation compile(Source... sources) throws IOException {

@@ -4,6 +4,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'markdown-source.ps1')
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $summaryFullPath = Join-Path $repoRoot $SummaryPath
@@ -15,8 +16,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $findings = New-Object System.Collections.Generic.List[object]
-$inlineLinkPattern = [regex]'!?\[[^\]]*\]\((?<target><[^>]+>|[^\s\)]+)'
-$referenceLinkPattern = [regex]'^[ \t]*\[[^\]]+\]:[ \t]*(?<target><[^>]+>|\S+)'
 
 foreach ($relativeFile in ($relativeFiles | Sort-Object -Unique)) {
     $filePath = Join-Path $repoRoot $relativeFile
@@ -24,22 +23,9 @@ foreach ($relativeFile in ($relativeFiles | Sort-Object -Unique)) {
         continue
     }
 
-    $insideFence = $false
-    $lines = Get-Content -LiteralPath $filePath
-    for ($index = 0; $index -lt $lines.Count; $index++) {
-        $line = [string]$lines[$index]
-        if ($line.TrimStart().StartsWith('```')) {
-            $insideFence = -not $insideFence
-            continue
-        }
-        if ($insideFence) {
-            continue
-        }
-
-        $scanLine = [regex]::Replace($line, '`[^`]*`', '')
-        $matches = @($inlineLinkPattern.Matches($scanLine)) + @($referenceLinkPattern.Matches($scanLine))
-        foreach ($match in $matches) {
-            $rawTarget = $match.Groups['target'].Value.Trim().Trim('<', '>')
+    foreach ($sourceLine in Get-MarkdownSourceLines @(Get-Content -LiteralPath $filePath)) {
+        foreach ($target in $sourceLine.Targets) {
+            $rawTarget = $target.Trim()
             if ([string]::IsNullOrWhiteSpace($rawTarget) -or
                     $rawTarget.StartsWith('#') -or
                     $rawTarget.StartsWith('//') -or
@@ -56,7 +42,7 @@ foreach ($relativeFile in ($relativeFiles | Sort-Object -Unique)) {
             } catch {
                 $findings.Add([pscustomobject]@{
                     File = $relativeFile
-                    Line = $index + 1
+                    Line = $sourceLine.Number
                     Target = $rawTarget
                     Reason = 'invalid URL encoding'
                 })
@@ -71,7 +57,7 @@ foreach ($relativeFile in ($relativeFiles | Sort-Object -Unique)) {
             if (-not (Test-Path -LiteralPath $resolved)) {
                 $findings.Add([pscustomobject]@{
                     File = $relativeFile
-                    Line = $index + 1
+                    Line = $sourceLine.Number
                     Target = $rawTarget
                     Reason = 'target does not exist'
                 })

@@ -1,0 +1,8 @@
+BEGIN EXECUTE IMMEDIATE 'CREATE TABLE sample_encrypted_notes (
+    note_id VARCHAR2(32) PRIMARY KEY,
+    note_value VARCHAR2(512 CHAR) NOT NULL,
+    entity_version NUMBER(19) DEFAULT 0,
+    deleted VARCHAR2(16)
+)';
+EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF; END;
+@@

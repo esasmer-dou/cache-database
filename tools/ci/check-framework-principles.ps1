@@ -11,6 +11,24 @@ function Add-Violation {
     $violations.Add($Message)
 }
 
+function Test-TypeOnlyKeyGeneratorSpi([string]$Source) {
+    if ($Source.Length -gt 65536 -or $Source -match '\\u+[0-9a-fA-F]{4}') { return $false }
+    # Mask comments/literals so an apparent signature in documentation cannot grant an exception.
+    $code = [regex]::Replace($Source, '(?s)/\*.*?\*/|//[^\r\n]*|""".*?"""|"(?:\\.|[^"\\])*"|''(?:\\.|[^''\\])*''', ' ')
+    if ([regex]::Matches($code, '(?m)^\s*package com\.reactor\.cachedb\.spring\.boot\.cache;\s*$').Count -ne 1 -or
+            [regex]::Matches($code, '(?m)^\s*import org\.springframework\.cache\.interceptor\.KeyGenerator;\s*$').Count -ne 1) { return $false }
+    if ($code -notmatch '\bpublic\s+final\s+class\s+CacheDbKeyGenerator\s+implements\s+KeyGenerator\s*\{') { return $false }
+    $import = '(?m)^\s*import java\.lang\.reflect\.Method;\s*$'
+    $signature = '@Override\s+public\s+Object\s+generate\s*\(\s*Object\s+target\s*,\s*Method\s+method\s*,\s*Object\s*\.\.\.\s+params\s*\)\s*\{'
+    if ([regex]::Matches($code, $import).Count -ne 1 -or [regex]::Matches($code, $signature).Count -ne 1) { return $false }
+    $remaining = [regex]::Replace([regex]::Replace($code, $import, ' '), $signature, ' ')
+    if ($remaining -match '\b(?:Method|method)\b') { return $false }
+    # The exception is a type-only SPI boundary, never permission to execute reflection elsewhere in this class.
+    if ($remaining -match '(?:\.|::)\s*(?:invoke|newInstance|setAccessible|trySetAccessible|getClass|getMethods?|getDeclaredMethods?|getConstructors?|getDeclaredConstructors?|getFields?|getDeclaredFields?|getAnnotations?|getDeclaredAnnotations?)\b' -or
+            $remaining -match '\bClass\s*\.\s*forName\b|java\s*\.\s*lang\s*\.\s*reflect\b') { return $false }
+    return $true
+}
+
 $mainSources = Get-ChildItem -LiteralPath $root -Recurse -Filter "*.java" -File |
     Where-Object {
         $_.FullName -match '[\\/]src[\\/]main[\\/]java[\\/]' -and
@@ -39,13 +57,21 @@ $forbiddenRuntimePatterns = [ordered]@{
     'Proxy\.newProxyInstance\s*\(' = 'runtime-proxy-generation'
 }
 
+$keyGeneratorPath = 'cachedb-spring-boot-starter/src/main/java/com/cachedb/spring/boot/cache/CacheDbKeyGenerator.java'
+$keyGeneratorTypeOnly = Test-TypeOnlyKeyGeneratorSpi (Get-Content -LiteralPath (Join-Path $root $keyGeneratorPath) -Raw)
 foreach ($entry in $forbiddenRuntimePatterns.GetEnumerator()) {
     foreach ($match in Select-String -LiteralPath $mainSources.FullName -Pattern $entry.Key) {
         $relative = [System.IO.Path]::GetRelativePath($root, $match.Path)
+        $normalized = $relative.Replace([IO.Path]::DirectorySeparatorChar, '/')
         # These two type declarations support Spring startup metadata, not reflective invocation.
         if ($entry.Value -eq 'runtime-reflection-import' -and
                 $relative.Replace('\', '/') -eq $transactionConfiguration -and
                 $match.Line.Trim() -in @('import java.lang.reflect.Method;', 'import java.lang.reflect.Modifier;')) {
+            continue
+        }
+        if ($entry.Value -eq 'runtime-reflection-import' -and $keyGeneratorTypeOnly -and
+                $normalized -ceq $keyGeneratorPath -and
+                $match.Line.Trim() -ceq 'import java.lang.reflect.Method;') {
             continue
         }
         Add-Violation "${relative}:$($match.LineNumber) [$($entry.Value)] $($match.Line.Trim())"

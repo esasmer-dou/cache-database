@@ -13,7 +13,7 @@ SQL routed through an Oracle JDBC URL.
 | Area | Contract |
 | --- | --- |
 | Database | Oracle Database 19c or newer; CI uses Oracle Database Free 23 |
-| Java | Java 17 or newer; the sample and CI use Java 21 |
+| Java | Java 21+ (LTS), including the library, sample and CI |
 | Driver | `com.oracle.database.jdbc:ojdbc17`, supplied by the Oracle starter |
 | JDBC URL | Thin service-name URL such as `jdbc:oracle:thin:@//host:1521/service` |
 | Identifier | Generated before Redis accepts the command |

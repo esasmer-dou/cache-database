@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       externalFailoverWaitSeconds:
-        description: Seconds to wait while an operator triggers managed Redis failover
+        description: Seconds between Redis smokes; waiting does not verify failover
         required: true
         default: "120"
       mssqlExternalFailoverWaitSeconds:
-        description: Seconds to wait while an operator triggers managed SQL Server or Always On failover
+        description: Seconds between MSSQL smokes; waiting does not verify failover
         required: true
         default: "120"
       migrationCoverageCsvPath:
@@ -56,6 +56,7 @@ jobs:
           STAGING_POSTGRES_URL: ${{ secrets.STAGING_POSTGRES_URL }}
           STAGING_POSTGRES_USER: ${{ secrets.STAGING_POSTGRES_USER }}
           STAGING_POSTGRES_PASSWORD: ${{ secrets.STAGING_POSTGRES_PASSWORD }}
+          EXTERNAL_FAILOVER_WAIT_SECONDS: ${{ inputs.externalFailoverWaitSeconds }}
         run: >
           ./tools/ci/run-staging-redis-ha-evidence.ps1
           -MavenExecutable mvn
@@ -63,13 +64,22 @@ jobs:
           -PostgresUrl "$env:STAGING_POSTGRES_URL"
           -PostgresUser "$env:STAGING_POSTGRES_USER"
           -PostgresPassword "$env:STAGING_POSTGRES_PASSWORD"
-          -ExternalFailoverWaitSeconds ${{ inputs.externalFailoverWaitSeconds }}
+          -ExternalFailoverWaitSeconds "$env:EXTERNAL_FAILOVER_WAIT_SECONDS"
 
       - name: Publish staging HA summary
+        if: ${{ always() }}
         shell: pwsh
-        run: Get-Content ./target/cachedb-staging-ha-reports/staging-redis-ha-evidence.md >> $env:GITHUB_STEP_SUMMARY
+        run: |
+          $summaries = @(Get-ChildItem -Path './target/cachedb-staging-ha-reports/run-*/staging-redis-ha-evidence.md' -File -ErrorAction SilentlyContinue | Sort-Object FullName)
+          if ($summaries.Count -eq 0) {
+            'No staging Redis run summary was produced. HA remains NOT QUALIFIED.' >> $env:GITHUB_STEP_SUMMARY
+          }
+          foreach ($summary in $summaries) {
+            Get-Content -LiteralPath $summary.FullName >> $env:GITHUB_STEP_SUMMARY
+          }
 
       - name: Upload staging HA evidence artifacts
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: staging-redis-ha-evidence
@@ -137,19 +147,29 @@ jobs:
           STAGING_MSSQL_URL: ${{ secrets.STAGING_MSSQL_URL }}
           STAGING_MSSQL_USER: ${{ secrets.STAGING_MSSQL_USER }}
           STAGING_MSSQL_PASSWORD: ${{ secrets.STAGING_MSSQL_PASSWORD }}
+          EXTERNAL_FAILOVER_WAIT_SECONDS: ${{ inputs.mssqlExternalFailoverWaitSeconds }}
         run: >
           ./tools/ci/run-staging-mssql-ha-evidence.ps1
           -MavenExecutable mvn
           -MssqlUrl "$env:STAGING_MSSQL_URL"
           -MssqlUser "$env:STAGING_MSSQL_USER"
           -MssqlPassword "$env:STAGING_MSSQL_PASSWORD"
-          -ExternalFailoverWaitSeconds ${{ inputs.mssqlExternalFailoverWaitSeconds }}
+          -ExternalFailoverWaitSeconds "$env:EXTERNAL_FAILOVER_WAIT_SECONDS"
 
       - name: Publish staging MSSQL HA summary
+        if: ${{ always() }}
         shell: pwsh
-        run: Get-Content ./target/cachedb-staging-mssql-ha-reports/staging-mssql-ha-evidence.md >> $env:GITHUB_STEP_SUMMARY
+        run: |
+          $summaries = @(Get-ChildItem -Path './target/cachedb-staging-mssql-ha-reports/run-*/staging-mssql-ha-evidence.md' -File -ErrorAction SilentlyContinue | Sort-Object FullName)
+          if ($summaries.Count -eq 0) {
+            'No staging MSSQL run summary was produced. HA remains NOT QUALIFIED.' >> $env:GITHUB_STEP_SUMMARY
+          }
+          foreach ($summary in $summaries) {
+            Get-Content -LiteralPath $summary.FullName >> $env:GITHUB_STEP_SUMMARY
+          }
 
       - name: Upload staging MSSQL HA evidence artifacts
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: staging-mssql-ha-evidence

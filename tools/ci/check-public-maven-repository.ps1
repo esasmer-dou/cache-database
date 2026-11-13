@@ -33,6 +33,14 @@ if ([version]$Version -ge [version]'0.14.0') {
         "cachedb-json/$Version/cachedb-json-$Version.jar"
     )
 }
+if ([version]$Version -ge [version]'0.19.0') {
+    $requiredArtifacts += @(
+        "cachedb-reactor/$Version/cachedb-reactor-$Version.pom",
+        "cachedb-reactor/$Version/cachedb-reactor-$Version.jar",
+        "cachedb-spring-data/$Version/cachedb-spring-data-$Version.pom",
+        "cachedb-spring-data/$Version/cachedb-spring-data-$Version.jar"
+    )
+}
 
 $results = New-Object System.Collections.Generic.List[object]
 foreach ($artifact in $requiredArtifacts) {

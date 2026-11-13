@@ -1,253 +1,97 @@
 #!lua name=__LIBRARY_NAME__
 
-redis.register_function('__UPSERT_FUNCTION__', function(keys, args)
-    local entityKey = keys[1]
-    local versionKey = keys[2]
-    local tombstoneKey = keys[3]
-    local streamKey = keys[4]
-    local compactionPayloadKey = keys[5]
-    local compactionPendingKey = keys[6]
-    local compactionStreamKey = keys[7]
-    local compactionStatsKey = keys[8]
-    local payload = args[1]
-    local cacheEntity = args[2] == '1'
-    local ttl = tonumber(args[3])
-    local compactionPayloadTtl = tonumber(args[4])
-    local compactionPendingTtl = tonumber(args[5])
-    local versionKeyTtl = tonumber(args[6])
-    local durableCompaction = args[8] == '1'
-    local observationTag = args[9]
-    local operationType = args[10]
-    local entityName = args[11]
-    local tableName = args[12]
-    local namespace = args[13]
-    local idColumn = args[14]
-    local versionColumn = args[15]
-    local deletedColumn = args[16]
-    local activeMarkerValue = args[17]
-    local id = args[18]
-    local createdAt = args[19]
-    local columnCount = tonumber(args[20])
-    local trailerIndex = 21 + (columnCount * 2)
-    local expectedVersion = tonumber(args[trailerIndex] or '-1')
-    local dependencyNamespace = args[trailerIndex + 1] or ''
-    local dependencyId = args[trailerIndex + 2] or ''
-    local dependencyVersion = tonumber(args[trailerIndex + 3] or '0')
-    local traceMetadata = args[trailerIndex + 4] or ''
-    local invalidationChannel = args[trailerIndex + 5] or ''
-    local invalidationMessage = args[trailerIndex + 6] or ''
-    if invalidationChannel ~= '' and not redis.acl_check_cmd('PUBLISH', invalidationChannel, invalidationMessage) then
-        return redis.error_reply('Near-cache requires PUBLISH permission before write acceptance')
+__CACHEDB_VERSION_ALLOCATOR__
+
+__CACHEDB_UPSERT_BODY__
+
+redis.register_function('__UPSERT_FUNCTION__', cachedb_upsert)
+
+__CACHEDB_DELETE_BODY__
+
+local function cachedb_delete_one(keys, args)
+    return cachedb_delete(keys, args)
+end
+
+redis.register_function('__DELETE_FUNCTION__', cachedb_delete_one)
+
+-- Independent row outcomes. Redis does not roll back an earlier row when a later row fails.
+redis.register_function('__DELETE_FUNCTION___bulk', function(keys, args)
+    local n = tonumber(args[1])
+    if not n or n < 1 or n > 128 or #keys > 16384 or #args > 65536 then
+        return redis.error_reply('Invalid bounded delete request')
     end
-    local currentVersion = tonumber(redis.call('GET', versionKey) or '0')
-    if expectedVersion ~= nil and expectedVersion >= 0 and currentVersion ~= expectedVersion then
-        return -(currentVersion + 1)
-    end
-    if operationType == 'PATCH' and redis.call('EXISTS', tombstoneKey) == 1 then
-        return redis.error_reply('PATCH cannot recreate a deleted entity')
-    end
-    if args[trailerIndex + 7] == 'cachedb:tenant:v1' then
-        local tenant = args[trailerIndex + 8]
-        if tenant == nil or redis.call('GET', keys[#keys]) ~= tenant then
-            return redis.error_reply('CacheDB tenant access denied')
+    local bytes = 0
+    for _,v in ipairs(keys) do bytes = bytes + #v end
+    for _,v in ipairs(args) do bytes = bytes + #v end
+    if bytes > 16777216 then return redis.error_reply('Bounded delete request exceeds 16 MiB') end
+    local rows, p, k, commandCount = {}, 2, 1, 0
+    local allowed = {DEL=true, SREM=true, ZREM=true, SADD=true, SET=true, CLAMP=true}
+    for i=1,n do
+        local base, ac, cc = tonumber(args[p]), tonumber(args[p+1]), tonumber(args[p+2])
+        p=p+3
+        if not base or not ac or not ((base==8 or base==9) and ac==21 or base==12 and ac==29 or base==13 and ac==32)
+            or not cc or cc<0 or cc>8192 then
+            return redis.error_reply('Invalid bounded delete row')
         end
+        commandCount=commandCount+cc
+        if commandCount>8192 then return redis.error_reply('Too many delete maintenance commands') end
+        local row={keys={}, args={}, commands={}}
+        for j=1,base do
+            if not keys[k] then return redis.error_reply('Missing bounded delete key') end
+            row.keys[j]=keys[k]; k=k+1
+        end
+        for j=1,ac do
+            if not args[p] then return redis.error_reply('Missing bounded delete argument') end
+            row.args[j]=args[p]; p=p+1
+        end
+        row.hotKey=keys[k]; k=k+1
+        row.hotExpected=args[p]; p=p+1
+        if not row.hotKey or not row.hotExpected then return redis.error_reply('Missing hot-owner guard') end
+        for j=1,cc do
+            local op, arity=args[p],tonumber(args[p+1]); p=p+2
+            if not allowed[op] or not arity or arity<2 or arity>4 or not keys[k] then
+                return redis.error_reply('Invalid delete maintenance command')
+            end
+            local c={op,keys[k]}; k=k+1
+            for x=3,arity do
+                if not args[p] then return redis.error_reply('Missing maintenance operand') end
+                c[x]=args[p]; p=p+1
+            end
+            if op=='CLAMP' and (arity~=3 or not tonumber(c[3]) or tonumber(c[3])<0) then
+                return redis.error_reply('Invalid tenant byte decrement')
+            end
+            row.commands[j]=c
+        end
+        rows[i]=row
     end
-    local version = redis.call('INCR', versionKey)
-
-    if operationType == 'PATCH' and keys[9] ~= nil then
-        redis.call('SET', keys[9], 'patch')
-    end
-
-    if versionKeyTtl ~= nil and versionKeyTtl > 0 then
-        redis.call('EXPIRE', versionKey, versionKeyTtl)
-    end
-
-    if cacheEntity then
-        if ttl ~= nil and ttl > 0 then
-            redis.call('SETEX', entityKey, ttl, payload)
+    if k~=#keys+1 or p~=#args+1 then return redis.error_reply('Trailing bounded delete data') end
+    local output, stopped={},false
+    for i,row in ipairs(rows) do
+        if stopped then output[i]={'N','0','N'}
         else
-            redis.call('SET', entityKey, payload)
-        end
-    else
-        redis.call('DEL', entityKey)
-    end
-    redis.call('DEL', tombstoneKey)
-
-    local fields = {
-        'type', operationType,
-        'entity', entityName,
-        'table', tableName,
-        'namespace', namespace,
-        'observationTag', observationTag,
-        'idColumn', idColumn,
-        'versionColumn', versionColumn,
-        'deletedColumn', deletedColumn,
-        'id', id,
-        'version', tostring(version),
-        'createdAt', createdAt
-    }
-
-    table.insert(fields, 'col:' .. versionColumn)
-    table.insert(fields, tostring(version))
-
-    if operationType ~= 'PATCH' and deletedColumn ~= nil and deletedColumn ~= '' then
-        table.insert(fields, 'col:' .. deletedColumn)
-        table.insert(fields, activeMarkerValue)
-    end
-
-    if dependencyNamespace ~= '' and dependencyId ~= '' and dependencyVersion > 0 then
-        table.insert(fields, 'dependencyNamespace')
-        table.insert(fields, dependencyNamespace)
-        table.insert(fields, 'dependencyId')
-        table.insert(fields, dependencyId)
-        table.insert(fields, 'dependencyVersion')
-        table.insert(fields, tostring(dependencyVersion))
-    end
-
-    local index = 21
-    for i = 1, columnCount do
-        local columnName = args[index]
-        local columnValue = args[index + 1]
-        table.insert(fields, 'col:' .. columnName)
-        table.insert(fields, columnValue)
-        index = index + 2
-    end
-
-    if traceMetadata ~= '' then
-        table.insert(fields, 'traceMetadata')
-        table.insert(fields, traceMetadata)
-    end
-
-    if durableCompaction then
-        local payloadExists = redis.call('EXISTS', compactionPayloadKey)
-        if traceMetadata == '' then redis.call('HDEL', compactionPayloadKey, 'traceMetadata') end
-        redis.call('HSET', compactionPayloadKey, unpack(fields))
-        if payloadExists == 0 then
-            redis.call('HINCRBY', compactionStatsKey, 'payloadCount', 1)
-        end
-        local pendingAdded = redis.call('SETNX', compactionPendingKey, tostring(version))
-        if pendingAdded == 1 then
-            redis.call('HINCRBY', compactionStatsKey, 'pendingCount', 1)
-            redis.call('XADD', compactionStreamKey, '*',
-                'namespace', namespace,
-                'id', id,
-                'version', tostring(version),
-                'entity', entityName,
-                'observationTag', observationTag)
-        else
-            redis.call('SET', compactionPendingKey, tostring(version))
-        end
-    else
-        redis.call('XADD', streamKey, '*', unpack(fields))
-    end
-    if invalidationChannel ~= '' then redis.call('PUBLISH', invalidationChannel, invalidationMessage) end
-    return version
-end)
-
-redis.register_function('__DELETE_FUNCTION__', function(keys, args)
-    local entityKey = keys[1]
-    local versionKey = keys[2]
-    local tombstoneKey = keys[3]
-    local streamKey = keys[4]
-    local compactionPayloadKey = keys[5]
-    local compactionPendingKey = keys[6]
-    local compactionStreamKey = keys[7]
-    local compactionStatsKey = keys[8]
-    local compactionPayloadTtl = tonumber(args[1])
-    local compactionPendingTtl = tonumber(args[2])
-    local versionKeyTtl = tonumber(args[3])
-    local tombstoneTtl = tonumber(args[4])
-    local durableCompaction = args[5] == '1'
-    local observationTag = args[6]
-    local entityName = args[7]
-    local tableName = args[8]
-    local namespace = args[9]
-    local idColumn = args[10]
-    local versionColumn = args[11]
-    local deletedColumn = args[12]
-    local deletedMarkerValue = args[13]
-    local id = args[14]
-    local createdAt = args[15]
-    local traceMetadata = args[16] or ''
-    local invalidationChannel = args[17] or ''
-    local invalidationMessage = args[18] or ''
-    local expectedVersion = tonumber(args[21] or '-1')
-    local currentVersion = tonumber(redis.call('GET', versionKey) or '0')
-    if expectedVersion ~= nil and expectedVersion >= 0 and currentVersion ~= expectedVersion then
-        return -(currentVersion + 1)
-    end
-    if args[19] == 'cachedb:tenant:v1' then
-        local tenant = args[20]
-        if tenant == nil or redis.call('GET', keys[#keys]) ~= tenant then
-            return redis.error_reply('CacheDB tenant access denied')
+            local ok,value=pcall(cachedb_delete_one,row.keys,row.args)
+            if not ok then output[i]={'U','0','N'}; stopped=true
+            elseif type(value)=='table' and value.err then output[i]={'R','0','N'}; stopped=true
+            elseif type(value)~='number' or value<=0 then output[i]={'R','0','N'}; stopped=true
+            else
+                local hot = redis.pcall('GET',row.hotKey)
+                local clean = (type(hot)~='table') and (hot or '')==row.hotExpected
+                if clean then
+                    for _,c in ipairs(row.commands) do
+                        local result
+                        if c[1]=='CLAMP' then
+                            result=redis.pcall('DECRBY',c[2],c[3])
+                            if type(result)=='number' and result<=0 then result=redis.pcall('DEL',c[2]) end
+                        else result=redis.pcall(unpack(c)) end
+                        if type(result)=='table' and result.err then clean=false; break end
+                    end
+                end
+                output[i]={'A',tostring(value),clean and 'C' or 'F'}
+                if not clean then stopped=true end
+            end
         end
     end
-    if invalidationChannel ~= '' and not redis.acl_check_cmd('PUBLISH', invalidationChannel, invalidationMessage) then
-        return redis.error_reply('Near-cache requires PUBLISH permission before write acceptance')
-    end
-    local version = redis.call('INCR', versionKey)
-
-    if versionKeyTtl ~= nil and versionKeyTtl > 0 then
-        redis.call('EXPIRE', versionKey, versionKeyTtl)
-    end
-
-    redis.call('DEL', entityKey)
-    if tombstoneTtl ~= nil and tombstoneTtl > 0 then
-        redis.call('SETEX', tombstoneKey, tombstoneTtl, tostring(version))
-    else
-        redis.call('SET', tombstoneKey, tostring(version))
-    end
-
-    local fields = {
-        'type', 'DELETE',
-        'entity', entityName,
-        'table', tableName,
-        'namespace', namespace,
-        'observationTag', observationTag,
-        'idColumn', idColumn,
-        'versionColumn', versionColumn,
-        'deletedColumn', deletedColumn,
-        'id', id,
-        'version', tostring(version),
-        'createdAt', createdAt,
-        'col:' .. idColumn, id,
-        'col:' .. versionColumn, tostring(version)
-    }
-
-    if deletedColumn ~= nil and deletedColumn ~= '' then
-        table.insert(fields, 'col:' .. deletedColumn)
-        table.insert(fields, deletedMarkerValue)
-    end
-
-    if traceMetadata ~= '' then
-        table.insert(fields, 'traceMetadata')
-        table.insert(fields, traceMetadata)
-    end
-
-    if durableCompaction then
-        local payloadExists = redis.call('EXISTS', compactionPayloadKey)
-        if traceMetadata == '' then redis.call('HDEL', compactionPayloadKey, 'traceMetadata') end
-        redis.call('HSET', compactionPayloadKey, unpack(fields))
-        if payloadExists == 0 then
-            redis.call('HINCRBY', compactionStatsKey, 'payloadCount', 1)
-        end
-        local pendingAdded = redis.call('SETNX', compactionPendingKey, tostring(version))
-        if pendingAdded == 1 then
-            redis.call('HINCRBY', compactionStatsKey, 'pendingCount', 1)
-            redis.call('XADD', compactionStreamKey, '*',
-                'namespace', namespace,
-                'id', id,
-                'version', tostring(version),
-                'entity', entityName,
-                'observationTag', observationTag)
-        else
-            redis.call('SET', compactionPendingKey, tostring(version))
-        end
-    else
-        redis.call('XADD', streamKey, '*', unpack(fields))
-    end
-    if invalidationChannel ~= '' then redis.call('PUBLISH', invalidationChannel, invalidationMessage) end
-    return version
+    return output
 end)
 
 redis.register_function('__COMPACTION_COMPLETE_FUNCTION__', function(keys, args)

@@ -1,6 +1,7 @@
 package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.api.ProjectionRepository;
+import com.reactor.cachedb.core.observe.*;
 import com.reactor.cachedb.core.config.ReadShapeGuardrailConfig;
 import com.reactor.cachedb.core.guardrail.ReadShapeGuardrails;
 import com.reactor.cachedb.core.projection.EntityProjection;
@@ -29,6 +30,20 @@ import java.util.function.Function;
 
 public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepository<P, ID> {
 
+    private CacheObservationRecorder observationRecorder = NoOpCacheObservationRecorder.INSTANCE;
+    private boolean observationEnabled;
+    private Object observationOwner;
+    RedisProjectionRepository<T, ID, P> withObservationRecorder(CacheObservationRecorder recorder,
+            boolean enabled, Object owner) {
+        observationRecorder = recorder; observationEnabled = enabled; observationOwner = owner; return this;
+    }
+    private void observationTier(Tier tier) {
+        if (observationEnabled) try { CacheObservationContext.tier(tier); } catch (RuntimeException ignored) { }
+    }
+    private void observationOutcome(Outcome outcome) {
+        if (observationEnabled) try { CacheObservationContext.outcome(outcome); } catch (RuntimeException ignored) { }
+    }
+
     private static final int HOT_QUERY_CACHE_LIMIT = 512;
     private static final long HOT_QUERY_CACHE_TTL_MILLIS = 15_000L;
 
@@ -49,6 +64,26 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             Function<Collection<String>, Map<String, String>> owners) {
         if (metadata.tenantFieldName() != null) { tenantMetadata = metadata; tenantOwners = owners; }
         return this;
+    }
+
+    private void requireCausalReadAllowed() {
+        // A business projection can depend on several entities; a source receipt is not its applied version.
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements())
+            throw new com.reactor.cachedb.core.exception.CacheCausalReadUnsupportedException();
+    }
+
+    /** Explicit maintenance export. Mixed or non-ID-preserving projections cannot be partially purged. */
+    public List<RedisPurgeTarget> purgeTargets(boolean reviewedIdentityPreserving, boolean mixedOwnership) {
+        var read = readRuntime.purgeTarget(reviewedIdentityPreserving, mixedOwnership);
+        var refresh = refreshRuntime.purgeTarget(reviewedIdentityPreserving, mixedOwnership);
+        if (read.namespace().equals(refresh.namespace())) {
+            if (!read.fingerprint().equals(refresh.fingerprint())) throw RedisIdentityPurgeParticipant.incomplete();
+            return List.of(new RedisPurgeTarget(read.indexes, read.pages, read.tenantColumn,
+                    read.projection, read.identityPreserving, id -> {
+                        read.invalidateLocal.accept(id); refresh.invalidateLocal.accept(id);
+                    }));
+        }
+        return List.of(read, refresh);
     }
 
     private String activeTenant() {
@@ -82,21 +117,28 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
         this.queryWarmupLoader = Objects.requireNonNull(queryWarmupLoader, "queryWarmupLoader");
         this.performanceCollector = performanceCollector;
         this.readShapeGuardrailConfig = readShapeGuardrailConfig;
-        this.readRuntime.attachQueryCacheInvalidator(queryCache::clear);
-        this.refreshRuntime.attachQueryCacheInvalidator(queryCache::clear);
+        Runnable invalidator = queryCache::clear;
+        this.readRuntime.attachQueryCacheInvalidator(invalidator);
+        if (this.refreshRuntime != this.readRuntime) this.refreshRuntime.attachQueryCacheInvalidator(invalidator);
     }
 
     @Override
     public Optional<P> findById(ID id) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.FIND_BY_ID,
+                    readRuntime.binding().projection().name(), observationOwner, () -> findById(id));
+        requireCausalReadAllowed();
         verifyOwner(String.valueOf(id), activeTenant());
         long startedAt = System.nanoTime();
         try {
             String rawId = String.valueOf(id);
+            observationTier(Tier.REDIS);
             List<String> values =
                     readRuntime
                             .jedis()
                             .mget(readRuntime.payloadKey(id), readRuntime.tombstoneKey(id));
             if (values.get(1) != null) {
+                observationOutcome(Outcome.TOMBSTONE);
                 return Optional.empty();
             }
             String encodedProjection = values.get(0);
@@ -113,6 +155,10 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
 
     @Override
     public List<P> findAll(Collection<ID> ids) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.FIND_ALL,
+                    readRuntime.binding().projection().name(), observationOwner, () -> findAll(ids));
+        requireCausalReadAllowed();
         String tenant = activeTenant();
         if (tenant != null) {
             if (ids.size() > 10_000) throw new IllegalArgumentException("Projection bulk limit exceeded");
@@ -144,6 +190,10 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
 
     @Override
     public List<P> query(QuerySpec querySpec) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.QUERY,
+                    readRuntime.binding().projection().name(), observationOwner, () -> query(querySpec));
+        requireCausalReadAllowed();
         String tenant = activeTenant();
         if (tenant != null) return tenantQuery(querySpec, tenant);
         long startedAt = System.nanoTime();
@@ -157,9 +207,11 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             if (hotQueryCacheKey != null) {
                 List<P> cached = queryCache.get(hotQueryCacheKey);
                 if (cached != null) {
+                    observationTier(Tier.L1);
                     return cached;
                 }
             }
+            observationTier(Tier.REDIS);
             readRuntime.queryIndexManager().warm(querySpec);
             Optional<List<P>> rankedWindowResult = queryViaRankedProjectionWindow(querySpec);
             if (rankedWindowResult.isPresent()) {
@@ -252,6 +304,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             var keys = new ArrayList<String>();
             for (String id : batch) keys.add(readRuntime.payloadKey(id));
             for (String id : batch) keys.add(readRuntime.tombstoneKey(id));
+            observationTier(Tier.REDIS);
             var payloads = readRuntime.jedis().boundedMget(keys,16L * 1024 * 1024);
             for (int i = 0; i < batch.size(); i++) {
                 String raw = payloads.get(i);
@@ -588,6 +641,7 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
             lookupKeys[index] = payloadKeys.get(index);
             lookupKeys[payloadCount + index] = tombstoneKeys.get(index);
         }
+        observationTier(Tier.REDIS);
         return readRuntime.jedis().mget(lookupKeys);
     }
 
@@ -603,6 +657,10 @@ public final class RedisProjectionRepository<T, ID, P> implements ProjectionRepo
 
     private void warmProjections(Collection<P> projections) {
         if (projections == null || projections.isEmpty()) {
+            return;
+        }
+        if (refreshRuntime.binding().projection().refreshMode().isAsync()) {
+            try { refreshRuntime.upsertBatch(projections); } catch (RuntimeException ignored) { }
             return;
         }
         for (P projection : projections) {

@@ -18,6 +18,13 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 class InMemoryCacheRepositoryTest {
+    @Test void knownTestDoubleReportsUnrestrictedQueryRowsAndPreservesItOnViews() {
+        var repository = new InMemoryCacheDatabase().repository(metadata(), codec());
+        assertEquals(com.reactor.cachedb.core.api.EntityQueryCapacity.unrestricted(), repository.entityQueryCapacity());
+        assertEquals(repository.entityQueryCapacity(), repository.withFetchPlan(
+                com.reactor.cachedb.core.plan.FetchPlan.empty()).entityQueryCapacity());
+    }
+
     @Test
     void nullSerializationNeverMutatesAnEntityOrBecomesABatchDelete() {
         var delegate = codec();

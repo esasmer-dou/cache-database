@@ -1,0 +1,67 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+import { validateSampleMatrix } from './check-v019-sample-coverage.mjs';
+
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
+const read=p=>fs.readFileSync(path.join(root,p),'utf8').replace(/\r\n/g,'\n');
+function checkProducerSummary(source){
+    const match=/"--summary",\s*source\.resolve\("([^"]+)"\)\.toString\(\)/.exec(source);
+    assert(match,'Runtime producer must resolve its summary against the checked source tree');
+    assert(path.resolve(root,match[1]).startsWith(path.resolve(root,'target')+path.sep),
+        'Runtime producer summary must stay below target');
+}
+const producer=read('tools/k8s/SampleRuntimeEvidence.java');
+checkProducerSummary(producer);
+assert.throws(()=>checkProducerSummary(producer.replace(
+    'source.resolve("target/sample-runtime-coverage.md")','out.resolve("coverage.md")')));
+assert.throws(()=>checkProducerSummary(producer.replace(
+    'source.resolve("target/sample-runtime-coverage.md")','source.resolve("../coverage.md")')));
+const baseline=validateSampleMatrix(read);
+assert.deepEqual(baseline.errors,[],'Implemented scenarios must be structurally consistent');
+assert.equal(baseline.complete,false,'Deferred protection/bulk-delete scenarios must not certify a release');
+assert.equal(baseline.runtimeQualified,false,'Documentation authority must not qualify runtime behavior');
+assert(baseline.deferred.length>0&&baseline.deferred.every(row=>
+    row.runtimeStatus==='SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED'&&row.runtimeEvidence===null),
+    'Public documentation wording must not change internal source coverage declarations');
+const prefix='sample-cache-database-postgresql/';
+const controller=prefix+'src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java';
+const collection=prefix+'postman/cache-database-postgresql-sample.postman_collection.json';
+const mutations=[
+    ['old-guide-status',prefix+'README.md',s=>s.replace(
+        '| tenant-purge | Release-commit CI / artifact-bound evidence |',
+        '| tenant-purge | SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED |')],
+    ['fabricated-guide-pass',prefix+'README.md',s=>s.replace(
+        '| tenant-purge | Release-commit CI / artifact-bound evidence |',
+        '| tenant-purge | RUNTIME_ACCEPTED |')],
+    ['wrong-turkish-authority',prefix+'README.tr.md',s=>s.replace(
+        '| tenant-purge | S\u00fcr\u00fcm commit CI / pakete ba\u011fl\u0131 kan\u0131t |',
+        '| tenant-purge | Release-commit CI / artifact-bound evidence |')],
+    ['duplicate-guide-authority',prefix+'README.md',s=>s.replace(
+        /^\| tenant-purge \|[^\n]+/m,row=>row+'\n'+row)],
+    ['fabricated-source-pass','tools/samples/v019-scenarios.json',s=>{
+        const data=JSON.parse(s),feature=data.deferredFeatures.find(f=>f.id==='tenant-purge');
+        feature.status='RUNTIME_ACCEPTED';feature.runtimeEvidence={claimed:true};return JSON.stringify(data);}],
+    ['comment-spoof',controller,s=>s.replace('String tenant = access.tenant(auth); key(sku, branch);',
+        '/* access.tenant(auth) */ String tenant = "shop-a"; key(sku, branch);')],
+    ['wrong-rest-path',controller,s=>s.replace('@GetMapping("/cache/quotes/{sku}")','@GetMapping("/cache/quote-broken/{sku}")')],
+    ['wrong-turkish-matrix',prefix+'README.tr.md',s=>s.replace('[CacheApiController.quote]','[CacheApiController.clear]')],
+    ['unqualified-default',prefix+'src/main/resources/application.yml',
+        s=>s.replace('SAMPLE_READ_COALESCING_ENABLED:false','SAMPLE_READ_COALESCING_ENABLED:true')],
+    ['drop-folder-07',collection,s=>{const c=JSON.parse(s);c.item=c.item.filter(i=>i.name!=='07 Method Cache and Async');return JSON.stringify(c);}],
+    ['vacuous-assertion',collection,s=>{const c=JSON.parse(s);c.item.find(i=>i.name==='07 Method Cache and Async')
+        .item[0].event.find(e=>e.listen==='test').script.exec=["pm.test('HTTP 204',()=>{});"];return JSON.stringify(c);}],
+    ['skipped-certification',collection,s=>{const c=JSON.parse(s);c.item.find(i=>i.name==='07 Method Cache and Async')
+        .event[0].script.exec=['pm.execution.skipRequest();'];return JSON.stringify(c);}]
+];
+for(const[name,file,change]of mutations){
+    const original=read(file),modified=change(original);
+    assert.notEqual(modified,original,'Mutation did not target actual source: '+name);
+    const result=validateSampleMatrix(p=>p===file?modified:read(p));
+    assert(result.errors.length>baseline.errors.length,'Matrix accepted broken source/guide/request: '+name);
+}
+const manifest='tools/samples/v019-scenarios.json',data=JSON.parse(read(manifest));
+data.requiredFeatures=data.requiredFeatures.filter(f=>f!=='tenant-purge');
+assert.throws(()=>validateSampleMatrix(p=>p===manifest?JSON.stringify(data):read(p)),/Required release feature set changed/);
+process.stdout.write('Static matrix rejection checks passed; no live application acceptance is implied.\n');

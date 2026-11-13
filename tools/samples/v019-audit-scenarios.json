@@ -1,0 +1,917 @@
+{
+  "schema": 1,
+  "evidence": "STATIC_CONTRACT_ONLY_NOT_RUNTIME_ACCEPTANCE",
+  "providers": [
+    "postgresql",
+    "mssql",
+    "oracle"
+  ],
+  "scenarios": [
+    {
+      "id": "audit-write",
+      "method": "sourceRoundtrip",
+      "request": "Expire delete 1",
+      "calls": [
+        "AuditNoteRules.verify",
+        "write"
+      ],
+      "extra": [
+        [
+          "write",
+          [
+            "stores.delete",
+            "stores.evict",
+            "saveWithReceipt",
+            "confirm",
+            "findById"
+          ]
+        ],
+        [
+          "confirm",
+          [
+            "awaitDurable"
+          ]
+        ]
+      ],
+      "test": "acceptedWriteTimeoutIsNotRetriedAndNeverClaimsSourceConfirmation",
+      "external": "evictSweepsOnlyIndexedExpiredPayloadAndRetainsDurableSql"
+    },
+    {
+      "id": "spring-data-zero-query-budget",
+      "method": "springData",
+      "request": "Spring Data rejects zero query budget",
+      "calls": [
+        "AuditNoteRules.verify",
+        "entityQueryCapacity",
+        "deleteByState",
+        "partial"
+      ],
+      "extra": [],
+      "test": "derivedPartialFailurePreservesAllCategoriesWithoutRetry",
+      "external": "derivedDeleteRejectsZeroQueryBudgetWithoutMutatingAnyRows"
+    },
+    {
+      "id": "native-bulk-receipts",
+      "method": "bulk",
+      "request": "Native bulk returns actual receipts",
+      "calls": [
+        "AuditNoteRules.verify",
+        "AuditNoteRules.ids",
+        "bulkDelete",
+        "partial"
+      ],
+      "extra": [],
+      "test": "nativeBulkExposesActualReceiptsAndBoundsBeforeIo",
+      "external": "actualBulkHttpReceiptsConfirmOnlyRedisUntilMatchingSqlMarkersAreAwaited"
+    },
+    {
+      "id": "retention-evict",
+      "method": "sweep",
+      "request": "Evict indexed expired cache payload",
+      "calls": [
+        "AuditNoteRules.verify",
+        "AuditNoteRules.maxRows",
+        "CacheTenantContext.administrative",
+        "sweepOnce"
+      ],
+      "extra": [],
+      "test": "sweeperUsesActualAdministrativeScopeAndRestoresCallerOnBothPaths",
+      "external": "evictSweepsOnlyIndexedExpiredPayloadAndRetainsDurableSql"
+    },
+    {
+      "id": "retention-delete",
+      "method": "sweep",
+      "request": "Delete indexed expired note via write-behind",
+      "calls": [
+        "AuditNoteRules.verify",
+        "AuditNoteRules.maxRows",
+        "CacheTenantContext.administrative",
+        "sweepOnce"
+      ],
+      "extra": [],
+      "test": "sweeperUsesActualAdministrativeScopeAndRestoresCallerOnBothPaths",
+      "external": "deleteSweepEnqueuesNormalWriteBehindWithoutClaimingSourceErasure"
+    },
+    {
+      "id": "supplier-tenant-causal",
+      "method": "source",
+      "request": "Tenant A cannot inspect global source",
+      "calls": [
+        "AuditNoteRules.verify",
+        "findById"
+      ],
+      "extra": [],
+      "test": "supplierTenantAndCausalGuardsFailBeforeAnyRepositoryMutation",
+      "external": "actualHttpRejectsTenantIdentityCausalRequirementsAndOutOfBoundsSweep"
+    }
+  ],
+  "cases": [
+    {
+      "id": "baseline-delete-1",
+      "name": "Baseline delete 1",
+      "method": "POST",
+      "path": "delete/1/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-delete-1",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"baseline-delete-1\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-1'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-delete-2",
+      "name": "Baseline delete 2",
+      "method": "POST",
+      "path": "delete/2/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-delete-2",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(2); pm.expect(j.note).to.eql(\"baseline-delete-2\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-2'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-delete-3",
+      "name": "Baseline delete 3",
+      "method": "POST",
+      "path": "delete/3/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-delete-3",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(3); pm.expect(j.note).to.eql(\"baseline-delete-3\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-3'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-delete-4",
+      "name": "Baseline delete 4",
+      "method": "POST",
+      "path": "delete/4/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-delete-4",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(4); pm.expect(j.note).to.eql(\"baseline-delete-4\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-4'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-delete-5",
+      "name": "Baseline delete 5",
+      "method": "POST",
+      "path": "delete/5/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-delete-5",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(5); pm.expect(j.note).to.eql(\"baseline-delete-5\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-5'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-delete-6",
+      "name": "Baseline delete 6",
+      "method": "POST",
+      "path": "delete/6/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-delete-6",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(6); pm.expect(j.note).to.eql(\"baseline-delete-6\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-6'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-delete-7",
+      "name": "Baseline delete 7",
+      "method": "POST",
+      "path": "delete/7/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-delete-7",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(7); pm.expect(j.note).to.eql(\"baseline-delete-7\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-7'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-delete-8",
+      "name": "Baseline delete 8",
+      "method": "POST",
+      "path": "delete/8/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-delete-8",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(8); pm.expect(j.note).to.eql(\"baseline-delete-8\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-8'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-evict-1",
+      "name": "Baseline evict 1",
+      "method": "POST",
+      "path": "evict/1/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-evict-1",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"baseline-evict-1\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-1'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-evict-2",
+      "name": "Baseline evict 2",
+      "method": "POST",
+      "path": "evict/2/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-evict-2",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(2); pm.expect(j.note).to.eql(\"baseline-evict-2\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-2'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-evict-3",
+      "name": "Baseline evict 3",
+      "method": "POST",
+      "path": "evict/3/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-evict-3",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(3); pm.expect(j.note).to.eql(\"baseline-evict-3\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-3'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-evict-4",
+      "name": "Baseline evict 4",
+      "method": "POST",
+      "path": "evict/4/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-evict-4",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(4); pm.expect(j.note).to.eql(\"baseline-evict-4\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-4'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-evict-5",
+      "name": "Baseline evict 5",
+      "method": "POST",
+      "path": "evict/5/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-evict-5",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(5); pm.expect(j.note).to.eql(\"baseline-evict-5\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-5'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-evict-6",
+      "name": "Baseline evict 6",
+      "method": "POST",
+      "path": "evict/6/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-evict-6",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(6); pm.expect(j.note).to.eql(\"baseline-evict-6\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-6'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-evict-7",
+      "name": "Baseline evict 7",
+      "method": "POST",
+      "path": "evict/7/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-evict-7",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(7); pm.expect(j.note).to.eql(\"baseline-evict-7\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-7'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "baseline-evict-8",
+      "name": "Baseline evict 8",
+      "method": "POST",
+      "path": "evict/8/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "baseline-evict-8",
+        "expired": false
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(8); pm.expect(j.note).to.eql(\"baseline-evict-8\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-8'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "expire-delete-1",
+      "name": "Expire delete 1",
+      "method": "POST",
+      "path": "delete/1/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "sil-ğışöüİ-1",
+        "expired": true
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"sil-ğışöüİ-1\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-1'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+        "pm.expect(j.state).to.eql('EXPIRED');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "expire-delete-2",
+      "name": "Expire delete 2",
+      "method": "POST",
+      "path": "delete/2/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "sil-ğışöüİ-2",
+        "expired": true
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(2); pm.expect(j.note).to.eql(\"sil-ğışöüİ-2\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-2'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+        "pm.expect(j.state).to.eql('EXPIRED');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "spring-delete",
+      "name": "Spring Data rejects zero query budget",
+      "method": "POST",
+      "path": "delete/spring-data",
+      "status": 409,
+      "assertions": [
+        "pm.expect(j.error).to.eql('AUDIT_DERIVED_DELETE_ZERO_QUERY_BUDGET');",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.retrySafe).to.eql(false);",
+        "pm.expect(j).not.to.have.property('outcomeUnknown');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "springData"
+    },
+    {
+      "id": "spring-hot-preserved",
+      "name": "Rejected derived delete keeps expired note",
+      "method": "GET",
+      "path": "delete/1",
+      "status": 200,
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "hot",
+      "assertions": [
+        "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql('sil-ğışöüİ-1'); pm.expect(j.state).to.eql('EXPIRED');",
+        "pm.expect(j.origin).to.eql('HOT'); pm.expect(j.receipt).to.eql(null);",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(false);"
+      ]
+    },
+    {
+      "id": "spring-active",
+      "name": "Derived delete keeps active note",
+      "method": "GET",
+      "path": "delete/3",
+      "status": 200,
+      "assertions": [
+        "pm.expect(j.slot).to.eql(3); pm.expect(j.note).to.eql(\"baseline-delete-3\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.origin).to.eql(\"HOT\");",
+        "pm.expect(j.receipt).to.eql(null);"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "hot"
+    },
+    {
+      "id": "expire-delete-4",
+      "name": "Expire delete 4",
+      "method": "POST",
+      "path": "delete/4/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "bulk-4",
+        "expired": true
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(4); pm.expect(j.note).to.eql(\"bulk-4\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-4'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+        "pm.expect(j.state).to.eql('EXPIRED');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "expire-delete-5",
+      "name": "Expire delete 5",
+      "method": "POST",
+      "path": "delete/5/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "bulk-5",
+        "expired": true
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(5); pm.expect(j.note).to.eql(\"bulk-5\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-5'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+        "pm.expect(j.state).to.eql('EXPIRED');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "bulk-delete",
+      "name": "Native bulk returns actual receipts",
+      "method": "POST",
+      "path": "delete/bulk",
+      "status": 202,
+      "body": {
+        "slots": [
+          1,
+          2,
+          4,
+          5
+        ]
+      },
+      "assertions": [
+        "pm.expect(j.api).to.eql('NATIVE_BULK'); pm.expect(j.phase).to.eql('COMPLETE'); pm.expect(j.selected).to.eql(['audit-1','audit-2','audit-4','audit-5']);",
+        "pm.expect(j.receiptAvailability).to.eql('ACTUAL_WRITE_RECEIPTS'); pm.expect(j.accepted.length).to.eql(4);",
+        "pm.expect(j.accepted.map(r=>r.id).sort()).to.eql(['audit-1','audit-2','audit-4','audit-5']);",
+        "j.accepted.forEach(r=>{pm.expect(r.operation).to.eql('DELETE');pm.expect(r.version).to.match(/^[1-9][0-9]{0,18}$/);pm.expect(typeof r.acceptedAt).to.eql('string');});",
+        "pm.expect(j.rejected).to.eql([]); pm.expect(j.uncertain).to.eql([]); pm.expect(j.cleanupPending).to.eql([]); pm.expect(j.notAttempted).to.eql(0);",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.retrySafe).to.eql(false);"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "bulk"
+    },
+    {
+      "id": "bulk-hot-miss",
+      "name": "Bulk deleted hot note is absent",
+      "method": "GET",
+      "path": "delete/4",
+      "status": 404,
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "hot"
+    },
+    {
+      "id": "expire-evict-1",
+      "name": "Expire evict 1",
+      "method": "POST",
+      "path": "evict/1/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "kalıcı-SQL-ğışöüİ",
+        "expired": true
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"kalıcı-SQL-ğışöüİ\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-1'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+        "pm.expect(j.state).to.eql('EXPIRED');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "evict-sweep",
+      "name": "Evict indexed expired cache payload",
+      "method": "POST",
+      "path": "evict/sweep",
+      "status": 200,
+      "body": {
+        "maxRows": 8
+      },
+      "assertions": [
+        "pm.expect(j.action).to.eql('EVICT_CACHE'); pm.expect(j.examined).to.eql(1); pm.expect(j.evicted).to.eql(1);",
+        "pm.expect(j.indexCleaned).to.eql(1); pm.expect(j.deleteAccepted).to.eql(0); pm.expect(j.skipped).to.eql(0);",
+        "pm.expect(j.indexedResidentOnly).to.eql(true); pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.sourceErasureConfirmed).to.eql(false);",
+        "pm.expect(j.exhausted).to.eql(true); pm.expect(typeof j.cutoff).to.eql('number'); pm.expect(typeof j.finishedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sweep"
+    },
+    {
+      "id": "evict-hot-miss",
+      "name": "Evicted note is not hot",
+      "method": "GET",
+      "path": "evict/1",
+      "status": 404,
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "hot"
+    },
+    {
+      "id": "evict-source-kept",
+      "name": "Eviction retains SQL note",
+      "method": "GET",
+      "path": "evict/1/source",
+      "status": 200,
+      "assertions": [
+        "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"kalıcı-SQL-ğışöüİ\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.origin).to.eql(\"SOURCE_OBSERVED\");",
+        "pm.expect(j.receipt).to.eql(null);"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "source"
+    },
+    {
+      "id": "evict-active",
+      "name": "Eviction keeps active hot note",
+      "method": "GET",
+      "path": "evict/2",
+      "status": 200,
+      "assertions": [
+        "pm.expect(j.slot).to.eql(2); pm.expect(j.note).to.eql(\"baseline-evict-2\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.origin).to.eql(\"HOT\");",
+        "pm.expect(j.receipt).to.eql(null);"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "hot"
+    },
+    {
+      "id": "expire-delete-6",
+      "name": "Expire delete 6",
+      "method": "POST",
+      "path": "delete/6/source-roundtrip",
+      "status": 200,
+      "body": {
+        "note": "retention-6",
+        "expired": true
+      },
+      "assertions": [
+        "pm.expect(j.slot).to.eql(6); pm.expect(j.note).to.eql(\"retention-6\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+        "pm.expect(j.receipt.id).to.eql('audit-6'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+        "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+        "pm.expect(j.state).to.eql('EXPIRED');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sourceRoundtrip"
+    },
+    {
+      "id": "delete-sweep",
+      "name": "Delete indexed expired note via write-behind",
+      "method": "POST",
+      "path": "delete/sweep",
+      "status": 200,
+      "body": {
+        "maxRows": 8
+      },
+      "assertions": [
+        "pm.expect(j.action).to.eql('DELETE'); pm.expect(j.examined).to.eql(1); pm.expect(j.evicted).to.eql(0);",
+        "pm.expect(j.indexCleaned).to.eql(1); pm.expect(j.deleteAccepted).to.eql(1); pm.expect(j.skipped).to.eql(0);",
+        "pm.expect(j.indexedResidentOnly).to.eql(true); pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.sourceErasureConfirmed).to.eql(false);",
+        "pm.expect(j.exhausted).to.eql(true); pm.expect(typeof j.cutoff).to.eql('number'); pm.expect(typeof j.finishedAt).to.eql('string');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sweep"
+    },
+    {
+      "id": "delete-hot-miss",
+      "name": "Retention deleted hot note is absent",
+      "method": "GET",
+      "path": "delete/6",
+      "status": 404,
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "hot"
+    },
+    {
+      "id": "delete-active",
+      "name": "Retention keeps active hot note",
+      "method": "GET",
+      "path": "delete/7",
+      "status": 200,
+      "assertions": [
+        "pm.expect(j.slot).to.eql(7); pm.expect(j.note).to.eql(\"baseline-delete-7\");",
+        "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.origin).to.eql(\"HOT\");",
+        "pm.expect(j.receipt).to.eql(null);"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "hot"
+    },
+    {
+      "id": "tenant-a-denied",
+      "name": "Tenant A cannot inspect global source",
+      "method": "GET",
+      "path": "evict/1/source",
+      "status": 403,
+      "auth": "a",
+      "headers": [],
+      "controllerMethod": "source"
+    },
+    {
+      "id": "tenant-b-denied",
+      "name": "Tenant B cannot sweep global notes",
+      "method": "POST",
+      "path": "delete/sweep",
+      "status": 403,
+      "body": {
+        "maxRows": 1
+      },
+      "auth": "b",
+      "headers": [],
+      "controllerMethod": "sweep"
+    },
+    {
+      "id": "missing-identity",
+      "name": "Missing supplier identity is rejected",
+      "method": "GET",
+      "path": "evict/1",
+      "status": 401,
+      "auth": "none",
+      "headers": [],
+      "controllerMethod": "hot"
+    },
+    {
+      "id": "causal-denied",
+      "name": "Causal query requirement is rejected",
+      "method": "POST",
+      "path": "delete/spring-data",
+      "status": 409,
+      "auth": "supplier",
+      "headers": [
+        {
+          "key": "X-CacheDB-Causal",
+          "value": "required"
+        }
+      ],
+      "controllerMethod": "springData"
+    },
+    {
+      "id": "slot-bound",
+      "name": "Slot nine is rejected",
+      "method": "PUT",
+      "path": "evict/9",
+      "status": 400,
+      "body": {
+        "note": "invalid slot",
+        "expired": true
+      },
+      "assertions": [
+        "pm.expect(j.error).to.eql('Invalid bounded audit input');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "save"
+    },
+    {
+      "id": "sweep-bound",
+      "name": "Sweep bound nine is rejected",
+      "method": "POST",
+      "path": "delete/sweep",
+      "status": 400,
+      "body": {
+        "maxRows": 9
+      },
+      "assertions": [
+        "pm.expect(j.error).to.eql('Invalid bounded audit input');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "sweep"
+    },
+    {
+      "id": "duplicate-bound",
+      "name": "Duplicate bulk slots are rejected",
+      "method": "POST",
+      "path": "delete/bulk",
+      "status": 400,
+      "body": {
+        "slots": [
+          1,
+          1
+        ]
+      },
+      "assertions": [
+        "pm.expect(j.error).to.eql('Invalid bounded audit input');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "bulk"
+    },
+    {
+      "id": "policy-bound",
+      "name": "Unsupported policy is rejected",
+      "method": "GET",
+      "path": "purge/1",
+      "status": 400,
+      "assertions": [
+        "pm.expect(j.error).to.eql('Invalid bounded audit input');"
+      ],
+      "auth": "supplier",
+      "headers": [],
+      "controllerMethod": "hot"
+    }
+  ],
+  "limits": {
+    "slotsPerPolicy": 8,
+    "bodyBytes": 2048,
+    "activeRequests": 8,
+    "maxSweepRows": 8,
+    "commandKeys": 512,
+    "commandBytes": 65536
+  },
+  "runtimeQualified": false,
+  "positiveDerivedDelete": {
+    "repository": "src/main/java/com/example/cachedb/sample/rangedata/RangeDataRepository.java",
+    "method": "deleteByRunIdAndStatus",
+    "providerTest": "src/test/java/com/example/cachedb/sample/rangedata/DerivedDeleteRangeExternalIT.java",
+    "success": "generatedDeleteSelectsCompletePositiveBudgetMatchesAndPreservesOtherScopes",
+    "capacityRejection": "exactCapacitySelectionRejectsAmbiguousCompletenessBeforeAnyDelete"
+  },
+  "deferred": [
+    "tenant-purge",
+    "tenant-encrypted-ownership-provisioning",
+    "full-cold-source-retention"
+  ],
+  "native": [
+    {
+      "file": "cachedb-spring-data/src/main/java/com/cachedb/spring/data/AbstractCacheDbSpringDataRepository.java",
+      "method": "deleteMatching",
+      "calls": [
+        "deleteIds"
+      ]
+    },
+    {
+      "file": "cachedb-spring-data/src/main/java/com/cachedb/spring/data/AbstractCacheDbSpringDataRepository.java",
+      "method": "deleteIds",
+      "calls": [
+        "bulkDelete"
+      ]
+    },
+    {
+      "file": "cachedb-storage-redis/src/main/java/com/cachedb/redis/RedisEntityRepository.java",
+      "method": "bulkDelete",
+      "calls": [
+        "acquireBulkDelete",
+        "requireOwners"
+      ]
+    },
+    {
+      "file": "cachedb-starter/src/main/java/com/cachedb/starter/RetentionSweeper.java",
+      "method": "sweepOnce",
+      "calls": [
+        "CacheTenantContext.isAdministrative",
+        "sweep"
+      ]
+    },
+    {
+      "file": "cachedb-storage-redis/src/main/java/com/cachedb/redis/RedisRetentionAdapter.java",
+      "method": "sweep",
+      "calls": [
+        "CacheTenantContext.isAdministrative",
+        "select",
+        "snapshot",
+        "eval",
+        "invalidate"
+      ]
+    }
+  ]
+}

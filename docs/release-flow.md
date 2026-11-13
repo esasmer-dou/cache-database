@@ -1,26 +1,35 @@
 # Stable Release Flow
 
-Every stable release is built, tested, distributed, and verified from one
-immutable tag.
+Every stable release uses one immutable SDK artifact set. The release tag
+identifies its source; a reviewed source-equivalence record must explain any
+documentation or validation-tool changes made after the SDK build.
 
 ## Release Sequence
 
 1. Set the stable semantic version in the root and module POM files.
 2. Update `CHANGELOG.md`, English/Turkish release notes, README files, and the
    three standalone samples.
-3. Run the full reactor, provider integration, Docker HA, documentation,
-   compatibility, benchmark, and release-artifact checks locally.
-4. Commit and push `main`; wait for `Framework Readiness` and `Production
-   Evidence` on that exact commit.
-5. Create and push the annotated stable tag.
-6. Wait for `Public Maven Repository Publish`; verify anonymous Maven
-   resolution for the tag.
-7. Publish GitHub Packages as a compatibility channel.
-8. Create the non-prerelease GitHub Release with the ZIP, BOM, binary JARs, and
-   checksums.
-9. Run `Production GA Release Readiness` for the tag.
-10. Build the standalone PostgreSQL, SQL Server, and Oracle samples against the
-    remote, anonymous Maven repository; then tag and release all three samples.
+3. Build and run the required reactor, provider, HA, documentation, API,
+   benchmark, sample, and artifact checks in the approved Kubernetes environment.
+   Preserve original results and artifact checksums; do not rebuild a frozen SDK
+   or repeat passed scopes just to obtain a new aggregate log.
+4. Complete canonical evidence verification. Keep original failures and link
+   each permitted follow-up result explicitly. Missing evidence is a blocker,
+   not a successful check.
+5. Commit and push `main`; create the annotated stable tag on that exact commit.
+   Complete the required remote evidence checks and pre-publication readiness
+   check. A tag alone is not release approval.
+6. Prepare a draft GitHub Release containing the verified ZIP, BOM, binary,
+   source and Javadoc JARs, and checksums. Publish it as a stable release only
+   after every required pre-publication check passes.
+7. Run `Public Maven Repository Publish`. It imports the published release ZIP;
+   it does not rebuild the SDK. Verify anonymous Maven resolution afterward.
+8. Publish those same artifacts to GitHub Packages as a compatibility channel.
+9. Run post-publication readiness checks. A framework package release does not
+   certify an application's own HA topology or migration coverage.
+10. In the approved Kubernetes environment, build the standalone PostgreSQL,
+    SQL Server, and Oracle samples against the remote anonymous Maven repository.
+    Then push their updated source, tags, and release assets.
 
 Do not rebuild or replace an existing version. A correction receives a new
 semantic version.

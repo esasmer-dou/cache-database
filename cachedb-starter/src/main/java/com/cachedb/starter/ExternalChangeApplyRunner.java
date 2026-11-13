@@ -47,6 +47,11 @@ public final class ExternalChangeApplyRunner implements ExternalChangeSink {
 
     public ExternalChangeApplyResult apply(ExternalChangeEvent event) {
         Objects.requireNonNull(event, "event");
+        var protectedBinding=entityRegistry.find(event.entityName());
+        if(protectedBinding.isPresent() && protectedBinding.get().metadata().tenantPurgeEnabled())
+            return ExternalChangeApplyResult.failed(event,event.id(),mode,"Original generation and declared ownership are required",
+                    new com.reactor.cachedb.core.protection.ProtectionException(
+                            com.reactor.cachedb.core.protection.ProtectionException.Code.MIGRATION_REQUIRED));
         ExternalChangeEntityHandler handler = handlers.get(event.entityName());
         if (handler != null) {
             return applyHandler(event, handler);

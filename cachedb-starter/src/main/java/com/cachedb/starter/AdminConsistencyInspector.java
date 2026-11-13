@@ -136,7 +136,8 @@ final class AdminConsistencyInspector {
                 new redis.clients.jedis.params.ScanParams()
                         .match(pattern)
                         .count(ADMIN_METRICS_SCAN_COUNT);
-        synchronized (progress) {
+        progress.scanLock.lock();
+        try {
             for (int step = 0; step < ADMIN_METRICS_SCAN_STEPS; step++) {
                 redis.clients.jedis.resps.ScanResult<String> scan =
                         jedis.scan(progress.cursor(), params);
@@ -150,9 +151,12 @@ final class AdminConsistencyInspector {
                 }
             }
             return progress.completedCount();
+        } finally {
+            progress.scanLock.unlock();
         }
     }
     private static final class IncrementalKeyScan {
+        private final java.util.concurrent.locks.ReentrantLock scanLock = new java.util.concurrent.locks.ReentrantLock();
         private String cursor = "0";
         private long currentCount;
         private long completedCount;
@@ -170,8 +174,11 @@ final class AdminConsistencyInspector {
         }
 
         long completedCount() {
-            synchronized (this) {
+            scanLock.lock();
+            try {
                 return completedCount;
+            } finally {
+                scanLock.unlock();
             }
         }
 

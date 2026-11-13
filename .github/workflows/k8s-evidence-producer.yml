@@ -1,0 +1,87 @@
+name: K8s Evidence Producer
+run-name: canonical52-${{ inputs.sourceSha }}-${{ inputs.privateReleaseId }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      privateReleaseId:
+        description: Pre-created draft release ID in this private exact-source mirror
+        required: true
+        type: string
+      sourceSha:
+        description: Actual final public commit S, also the dispatch and workflow commit
+        required: true
+        type: string
+      sourceManifestSha256:
+        description: Frozen Kubernetes execution source manifest SHA256, not a relabelled Git SHA
+        required: true
+        type: string
+      sdkManifestSha256:
+        description: Frozen SDK manifest SHA256; no SDK rebuild is permitted
+        required: true
+        type: string
+      frozenPlanSha256:
+        description: SHA256 of the coordinator-approved frozen canonical plan bytes
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  private-producer:
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.private == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 26
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+      receipt-sha256: ${{ steps.stage.outputs.receipt-sha256 }}
+    env:
+      EVENT_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      APPROVED_PRIVATE_REPOSITORY: ${{ vars.CACHEDB_EVIDENCE_REPOSITORY }}
+      APPROVED_PRIVATE_REPOSITORY_ID: ${{ vars.CACHEDB_EVIDENCE_REPOSITORY_ID }}
+      PUBLIC_SOURCE_REPOSITORY: ${{ vars.CACHEDB_PUBLIC_SOURCE_REPOSITORY }}
+      PUBLIC_SOURCE_REPOSITORY_ID: ${{ vars.CACHEDB_PUBLIC_SOURCE_REPOSITORY_ID }}
+      APPROVED_SOURCE_SHA: ${{ inputs.sourceSha }}
+      PRIVATE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      PRIVATE_RELEASE_ID: ${{ inputs.privateReleaseId }}
+      K8S_SOURCE_MANIFEST_PIN: ${{ inputs.sourceManifestSha256 }}
+      K8S_SDK_PIN: ${{ inputs.sdkManifestSha256 }}
+      K8S_FROZEN_PLAN_PIN: ${{ inputs.frozenPlanSha256 }}
+    steps:
+      - name: Admit private exact-source dispatch before checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:EVENT_REPOSITORY_PRIVATE -cne 'true' -or
+              !$env:APPROVED_PRIVATE_REPOSITORY -or !$env:APPROVED_PRIVATE_REPOSITORY_ID -or
+              $env:GITHUB_REPOSITORY -cne $env:APPROVED_PRIVATE_REPOSITORY -or
+              $env:GITHUB_REPOSITORY_ID -cne $env:APPROVED_PRIVATE_REPOSITORY_ID -or
+              $env:APPROVED_SOURCE_SHA -cnotmatch '^[a-f0-9]{40}$' -or
+              $env:GITHUB_SHA -cne $env:APPROVED_SOURCE_SHA -or $env:PRIVATE_WORKFLOW_SHA -cne $env:GITHUB_SHA) {
+            throw 'Private manual dispatch at the exact approved source/workflow commit is required.'
+          }
+      - name: Checkout exact source without retained credentials
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Wait for own sealed Kubernetes evidence and validate metadata only
+        id: stage
+        timeout-minutes: 24
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./tools/ci/stage-k8s-private-producer.ps1
+      - name: Upload unchanged fully validated private evidence
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v019-private-owned-runtime/evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

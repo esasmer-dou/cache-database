@@ -1,6 +1,10 @@
 # CacheDB
 
-> CacheDB 0.18.1: [sürüm ve indirmeler](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1) | [herkese açık Maven deposu](https://esasmer-dou.github.io/cache-database/maven2). Maven ile indirmek için GitHub token'ı veya framework kaynak kodunu derlemek gerekmez.
+> **Sürüm belgeleri: 0.19.0.** [Sürüm notları](docs/releases/v0.19.0.md)
+> ve [geçiş rehberi](docs/upgrading-to-0.19.md). Gerçek paket erişimi ve sağlama toplamları için
+> sürüm sayfası yetkilidir; belge tek başına yayım veya kabul kanıtı değildir.
+
+> [Sürümler ve indirmeler](https://github.com/esasmer-dou/cache-database/releases) | [herkese açık Maven deposu](https://esasmer-dou.github.io/cache-database/maven2). Maven ile indirmek için GitHub token'ı veya framework kaynak kodunu derlemek gerekmez.
 
 [English](../README.md) | Türkçe
 
@@ -49,13 +53,34 @@ doğrulanmalıdır.
 | Sürüm bilgisi | Değer |
 | --- | --- |
 | Yayımlanmış son sürüm | [GitHub sürümü](https://github.com/esasmer-dou/cache-database/releases/latest) |
-| Repo sürümü | `0.18.1` |
-| Kütüphane bytecode seviyesi | Java 17 |
+| Sürüm belgeleri | `0.19.0`; gerçek paket erişimi ve sağlama toplamları için sürüm sayfası yetkilidir |
+| 0.19.0 için minimum Java ve kütüphane bytecode seviyesi | Java 21+ (LTS) |
 | Çalıştırılabilir örnekler | Java 21 |
 | Yerel sağlayıcı test topolojisi | Redis 8, PostgreSQL 16, SQL Server 2022, Oracle Database Free 23 |
 | Uygulama API'si | Derleme sırasında üretilen `@CacheRepository` interface'leri |
 
 Çok tablodan hazırlanan bir API cevabını yenilemek için [tanımlı katalog yenileme rehberini](docs/snapshot-projectionlar.md) kullanın. Kaynak, projection ve ayarları tanımlayın; dosya, partileme, kilit ve güvenli yayını framework yönetsin.
+
+## 0.19.0 Sürümü Ve Geçiş Sınırı
+
+0.19.0; Java 21/sanal thread hazırlığı, isteğe bağlı tekil okuma birleştirme, sunucu destekli L1,
+asenkron/isteğe bağlı Reactor API'leri, kiracılı toplam ve gruplamalar, gözlem, tekrarlanabilir
+performans kontrolleri, bileşik aralık/imleç indeksleri, derleme zamanı Spring Data,
+şifreleme/saklama süresi/varlık kapsamlı temizleme ve Spring Cache alanlarını kapsar.
+[On bir özellik alanını ve sınırlarını](docs/releases/v0.19.0.md) inceleyin.
+
+Kabulün yetkili kaynağı, tam sürüm commit'inin CI sonuçları ve kaynak, SDK ve örnek
+paketlerine bağlı kanıttır; bu özet veya geçmiş aday sayıları değildir.
+`FrameworkPackage != universalGA`: gerçek uygulama yolları, koruma geçişi, HA ve geri yükleme
+ayrı doğrulama gerektirir. Ham COUNT/FACET T4 durumu `PASS_BY_ACCEPTANCE_EXCEPTION` olarak korunur;
+sayısal 2x `rawT4target` sağlanmamıştır. Geçmiş başarısızlıklar değişmez;
+diğer performans ve regresyon kapıları geçerliliğini korur.
+
+Java 17 kullanan uygulamalar 0.18.x üzerinde kalmalıdır. Binding'leri yalnız uyumlu ve onaylı
+paketlerle eşitleyip yeniden üretin. Doğrulanmış geçiş olmadan eski veride korumayı açmayın;
+karışık sürüm filosunda bildirim yayınını kapatmayın. Kapsam aktarımını nedensel sorgu kanıtı,
+iki kat benchmark hedefini de elde edilmiş sonuç saymayın. [Geçiş rehberi](docs/upgrading-to-0.19.md),
+açık seçimleri, kapasite hatalarını ve geri dönüş sınırlarını açıklar.
 
 ## 0.18.1 Sürümü
 
@@ -76,14 +101,16 @@ hazırlayın ve geçişten önce eski worker'ları devreden çıkarın. Framewor
 yayımlanması; uygulamanızın canlı ortam yollarını, Oracle Data Guard veya
 SQL Server Always On topolojisini kendiliğinden doğrulamaz.
 
-Yayımlandıktan sonra [0.18.1 paketlerini ve sağlama toplamlarını](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1)
-veya herkese açık CacheDB Maven deposunu kullanabilirsiniz. O zamana kadar
-hazır paketlerle hızlı başlangıç için yayımlanmış 0.18.0 tag'ini kullanın.
-
 Katı 50 ms test hedefi, ilk kullanım dâhil Jackson'sız üretilen codec/snapshot
 senaryolarına uygulanır. Eski mapper API'lerinin uyumluluğu test edilir;
 çağıranın mapper oluşturması ve JUnit metodunun toplam süresi ayrıca raporlanır.
 Bu hedef, her ortamda geçerli bir canlı sistem gecikmesi garantisi değildir.
+
+## Güncel Hızlı Başlangıç Koordinatları
+
+Aşağıdaki hızlı başlangıç 0.19.0 sürümünü hedefler. Kullanımdan önce gerçek ve uyumlu paketleri
+ve sağlama toplamlarını [sürüm sayfasından](https://github.com/esasmer-dou/cache-database/releases) doğrulayın.
+Kaynak sürümü yayımı kanıtlamaz veya karışık sürüm geçişine izin vermez. Önceki 0.18.1 rehberi tarihseldir.
 
 ## Ürün Konumlandırması: CacheDB Nedir, Ne Değildir?
 
@@ -138,11 +165,13 @@ CacheDB özellikle şu problemlere odaklanır:
 | "CacheDB bana uygun mu?" | [ORM Alternatifi Rehberi](docs/orm-alternative.md) |
 | "Sıfırdan nasıl çalıştırırım?" | [Başlangıç Rehberi](docs/getting-started.md) |
 | "Repository'leri güvenli biçimde nasıl tanımlar ve işletirim?" | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| "Güncel sürümde neler değişti?" | [v0.18.1 Sürüm Notları](docs/releases/v0.18.1.md) |
+| "0.19.0 sürümünde neler değişiyor?" | [v0.19.0 sürüm notları](docs/releases/v0.19.0.md) |
+| "Nasıl geçerim ve açık seçimleri nasıl incelerim?" | [0.19.0 geçiş rehberi](docs/upgrading-to-0.19.md) |
 | "Çalışan REST API örneği nerede?" | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) örneği |
 | "Spring Boot projemde hangi dependency gerekir?" | [Spring Boot Starter](docs/spring-boot-starter.md) |
 | "Oracle provider sözleşmesi nedir?" | [Oracle Provider](docs/oracle-provider.md) |
 | "Birden fazla pod aktif veri setini düzenli olarak nasıl yeniler ve temizler?" | [Periyodik Warm ve Aktif Veri Seti Uzlaştırması](docs/periodik-warm.md) |
+| "COUNT/FACET panolarını önceden hesaplanmış sonuçlarla nasıl sunarım?" | [COUNT/FACET Okuma Modeli](docs/count-facet-read-model.md) |
 | "Entity, relation, projection ve route contract ne demek?" | [Kavramlar ve Kabuller](docs/kavramlar-ve-kabuller.md) |
 | "Gerçek hayatta nasıl modellemeliyim?" | [Kullanım Senaryosu Örnekleri](docs/use-case-examples.md) |
 | "Redis memory ve performansı nasıl ayarlamalıyım?" | [Production Tuning Rehberi](docs/production-tuning-rehberi.md) |
@@ -190,13 +219,13 @@ Bu sıra ürün sözleşmesini, sınırsız CRUD metotlarıyla başlamaktan daha
 
 ## 5 Dakikada Spring Boot Kurulumu
 
-`cachedb.version` değerini kullandığın yayımlanmış sürümle aynı tut. Aşağıdaki örnek
-`0.18.1` içindir. Bu sürüm kimlik doğrulaması istemeyen
-Maven deposundan ve GitHub Release paketinden indirilebilir.
+BOM, processor ve sağlayıcı starter sürümlerini eşitleyin. Aşağıdaki örnek `0.19.0` içindir;
+kimlik doğrulaması istemeyen CacheDB Maven deposunu veya sürüm paketini kullanmadan önce
+gerçek paket erişimini ve sağlama toplamlarını sürüm sayfasından doğrulayın.
 
 ```xml
 <properties>
-    <cachedb.version>0.18.1</cachedb.version>
+    <cachedb.version>0.19.0</cachedb.version>
     <jedis.version>5.2.0</jedis.version>
 </properties>
 

@@ -1,0 +1,120 @@
+name: EmaTech T1 and v019 Feature Performance Gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: Existing approved benchmark namespace
+        required: true
+        type: string
+      pod:
+        description: Idle approved benchmark pod with fresh six-hour deadline; no provisioning
+        required: true
+        type: string
+      container:
+        description: Java/Maven/PowerShell benchmark container
+        required: true
+        type: string
+      workspace:
+        description: Clean matching checkout, absolute path at or below /workspace
+        required: true
+        type: string
+      redis:
+        description: Exclusive disposable Redis endpoint reachable from the benchmark pod
+        required: true
+        type: string
+      baseline_jar:
+        description: Preserved original baseline JAR, absolute path below /workspace
+        required: true
+        type: string
+      baseline_sha256:
+        description: Independently recorded original baseline SHA256, not a candidate-manifest value
+        required: true
+        type: string
+      memory_limit:
+        description: Exact already-qualified container memory limit (Mi/Gi), at least 2Gi
+        required: true
+        type: string
+      cpus:
+        description: Fixed child JVM ActiveProcessorCount, independent of the benchmark-container CPU limit
+        required: true
+        type: choice
+        default: '1'
+        options: ['1', '2']
+      pod_cpu_limit:
+        description: Sum of regular-container CPU limits; 2 means Maven 1 plus Redis 1, not Maven 2
+        required: true
+        type: string
+        default: '2'
+      container_cpu_limit:
+        description: Exact Maven container CPU limit and request, separate from pod sum and child count
+        required: true
+        type: string
+        default: '1'
+      runtime_version:
+        description: Candidate SDK Maven version in the verified source checkout
+        required: true
+        type: string
+        default: '0.19.0'
+
+permissions:
+  contents: read
+
+# No parallel loads on the same scarce benchmark capacity, even across branches/attempts.
+concurrency:
+  group: cachedb-ematech-performance
+  cancel-in-progress: false
+
+jobs:
+  feature-performance:
+    if: github.ref == 'refs/heads/main'
+    environment: cachedb-performance-ematech
+    # Existing authenticated Linux control runner: standalone resource checks only.
+    # SDK builds, tests and benchmark JVMs execute exclusively in EmaTech Kubernetes.
+    runs-on: [self-hosted, linux, cachedb-ematech-control]
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Complete T1 and feature numerical gates in the approved EmaTech pod
+        id: gates
+        timeout-minutes: 180
+        uses: ./.github/actions/cachedb-v019-performance
+        with:
+          namespace: ${{ inputs.namespace }}
+          pod: ${{ inputs.pod }}
+          container: ${{ inputs.container }}
+          workspace: ${{ inputs.workspace }}
+          redis: ${{ inputs.redis }}
+          baseline-jar: ${{ inputs.baseline_jar }}
+          baseline-sha256: ${{ inputs.baseline_sha256 }}
+          memory-limit: ${{ inputs.memory_limit }}
+          cpus: ${{ inputs.cpus }}
+          pod-cpu-limit: ${{ inputs.pod_cpu_limit }}
+          container-cpu-limit: ${{ inputs.container_cpu_limit }}
+          runtime-version: ${{ inputs.runtime_version }}
+      - name: Publish numerical summaries without suppressing failed gates
+        if: always()
+        shell: bash
+        env:
+          EVIDENCE: ${{ steps.gates.outputs.evidence-directory }}
+        run: |
+          set -eu
+          test -n "$EVIDENCE"
+          for f in t1-gates.log feature-gates.log; do
+            if test -f "$EVIDENCE/$f"; then
+              printf '\n## %s\n\n' "$f" >> "$GITHUB_STEP_SUMMARY"
+              cat "$EVIDENCE/$f" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          printf '\nNumerical/coverage gates are not release or provider acceptance.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain every available raw attempt, failure log, source snapshot and exact candidate JAR
+        if: always()
+        timeout-minutes: 15
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ematech-t1-t9-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/ci-t9-*/
+          if-no-files-found: error
+          retention-days: 30

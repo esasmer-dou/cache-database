@@ -14,6 +14,14 @@ import java.util.Map;
 public class CacheDbSpringProperties implements InitializingBean {
 
     private boolean enabled = true;
+    private final AsyncProperties async = new AsyncProperties();
+    public AsyncProperties getAsync() { return async; }
+
+    public static final class AsyncProperties {
+        private int maxConcurrent = 1024;
+        public int getMaxConcurrent() { return maxConcurrent; }
+        public void setMaxConcurrent(int value) { maxConcurrent = value; }
+    }
     private com.reactor.cachedb.core.config.CacheRuntimeRole runtimeRole = com.reactor.cachedb.core.config.CacheRuntimeRole.FULL;
     public com.reactor.cachedb.core.config.CacheRuntimeRole getRuntimeRole() { return runtimeRole; }
     public void setRuntimeRole(com.reactor.cachedb.core.config.CacheRuntimeRole role) {
@@ -21,6 +29,8 @@ public class CacheDbSpringProperties implements InitializingBean {
     }
     private Profile profile = Profile.DEFAULT;
     private final RedisProperties redis = new RedisProperties();
+    private final NearCacheProperties nearCache = new NearCacheProperties();
+    public NearCacheProperties getNearCache() { return nearCache; }
     private final SqlProperties sql = new SqlProperties();
     private final AdminUiProperties admin = new AdminUiProperties();
     private final RegistrationProperties registration = new RegistrationProperties();
@@ -88,7 +98,17 @@ public class CacheDbSpringProperties implements InitializingBean {
 
     @Override
     public void afterPropertiesSet() {
+        try { nearCache.toConfig(); }
+        catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("Invalid CacheDB property cachedb.near-cache: " + invalid.getMessage(), invalid);
+        }
         validatePool("cachedb.redis.pool", redis.getPool());
+        if (async.getMaxConcurrent() < 1 || async.getMaxConcurrent() > 65_536)
+            throw invalid("cachedb.async.max-concurrent", "must be in 1..65536");
+        try { redis.getReadCoalescing().toConfig().resolveMaxInFlight(redis.getPool().getMaxTotal()); }
+        catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("Invalid CacheDB property cachedb.redis.read-coalescing: " + invalid.getMessage(), invalid);
+        }
         if (redis.getUri() == null || redis.getUri().isBlank()) {
             throw invalid("cachedb.redis.uri", "must not be blank");
         }
@@ -247,9 +267,57 @@ public class CacheDbSpringProperties implements InitializingBean {
         METADATA_ONLY
     }
 
+    public static final class NearCacheProperties {
+        private final com.reactor.cachedb.core.config.NearCacheInvalidationConfig defaults = com.reactor.cachedb.core.config.NearCacheInvalidationConfig.defaults();
+        private com.reactor.cachedb.core.config.NearCacheInvalidationMode invalidationMode = defaults.mode();
+        public com.reactor.cachedb.core.config.NearCacheInvalidationMode getInvalidationMode() { return invalidationMode; }
+        public void setInvalidationMode(com.reactor.cachedb.core.config.NearCacheInvalidationMode value) { invalidationMode = java.util.Objects.requireNonNull(value, "invalidationMode"); }
+        private boolean publishLegacyInvalidations = defaults.publishLegacyInvalidations();
+        public boolean isPublishLegacyInvalidations() { return publishLegacyInvalidations; }
+        public void setPublishLegacyInvalidations(boolean value) { publishLegacyInvalidations = value; }
+        private int maxMasters = defaults.maxMasters();
+        public int getMaxMasters() { return maxMasters; }
+        public void setMaxMasters(int value) { maxMasters = value; }
+        private int maxNodes = defaults.maxNodes();
+        public int getMaxNodes() { return maxNodes; }
+        public void setMaxNodes(int value) { maxNodes = value; }
+        private int maxNamespaces = defaults.maxNamespaces();
+        public int getMaxNamespaces() { return maxNamespaces; }
+        public void setMaxNamespaces(int value) { maxNamespaces = value; }
+        private int ioTimeoutMillis = defaults.ioTimeoutMillis();
+        public int getIoTimeoutMillis() { return ioTimeoutMillis; }
+        public void setIoTimeoutMillis(int value) { ioTimeoutMillis = value; }
+        private int heartbeatMillis = defaults.heartbeatMillis();
+        public int getHeartbeatMillis() { return heartbeatMillis; }
+        public void setHeartbeatMillis(int value) { heartbeatMillis = value; }
+        private int healthTimeoutMillis = defaults.healthTimeoutMillis();
+        public int getHealthTimeoutMillis() { return healthTimeoutMillis; }
+        public void setHealthTimeoutMillis(int value) { healthTimeoutMillis = value; }
+        private int maxAttempts = defaults.maxAttempts();
+        public int getMaxAttempts() { return maxAttempts; }
+        public void setMaxAttempts(int value) { maxAttempts = value; }
+        private int initialBackoffMillis = defaults.initialBackoffMillis();
+        public int getInitialBackoffMillis() { return initialBackoffMillis; }
+        public void setInitialBackoffMillis(int value) { initialBackoffMillis = value; }
+        private int maxBackoffMillis = defaults.maxBackoffMillis();
+        public int getMaxBackoffMillis() { return maxBackoffMillis; }
+        public void setMaxBackoffMillis(int value) { maxBackoffMillis = value; }
+        private int retryCooldownMillis = defaults.retryCooldownMillis();
+        public int getRetryCooldownMillis() { return retryCooldownMillis; }
+        public void setRetryCooldownMillis(int value) { retryCooldownMillis = value; }
+        public com.reactor.cachedb.core.config.NearCacheInvalidationConfig toConfig() {
+            return new com.reactor.cachedb.core.config.NearCacheInvalidationConfig(
+                    invalidationMode, publishLegacyInvalidations, maxMasters, maxNodes, maxNamespaces,
+                    ioTimeoutMillis, heartbeatMillis, healthTimeoutMillis, maxAttempts,
+                    initialBackoffMillis, maxBackoffMillis, retryCooldownMillis);
+        }
+    }
+
     public static final class RedisProperties {
         private String uri = "redis://127.0.0.1:6379";
         private final PoolProperties pool = PoolProperties.foregroundDefaults();
+        private final ReadCoalescingProperties readCoalescing = new ReadCoalescingProperties();
+        public ReadCoalescingProperties getReadCoalescing() { return readCoalescing; }
         private final BackgroundRedisProperties background = new BackgroundRedisProperties();
 
         public String getUri() {
@@ -266,6 +334,42 @@ public class CacheDbSpringProperties implements InitializingBean {
 
         public BackgroundRedisProperties getBackground() {
             return background;
+        }
+    }
+
+    public static final class ReadCoalescingProperties {
+        private static final com.reactor.cachedb.core.config.RedisReadCoalescingConfig DEFAULTS =
+                com.reactor.cachedb.core.config.RedisReadCoalescingConfig.defaults();
+        private boolean enabled = DEFAULTS.enabled();
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean value) { enabled = value; }
+        private int maxBatchKeys = DEFAULTS.maxBatchKeys();
+        public int getMaxBatchKeys() { return maxBatchKeys; }
+        public void setMaxBatchKeys(int value) { maxBatchKeys = value; }
+        private int maxQueuedRequests = DEFAULTS.maxQueuedRequests();
+        public int getMaxQueuedRequests() { return maxQueuedRequests; }
+        public void setMaxQueuedRequests(int value) { maxQueuedRequests = value; }
+        private int maxInFlightBatches = DEFAULTS.maxInFlightBatches();
+        public int getMaxInFlightBatches() { return maxInFlightBatches; }
+        public void setMaxInFlightBatches(int value) { maxInFlightBatches = value; }
+        private long maxQueuedBytes = DEFAULTS.maxQueuedBytes();
+        public long getMaxQueuedBytes() { return maxQueuedBytes; }
+        public void setMaxQueuedBytes(long value) { maxQueuedBytes = value; }
+        private long maxReplyBytes = DEFAULTS.maxReplyBytes();
+        public long getMaxReplyBytes() { return maxReplyBytes; }
+        public void setMaxReplyBytes(long value) { maxReplyBytes = value; }
+        private long maxLiveReplyBytes = DEFAULTS.maxLiveReplyBytes();
+        public long getMaxLiveReplyBytes() { return maxLiveReplyBytes; }
+        public void setMaxLiveReplyBytes(long value) { maxLiveReplyBytes = value; }
+        private long timeoutMillis = DEFAULTS.timeoutMillis();
+        public long getTimeoutMillis() { return timeoutMillis; }
+        public void setTimeoutMillis(long value) { timeoutMillis = value; }
+        private int maxAsyncDirect = DEFAULTS.maxAsyncDirect();
+        public int getMaxAsyncDirect() { return maxAsyncDirect; }
+        public void setMaxAsyncDirect(int value) { maxAsyncDirect = value; }
+        public com.reactor.cachedb.core.config.RedisReadCoalescingConfig toConfig() {
+            return new com.reactor.cachedb.core.config.RedisReadCoalescingConfig(enabled, maxBatchKeys,
+                    maxQueuedRequests, maxInFlightBatches, maxQueuedBytes, maxReplyBytes, timeoutMillis, maxAsyncDirect, maxLiveReplyBytes);
         }
     }
 

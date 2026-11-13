@@ -5,12 +5,13 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.reactor.cachedb.core.config.*;
 import com.reactor.cachedb.core.model.*;
 import com.reactor.cachedb.core.query.*;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import redis.clients.jedis.*;
+import redis.clients.jedis.executors.CommandExecutor;
 
 @EnabledIfSystemProperty(named="cachedb.snapshot.redis", matches="true")
 class RedisQueryIndexDiffRedisTest {
@@ -29,11 +30,14 @@ class RedisQueryIndexDiffRedisTest {
         };
         try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
             var keys = new RedisKeyStrategy("composite-" + UUID.randomUUID());
-            var manager = new RedisQueryIndexManager<>(redis,metadata,CODEC,keys,null,QueryIndexConfig.defaults(),RelationConfig.defaults(),new QueryEvaluator(),null);
+            var scoped = new RecordingOperations(redis);
+            var manager = new RedisQueryIndexManager<>(scoped,metadata,CODEC,keys,null,QueryIndexConfig.defaults(),RelationConfig.defaults(),new QueryEvaluator(),null);
             manager.reindex(new Row(1L,7L,"a|b:c Ş",10L));
-            long intersections = calls(redis,"sinter");
+            scoped.reset();
             assertEquals(List.of("1"),manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("tenant_id",7L),QueryFilter.eq("name","a|b:c Ş"))));
-            assertEquals(intersections,calls(redis,"sinter"));
+            assertEquals(0,scoped.intersections);
+            assertEquals(0,scoped.calls("SINTER"));
+            assertEquals(0,scoped.scriptsCalling("SINTER"));
             manager.reindex(new Row(1L,8L,"new",10L));
             assertTrue(manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("tenant_id",7L),QueryFilter.eq("name","a|b:c Ş"))).isEmpty());
             assertEquals(List.of("1"),manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("tenant_id",8L),QueryFilter.eq("name","new"))));
@@ -71,25 +75,38 @@ class RedisQueryIndexDiffRedisTest {
     @Test void unchangedRowsUseOneReadPipelineAndNoIndexWrites() {
         try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
             var keys = new RedisKeyStrategy("diff-test-"+UUID.randomUUID());
-            AtomicInteger pipelines = new AtomicInteger();
-            RedisClientOperations counted = new RedisClientOperations() {
-                public UnifiedJedis commands() { return redis; }
-                public AbstractPipeline pipeline() { pipelines.incrementAndGet(); return redis.pipelined(); }
-                public void close() {}
-            };
+            var counted = new RecordingOperations(redis);
             var config = QueryIndexConfig.builder().prefixIndexEnabled(true).textIndexEnabled(true).build();
             var manager = new RedisQueryIndexManager<>(counted,METADATA,CODEC,keys,null,config,
                     RelationConfig.defaults(),new QueryEvaluator(),null);
             Row row = new Row(1L,7L,"Istanbul stock",10L);
             manager.reindexBatch(List.of(row));
-            assertEquals(2,pipelines.get());
-            long writes = calls(redis,"hset") + calls(redis,"sadd") + calls(redis,"zadd") + calls(redis,"zrem");
+            assertEquals(2,counted.pipelines.size());
+            assertEquals(2,counted.syncs);
+            String meta=keys.indexMetaKey("rows",1L);
+            String exact=keys.indexExactKey("rows","name",RedisIndexKeySpace.encodeKeyPart("Istanbul stock"));
+            String partition=keys.indexPartitionSortKey("rows","tenant_id",RedisIndexKeySpace.encodeKeyPart("7"),"score");
+            var beforeMeta=redis.hgetAll(meta);
+            assertFalse(beforeMeta.isEmpty());
+            assertEquals(Set.of("1"),redis.smembers(keys.indexAllKey("rows")));
+            assertEquals(Set.of("1"),redis.smembers(exact));
+            assertEquals(10d,redis.zscore(keys.indexSortKey("rows","score"),"1"));
+            assertEquals(10d,redis.zscore(partition,"1"));
+            counted.reset();
             manager.reindexBatch(List.of(row,row));
-            assertEquals(3,pipelines.get());
-            assertEquals(writes,calls(redis,"hset") + calls(redis,"sadd") + calls(redis,"zadd") + calls(redis,"zrem"));
-            long scoreWrites = calls(redis,"zadd");
+            assertEquals(1,counted.pipelines.size());
+            assertEquals(1,counted.syncs);
+            assertTrue(counted.direct.isEmpty(),"Unchanged rows must not issue direct commands");
+            assertEquals(List.of(List.of("HGETALL",meta)),counted.pipelines.getFirst(),
+                    "Deduplicate IDs and submit exactly one metadata read, with zero index writes");
+            assertEquals(beforeMeta,redis.hgetAll(meta));
+            assertEquals(Set.of("1"),redis.smembers(keys.indexAllKey("rows")));
+            assertEquals(Set.of("1"),redis.smembers(exact));
+            assertEquals(10d,redis.zscore(keys.indexSortKey("rows","score"),"1"));
+            assertEquals(10d,redis.zscore(partition,"1"));
+            counted.reset();
             manager.reindex(new Row(1L,7L,"new stock",10L));
-            assertEquals(scoreWrites,calls(redis,"zadd"));
+            assertEquals(0,counted.calls("ZADD"),"A text-only change must not rewrite sorted scores");
             assertTrue(manager.resolveCandidateIds(QuerySpec.where(QueryFilter.eq("name","new stock"))).contains("1"));
             assertTrue(manager.resolveCandidateIds(QuerySpec.where(QueryFilter.eq("name","Istanbul stock"))).isEmpty());
             manager.reindex(new Row(1L,8L,null,20L));
@@ -103,40 +120,41 @@ class RedisQueryIndexDiffRedisTest {
     @Test void lazyAndProbesOnlySmallCandidatesAndInUsesOneBatch() {
         try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
             var keys = new RedisKeyStrategy("lazy-index-" + UUID.randomUUID());
-            var probes = new AtomicInteger(); var batches = new AtomicInteger();
-            RedisClientOperations client = new RedisClientOperations() {
-                public UnifiedJedis commands() { return redis; }
-                public Set<String> probeMembers(String key, Collection<String> candidates) {
-                    probes.incrementAndGet(); return RedisClientOperations.super.probeMembers(key, candidates);
-                }
-                public Map<String, Set<String>> smembersBatch(Collection<String> names, int max) {
-                    batches.incrementAndGet(); return RedisClientOperations.super.smembersBatch(names, max);
-                }
-            };
+            var client = new RecordingOperations(redis);
             var manager = new RedisQueryIndexManager<>(client, METADATA, CODEC, keys, null,
                     QueryIndexConfig.defaults(), RelationConfig.defaults(), new QueryEvaluator(), null);
             manager.reindexBatch(List.of(new Row(1L, 7L, "one", 1L), new Row(2L, 7L, "two", 2L), new Row(3L, 7L, "three", 3L)));
-            long members = calls(redis, "smembers");
+            client.reset();
             assertTrue(manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("id", 999L), QueryFilter.eq("tenant_id", 7L))).isEmpty());
-            assertTrue(calls(redis, "smembers") - members <= 1, "Empty first candidate must not materialize later indexes");
+            assertTrue(client.membershipKeys.stream().mapToInt(List::size).sum() <= 1,
+                    "Empty first candidate must not materialize later indexes");
+            assertTrue(client.setReadKeys().size() <= 1,
+                    "Direct and Lua command plans must not fetch later memberships either");
+            client.reset();
             assertEquals(List.of("1"), manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("id", 1L), QueryFilter.eq("tenant_id", 7L))));
-            assertEquals(1, probes.get());
+            assertEquals(1,client.probes);
+            client.reset();
             var values = new ArrayList<Long>(); for (long i = 1; i <= 20; i++) values.add(i);
             assertEquals(Set.of("1", "2", "3"), Set.copyOf(manager.resolveCandidateIds(QuerySpec.where(QueryFilter.in("score", values)))));
-            assertEquals(1, batches.get());
+            assertEquals(1,client.membershipKeys.size());
+            assertEquals(1,client.scriptsCalling("SMEMBERS"));
+            assertEquals(0,client.calls("SMEMBERS"),"IN must not degrade into direct per-value set reads");
+            assertTrue(client.pipelines.isEmpty(),"Same-slot IN must use the single bounded server request");
         }
     }
 
     @Test void largerSameSlotExactPredicatesIntersectOnServerWithBoundedReply() {
         try (var redis = new JedisPooled(RedisTestEndpoint.uri())) {
             var keys = new RedisKeyStrategy("sinter-index-" + UUID.randomUUID());
-            var manager = new RedisQueryIndexManager<>(redis, METADATA, CODEC, keys, null,
+            var client = new RecordingOperations(redis);
+            var manager = new RedisQueryIndexManager<>(client, METADATA, CODEC, keys, null,
                     QueryIndexConfig.defaults(), RelationConfig.defaults(), new QueryEvaluator(), null);
             var rows = new ArrayList<Row>(); for (long i = 1; i <= 200; i++) rows.add(new Row(i, 7L, "shared", i));
             manager.reindexBatch(rows);
-            long calls = calls(redis, "sinter");
+            client.reset();
             assertEquals(200, manager.resolveCandidateIds(QuerySpec.allOf(QueryFilter.eq("tenant_id", 7L), QueryFilter.eq("name", "shared"))).size());
-            assertEquals(calls + 1, calls(redis, "sinter"));
+            assertEquals(1,client.intersections);
+            assertEquals(1,client.scriptsCalling("SINTER"),"Submit exactly one real bounded server-intersection plan");
         }
     }
 
@@ -157,15 +175,81 @@ class RedisQueryIndexDiffRedisTest {
             assertThrows(redis.clients.jedis.exceptions.JedisDataException.class, () -> operations.smembersBatch(List.of(prefix + ":too-large"), 1));
         }
     }
-    private static long calls(JedisPooled redis,String command) {
-        Object response = redis.sendCommand(Protocol.Command.INFO,"commandstats");
-        String info = response instanceof byte[] bytes ? new String(bytes,java.nio.charset.StandardCharsets.UTF_8) : String.valueOf(response);
-        for (String line : info.split("\n")) {
-            if (line.startsWith("cmdstat_"+command+":")) {
-                int start = line.indexOf("calls=")+6;
-                return Long.parseLong(line.substring(start,line.indexOf(',',start)));
-            }
+    /** Observe only this manager's commands; every response still comes from its real Redis transport. */
+    private static final class RecordingOperations implements RedisClientOperations {
+        final JedisPooled redis;
+        final UnifiedJedis commands;
+        final List<List<String>> direct=new ArrayList<>();
+        final List<List<List<String>>> pipelines=new ArrayList<>();
+        final List<List<String>> membershipKeys=new ArrayList<>();
+        int syncs,probes,intersections;
+
+        RecordingOperations(JedisPooled redis){
+            this.redis=redis;
+            commands=new UnifiedJedis(new CommandExecutor(){
+                public <T> T executeCommand(CommandObject<T> command){
+                    direct.add(arguments(command));
+                    return redis.executeCommand(command);
+                }
+                public void close(){} // The enclosing test owns the real client.
+            });
         }
-        return 0;
+        public UnifiedJedis commands(){return commands;}
+        public AbstractPipeline pipeline(){
+            Pipeline real=redis.pipelined();
+            var plan=new ArrayList<List<String>>();
+            pipelines.add(plan);
+            return new AbstractPipeline(new CommandObjects()){
+                protected <T> Response<T> appendCommand(CommandObject<T> command){
+                    plan.add(arguments(command));
+                    return real.appendCommand(command);
+                }
+                public void sync(){syncs++;real.sync();}
+                public void close(){real.close();}
+            };
+        }
+        public Map<String,Set<String>> smembersBatch(Collection<String> names,int maximum){
+            membershipKeys.add(List.copyOf(new LinkedHashSet<>(names)));
+            return RedisClientOperations.super.smembersBatch(names,maximum);
+        }
+        public Set<String> probeMembers(String key,Collection<String> candidates){
+            probes++;
+            return RedisClientOperations.super.probeMembers(key,candidates);
+        }
+        public Optional<Set<String>> intersectSets(List<String> keys,int maximum){
+            intersections++;
+            return RedisClientOperations.super.intersectSets(keys,maximum);
+        }
+        List<List<String>> allCommands(){
+            var result=new ArrayList<>(direct);
+            for(var plan:pipelines)result.addAll(plan);
+            return result;
+        }
+        long calls(String command){
+            return allCommands().stream().filter(args->command.equals(args.getFirst())).count();
+        }
+        long scriptsCalling(String command){
+            // This counts submitted Lua plans, not server-internal commands or fabricated round trips.
+            return allCommands().stream().filter(args->args.size()>1&&"EVAL".equals(args.getFirst())
+                    &&args.get(1).contains("redis.call('"+command+"'")).count();
+        }
+        List<String> setReadKeys(){
+            var keys=new ArrayList<String>();
+            for(var args:allCommands()){
+                if("SMEMBERS".equals(args.getFirst()))keys.add(args.get(1));
+                else if(args.size()>2&&"EVAL".equals(args.getFirst())&&args.get(1).contains("redis.call('SMEMBERS'")){
+                    int count=Integer.parseInt(args.get(2));
+                    keys.addAll(args.subList(3,3+count));
+                }
+            }
+            return keys;
+        }
+        void reset(){direct.clear();pipelines.clear();membershipKeys.clear();syncs=0;probes=0;intersections=0;}
+        private static List<String> arguments(CommandObject<?> command){
+            var values=new ArrayList<String>();
+            for(var argument:command.getArguments())values.add(new String(argument.getRaw(),StandardCharsets.UTF_8));
+            return List.copyOf(values);
+        }
+        public void close(){} // Borrowed transport; never close the enclosing test's client.
     }
 }

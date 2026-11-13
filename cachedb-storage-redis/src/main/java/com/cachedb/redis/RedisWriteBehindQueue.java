@@ -89,7 +89,11 @@ public final class RedisWriteBehindQueue implements WriteBehindQueue {
 
     @Override
     public <T, ID> void enqueue(WriteOperation<T, ID> operation) {
-        if (operation.columns().size() > maxColumnsPerOperation) {
+        com.reactor.cachedb.core.protection.TenantProtectionGate.requireLegacy(operation.metadata());
+        int wireLimit = maxColumnsPerOperation + (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(operation.metadata()) ? 2 : 0);
+        if (operation.type() != com.reactor.cachedb.core.model.OperationType.DELETE)
+            com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateQueuedColumns(operation.metadata(), operation.columns());
+        if (operation.columns().size() > wireLimit) {
             throw new IllegalArgumentException(
                     "Operation column count "
                             + operation.columns().size()

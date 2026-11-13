@@ -1,0 +1,128 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: DEPOT_NAME
+  namespace: DEPOT_NAMESPACE
+  labels: {cachedb-artifact-depot: DEPOT_NAME}
+spec:
+  activeDeadlineSeconds: 3600
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  terminationGracePeriodSeconds: 5
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile: {type: RuntimeDefault}
+  initContainers:
+    - name: node-tools
+      image: node:22-bookworm-slim@sha256:3ed748ce9dea62d2f0f0205cdbb6823106d9f973a6f555c402fe2575f8d6e1ae
+      command:
+        - sh
+        - -ec
+        - |
+          umask 077
+          mkdir -p /depot/toolchain/node/bin /depot/toolchain/node/lib/node_modules /depot/input /depot/incoming /depot/published
+          timeout 90 sh -ec '
+            test -f /usr/local/bin/node && test ! -L /usr/local/bin/node
+            test -d /usr/local/lib/node_modules/npm && test ! -L /usr/local/lib/node_modules/npm
+            cp /usr/local/bin/node /depot/toolchain/node/bin/node
+            cp -R /usr/local/lib/node_modules/npm /depot/toolchain/node/lib/node_modules/
+            ln -s ../lib/node_modules/npm/bin/npm-cli.js /depot/toolchain/node/bin/npm
+            ln -s ../lib/node_modules/npm/bin/npx-cli.js /depot/toolchain/node/bin/npx
+            test -f /depot/toolchain/node/bin/npm && test -f /depot/toolchain/node/bin/npx
+          '
+      resources:
+        requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+        limits: {cpu: '1', memory: 256Mi, ephemeral-storage: 2Gi}
+      securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+      volumeMounts: [{name: data, mountPath: /depot}]
+  containers:
+    - name: cache-preparation
+      image: maven:3.9.9-eclipse-temurin-21@sha256:3a4ab3276a087bf276f79cae96b1af04f53731bec53fb2e651aca79e4b10211e
+      command:
+        - bash
+        - -ec
+        - |
+          cd /scripts
+          printf '%s  scripts.sha256\n' "$DEPOT_SCRIPTS_SHA256" | sha256sum --strict --status -c -
+          sha256sum --strict --status -c scripts.sha256
+          exec bash /scripts/prepare-sample-artifact-cache.sh
+      env:
+        - {name: DEPOT_SCRIPTS_SHA256, value: 'DEPOT_SCRIPT_MANIFEST_SHA256'}
+        - {name: POD_UID, valueFrom: {fieldRef: {fieldPath: metadata.uid}}}
+        - {name: HOME, value: /depot/home}
+        - {name: PATH, value: '/depot/toolchain/node/bin:/opt/java/openjdk/bin:/usr/share/maven/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'}
+      resources:
+        requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 256Mi}
+        limits: {cpu: '1', memory: 768Mi, ephemeral-storage: 2Gi}
+      securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+      volumeMounts:
+        - {name: data, mountPath: /depot}
+        - {name: scripts, mountPath: /scripts, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+    - name: depot
+      image: node:22-bookworm-slim@sha256:3ed748ce9dea62d2f0f0205cdbb6823106d9f973a6f555c402fe2575f8d6e1ae
+      command:
+        - sh
+        - -ec
+        - |
+          cd /scripts
+          printf '%s  scripts.sha256\n' "$DEPOT_SCRIPTS_SHA256" | sha256sum --strict --status -c -
+          sha256sum --strict --status -c scripts.sha256
+          exec node --max-old-space-size=64 /scripts/sample-artifact-depot.mjs
+      env:
+        - {name: DEPOT_SCRIPTS_SHA256, value: 'DEPOT_SCRIPT_MANIFEST_SHA256'}
+        - {name: POD_UID, valueFrom: {fieldRef: {fieldPath: metadata.uid}}}
+      ports: [{name: artifacts, containerPort: 8080}]
+      readinessProbe: {tcpSocket: {port: artifacts}, periodSeconds: 3, timeoutSeconds: 1}
+      resources:
+        requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+        limits: {cpu: '1', memory: 128Mi, ephemeral-storage: 2Gi}
+      securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+      volumeMounts:
+        - {name: data, mountPath: /depot, readOnly: true}
+        - {name: scripts, mountPath: /scripts, readOnly: true}
+        - {name: auth, mountPath: /var/run/depot-auth, readOnly: true}
+  volumes:
+    - {name: data, emptyDir: {sizeLimit: 2Gi}}
+    - {name: tmp, emptyDir: {sizeLimit: 32Mi}}
+    - {name: scripts, configMap: {name: DEPOT_NAME, defaultMode: 292}}
+    - {name: auth, secret: {secretName: DEPOT_NAME, defaultMode: 288}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: DEPOT_NAME
+  namespace: DEPOT_NAMESPACE
+  labels: {cachedb-artifact-depot: DEPOT_NAME}
+spec:
+  type: ClusterIP
+  selector: {cachedb-artifact-depot: DEPOT_NAME}
+  ports: [{name: artifacts, port: 8080, targetPort: artifacts, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: DEPOT_NAME
+  namespace: DEPOT_NAMESPACE
+spec:
+  podSelector: {matchLabels: {cachedb-artifact-depot: DEPOT_NAME}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: DEPOT_NAMESPACE}}
+          podSelector: {matchLabels: {cachedb-artifact-client: DEPOT_NAME}}
+      ports: [{port: 8080, protocol: TCP}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.0.0/16, 100.64.0.0/10, 224.0.0.0/4, 240.0.0.0/4]
+      ports: [{port: 443, protocol: TCP}]

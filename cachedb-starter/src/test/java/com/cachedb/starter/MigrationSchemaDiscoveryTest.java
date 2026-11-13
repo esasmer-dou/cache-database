@@ -97,6 +97,54 @@ class MigrationSchemaDiscoveryTest {
         assertTrue(result.warnings().isEmpty());
     }
 
+    @Test
+    void excludesRetainedEmptyActivationMetadataAndItsRouteSuggestionsWithoutDeletingReceipts() throws SQLException {
+        DataSource dataSource = newDataSource("schema-discovery-empty-activation");
+        seedRows(dataSource, List.of(
+                "CREATE TABLE activation_customer (customer_id BIGINT PRIMARY KEY)",
+                "CREATE TABLE CACHEDB_EMPTY_ACTIVATION (activation_id BIGINT PRIMARY KEY, customer_id BIGINT NOT NULL, receipt VARCHAR(32), FOREIGN KEY (customer_id) REFERENCES activation_customer(customer_id))",
+                "INSERT INTO activation_customer VALUES (1)",
+                "INSERT INTO CACHEDB_EMPTY_ACTIVATION VALUES (1, 1, 'retained-receipt')"
+        ));
+
+        MigrationSchemaDiscovery.Result result = new MigrationSchemaDiscovery(dataSource, emptyRegistry()).discover();
+
+        assertEquals(1, result.tables().size());
+        assertTrue(result.tables().get(0).tableName().equalsIgnoreCase("activation_customer"));
+        assertTrue(result.routeSuggestions().isEmpty());
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement();
+             var rows = statement.executeQuery("SELECT receipt FROM CACHEDB_EMPTY_ACTIVATION")) {
+            assertTrue(rows.next());
+            assertEquals("retained-receipt", rows.getString(1));
+            assertFalse(rows.next());
+        }
+    }
+
+    @Test
+    void excludesIdentitySecurityLedgerWithoutResettingHighwater() throws SQLException {
+        DataSource dataSource = newDataSource("schema-discovery-identity-allocator");
+        seedRows(dataSource, List.of(
+                "CREATE TABLE identity_customer (customer_id BIGINT PRIMARY KEY)",
+                "CREATE TABLE CACHEDB_IDENTITY_ALLOCATOR (scope_token VARCHAR(64) PRIMARY KEY, highwater BIGINT, customer_id BIGINT REFERENCES identity_customer(customer_id))",
+                "INSERT INTO identity_customer VALUES (1)",
+                "INSERT INTO CACHEDB_IDENTITY_ALLOCATOR VALUES ('namespace', 135, 1)"
+        ));
+
+        MigrationSchemaDiscovery.Result result = new MigrationSchemaDiscovery(dataSource, emptyRegistry()).discover();
+
+        assertEquals(1, result.tables().size());
+        assertTrue(result.tables().get(0).tableName().equalsIgnoreCase("identity_customer"));
+        assertTrue(result.routeSuggestions().isEmpty());
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement();
+             var rows = statement.executeQuery("SELECT highwater FROM CACHEDB_IDENTITY_ALLOCATOR")) {
+            assertTrue(rows.next());
+            assertEquals(135, rows.getLong(1));
+            assertFalse(rows.next());
+        }
+    }
+
     private DataSource newDataSource(String name) {
         JdbcDataSource dataSource = new JdbcDataSource();
         dataSource.setURL("jdbc:h2:mem:" + name + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");

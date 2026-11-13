@@ -172,11 +172,42 @@ database.writeBatch("cancel-" + requestId)
 
 Yazılabilir entity ve projection'ları önce kaydedin. Kimlik put öncesinde verilmiş
 olmalıdır; batch kimlik tahmin etmez veya eksik alanları birleştirmez. Tam entity verin.
-Üst sınır 100 işlem ve 4 MiB kodlanmış komuttur; stream alan sayısı ve yapılandırılmış
+Üst sınır 100 işlem ve 4 MiB kodlanmış argüman verisidir; stream alan sayısı ve yapılandırılmış
 kolon sınırı da denetlenir. Tekrarlanan entity/kimlik ve hatalı sürüm beklentisi,
 değişiklik yapılmadan reddedilir. Yeniden denemede aynı batch kimliğini kullanın.
 Aynı içerikle tekrar, 24 saat boyunca aynı makbuzu verir. Farklı içerikle aynı kimliği
 kullanmayın; bu süreden sonra tekrar engelleme garantisi varsaymayın.
+
+### 0.19'da Yeniden Deneme Kimliği
+
+Şifrelenmemiş yeni makbuzlarda işlem kimliği; sıralı iş adımlarına, varlık eşlemesine,
+fiziksel hedeflere, atanan değerlere ve açık sürüm koşullarına bağlıdır. Önbelleğe
+kabul, kayıt sınırı, TTL, izleme veya geçersizleştirme bildirimi değişti diye aynı
+istek farklı bir yazma sayılmaz. İç kolon ve projection kayıt sırası standartlaştırılır;
+çağıranın verdiği işlem sırası değiştirilmez. Kabul edilmiş bir tekrar, özgün makbuzu
+döndürür. Kuyruğa ikinci zarf eklemez, sürümü artırmaz, içeriği yeniden yazmaz ve
+makbuzun ya da kaydın TTL süresini uzatmaz.
+
+Örneğin bir pod'da kabul edilen katalog aktarımı, uyarlamalı bellek profili değiştikten
+sonra başka bir pod'da yeniden denenebilir. Batch kimliğini, varlıkları, değerleri ve
+işlem sırasını koruyun. Fiyat, kiracı, hedef eşlemesi veya beklenen sürüm değişmişse
+bu artık farklı bir işlemdir; aynı kimlik kullanılmamalıdır. PATCH, atama niyetini
+korur; içeride okunan aktif sürüm ilk kabulde yine denetlenir. PATCH oluşturmak için
+tam, sürümlü kaydın Redis'te bulunması hâlâ gerekir. Tekrar denetimi, kaynak veriyi
+otomatik birleştirmez ve bu ön koşulu kaldırmaz.
+
+Eski çağıranlar ve yeni mantıksal kimliği içermeyen makbuzlar, cache politikasından
+etkilenebilen eski eşleştirme kuralını korur. Kaydedilmiş özetten özgün iş isteği
+kanıtlanamayacağı için bunlar otomatik tamamlanmaz veya yeniden yazılmaz. Karma
+sürüm geçişinde eski tekrarların ayarlarını sabit tutun. Sonucu belirsiz bir yazmayı
+yeni batch kimliğiyle göndermek yerine önce sonucunu uzlaştırın. Şifreli batch'lerin
+anahtarlı işlem kimliği ve şifreleme sözleşmeleri korunur. Tekrar metadata'sı da
+100 işlem ve 4 MiB argüman verisi sınırları içindedir. Redis anahtar adları ve RESP
+çerçevesi ek ağ verisi oluşturur; bu sınır toplam heap bütçesi değildir. Kaydedilmiş
+stream ve sürüm alanlarının uzunluğu okunmadan önce denetlenir; biçimleri de geçerli
+ve standart olmalıdır. Bozuk veya eksik makbuz, yeniden yazılmadan, sürüm artırılmadan
+ve TTL uzatılmadan reddedilir. Redis'e yazma yetkisi güven sınırının içindedir; makbuz
+özeti, depodaki keyfî değişikliklere karşı kimlik doğrulama sağlamaz.
 
 Redis, içerik/sürüm/silme işaretlerini ve desteklenen kayıtlı projection içeriklerini
 tek işlemde değiştirir. SQL kuyruğuna bölünemeyen tek zarf bırakır. Sorgu indeksleri

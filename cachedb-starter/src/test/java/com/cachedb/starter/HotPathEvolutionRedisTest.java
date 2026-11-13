@@ -277,7 +277,10 @@ class HotPathEvolutionRedisTest {
         Fixture(CachePolicy policy, Source source, String prefix) {
             this.prefix = prefix; this.keys = new RedisKeyStrategy(prefix);
             var jdbc = new JdbcDataSource(); jdbc.setURL("jdbc:h2:mem:" + prefix);
-            RedisClientOperations client = new RedisClientOperations() {
+            class TrackingClient implements RedisClientOperations, RedisTrackingConnectionProvider {
+                public List<RedisTrackingNode> trackingNodes(int maximumNodes) {
+                    return new JedisPooledOperations(redis).trackingNodes(maximumNodes);
+                }
                 public redis.clients.jedis.UnifiedJedis commands() { return redis; }
                 public boolean clustered() { return emulateCluster; }
                 public List<String> mget(String... keys) {
@@ -300,18 +303,61 @@ class HotPathEvolutionRedisTest {
                     return result;
                 }
                 public void close() { }
-            };
+            }
+            RedisClientOperations client = new TrackingClient();
             database = new CacheDatabase(client, jdbc, CacheDatabaseConfig.builder()
                     .runtimeRole(CacheRuntimeRole.CLIENT_ONLY)
                     .keyspace(KeyspaceConfig.builder().keyPrefix(prefix).build())
                     .writeBehind(WriteBehindConfig.builder().streamKey(prefix + ":writes")
                             .deadLetterStreamKey(prefix + ":deadletters").consumerGroup(prefix).build())
-                    .readThrough(ReadThroughConfig.builder().mode(ReadThroughMode.READ_THROUGH_BY_ID).build()).build());
+                    .readThrough(ReadThroughConfig.builder().mode(ReadThroughMode.READ_THROUGH_BY_ID).build()).build(),
+                    // These tests deliberately observe legacy MGET/refresh instrumentation.
+                    com.reactor.cachedb.core.config.CacheRuntimeOptions.builder()
+                            .nearCacheInvalidation(NearCacheInvalidationConfig.builder()
+                                    .mode(NearCacheInvalidationMode.PUBSUB).build())
+                            .redisReadCoalescing(RedisReadCoalescingConfig.builder().enabled(false).build()).build());
             database.register(METADATA, codec, policy, null, source, source, source);
             repository = database.repository(METADATA, codec, policy);
             database.start();
         }
-        public void close() { database.close(); redis.close(); }
+        public void close() {
+            try { database.close(); }
+            finally {
+                try {
+                    String cursor = "0";
+                    boolean complete = false;
+                    for (int round = 0; round < 256; round++) {
+                        var scan = redis.scan(cursor, new redis.clients.jedis.params.ScanParams()
+                                .match(prefix + ":*").count(512));
+                        if (scan.getResult().size() > 4096)
+                            throw new IllegalStateException("Fixture cleanup reply exceeds its key budget");
+                        if (!scan.getResult().isEmpty()) redis.unlink(scan.getResult().toArray(String[]::new));
+                        cursor = scan.getCursor();
+                        if ("0".equals(cursor)) { complete = true; break; }
+                    }
+                    if (!complete) throw new IllegalStateException("Fixture cleanup scan budget exceeded");
+                } finally { redis.close(); }
+            }
+        }
+    }
+
+    @Test void fixtureCleanupRemovesItsIndexesAndVersionsWithoutTouchingAnotherFixture() {
+        try (var peer = new Fixture(CachePolicy.defaults(), new Source())) {
+            peer.repository.save(new Row(2L, "peer", 2));
+            String version;
+            String index;
+            var isolated = new Fixture(CachePolicy.defaults(), new Source());
+            try (isolated) {
+                isolated.repository.save(new Row(1L, "isolated", 1));
+                version = isolated.keys.versionKey("evolution", 1L);
+                index = isolated.keys.indexAllKey("evolution");
+                assertTrue(peer.redis.exists(version));
+                assertTrue(peer.redis.exists(index));
+            }
+            assertFalse(peer.redis.exists(version));
+            assertFalse(peer.redis.exists(index));
+            assertEquals("peer", peer.repository.findById(2L).orElseThrow().name);
+        }
     }
 
     @Test void sixtyFourRepositoryMissesUseOneSourceLoadAndNeverShareMutableEntities() throws Exception {
@@ -628,7 +674,14 @@ class HotPathEvolutionRedisTest {
     @Test void softExpiredReadReturnsBeforeRedisRefreshAndLaterObservesUpdatedPayload() throws Exception {
         var policy = CachePolicy.builder().nearCachePolicy(new NearCachePolicy(32, 4, 65536, 1)).build();
         try (var fixture = new Fixture(policy, new Source())) {
-            fixture.repository.save(new Row(1L, "old", 1)); awaitNear(fixture, 1L);
+            var invalidation = fixture.database.nearCacheCoordinator();
+            awaitCondition(invalidation::connected, "Legacy invalidation subscription did not become ready");
+            long received = invalidation.invalidationsReceived();
+            fixture.repository.save(new Row(1L, "old", 1));
+            // Warm only after the seed write's asynchronous invalidation has actually been consumed.
+            awaitCondition(() -> invalidation.invalidationsReceived() > received,
+                    "Seed write invalidation was not consumed");
+            awaitNear(fixture, 1L);
             fixture.refreshGate = new CountDownLatch(1);
             fixture.redis.mset(fixture.keys.entityKey("evolution", 1L), fixture.codec.toRedisValue(new Row(1L, "fresh", 2)),
                     fixture.keys.versionKey("evolution", 1L), "2");
@@ -642,6 +695,11 @@ class HotPathEvolutionRedisTest {
     }
     private static void awaitNear(Fixture fixture, Long id) throws Exception {
         awaitNear(fixture,fixture.repository,id);
+    }
+    private static void awaitCondition(java.util.function.BooleanSupplier condition, String failure) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(2);
+        assertTrue(condition.getAsBoolean(), failure);
     }
     private static <T> void awaitNear(Fixture fixture,EntityRepository<T,Long> repository,Long id) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);

@@ -1,0 +1,309 @@
+name: CacheDB T1 and v019 Performance Gates
+description: Bounded orchestration on an existing approved EmaTech benchmark pod; no provisioning.
+inputs:
+  namespace:
+    description: Existing approved benchmark pod namespace
+    required: true
+  pod:
+    description: Existing benchmark pod with a fresh six-hour deadline and fixed resources
+    required: true
+  container:
+    description: Existing Java/Maven/PowerShell benchmark container, not the Redis container
+    required: true
+  workspace:
+    description: Existing clean checkout inside /workspace, matching GITHUB_SHA
+    required: true
+  redis:
+    description: Exclusive disposable Redis endpoint in that same qualified environment
+    required: true
+  baseline-jar:
+    description: Absolute preserved original baseline JAR path inside /workspace
+    required: true
+  baseline-sha256:
+    description: Independently recorded immutable baseline SHA256
+    required: true
+  cpus:
+    description: Fixed child JVM ActiveProcessorCount, identical to the root paired gate
+    default: '1'
+  pod-cpu-limit:
+    description: Exact sum of regular-container CPU limits (2 for Maven 1 plus Redis 1), not a shared cgroup quota
+    required: true
+  container-cpu-limit:
+    description: Exact Java/Maven container CPU limit and request, separate from the pod sum and child CPU count
+    default: '1'
+  redis-container:
+    description: Co-located Redis container with CPU limit 1 and request 200m
+    default: 'redis'
+  memory-limit:
+    description: Exact approved benchmark-container memory limit, at least 2Gi, never changed by this action
+    required: true
+  runtime-version:
+    description: Final 0.19.0 candidate SDK Maven coordinates, installed from the verified checkout
+    default: '0.19.0'
+outputs:
+  evidence-directory:
+    description: Local collected raw evidence directory
+    value: ${{ steps.target.outputs.evidence }}
+runs:
+  using: composite
+  steps:
+    - id: target
+      name: Validate the EmaTech attachment
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        POD: ${{ inputs.pod }}
+        CONTAINER: ${{ inputs.container }}
+        REDIS_CONTAINER: ${{ inputs.redis-container }}
+        CONTAINER_CPU_LIMIT: ${{ inputs.container-cpu-limit }}
+        RESOURCE_GUARD: ${{ github.workspace }}/tools/ci/resource-guard/target/resource-guard.jar
+        WORK: ${{ inputs.workspace }}
+        REDIS: ${{ inputs.redis }}
+        BASELINE: ${{ inputs.baseline-jar }}
+        BASELINE_SHA: ${{ inputs.baseline-sha256 }}
+        CPUS: ${{ inputs.cpus }}
+        POD_CPU_LIMIT: ${{ inputs.pod-cpu-limit }}
+        VERSION: ${{ inputs.runtime-version }}
+        MEMORY: ${{ inputs.memory-limit }}
+      run: |
+        set -euo pipefail
+        for utility in kubectl timeout git tar java; do command -v "$utility" >/dev/null; done
+        for name in "$NS" "$POD" "$CONTAINER" "$REDIS_CONTAINER"; do
+          [[ "$name" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || exit 2
+          test "${#name}" -le 253
+        done
+        for path in "$WORK" "$BASELINE"; do
+          [[ "$path" =~ ^/workspace(/[A-Za-z0-9_.-]+)*$ ]] || exit 2
+          case "$path" in */../*|*/./*|*/..|*/.) exit 2 ;; esac
+        done
+        [[ "$BASELINE_SHA" =~ ^[0-9A-Fa-f]{64}$ ]]
+        [[ "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$ ]]
+        [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] && [[ "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+        case "$CPUS" in 1|2) ;; *) exit 2 ;; esac
+        case "$REDIS" in ''|*'@'*|*[![:graph:]]*) exit 2 ;; esac
+        test "${#REDIS}" -le 1024
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        [[ "$MEMORY" =~ ^([0-9]+)(Mi|Gi)$ ]]
+        amount=${BASH_REMATCH[1]}; unit=${BASH_REMATCH[2]}
+        if [ "$unit" = Gi ]; then amount=$((amount * 1024)); fi
+        test "$amount" -ge 2048
+        # Compile the same standalone guard in the approved fresh pod, never on the controller.
+        if bash tools/ci/prepare-ematech-resource-guard.sh; then :; else
+          rc=$?
+          failed="target/ci-t9-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$failed"
+          for suffix in build.log binding.txt poduid; do
+            if test -f "$RESOURCE_GUARD.$suffix"; then cp "$RESOURCE_GUARD.$suffix" "$failed/"; fi
+          done
+          exit "$rc"
+        fi
+        test -f "$RESOURCE_GUARD"
+        sha256sum --check --strict "$RESOURCE_GUARD.sha256"
+        # Only non-secret identity/resources are read; never export full Pod env/credentials.
+        resources=$(timeout --signal=TERM --kill-after=15s 1m kubectl --context kubernetes-admin@EmaTech \
+          --request-timeout=30s -n "$NS" get pod "$POD" -o json |
+          timeout --signal=TERM --kill-after=5s 30s java -Xmx64m -jar "$RESOURCE_GUARD" \
+            qualify --container "$CONTAINER" --redis "$REDIS_CONTAINER" \
+            --container-cpu "$CONTAINER_CPU_LIMIT" --pod-cpu "$POD_CPU_LIMIT" --child "$CPUS" --memory "$MEMORY" \
+            --fresh --github-output "$GITHUB_OUTPUT")
+        guard_uid=$(cat "$RESOURCE_GUARD.poduid")
+        [[ "$resources" == *"\"uid\":\"$guard_uid\""* ]]
+        echo "evidence=target/ci-t9-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+        timeout --signal=TERM --kill-after=15s 1m kubectl --context kubernetes-admin@EmaTech \
+          -n "$NS" get pod "$POD" -o name
+    - id: measure
+      name: Build and run complete T1 plus feature matrices in EmaTech
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        POD: ${{ inputs.pod }}
+        CONTAINER: ${{ inputs.container }}
+        REDIS_CONTAINER: ${{ inputs.redis-container }}
+        CONTAINER_CPU_LIMIT: ${{ inputs.container-cpu-limit }}
+        RESOURCE_GUARD: ${{ github.workspace }}/tools/ci/resource-guard/target/resource-guard.jar
+        WORK: ${{ inputs.workspace }}
+        REDIS: ${{ inputs.redis }}
+        BASELINE: ${{ inputs.baseline-jar }}
+        BASELINE_SHA: ${{ inputs.baseline-sha256 }}
+        CPUS: ${{ inputs.cpus }}
+        POD_CPU_LIMIT: ${{ inputs.pod-cpu-limit }}
+        VERSION: ${{ inputs.runtime-version }}
+        MEMORY: ${{ inputs.memory-limit }}
+        EVIDENCE: ${{ steps.target.outputs.evidence }}
+        POD_UID: ${{ steps.target.outputs.poduid }}
+        RESOURCES: ${{ steps.target.outputs.resources }}
+        ACTUAL_CONTAINER_CPU_LIMIT: ${{ steps.target.outputs.containercpu }}
+        ACTUAL_CONTAINER_CPU_REQUEST: ${{ steps.target.outputs.containercpurequest }}
+        ACTUAL_POD_CPU_SUM: ${{ steps.target.outputs.podcpusum }}
+        ACTUAL_REDIS_CPU_LIMIT: ${{ steps.target.outputs.rediscpu }}
+        ACTUAL_REDIS_CPU_REQUEST: ${{ steps.target.outputs.rediscpurequest }}
+      run: |
+        set -euo pipefail
+        before=$(timeout --signal=TERM --kill-after=15s 1m kubectl --context kubernetes-admin@EmaTech \
+          --request-timeout=30s -n "$NS" get pod "$POD" -o json |
+          timeout --signal=TERM --kill-after=5s 30s java -Xmx64m -jar "$RESOURCE_GUARD" \
+            same --container "$CONTAINER" --redis "$REDIS_CONTAINER" --expected "$RESOURCES")
+        # Remote and host deadlines are independent: disconnect cannot leave an unbounded run.
+        timeout --signal=TERM --kill-after=15s 165m \
+          kubectl --context kubernetes-admin@EmaTech -n "$NS" exec -i "$POD" -c "$CONTAINER" -- \
+          timeout --signal=TERM --kill-after=15s 160m sh -s -- \
+          "$WORK" "$GITHUB_SHA" "$BASELINE" "$BASELINE_SHA" "$CPUS" "$REDIS" "$VERSION" "$EVIDENCE" "$POD_UID" \
+          "$CONTAINER_CPU_LIMIT" "$ACTUAL_CONTAINER_CPU_LIMIT" "$ACTUAL_CONTAINER_CPU_REQUEST" \
+          "$POD_CPU_LIMIT" "$ACTUAL_POD_CPU_SUM" "$ACTUAL_REDIS_CPU_LIMIT" "$ACTUAL_REDIS_CPU_REQUEST" <<'REMOTE'
+        set -eu
+        cd -P "$1"
+        case "$PWD" in /workspace|/workspace/*) ;; *) exit 2 ;; esac
+        commit=$2; baseline=$3; expected=$4; cpus=$5; endpoint=$6; version=$7; output=/workspace/.cachedb-ci-evidence/$8
+        approved_container_cpu=${10}; actual_container_cpu=${11}; actual_container_request=${12}
+        approved_pod_cpu_sum=${13}; actual_pod_cpu_sum=${14}; actual_redis_cpu=${15}; actual_redis_request=${16}
+        test "$(git rev-parse HEAD)" = "$commit"
+        command -v realpath >/dev/null
+        baseline=$(realpath "$baseline")
+        case "$baseline" in /workspace/*) ;; *) exit 2 ;; esac
+        assert_source() {
+          test "$(git rev-parse HEAD)" = "$commit" || return 1
+          set -- . ':(exclude).cachedb-ci-evidence/**'
+          case "$baseline" in "$PWD"/*) set -- "$@" ":(exclude)${baseline#"$PWD"/}" ;; esac
+          test -z "$(git status --porcelain --untracked-files=all -- "$@")"
+        }
+        assert_source
+        # Root clean must never erase earlier qualification evidence or a preserved baseline.
+        test ! -e target || { echo 'A fresh checkout without root target/ is required; archive earlier work separately' >&2; exit 2; }
+        case "$baseline" in */target/*) echo 'Baseline must live outside every Maven target/ directory' >&2; exit 2 ;; esac
+        for utility in flock pgrep timeout sha256sum mvn pwsh tar cmp python3; do command -v "$utility" >/dev/null; done
+        exec 9>/tmp/cachedb-exclusive-performance.lock
+        flock -n 9 || { echo 'Benchmark slot is already owned' >&2; exit 2; }
+        if pgrep -x java >/dev/null; then
+          echo 'Refusing to build or measure while another Java process occupies the benchmark container' >&2
+          exit 2
+        fi
+        test -f "$baseline"
+        actual=$(sha256sum "$baseline" | cut -d ' ' -f 1)
+        test "$(printf '%s' "$actual" | tr A-F a-f)" = "$(printf '%s' "$expected" | tr A-F a-f)"
+        test ! -e "$output"
+        mkdir -p "$(dirname "$output")"
+        mkdir "$output"
+        printf 'context=kubernetes-admin@EmaTech\ncommit=%s\nbaselineSha256=%s\ncpus=%s\npodUid=%s\nchildActiveProcessorCount=%s\napprovedBenchmarkContainerCpuLimit=%s\nactualBenchmarkContainerCpuLimit=%s\nactualBenchmarkContainerCpuRequest=%s\napprovedPodRegularContainerCpuLimitSum=%s\nactualPodRegularContainerCpuLimitSumMilli=%s\nactualRedisContainerCpuLimit=%s\nactualRedisContainerCpuRequest=%s\n' \
+          "$commit" "$actual" "$cpus" "$9" "$cpus" "$approved_container_cpu" "$actual_container_cpu" \
+          "$actual_container_request" "$approved_pod_cpu_sum" "$actual_pod_cpu_sum" "$actual_redis_cpu" "$actual_redis_request" > "$output/ci-attachment.txt"
+        export CACHEDB_BENCH_CPUS="$cpus" CACHEDB_BENCH_REDIS="$endpoint" CACHEDB_BENCH_BASELINE_JAR="$baseline"
+        complete=false
+        finish() {
+          rc=$?
+          trap - 0 HUP INT TERM
+          test "$(sha256sum "$baseline" | cut -d ' ' -f 1)" = "$actual" || rc=1
+          assert_source || rc=1
+          if [ "$rc" -ne 0 ] || [ "$complete" != true ]; then
+            printf 'FAILED_OR_INCOMPLETE\nexit=%s\nNo resume, record selection or performance acceptance.\n' "$rc" > "$output/CI_FAILED.txt"
+            test "$rc" -ne 0 || rc=1
+          else
+            printf 'COMPLETE_NUMERIC_GATES_NOT_RELEASE_ACCEPTANCE\n' > "$output/CI_COMPLETE.txt"
+          fi
+          exit "$rc"
+        }
+        trap finish 0
+        trap 'exit 129' HUP
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        # Install CURRENT sources before standalone capability-profile builds. No baseline rebuild.
+        timeout --signal=TERM --kill-after=15s 20m sh -c '
+          set -eu
+          export MAVEN_OPTS="-Xmx512m"
+          actual_version=$(pwsh -NoProfile -Command "[xml]\$p = Get-Content -Raw pom.xml; [Console]::Write(\$p.project.version)" </dev/null)
+          test "$actual_version" = "$1"
+          mvn -B -ntp -pl cachedb-spring-boot-starter -am -DskipTests clean install </dev/null
+          mvn -B -ntp -f tools/benchmarks/redis/pom.xml -Predis-benchmarks-t1 \
+            "-Dcachedb.benchmark.runtime.version=$1" -DskipTests clean package </dev/null
+          mvn -B -ntp -f tools/benchmarks/redis/pom.xml -Predis-benchmarks-v019 \
+            "-Dcachedb.benchmark.runtime.version=$1" -DskipTests clean package </dev/null
+        ' sh "$version" > "$output/build.log" 2>&1
+        t1=tools/benchmarks/redis/target/coalescing/benchmarks-t1-coalescing.jar
+        features=tools/benchmarks/redis/target/features-v019/benchmarks-v019-features.jar
+        timeout --signal=TERM --kill-after=15s 6m sh tools/benchmarks/redis/prepare-jmh-compactor.sh \
+          "$t1" "$output/compactor-selfcheck-t1" > "$output/compactor-selfcheck-t1.log" 2>&1 </dev/null
+        timeout --signal=TERM --kill-after=15s 6m sh tools/benchmarks/redis/prepare-jmh-compactor.sh \
+          "$features" "$output/compactor-selfcheck-features" > "$output/compactor-selfcheck-features.log" 2>&1 </dev/null
+        compactor_entry=com/reactor/cachedb/benchmarks/redis/JmhSampleCompactionProfiler.class
+        cmp "$output/compactor-selfcheck-t1/helper-classes/$compactor_entry" \
+          "$output/compactor-selfcheck-features/helper-classes/$compactor_entry"
+        export CACHEDB_BENCH_COMPACTOR_DIR="$output/compactor-selfcheck-t1/helper-classes"
+        # One JMH 1.37 resource overlay is shared by both complete matrices, outside timing.
+        timeout --signal=TERM --kill-after=15s 6m sh tools/benchmarks/redis/prepare-jmh-resources.sh \
+          "$features" "$output/resource-selfcheck" > "$output/resource-selfcheck.log" 2>&1 </dev/null
+        export CACHEDB_BENCH_RESOURCE_CLASSES="$output/resource-selfcheck/classes"
+        timeout --signal=TERM --kill-after=15s 5m pwsh -NoProfile \
+          -File tools/ci/test-t1-default-acceptance.ps1 > "$output/t1-checker-selftest.log" 2>&1 </dev/null
+        timeout --signal=TERM --kill-after=15s 2m pwsh -NoProfile \
+          -File tools/ci/test-jmh-histogram-consistency.ps1 -EvidenceDirectory "$output/histogram-checker-fixtures" \
+          > "$output/histogram-checker-selftest.log" 2>&1 </dev/null
+        timeout --signal=TERM --kill-after=15s 5m pwsh -NoProfile \
+          -File tools/ci/test-t9-feature-evidence.ps1 -EvidenceDirectory "$output/checker-fixtures" \
+          > "$output/feature-checker-selftest.log" 2>&1 </dev/null
+        mkdir "$output/jars"
+        cp "$t1" "$output/jars/benchmarks-t1-coalescing.jar"
+        cp "$features" "$output/jars/benchmarks-v019-features.jar"
+        cp "$baseline" "$output/jars/preserved-baseline.jar"
+        sha256sum "$output/jars/"*.jar > "$output/jars.sha256"
+        timeout --signal=TERM --kill-after=15s 60m sh tools/benchmarks/redis/run-coalescing-paired.sh \
+          "$t1" "$output/t1" > "$output/t1-launcher.log" 2>&1 </dev/null
+        timeout --signal=TERM --kill-after=15s 5m pwsh -NoProfile -File tools/ci/check-t1-coalescing-evidence.ps1 \
+          -Path "$output/t1" -CandidateJar "$t1" -ProcessorCount "$cpus" -ExpectedBaselineSha256 "$expected" \
+          > "$output/t1-gates.log" 2>&1 </dev/null
+        timeout --signal=TERM --kill-after=15s 60m sh tools/benchmarks/redis/run-features-paired.sh \
+          "$features" "$output/features" features > "$output/feature-launcher.log" 2>&1 </dev/null
+        timeout --signal=TERM --kill-after=15s 5m pwsh -NoProfile -File tools/ci/check-t9-feature-evidence.ps1 \
+          -Path "$output/features" -CandidateJar "$features" -ProcessorCount "$cpus" \
+          -ExpectedBaselineSha256 "$expected" -Group features > "$output/feature-gates.log" 2>&1 </dev/null
+        test "$(sha256sum "$baseline" | cut -d ' ' -f 1)" = "$actual"
+        complete=true
+        REMOTE
+    - name: Collect all raw attempts even after failure
+      if: always() && steps.target.outcome == 'success'
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        POD: ${{ inputs.pod }}
+        CONTAINER: ${{ inputs.container }}
+        REDIS_CONTAINER: ${{ inputs.redis-container }}
+        RESOURCE_GUARD: ${{ github.workspace }}/tools/ci/resource-guard/target/resource-guard.jar
+        WORK: ${{ inputs.workspace }}
+        EVIDENCE: ${{ steps.target.outputs.evidence }}
+        POD_UID: ${{ steps.target.outputs.poduid }}
+        RESOURCES: ${{ steps.target.outputs.resources }}
+      run: |
+        set -euo pipefail
+        test ! -e "$EVIDENCE"
+        mkdir -p "$EVIDENCE"
+        cp "$RESOURCE_GUARD.binding.txt" "$RESOURCE_GUARD.build.log" "$RESOURCE_GUARD.sha256" "$EVIDENCE/"
+        resource_match=true
+        sha256sum --check --strict "$RESOURCE_GUARD.sha256" || resource_match=false
+        printf '%s\n' "$RESOURCES" > "$EVIDENCE/pod-resources.json"
+        after=$(timeout --signal=TERM --kill-after=15s 1m kubectl --context kubernetes-admin@EmaTech \
+          --request-timeout=30s -n "$NS" get pod "$POD" -o json |
+          timeout --signal=TERM --kill-after=5s 30s java -Xmx64m -jar "$RESOURCE_GUARD" \
+            snapshot --container "$CONTAINER" --redis "$REDIS_CONTAINER" \
+            2> "$EVIDENCE/resource-guard-final.stderr.log") || resource_match=false
+        if test -n "$after"; then
+          printf '%s\n' "$after" > "$EVIDENCE/pod-resources-final.json"
+          printf '%s' "$after" | timeout --signal=TERM --kill-after=5s 30s java -Xmx64m -jar "$RESOURCE_GUARD" \
+            compare --expected "$RESOURCES" 2>> "$EVIDENCE/resource-guard-final.stderr.log" \
+            >/dev/null || resource_match=false
+        else
+          printf 'No sanitized final snapshot; validation failed or the Pod could not be read.\n' \
+            > "$EVIDENCE/pod-resources-final-unavailable.txt"
+        fi
+        sha256sum "$RESOURCE_GUARD" > "$EVIDENCE/resource-guard.jar.sha256" || resource_match=false
+        # No source deletion, pod deletion, retries, record selection or cleanup of failed attempts.
+        timeout --signal=TERM --kill-after=15s 5m kubectl --context kubernetes-admin@EmaTech \
+          -n "$NS" exec "$POD" -c "$CONTAINER" -- sh -c '
+          set -eu
+          cd "$1"
+          test -d "$2"
+          kb=$(du -sk "$2" | cut -f 1)
+          test "$kb" -le 2097152
+          tar -cf - "$2"
+        ' sh /workspace/.cachedb-ci-evidence "$EVIDENCE" | tar -xf - -C .
+        test "$resource_match" = true || {
+          echo 'Pod UID or CPU/memory/storage allocation changed; raw evidence retained, qualification rejected' >&2
+          exit 2
+        }

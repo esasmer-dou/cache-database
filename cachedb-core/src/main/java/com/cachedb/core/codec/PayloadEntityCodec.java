@@ -61,6 +61,27 @@ public final class PayloadEntityCodec<T> implements EntityCodec<T> {
         return delegate.fromRedisValue(body);
     }
     public Map<String, Object> toColumns(T entity) { return delegate.toColumns(entity); }
+    public EntityCodec<T> bindEncryption(com.reactor.cachedb.core.crypto.CacheKeyProvider provider) {
+        return new PayloadEntityCodec<>(delegate.bindEncryption(provider), metadata, threshold);
+    }
+    public boolean encryptionBound() { return delegate.encryptionBound(); }
+    public boolean encryptedMapping() { return delegate.encryptedMapping() || !metadata.encryptedColumns().isEmpty(); }
+    public String encryptionIntentToken(T entity, java.util.Set<String> columns) { return delegate.encryptionIntentToken(entity, columns); }
+    public String encryptionIntentFingerprint(java.util.List<String> parts) { return delegate.encryptionIntentFingerprint(parts); }
+    public Map<String, Object> toIndexColumns(T entity) { return delegate.toIndexColumns(entity); }
+    public Object indexQueryValue(String column, Object value) { return delegate.indexQueryValue(column, value); }
+    public Map<String, Object> toSourceColumns(T entity) { return delegate.toSourceColumns(entity); }
+    public T fromLogicalColumns(Map<String, Object> columns) { return delegate.fromLogicalColumns(columns); }
+    public Map<String, Object> toQueuedColumns(T entity) { return delegate.toQueuedColumns(entity); }
+    public Map<String, Object> toQueuedColumns(T entity, Map<String, Object> assignments) {
+        return delegate.toQueuedColumns(entity, assignments);
+    }
+    public Map<String, Object> toQueuedPatchColumns(String id, String verifiedTenant, Map<String, Object> assignments) {
+        return delegate.toQueuedPatchColumns(id, verifiedTenant, assignments);
+    }
+    public Map<String, String> sourceColumnsFromQueued(String id, Map<String, String> queued) {
+        return delegate.sourceColumnsFromQueued(id, queued);
+    }
     public T fromColumns(Map<String, Object> columns) { return delegate.fromColumns(columns); }
     public boolean directColumnAccess() { return delegate.directColumnAccess(); }
     public Object entityColumnValue(T entity, String column) { return delegate.entityColumnValue(entity, column); }

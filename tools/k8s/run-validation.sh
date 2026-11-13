@@ -11,6 +11,8 @@ date -u '+%Y-%m-%dT%H:%M:%SZ' > target/kubernetes-validation-start.txt
 namespace=${CACHEDB_TEST_NAMESPACE:-cachedb-v017-validation}
 case "$namespace" in cachedb-*) ;; *) echo 'Dedicated namespace required' >&2; exit 2;; esac
 export CACHEDB_TEST_NAMESPACE="$namespace"
+sample_redis_uri=${CACHEDB_TEST_REDIS_URI:-}
+sample_split_redis_uri=${CACHEDB_TEST_SPLIT_REDIS_URI:-}
 password=$(tr -d '\r\n' < /workspace/fixture-password)
 export CACHEDB_SNAPSHOT_POSTGRES_URL="jdbc:postgresql://postgres.$namespace.svc.cluster.local:5432/cachedb"
 export CACHEDB_SNAPSHOT_POSTGRES_USER=cachedb CACHEDB_SNAPSHOT_POSTGRES_PASSWORD="$password"
@@ -71,8 +73,14 @@ case "${1:-unit}" in
       *) echo 'Unsupported sample provider' >&2; exit 2 ;;
     esac
     export CACHEDB_TEST_DATASOURCE_PASSWORD="$password"
-    export CACHEDB_TEST_REDIS_URI="redis://$redis:6379/$redis_database"
-    export CACHEDB_TEST_SPLIT_REDIS_URI="redis://$redis:6379/$split_redis_database"
+    export CACHEDB_TEST_REDIS_URI="${sample_redis_uri:-redis://$redis:6379/$redis_database}"
+    export CACHEDB_TEST_SPLIT_REDIS_URI="${sample_split_redis_uri:-redis://$redis:6379/$split_redis_database}"
+    # Check the service endpoint, not a sidecar's localhost, before a long Maven run.
+    printf 'Main Redis: '
+    timeout 20s java "$(dirname "$0")/RedisServicePreflight.java"
+    printf 'Split-role Redis: '
+    CACHEDB_TEST_REDIS_URI="$CACHEDB_TEST_SPLIT_REDIS_URI" \
+      timeout 20s java "$(dirname "$0")/RedisServicePreflight.java"
     mvn -B -ntp -f "sample-cache-database-$provider/pom.xml" -Pprovider-integration verify ;;
   *) echo 'Expected all, unit, columns, redis, cluster, providers, provider-legacy, release-smoke, or sample-{postgresql,mssql,oracle}' >&2; exit 2 ;;
 esac

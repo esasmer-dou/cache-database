@@ -6,8 +6,11 @@ import com.reactor.cachedb.annotations.CacheTransactional;
 import com.reactor.cachedb.core.api.*;
 import com.reactor.cachedb.spring.boot.CacheTransactionAutoConfiguration;
 import com.reactor.cachedb.starter.CacheDatabase;
+import com.reactor.cachedb.starter.CacheTransactionTemplate;
 import java.util.*;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.*;
 
 class CacheTransactionalBoundaryTest {
@@ -32,6 +35,30 @@ class CacheTransactionalBoundaryTest {
         @CacheTransactional public String commit() { CacheUnitOfWork.current().put("order").put("line"); return "result"; }
         @CacheTransactional public void abort() { CacheUnitOfWork.current().put("discarded"); throw new IllegalArgumentException("business validation"); }
         @CacheTransactional public void immediateReceipt() { CacheUnitOfWork.rejectImmediateReceipt(); }
+    }
+    @Test void manualRuntimeWithoutDatabaseBeanDoesNotEnableTransactionInfrastructure() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(CacheTransactionAutoConfiguration.class))
+                .withBean(Service.class, Service::new)
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertEquals(0, context.getBeansOfType(CacheTransactionTemplate.class).size());
+                    assertFalse(context.containsBean("cacheTransactionBoundaries"));
+                    assertFalse(org.springframework.aop.support.AopUtils.isAopProxy(context.getBean(Service.class)));
+                });
+    }
+    @Test void databaseBeanEnablesTemplateAndTransactionalService() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(CacheTransactionAutoConfiguration.class))
+                .withUserConfiguration(Configuration.class)
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertEquals(1, context.getBeansOfType(CacheTransactionTemplate.class).size());
+                    assertTrue(context.containsBean("cacheTransactionBoundaries"));
+                    assertEquals("result", context.getBean(Service.class).commit());
+                    assertEquals(1, context.getBean(Batch.class).commits);
+                    assertFalse(CacheUnitOfWork.active());
+                });
     }
     @Test void proxiedServiceCommitsOnceDiscardsOnFailureAndAlwaysClearsThreadContext() {
         try (var context = new AnnotationConfigApplicationContext(Configuration.class, CacheTransactionAutoConfiguration.class)) {

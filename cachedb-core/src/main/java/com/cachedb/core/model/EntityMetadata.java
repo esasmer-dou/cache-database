@@ -31,6 +31,12 @@ public interface EntityMetadata<T, ID> {
     /** True only for generated records whose complete state is known immutable. */
     default boolean deeplyImmutable() { return false; }
     default int schemaVersion() { return 1; }
+    /** Generated true only for explicitly opted-in, indexed-tenant protection bindings. */
+    default boolean tenantPurgeEnabled() { return false; }
+    /** Empty preserves existing generated metadata; no reflection-based annotation discovery. */
+    default java.util.Optional<com.reactor.cachedb.core.retention.RetentionPolicy> retentionPolicy() {
+        return java.util.Optional.empty();
+    }
     default String tenantFieldName() { return null; }
     default String extractTenantId(T entity) { return null; }
     default int compressionThresholdBytes() { return 0; }
@@ -47,7 +53,13 @@ public interface EntityMetadata<T, ID> {
     default Map<String, String> columnTypes() {
         return Map.of();
     }
+    /** Physical column -> immutable protection contract; old metadata has no encrypted columns. */
+    default Map<String, com.reactor.cachedb.core.crypto.EncryptedColumnDescriptor> encryptedColumns() {
+        return Map.of();
+    }
     default Map<String, List<String>> compositeExactIndexes() { return Map.of(); }
+    /** Opt-in composite name -> persisted score column; legacy bindings remain unchanged. */
+    default Map<String, String> compositeSortColumns() { return Map.of(); }
     /** Explicit schema/business contract: distinct IDs have no cross-row ordering constraints. */
     default boolean independentWriteReordering() { return false; }
     default Map<String, List<String>> partitionedSortIndexes() {

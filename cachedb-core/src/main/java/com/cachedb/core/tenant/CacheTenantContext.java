@@ -19,6 +19,8 @@ public final class CacheTenantContext {
         return tenant;
     }
     public static Scope withTenant(String tenant) { return bind(new Captured(checked(tenant), false)); }
+    /** Masks ambient tenant AND administrative authority for a lexical bridge invocation. */
+    public static Scope empty() { return bind(new Captured(null, false)); }
     /** Trusted maintenance entry point; never derive this permission from request data. */
     public static Scope administrative() { return bind(new Captured(null, true)); }
     private static Captured capture() { return new Captured(currentTenant().orElse(null), isAdministrative()); }

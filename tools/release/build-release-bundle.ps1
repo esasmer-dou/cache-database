@@ -126,6 +126,10 @@ foreach ($sampleProject in $sampleProjects) {
     }
 }
 
+& (Join-Path $PSScriptRoot 'repair-bundle-documentation.ps1') `
+    -RepositoryRoot $repoRoot -StagingRoot $stagingRoot -Version $Version
+
+# Explicit public allowlist: benchmark and SDK acceptance tools are never bundled.
 $artifactModules = @(
     "cachedb-annotations",
     "cachedb-processor",
@@ -138,6 +142,8 @@ $artifactModules = @(
     "cachedb-storage-oracle",
     "cachedb-starter",
     "cachedb-spring-boot-starter",
+    "cachedb-reactor",
+    "cachedb-spring-data",
     "cachedb-spring-boot-starter-postgres",
     "cachedb-spring-boot-starter-mssql",
     "cachedb-spring-boot-starter-oracle",
@@ -178,7 +184,16 @@ Copy-Item `
     -Path (Join-Path $repoRoot "cachedb-bom\pom.xml") `
     -Destination (Join-Path $bomDest "cachedb-bom-$Version.pom")
 
-Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $zipPath -Force
+# Compress-Archive omits hidden files on Unix, including sample CI workflows.
+if (Test-Path -LiteralPath $zipPath) {
+    Remove-Item -LiteralPath $zipPath -Force
+}
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $stagingRoot,
+    $zipPath,
+    [System.IO.Compression.CompressionLevel]::Optimal,
+    $false
+)
 $checksumPath = "$zipPath.sha256"
 $checksum = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath $checksumPath -Value "$checksum  $([System.IO.Path]::GetFileName($zipPath))" -NoNewline

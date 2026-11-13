@@ -61,10 +61,11 @@ class ProductionTestEnvironmentTest {
 
     @Test
     void sharedIntegrationPropertiesAreUsedWhenProductionPropertiesAreAbsent() {
-        System.clearProperty("cachedb.prod.postgres.url");
-        System.clearProperty("cachedb.prod.postgres.user");
-        System.clearProperty("cachedb.prod.postgres.password");
-        System.clearProperty("cachedb.prod.redis.uri");
+        // Empty properties mask process environment defaults without changing their precedence.
+        System.setProperty("cachedb.prod.postgres.url", "");
+        System.setProperty("cachedb.prod.postgres.user", "");
+        System.setProperty("cachedb.prod.postgres.password", "");
+        System.setProperty("cachedb.prod.redis.uri", "");
         System.setProperty("cachedb.it.postgres.url", "jdbc:postgresql://shared/db");
         System.setProperty("cachedb.it.postgres.user", "shared-user");
         System.setProperty("cachedb.it.postgres.password", "shared-password");

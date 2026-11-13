@@ -43,6 +43,8 @@ cachedb:
   profile: ${CACHEDB_PROFILE:production}
   redis:
     uri: ${REDIS_URI:redis://127.0.0.1:56381}
+    read-coalescing:
+      enabled: ${SAMPLE_READ_COALESCING_ENABLED:false}
     background:
       enabled: true
   sql:
@@ -209,6 +211,12 @@ cachedb:
     leader-lease-enabled: true
 
 sample:
+  audit-api:
+    enabled: false
+  cache-api:
+    enabled: false
+  range-data:
+    enabled: false
   scheduled-warm:
     enabled: ${SAMPLE_SCHEDULED_WARM_ENABLED:false}
     orders:

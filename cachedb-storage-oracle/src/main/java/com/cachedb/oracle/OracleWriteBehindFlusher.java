@@ -79,31 +79,42 @@ public final class OracleWriteBehindFlusher extends AbstractJdbcWriteBehindFlush
 
     @Override
     public void flush(QueuedWriteOperation operation) throws SQLException {
-        if (operation.atomicBatch()) {
-            flushAtomicBatch(operation.batchOperations());
-            return;
-        }
-        long startedAt = System.nanoTime();
         try {
-            executeWithDuplicateRecovery(List.of(operation), options.duplicateRaceRetries());
-        } finally {
-            recordWrite(startedAt, operation.observationTag());
+            if (operation.atomicBatch()) {
+                flushAtomicBatch(operation.batchOperations());
+                return;
+            }
+            long startedAt = System.nanoTime();
+            try {
+                executeWithDuplicateRecovery(List.of(operation), options.duplicateRaceRetries());
+            } finally {
+                recordWrite(startedAt, operation.observationTag());
+            }
+        } catch (SQLException unsafe) {
+            throw safeSqlFailure(List.of(operation), unsafe);
         }
     }
 
     @Override
     public void flushBatch(List<QueuedWriteOperation> operations) throws SQLException {
-        long startedAt = System.nanoTime();
         try {
-            for (int start = 0; start < operations.size(); start += transactionBatchSize) {
-                int end = Math.min(operations.size(), start + transactionBatchSize);
-                executeWithDuplicateRecovery(
-                        operations.subList(start, end), options.duplicateRaceRetries());
+            long startedAt = System.nanoTime();
+            try {
+                if (operations.isEmpty()) return;
+                var prepared = prepareWrites(operations);
+                initializeWriteFence(prepared);
+                for (int start = 0; start < operations.size(); start += transactionBatchSize) {
+                    int end = Math.min(operations.size(), start + transactionBatchSize);
+                    executeWithDuplicateRecovery(
+                            operations.subList(start, end), options.duplicateRaceRetries(), prepared.slice(start, end));
+                }
+            } finally {
+                if (!operations.isEmpty()) {
+                    recordWrite(startedAt, dominantObservationTag(operations));
+                }
             }
-        } finally {
-            if (!operations.isEmpty()) {
-                recordWrite(startedAt, dominantObservationTag(operations));
-            }
+        } catch (SQLException unsafe) {
+            throw safeSqlFailure(operations, unsafe);
         }
     }
 
@@ -112,9 +123,14 @@ public final class OracleWriteBehindFlusher extends AbstractJdbcWriteBehindFlush
         if (operations.isEmpty()) {
             return;
         }
-        writeFence.initialize();
+        executeWithDuplicateRecovery(operations, retriesRemaining, prepareWrites(operations));
+    }
+
+    private void executeWithDuplicateRecovery(List<QueuedWriteOperation> operations, int retriesRemaining,
+            PreparedWrites prepared) throws SQLException {
+        initializeWriteFence(prepared);
         try (Connection connection = dataSource.getConnection()) {
-            executeInTransaction(connection, operations);
+            executeInTransaction(connection, prepared);
         } catch (SQLException failure) {
             if (!isUniqueConstraintViolation(failure) || retriesRemaining <= 0) {
                 throw failure;
@@ -146,21 +162,26 @@ public final class OracleWriteBehindFlusher extends AbstractJdbcWriteBehindFlush
 
     @Override
     public void flushAtomicBatch(List<QueuedWriteOperation> operations) throws SQLException {
-        if (operations.isEmpty()) return;
-        writeFence.initialize();
-        // No per-row duplicate recovery: an atomic group must be retried as one unit.
-        try (Connection connection = dataSource.getConnection()) {
-            executeInTransaction(connection, operations, true);
+        try {
+            if (operations.isEmpty()) return;
+            var prepared = prepareWrites(operations);
+            initializeWriteFence(prepared);
+            // No per-row duplicate recovery: an atomic group must be retried as one unit.
+            try (Connection connection = dataSource.getConnection()) {
+                executeInTransaction(connection, prepared, true);
+            }
+        } catch (SQLException unsafe) {
+            throw safeSqlFailure(operations, unsafe);
         }
     }
 
-    private void executeInTransaction(Connection connection, List<QueuedWriteOperation> operations)
+    private void executeInTransaction(Connection connection, PreparedWrites operations)
             throws SQLException {
         executeInTransaction(connection, operations, false);
     }
 
     private void executeInTransaction(
-            Connection connection, List<QueuedWriteOperation> operations, boolean preserveOrder)
+            Connection connection, PreparedWrites operations, boolean preserveOrder)
             throws SQLException {
         inTransaction(connection, operations, options.transactionIsolation(), null, accepted -> {
             if (preserveOrder || accepted.stream().anyMatch(op -> op.type() == OperationType.PATCH)) {

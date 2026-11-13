@@ -129,6 +129,7 @@ public final class RedisPageCacheManager<T, ID> {
             StoragePerformanceCollector performanceCollector) {
         this.jedis = jedis;
         this.metadata = metadata;
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
         this.codec = com.reactor.cachedb.core.codec.PayloadEntityCodec.wrap(codec, metadata,
                 Math.max(metadata.compressionThresholdBytes(), cachePolicy.compressionThresholdBytes()));
         this.cachePolicy = cachePolicy;
@@ -250,9 +251,15 @@ public final class RedisPageCacheManager<T, ID> {
     }
 
     public void cacheEntity(T entity, String encoded, CacheAdmissionSource source) {
+        if (!queryIndexManager.hasCompositeSortIndexes()) { cacheEntityUnfenced(entity, encoded, source); return; }
+        queryIndexManager.withCompositeMutation(() -> { cacheEntityUnfenced(entity, encoded, source); return null; });
+    }
+
+    private void cacheEntityUnfenced(T entity, String encoded, CacheAdmissionSource source) {
         CachePolicy effectiveCachePolicy = effectiveCachePolicy();
         ID id = metadata.idAccessor().apply(entity);
         Map<String, Object> columns = codec.toColumns(entity);
+        queryIndexManager.validateCompositeValues(columns);
         long estimatedPayloadBytes = estimatePayloadBytes(encoded);
         if (!shouldCacheEntity(columns, source, effectiveCachePolicy)
                 || !allowTenantQuota(id, columns, estimatedPayloadBytes)) {
@@ -271,7 +278,41 @@ public final class RedisPageCacheManager<T, ID> {
         recordEntityAccess(id, columns, estimatedPayloadBytes);
     }
 
+    void bulkDeleteObserved(java.util.Collection<ID> ids) {
+        for (ID id : ids) recentTouches.forget(id);
+    }
+
+    /** pages must be the sealed complete page manifest, including the actual LIST/ZSET schema. */
+    public RedisPurgeTarget purgeTarget(List<RedisPurgeTarget.Page> pages) {
+        return new RedisPurgeTarget(queryIndexManager.purgeLayout(), pages, metadata.tenantFieldName(),
+                false, true, id -> {
+                    if (id == null) recentTouches.clear();
+                    queryIndexManager.purgeInvalidateLocalStatistics();
+                });
+    }
+
+    static String tenantAdmissionLockKey(String tenantSetKey) { return tenantSetKey + ":admission-lock"; }
+
+    /** Strict reader of the EXISTING owner encoding; legacy/ambiguous records require migration. */
+    static long purgeTenantPayloadBytes(String encoded, String expectedSet, String expectedBytes) {
+        if (encoded == null) return 0;
+        if (encoded.length() > 16384 || expectedSet == null || expectedBytes == null)
+            throw RedisIdentityPurgeParticipant.incomplete();
+        String[] parts = encoded.split("\\n", -1);
+        if (parts.length != 3 || !parts[0].equals(expectedSet) || !parts[1].equals(expectedBytes)
+                || !parts[2].matches("0|[1-9][0-9]{0,15}")) throw RedisIdentityPurgeParticipant.incomplete();
+        TenantOwnerRecord record = TenantOwnerRecord.decode(encoded);
+        if (record.payloadBytes() > 9_007_199_254_740_991L
+                || !Long.toString(record.payloadBytes()).equals(parts[2])) throw RedisIdentityPurgeParticipant.incomplete();
+        return record.payloadBytes();
+    }
+
     public void removeEntity(ID id) {
+        if (!queryIndexManager.hasCompositeSortIndexes()) { removeEntityUnfenced(id); return; }
+        queryIndexManager.withCompositeMutation(() -> { removeEntityUnfenced(id); return null; });
+    }
+
+    private void removeEntityUnfenced(ID id) {
         recentTouches.forget(id);
         jedis.commands().del(keyStrategy.entityKey(metadata.redisNamespace(), id));
         hotSetManager.remove(metadata.redisNamespace(), id);
@@ -566,6 +607,12 @@ public final class RedisPageCacheManager<T, ID> {
         }
     }
 
+    private void invalidateTenantPayload(ID id) {
+        jedis.commands().del(keyStrategy.entityKey(metadata.redisNamespace(), id));
+        hotSetManager.remove(metadata.redisNamespace(), id);
+        queryIndexManager.removeById(id);
+    }
+
     private void recordTenantAccessLocked(
             ID id,
             RouteCacheContract contract,
@@ -576,9 +623,9 @@ public final class RedisPageCacheManager<T, ID> {
             long payloadBytes) {
         TenantOwnerRecord reservation = readTenantOwner(id);
         if (!tenantSetKey.equals(reservation.tenantSetKey())) {
-            jedis.commands().del(keyStrategy.entityKey(metadata.redisNamespace(), id));
-            hotSetManager.remove(metadata.redisNamespace(), id);
-            queryIndexManager.removeById(id);
+            if (queryIndexManager.hasCompositeSortIndexes()) {
+                queryIndexManager.withCompositeMutation(() -> { invalidateTenantPayload(id); return null; });
+            } else invalidateTenantPayload(id);
             recordTenantAdmission(contract, String.valueOf(tenantValue), false);
             return;
         }
@@ -803,7 +850,7 @@ public final class RedisPageCacheManager<T, ID> {
     }
 
     private <R> R withTenantAdmissionLock(String tenantSetKey, Supplier<R> action) {
-        String lockKey = tenantSetKey + ":admission-lock";
+        String lockKey = tenantAdmissionLockKey(tenantSetKey);
         Set<String> heldLocks = heldTenantLocks.get();
         if (heldLocks.contains(lockKey)) {
             return action.get();

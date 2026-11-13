@@ -62,6 +62,34 @@ corresponding managed HA topology. The local physical Data Guard lane may be
 reported as representative framework evidence; it is not PostgreSQL HA, SQL
 Server Always On, Oracle RAC, or customer-topology certification.
 
+## Staging HA Evidence Boundary
+
+`run-staging-redis-ha-evidence.ps1` and `run-staging-mssql-ha-evidence.ps1` run
+two smoke phases separated by `ExternalFailoverWaitSeconds`. They do not collect
+or validate an independent witness of a live failover. Neither a positive wait
+nor a zero wait proves a topology transition or connection recovery.
+
+The default invocation retains both smoke phases but fails HA qualification,
+even if both pass. Every run reports `liveFailoverVerified=false` and
+`haQualified=false` in its JSON and summary. The `Production GA Staging Evidence`
+workflow deliberately uses this fail-closed default; it cannot currently satisfy
+`-RequireManagedStagingHa`. A real topology-specific independent witness and its
+validator remain required before this lane can qualify HA. There is no operator
+checkbox or caller-supplied success flag that substitutes for that proof.
+
+For explicitly non-qualifying diagnostics only, add `-ReconnectSmokeOnly` to
+either script. It succeeds only when both smoke phases pass; it still emits
+both HA flags as false and does not establish that a reconnect occurred. Do not
+add this switch to an HA-gating caller or treat smoke-only success as GA evidence.
+
+Reports are retained under unique `run-*` directories in
+`target/cachedb-staging-ha-reports/` or
+`target/cachedb-staging-mssql-ha-reports/`. Earlier reports are not cleared, and
+partial smoke outcomes are retained on failure. The workflow publishes summaries
+from `run-*/staging-*-ha-evidence.md` and attempts artifact upload with `always()`
+after failure. Missing evidence is not an HA pass; artifact transport success is
+not HA qualification either.
+
 ## Step-by-Step GA Flow
 
 1. Prepare a stable version such as `0.1.0` or `1.0.0`. Do not use `beta`, `alpha`,
@@ -164,6 +192,66 @@ gh workflow run maven-central-publish.yml `
   -f targetRef=main `
   -f migrationCoverageCsvPath=docs/ga-migration-coverage.csv
 ```
+
+## Kubernetes Acceptance Handoff
+
+For the Kubernetes acceptance lane, run workloads in the approved Kubernetes
+namespace. The public `Framework Readiness` job verifies their reports; it does
+not rerun the workloads or infer success from an artifact upload.
+
+The contract in `tools/ci/k8s-acceptance-contract.psd1` currently requires 52
+acceptance obligations: one SDK build, standalone tests, Cluster tests, sample feature
+qualification, three complete provider suites, three negative certification
+checks, twelve API baseline cells and thirty repository controls. A feature smoke
+test does not replace a provider suite or the API baseline. Performance and HA
+qualification remain separate gates.
+
+The package control (`control/17`) may reference the original `sdk-build`
+execution instead of requiring a second build. That reference contains only
+`id`, `executionRef` and `canonicalCommand`; it cannot override process evidence.
+All other obligations require separate executions. Preserve the actual command
+and environment evidence: a canonical command describes the obligation, not the
+full invocation. An offline build needs separately approved, sealed invocation
+evidence; matching artifact hashes alone do not approve a different command.
+
+1. Retain each process's original command, working directory, log, exit file,
+   timestamps and pod UID. Record the source SHA and SDK manifest used by that
+   process. Preserve the before/after source and SDK manifests. Do not fill gaps
+   with another package's results or extend an expired run's cutoff.
+2. Supply an explicit `cachedb.k8s-acceptance-input/v1` inventory with `source`,
+   `sdk`, `producer`, `runs`, `executions` and `files`. Each file entry contains
+   its relative path, byte length and SHA-256. Producer IDs must come from the
+   real protected workflow, not an example or an invented identifier.
+3. Assemble a new output directory from the retained evidence:
+
+   ```powershell
+   $inventory = './target/runtime-evidence/execution-inventory.json'
+   $pin = (Get-FileHash -LiteralPath $inventory -Algorithm SHA256).Hash.ToLowerInvariant()
+   pwsh ./tools/ci/new-k8s-acceptance-receipt.ps1 `
+     -InventoryPath $inventory `
+     -InventorySha256 $pin `
+     -EvidenceRoot ./target/runtime-evidence `
+     -OutputDirectory ./target/k8s-acceptance
+   ```
+
+   The inventory must already exist. This command neither executes tests nor
+   creates missing evidence. It rejects missing executions, changed bytes,
+   reused process logs and invalid deadlines. It preserves the original
+   inventory in `origin/execution-inventory.json`. Its successful status is
+   `ASSEMBLED_NOT_RUNTIME_ACCEPTANCE`, not release approval. Hashing a local
+   inventory seals its bytes; it does not authenticate the producer.
+4. Publish the assembled evidence through the approved private producer and
+   configure the public repository's `CACHEDB_K8S_ACCEPTANCE_ARTIFACT_ID`,
+   `CACHEDB_K8S_ACCEPTANCE_ARCHIVE_SHA256`,
+   `CACHEDB_K8S_ACCEPTANCE_RECEIPT_SHA256`,
+   `CACHEDB_K8S_ACCEPTANCE_SDK_SHA256` and
+   `CACHEDB_K8S_ACCEPTANCE_PRODUCER_WORKFLOW` variables with the actual values.
+   Keep the repository identity and read-only credential configured separately.
+5. Let the protected public workflow run `check-k8s-acceptance.ps1`. It verifies
+   producer authority, source/SDK identity and the required report contents.
+   `K8S_ACCEPTANCE_VERIFIED` closes this gate only; it does not publish a release
+   or waive the remaining GA checks. A missing report, failed process or
+   untrusted producer keeps the gate closed.
 
 ## Production Decision
 

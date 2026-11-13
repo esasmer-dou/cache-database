@@ -6,7 +6,7 @@
 
     <groupId>com.reactor.cachedb</groupId>
     <artifactId>cache-database</artifactId>
-    <version>0.18.1</version>
+    <version>0.19.0</version>
     <packaging>pom</packaging>
 
     <name>cache-database</name>
@@ -50,7 +50,10 @@
 
     <properties>
         <cachedb.gson.version>2.13.2</cachedb.gson.version>
-        <maven.compiler.release>17</maven.compiler.release>
+        <maven.compiler.release>21</maven.compiler.release>
+        <maven.compiler.proc>full</maven.compiler.proc>
+        <argLine/>
+        <cachedb.test.jvmArgs/>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jedis.version>5.2.0</jedis.version>
         <postgresql.version>42.7.4</postgresql.version>
@@ -86,6 +89,8 @@
         <module>cachedb-storage-oracle</module>
         <module>cachedb-starter</module>
         <module>cachedb-spring-boot-starter</module>
+        <module>cachedb-reactor</module>
+        <module>cachedb-spring-data</module>
         <module>cachedb-spring-boot-starter-postgres</module>
         <module>cachedb-spring-boot-starter-mssql</module>
         <module>cachedb-spring-boot-starter-oracle</module>
@@ -108,6 +113,7 @@
                     <version>3.11.0</version>
                     <configuration>
                         <release>${maven.compiler.release}</release>
+                        <proc>full</proc>
                         <!-- Generated sibling sources are deliberately compiled with their callers. -->
                         <implicit>class</implicit>
                     </configuration>
@@ -116,6 +122,14 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-source-plugin</artifactId>
                     <version>${maven.source.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.2.5</version>
+                    <configuration>
+                        <argLine>${argLine} ${cachedb.test.jvmArgs}</argLine>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
@@ -134,26 +148,39 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>require-supported-build-platform</id>
+                        <goals><goal>enforce</goal></goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[21,)</version>
+                                    <message>CacheDB requires Java 21 or newer. Java 17 applications must stay on CacheDB 0.18.x.</message>
+                                </requireJavaVersion>
+                                <requireMavenVersion>
+                                    <version>[3.9,)</version>
+                                    <message>CacheDB builds require Maven 3.9 or newer.</message>
+                                </requireMavenVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 
     <profiles>
         <profile>
-            <id>explicit-annotation-processing</id>
-            <activation><jdk>[21,)</jdk></activation>
+            <id>virtual-thread-readiness</id>
             <properties>
-                <maven.compiler.proc>full</maven.compiler.proc>
+                <cachedb.test.jvmArgs>-Xlog:jfr+startup=off -XX:FlightRecorderOptions=stackdepth=256 -XX:StartFlightRecording=settings=${maven.multiModuleProjectDirectory}/tools/ci/virtual-threads.jfc,filename=${project.build.directory}/virtual-threads-${surefire.forkNumber}.jfr,dumponexit=true,maxsize=64m</cachedb.test.jvmArgs>
             </properties>
-            <build>
-                <pluginManagement>
-                    <plugins>
-                        <plugin>
-                            <groupId>org.apache.maven.plugins</groupId>
-                            <artifactId>maven-compiler-plugin</artifactId>
-                            <configuration><proc>full</proc></configuration>
-                        </plugin>
-                    </plugins>
-                </pluginManagement>
-            </build>
         </profile>
         <profile>
             <id>inmemory-benchmarks</id>
@@ -194,6 +221,7 @@
                                 </goals>
                                 <configuration>
                                     <source>${maven.compiler.release}</source>
+                                    <sourcepath>${project.build.sourceDirectory}${path.separator}${project.build.directory}/generated-sources/annotations</sourcepath>
                                     <show>package</show>
                                     <failOnError>false</failOnError>
                                     <doclint>none</doclint>

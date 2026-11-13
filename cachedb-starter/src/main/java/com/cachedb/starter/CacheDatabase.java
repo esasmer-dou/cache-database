@@ -76,12 +76,20 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 
 import javax.sql.DataSource;
 
 public final class CacheDatabase implements CacheSession, AutoCloseable {
+
+    private final com.reactor.cachedb.core.config.CacheRuntimeOptions runtimeOptions;
+    private final com.reactor.cachedb.core.trace.TraceContextPropagator runtimeTraceContextPropagator;
+    public com.reactor.cachedb.core.config.CacheRuntimeOptions runtimeOptions() { return runtimeOptions; }
+    public com.reactor.cachedb.core.config.NearCacheInvalidationMode nearCacheInvalidationMode() { return nearCaches.invalidationMode(); }
+    public java.util.function.BooleanSupplier nearCacheTrackingReadySupplier() { return nearCaches.trackingReadySupplier(); }
+    public boolean publishLegacyNearInvalidations() { return nearCaches.publishLegacyInvalidations(); }
 
     private final CacheDatabaseConfig config;
     private final DataSource dataSource;
@@ -91,6 +99,56 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             new java.util.concurrent.CopyOnWriteArrayList<>();
     private final String instanceId;
     private final DefaultCacheSession session;
+    private volatile CacheDataProtection dataProtection;
+
+    /**
+     * Install explicit native plans. Plan construction still requires approved complete route/runtime
+     * inventory and a real distributed TenantReadFence; registration does not create that evidence.
+     */
+    public synchronized CacheDataProtection configureDataProtection(
+            java.util.Collection<RedisTenantPurgePlan> plans, int maxConcurrentAdministrators) {
+        if (dataProtection != null) throw new IllegalStateException("Data protection is already configured");
+        if (plans == null || plans.isEmpty() || plans.size() > 64)
+            throw new IllegalArgumentException("Data protection requires 1..64 explicit entity plans");
+        for (var plan : plans) {
+            var binding = entityRegistry.find(plan.entityName).orElseThrow(
+                    () -> new IllegalArgumentException("Unknown protected entity plan"));
+            var metadata = binding.metadata();
+            if (!metadata.tenantPurgeEnabled() || metadata.entityType() != plan.entityType()
+                    || !metadata.redisNamespace().equals(plan.scope())
+                    || !metadata.tableName().equals(plan.binding.source().table())
+                    || !metadata.idColumn().equals(plan.binding.source().idColumn())
+                    || !java.util.Objects.equals(metadata.tenantFieldName(), plan.binding.source().tenantColumn())
+                    || !metadata.versionColumn().equals(plan.versionColumn)
+                    || plan.redis != foregroundJedis || plan.keys != redisKeyStrategy)
+                throw new IllegalArgumentException("Purge plan is not bound to this database's entity/runtime");
+        }
+        dataProtection = new CacheDataProtection(entityRegistry, plans, maxConcurrentAdministrators);
+        return dataProtection;
+    }
+
+    public CacheDataProtection dataProtection() {
+        var configured = dataProtection;
+        if (configured == null) throw new com.reactor.cachedb.core.protection.ProtectionException(
+                com.reactor.cachedb.core.protection.ProtectionException.Code.UNWIRED_PROTOCOL);
+        return configured;
+    }
+
+    /** Borrowed actual key strategy, including Cluster/custom segments; never replace it in a purge plan. */
+    public RedisKeyStrategy redisKeyStrategy() { return redisKeyStrategy; }
+
+    private final com.reactor.cachedb.core.async.CacheAsyncExecutor asyncExecutor;
+    @Override public com.reactor.cachedb.core.async.CacheAsyncExecutor asyncExecutor() { return asyncExecutor; }
+    private final com.reactor.cachedb.redis.RedisRepositoryReadState pointReads;
+    private final com.reactor.cachedb.redis.RedisNearCacheCoordinator nearCaches;
+    /** Borrowed coordinator owned and closed by this database, not by callers or repository views. */
+    public com.reactor.cachedb.redis.RedisNearCacheCoordinator nearCacheCoordinator() { return nearCaches; }
+    /** Borrowed runtime shared by every synchronous repository/view in this database. */
+    public com.reactor.cachedb.redis.RedisReadRuntime redisReadRuntime() { return pointReads.runtime(); }
+    public com.reactor.cachedb.redis.RedisRepositoryReadState.Metrics redisReadMetrics() { return pointReads.metrics(); }
+    public com.reactor.cachedb.redis.RedisRepositoryReadState.NativeReadMemory nativeReadMemory() {
+        return pointReads.nativeReadMemory();
+    }
     private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<com.reactor.cachedb.core.queue.QueuedWriteOperation>> durableListeners
             = new java.util.concurrent.CopyOnWriteArrayList<>();
 
@@ -138,6 +196,34 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     private final RedisKeyStrategy redisKeyStrategy;
     private final com.reactor.cachedb.core.route.RouteCoverageStore routeCoverageStore;
     private final com.reactor.cachedb.core.repository.CacheIdGenerator idGenerator;
+
+    // Non-tenant resident re-encryption: isolated from producer and tenant-purge wiring.
+    private final CacheDatabaseReencryption reencryption = ownReencryption();
+
+    private CacheDatabaseReencryption ownReencryption() {
+        var service = new CacheDatabaseReencryption(this);
+        ownResource(service);
+        return service;
+    }
+
+    /** Cached database-owned handle; actual registration/provider are mandatory. Administrative only. */
+    public CacheReencryptionJob reencryptionRunner(Class<?> entityClass) {
+        return reencryption.factory(entityClass);
+    }
+
+    /** Bounded Redis-resident maintenance. SOURCE is explicitly unsupported, not a business save. */
+    public com.reactor.cachedb.redis.RedisNonTenantReencryptionRunner.Step reencrypt(
+            Class<?> entityClass, int maxRows,
+            com.reactor.cachedb.redis.RedisNonTenantReencryptionRunner.Scope scope) {
+        reencryption.validate(maxRows, scope);
+        return reencryptionRunner(entityClass).reencrypt(maxRows, scope);
+    }
+
+    public com.reactor.cachedb.redis.RedisNonTenantReencryptionRunner.Step reencrypt(
+            Class<?> entityClass, int maxRows) {
+        return reencrypt(entityClass, maxRows,
+                com.reactor.cachedb.redis.RedisNonTenantReencryptionRunner.Scope.REDIS_RESIDENT);
+    }
 
     public static CacheDatabaseBootstrap bootstrap(DataSource dataSource) {
         return CacheDatabaseBootstrap.using(dataSource);
@@ -197,11 +283,43 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 config);
     }
 
+    public CacheDatabase(JedisPooled jedis, DataSource dataSource, CacheDatabaseConfig config,
+            com.reactor.cachedb.core.config.CacheRuntimeOptions runtimeOptions) {
+        this(JedisPooledOperations.of(jedis), dataSource, config, runtimeOptions);
+    }
+
+    public CacheDatabase(RedisClientOperations jedis, DataSource dataSource, CacheDatabaseConfig config,
+            com.reactor.cachedb.core.config.CacheRuntimeOptions runtimeOptions) {
+        this(jedis, jedis, dataSource, config, runtimeOptions);
+    }
+
+    public CacheDatabase(JedisPooled foregroundJedis, JedisPooled backgroundJedis, DataSource dataSource,
+            CacheDatabaseConfig config, com.reactor.cachedb.core.config.CacheRuntimeOptions runtimeOptions) {
+        this(JedisPooledOperations.of(foregroundJedis), JedisPooledOperations.of(backgroundJedis),
+                dataSource, config, runtimeOptions);
+    }
+
     public CacheDatabase(
             RedisClientOperations foregroundJedis,
             RedisClientOperations backgroundJedis,
             DataSource dataSource,
             CacheDatabaseConfig config) {
+        this(foregroundJedis, backgroundJedis, dataSource, config,
+                com.reactor.cachedb.core.config.CacheRuntimeOptions.defaults());
+    }
+
+    public CacheDatabase(
+            RedisClientOperations foregroundJedis,
+            RedisClientOperations backgroundJedis,
+            DataSource dataSource,
+            CacheDatabaseConfig config,
+            com.reactor.cachedb.core.config.CacheRuntimeOptions runtimeOptions) {
+        this.runtimeOptions = java.util.Objects.requireNonNull(runtimeOptions, "runtimeOptions");
+        this.runtimeTraceContextPropagator = runtimeOptions.observationRecorder().enabled()
+                && runtimeOptions.observationTraceparentSupplier() != com.reactor.cachedb.core.observe.CacheTraceparentSupplier.NONE
+                ? new com.reactor.cachedb.core.observe.ObservingTraceContextPropagator(
+                        config.traceContextPropagator(), runtimeOptions.observationTraceparentSupplier(), true)
+                : config.traceContextPropagator();
         this.dataSource = dataSource;
         this.foregroundJedis = foregroundJedis;
         this.backgroundJedis = backgroundJedis;
@@ -231,7 +349,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         .leaderLeaseRenewIntervalMillis(
                                 config.runtimeCoordination().leaderLeaseRenewIntervalMillis())
                         .build();
-        this.entityRegistry = new DefaultEntityRegistry(config.resourceLimits());
+        this.entityRegistry = new DefaultEntityRegistry(config.resourceLimits(), runtimeOptions.keyProvider());
         this.queryEvaluator = new QueryEvaluator();
         this.projectionRefreshDispatcher = null;
         this.adminMonitoringEnabled = config.adminMonitoring().enabled() && config.runtimeRole().runsWorkers();
@@ -260,7 +378,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         : RedisStoragePerformanceMirror.disabled(
                                 storagePerformanceCollector, effectiveAdminMonitoringConfig);
 
-        RedisWriteOperationMapper mapper = new RedisWriteOperationMapper(config.traceContextPropagator());
+        RedisWriteOperationMapper mapper = new RedisWriteOperationMapper(runtimeTraceContextPropagator, entityRegistry);
         RedisKeyStrategy keyStrategy =
                 foregroundJedis.clustered() || backgroundJedis.clustered()
                 ? new com.reactor.cachedb.redis.ClusterHashTagKeyStrategy(config.keyspace())
@@ -282,6 +400,14 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                 new RedisCacheIdGenerator(
                         backgroundJedis, config.keyspace().keyPrefix() + ":sequence");
         this.redisKeyStrategy = keyStrategy;
+        // One validated fleet policy drives both reads and foreground/background write publication.
+        nearCaches = new com.reactor.cachedb.redis.RedisNearCacheCoordinator(
+                backgroundJedis, keyStrategy, runtimeOptions.nearCacheInvalidation());
+        ownResource(nearCaches);
+        if (foregroundJedis instanceof com.reactor.cachedb.redis.RedisTopologyChangeSource source)
+            ownResource(source.onTopologyChange(nearCaches::topologyChanged));
+        if (backgroundJedis != foregroundJedis && backgroundJedis instanceof com.reactor.cachedb.redis.RedisTopologyChangeSource source)
+            ownResource(source.onTopologyChange(nearCaches::topologyChanged));
         this.durabilityTracker = new RedisDurabilityTracker(backgroundJedis, keyStrategy);
         RedisFunctionExecutor functionExecutor =
                 new RedisFunctionExecutor(
@@ -289,14 +415,16 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         config.redisFunctions(),
                         config.redisGuardrail(),
                         effectiveWriteBehindConfig,
-                        new RedisFunctionArgsMapper(config.traceContextPropagator()).withNearInvalidationChannel(keyStrategy.nearInvalidationChannel()));
+                        new RedisFunctionArgsMapper(runtimeTraceContextPropagator).withNearInvalidationChannel(keyStrategy.nearInvalidationChannel())
+                                .withNearInvalidationPublisher(nearCaches::publishLegacyInvalidations));
         RedisFunctionExecutor backgroundFunctionExecutor =
                 new RedisFunctionExecutor(
                         backgroundJedis,
                         config.redisFunctions(),
                         config.redisGuardrail(),
                         effectiveWriteBehindConfig,
-                        new RedisFunctionArgsMapper(config.traceContextPropagator()).withNearInvalidationChannel(keyStrategy.nearInvalidationChannel()));
+                        new RedisFunctionArgsMapper(runtimeTraceContextPropagator).withNearInvalidationChannel(keyStrategy.nearInvalidationChannel())
+                                .withNearInvalidationPublisher(nearCaches::publishLegacyInvalidations));
         RedisWriteBehindQueue queue =
                 new RedisWriteBehindQueue(
                         foregroundJedis,
@@ -363,8 +491,13 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         .runtimeCoordination(effectiveRuntimeCoordination)
                         .build();
         this.config = runtimeConfig;
-        var nearCaches = new com.reactor.cachedb.redis.RedisNearCacheCoordinator(backgroundJedis, keyStrategy);
-        ownResource(nearCaches);
+        pointReads = new com.reactor.cachedb.redis.RedisRepositoryReadState(foregroundJedis, runtimeOptions.redisReadCoalescing());
+        ownResource(pointReads);
+        asyncExecutor = new com.reactor.cachedb.core.async.CacheAsyncExecutor(
+                runtimeOptions.asyncMaxConcurrent(), runtimeOptions.asyncExecutor(),
+                runtimeTraceContextPropagator,
+                com.reactor.cachedb.core.async.CacheAsyncExecutor.DEFAULT_SHUTDOWN_TIMEOUT);
+        ownResource(asyncExecutor);
         this.session =
                 new DefaultCacheSession(
                         foregroundJedis,
@@ -379,7 +512,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         queryEvaluator,
                         storagePerformanceCollector,
                         projectionRefreshDispatcher,
-                        projectionRefreshQueue).withNearCacheCoordinator(nearCaches);
+                        projectionRefreshQueue, runtimeOptions).withNearCacheCoordinator(nearCaches).withReadRuntime(pointReads)
+                        .withAsyncExecutor(asyncExecutor);
         this.writeBehindWorker =
                 new RedisWriteBehindWorker(
                         backgroundJedis,
@@ -387,7 +521,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         effectiveWriteBehindConfig,
                         mapper,
                         keyStrategy,
-                        backgroundFunctionExecutor).withTraceContextPropagator(config.traceContextPropagator())
+                        backgroundFunctionExecutor).withTraceContextPropagator(runtimeTraceContextPropagator)
                         .withDurableListener(this::publishDurableChange);
         this.deadLetterRecoveryWorker =
                 new RedisDeadLetterRecoveryWorker(
@@ -397,7 +531,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         mapper,
                         keyStrategy,
                         effectiveWriteBehindConfig.deadLetterStreamKey())
-                        .withTraceContextPropagator(config.traceContextPropagator())
+                        .withTraceContextPropagator(runtimeTraceContextPropagator)
                         .withDurableListener(this::publishDurableChange);
         RedisLeaderLease recoveryCleanupLeaderLease =
                 !config.runtimeRole().runsWorkers() ? null : RuntimeCoordinationSupport.leaderLease(
@@ -420,7 +554,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         mapper,
                         keyStrategy,
                         effectiveWriteBehindConfig.deadLetterStreamKey())
-                        .withTraceContextPropagator(config.traceContextPropagator())
+                        .withTraceContextPropagator(runtimeTraceContextPropagator)
                         .withDurableListener(this::publishDurableChange);
         if (adminMonitoringEnabled) {
             RedisLeaderLease adminReportLeaderLease =
@@ -610,6 +744,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             CachePolicy cachePolicy,
             RelationBatchLoader<T> relationBatchLoader,
             EntityPageLoader<T> pageLoader) {
+        codec = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.bind(metadata, codec, runtimeOptions.keyProvider());
         JdbcEntitySourceLoader<T, ID> sourceLoader =
                 new JdbcEntitySourceLoader<>(
                         dataSource,
@@ -742,18 +877,92 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
             WriteBehindConfig writeBehindConfig,
             StoragePerformanceCollector performanceCollector,
             WriteBehindFlusherFactory flusherFactory) {
-        if (flusherFactory != null) {
-            return flusherFactory.create(
-                    dataSource, entityRegistry, writeBehindConfig, performanceCollector);
-        }
-        return JdbcStorageProviders.require("postgres")
-                .writeBehindFlusherFactory(Map.of())
-                .create(dataSource, entityRegistry, writeBehindConfig, performanceCollector);
+        WriteBehindFlusher flusher = flusherFactory != null
+                ? flusherFactory.create(dataSource, entityRegistry, writeBehindConfig, performanceCollector)
+                : JdbcStorageProviders.require("postgres").writeBehindFlusherFactory(Map.of())
+                        .create(dataSource, entityRegistry, writeBehindConfig, performanceCollector);
+        if (flusher instanceof com.reactor.cachedb.jdbc.AbstractJdbcWriteBehindFlusher jdbc)
+            jdbc.withObservationRecorder(runtimeOptions.observationRecorder())
+                    .withObservationOriginLinksEnabled(runtimeOptions.observationTraceparentSupplier()
+                            != com.reactor.cachedb.core.observe.CacheTraceparentSupplier.NONE);
+        return flusher;
+    }
+
+    /**
+     * Attach the native producer before the first repository is obtained.
+     * This does NOT open a generation, invent a migration attestation or certify purge closure.
+     * The returned capability is borrowed and participates in distributed producer-drain probes.
+     */
+    public com.reactor.cachedb.redis.RedisTenantProducer configureTenantProducer(EntityMetadata<?, ?> metadata, int maxInFlight) {
+        var binding = entityRegistry.find(metadata.entityName()).orElseThrow(
+                () -> new IllegalStateException("Register the entity before protection configuration"));
+        if (!binding.metadata().redisNamespace().equals(metadata.redisNamespace())
+                || !binding.metadata().tenantPurgeEnabled())
+            throw new IllegalArgumentException("Protection metadata disagrees with the registered entity");
+        var producer = session.configureTenantProducer(binding.metadata(), maxInFlight);
+        ownedResources.add(producer);
+        return producer;
+    }
+
+    private final java.util.concurrent.locks.ReentrantLock tenantProtectionPreparation =
+            new java.util.concurrent.locks.ReentrantLock();
+
+    /** First-only administrator binding. Inspect its descriptor, then bootstrap BEFORE INITIAL acquisition. */
+    public <T,ID> CacheInitialNamespace<T,ID> prepareInitialNamespace(EntityMetadata<T,ID> metadata,
+            com.reactor.cachedb.core.protection.TenantPurgeProtocol.Binding nativeBinding,
+            com.reactor.cachedb.jdbc.JdbcTenantPurgeGuard guard,
+            com.reactor.cachedb.jdbc.JdbcSourceOwnerOnboarding.JdbcIdCodec<ID> ids, ID first, ID last,
+            int maxRows,int pageBytes,int rowBytes,long residentBytes,int maxInFlight) {
+        var prepared=CacheInitialNamespace.prepare(this,session,metadata,nativeBinding,guard,ids,first,last,
+                maxRows,pageBytes,rowBytes,residentBytes,maxInFlight);
+        ownResource(prepared);return prepared;
+    }
+
+    com.reactor.cachedb.redis.RedisTenantProducer tenantProducerForEnrollment(EntityMetadata<?,?> metadata,int maxInFlight) {
+        var existing=session.configuredTenantProducer(metadata);
+        return existing==null?configureTenantProducer(metadata,maxInFlight):existing;
+    }
+
+    /** Prepare all registered protected producers before the first repository is published. */
+    public CacheTenantRuntimeEnrollment prepareTenantProtection(int maxInFlight) {
+        tenantProtectionPreparation.lock();
+        try {
+            var enrollment = CacheTenantRuntimeEnrollment.prepare(this, maxInFlight);
+            ownedResources.add(enrollment);
+            return enrollment;
+        } finally { tenantProtectionPreparation.unlock(); }
+    }
+
+    /** Explicit administrative adoption of a bounded existing-identity worklist; never opens admission. */
+    public <T,ID> CacheSourceOwnerOnboarding<ID> prepareSourceOwnerOnboarding(EntityMetadata<T,ID> metadata,
+            CacheTenantRuntimeEnrollment enrollment, RedisTenantPurgePlan plan,
+            com.reactor.cachedb.redis.RedisTenantRuntimeControl.ApprovedRoster approval,
+            com.reactor.cachedb.jdbc.JdbcSourceOwnerOnboarding.JdbcIdCodec<ID> ids,
+            java.util.List<ID> existingCandidates, java.util.Set<String> reviewedPlans) {
+        return CacheSourceOwnerOnboarding.prepare(this,metadata,enrollment,plan,approval,ids,existingCandidates,reviewedPlans);
     }
 
     public <T, ID, P> EntityProjectionBinding<T, P, ID> registerProjection(
             EntityMetadata<T, ID> metadata, EntityProjection<T, P, ID> projection) {
         return entityRegistry.registerProjection(metadata, projection);
+    }
+
+    /** Explicit aggregate snapshot API; does not change repository COUNT/FACET semantics. */
+    public com.reactor.cachedb.core.readmodel.CountFacetReadModel countFacetReadModel(
+            EntityMetadata<?, ?> source,
+            com.reactor.cachedb.core.readmodel.CountFacetDefinition definition) {
+        Objects.requireNonNull(source, "source");
+        var registered = entityRegistry.find(source.entityName()).orElseThrow(
+                () -> new IllegalStateException("Register the source entity before creating its read model"));
+        var actual = registered.metadata();
+        if (actual.entityType() != source.entityType()
+                || !actual.redisNamespace().equals(source.redisNamespace())
+                || !Objects.equals(actual.tenantFieldName(), source.tenantFieldName())
+                || actual.tenantPurgeEnabled() != source.tenantPurgeEnabled()) {
+            throw new IllegalArgumentException("Read-model source disagrees with the registered entity");
+        }
+        return new com.reactor.cachedb.redis.RedisCountFacetReadModel(
+                foregroundJedis, redisKeyStrategy, actual, definition);
     }
 
     @Override
@@ -772,6 +981,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     @SuppressWarnings("unchecked")
     public <T, ID> SourceRepository<T, ID> sourceRepository(
             EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
+        com.reactor.cachedb.core.protection.TenantProtectionGate.requireLegacy(metadata);
         EntityBinding<?, ?> rawBinding =
                 entityRegistry
                         .find(metadata.entityName())
@@ -782,6 +992,7 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                                                         + " reads: "
                                                         + metadata.entityName()));
         EntityBinding<T, ID> binding = (EntityBinding<T, ID>) rawBinding;
+        com.reactor.cachedb.core.protection.TenantProtectionGate.requireLegacy(binding.metadata());
         return new RegisteredSourceRepository<>(
                 metadata,
                 binding.byIdLoader(),
@@ -792,6 +1003,27 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
     public <T> com.reactor.cachedb.core.repository.SourceSqlRepository<T> sourceSqlRepository(
             EntityCodec<T> codec) {
         return new JdbcSourceSqlRepository<>(dataSource, codec);
+    }
+
+    @Override public <T, ID> EntityCodec<T> runtimeCodec(EntityMetadata<T, ID> metadata, EntityCodec<T> fallback) {
+        var registered = entityRegistry.find(metadata.entityName());
+        if (registered.isPresent()) {
+            @SuppressWarnings("unchecked") var bound = (EntityBinding<T, ID>) registered.get();
+            com.reactor.cachedb.core.crypto.EncryptedStorageChecks.sameMapping(metadata, bound.metadata());
+            com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, bound.codec());
+            return bound.codec();
+        }
+        return com.reactor.cachedb.core.crypto.EncryptedStorageChecks.bind(metadata, fallback, runtimeOptions.keyProvider());
+    }
+
+    public <T> com.reactor.cachedb.core.model.SourceMapping<T> sourceMapping(com.reactor.cachedb.core.model.SourceMapping<T> mapping) {
+        if (mapping.entityMetadata() == null) return mapping;
+        @SuppressWarnings("unchecked") var metadata = (EntityMetadata<T, Object>) mapping.entityMetadata();
+        var registered = entityRegistry.find(metadata.entityName());
+        if (registered.isEmpty()) return mapping.bindEncryption(runtimeOptions.keyProvider());
+        @SuppressWarnings("unchecked") var binding = (EntityBinding<T, Object>) registered.get();
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.sameMapping(metadata, binding.metadata());
+        return mapping.withCodec(binding.codec());
     }
 
     public boolean isDurable(WriteReceipt<?, ?> receipt) {
@@ -1139,7 +1371,8 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
                         batchId)
                 .withMaxColumnsPerOperation(config.resourceLimits().maxColumnsPerOperation())
                 .withQueryIndexConfig(config.queryIndex())
-                .withTraceContextPropagator(config.traceContextPropagator());
+                .withTraceContextPropagator(runtimeTraceContextPropagator)
+                .withNearInvalidationPublisher(nearCaches::publishLegacyInvalidations);
     }
 
     public String instanceId() {
@@ -1162,7 +1395,11 @@ public final class CacheDatabase implements CacheSession, AutoCloseable {
 
     @Override
     public void close() {
-        RuntimeException closeFailure = null;
+        session.stopTenantProducers();
+        asyncExecutor.stopAccepting();
+        // Foreclose both transport admission and the disabled/causal/UOW legacy bypass paths first.
+        RuntimeException closeFailure = closeResource(pointReads, null);
+        closeFailure = closeResource(asyncExecutor, closeFailure);
         closeFailure = closeResource(writeBehindWorker, closeFailure);
         durableListeners.clear();
         closeFailure = closeResource(deadLetterRecoveryWorker, closeFailure);

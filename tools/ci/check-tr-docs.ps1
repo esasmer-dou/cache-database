@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'markdown-source.ps1')
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $docsFullPath = Join-Path $repoRoot $DocsRoot
@@ -44,7 +45,7 @@ $rules = @(
     @{ Pattern = '(?<!\p{L})Sagla(?=\p{L}|$)'; Suggestion = 'Use "Sağla..." forms with ğ.' },
     @{ Pattern = '(?<!\p{L})cagri(?=\p{L}|$)'; Suggestion = 'Use "çağrı..." forms with ç and ğ.' },
     @{ Pattern = '(?<!\p{L})Cagri(?=\p{L}|$)'; Suggestion = 'Use "Çağrı..." forms with ç and ğ.' },
-    @{ Pattern = '(?<!\p{L})gecmis(?=\p{L}|$)'; Suggestion = 'Use "geçmiş..." forms with ç.' },
+    @{ Pattern = '(?<!\p{L})gecmis'; Suggestion = 'Use "geçmiş..." forms with ç.' },
     @{ Pattern = '(?<!\p{L})trafig(?=\p{L}|$)'; Suggestion = 'Use "trafik/trafiği" forms with ı and ğ when needed.' },
     @{ Pattern = '(?<!\p{L})tarafinda(?!\p{L})'; Suggestion = 'Use "tarafında".' },
     @{ Pattern = '(?<!\p{L})yazılir(?!\p{L})'; Suggestion = 'Use "yazılır".' },
@@ -64,23 +65,9 @@ $markdownFiles = @(
 ) | Sort-Object FullName -Unique
 
 foreach ($file in $markdownFiles) {
-    $lines = Get-Content -LiteralPath $file.FullName
-    $insideFence = $false
-
-    for ($index = 0; $index -lt $lines.Count; $index++) {
-        $line = $lines[$index]
-        $trimmed = $line.Trim()
-
-        if ($trimmed.StartsWith('```')) {
-            $insideFence = -not $insideFence
-            continue
-        }
-
-        if ($insideFence) {
-            continue
-        }
-
-        $scanLine = [regex]::Replace($line, '`[^`]+`', '')
+    $lines = @(Get-Content -LiteralPath $file.FullName)
+    foreach ($sourceLine in Get-MarkdownSourceLines $lines) {
+        $scanLine = $sourceLine.Prose
         if ([string]::IsNullOrWhiteSpace($scanLine)) {
             continue
         }
@@ -91,10 +78,10 @@ foreach ($file in $markdownFiles) {
                 $relativePath = [System.IO.Path]::GetRelativePath($repoRoot, $file.FullName)
                 $findings.Add([pscustomobject]@{
                     File = $relativePath
-                    Line = $index + 1
+                    Line = $sourceLine.Number
                     Token = $match.Value
                     Suggestion = $rule.Suggestion
-                    Text = $line.Trim()
+                    Text = $lines[$sourceLine.Number - 1].Trim()
                 })
             }
         }

@@ -1,8 +1,10 @@
 package com.reactor.cachedb.redis;
 
 import com.reactor.cachedb.core.api.EntityRepository;
+import com.reactor.cachedb.core.observe.*;
 import com.reactor.cachedb.core.api.ProjectionRepository;
 import com.reactor.cachedb.core.api.RepositoryCapabilities;
+import com.reactor.cachedb.core.api.RepositoryCapability;
 import com.reactor.cachedb.core.cache.CacheAdmissionSource;
 import com.reactor.cachedb.core.cache.CachePolicy;
 import com.reactor.cachedb.core.cache.PageWindow;
@@ -66,8 +68,69 @@ import redis.clients.jedis.resps.ScanResult;
 import redis.clients.jedis.resps.Tuple;
 
 public final class RedisEntityRepository<T, ID>
-        implements EntityRepository<T, ID>, ExternalChangeHydrationRepository<T, ID> {
+        implements EntityRepository<T, ID>, ExternalChangeHydrationRepository<T, ID>,
+                com.reactor.cachedb.core.api.RedisLexicalWindowRepository<T> {
+    private final java.util.concurrent.locks.ReentrantLock watcherRegistrationLock = new java.util.concurrent.locks.ReentrantLock();
     private static final RepositoryCapabilities CAPABILITIES = RepositoryCapabilities.all();
+    private static final RepositoryCapabilities LEGACY_CAPABILITIES = RepositoryCapabilities.of(
+            java.util.Arrays.stream(RepositoryCapability.values())
+                    .filter(capability -> capability != RepositoryCapability.BULK_DELETE)
+                    .toArray(RepositoryCapability[]::new));
+
+    private CacheObservationRecorder observationRecorder = NoOpCacheObservationRecorder.INSTANCE;
+    private boolean observationEnabled;
+    private Object observationOwner;
+    private com.reactor.cachedb.core.trace.TraceContextPropagator observationWriteTrace;
+
+    /** Configure once, before publication. Concrete maintenance capabilities remain intact. */
+    public RedisEntityRepository<T, ID> withObservationRecorder(CacheObservationRecorder recorder) {
+        java.util.Objects.requireNonNull(recorder, "recorder");
+        if (observationRecorder != NoOpCacheObservationRecorder.INSTANCE && observationRecorder != recorder)
+            throw new IllegalStateException("Observation recorder is already assigned");
+        if (observationRecorder != recorder) {
+            observationEnabled = recorder.enabled();
+            observationOwner = observationEnabled ? new Object() : null;
+            observationRecorder = recorder;
+        }
+        return this;
+    }
+    public RedisEntityRepository<T, ID> withObservationRecorder(CacheObservationRecorder recorder,
+            com.reactor.cachedb.core.trace.TraceContextPropagator nativeWriteTrace) {
+        withObservationRecorder(recorder);
+        observationWriteTrace = observationEnabled ? nativeWriteTrace : null; return this;
+    }
+    private <V> V observeWrite(CacheOperation operation, java.util.function.Supplier<V> action) {
+        return CacheObservations.call(observationRecorder, operation, metadata.entityName(), observationOwner, () -> {
+            if (observationWriteTrace == null) return action.get();
+            try (var trace = com.reactor.cachedb.core.trace.TraceContexts.withMetadata(observationWriteTrace.capture())) {
+                return action.get();
+            }
+        });
+    }
+    private RedisEntityRepository<T, ID> withObservationState(RedisEntityRepository<T, ID> source) {
+        observationRecorder = source.observationRecorder;
+        observationWriteTrace = source.observationWriteTrace;
+        observationEnabled = source.observationEnabled; observationOwner = source.observationOwner;
+        return this;
+    }
+    private void observationTier(Tier tier) {
+        if (observationEnabled) try {
+            CacheObservationContext.tier(tier);
+            if (tier == Tier.SOURCE) CacheObservationContext.current().databaseSystem("other");
+        } catch (RuntimeException ignored) { }
+    }
+    private void observationOutcome(Outcome outcome) {
+        if (observationEnabled) try { CacheObservationContext.outcome(outcome); } catch (RuntimeException ignored) { }
+    }
+    @Override public com.reactor.cachedb.core.api.AsyncEntityRepository<T, ID> async() {
+        return async(asyncExecutor());
+    }
+    @Override public long count(QuerySpec spec) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.COUNT, metadata.entityName(),
+                    observationOwner, () -> count(spec));
+        return EntityRepository.super.count(spec);
+    }
 
     private final RedisClientOperations jedis;
     private final RedisClientOperations backgroundJedis;
@@ -107,25 +170,157 @@ public final class RedisEntityRepository<T, ID>
     private final RedisDurabilityTracker durabilityTracker;
     private RedisNearCacheCoordinator nearCacheCoordinator;
     private RedisNearCacheCoordinator.Store nearCache;
+    private RedisProtectedPointReads<T, ID> tenantReadBridge;
+    private RedisTenantProducer tenantProducer;
+
+    /** Attach before repository publication; the owning runtime closes the producer. */
+    public RedisEntityRepository<T, ID> withTenantProducer(RedisTenantProducer producer) {
+        if (!metadata.tenantPurgeEnabled() || producer == null
+                || !metadata.redisNamespace().equals(producer.namespace())
+                || !producer.belongsToRuntime(jedis, keyStrategy)
+                || tenantProducer != null && tenantProducer != producer)
+            throw new com.reactor.cachedb.core.protection.ProtectionException(
+                    com.reactor.cachedb.core.protection.ProtectionException.Code.INVALID_REQUEST);
+        if (readThroughConfig.mode().byIdEnabled()
+                && readThroughConfig.hydrateLoadedEntities())
+            throw new com.reactor.cachedb.core.protection.ProtectionException(
+                    com.reactor.cachedb.core.protection.ProtectionException.Code.UNWIRED_PROTOCOL);
+        RedisProtectedPointReads.Source<T, ID> source = null;
+        if (readThroughConfig.mode().byIdEnabled()) {
+            var versioned = versionedSourceLoader(currentByIdLoader());
+            if (versioned == null) throw new com.reactor.cachedb.core.protection.ProtectionException(
+                    com.reactor.cachedb.core.protection.ProtectionException.Code.UNWIRED_PROTOCOL);
+            source = (original, id) -> versioned.loadVersionedById(id);
+        }
+        if (functionExecutor == null) throw new com.reactor.cachedb.core.protection.ProtectionException(
+                com.reactor.cachedb.core.protection.ProtectionException.Code.UNWIRED_PROTOCOL);
+        functionExecutor.withProtectedRuntime(keyStrategy);
+        var localReads = producer.bindPointReads(cachePolicy, nearCache);
+        withTenantReadFence(localReads, source, null, java.util.Set.of());
+        tenantProducer = producer;
+        return this;
+    }
+
+    /** Actual manager descriptor, not a guessed layout or an approval of the supplied complete page inventory. */
+    public RedisPurgeTarget tenantPurgeTarget(List<RedisPurgeTarget.Page> completePages) {
+        if (!metadata.tenantPurgeEnabled() || tenantProducer == null)
+            throw new com.reactor.cachedb.core.protection.ProtectionException(
+                    com.reactor.cachedb.core.protection.ProtectionException.Code.UNWIRED_PROTOCOL);
+        return pageCacheManager.purgeTarget(completePages);
+    }
+
+    /** Lends these ACTUAL managers and the registered codec; no second index manager or transport is created. */
+    public RedisInitialSourceHydrator<T,ID> initialSourceHydrator(
+            com.reactor.cachedb.core.protection.InitialSourceHotWindow<T,ID> window,RedisTenantRuntimeControl control) {
+        if(tenantProducer==null || window.metadata()!=metadata || window.codec()!=codec)
+            throw new com.reactor.cachedb.core.protection.ProtectionException(
+                    com.reactor.cachedb.core.protection.ProtectionException.Code.UNWIRED_PROTOCOL);
+        return new RedisInitialSourceHydrator<>(jedis,keyStrategy,metadata,codec,cachePolicy,queryIndexManager,
+                pageCacheManager,nearCache,tenantProducer,control,window);
+    }
+
+    /** Borrowed actual namespace store. Null means near cache was disabled for this runtime. */
+    public RedisNearCacheCoordinator.Store tenantNearCache() { return nearCache; }
+
+    private void requireProtectedRuntime(String tenant) {
+        if (tenantProducer == null || tenant == null || functionExecutor == null || !functionExecutor.enabled()
+                || !tenantProducer.belongsToRuntime(jedis, keyStrategy)
+                || watching() || !fetchPlan.includes().isEmpty()
+                || entityRegistry != null && !entityRegistry.projections(metadata.entityName()).isEmpty())
+            throw new com.reactor.cachedb.core.protection.ProtectionException(
+                    com.reactor.cachedb.core.protection.ProtectionException.Code.UNWIRED_PROTOCOL);
+    }
+
+    private boolean ownedProtectedMutation(String tenant) {
+        // Also validate cloned views and changed projection/watcher state when a ticket already exists.
+        requireProtectedRuntime(tenant);
+        return tenantProducer.ownsCurrent(tenant);
+    }
+
+    private <R> R protectedMutation(String tenant, java.util.function.Supplier<R> action) {
+        requireProtectedRuntime(tenant);
+        return tenantProducer.execute(tenant, () -> {
+            try (var scope = com.reactor.cachedb.core.tenant.CacheTenantContext.withTenant(tenant)) {
+                return action.get();
+            }
+        });
+    }
+
+    private void requireProtectedMutation() {
+        if (metadata.tenantPurgeEnabled()) {
+            String tenant = activeTenant();
+            requireProtectedRuntime(tenant);
+            tenantProducer.requireCurrent(tenant);
+        }
+    }
+
+
+    /** Bind once, after L1 setup, using the same facade-owned generation barrier. */
+    public RedisEntityRepository<T, ID> withTenantReadFence(RedisTenantReadFence fence,
+            RedisProtectedPointReads.Source<T, ID> source, RedisProtectedPointReads.Fill<T> fill,
+            java.util.Set<String> reviewedIdentityProjections) {
+        if (tenantReadBridge != null)
+            throw RedisTenantReadFence.failure(com.reactor.cachedb.core.protection.ProtectionException.Code.INVALID_REQUEST);
+        tenantReadBridge = new RedisProtectedPointReads<>(fence, metadata, codec, keyStrategy,
+                nearCache, pageCacheManager::shouldServeCachedEntity, source, fill, reviewedIdentityProjections);
+        return this;
+    }
+
+    public <P> int refreshProtectedProjection(EntityProjection<T, P, ID> projection,
+            Collection<ID> ids, RedisProtectedPointReads.ProjectionFill<P> planner) {
+        return protectedPointReads().refreshProjection(activeTenant(), projection, ids, planner);
+    }
+
+    private RedisEntityRepository<T, ID> withTenantReadBridgeState(RedisEntityRepository<T, ID> original) {
+        tenantReadBridge = original.tenantReadBridge;
+        tenantProducer = original.tenantProducer;
+        return this;
+    }
+
+    private RedisProtectedPointReads<T, ID> protectedPointReads() {
+        if (pointReads != null) pointReads.ensureOpen();
+        if (tenantReadBridge == null || !fetchPlan.includes().isEmpty())
+            throw RedisTenantReadFence.failure(com.reactor.cachedb.core.protection.ProtectionException.Code.UNWIRED_PROTOCOL);
+        return tenantReadBridge;
+    }
+
+    private void rejectUncertifiedProtectedRead() {
+        if (metadata.tenantPurgeEnabled())
+            throw RedisTenantReadFence.failure(com.reactor.cachedb.core.protection.ProtectionException.Code.INCOMPLETE_INVENTORY);
+    }
+    private RedisRepositoryReadState pointReads;
+    public RedisEntityRepository<T, ID> withReadRuntime(RedisRepositoryReadState state) {
+        if (pointReads != null && pointReads != state) throw new IllegalStateException("Repository read runtime is already assigned");
+        pointReads = state; return this;
+    }
+    /** Null only for legacy standalone repositories without an injected runtime owner. */
+    public RedisReadRuntime redisReadRuntime() { return pointReads == null ? null : pointReads.runtime(); }
     private VerifiedOwners verifiedOwners = new VerifiedOwners();
     private RedisEntityRepository<T, ID> withVerifiedOwners(VerifiedOwners owners) { verifiedOwners = owners; return this; }
     private static final class VerifiedOwners {
+        private final java.util.concurrent.locks.ReentrantLock ownersLock = new java.util.concurrent.locks.ReentrantLock();
         private final LinkedHashMap<String, String> owners = new LinkedHashMap<>(16, 0.75f, true);
         private long bytes;
-        synchronized String get(Object id) { return owners.get(String.valueOf(id)); }
-        synchronized void put(Object id, String owner) {
-            String key = String.valueOf(id);
-            if (key.length() > 4096) return;
-            String previous = owners.put(key, owner);
-            if (previous != null) bytes -= 128L + 2L * (key.length() + previous.length());
-            bytes += 128L + 2L * (key.length() + owner.length());
-            while (owners.size() > 16_384 || bytes > 4L * 1024 * 1024) {
-                var first = owners.entrySet().iterator(); var victim = first.next();
-                bytes -= 128L + 2L * (victim.getKey().length() + victim.getValue().length()); first.remove();
+        String get(Object id) { ownersLock.lock(); try { return owners.get(String.valueOf(id)); } finally { ownersLock.unlock(); } }
+        void put(Object id, String owner) {
+            ownersLock.lock();
+            try {
+                String key = String.valueOf(id);
+                if (key.length() > 4096) return;
+                String previous = owners.put(key, owner);
+                if (previous != null) bytes -= 128L + 2L * (key.length() + previous.length());
+                bytes += 128L + 2L * (key.length() + owner.length());
+                while (owners.size() > 16_384 || bytes > 4L * 1024 * 1024) {
+                    var first = owners.entrySet().iterator(); var victim = first.next();
+                    bytes -= 128L + 2L * (victim.getKey().length() + victim.getValue().length()); first.remove();
+                }
+            } finally {
+                ownersLock.unlock();
             }
         }
     }
     private static final class WatchState<T, ID> {
+        private final java.util.concurrent.locks.ReentrantLock registrationLock = new java.util.concurrent.locks.ReentrantLock();
         volatile RedisWatchRegistry<T, ID> registry;
         int limit = 64;
     }
@@ -136,13 +331,22 @@ public final class RedisEntityRepository<T, ID>
         if (limit < 1 || limit > 64 || watchState.registry != null) throw new IllegalArgumentException("Invalid watcher limit or late configuration");
         watchState.limit = limit; return this;
     }
-    @Override public synchronized com.reactor.cachedb.core.watch.CacheWatcherRegistration registerWatcher(QuerySpec spec,
+    @Override public com.reactor.cachedb.core.watch.CacheWatcherRegistration registerWatcher(QuerySpec spec,
             com.reactor.cachedb.core.watch.CacheWatcherListener<T, ID> listener) {
-        if (metadata.tenantFieldName() != null && activeTenant() == null)
-            throw new IllegalStateException("Tenant watcher requires an explicit tenant context");
-        synchronized (watchState) {
-            if (watchState.registry == null) watchState.registry = new RedisWatchRegistry<>(metadata, codec, queryEvaluator, watchState.limit);
-            return watchState.registry.register(tenantQuery(spec), listener);
+        rejectUncertifiedProtectedRead();
+        watcherRegistrationLock.lock();
+        try {
+            if (metadata.tenantFieldName() != null && activeTenant() == null)
+                throw new IllegalStateException("Tenant watcher requires an explicit tenant context");
+            watchState.registrationLock.lock();
+            try {
+                if (watchState.registry == null) watchState.registry = new RedisWatchRegistry<>(metadata, codec, queryEvaluator, watchState.limit);
+                return watchState.registry.register(tenantQuery(spec), listener);
+            } finally {
+                watchState.registrationLock.unlock();
+            }
+        } finally {
+            watcherRegistrationLock.unlock();
         }
     }
     public long droppedWatcherNotifications() { var registry = watchState.registry; return registry == null ? 0 : registry.dropped(); }
@@ -154,7 +358,8 @@ public final class RedisEntityRepository<T, ID>
                 keyStrategy.versionKey(metadata.redisNamespace(), id), keyStrategy.tombstoneKey(metadata.redisNamespace(), id));
         long version = values.get(1) == null ? 0 : Long.parseLong(values.get(1));
         if (values.get(0) == null && values.get(2) == null && version > 0)
-            throw new com.reactor.cachedb.core.repository.HotUpdateUnavailableException(id);
+            throw new com.reactor.cachedb.core.repository.HotUpdateUnavailableException(
+                    com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata) ? null : id);
         return new WatchBefore(values.get(2) == null ? values.get(0) : null, version);
     }
     private void notifyWatchers(ID id, String before, String after) {
@@ -171,6 +376,346 @@ public final class RedisEntityRepository<T, ID>
         nearCacheCoordinator = coordinator;
         nearCache = coordinator.register(metadata.redisNamespace(), policy);
         return this;
+    }
+
+    private com.reactor.cachedb.core.async.CacheAsyncExecutor asyncGate;
+
+    public RedisEntityRepository<T, ID> withAsyncExecutor(com.reactor.cachedb.core.async.CacheAsyncExecutor gate) {
+        if (asyncGate != null && asyncGate != gate) throw new IllegalStateException("Async gate is already attached");
+        asyncGate = gate;
+        return this;
+    }
+
+    @Override public com.reactor.cachedb.core.async.CacheAsyncExecutor asyncExecutor() {
+        if (asyncGate == null) throw new UnsupportedOperationException("Attach a runtime-owned CacheAsyncExecutor");
+        return asyncGate;
+    }
+
+    @Override public com.reactor.cachedb.core.api.AsyncEntityRepository<T, ID> async(
+            com.reactor.cachedb.core.async.CacheAsyncExecutor gate) {
+        java.util.Objects.requireNonNull(gate, "executor");
+        com.reactor.cachedb.core.api.AsyncEntityRepository<T, ID> delegate = pointReads == null || metadata.tenantPurgeEnabled()
+                ? new com.reactor.cachedb.core.async.OffloadingAsyncEntityRepository<>(this, gate)
+                : new NativeAsyncRepository(gate);
+        return observationEnabled
+                ? ObservingAsyncEntityRepository.wrap(delegate, metadata.entityName(), observationRecorder, observationOwner, observationWriteTrace)
+                : delegate;
+    }
+
+    private HotLookup<T> decodeAsyncPoint(ID id, String entityKey, RedisPointRead read,
+            boolean local, long epoch, boolean touch) {
+        if (read.tombstone() != null) {
+            if (touch) observationOutcome(Outcome.TOMBSTONE);
+            return HotLookup.tombstoned();
+        }
+        String payload = read.payload();
+        if (payload == null) return HotLookup.notCached();
+        T entity = codec.fromRedisValue(payload);
+        verifyTenant(entity);
+        if (!pageCacheManager.shouldServeCachedEntity(entity)) {
+            if (effectiveCachePolicy().hotPolicy().evictWhenRejected()) pageCacheManager.removeEntity(id);
+            return HotLookup.outsidePolicy();
+        }
+        if (touch) pageCacheManager.recordEntityAccess(id);
+        if (local && nearCacheActive()) nearCache.put(String.valueOf(id), payload,
+                shareableNearEntity(entity, payload), pointReadTtl(read, entityKey), epoch, 0);
+        return HotLookup.hit(entity);
+    }
+
+    private RedisAsyncReadWindow.Row<T> nearAsyncRow(ID id, RedisAsyncReadDelivery<?> delivery) {
+        if (!nearCacheActive()) return null;
+        String identity = String.valueOf(id);
+        var entry = nearCache.lookup(identity, requiredVersion(id));
+        if (entry == null || !nearCacheActive()) return null;
+        delivery.charge(com.reactor.cachedb.core.codec.Utf8Length.of(entry.payload()));
+        @SuppressWarnings("unchecked") T entity = entry.decoded() == null || !canShareNear(entry.payload())
+                ? codec.fromRedisValue(entry.payload()) : (T) entry.decoded();
+        verifyTenant(entity);
+        if (!pageCacheManager.shouldServeCachedEntity(entity)) { invalidateNear(id); return null; }
+        if (entry.softExpired()) {
+            Runnable refresh = com.reactor.cachedb.core.tenant.CacheTenantContext.wrap(() -> refreshNear(id));
+            nearCacheCoordinator.refresh(nearCache, identity, refresh);
+        }
+        observationTier(Tier.L1);
+        return new RedisAsyncReadWindow.Row<>(entity,
+                com.reactor.cachedb.core.codec.Utf8Length.of(entry.payload()), false, entry.payload());
+    }
+
+    private final class NativeAsyncRepository implements com.reactor.cachedb.core.api.AsyncEntityRepository<T, ID> {
+        private final com.reactor.cachedb.core.async.CacheAsyncExecutor gate;
+        private final com.reactor.cachedb.core.async.OffloadingAsyncEntityRepository<T, ID> fallback;
+        NativeAsyncRepository(com.reactor.cachedb.core.async.CacheAsyncExecutor gate) {
+            this.gate = gate;
+            fallback = new com.reactor.cachedb.core.async.OffloadingAsyncEntityRepository<>(RedisEntityRepository.this, gate);
+        }
+
+        private <R> java.util.concurrent.CompletableFuture<R> guarded(
+                java.util.function.Supplier<java.util.concurrent.CompletableFuture<R>> call) {
+            try {
+                if (pointReads != null) pointReads.ensureOpen();
+                if (com.reactor.cachedb.core.api.CacheUnitOfWork.active())
+                    throw new IllegalStateException("Async CacheDB operations are unavailable inside a synchronous unit of work");
+                if (!gate.accepting()) throw new com.reactor.cachedb.core.async.CacheAsyncRejectedException(
+                        com.reactor.cachedb.core.async.CacheAsyncRejectedException.Reason.CLOSED);
+                activeTenant();
+                return call.get();
+            } catch (RuntimeException failure) { return java.util.concurrent.CompletableFuture.failedFuture(failure); }
+        }
+
+        private RedisAsyncReadBudget readBudget() {
+            if (pointReads == null) throw new UnsupportedOperationException("Bounded native reads require runtime read state");
+            return pointReads.asyncReadBudget();
+        }
+
+        private <R> java.util.concurrent.CompletableFuture<R> worker(java.util.concurrent.Callable<R> call) {
+            var delivery = new RedisAsyncReadDelivery<R>(readBudget().reserveWorker());
+            try {
+                delivery.checkActive();
+                var operation = gate.submitTracked(() -> {
+                    delivery.checkActive();
+                    return call.call();
+                });
+                delivery.bind(operation.result(), operation.physical());
+            } catch (Throwable failure) { delivery.failSetup(failure); }
+            finally { delivery.finishSetup(); }
+            return delivery.future();
+        }
+
+        private boolean nativePoint(ID id) {
+            java.util.Objects.requireNonNull(id, "id");
+            return pointReads != null && fetchPlan.includes().isEmpty()
+                    && pointReads.useAsyncTransport(requiredVersion(id));
+        }
+
+        private java.util.concurrent.CompletableFuture<HotLookup<T>> hot(ID id) {
+            long started = System.nanoTime();
+            boolean local = nearCacheActive();
+            long epoch = local ? nearCache.epoch() : 0; // Conservative global invalidation stamp, captured before I/O.
+            T cached = nearValue(id);
+            if (cached != null) {
+                recordRedisRead(started);
+                return java.util.concurrent.CompletableFuture.completedFuture(HotLookup.hit(cached));
+            }
+            String entityKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
+            String tombstone = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
+            var delivery = new RedisAsyncReadDelivery<HotLookup<T>>(readBudget().reservePoint());
+            try {
+                delivery.checkActive();
+                var result = gate.submitExternal(() -> {
+                    delivery.checkActive();
+                    observationTier(Tier.REDIS);
+                    var raw = pointReads.runtime().readAsync(entityKey, tombstone, local);
+                    return new com.reactor.cachedb.core.async.CacheAsyncExecutor.ExternalOperation<>(
+                            raw, pointReads.runtime().physicalCompletion(raw));
+                }, read -> {
+                    delivery.checkActive();
+                    return decodeAsyncPoint(id, entityKey, read, local, epoch, true);
+                });
+                delivery.bind(gate, result);
+            } catch (Throwable failure) { delivery.failSetup(failure); }
+            finally { delivery.finishSetup(); }
+            delivery.future().whenComplete((ignored, failure) -> recordRedisRead(started));
+            return delivery.future();
+        }
+
+        @Override public java.util.concurrent.CompletableFuture<HotLookup<T>> findHotByIdAsync(ID id) {
+            return guarded(() -> nativePoint(id) ? hot(id) : worker(() -> RedisEntityRepository.this.findHotById(id)));
+        }
+
+        @Override public java.util.concurrent.CompletableFuture<Optional<T>> findByIdAsync(ID id) {
+            return guarded(() -> {
+                if (!nativePoint(id)) return worker(() -> RedisEntityRepository.this.findById(id));
+                return RedisAsyncContinuation.compose(gate, hot(id), lookup -> {
+                    if (!lookup.isNotCached()) return java.util.concurrent.CompletableFuture.completedFuture(lookup.optional());
+                    // These two outcomes require no source, fetch-plan, extra Redis read or worker.
+                    if (!readThroughConfig.mode().byIdEnabled()) {
+                        recordReadThroughEvent("by-id-disabled", false);
+                        return java.util.concurrent.CompletableFuture.completedFuture(Optional.empty());
+                    }
+                    if (currentByIdLoader() instanceof NoOpEntityByIdLoader) {
+                        if (readThroughConfig.failOnMissingLoader()) return java.util.concurrent.CompletableFuture.failedFuture(
+                                new IllegalStateException("Redis miss for " + metadata.entityName() + " id=" + id
+                                        + " but no EntityByIdLoader is registered"));
+                        recordReadThroughEvent("by-id-loader-missing", false);
+                        return java.util.concurrent.CompletableFuture.completedFuture(Optional.empty());
+                    }
+                    // hot's physical/contextual permit was released before this continuation; maxConcurrent=1 is safe.
+                    return worker(() -> {
+                        var loaded = loadByIdFromSource(id);
+                        loaded.ifPresent(RedisEntityRepository.this::verifyTenant);
+                        return loaded;
+                    });
+                });
+            });
+        }
+
+        private com.reactor.cachedb.core.async.CacheAsyncExecutor.ExternalOperation<RedisAsyncReadWindow.Row<T>> row(ID id, RedisAsyncReadDelivery<?> delivery) {
+            boolean local = nearCacheActive();
+            long epoch = local ? nearCache.epoch() : 0;
+            delivery.checkActive();
+            var cached = nearAsyncRow(id, delivery);
+            if (cached != null) return new com.reactor.cachedb.core.async.CacheAsyncExecutor.ExternalOperation<>(
+                    java.util.concurrent.CompletableFuture.completedFuture(cached),
+                    java.util.concurrent.CompletableFuture.completedFuture(null));
+            String entityKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
+            observationTier(Tier.REDIS);
+            var raw = pointReads.runtime().readAsync(entityKey,
+                    keyStrategy.tombstoneKey(metadata.redisNamespace(), id), local);
+            return gate.mapExternal(new com.reactor.cachedb.core.async.CacheAsyncExecutor.ExternalOperation<>(
+                    raw, pointReads.runtime().physicalCompletion(raw)), read -> {
+                if (read.payload() != null && read.tombstone() == null)
+                    delivery.charge(com.reactor.cachedb.core.codec.Utf8Length.of(read.payload()));
+                else delivery.checkActive();
+                var lookup = decodeAsyncPoint(id, entityKey, read, local, epoch, false);
+                return new RedisAsyncReadWindow.Row<>(lookup.value(), lookup.isHit()
+                        ? com.reactor.cachedb.core.codec.Utf8Length.of(read.payload()) : 0, lookup.isHit(),
+                        lookup.isHit() ? read.payload() : null);
+            });
+        }
+
+        private List<T> finishBulk(List<ID> ids, List<ID> unique, Map<ID, Integer> indexes,
+                List<RedisAsyncReadWindow.Row<T>> rows, RedisAsyncReadDelivery<?> delivery) {
+            long emittedBytes = 0;
+            for (ID id : ids) {
+                var row = rows.get(indexes.get(id));
+                if (row.value() != null) {
+                    if (row.bytes() > RedisAsyncReadBudget.CONTENT_BYTES - emittedBytes)
+                        throw new IllegalArgumentException("Async bulk output including duplicate IDs exceeds 16 MiB");
+                    emittedBytes += row.bytes();
+                }
+            }
+            var entities = new ArrayList<T>();
+            var accessed = new ArrayList<ID>();
+            for (int i = 0; i < unique.size(); i++) if (rows.get(i).accessed()) accessed.add(unique.get(i));
+            var emitted = new java.util.HashSet<ID>();
+            for (ID id : ids) {
+                delivery.checkActive();
+                var row = rows.get(indexes.get(id));
+                if (row.value() == null) continue;
+                T value = row.value();
+                if (!emitted.add(id) && !metadata.deeplyImmutable()) {
+                    if (row.encoded() == null) throw new IllegalStateException("Missing bounded duplicate payload");
+                    delivery.chargeDuplicate(row.bytes());
+                    value = codec.fromRedisValue(row.encoded());
+                    verifyTenant(value);
+                }
+                entities.add(value);
+            }
+            if (!accessed.isEmpty()) pageCacheManager.recordEntityAccessBatch(accessed);
+            return List.copyOf(entities);
+        }
+
+        private List<RedisAsyncReadWindow.Row<T>> causalBulk(
+                List<ID> unique, RedisAsyncReadDelivery<?> delivery) {
+            var rows = new ArrayList<RedisAsyncReadWindow.Row<T>>(unique.size());
+            for (int start = 0; start < unique.size(); start += 128) {
+                delivery.checkActive();
+                var batch = unique.subList(start, Math.min(start + 128, unique.size()));
+                var versions = RedisAsyncBoundedValues.read(jedis, batch.stream()
+                        .map(id -> keyStrategy.versionKey(metadata.redisNamespace(), id)).toList(), 4096);
+                for (int i = 0; i < batch.size(); i++) verifyCausalVersion(batch.get(i), versions.get(i));
+                var keys = new ArrayList<RedisBoundedPointRead.KeyPair>(batch.size());
+                for (ID id : batch) keys.add(new RedisBoundedPointRead.KeyPair(
+                        keyStrategy.entityKey(metadata.redisNamespace(), id),
+                        keyStrategy.tombstoneKey(metadata.redisNamespace(), id), false));
+                RedisPointRead[] values;
+                try { values = RedisBoundedPointRead.read(jedis, keys, RedisAsyncReadBudget.CONTENT_BYTES); }
+                catch (redis.clients.jedis.exceptions.JedisDataException budget) {
+                    if (keys.size() == 1 || !("CACHEDB_READ_BUDGET".equals(budget.getMessage())
+                            || "ERR CACHEDB_READ_BUDGET".equals(budget.getMessage()))) throw budget;
+                    for (int i = 0; i < batch.size(); i++) {
+                        delivery.checkActive();
+                        var read = RedisBoundedPointRead.read(jedis, List.of(keys.get(i)),
+                                RedisAsyncReadBudget.CONTENT_BYTES)[0];
+                        rows.add(causalRow(batch.get(i), keys.get(i).entity(), read, delivery));
+                    }
+                    continue;
+                }
+                for (int i = 0; i < batch.size(); i++) {
+                    RedisPointRead read = values[i];
+                    values[i] = null;
+                    rows.add(causalRow(batch.get(i), keys.get(i).entity(), read, delivery));
+                }
+            }
+            return rows;
+        }
+
+        private RedisAsyncReadWindow.Row<T> causalRow(
+                ID id, String key, RedisPointRead read, RedisAsyncReadDelivery<?> delivery) {
+            delivery.checkActive();
+            if (requiredVersion(id) > 0 && read.payload() == null && read.tombstone() == null)
+                throw new IllegalStateException("Causal bulk entity payload unavailable; source cannot certify it");
+            if (read.payload() != null && read.tombstone() == null)
+                delivery.charge(com.reactor.cachedb.core.codec.Utf8Length.of(read.payload()));
+            var lookup = decodeAsyncPoint(id, key, read, false, 0, false);
+            return new RedisAsyncReadWindow.Row<>(lookup.value(), lookup.isHit()
+                    ? com.reactor.cachedb.core.codec.Utf8Length.of(read.payload()) : 0, lookup.isHit(),
+                    lookup.isHit() ? read.payload() : null);
+        }
+
+        @Override public java.util.concurrent.CompletableFuture<List<T>> findAllAsync(Collection<ID> input) {
+            return guarded(() -> {
+                java.util.Objects.requireNonNull(input, "ids");
+                if (!fetchPlan.includes().isEmpty()) throw new UnsupportedOperationException(
+                        "Bounded async bulk fetch plans require a relation-result size contract");
+                var delivery = new RedisAsyncReadDelivery<List<T>>(readBudget().reserveBulk());
+                try {
+                    // Reserve globally BEFORE even iterating or copying the caller collection.
+                    var ids = new ArrayList<ID>();
+                    for (ID id : input) {
+                        delivery.checkActive();
+                        if (ids.size() == QuerySpec.MAX_LIMIT)
+                            throw new IllegalArgumentException("Async bulk input exceeds 100000 IDs");
+                        ids.add(java.util.Objects.requireNonNull(id, "id"));
+                    }
+                    if (ids.isEmpty()) {
+                        delivery.bind(java.util.concurrent.CompletableFuture.completedFuture(List.of()),
+                                java.util.concurrent.CompletableFuture.completedFuture(null));
+                        return delivery.future();
+                    }
+                    validateEntityRouteContract("Entity bulk read", ids.size());
+                    var indexes = new LinkedHashMap<ID, Integer>();
+                    for (ID id : ids) if (!indexes.containsKey(id)) indexes.put(id, indexes.size());
+                    var unique = List.copyOf(indexes.keySet());
+                    if (ids.stream().anyMatch(id -> requiredVersion(id) > 0)) {
+                        var operation = gate.submitTracked(() ->
+                                finishBulk(ids, unique, indexes, causalBulk(unique, delivery), delivery));
+                        delivery.bind(operation.result(), operation.physical());
+                    } else {
+                        if (!pointReads.useAsyncTransport(0)) throw new IllegalStateException("Native transport unavailable");
+                        var window = new RedisAsyncReadWindow<T, ID>(unique, gate, id -> row(id, delivery));
+                        var prepared = window.prepare();
+                        var result = gate.submitExternal(() -> prepared,
+                                rows -> finishBulk(ids, unique, indexes, rows, delivery));
+                        var producer = java.util.concurrent.CompletableFuture.allOf(
+                                window.deliveryCompletion(), gate.deliveryCompletion(result));
+                        delivery.bind(result, producer);
+                        if (result.isCompletedExceptionally() || delivery.future().isDone()) prepared.result().cancel(false);
+                        window.activate();
+                    }
+                } catch (Throwable failure) { delivery.failSetup(failure); }
+                finally { delivery.finishSetup(); }
+                return delivery.future();
+            });
+        }
+
+        @Override public java.util.concurrent.CompletableFuture<T> saveAsync(T entity) {
+            return guarded(() -> fallback.saveAsync(entity));
+        }
+        @Override public java.util.concurrent.CompletableFuture<Void> deleteAsync(ID id) {
+            return guarded(() -> fallback.deleteAsync(id));
+        }
+        @Override public java.util.concurrent.CompletableFuture<List<T>> queryAsync(QuerySpec query) {
+            return guarded(() -> fallback.queryAsync(query));
+        }
+        @Override public java.util.concurrent.CompletableFuture<com.reactor.cachedb.core.query.AggregateResult> aggregateAsync(
+                com.reactor.cachedb.core.query.AggregateSpec spec) {
+            return guarded(() -> fallback.aggregateAsync(spec));
+        }
+        @Override public java.util.concurrent.CompletableFuture<Map<String, com.reactor.cachedb.core.query.AggregateResult>> aggregateByAsync(
+                String field, com.reactor.cachedb.core.query.AggregateSpec spec) {
+            return guarded(() -> fallback.aggregateByAsync(field, spec));
+        }
     }
 
     private boolean nearCacheActive() {
@@ -193,11 +738,18 @@ public final class RedisEntityRepository<T, ID>
             Runnable refresh = com.reactor.cachedb.core.tenant.CacheTenantContext.wrap(() -> refreshNear(id));
             nearCacheCoordinator.refresh(nearCache, identity, refresh);
         }
+        observationTier(Tier.L1);
         return entity;
     }
 
     private long requiredVersion(ID id) {
         return com.reactor.cachedb.core.causal.CacheCausalContext.requiredVersion(metadata.redisNamespace(), id);
+    }
+
+    private void requireUnversionedReadAllowed() {
+        rejectUncertifiedProtectedRead();
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace()))
+            throw new com.reactor.cachedb.core.exception.CacheCausalReadUnsupportedException();
     }
 
     private void verifyCausalVersion(ID id, String version) {
@@ -216,9 +768,18 @@ public final class RedisEntityRepository<T, ID>
                 (index, observed) -> verifyCausalVersion(id, observed));
     }
 
+    private long pointReadTtl(RedisPointRead read, String entityKey) {
+        if (read == null) return jedis.commands().pttl(entityKey); // Unchanged legacy bypass path.
+        long ttl = read.ttlMillis();
+        if (ttl == RedisPointRead.TTL_NOT_REQUESTED) return 0; // Never cache an unqualified TTL.
+        if (ttl > 0) ttl = Math.max(0, ttl - (System.nanoTime() - read.observedAtNanos() + 999_999L) / 1_000_000L);
+        return ttl;
+    }
+
     private void refreshNear(ID id) {
         if (!nearCacheActive()) return;
-        long epoch = nearCache.epoch(), started = System.nanoTime();
+        var stamp = nearCache.capture(String.valueOf(id));
+        long started = System.nanoTime();
         var values = pointValues(id, true);
         if (values.get(0) == null || values.get(1) != null) { invalidateNear(id); return; }
         T entity = codec.fromRedisValue(values.get(0)); verifyTenant(entity);
@@ -226,7 +787,7 @@ public final class RedisEntityRepository<T, ID>
         long ttl = jedis.commands().pttl(keyStrategy.entityKey(metadata.redisNamespace(), id));
         if (ttl > 0) ttl = Math.max(0, ttl - (System.nanoTime() - started + 999_999L) / 1_000_000L);
         if (nearCacheActive()) nearCache.put(String.valueOf(id), values.get(0), shareableNearEntity(entity, values.get(0)),
-                ttl, epoch, values.get(2) == null ? 0 : Long.parseLong(values.get(2)));
+                ttl, stamp, values.get(2) == null ? 0 : Long.parseLong(values.get(2)));
     }
 
     private Object shareableNearEntity(T entity, String payload) {
@@ -242,20 +803,31 @@ public final class RedisEntityRepository<T, ID>
     }
 
     private void requireTenantMaintenanceScope() {
+        com.reactor.cachedb.core.protection.TenantProtectionGate.requireLegacy(metadata);
         if (metadata.tenantFieldName() != null
                 && !com.reactor.cachedb.core.tenant.CacheTenantContext.isAdministrative())
             throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
     }
 
     private void verifyTenant(T entity) {
+        requireProtectedMutation();
         com.reactor.cachedb.core.tenant.TenantAccess.verify(metadata, entity);
     }
 
     private QuerySpec tenantQuery(QuerySpec query) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateQuery(metadata, query);
         return com.reactor.cachedb.core.tenant.TenantAccess.scoped(metadata, query);
     }
 
     private void ensureTenantOwner(ID id, boolean create) {
+        requireProtectedMutation();
+        if (metadata.tenantPurgeEnabled()) {
+            String tenant = activeTenant();
+            if (!tenant.equals(jedis.commands().get(keyStrategy.versionKey(metadata.redisNamespace(), id) + ":tenant")))
+                throw new com.reactor.cachedb.core.protection.ProtectionException(
+                        com.reactor.cachedb.core.protection.ProtectionException.Code.MIGRATION_REQUIRED);
+            return;
+        }
         verifyTenantOwner(id, create, true);
     }
 
@@ -305,7 +877,21 @@ public final class RedisEntityRepository<T, ID>
         return result;
     }
 
+    private void verifyProtectedWriteOwner(ID id, String tenant) {
+        requireProtectedMutation();
+        if (metadata.tenantPurgeEnabled()) { ensureTenantOwner(id, false); return; }
+        if (tenant == null || !com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata)) return;
+        String known = verifiedOwners.get(id);
+        if (known == null) known = jedis.commands().get(keyStrategy.versionKey(metadata.redisNamespace(), id) + ":tenant");
+        if (!tenant.equals(known)) throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
+        verifiedOwners.put(id, known);
+    }
+
     private void prepareEntityTenantOwner(T entity) {
+        if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata) && metadata.tenantFieldName() != null) {
+            verifyProtectedWriteOwner(metadata.idAccessor().apply(entity), metadata.extractTenantId(entity));
+            return;
+        }
         if (metadata.tenantFieldName() != null && com.reactor.cachedb.core.tenant.CacheTenantContext.isAdministrative()) {
             try (var tenant = com.reactor.cachedb.core.tenant.CacheTenantContext.withTenant(metadata.extractTenantId(entity))) {
                 ensureTenantOwner(metadata.idAccessor().apply(entity), true);
@@ -324,6 +910,23 @@ public final class RedisEntityRepository<T, ID>
     }
 
     private void prepareTenantOwners(List<T> entities) {
+        if (metadata.tenantPurgeEnabled()) {
+            requireProtectedMutation();
+            String tenant = activeTenant();
+            for (int start = 0; start < entities.size(); start += 128) {
+                var replies = new ArrayList<redis.clients.jedis.Response<String>>();
+                int end = Math.min(entities.size(), start + 128);
+                try (var pipeline = jedis.pipeline()) {
+                    for (int i = start; i < end; i++) replies.add(pipeline.get(
+                            keyStrategy.versionKey(metadata.redisNamespace(), metadata.idAccessor().apply(entities.get(i))) + ":tenant"));
+                    pipeline.sync();
+                    for (var reply : replies) if (!tenant.equals(reply.get()))
+                        throw new com.reactor.cachedb.core.protection.ProtectionException(
+                                com.reactor.cachedb.core.protection.ProtectionException.Code.MIGRATION_REQUIRED);
+                }
+            }
+            return;
+        }
         if (metadata.tenantFieldName() != null && com.reactor.cachedb.core.tenant.CacheTenantContext.isAdministrative()) {
             var groups = new LinkedHashMap<String, List<T>>();
             for (T row : entities) groups.computeIfAbsent(java.util.Objects.requireNonNull(metadata.extractTenantId(row)), ignored -> new ArrayList<>()).add(row);
@@ -350,6 +953,8 @@ public final class RedisEntityRepository<T, ID>
                 }
             }
         }
+        if (!unknown.isEmpty() && com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+            throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
         for (int start = 0; start < unknown.size(); start += 500) {
             var ids = unknown.subList(start, Math.min(unknown.size(), start + 500));
             var existing = loadSourceOwners(ids);
@@ -380,7 +985,13 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public RepositoryCapabilities capabilities() {
-        return CAPABILITIES;
+        return pointReads != null && functionExecutor != null && functionExecutor.supportsBulkDelete()
+                ? CAPABILITIES : LEGACY_CAPABILITIES;
+    }
+
+    @Override public com.reactor.cachedb.core.api.EntityQueryCapacity entityQueryCapacity() {
+        CachePolicy policy = producerGuard == null ? cachePolicy : producerGuard.cachedEffectiveCachePolicy(cachePolicy);
+        return ReadShapeGuardrails.entityQueryCapacity(policy, readShapeGuardrailConfig);
     }
 
     public RedisEntityRepository(
@@ -600,6 +1211,7 @@ public final class RedisEntityRepository<T, ID>
         this.jedis = jedis;
         this.backgroundJedis = backgroundJedis == null ? jedis : backgroundJedis;
         this.metadata = metadata;
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
         this.codec = com.reactor.cachedb.core.codec.PayloadEntityCodec.wrap(codec, metadata,
                 Math.max(metadata.compressionThresholdBytes(), cachePolicy.compressionThresholdBytes()));
         this.writeBehindQueue = writeBehindQueue;
@@ -638,24 +1250,38 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public Optional<T> findById(ID id) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.FIND_BY_ID, metadata.entityName(),
+                    observationOwner, () -> findById(id));
+        if (metadata.tenantPurgeEnabled()) return protectedPointReads().findById(activeTenant(), id, requiredVersion(id));
         activeTenant();
+        if (pointReads != null) pointReads.ensureOpen();
         long startedAt = System.nanoTime();
         try {
             boolean local = nearCacheActive();
             String localId = local ? String.valueOf(id) : null;
-            long epoch = local ? nearCache.epoch() : 0;
             T cached = nearValue(id);
             if (cached != null) { applyFetchPlan(List.of(cached)); return Optional.of(cached); }
+            var stamp = local ? nearCache.capture(localId) : null;
             String entityKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
             String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
-            List<String> values = pointValues(id, requiredVersion(id) > 0);
-            if (requiredVersion(id) > 0) verifyCausalVersion(id, values.get(2));
-            if (values.get(1) != null) {
+            long minimumVersion = requiredVersion(id);
+            RedisPointRead read = null;
+            List<String> values = null;
+            observationTier(Tier.REDIS);
+            if (pointReads != null && pointReads.coalesce(minimumVersion)) {
+                read = pointReads.runtime().readSync(entityKey, tombstoneKey, local);
+            } else {
+                values = pointValues(id, minimumVersion > 0);
+            }
+            if (minimumVersion > 0) verifyCausalVersion(id, values.get(2));
+            if ((read == null ? values.get(1) : read.tombstone()) != null) {
+                observationOutcome(Outcome.TOMBSTONE);
                 return Optional.empty();
             }
-            String encoded = values.get(0);
+            String encoded = read == null ? values.get(0) : read.payload();
             if (encoded == null) {
-                if (requiredVersion(id) > 0) throw new IllegalStateException("Causal entity payload is unavailable; SQL fallback cannot certify this version");
+                if (minimumVersion > 0) throw new IllegalStateException("Causal entity payload is unavailable; SQL fallback cannot certify this version");
                 Optional<T> loaded = loadByIdFromSource(id);
                 loaded.ifPresent(this::verifyTenant);
                 loaded.ifPresent(entity -> applyFetchPlan(List.of(entity)));
@@ -671,7 +1297,7 @@ public final class RedisEntityRepository<T, ID>
             }
             pageCacheManager.recordEntityAccess(id);
             if (local && nearCacheActive()) nearCache.put(localId, encoded, shareableNearEntity(entity, encoded),
-                    jedis.commands().pttl(entityKey), epoch, values.size() > 2 && values.get(2) != null ? Long.parseLong(values.get(2)) : 0);
+                    pointReadTtl(read, entityKey), stamp, values != null && values.size() > 2 && values.get(2) != null ? Long.parseLong(values.get(2)) : 0);
             applyFetchPlan(List.of(entity));
             return Optional.of(entity);
         } finally {
@@ -681,6 +1307,14 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public List<T> findAll(Collection<ID> ids) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.FIND_ALL, metadata.entityName(),
+                    observationOwner, () -> findAll(ids));
+        if (metadata.tenantPurgeEnabled()) {
+            if (ids == null) throw RedisTenantReadFence.failure(com.reactor.cachedb.core.protection.ProtectionException.Code.INVALID_REQUEST);
+            validateEntityRouteContract("Entity bulk read", ids.size());
+            return protectedPointReads().findAll(activeTenant(), ids, this::requiredVersion);
+        }
         activeTenant();
         long startedAt = System.nanoTime();
         try {
@@ -700,7 +1334,10 @@ public final class RedisEntityRepository<T, ID>
             for (int start = 0; start < missing.size(); start += 512) {
                 var batch = missing.subList(start, Math.min(missing.size(), start + 512));
                 boolean local = nearCacheActive();
-                long epoch = local ? nearCache.epoch() : 0, fetched = System.nanoTime();
+                var stamps = local ? new RedisNearCacheCoordinator.Store.Stamp[batch.size()] : null;
+                if (local) for (int i = 0; i < batch.size(); i++)
+                    stamps[i] = nearCache.capture(String.valueOf(batch.get(i)));
+                long fetched = System.nanoTime();
                 boolean causal = batch.stream().anyMatch(id -> requiredVersion(id) > 0);
                 var keys = new ArrayList<String>(batch.size() * (causal ? 3 : 2));
                 for (ID id : batch) keys.add(keyStrategy.entityKey(metadata.redisNamespace(), id));
@@ -708,6 +1345,7 @@ public final class RedisEntityRepository<T, ID>
                 if (causal) {
                     for (ID id : batch) keys.add(keyStrategy.versionKey(metadata.redisNamespace(), id));
                 }
+                observationTier(Tier.REDIS);
                 var values = causal && jedis.clustered() ? RedisCausalReads.read(jedis, keys.subList(0, batch.size()),
                         keys.subList(batch.size(), batch.size() * 2), keys.subList(batch.size() * 2, keys.size()),
                         (index, observed) -> verifyCausalVersion(batch.get(index), observed))
@@ -729,7 +1367,7 @@ public final class RedisEntityRepository<T, ID>
                         if (local && nearCacheActive()) {
                             long ttl = ttls.get(i).get();
                             if (ttl > 0) ttl = Math.max(0, ttl - (System.nanoTime() - fetched + 999_999L) / 1_000_000L);
-                            nearCache.put(String.valueOf(id), encoded, shareableNearEntity(entity, encoded), ttl, epoch,
+                            nearCache.put(String.valueOf(id), encoded, shareableNearEntity(entity, encoded), ttl, stamps[i],
                                     version == null ? 0 : Long.parseLong(version));
                         }
                     } else if (effectiveCachePolicy().hotPolicy().evictWhenRejected()) pageCacheManager.removeEntity(id);
@@ -752,6 +1390,10 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public List<T> findPage(PageWindow pageWindow) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.FIND_PAGE, metadata.entityName(),
+                    observationOwner, () -> findPage(pageWindow));
+        requireUnversionedReadAllowed();
         if (activeTenant() != null) return query(QuerySpec.where(QueryFilter.eq(metadata.tenantFieldName(), activeTenant()))
                 .offsetBy(pageWindow.pageNumber() * pageWindow.pageSize()).limitTo(pageWindow.pageSize()));
         long startedAt = System.nanoTime();
@@ -765,6 +1407,7 @@ public final class RedisEntityRepository<T, ID>
                     pageWindow,
                     effectiveCachePolicy(),
                     readShapeGuardrailConfig);
+            observationTier(Tier.REDIS);
             Optional<List<T>> cachedPage = pageCacheManager.getCachedPage(pageWindow);
             if (cachedPage.isPresent()) {
                 List<T> entities = cachedPage.get();
@@ -802,6 +1445,7 @@ public final class RedisEntityRepository<T, ID>
             if (!pageCacheConfig.readThroughEnabled()) {
                 return List.of();
             }
+            if (!(effectivePageLoader instanceof NoOpEntityPageLoader)) observationTier(Tier.SOURCE);
             VersionedEntitySourceLoader<T, ID> versionedLoader =
                     versionedSourceLoader(effectivePageLoader);
             if (producerGuard != null
@@ -846,34 +1490,81 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public QueryExplainPlan explain(QuerySpec querySpec) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.EXPLAIN, metadata.entityName(),
+                    observationOwner, () -> explain(querySpec));
+        rejectUncertifiedProtectedRead();
         return queryIndexManager.explain(tenantQuery(querySpec));
     }
 
     @Override
-    public Object aggregateFieldValue(T entity, String column) { return codec.entityColumnValue(entity, column); }
+    public Object aggregateFieldValue(T entity, String column) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.rejectProtectedRole(metadata, column);
+        return codec.entityColumnValue(entity, column);
+    }
+
+    private List<String> lazyIndexMetadataKeys(List<String> ids) {
+        // COUNT(*) needs alignment only; custom transports can still resolve the actual keys.
+        return Collections.unmodifiableList(new java.util.AbstractList<String>() {
+            @Override public String get(int index) {
+                return keyStrategy.indexMetaKey(metadata.redisNamespace(), ids.get(index));
+            }
+            @Override public int size() { return ids.size(); }
+        });
+    }
 
     @Override
     public com.reactor.cachedb.core.query.AggregateResult aggregate(com.reactor.cachedb.core.query.AggregateSpec spec) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.AGGREGATE, metadata.entityName(),
+                    observationOwner, () -> aggregate(spec));
+        requireUnversionedReadAllowed();
         java.util.Objects.requireNonNull(spec, "spec");
         rejectProjectionOnlyEntityRoute("Entity aggregate");
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.rejectProtectedRole(metadata, spec.fieldName());
         boolean count = spec.function() == com.reactor.cachedb.core.query.AggregateFunction.COUNT;
         boolean countRows = count && (spec.fieldName() == null || spec.fieldName().isBlank() || spec.fieldName().equals("*"));
         if (!countRows && !metadata.columns().contains(spec.fieldName())) throw new IllegalArgumentException("Unknown aggregate column");
         var query = tenantQuery(QuerySpec.where(spec.filter()));
+        observationTier(Tier.REDIS);
         var indexed = queryIndexManager.indexOnlyCandidates(query);
         var accumulator = new com.reactor.cachedb.core.query.AggregateResult.Accumulator();
         boolean indexValues = indexed.isPresent() && (countRows || queryIndexManager.hasIndexedColumn(spec.fieldName())) && !ambiguousNullFilter(query);
         boolean countOnlyPolicy = effectiveCachePolicy().hotPolicy().mode()
                 == com.reactor.cachedb.core.cache.EntityHotPolicyMode.COUNT_WINDOW;
+        String tenant = activeTenant();
         List<String> ids = indexed.orElseGet(() -> queryIndexManager.resolveCandidateIds(query));
-        for (int start = 0; start < ids.size(); start += 512) {
-            var batch = ids.subList(start, Math.min(ids.size(), start + 512));
-            if (indexValues && countOnlyPolicy && activeTenant() == null) {
-                var aggregated = jedis.aggregateIndexBatch(
+        if (countRows && indexValues && countOnlyPolicy && ids.size() > 512
+                && (tenant != null || jedis.supportsUnownedIndexCounts())) {
+            var pipelined = RedisBinaryCountKeys.supports(jedis, keyStrategy)
+                    ? ((JedisPooledOperations) jedis).binaryIndexCounts(
+                            new RedisBinaryCountKeys(keyStrategy, metadata.redisNamespace(), ids, tenant), tenant)
+                    : jedis.aggregateIndexCounts(ids.size(), start -> {
+                var batch = ids.subList(start, Math.min(ids.size(), start + 512));
+                return new RedisClientOperations.IndexReadKeys(
                         batch.stream().map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id)).toList(),
                         batch.stream().map(id -> keyStrategy.tombstoneKey(metadata.redisNamespace(), id)).toList(),
-                        batch.stream().map(id -> keyStrategy.indexMetaKey(metadata.redisNamespace(), id)).toList(),
-                        countRows ? null : spec.fieldName(), count);
+                        lazyIndexMetadataKeys(batch),
+                        tenant == null ? null : batch.stream()
+                                .map(id -> keyStrategy.versionKey(metadata.redisNamespace(), id) + ":tenant").toList());
+            }, tenant);
+            if (pipelined.isPresent()) {
+                accumulator.addCount(pipelined.getAsLong());
+                return accumulator.result();
+            }
+        }
+        for (int start = 0; start < ids.size(); start += 512) {
+            var batch = ids.subList(start, Math.min(ids.size(), start + 512));
+            if (indexValues && countOnlyPolicy) {
+                var entities = batch.stream().map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id)).toList();
+                var tombstones = batch.stream().map(id -> keyStrategy.tombstoneKey(metadata.redisNamespace(), id)).toList();
+                var indexMetadata = countRows ? lazyIndexMetadataKeys(batch)
+                        : batch.stream().map(id -> keyStrategy.indexMetaKey(metadata.redisNamespace(), id)).toList();
+                var aggregated = tenant == null
+                        ? jedis.aggregateIndexBatch(entities, tombstones, indexMetadata, countRows ? null : spec.fieldName(), count)
+                        : jedis.aggregateIndexBatch(entities, tombstones, indexMetadata,
+                                batch.stream().map(id -> keyStrategy.versionKey(metadata.redisNamespace(), id) + ":tenant").toList(),
+                                tenant, countRows ? null : spec.fieldName(), count);
                 if (aggregated.isPresent()) {
                     if (count) accumulator.addCount(aggregated.get().count());
                     else for (String value : aggregated.get().values()) accumulator.add(indexNumber(value));
@@ -882,13 +1573,20 @@ public final class RedisEntityRepository<T, ID>
                         accumulator.addCount(aggregated.get().count() - aggregated.get().values().size());
                     if (count && !aggregated.get().nullCandidates().isEmpty()) {
                         var ambiguous = aggregated.get().nullCandidates().stream().map(batch::get).toList();
-                        var raw = jedis.boundedMget(ambiguous.stream().map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id)).toList(), 16L * 1024 * 1024);
-                        for (String payload : raw) if (payload != null && codec.entityColumnValue(codec.fromRedisValue(payload), spec.fieldName()) != null)
-                            accumulator.addCount(1);
+                        for (String payload : aggregateLivePayloads(ambiguous, tenant)) {
+                            if (payload == null) continue;
+                            T row = codec.fromRedisValue(payload);
+                            if (!pageCacheManager.shouldServeCachedEntity(row)
+                                    || !queryEvaluator.matches(row, codec, query.rootGroup())) continue;
+                            verifyTenant(row);
+                            if (codec.entityColumnValue(row, spec.fieldName()) != null) accumulator.addCount(1);
+                        }
                     }
                     continue;
                 }
             }
+            // A tenant fallback must inspect the payload, not trust injected index membership.
+            boolean pipelineIndexValues = indexValues && tenant == null;
             var live = new ArrayList<redis.clients.jedis.Response<Boolean>>(batch.size());
             var deleted = new ArrayList<redis.clients.jedis.Response<Boolean>>(batch.size());
             var fields = new ArrayList<redis.clients.jedis.Response<String>>(batch.size());
@@ -896,28 +1594,30 @@ public final class RedisEntityRepository<T, ID>
                 for (String id : batch) {
                     live.add(pipeline.exists(keyStrategy.entityKey(metadata.redisNamespace(), id)));
                     deleted.add(pipeline.exists(keyStrategy.tombstoneKey(metadata.redisNamespace(), id)));
-                    fields.add(countRows || !indexValues ? null : pipeline.hget(keyStrategy.indexMetaKey(metadata.redisNamespace(), id), spec.fieldName()));
+                    fields.add(countRows || !pipelineIndexValues ? null : pipeline.hget(keyStrategy.indexMetaKey(metadata.redisNamespace(), id), spec.fieldName()));
                 }
                 pipeline.sync();
-                List<String> payloads = !countOnlyPolicy || !indexValues || count && !countRows
-                        ? jedis.boundedMget(batch.stream().map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id)).toList(), 16L * 1024 * 1024) : null;
-                for (int i = 0; i < batch.size(); i++) {
-                    if (!Boolean.TRUE.equals(live.get(i).get()) || Boolean.TRUE.equals(deleted.get(i).get())) continue;
-                    T entity = payloads == null || payloads.get(i) == null ? null : codec.fromRedisValue(payloads.get(i));
-                    if (payloads != null && (entity == null || !pageCacheManager.shouldServeCachedEntity(entity))) continue;
-                    if (entity != null && !queryEvaluator.matches(entity, codec, query.rootGroup())) continue;
-                    Object value = null;
-                    if (!countRows) {
-                        if (count && entity != null) value = codec.entityColumnValue(entity, spec.fieldName());
-                        else if (indexValues) {
-                            String raw = fields.get(i).get();
-                            if (raw == null) throw new IllegalStateException("Aggregate index metadata is incomplete; rebuild indexes");
-                            if (!raw.equals("__NULL__")) value = count ? raw : indexNumber(raw);
-                        } else value = codec.entityColumnValue(entity, spec.fieldName());
-                    }
-                    if (count && !countRows && value == null) continue;
-                    accumulator.add(count ? null : value);
+            }
+            // Release the pipeline lease before the guarded payload read borrows a connection.
+            List<String> payloads = !countOnlyPolicy || !pipelineIndexValues || count && !countRows
+                    ? jedis.boundedMget(batch.stream().map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id)).toList(), 16L * 1024 * 1024) : null;
+            for (int i = 0; i < batch.size(); i++) {
+                if (!Boolean.TRUE.equals(live.get(i).get()) || Boolean.TRUE.equals(deleted.get(i).get())) continue;
+                T entity = payloads == null || payloads.get(i) == null ? null : codec.fromRedisValue(payloads.get(i));
+                if (payloads != null && (entity == null || !pageCacheManager.shouldServeCachedEntity(entity))) continue;
+                if (entity != null && !queryEvaluator.matches(entity, codec, query.rootGroup())) continue;
+                if (entity != null) verifyTenant(entity);
+                Object value = null;
+                if (!countRows) {
+                    if (count && entity != null) value = codec.entityColumnValue(entity, spec.fieldName());
+                    else if (pipelineIndexValues) {
+                        String raw = fields.get(i).get();
+                        if (raw == null) throw new IllegalStateException("Aggregate index metadata is incomplete; rebuild indexes");
+                        if (!raw.equals("__NULL__")) value = count ? raw : indexNumber(raw);
+                    } else value = codec.entityColumnValue(entity, spec.fieldName());
                 }
+                if (count && !countRows && value == null) continue;
+                accumulator.add(count ? null : value);
             }
         }
         return accumulator.result();
@@ -925,6 +1625,9 @@ public final class RedisEntityRepository<T, ID>
 
     @Override public Map<String, com.reactor.cachedb.core.query.AggregateResult> aggregateBy(String group,
             com.reactor.cachedb.core.query.AggregateSpec spec) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.AGGREGATE_BY, metadata.entityName(),
+                    observationOwner, () -> aggregateBy(group, spec));
         try {
             return aggregateByScoped(group, spec);
         } catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) {
@@ -934,6 +1637,9 @@ public final class RedisEntityRepository<T, ID>
 
     private Map<String, com.reactor.cachedb.core.query.AggregateResult> aggregateByScoped(String group,
             com.reactor.cachedb.core.query.AggregateSpec spec) {
+        requireUnversionedReadAllowed();
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.rejectProtectedRole(metadata, group);
+        if (spec != null) com.reactor.cachedb.core.crypto.EncryptedStorageChecks.rejectProtectedRole(metadata, spec.fieldName());
         if (group == null || group.isBlank() || !metadata.indexedColumns().contains(group))
             throw new IllegalArgumentException("Facet group must be an indexed column");
         java.util.Objects.requireNonNull(spec);
@@ -941,17 +1647,105 @@ public final class RedisEntityRepository<T, ID>
         boolean field = spec.fieldName() != null && !spec.fieldName().isBlank() && !spec.fieldName().equals("*");
         if ((!count || field) && !metadata.columns().contains(spec.fieldName())) throw new IllegalArgumentException("Unknown aggregate column");
         QuerySpec query = tenantQuery(QuerySpec.where(spec.filter()));
+        observationTier(Tier.REDIS);
         var indexed = queryIndexManager.indexOnlyCandidates(query);
+        String tenant = activeTenant();
         boolean indexValues = indexed.isPresent() && queryIndexManager.hasIndexedColumn(group)
-                && (!field || queryIndexManager.hasIndexedColumn(spec.fieldName())) && activeTenant() == null
+                && (!field || queryIndexManager.hasIndexedColumn(spec.fieldName()))
                 && !ambiguousNullFilter(query)
                 && effectiveCachePolicy().hotPolicy().mode() == com.reactor.cachedb.core.cache.EntityHotPolicyMode.COUNT_WINDOW;
         List<String> ids = indexed.orElseGet(() -> queryIndexManager.resolveCandidateIds(query));
         if (ids.size() > 100_000) throw new IllegalStateException("Facet candidate limit exceeded: max 100000");
         var result = new com.reactor.cachedb.core.query.FacetAccumulator();
         long bytes = 0;
-        for (int start = 0; start < ids.size(); start += 128) {
-            var batch = ids.subList(start, Math.min(ids.size(), start + 128));
+        int batchSize = indexValues && field ? 256 : 512;
+        var binaryKeys = indexValues && ids.size() > batchSize && RedisBinaryFacetKeys.supports(jedis, keyStrategy)
+                ? new RedisBinaryFacetKeys(keyStrategy, metadata.redisNamespace(), ids, tenant) : null;
+        java.util.function.IntFunction<RedisClientOperations.IndexReadKeys> windows = start -> {
+            var batch = ids.subList(start, Math.min(ids.size(), start + batchSize));
+            return new RedisClientOperations.IndexReadKeys(
+                    batch.stream().map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id)).toList(),
+                    batch.stream().map(id -> keyStrategy.tombstoneKey(metadata.redisNamespace(), id)).toList(),
+                    batch.stream().map(id -> keyStrategy.indexMetaKey(metadata.redisNamespace(), id)).toList(),
+                    tenant == null ? null : batch.stream()
+                            .map(id -> keyStrategy.versionKey(metadata.redisNamespace(), id) + ":tenant").toList());
+        };
+        var compactPhase = indexValues && count && !field && ids.size() > batchSize
+                ? binaryKeys == null ? jedis.facetIndexCountsPhase(ids.size(), windows, tenant, group)
+                        : ((JedisPooledOperations) jedis).binaryFacetIndexCountsPhase(binaryKeys, tenant, group)
+                : RedisClientOperations.FacetPhaseResult.<RedisClientOperations.FacetIndexCounts>declined(
+                        RedisClientOperations.FacetPhaseDecline.UNSUPPORTED);
+        var compacted = compactPhase.batches();
+        Optional<List<RedisClientOperations.FacetIndexBatch>> pipelined = compacted.isEmpty() && !compactPhase.skipRowsPhase()
+                && indexValues && ids.size() > batchSize
+                ? binaryKeys == null ? jedis.facetIndexBatches(ids.size(), windows, tenant, group, field ? spec.fieldName() : null)
+                        : ((JedisPooledOperations) jedis).binaryFacetIndexBatches(binaryKeys, tenant, group, field ? spec.fieldName() : null)
+                : Optional.empty();
+        for (int start = 0; start < ids.size(); start += batchSize) {
+            var batch = ids.subList(start, Math.min(ids.size(), start + batchSize));
+            if (compacted.isPresent()) {
+                var summary = compacted.get().get(start / batchSize);
+                for (var entry : summary.counts().entrySet()) {
+                    bytes += entry.getValue() * (2L * entry.getKey().length() + 16);
+                    if (bytes > 16L * 1024 * 1024) throw new IllegalStateException("Facet byte budget exceeded");
+                    result.addCount(entry.getKey(), entry.getValue());
+                }
+                if (!summary.nullCandidates().isEmpty()) {
+                    var ambiguous = summary.nullCandidates().stream().map(batch::get).toList();
+                    for (String payload : aggregateLivePayloads(ambiguous, tenant)) {
+                        if (payload == null) continue;
+                        bytes += 2L * payload.length();
+                        if (bytes > 16L * 1024 * 1024) throw new IllegalStateException("Facet byte budget exceeded");
+                        T entity = codec.fromRedisValue(payload);
+                        if (!pageCacheManager.shouldServeCachedEntity(entity)
+                                || !queryEvaluator.matches(entity, codec, query.rootGroup())) continue;
+                        verifyTenant(entity);
+                        result.add(codec.entityColumnValue(entity, group), null, false);
+                    }
+                }
+                continue;
+            }
+            if (indexValues) {
+                var faceted = pipelined.isPresent() ? Optional.of(pipelined.get().get(start / batchSize)) : jedis.facetIndexBatch(
+                        batch.stream().map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id)).toList(),
+                        batch.stream().map(id -> keyStrategy.tombstoneKey(metadata.redisNamespace(), id)).toList(),
+                        batch.stream().map(id -> keyStrategy.indexMetaKey(metadata.redisNamespace(), id)).toList(),
+                        tenant == null ? null : batch.stream()
+                                .map(id -> keyStrategy.versionKey(metadata.redisNamespace(), id) + ":tenant").toList(),
+                        tenant, group, field ? spec.fieldName() : null);
+                if (faceted.isPresent()) {
+                    var ambiguous = new ArrayList<String>();
+                    for (var row : faceted.get().rows())
+                        if ("__NULL__".equals(row.groupRaw()) || count && field && "__NULL__".equals(row.valueRaw()))
+                            ambiguous.add(batch.get(row.candidate()));
+                    var payloads = ambiguous.isEmpty() ? List.<String>of() : aggregateLivePayloads(ambiguous, tenant);
+                    int payloadIndex = 0;
+                    for (var row : faceted.get().rows()) {
+                        Object groupValue, value;
+                        if ("__NULL__".equals(row.groupRaw()) || count && field && "__NULL__".equals(row.valueRaw())) {
+                            String payload = payloads.get(payloadIndex++);
+                            if (payload == null) continue;
+                            bytes += 2L * payload.length();
+                            if (bytes > 16L * 1024 * 1024) throw new IllegalStateException("Facet byte budget exceeded");
+                            T entity = codec.fromRedisValue(payload);
+                            if (!pageCacheManager.shouldServeCachedEntity(entity)
+                                    || !queryEvaluator.matches(entity, codec, query.rootGroup())) continue;
+                            verifyTenant(entity);
+                            groupValue = codec.entityColumnValue(entity, group);
+                            value = field ? codec.entityColumnValue(entity, spec.fieldName()) : null;
+                        } else {
+                            bytes += 2L * row.groupRaw().length() + (field ? 2L * row.valueRaw().length() : 16);
+                            groupValue = row.groupRaw();
+                            value = !field || "__NULL__".equals(row.valueRaw()) ? null
+                                    : count ? row.valueRaw() : indexNumber(row.valueRaw());
+                        }
+                        if (bytes > 16L * 1024 * 1024) throw new IllegalStateException("Facet byte budget exceeded");
+                        result.add(groupValue, value, count && field);
+                    }
+                    continue;
+                }
+            }
+            boolean pipelineIndexValues = indexValues && tenant == null;
             try (var pipeline = jedis.pipeline()) {
                 var live = new ArrayList<redis.clients.jedis.Response<Boolean>>();
                 var deleted = new ArrayList<redis.clients.jedis.Response<Boolean>>();
@@ -960,17 +1754,17 @@ public final class RedisEntityRepository<T, ID>
                 for (String id : batch) {
                     live.add(pipeline.exists(keyStrategy.entityKey(metadata.redisNamespace(), id)));
                     deleted.add(pipeline.exists(keyStrategy.tombstoneKey(metadata.redisNamespace(), id)));
-                    if (indexValues) {
+                    if (pipelineIndexValues) {
                         String key = keyStrategy.indexMetaKey(metadata.redisNamespace(), id);
                         groups.add(pipeline.hget(key, group));
                         if (field) values.add(pipeline.hget(key, spec.fieldName()));
                     }
                 }
                 pipeline.sync();
-                List<String> boundedPayloads = !indexValues ? jedis.boundedMget(batch.stream()
+                List<String> boundedPayloads = !pipelineIndexValues ? jedis.boundedMget(batch.stream()
                         .map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id)).toList(), 16L * 1024 * 1024) : List.of();
                 var ambiguous = new LinkedHashMap<Integer, String>();
-                if (indexValues) {
+                if (pipelineIndexValues) {
                     var positions = new ArrayList<Integer>();
                     for (int i = 0; i < batch.size(); i++) if ("__NULL__".equals(groups.get(i).get())
                             || count && field && "__NULL__".equals(values.get(i).get())) positions.add(i);
@@ -982,14 +1776,14 @@ public final class RedisEntityRepository<T, ID>
                 for (int i = 0; i < batch.size(); i++) {
                     if (!Boolean.TRUE.equals(live.get(i).get()) || Boolean.TRUE.equals(deleted.get(i).get())) continue;
                     Object groupValue, value;
-                    if (indexValues && !ambiguous.containsKey(i)) {
+                    if (pipelineIndexValues && !ambiguous.containsKey(i)) {
                         String raw = groups.get(i).get(), numeric = field ? values.get(i).get() : "__NULL__";
                         if (raw == null || numeric == null) throw new IllegalStateException("Facet index metadata is incomplete; rebuild indexes");
                         bytes += 2L * (raw.length() + numeric.length());
                         groupValue = raw.equals("__NULL__") ? null : raw;
                         value = numeric.equals("__NULL__") ? null : count ? numeric : indexNumber(numeric);
                     } else {
-                        String raw = indexValues ? ambiguous.get(i) : boundedPayloads.get(i);
+                        String raw = pipelineIndexValues ? ambiguous.get(i) : boundedPayloads.get(i);
                         if (raw == null) continue;
                         bytes += 2L * raw.length();
                         if (bytes > 16L * 1024 * 1024) throw new IllegalStateException("Facet byte budget exceeded");
@@ -1007,6 +1801,15 @@ public final class RedisEntityRepository<T, ID>
         return result.result();
     }
 
+    private List<String> aggregateLivePayloads(List<String> ids, String tenant) {
+        return jedis.liveIndexPayloadBatch(
+                ids.stream().map(id -> keyStrategy.entityKey(metadata.redisNamespace(), id)).toList(),
+                ids.stream().map(id -> keyStrategy.tombstoneKey(metadata.redisNamespace(), id)).toList(),
+                tenant == null ? null : ids.stream()
+                        .map(id -> keyStrategy.versionKey(metadata.redisNamespace(), id) + ":tenant").toList(),
+                tenant).orElseThrow(() -> new IllegalStateException("Aggregate sentinel re-read requires a common Redis slot"));
+    }
+
     private static java.math.BigDecimal indexNumber(String value) {
         if (value.length() > 4096) throw new IllegalArgumentException("Aggregate numeric text exceeds 4096 characters");
         return com.reactor.cachedb.core.model.NumericValues.boundedDecimal(new java.math.BigDecimal(value));
@@ -1017,6 +1820,10 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public List<T> query(QuerySpec requestedQuery) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.QUERY, metadata.entityName(),
+                    observationOwner, () -> query(requestedQuery));
+        requireUnversionedReadAllowed();
         final QuerySpec querySpec = tenantQuery(requestedQuery);
         long startedAt = System.nanoTime();
         try {
@@ -1029,7 +1836,33 @@ public final class RedisEntityRepository<T, ID>
                     querySpec,
                     effectiveCachePolicy(),
                     readShapeGuardrailConfig);
-            if (effectiveCachePolicy().hotPolicy().mode() == com.reactor.cachedb.core.cache.EntityHotPolicyMode.COUNT_WINDOW
+            observationTier(Tier.REDIS);
+            if (queryIndexManager.hasCompositeSortIndexes() && !readThroughConfig.mode().queryEnabled()) {
+                var rejected = new java.util.LinkedHashSet<ID>();
+                java.util.Optional<RedisQueryIndexManager.CompositeWindow<T>> compositeWindow;
+                try {
+                    compositeWindow = queryIndexManager.resolveCompositeQueryWindow(querySpec, entity -> {
+                        verifyTenant(entity);
+                        if (pageCacheManager.shouldServeCachedEntity(entity)) return true;
+                        rejected.add(metadata.idAccessor().apply(entity)); return false;
+                    });
+                } catch (RedisQueryIndexManager.CompositePayloadDivergenceException divergence) {
+                    compositeWindow = java.util.Optional.empty();
+                }
+                compositeReadDeadline(querySpec, startedAt);
+                if (compositeWindow.isPresent()) {
+                    if (effectiveCachePolicy().hotPolicy().evictWhenRejected())
+                        for (ID id : rejected) pageCacheManager.removeEntity(id);
+                    var rows = compositeWindow.get().rows().stream().map(RedisQueryIndexManager.CompositeRow::entity).toList();
+                    pageCacheManager.recordEntityAccessBatch(rows.stream().map(metadata.idAccessor()).toList());
+                    queryIndexManager.observe(querySpec, rows.size());
+                    applyFetchPlan(rows, querySpec.fetchPlan());
+                    compositeReadDeadline(querySpec, startedAt);
+                    return rows;
+                }
+            }
+            var compositeCandidates = queryIndexManager.resolveCompositeRangeCandidates(querySpec);
+            if (compositeCandidates.isEmpty() && effectiveCachePolicy().hotPolicy().mode() == com.reactor.cachedb.core.cache.EntityHotPolicyMode.COUNT_WINDOW
                     && !readThroughConfig.mode().queryEnabled()) {
                 boolean local = nearCacheActive();
                 long epoch = local ? nearCache.epoch() : 0;
@@ -1052,11 +1885,11 @@ public final class RedisEntityRepository<T, ID>
                     return List.copyOf(entities);
                 }
             }
-            queryIndexManager.warm(querySpec);
-            boolean sortedIndexScan = queryIndexManager.supportsSortedIndexScan(querySpec);
+            if (compositeCandidates.isEmpty()) queryIndexManager.warm(querySpec);
+            boolean sortedIndexScan = compositeCandidates.isEmpty() && queryIndexManager.supportsSortedIndexScan(querySpec);
             boolean primarySortedScan =
-                    !sortedIndexScan && queryIndexManager.shouldUsePrimarySortedScan(querySpec);
-            List<String> candidateIds =
+                    compositeCandidates.isEmpty() && !sortedIndexScan && queryIndexManager.shouldUsePrimarySortedScan(querySpec);
+            List<String> candidateIds = compositeCandidates.isPresent() ? compositeCandidates.get() :
                     sortedIndexScan
                             ? queryIndexManager.resolveSortedIds(querySpec)
                             : (primarySortedScan
@@ -1067,7 +1900,7 @@ public final class RedisEntityRepository<T, ID>
                             && queryIndexManager.resolvesCompleteSortOrder(
                                     querySpec, candidateIds.size());
             boolean requiresResidualEvaluation =
-                    !queryIndexManager.fullyIndexed(querySpec.rootGroup());
+                    compositeCandidates.isPresent() || !queryIndexManager.fullyIndexed(querySpec.rootGroup());
             boolean requiresInMemorySort =
                     !querySpec.sorts().isEmpty() && !sortedIndexScan && !completeSortOrderResolved;
             if (candidateIds.isEmpty()) {
@@ -1095,12 +1928,14 @@ public final class RedisEntityRepository<T, ID>
                     payloadIds.stream()
                             .map(id -> keyStrategy.tombstoneKey(metadata.redisNamespace(), id))
                             .toList();
-            List<String> values = mgetEntityAndTombstones(keys, tombstoneKeys);
+            var compositePayloads = compositeCandidates.isPresent() ? compositeCandidatePayloads(payloadIds, querySpec, startedAt) : null;
+            List<String> values = compositePayloads == null ? mgetEntityAndTombstones(keys, tombstoneKeys) : compositePayloads.values();
             List<T> entities = new ArrayList<>();
             List<String> staleIndexIds = new ArrayList<>();
             Map<T, Map<String, Object>> resolvedColumns =
                     new IdentityHashMap<>(Math.max(16, keys.size()));
             for (int index = 0; index < keys.size(); index++) {
+                if (compositePayloads != null && compositePayloads.denied().contains(payloadIds.get(index))) continue;
                 String payload = values.get(index);
                 if (payload == null || values.get(keys.size() + index) != null) {
                     staleIndexIds.add(payloadIds.get(index));
@@ -1176,6 +2011,8 @@ public final class RedisEntityRepository<T, ID>
                 int toIndex = Math.min(fromIndex + querySpec.limit(), entities.size());
                 sliced = new ArrayList<>(entities.subList(fromIndex, toIndex));
             }
+            if (compositeCandidates.isPresent())
+                pageCacheManager.recordEntityAccessBatch(sliced.stream().map(metadata.idAccessor()).toList());
             applyFetchPlan(sliced, querySpec.fetchPlan());
             return sliced;
         } finally {
@@ -1183,24 +2020,291 @@ public final class RedisEntityRepository<T, ID>
         }
     }
 
+    private static void compositeReadDeadline(QuerySpec query, long startedAt) {
+        if (query.queryTimeoutSeconds() > 0 && System.nanoTime() - startedAt
+                >= java.util.concurrent.TimeUnit.SECONDS.toNanos(query.queryTimeoutSeconds()))
+            throw new IllegalStateException("Composite query deadline exceeded");
+    }
+
+    private record CompositeCandidatePayloads(List<String> values, java.util.Set<String> denied) {}
+
+    @SuppressWarnings("unchecked")
+    private CompositeCandidatePayloads compositeCandidatePayloads(List<String> ids, QuerySpec query, long startedAt) {
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace()))
+            throw new IllegalStateException("Sorted composite materialization cannot certify minimum versions; use point/findAll");
+        if (ids.size() > queryIndexManager.compositeMaterializationLimit())
+            throw new IllegalStateException("Composite candidate limit exceeded");
+        var values = new ArrayList<String>(Collections.nCopies(ids.size() * 2, null));
+        var denied = new java.util.HashSet<String>();
+        String tenant = activeTenant();
+        long bytes = 0;
+        for (String id : ids) {
+            RedisCompositeIndexes.validateMember(id);
+            bytes += id.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        }
+        for (int base = 0; base < ids.size(); base += 128) {
+            compositeReadDeadline(query, startedAt);
+            int end = Math.min(base + 128, ids.size());
+            var keys = new ArrayList<String>((end - base) * (tenant == null ? 2 : 3));
+            for (int i = base; i < end; i++) {
+                keys.add(keyStrategy.entityKey(metadata.redisNamespace(), ids.get(i)));
+                keys.add(keyStrategy.tombstoneKey(metadata.redisNamespace(), ids.get(i)));
+                if (tenant != null) keys.add(keyStrategy.versionKey(metadata.redisNamespace(), ids.get(i)) + ":tenant");
+            }
+            if (bytes >= 16L * 1024 * 1024) throw new IllegalStateException("Composite payload byte budget exceeded");
+            var batch = jedis.boundedMget(keys, 16L * 1024 * 1024 - bytes);
+            for (String value : batch) if (value != null) bytes += value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            int stride = tenant == null ? 2 : 3;
+            for (int i = base; i < end; i++) {
+                int offset = (i - base) * stride;
+                String payload = batch.get(offset), tombstone = batch.get(offset + 1);
+                if (tenant != null && !tenant.equals(batch.get(offset + 2))) denied.add(ids.get(i));
+                values.set(i, payload); values.set(ids.size() + i, tombstone);
+            }
+        }
+        compositeReadDeadline(query, startedAt);
+        return new CompositeCandidatePayloads(values, java.util.Set.copyOf(denied));
+    }
+
+    @Override
+    public com.reactor.cachedb.core.repository.CursorPage<T> queryRedisLongLexicalWindow(QuerySpec requested,
+            com.reactor.cachedb.core.repository.WindowRequest request, String indexName,
+            String route, String scope, Long afterValue, String afterId) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.QUERY, metadata.entityName(),
+                    observationOwner, () -> queryRedisLongLexicalWindow(requested, request, indexName, route, scope, afterValue, afterId));
+        rejectUncertifiedProtectedRead();
+        long startedAt = System.nanoTime();
+        var window = java.util.Objects.requireNonNull(request, "window");
+        QuerySpec query = tenantQuery(java.util.Objects.requireNonNull(requested, "query")).limitTo(window.limit());
+        rejectProjectionOnlyEntityRoute("Redis Long lexical window");
+        validateEntityRouteContract("Redis Long lexical window", window.limit());
+        ReadShapeGuardrails.validateEntityQuery(metadata.entityName(), query, effectiveCachePolicy(), readShapeGuardrailConfig);
+        queryIndexManager.requireRedisLongLexicalContract(query, indexName);
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace()))
+            throw new IllegalStateException("Redis Long lexical cursor cannot certify a causal scope; use causal entity reads");
+        String contract = queryIndexManager.redisLongLexicalCursorContract(query, indexName, route, scope);
+        if ((afterValue == null) != (afterId == null))
+            throw new IllegalArgumentException("Redis Long lexical score and ID must both be null or both supplied");
+        if (window.after() != null && afterValue != null)
+            throw new IllegalArgumentException("Choose an opaque cursor or explicit seek values, not both");
+        RedisQueryIndexManager.CompositeLongPosition after = null;
+        if (window.after() != null) {
+            var position = com.reactor.cachedb.core.repository.WindowCursor.decodeRedisLongLexical(window.after(), contract);
+            after = new RedisQueryIndexManager.CompositeLongPosition(position.sortValue(), position.id());
+        } else if (afterValue != null) after = new RedisQueryIndexManager.CompositeLongPosition(afterValue, afterId);
+        boolean sourceAllowed = readThroughConfig.mode().queryEnabled()
+                && (RouteCacheContext.currentContract() == null || RouteCacheContext.currentContract().sourceFallbackAllowed());
+        var rejected = new java.util.LinkedHashSet<ID>();
+        java.util.function.Predicate<T> admission = entity -> {
+            verifyTenant(entity);
+            if (pageCacheManager.shouldServeCachedEntity(entity)) return true;
+            if (rejected.size() >= 10_000) throw new IllegalStateException("Composite admission rejection budget exceeded");
+            rejected.add(metadata.idAccessor().apply(entity)); return false;
+        };
+        try {
+            RedisQueryIndexManager.CompositeLongWindow<T> result;
+            try {
+                observationTier(Tier.REDIS);
+                var fast = queryIndexManager.resolveRedisLongLexicalWindow(query, after, admission, indexName, sourceAllowed);
+                compositeReadDeadline(query, startedAt);
+                if (fast.isPresent()) result = fast.get();
+                else {
+                    rejected.clear();
+                    result = queryIndexManager.resolveRedisLongLexicalFallback(query, after, admission, indexName, sourceAllowed);
+                    compositeReadDeadline(query, startedAt);
+                }
+                if (result.rows().isEmpty() && sourceAllowed)
+                    result = loadRedisLongLexicalSource(query, after, indexName, startedAt);
+            } catch (RedisQueryIndexManager.CompositePayloadDivergenceException divergence) {
+                if (!sourceAllowed) throw divergence;
+                result = loadRedisLongLexicalSource(query, after, indexName, startedAt);
+            }
+            compositeReadDeadline(query, startedAt);
+            if (effectiveCachePolicy().hotPolicy().evictWhenRejected())
+                for (ID id : rejected) pageCacheManager.removeEntity(id);
+            var rows = result.rows().stream().map(RedisQueryIndexManager.CompositeLongRow::entity).toList();
+            pageCacheManager.recordEntityAccessBatch(rows.stream().map(metadata.idAccessor()).toList());
+            queryIndexManager.observe(query, rows.size());
+            applyFetchPlan(rows, query.fetchPlan());
+            compositeReadDeadline(query, startedAt);
+            String next = result.hasMore() && result.continuation() != null
+                    ? com.reactor.cachedb.core.repository.WindowCursor.encodeRedisLongLexical(
+                            result.continuation().sortValue(), result.continuation().id(), contract) : null;
+            return new com.reactor.cachedb.core.repository.CursorPage<>(rows, next);
+        } finally { recordRedisRead(startedAt); }
+    }
+
+    @Override
+    public com.reactor.cachedb.core.repository.CursorPage<T> queryRedisLexicalWindow(QuerySpec requested,
+            com.reactor.cachedb.core.repository.WindowRequest request, String indexName,
+            String route, String scope, Double afterScore, String afterId) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.QUERY, metadata.entityName(),
+                    observationOwner, () -> queryRedisLexicalWindow(requested, request, indexName, route, scope, afterScore, afterId));
+        rejectUncertifiedProtectedRead();
+        long startedAt = System.nanoTime();
+        var window = java.util.Objects.requireNonNull(request, "window");
+        QuerySpec query = tenantQuery(java.util.Objects.requireNonNull(requested, "query")).limitTo(window.limit());
+        rejectProjectionOnlyEntityRoute("Redis lexical window");
+        validateEntityRouteContract("Redis lexical window", window.limit());
+        ReadShapeGuardrails.validateEntityQuery(metadata.entityName(), query, effectiveCachePolicy(), readShapeGuardrailConfig);
+        queryIndexManager.requireRedisLexicalContract(query, indexName);
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace()))
+            throw new IllegalStateException("Redis lexical cursor cannot certify a causal scope; use causal entity reads");
+        String contract = queryIndexManager.redisLexicalCursorContract(query, indexName, route, scope);
+        if ((afterScore == null) != (afterId == null))
+            throw new IllegalArgumentException("Redis lexical score and ID must both be null or both supplied");
+        if (window.after() != null && afterScore != null)
+            throw new IllegalArgumentException("Choose an opaque cursor or explicit seek values, not both");
+        RedisQueryIndexManager.CompositePosition after = null;
+        if (window.after() != null) {
+            var position = com.reactor.cachedb.core.repository.WindowCursor.decodeRedisLexical(window.after(), contract);
+            after = new RedisQueryIndexManager.CompositePosition(position.score(), position.id());
+        } else if (afterScore != null) after = new RedisQueryIndexManager.CompositePosition(afterScore, afterId);
+        boolean sourceAllowed = readThroughConfig.mode().queryEnabled()
+                && (RouteCacheContext.currentContract() == null || RouteCacheContext.currentContract().sourceFallbackAllowed());
+        var rejected = new java.util.LinkedHashSet<ID>();
+        java.util.function.Predicate<T> admission = entity -> {
+            verifyTenant(entity);
+            if (pageCacheManager.shouldServeCachedEntity(entity)) return true;
+            if (rejected.size() >= 10_000) throw new IllegalStateException("Composite admission rejection budget exceeded");
+            rejected.add(metadata.idAccessor().apply(entity)); return false;
+        };
+        try {
+            RedisQueryIndexManager.CompositeWindow<T> result;
+            try {
+                observationTier(Tier.REDIS);
+                var fast = queryIndexManager.resolveCompositeWindowForIndex(query, after, admission, indexName, sourceAllowed);
+                compositeReadDeadline(query, startedAt);
+                if (fast.isPresent()) result = fast.get();
+                else {
+                    rejected.clear();
+                    result = queryIndexManager.resolveRedisLexicalFallback(query, after, admission, indexName, sourceAllowed);
+                    compositeReadDeadline(query, startedAt);
+                }
+                if (result.rows().isEmpty() && sourceAllowed)
+                    result = loadRedisLexicalSource(query, after, indexName, startedAt);
+            } catch (RedisQueryIndexManager.CompositePayloadDivergenceException divergence) {
+                if (!sourceAllowed) throw divergence;
+                result = loadRedisLexicalSource(query, after, indexName, startedAt);
+            }
+            compositeReadDeadline(query, startedAt);
+            if (effectiveCachePolicy().hotPolicy().evictWhenRejected())
+                for (ID id : rejected) pageCacheManager.removeEntity(id);
+            var rows = result.rows().stream().map(RedisQueryIndexManager.CompositeRow::entity).toList();
+            pageCacheManager.recordEntityAccessBatch(rows.stream().map(metadata.idAccessor()).toList());
+            queryIndexManager.observe(query, rows.size());
+            applyFetchPlan(rows, query.fetchPlan());
+            compositeReadDeadline(query, startedAt);
+            String next = result.hasMore() && result.continuation() != null
+                    ? com.reactor.cachedb.core.repository.WindowCursor.encodeRedisLexical(
+                            result.continuation().score(), result.continuation().id(), contract) : null;
+            return new com.reactor.cachedb.core.repository.CursorPage<>(rows, next);
+        } finally { recordRedisRead(startedAt); }
+    }
+
+    private record CompositeSourceRows<E>(List<E> rows, long bytes) {}
+
+    private RedisQueryIndexManager.CompositeWindow<T> loadRedisLexicalSource(QuerySpec query,
+            RedisQueryIndexManager.CompositePosition after, String indexName, long startedAt) {
+        var materialized = loadCompositeLexicalSource(query, startedAt);
+        return queryIndexManager.redisLexicalWindowFromRows(query, after, materialized.rows(), entity -> true,
+                indexName, materialized.bytes(), false);
+    }
+
+    private RedisQueryIndexManager.CompositeLongWindow<T> loadRedisLongLexicalSource(QuerySpec query,
+            RedisQueryIndexManager.CompositeLongPosition after, String indexName, long startedAt) {
+        var materialized = loadCompositeLexicalSource(query, startedAt);
+        return queryIndexManager.redisLongLexicalWindowFromRows(query, after, materialized.rows(), entity -> true,
+                indexName, materialized.bytes(), false);
+    }
+
+    private CompositeSourceRows<T> loadCompositeLexicalSource(QuerySpec query, long startedAt) {
+        compositeReadDeadline(query, startedAt);
+        int capacity = Math.min(queryIndexManager.compositeMaterializationLimit(), readThroughConfig.maxQueryLoadRows());
+        if (capacity <= query.limit()) throw new IllegalStateException("Source lexical fallback needs a bounded completeness lookahead");
+        QuerySpec source = QuerySpec.where(query.rootGroup()).limitTo(capacity)
+                .withQueryTimeoutSeconds(query.queryTimeoutSeconds()).fetching(query.fetchPlan());
+        List<T> loaded = loadQueryFromSource(source);
+        compositeReadDeadline(query, startedAt);
+        if (loaded.size() >= capacity)
+            throw new IllegalStateException("Source lexical fallback cannot prove complete materialization within capacity");
+        loaded.forEach(this::verifyTenant);
+        var accepted = new ArrayList<T>(loaded.size());
+        long bytes = 0;
+        for (T entity : loaded) {
+            String id = String.valueOf(metadata.idAccessor().apply(entity));
+            RedisCompositeIndexes.validateMember(id);
+            bytes += id.getBytes(java.nio.charset.StandardCharsets.UTF_8).length + 32L;
+            bytes += codec.toRedisValue(entity).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            if (bytes > 16L * 1024 * 1024) throw new IllegalStateException("Source lexical materialization byte budget exceeded");
+        }
+        for (int base = 0; base < loaded.size(); base += 128) {
+            compositeReadDeadline(query, startedAt);
+            int end = Math.min(base + 128, loaded.size());
+            var keys = new ArrayList<String>((end - base) * 2);
+            for (int i = base; i < end; i++) {
+                ID id = metadata.idAccessor().apply(loaded.get(i));
+                keys.add(keyStrategy.tombstoneKey(metadata.redisNamespace(), id));
+                keys.add(keyStrategy.versionKey(metadata.redisNamespace(), id) + ":tenant");
+            }
+            if (bytes >= 16L * 1024 * 1024) throw new IllegalStateException("Source lexical ownership byte budget exceeded");
+            var values = jedis.boundedMget(keys, 16L * 1024 * 1024 - bytes);
+            for (String value : values) if (value != null) bytes += value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            String tenant = activeTenant();
+            for (int i = base; i < end; i++) {
+                int offset = (i - base) * 2;
+                if (values.get(offset) != null || tenant != null && values.get(offset + 1) != null
+                        && !tenant.equals(values.get(offset + 1))) continue;
+                accepted.add(loaded.get(i));
+            }
+        }
+        return new CompositeSourceRows<>(accepted, bytes);
+    }
+
+    /** Every writer must use the cooperative composite protocol before this explicit migration. */
+    public com.reactor.cachedb.core.queue.QueryIndexRebuildResult rebuildCompositeIndexesFenced(boolean automatic, String note) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.REBUILD_INDEXES, metadata.entityName(),
+                    observationOwner, () -> rebuildCompositeIndexesFenced(automatic, note));
+        rejectUncertifiedProtectedRead();
+        observationTier(Tier.REDIS);
+        return queryIndexManager.rebuildCompositeIndexesFenced(automatic, note);
+    }
+
     @Override
     public HotLookup<T> findHotById(ID id) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.FIND_HOT_BY_ID, metadata.entityName(),
+                    observationOwner, () -> findHotById(id));
+        if (metadata.tenantPurgeEnabled()) return protectedPointReads().findHotById(activeTenant(), id, requiredVersion(id));
         activeTenant();
+        if (pointReads != null) pointReads.ensureOpen();
         long startedAt = System.nanoTime();
         try {
             boolean local = nearCacheActive();
             String localId = local ? String.valueOf(id) : null;
-            long epoch = local ? nearCache.epoch() : 0;
             T cached = nearValue(id);
             if (cached != null) { applyFetchPlan(List.of(cached)); return HotLookup.hit(cached); }
+            var stamp = local ? nearCache.capture(localId) : null;
             String entityKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
             String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
-            List<String> values = pointValues(id, requiredVersion(id) > 0);
-            if (requiredVersion(id) > 0) verifyCausalVersion(id, values.get(2));
-            if (values.get(1) != null) {
+            long minimumVersion = requiredVersion(id);
+            RedisPointRead read = null;
+            List<String> values = null;
+            observationTier(Tier.REDIS);
+            if (pointReads != null && pointReads.coalesce(minimumVersion)) {
+                read = pointReads.runtime().readSync(entityKey, tombstoneKey, local);
+            } else {
+                values = pointValues(id, minimumVersion > 0);
+            }
+            if (minimumVersion > 0) verifyCausalVersion(id, values.get(2));
+            if ((read == null ? values.get(1) : read.tombstone()) != null) {
+                observationOutcome(Outcome.TOMBSTONE);
                 return HotLookup.tombstoned();
             }
-            String encoded = values.get(0);
+            String encoded = read == null ? values.get(0) : read.payload();
             if (encoded == null) {
                 return HotLookup.notCached();
             }
@@ -1214,7 +2318,7 @@ public final class RedisEntityRepository<T, ID>
             }
             pageCacheManager.recordEntityAccess(id);
             if (local && nearCacheActive()) nearCache.put(localId, encoded, shareableNearEntity(entity, encoded),
-                    jedis.commands().pttl(entityKey), epoch, values.size() > 2 && values.get(2) != null ? Long.parseLong(values.get(2)) : 0);
+                    pointReadTtl(read, entityKey), stamp, values != null && values.size() > 2 && values.get(2) != null ? Long.parseLong(values.get(2)) : 0);
             applyFetchPlan(List.of(entity));
             return HotLookup.hit(entity);
         } finally {
@@ -1224,6 +2328,9 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public <K> Map<K, List<T>> queryPartitions(PartitionedQuerySpec<K> partitionedQuery) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.QUERY_PARTITIONS, metadata.entityName(),
+                    observationOwner, () -> queryPartitions(partitionedQuery));
         try {
             return queryPartitionsScoped(partitionedQuery);
         } catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) {
@@ -1232,6 +2339,7 @@ public final class RedisEntityRepository<T, ID>
     }
 
     private <K> Map<K, List<T>> queryPartitionsScoped(PartitionedQuerySpec<K> partitionedQuery) {
+        requireUnversionedReadAllowed();
         String tenant = activeTenant();
         if (tenant != null) {
             if (partitionedQuery == null || partitionedQuery.partitionValues().isEmpty()) return Map.of();
@@ -1240,6 +2348,7 @@ public final class RedisEntityRepository<T, ID>
             QuerySpec scoped = tenantQuery(QuerySpec.where(QueryFilter.in(partitionedQuery.partitionColumn(), partitionedQuery.partitionValues())));
             ReadShapeGuardrails.validateEntityQuery(metadata.entityName(), scoped.limitTo(partitionedQuery.limitPerPartition()),
                     effectiveCachePolicy(), readShapeGuardrailConfig);
+            observationTier(Tier.REDIS);
             var ids = queryIndexManager.resolveCandidateIds(scoped);
             if (ids.size() > 10_000) throw new IllegalStateException("Tenant partition candidate limit exceeded; use a bounded tenant projection");
             var result = new LinkedHashMap<K, List<T>>();
@@ -1297,6 +2406,7 @@ public final class RedisEntityRepository<T, ID>
                             .limitTo(partitionedQuery.limitPerPartition()),
                     effectiveCachePolicy(),
                     readShapeGuardrailConfig);
+            observationTier(Tier.REDIS);
             Map<K, List<String>> idsByPartition =
                     queryIndexManager.resolvePartitionedIds(partitionedQuery);
             List<String> payloadIds =
@@ -1398,6 +2508,8 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public T save(T entity) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return observeWrite(CacheOperation.SAVE, () -> save(entity));
         if (com.reactor.cachedb.core.api.CacheUnitOfWork.active()) {
             var work = com.reactor.cachedb.core.api.CacheUnitOfWork.current();
             work.requireOwner(entityRegistry); work.put(entity); return entity;
@@ -1407,11 +2519,15 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public WriteReceipt<T, ID> saveWithReceipt(T entity) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return observeWrite(CacheOperation.SAVE, () -> saveWithReceipt(entity));
         return saveInternal(entity, -1L, null);
     }
 
     @Override
     public WriteReceipt<T, ID> save(T entity, long expectedVersion) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return observeWrite(CacheOperation.SAVE, () -> save(entity, expectedVersion));
         if (expectedVersion < 0) {
             throw new IllegalArgumentException("expectedVersion must not be negative");
         }
@@ -1420,6 +2536,8 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public WriteReceipt<T, ID> saveAfter(T entity, WriteDependency dependency) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return observeWrite(CacheOperation.SAVE, () -> saveAfter(entity, dependency));
         if (dependency == null) {
             throw new IllegalArgumentException("dependency must not be null");
         }
@@ -1428,6 +2546,8 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public List<WriteReceipt<T, ID>> saveAll(Collection<T> entities) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return observeWrite(CacheOperation.SAVE_ALL, () -> saveAll(entities));
         com.reactor.cachedb.core.api.CacheUnitOfWork.rejectImmediateReceipt();
         if (entities == null || entities.isEmpty()) {
             return List.of();
@@ -1436,6 +2556,8 @@ public final class RedisEntityRepository<T, ID>
             throw new IllegalArgumentException(
                     "Bulk save supports at most 10000 entities per call");
         }
+        if (metadata.tenantPurgeEnabled() && !ownedProtectedMutation(activeTenant()))
+            return protectedMutation(activeTenant(), () -> saveAll(entities));
         List<T> input = List.copyOf(entities);
         java.util.HashSet<ID> uniqueIds = new java.util.HashSet<>(input.size());
         for (T entity : input) {
@@ -1461,16 +2583,32 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public T patch(ID id, Map<String, Object> updates) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return observeWrite(CacheOperation.PATCH, () -> patch(id, updates));
         return patchInternal(id, updates, true).entity();
     }
 
     @Override
     public WriteReceipt<T, ID> patchWithReceipt(ID id, Map<String, Object> updates) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return observeWrite(CacheOperation.PATCH, () -> patchWithReceipt(id, updates));
         return patchInternal(id, updates, false);
     }
 
     private WriteReceipt<T, ID> patchInternal(ID id, Map<String, Object> updates, boolean hotRequired) {
+        if (metadata.tenantPurgeEnabled() && !ownedProtectedMutation(activeTenant()))
+            return protectedMutation(activeTenant(), () -> {
+                try { return patchInternal(id, updates, hotRequired); }
+                finally { invalidateNear(id); }
+            });
+        observationTier(Tier.REDIS);
+        if (!queryIndexManager.hasCompositeSortIndexes()) return patchInternalUnfenced(id, updates, hotRequired);
+        return queryIndexManager.withCompositeMutation(() -> patchInternalUnfenced(id, updates, hotRequired));
+    }
+
+    private WriteReceipt<T, ID> patchInternalUnfenced(ID id, Map<String, Object> updates, boolean hotRequired) {
         com.reactor.cachedb.core.api.CacheUnitOfWork.rejectImmediateReceipt();
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
         java.util.Objects.requireNonNull(id, "id");
         String patchTenant = activeTenant();
         String cachedOwner = patchTenant == null ? null : verifiedOwners.get(id);
@@ -1483,13 +2621,14 @@ public final class RedisEntityRepository<T, ID>
         for (String column : updates.keySet())
             if (!metadata.columns().contains(column) || column.equals(metadata.idColumn())
                     || column.equals(metadata.versionColumn()) || column.equals(metadata.deletedColumn()))
-                throw new IllegalArgumentException("Invalid PATCH column: " + column);
+                throw new IllegalArgumentException("Invalid PATCH column");
         if (metadata.tenantFieldName() != null && updates.containsKey(metadata.tenantFieldName()))
             throw new IllegalArgumentException("PATCH cannot change tenant ownership");
         var assignments = new LinkedHashMap<String, Object>();
         var deltas = new LinkedHashMap<String, com.reactor.cachedb.core.model.PatchDeltaSpec>();
         updates.forEach((column, value) -> {
             if (value instanceof com.reactor.cachedb.core.model.PatchDeltaSpec delta) {
+                com.reactor.cachedb.core.crypto.EncryptedStorageChecks.rejectProtectedRole(metadata, column);
                 if (!column.equals(delta.columnName())) throw new IllegalArgumentException("Delta column mismatch");
                 deltas.put(column, delta);
             } else assignments.put(column, value);
@@ -1506,15 +2645,26 @@ public final class RedisEntityRepository<T, ID>
         for (int attempt = 0; attempt < settings.maxPatchAttempts(); attempt++) {
             var values = tenantOwnerKnown ? jedis.mget(entityKey, versionKey, tombstoneKey)
                     : jedis.mget(entityKey, versionKey, tombstoneKey, versionKey + ":tenant");
+            if (!tenantOwnerKnown && (metadata.tenantPurgeEnabled()
+                    || com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))) {
+                if (!patchTenant.equals(values.get(3))) throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
+                verifiedOwners.put(id, patchTenant); tenantOwnerKnown = true;
+            }
             if (!tenantOwnerKnown) tenantOwnerKnown = verifyObservedOwner(id, patchTenant, false, false, values.get(3));
             if (values.get(2) != null) throw new IllegalStateException("PATCH cannot recreate a deleted entity");
             boolean hot = values.get(0) != null;
-            if (!hot && watching()) throw new com.reactor.cachedb.core.repository.HotUpdateUnavailableException(id);
-            if (!hot && !deltas.isEmpty()) throw new com.reactor.cachedb.core.repository.HotUpdateUnavailableException(id);
+            if (!hot && watching()) throw new com.reactor.cachedb.core.repository.HotUpdateUnavailableException(
+                    com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata) ? null : id);
+            if (!hot && !deltas.isEmpty()) throw new com.reactor.cachedb.core.repository.HotUpdateUnavailableException(
+                    com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata) ? null : id);
             if (!hot && (hotRequired || !settings.coldPatchEnabled()))
                 throw new IllegalStateException("PATCH entity return requires a complete hot entity");
             boolean hasProjections = entityRegistry != null && !entityRegistry.projections(metadata.entityName()).isEmpty();
             if (values.get(1) == null) {
+                if (metadata.tenantPurgeEnabled()) throw new com.reactor.cachedb.core.protection.ProtectionException(
+                        com.reactor.cachedb.core.protection.ProtectionException.Code.MIGRATION_REQUIRED);
+                if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+                    throw new IllegalStateException("Encrypted PATCH requires an established Redis version");
                 var source = versionedSourceLoader(currentByIdLoader());
                 if (source == null) throw new IllegalStateException("Cold PATCH requires a versioned source loader");
                 var sourceVersion = source.loadVersionById(id);
@@ -1552,12 +2702,17 @@ public final class RedisEntityRepository<T, ID>
                 delta = new LinkedHashMap<>(codec.normalizePatchColumns(delta));
                 fullColumns.putAll(delta);
                 queryIndexManager.validateCompositeValues(fullColumns);
-                merged = codec.fromColumns(fullColumns);
+                merged = codec.fromLogicalColumns(fullColumns);
                 payload = codec.toRedisValue(merged);
                 admitted = shouldCacheEntity(id, fullColumns, CacheAdmissionSource.WRITE, policy, estimatePayloadBytes(payload));
             }
-            var columns = new LinkedHashMap<>(delta);
+            Map<String, Object> columns = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata)
+                    ? (hot ? codec.toQueuedColumns(merged, delta)
+                            : codec.toQueuedPatchColumns(String.valueOf(id), patchTenant, delta))
+                    : new LinkedHashMap<>(delta);
             columns.put(metadata.idColumn(), id);
+            if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+                com.reactor.cachedb.core.crypto.EncryptedStorageChecks.preparedBytes(0, payload, columns);
             if (!tenantOwnerKnown) { claimVerifiedTenantOwner(id); tenantOwnerKnown = true; }
             Instant created = Instant.now();
             var dependency = previous > 0 ? new WriteDependency(metadata.redisNamespace(), String.valueOf(id), previous) : null;
@@ -1588,11 +2743,24 @@ public final class RedisEntityRepository<T, ID>
     }
 
     private Object applyNumericDelta(ID id, com.reactor.cachedb.core.model.PatchDeltaSpec spec, Object current) {
-        return com.reactor.cachedb.core.model.NumericDeltas.apply(metadata.entityName(), id,
-                metadata.columnTypes().get(spec.columnName()), spec, current);
+        try {
+            return com.reactor.cachedb.core.model.NumericDeltas.apply(metadata.entityName(), id,
+                    metadata.columnTypes().get(spec.columnName()), spec, current);
+        } catch (RuntimeException failure) {
+            if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+            throw failure;
+        }
     }
 
     private List<WriteReceipt<T, ID>> saveBatch(List<T> entities) {
+        observationTier(Tier.REDIS);
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
+        if (!queryIndexManager.hasCompositeSortIndexes()) return saveBatchUnfenced(entities);
+        return queryIndexManager.withCompositeMutation(() -> saveBatchUnfenced(entities));
+    }
+
+    private List<WriteReceipt<T, ID>> saveBatchUnfenced(List<T> entities) {
         long startedAt = System.nanoTime();
         try {
             producerGuard.applyBackpressure();
@@ -1604,6 +2772,8 @@ public final class RedisEntityRepository<T, ID>
             ArrayList<Map<String, Object>> columnsByEntity = new ArrayList<>(entities.size());
             ArrayList<Long> payloadBytes = new ArrayList<>(entities.size());
             ArrayList<Boolean> admitted = new ArrayList<>(entities.size());
+            long protectedPreparedBytes = 0;
+            boolean protectedMapping = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata);
             for (T entity : entities) {
                 ID id = metadata.idAccessor().apply(entity);
                 verifyTenant(entity);
@@ -1619,12 +2789,15 @@ public final class RedisEntityRepository<T, ID>
                                 CacheAdmissionSource.WRITE,
                                 effectivePolicy,
                                 estimatedBytes);
+                Map<String, Object> queuedColumns = protectedMapping ? codec.toQueuedColumns(entity) : columns;
+                if (protectedMapping)
+                    protectedPreparedBytes = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.preparedBytes(protectedPreparedBytes, encoded, queuedColumns);
                 WriteOperation<T, ID> operation =
                         new WriteOperation<>(
                                 OperationType.UPSERT,
                                 metadata,
                                 id,
-                                columns,
+                                queuedColumns,
                                 encoded,
                                 0L,
                                 Instant.now());
@@ -1685,13 +2858,27 @@ public final class RedisEntityRepository<T, ID>
             syncProjectionPayloadsBatch(entities, false);
             return List.copyOf(receipts);
         } finally {
+            if (metadata.tenantPurgeEnabled())
+                for (T entity : entities) invalidateNear(metadata.idAccessor().apply(entity));
             recordRedisWrite(startedAt);
         }
     }
 
     private WriteReceipt<T, ID> saveInternal(
             T entity, long expectedVersion, WriteDependency dependency) {
+        if (metadata.tenantPurgeEnabled() && !ownedProtectedMutation(metadata.extractTenantId(entity))) {
+            com.reactor.cachedb.core.tenant.TenantAccess.verify(metadata, entity);
+            return protectedMutation(metadata.extractTenantId(entity), () -> saveInternal(entity, expectedVersion, dependency));
+        }
+        observationTier(Tier.REDIS);
+        if (!queryIndexManager.hasCompositeSortIndexes()) return saveInternalUnfenced(entity, expectedVersion, dependency);
+        return queryIndexManager.withCompositeMutation(() -> saveInternalUnfenced(entity, expectedVersion, dependency));
+    }
+
+    private WriteReceipt<T, ID> saveInternalUnfenced(
+            T entity, long expectedVersion, WriteDependency dependency) {
         com.reactor.cachedb.core.api.CacheUnitOfWork.rejectImmediateReceipt();
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
         verifyTenant(entity); prepareEntityTenantOwner(entity);
         WatchBefore watched = watchBefore(metadata.idAccessor().apply(entity));
         if (watched != null && expectedVersion < 0) expectedVersion = watched.version();
@@ -1726,12 +2913,16 @@ public final class RedisEntityRepository<T, ID>
                             CacheAdmissionSource.WRITE,
                             effectiveCachePolicy,
                             estimatedPayloadBytes);
+            boolean protectedMapping = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata);
+            Map<String, Object> queuedColumns = protectedMapping ? codec.toQueuedColumns(entity) : columns;
+            if (protectedMapping)
+                com.reactor.cachedb.core.crypto.EncryptedStorageChecks.preparedBytes(0, encoded, queuedColumns);
             WriteOperation<T, ID> operation =
                     new WriteOperation<>(
                             OperationType.UPSERT,
                             metadata,
                             id,
-                            columns,
+                            queuedColumns,
                             encoded,
                             0L,
                             Instant.now(),
@@ -1798,6 +2989,7 @@ public final class RedisEntityRepository<T, ID>
                     version,
                     operation.createdAt());
         } finally {
+            if (metadata.tenantPurgeEnabled()) invalidateNear(metadata.idAccessor().apply(entity));
             recordRedisWrite(startedAt);
         }
     }
@@ -1927,6 +3119,16 @@ public final class RedisEntityRepository<T, ID>
             List<Long> versions,
             boolean forceImmediateProjectionRefresh,
             boolean reindexQueryIndexes) {
+        if (!queryIndexManager.hasCompositeSortIndexes()) return hydrateWarmBatchInternalUnfenced(entities, versions, forceImmediateProjectionRefresh, reindexQueryIndexes);
+        return queryIndexManager.withCompositeMutation(() -> hydrateWarmBatchInternalUnfenced(entities, versions, forceImmediateProjectionRefresh, reindexQueryIndexes));
+    }
+
+    private List<T> hydrateWarmBatchInternalUnfenced(
+            List<T> entities,
+            List<Long> versions,
+            boolean forceImmediateProjectionRefresh,
+            boolean reindexQueryIndexes) {
+        if (queryIndexManager.hasCompositeSortIndexes()) reindexQueryIndexes = true;
         if (entities == null || entities.isEmpty()) {
             return List.of();
         }
@@ -1945,6 +3147,7 @@ public final class RedisEntityRepository<T, ID>
             ArrayList<String> admittedPayloads = new ArrayList<>(entities.size());
             ArrayList<Long> admittedPayloadBytes = new ArrayList<>(entities.size());
             ArrayList<ID> rejectedIds = new ArrayList<>();
+            long protectedPreparedBytes = 0;
             for (int index = 0; index < entities.size(); index++) {
                 Long requestedVersion = versions.get(index);
                 if (requestedVersion == null) {
@@ -1955,6 +3158,7 @@ public final class RedisEntityRepository<T, ID>
                 T entity = entities.get(index);
                 ID id = metadata.idAccessor().apply(entity);
                 Map<String, Object> columns = codec.toColumns(entity);
+                queryIndexManager.validateCompositeValues(columns);
                 String encoded = codec.toRedisValue(entity);
                 long estimatedPayloadBytes = estimatePayloadBytes(encoded);
                 if (shouldCacheEntity(
@@ -1963,6 +3167,8 @@ public final class RedisEntityRepository<T, ID>
                         CacheAdmissionSource.WARM,
                         effectiveCachePolicy,
                         estimatedPayloadBytes)) {
+                    if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+                        protectedPreparedBytes = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.preparedBytes(protectedPreparedBytes, encoded, Map.of());
                     admittedEntities.add(entity);
                     admittedIds.add(id);
                     admittedVersions.add(versions.get(index));
@@ -2032,13 +3238,19 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public Optional<VersionedEntity<T>> findVersionedById(ID id) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return CacheObservations.call(observationRecorder, CacheOperation.FIND_VERSIONED_BY_ID, metadata.entityName(),
+                    observationOwner, () -> findVersionedById(id));
+        if (metadata.tenantPurgeEnabled()) return protectedPointReads().findVersionedById(activeTenant(), id, requiredVersion(id));
         activeTenant();
         long startedAt = System.nanoTime();
         try {
             String entityKey = keyStrategy.entityKey(metadata.redisNamespace(), id);
             String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
             String versionKey = keyStrategy.versionKey(metadata.redisNamespace(), id);
+            observationTier(Tier.REDIS);
             List<String> values = jedis.mget(entityKey, tombstoneKey, versionKey);
+            if (values.get(1) != null) observationOutcome(Outcome.TOMBSTONE);
             if (values.get(0) == null || values.get(1) != null) {
                 return Optional.empty();
             }
@@ -2165,6 +3377,19 @@ public final class RedisEntityRepository<T, ID>
             boolean reindexQueryIndexes,
             boolean recordPageAccess,
             CacheAdmissionSource source) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
+        if (!queryIndexManager.hasCompositeSortIndexes()) return hydrateInternalUnfenced(entity, version, forceImmediateProjectionRefresh, reindexQueryIndexes, recordPageAccess, source);
+        return queryIndexManager.withCompositeMutation(() -> hydrateInternalUnfenced(entity, version, forceImmediateProjectionRefresh, reindexQueryIndexes, recordPageAccess, source));
+    }
+
+    private T hydrateInternalUnfenced(
+            T entity,
+            long version,
+            boolean forceImmediateProjectionRefresh,
+            boolean reindexQueryIndexes,
+            boolean recordPageAccess,
+            CacheAdmissionSource source) {
+        if (queryIndexManager.hasCompositeSortIndexes()) reindexQueryIndexes = true;
         verifyTenant(entity);
         requirePositiveHydrationVersion(version);
         long startedAt = System.nanoTime();
@@ -2174,8 +3399,11 @@ public final class RedisEntityRepository<T, ID>
             String versionKey = keyStrategy.versionKey(metadata.redisNamespace(), id);
             String tombstoneKey = keyStrategy.tombstoneKey(metadata.redisNamespace(), id);
             String encoded = codec.toRedisValue(entity);
+            if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+                com.reactor.cachedb.core.crypto.EncryptedStorageChecks.preparedBytes(0, encoded, Map.of());
             CachePolicy effectiveCachePolicy = effectiveCachePolicy();
             Map<String, Object> columns = codec.toColumns(entity);
+            queryIndexManager.validateCompositeValues(columns);
             long estimatedPayloadBytes = estimatePayloadBytes(encoded);
             boolean cacheEntity =
                     shouldCacheEntity(
@@ -2214,6 +3442,10 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public void deleteById(ID id) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner)) {
+            observeWrite(CacheOperation.DELETE, () -> { deleteById(id); return null; });
+            return;
+        }
         if (com.reactor.cachedb.core.api.CacheUnitOfWork.active()) {
             var work = com.reactor.cachedb.core.api.CacheUnitOfWork.current();
             work.requireOwner(entityRegistry); work.delete(metadata.entityType(), id); return;
@@ -2222,8 +3454,170 @@ public final class RedisEntityRepository<T, ID>
     }
 
     @Override
-    public WriteReceipt<T, ID> deleteWithReceipt(ID id) {
+    public List<WriteReceipt<T, ID>> bulkDelete(Collection<ID> requested) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return observeWrite(CacheOperation.DELETE, () -> bulkDelete(requested));
         com.reactor.cachedb.core.api.CacheUnitOfWork.rejectImmediateReceipt();
+        if (metadata.tenantPurgeEnabled() && !ownedProtectedMutation(activeTenant()))
+            return protectedMutation(activeTenant(), () -> bulkDelete(requested));
+        RedisEncryptedBulkDeleteChecks.requireScope(metadata);
+        if (pointReads == null || functionExecutor == null || !functionExecutor.supportsBulkDelete())
+            throw new com.reactor.cachedb.core.api.RepositoryCapabilityUnavailableException(
+                    com.reactor.cachedb.core.api.RepositoryCapability.BULK_DELETE, getClass());
+        if (!pointReads.acquireBulkDelete())
+            throw new java.util.concurrent.RejectedExecutionException("Bulk delete runtime admission is full");
+        long startedAt = System.nanoTime();
+        try {
+            observationTier(Tier.REDIS);
+            var ids = RedisBulkDeleteExecutor.copyIds(requested);
+            if (ids.isEmpty()) return List.of();
+            String tenant = activeTenant();
+            com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
+            long deadline = pointReads.bulkDeleteDeadline();
+            RedisEncryptedBulkDeleteChecks.requireMapping(metadata, codec, entityRegistry);
+            RedisEncryptedBulkDeleteChecks.probeIds(metadata, codec, ids, tenant, deadline);
+            // No source bootstrap: tenant owner markers are mandatory, including protected/cold IDs.
+            RedisBulkDeleteExecutor.requireOwners(jedis, keyStrategy, metadata, ids, tenant, deadline);
+            for (ID id : ids) jedis.requireSameSlot(bulkDeleteKeys(id));
+            if (entityRegistry != null) {
+                var bindings = entityRegistry.projections(metadata.entityName());
+                if (bindings.size() > 32) throw new IllegalArgumentException("Bulk delete supports at most 32 projection bindings");
+
+            }
+            return queryIndexManager.withCompositeMutation(() -> bulkDeletePrepared(ids, tenant, deadline));
+        } finally {
+            pointReads.releaseBulkDelete();
+            recordRedisWrite(startedAt);
+        }
+    }
+
+    private List<String> bulkDeleteKeys(ID id) {
+        return List.of(keyStrategy.entityKey(metadata.redisNamespace(), id),
+                keyStrategy.versionKey(metadata.redisNamespace(), id),
+                keyStrategy.tombstoneKey(metadata.redisNamespace(), id), streamKey,
+                keyStrategy.compactionPayloadKey(metadata.redisNamespace(), id),
+                keyStrategy.compactionPendingKey(metadata.redisNamespace(), id),
+                keyStrategy.compactionStreamKey(compactionStreamKey, metadata.redisNamespace(), id, compactionShardCount),
+                keyStrategy.compactionStatsKey(metadata.redisNamespace()));
+    }
+
+    private List<WriteReceipt<T, ID>> bulkDeletePrepared(List<ID> ids, String tenant, long deadline) {
+        var accepted = new ArrayList<WriteReceipt<T, ID>>();
+        for (int start = 0; start < ids.size(); start += RedisBulkDeleteExecutor.CHUNK) {
+            var batch = ids.subList(start, Math.min(ids.size(), start + RedisBulkDeleteExecutor.CHUNK));
+            final List<RedisBulkDeleteExecutor.State> snapshots;
+            final List<RedisFunctionExecutor.DeleteRequest> requests;
+            final RedisFunctionExecutor.PreparedDeleteBatch prepared;
+            try {
+                RedisBulkDeleteExecutor.checkDeadline(deadline);
+                boolean watched = watching();
+                snapshots = RedisBulkDeleteExecutor.states(jedis, keyStrategy, metadata, batch, watched, deadline);
+                requests = new ArrayList<>(batch.size());
+                long commandBytes = 0; int commandCount = 0;
+                for (int i = 0; i < batch.size(); i++) {
+                    ID id = batch.get(i); var snapshot = snapshots.get(i);
+                    if (metadata.tenantFieldName() != null && !java.util.Objects.equals(tenant, snapshot.owner()))
+                        throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
+                    RedisEncryptedBulkDeleteChecks.validateSnapshot(metadata, codec, keyStrategy, id, tenant, snapshot, watched);
+                    var indexCommands = queryIndexManager.bulkDeleteCommands(id, snapshot.meta());
+                    RedisEncryptedBulkDeleteChecks.validateIndexCommands(metadata, keyStrategy, indexCommands);
+                    var maintenance = RedisBulkDeleteExecutor.maintenance(keyStrategy, metadata, id, snapshot, indexCommands);
+                    for (var command : maintenance) {
+                        if (++commandCount > RedisDeleteCommandBuffer.MAX_COMMANDS)
+                            throw new IllegalArgumentException("Delete maintenance exceeds 8192 commands");
+                        for (String argument : command) commandBytes += com.reactor.cachedb.core.codec.Utf8Length.of(argument);
+                        if (commandBytes > RedisBulkDeleteExecutor.BYTES)
+                            throw new IllegalArgumentException("Delete maintenance exceeds 16 MiB");
+                    }
+                    var operation = new WriteOperation<T, ID>(OperationType.DELETE, metadata, id,
+                            Map.of(metadata.idColumn(), id), "", 0L, Instant.now());
+                    requests.add(new RedisFunctionExecutor.DeleteRequest(bulkDeleteKeys(id), operation,
+                            effectiveCachePolicy(), snapshot.version(),
+                            keyStrategy.tenantHotOwnerKey(metadata.redisNamespace(), id), snapshot.hotOwner(), maintenance));
+                }
+                prepared = functionExecutor.prepareDeleteBatch(requests);
+                producerGuard.applyBackpressure();
+                RedisBulkDeleteExecutor.checkDeadline(deadline);
+            } catch (RuntimeException failure) {
+                if (accepted.isEmpty()) throw failure;
+                throw bulkDeleteFailure(com.reactor.cachedb.core.api.BulkDeleteFailureException.Phase.PREFLIGHT,
+                        accepted, List.of(), List.of(), List.of(), ids.size() - start);
+            }
+            for (ID id : batch) invalidateNear(id);
+            final List<List<String>> replies;
+            try { replies = functionExecutor.deleteBatch(prepared); }
+            catch (RuntimeException uncertain) {
+                // No blind retry: any subset may already be durable in Redis.
+                throw bulkDeleteFailure(com.reactor.cachedb.core.api.BulkDeleteFailureException.Phase.MUTATION,
+                        accepted, List.of(), batch, List.of(), ids.size() - start - batch.size());
+            }
+            var changed = new ArrayList<ID>(); var acceptedVersions = new LinkedHashMap<ID,Long>(); var rejected = new ArrayList<ID>();
+            var uncertain = new ArrayList<ID>(); var cleanup = new ArrayList<ID>(); int notAttempted = ids.size() - start - batch.size();
+            for (int i = 0; i < replies.size(); i++) {
+                var reply = replies.get(i); ID id = batch.get(i);
+                if ("A".equals(reply.get(0))) {
+                    long version;
+                    try { version = Long.parseLong(reply.get(1)); }
+                    catch (NumberFormatException malformed) { uncertain.add(id); continue; }
+                    if (version <= 0) { uncertain.add(id); continue; }
+                    accepted.add(new WriteReceipt<>(null, id, metadata.redisNamespace(), OperationType.DELETE,
+                            version, requests.get(i).operation().createdAt()));
+                    changed.add(id); acceptedVersions.put(id, version);
+                    if (!"C".equals(reply.get(2))) cleanup.add(id);
+                } else if ("R".equals(reply.get(0))) rejected.add(id);
+                else if ("N".equals(reply.get(0))) notAttempted++;
+                else uncertain.add(id);
+            }
+            try {
+                pageCacheManager.bulkDeleteObserved(changed);
+                queryIndexManager.bulkDeleteObserved();
+                deleteProjectionPayloadsBatch(acceptedVersions, deadline);
+            } catch (RuntimeException postAcceptance) { for (ID id : changed) if (!cleanup.contains(id)) cleanup.add(id); }
+            for (int i = 0; i < batch.size(); i++) if (changed.contains(batch.get(i))) {
+                invalidateNear(batch.get(i));
+                if (watching()) notifyWatchers(batch.get(i), snapshots.get(i).payload(), null);
+            }
+            if (!rejected.isEmpty() || !uncertain.isEmpty() || !cleanup.isEmpty() || notAttempted > ids.size() - start - batch.size())
+                throw bulkDeleteFailure(cleanup.isEmpty()
+                                ? com.reactor.cachedb.core.api.BulkDeleteFailureException.Phase.MUTATION
+                                : com.reactor.cachedb.core.api.BulkDeleteFailureException.Phase.CLEANUP,
+                        accepted, rejected, uncertain, cleanup, notAttempted);
+        }
+        return List.copyOf(accepted);
+    }
+
+    private com.reactor.cachedb.core.api.BulkDeleteFailureException bulkDeleteFailure(
+            com.reactor.cachedb.core.api.BulkDeleteFailureException.Phase phase,
+            List<WriteReceipt<T, ID>> accepted, Collection<ID> rejected, Collection<ID> uncertain,
+            Collection<ID> cleanup, int notAttempted) {
+        return new com.reactor.cachedb.core.api.BulkDeleteFailureException(
+                phase, accepted, rejected, uncertain, cleanup, notAttempted);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void deleteProjectionPayloadsBatch(Map<ID,Long> versions, long deadline) {
+        if (versions.isEmpty() || entityRegistry == null) return;
+        for (var raw : entityRegistry.projections(metadata.entityName())) {
+            var binding = (EntityProjectionBinding<T, Object, ID>) raw;
+            // Bulk delete deliberately completes bounded cleanup inline for every refresh mode.
+            projectionSupport(binding).readRuntime().deleteBatch(versions, metadata.redisNamespace(), deadline);
+        }
+    }
+
+    @Override
+    public WriteReceipt<T, ID> deleteWithReceipt(ID id) {
+        if (observationEnabled && !CacheObservationContext.isOwnedBy(observationOwner))
+            return observeWrite(CacheOperation.DELETE, () -> deleteWithReceipt(id));
+        if (metadata.tenantPurgeEnabled() && !ownedProtectedMutation(activeTenant()))
+            return protectedMutation(activeTenant(), () -> deleteWithReceipt(id));
+        observationTier(Tier.REDIS);
+        if (!queryIndexManager.hasCompositeSortIndexes()) return deleteWithReceiptUnfenced(id);
+        return queryIndexManager.withCompositeMutation(() -> deleteWithReceiptUnfenced(id));
+    }
+
+    private WriteReceipt<T, ID> deleteWithReceiptUnfenced(ID id) {
+        com.reactor.cachedb.core.api.CacheUnitOfWork.rejectImmediateReceipt();
+        verifyProtectedWriteOwner(id, activeTenant());
         ensureTenantOwner(id, false);
         WatchBefore watched = watchBefore(id);
         invalidateNear(id);
@@ -2292,6 +3686,7 @@ public final class RedisEntityRepository<T, ID>
                     version,
                     operation.createdAt());
         } finally {
+            if (metadata.tenantPurgeEnabled()) invalidateNear(id);
             recordRedisWrite(startedAt);
         }
     }
@@ -2328,11 +3723,12 @@ public final class RedisEntityRepository<T, ID>
                 performanceCollector,
                 backgroundJedis,
                 projectionRefreshDispatcher,
-                projectionRefreshQueue).withMutationConfig(mutationConfig).withNearCache(nearCacheCoordinator).withReadFlights(readFlights).withWatchState(watchState).withVerifiedOwners(verifiedOwners);
+                projectionRefreshQueue).withMutationConfig(mutationConfig).withNearCache(nearCacheCoordinator).withReadRuntime(pointReads).withAsyncExecutor(asyncGate).withReadFlights(readFlights).withWatchState(watchState).withVerifiedOwners(verifiedOwners).withObservationState(this).withTenantReadBridgeState(this);
     }
 
     @Override
     public <P> ProjectionRepository<P, ID> projected(EntityProjection<T, P, ID> projection) {
+        if (metadata.tenantPurgeEnabled()) return protectedPointReads().projected(activeTenant(), projection);
         activeTenant();
         if (projection == null) throw new IllegalStateException("An explicit projection contract is required");
         if (entityRegistry == null) {
@@ -2349,7 +3745,8 @@ public final class RedisEntityRepository<T, ID>
                 rawIds -> loadProjectionMapFromBaseEntityPayload(rawIds, projection),
                 querySpec -> projectQueryFromBaseEntities(querySpec, projection),
                 performanceCollector,
-                readShapeGuardrailConfig).withTenantScope(metadata, this::projectionOwners);
+                readShapeGuardrailConfig).withTenantScope(metadata, this::projectionOwners)
+                .withObservationRecorder(observationRecorder, observationEnabled, observationOwner);
     }
 
     private Map<String, String> projectionOwners(Collection<String> ids) {
@@ -2591,6 +3988,7 @@ public final class RedisEntityRepository<T, ID>
             recordReadThroughEvent("by-id-loader-missing", false);
             return Optional.empty();
         }
+        observationTier(Tier.SOURCE);
         VersionedEntitySourceLoader<T, ID> versionedLoader =
                 versionedSourceLoader(effectiveByIdLoader);
         Optional<VersionedEntity<T>> versioned =
@@ -2680,6 +4078,7 @@ public final class RedisEntityRepository<T, ID>
                             + " rows but maxQueryLoadRows="
                             + readThroughConfig.maxQueryLoadRows());
         }
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateSourceQuery(metadata, querySpec);
         EntityQueryLoader<T> effectiveQueryLoader = currentQueryLoader();
         if (effectiveQueryLoader instanceof NoOpEntityQueryLoader) {
             if (readThroughConfig.failOnMissingLoader()) {
@@ -2691,6 +4090,7 @@ public final class RedisEntityRepository<T, ID>
             recordReadThroughEvent("query-loader-missing", false);
             return List.of();
         }
+        observationTier(Tier.SOURCE);
         VersionedEntitySourceLoader<T, ID> versionedLoader =
                 versionedSourceLoader(effectiveQueryLoader);
         List<VersionedEntity<T>> versioned =
@@ -2790,6 +4190,12 @@ public final class RedisEntityRepository<T, ID>
 
     @Override
     public void hydrateExternalDelete(ID id, long version) {
+        verifyProtectedWriteOwner(id, activeTenant());
+        if (!queryIndexManager.hasCompositeSortIndexes()) { hydrateExternalDeleteUnfenced(id, version); return; }
+        queryIndexManager.withCompositeMutation(() -> { hydrateExternalDeleteUnfenced(id, version); return null; });
+    }
+
+    private void hydrateExternalDeleteUnfenced(ID id, long version) {
         ensureTenantOwner(id, false);
         if (id == null) {
             throw new IllegalArgumentException("id must not be null");
@@ -3088,6 +4494,8 @@ public final class RedisEntityRepository<T, ID>
                             backgroundProjectionQueryIndexManager,
                             binding);
         }
+        readRuntime.withAsyncQueue(projectionRefreshQueue);
+        refreshRuntime.withAsyncQueue(projectionRefreshQueue);
         return new ProjectionSupport<>(binding, readRuntime, refreshRuntime);
     }
 

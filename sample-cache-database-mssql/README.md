@@ -1,8 +1,653 @@
 # CacheDB SQL Server Sample
 
-> CacheDB 0.18.1: [release and downloads](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1) | [public Maven repository](https://esasmer-dou.github.io/cache-database/maven2). Maven downloads do not require a GitHub token or a framework source build.
+> This sample requires matching CacheDB 0.19.0 artifacts. [Published releases](https://github.com/esasmer-dou/cache-database/releases) | [Maven repository](https://esasmer-dou.github.io/cache-database/maven2). Verify that the complete required artifact set is available before starting.
 
 English | [Türkçe](README.tr.md)
+
+> **Release documentation: 0.19.0. Java 21+ is required.** The release page is authoritative for actual availability and checksums.
+> Acceptance is determined by CI for the exact release commit and artifact-bound evidence, not this README.
+> Use matching artifacts and the matching sample tag; changing only a dependency version does not port these APIs.
+> `FrameworkPackage != universalGA`: application routes, protection onboarding, HA and restore need separate qualification.
+
+[Start here](#start-here) | [Quick start](#quick-start) | [API catalog](#api-catalog) |
+[Tuning by use case](#tuning-by-use-case) | [Postman](#postman)
+
+## Bounded Audit Notes: Bulk Delete and Retention
+
+These ordinary, unencrypted entities demonstrate two different retention policies and a bounded
+expired-note cleanup business case. Use synthetic notes in a disposable database/Redis namespace.
+The supplier identity owns eight fixed slots per policy (sixteen SQL rows in total); tenant
+credentials cannot read, write or sweep them. This is not tenant-owned encrypted storage or purge.
+
+### One Demo Startup
+
+Start the provider's existing database and Redis services, resolve the matching CacheDB artifacts,
+then run from this sample directory:
+
+```powershell
+mvn -B -ntp clean spring-boot:run "-Dspring-boot.run.profiles=demo"
+```
+
+Only `application-demo.yml` enables `sample.audit-api.enabled=true`, installs `schema-audit.sql`
+and configures both eight-row hot sets. Ordinary startup keeps the endpoint disabled.
+The `demo,encryption` startup also includes this schema when using the encrypted-demo build.
+Read coalescing remains an independent opt-in; this example does not enable it.
+Default demo tokens are local demonstration credentials, not production authentication.
+Use the existing `SAMPLE_CONTROLS_*` overrides and never expose demo write tools publicly.
+
+### Copy-Paste Requests
+
+`expired` is mandatory. The server chooses ACTIVE/today or EXPIRED/two UTC days ago;
+the client cannot choose an arbitrary ID, tenant, date, table or retention action.
+A note must contain 1..512 UTF-8 bytes, valid Unicode and no NUL.
+
+```powershell
+$base = 'http://127.0.0.1:8092'
+$headers = @{ Authorization = 'Bearer demo-supplier' }
+$body = '{"note":"Expired synthetic audit note: ğışöüİ","expired":true}'
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/delete/1/source-roundtrip" -Headers $headers -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body))
+try {
+    Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/delete/spring-data" -Headers $headers
+    throw 'Expected zero-query-budget rejection was not returned.'
+} catch {
+    if ($null -eq $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 409) { throw }
+}
+$slots = '{"slots":[1]}'
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/delete/bulk" -Headers $headers -ContentType 'application/json' -Body $slots
+```
+
+`PUT /api/examples/v019/audit-notes/{policy}/{slot}` accepts the same note body and returns
+202 with a real UPSERT receipt, without foreground SQL confirmation.
+The source-roundtrip route instead waits at most five seconds for that receipt's durability marker
+and checks the logical source row before returning 200. A 504 means accepted but unconfirmed,
+not rolled back. Concurrent writes may change the row before observation; 409 is not automatic RYOW.
+
+The eight-row hot set and global ten-row headroom leave this demo with zero effective
+full-entity query capacity. `POST /delete/spring-data` returns HTTP 409 with
+`AUDIT_DERIVED_DELETE_ZERO_QUERY_BUDGET`; no query or delete starts. Use `POST /delete/bulk`
+for known slots 1..8 without widening the budget. Zero is not unknown or unrestricted capacity.
+
+The positive-budget generated derived-delete example is
+[DerivedDeleteRangeExternalIT](src/test/java/com/example/cachedb/sample/rangedata/DerivedDeleteRangeExternalIT.java):
+it calls `RangeDataRepository.deleteByRunIdAndStatus` on the existing `RangeDataRow`,
+scoped by run/status and the verified tenant, preserving
+other statuses, runs and tenants. An exactly full selection cannot prove completeness and is
+rejected before any delete. A successful entity list is not a receipt or SQL delete count.
+The operation is not a transaction or an atomic predicate recheck against concurrent writers.
+
+`POST /delete/bulk` accepts 1..8 distinct slots and exposes actual DELETE receipts from the native
+bounded bulk-delete capability. Successful 202 responses still have `sqlDurabilityConfirmed=false`.
+For either delete route, partial failure is HTTP 409 with the real `phase`, `accepted` receipts,
+`rejected`, `uncertain`, `cleanupPending` and `notAttempted`. Cleanup-pending can overlap accepted.
+There is no serial point-delete fallback or automatic mutation retry. Reconcile uncertain outcomes
+and receipt versions before retrying; cancellation or transport failure is not rollback.
+
+### EVICT_CACHE Versus DELETE
+
+```powershell
+$evictBody = '{"note":"Keep this synthetic SQL audit note","expired":true}'
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/evict/1/source-roundtrip" -Headers $headers -ContentType 'application/json' -Body $evictBody
+$pass = '{"maxRows":8}'
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/evict/sweep" -Headers $headers -ContentType 'application/json' -Body $pass
+Invoke-RestMethod -Method Get -Uri "$base/api/examples/v019/audit-notes/evict/1/source" -Headers $headers
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/delete/sweep" -Headers $headers -ContentType 'application/json' -Body $pass
+```
+
+The two SOURCE-retained `@CacheRetention` annotations generate metadata for one-day policies:
+`EvictAuditNote` uses EVICT_CACHE; `DeleteAuditNote` uses DELETE. The server maps the two policy
+names to fixed entity classes and calls the actual `RetentionSweeper.sweepOnce` inside a
+temporary administrative scope only after supplier authorization.
+
+EVICT_CACHE removes indexed cache payload/memberships, not SQL, queued writes or durable versions.
+A hot GET can return 404 while the explicit `/{policy}/{slot}/source` route still returns the note.
+Read-through is disabled for this demo; other applications can re-admit SQL rows unless admission
+also enforces retention. A source observation without a receipt is not durability confirmation.
+
+DELETE enqueues the normal version-fenced write-behind delete. `deleteAccepted` counts Redis
+acceptance, never SQL commit or individual receipt durability. Sweep responses distinguish
+`examined`, `evicted`, `indexCleaned`, `deleteAccepted`, `skipped` and `exhausted`;
+they always say `indexedResidentOnly=true`, `sqlDurabilityConfirmed=false` and
+`sourceErasureConfirmed=false`. The resident sorted index cannot discover all cold SQL history.
+Neither action certifies backup erasure, generic cache ownership, tenant-wide PII erasure or purge.
+There is no purge REST endpoint.
+
+Bounds are eight active requests, a 2 KiB body including chunked input, eight sweep candidates,
+512 command keys and 64 KiB mutation command budget. Native leases/version/snapshot checks,
+producer guardrails, the configured trace/peer-invalidation publisher and the actual local L1 store
+are preserved. A pass can end early; `exhausted` is not a concurrent/all-history snapshot.
+The native 30-second admission budget is not a universal I/O timeout: finite client pool/socket
+and HTTP deadlines remain necessary. BUSY is 429; storage/lease failures are 503 with
+`outcomeUnknown=true`, never zero-delete success. Use bounded operational backoff, not blind
+mutation retries. Nonempty causal headers or ambient causal/tenant/admin scopes fail closed.
+
+### Saved Contracts and Tests
+
+<!-- BEGIN AUDIT API MATRIX -->
+| Scenario | Java Method | Saved Request |
+| --- | --- | --- |
+| Explicit receipt and SQL confirmation | [AuditNoteController.sourceRoundtrip](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Expire delete 1 |
+| Spring Data zero-query-budget rejection | [AuditNoteController.springData](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Spring Data rejects zero query budget |
+| Native bounded receipt batch | [AuditNoteController.bulk](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Native bulk returns actual receipts |
+| Cache-only retention | [AuditNoteController.sweep](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Evict indexed expired cache payload |
+| Write-behind retention | [AuditNoteController.sweep](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Delete indexed expired note via write-behind |
+| Supplier/tenant/causal boundary | [AuditNoteRules.verify](src/main/java/com/example/cachedb/sample/audit/AuditNoteRules.java) | Tenant A cannot inspect global source |
+<!-- END AUDIT API MATRIX -->
+
+The independent [audit collection](postman/cache-database-mssql-audit.postman_collection.json)
+contains 42 requests. Its first sixteen requests overwrite only the sixteen fixed synthetic rows;
+do not run it against retained business data or concurrently with another writer.
+Both `auditApiEnabled=true` and `auditApiCertification=true` are mandatory. Missing gates,
+skipped requests, missing assertions and actual execution failures reject certification.
+
+```powershell
+./scripts/test-audit-postman.ps1 -BaseUrl http://127.0.0.1:8092 -ConfirmDisposableDemo
+mvn -B -ntp test "-Dtest=AuditContractTest,AuditHttpContractTest"
+mvn -B -ntp test "-Dtest=AuditExternalIT"
+```
+
+The external test requires the existing dedicated `CACHEDB_TEST_NAMESPACE` provider fixtures;
+require non-skipped execution. It checks zero-budget rejection, known-ID bulk deletion, actual
+receipt markers and both retention actions. `DerivedDeleteRangeExternalIT` checks positive-budget
+generated deletion and exact-cap rejection before mutation against real Redis/SQL. Controlled unit/MVC failures cover partial-outcome
+mapping without adding fault-injection HTTP routes. Keep previous business (61+23), range/data
+(37) and encryption (10) collections and their independent gates.
+The [structural checker](../tools/ci/check-v019-audit-scenarios.mjs) checks source methods,
+EN/TR guides and saved request contracts; it does not establish runtime qualification.
+
+
+## Encrypted Supplier Notes
+
+This optional, isolated demo uses real generated field codecs and the Spring Boot
+CacheKeyProvider bean. It is not part of the default build: encrypted metadata
+must not enter discovery without explicit keys. The encrypted-demo Maven profile
+adds src/encryption/java, src/encryption-test/java and src/encryption/resources.
+Use clean when switching profiles so stale generated classes cannot survive.
+
+Only the verified supplier credential can access these **global** notes. Tenant
+credentials are rejected. This is not a tenant-PII ownership/provisioning example.
+There are exactly eight server-selected IDs, a 1..512-byte UTF-8 note limit (empty/NUL notes are rejected), 2 KiB
+request bodies, eight concurrent requests and a 300-second Redis TTL. There is
+no list, user-controlled namespace, blind search, retention job or purge API.
+
+### Start Once With Explicit Keys
+
+Complete this provider's existing disposable database/Redis setup first. Keep the
+same keys across restarts while encrypted Redis data or queued records remain.
+Do not regenerate keys against an existing namespace. No default key exists in
+Java/YAML; these two independent random dev keys are not production key management.
+
+~~~powershell
+function New-DemoKey {
+    $bytes = [byte[]]::new(32)
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    [Convert]::ToBase64String($bytes)
+}
+$env:SAMPLE_ENCRYPTION_AES_KEY = New-DemoKey
+$env:SAMPLE_ENCRYPTION_HMAC_KEY = New-DemoKey
+mvn -B -ntp -Pencrypted-demo clean spring-boot:run "-Dspring-boot.run.profiles=demo,encryption"
+~~~
+
+Run from this sample directory. The normal build remains unchanged. An artifact
+built with encrypted-demo requires both demo/encryption profiles and valid keys;
+do not deploy it as a production artifact. Never expose demo credentials publicly.
+
+For the complete encrypted integration test run, keep the two keys above in this
+shell and configure the disposable provider fixtures described in the test guide.
+The Maven profile adds Java sources; it does not activate a Spring runtime profile.
+Every test application containing these bindings needs the encryption profile,
+including existing tests that otherwise activate only `demo`:
+
+~~~powershell
+$previousInclude = $env:SPRING_PROFILES_INCLUDE
+try {
+    $env:SPRING_PROFILES_INCLUDE = 'encryption'
+    mvn -B -ntp -Pprovider-integration,encrypted-demo clean verify
+    if ($LASTEXITCODE -ne 0) { throw 'Integration tests failed' }
+} finally {
+    $env:SPRING_PROFILES_INCLUDE = $previousInclude
+}
+~~~
+
+Do not set `SAMPLE_SCHEDULED_WARM_ENABLED=false` globally for this Maven run:
+the normal integration contract checks scheduled-job registration. Individual
+tests disable scheduling where required. Missing keys must fail startup, never
+silently switch encrypted fields to plaintext.
+
+~~~powershell
+$base = 'http://127.0.0.1:8092'
+$headers = @{ Authorization = 'Bearer demo-supplier' }
+$body = @{ note = 'Türkçe alan: ğışöüİ' } | ConvertTo-Json
+Invoke-RestMethod "$base/api/examples/v019/encryption/notes/1" -Method Put -Headers $headers -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body))
+Invoke-RestMethod "$base/api/examples/v019/encryption/notes/1" -Headers $headers
+Invoke-RestMethod "$base/api/examples/v019/encryption/notes/1/source-roundtrip" -Method Post -Headers $headers -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body))
+pwsh -NoProfile -File scripts/test-encryption-postman.ps1 -BaseUrl $base -ConfirmDisposableDemo
+~~~
+
+PUT returns 202 with sqlDurabilityConfirmed=false: Redis acceptance is not SQL
+persistence. GET is a decrypted Redis-only point read; a miss says nothing about
+SQL absence. source-roundtrip performs an explicit write, waits at most five
+seconds for that receipt's durability and reads the source by ID. It returns
+confirmed=true only after matching the logical row. A 504 means the write was
+accepted but not confirmed; a concurrent source change yields 409. Neither is
+an instruction to blindly retry. Nonempty causal requirements fail closed.
+
+REDIS_ONLY encrypts the annotated note in Redis payloads and queued writes,
+but stores its **original plaintext in SQL**. TLS, disk encryption, JDBC log
+redaction and backup controls remain separate. The external integration test
+inspects the actual Redis ciphertext and actual provider SQL value; REST alone
+does not establish encryption at rest. No REDIS_AND_SOURCE or Oracle CLOB claim.
+
+| Scenario | REST | Actual Method | Saved Requests |
+| --- | --- | --- | --- |
+| encrypted-save | PUT /api/examples/v019/encryption/notes/{slot} | [EncryptedNoteController.save](src/encryption/java/com/example/cachedb/sample/encryption/EncryptedNoteController.java) | 4 |
+| encrypted-hot | GET /api/examples/v019/encryption/notes/{slot} | [EncryptedNoteController.hot](src/encryption/java/com/example/cachedb/sample/encryption/EncryptedNoteController.java) | 5 |
+| encrypted-source | POST /api/examples/v019/encryption/notes/{slot}/source-roundtrip | [EncryptedNoteController.sourceRoundtrip](src/encryption/java/com/example/cachedb/sample/encryption/EncryptedNoteController.java) | 1 |
+
+The separate postman/cache-database-mssql-encryption.postman_collection.json
+requires encryptionApiEnabled=true and encryptionApiCertification=true; the runner
+sets both and rejects missing, skipped or failed requests/assertions. It preserves
+the existing 84 business and 37 range/data requests. Use only synthetic notes:
+Postman reports contain decrypted request/response data and must remain private.
+The encrypted-note routes do not perform bulk deletion, retention, tenant purge
+or tenant-ownership provisioning. The separate ordinary audit-note routes above
+demonstrate bounded bulk deletion and retention; they do not extend the encrypted-note contract.
+
+## Range and Spring Data APIs (0.19)
+
+These examples require matching CacheDB 0.19 core, processor, Redis storage,
+starter and optional cachedb-spring-data artifacts at ${cachedb.version}.
+They use the generated
+[RangeRoutes](src/main/java/com/example/cachedb/sample/rangedata/RangeRoutes.java)
+and [RangeDataRepository](src/main/java/com/example/cachedb/sample/rangedata/RangeDataRepository.java);
+there is no reflective repository proxy or SQL fallback.
+
+After this provider's database and Redis quick start, start the application
+from this sample directory with one command:
+
+~~~shell
+mvn -B -ntp spring-boot:run "-Dspring-boot.run.profiles=demo"
+~~~
+
+The demo profile alone enables sample.range-data.enabled and initializes
+schema-range-data.sql. It also retains the method-cache/async settings.
+Without demo these new REST endpoints and repository beans are absent, even if
+sample.range-data.enabled is supplied. No additional feature flags are needed
+on the server. Demo credentials select shop-a/shop-b through ControlsAccess;
+supplier credentials cannot use these tenant endpoints. Never expose demo
+credentials or write tools to an untrusted network.
+
+### Write and Read Exact Long Values
+
+Use the actual request body below. rank is a decimal **string**, not a JSON
+number: JavaScript cannot exactly represent every signed Long. The server
+constructs the row ID from verified tenant, run and slot; request data never
+selects a tenant. OPEN/CLOSED are the only statuses.
+
+~~~powershell
+$base = 'http://127.0.0.1:8092'
+$headers = @{ Authorization = 'Bearer demo-shop-a' }
+$run = [Guid]::NewGuid().ToString('N')
+$url = "$base/api/examples/v019/range-data/$run"
+Invoke-RestMethod "$url/rows/a" -Method Put -Headers $headers -ContentType application/json -Body '{"rank":"9007199254740992","status":"OPEN"}'
+Invoke-RestMethod "$url/rows/c" -Method Put -Headers $headers -ContentType application/json -Body '{"rank":"9007199254740993","status":"OPEN"}'
+$first = Invoke-RestMethod "$url/native?limit=1" -Headers $headers
+$first.items
+$next = [Uri]::EscapeDataString($first.nextCursor)
+Invoke-RestMethod "$url/native?limit=1&cursor=$next" -Headers $headers
+Invoke-RestMethod "$url/native/seek?afterRank=9007199254740992&afterSlot=a&limit=2" -Headers $headers
+Invoke-RestMethod "$url/data/page?limit=2" -Headers $headers
+Invoke-RestMethod "$url/data/slice?limit=1" -Headers $headers
+$window = Invoke-RestMethod "$url/data/window?limit=1" -Headers $headers
+$next = [Uri]::EscapeDataString($window.nextCursor)
+Invoke-RestMethod "$url/data/window?limit=1&cursor=$next" -Headers $headers
+Invoke-RestMethod "$url/data/stats" -Headers $headers
+~~~
+
+PUT returns 202 with row and sqlDurabilityConfirmed:false. Spring Data save does
+not return a WriteReceipt, so these endpoints invent neither a receipt version
+nor a causal token. Redis acceptance is not SQL commit; worker failure may leave
+accepted data visible while persistence is pending. No write is automatically
+retried. Repeating a PUT addresses the same logical row but creates another
+write/version and is not an exactly-once delivery receipt.
+
+### Query Contracts
+
+All paths below are under /api/examples/v019/range-data/{run}:
+
+| Method and Path | Actual API and Result |
+| --- | --- |
+| PUT /rows/{slot} | Spring Data save; 202, server-owned ID/tenant |
+| GET /rows/{slot} | Spring Data findById; 200 or resident miss 404 |
+| DELETE /rows/{slot} | Spring Data deleteById; 204, not confirmed SQL deletion |
+| GET /native?minimum=0&maximum=9223372036854775807&limit=2 | Generated Long composite range, OPEN only |
+| GET /native?descending=true&cursor=... | Descending rank then unsigned Redis UTF-8 ID |
+| GET /native/seek?afterRank=42&afterSlot=a&limit=2 | Ascending paired Long/ID seek |
+| GET /data/page?page=0&limit=2 | PageRequest with rankValue ASC,rowId ASC; rows plus a separate count |
+| GET /data/slice?page=0&limit=2 | Slice with lookahead and no total count |
+| GET /data/window?limit=2&cursor=... | Spring Data typed keyset ScrollPosition/Window |
+| GET /data/stats | Derived count and exists, two independent queries |
+
+The native generated route dispatches queryRedisLongLexicalWindow, preserving
+all signed Long values with a version-4 cursor. Fast score continuation requires
+a verified Long53 index and native writer fencing. A missing/unsafe proof uses
+the native **complete bounded Redis materialization** path, never SQL or a
+rounded double cursor. This sample exposes no administrative rebuild endpoint.
+Demo startup rebuilds only sample-range-rows under a trusted cooperative fence
+and fails startup if verification fails. This maintenance can scan Redis keys;
+use only a small isolated demo Redis, not a shared production database. All
+writers must use the current protocol. Request routes remain strict and fail
+rather than scanning degraded indexes.
+
+Native and Spring Data cursors are different contracts and are not
+interchangeable. The Spring Data endpoint restores only the adapter's
+$cachedb:cursor position, never arbitrary client sort keys. Keep the same tenant,
+run, bounds and direction across native continuation; keep the same tenant/run
+across Spring Data continuation. Replays with changed contracts fail. ASCII
+row IDs make these examples' ascending tie order comparable; this does not
+assert universal equivalence between Redis byte order and Java string order.
+
+Results describe the Redis-resident data set, not all source rows. Native
+sourceCoverageConfirmed reports existing coverage and is not set by these
+writes. Page totals and count/exists may observe different moments; keyset
+pagination is not snapshot isolation. Inserts behind a cursor are not revisited,
+and sort-changing updates can cause skips or repeats. TTL/capacity eviction
+can remove rows. Reusing a continuation after changes does not reconstruct history.
+
+### Bounds and Failure Handling
+
+run is 1..32 lowercase ASCII letters/digits, slot is 1..8. rank spans
+-9223372036854775808..9223372036854775807. Limits are 1..32; Page/Slice offset
+is capped at 128. Bodies are capped at 2 KiB before JSON decoding, including
+chunked requests; paths are capped at 512 and query strings at 12288 characters;
+cursor text is capped at 8192. The demo entity policy limits resident rows to
+512, entity TTL to 1800 seconds and cached-page TTL to five seconds.
+These are not a global Redis byte or all-metadata quota. Use disposable data,
+Redis maxmemory and an upstream request/new-key rate limit.
+
+Each JVM admits at most 32 active range/data operations without a waiting queue.
+Authentication precedes body reading; a separate 32-request filter gate also
+bounds body decoding and remains held until request processing finishes.
+Existing finite Redis/JDBC/pool timeouts still apply; there is no extra executor.
+Apply an upstream total request/body-read deadline; byte limits alone do not
+prevent slow uploads.
+Authentication failures are 401, wrong roles/tenant ownership 403, invalid input
+or cursor 400, oversized body 413, long URI 414, capacity rejection 429.
+Unavailable native query/budget state is 409; driver errors remain failures.
+A timed-out client does not cancel or roll back an accepted write.
+
+All these endpoints reject nonempty X-CacheDB-Causal and ambient causal
+requirements with 409 before repository access. They do not certify query RYOW.
+Credential mapping is authentication, not a tenant supplied in the body.
+These range/data routes do not provide encryption, retention or tenant purge.
+The separate audit and encrypted-note examples above have their own contracts.
+These default range/data routes have no tenant-purge REST endpoint. The separate,
+explicitly opted-in F3 companion below provides its own bounded purge HTTP API.
+
+### Postman and Provider Tests
+
+Import [the range/data collection](postman/cache-database-mssql-range-data.postman_collection.json).
+Set rangeDataEnabled=true and rangeDataCertification=true. All 37 requests must
+receive actual responses and execute every saved assertion, including expected
+4xx cases. Disabling the feature in certification mode fails instead of skipping.
+Outside certification, skipping a disabled collection is not acceptance.
+
+~~~powershell
+pwsh -NoProfile -File scripts/test-range-data-postman.ps1 -BaseUrl http://127.0.0.1:8092 -ConfirmDisposableDemo
+~~~
+
+The runner sets both flags, uses pinned Newman, redacts bearer tokens in reports
+and validates all 37 saved requests. test-v019-postman.ps1 retains all 84 business
+requests and then runs this separate collection. It does not replace or truncate
+the existing 61+23 flow. The collections mutate only disposable demo data.
+
+RangeDataExternalIT compares generated routes and Spring Data operations against
+the actual RedisEntityRepository and independent expected fixtures, including
+full-width Longs, ties, descending order, deleted anchors, tenant/cursor/causal
+rejection and the real provider's exact JDBC write-behind value. External-service
+tests require the existing isolated CACHEDB_TEST_NAMESPACE and datasource/Redis
+fixture variables; they do not start substitute containers.
+
+<!-- BEGIN CACHE API MATRIX -->
+### REST, Code and Request Matrix
+
+Each row links an actual controller method to its saved request count.
+This table is not runtime or performance acceptance.
+
+| Scenario | REST | Java | Request Count |
+| --- | --- | --- | --- |
+| method-quote | GET /api/examples/v019/cache/quotes/{sku} | [CacheApiController.quote](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 7 |
+| method-refresh | POST /api/examples/v019/cache/quotes/{sku}/refresh | [CacheApiController.refresh](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| method-evict | DELETE /api/examples/v019/cache/quotes/{sku} | [CacheApiController.evict](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| method-clear | DELETE /api/examples/v019/cache/quotes | [CacheApiController.clear](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 4 |
+| method-null | GET /api/examples/v019/cache/nullable/{sku} | [CacheApiController.nullable](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 2 |
+| offer-save | PUT /api/examples/v019/async/offers/{id} | [CacheApiController.save](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| offer-hot | GET /api/examples/v019/async/offers/{id} | [CacheApiController.hot](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| offer-source | GET /api/examples/v019/async/offers/{id}/source | [CacheApiController.source](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| stock-write | PUT /api/examples/v018/stock/{id} | [ControlsController.stockPut](src/main/java/com/example/cachedb/sample/controls/ControlsController.java) | 2 |
+| stock-one | GET /api/examples/v019/reactive/stock/{id} | [CacheApiController.stock](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 2 |
+| stock-list | GET /api/examples/v019/reactive/stock | [CacheApiController.stocks](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| range-save | PUT /api/examples/v019/range-data/{run}/rows/{slot} | [RangeDataController.save](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 8 |
+| range-point | GET /api/examples/v019/range-data/{run}/rows/{slot} | [RangeDataController.read](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 3 |
+| range-delete | DELETE /api/examples/v019/range-data/{run}/rows/{slot} | [RangeDataController.delete](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 1 |
+| range-window | GET /api/examples/v019/range-data/{run}/native | [RangeDataController.nativeRange](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 13 |
+| range-seek | GET /api/examples/v019/range-data/{run}/native/seek | [RangeDataController.nativeSeek](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 1 |
+| data-page | GET /api/examples/v019/range-data/{run}/data/page | [RangeDataController.page](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 3 |
+| data-slice | GET /api/examples/v019/range-data/{run}/data/slice | [RangeDataController.slice](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 1 |
+| data-window | GET /api/examples/v019/range-data/{run}/data/window | [RangeDataController.window](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 3 |
+| data-stats | GET /api/examples/v019/range-data/{run}/data/stats | [RangeDataController.stats](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 4 |
+<!-- END CACHE API MATRIX -->
+
+## Method Cache and Asynchronous APIs (0.19)
+
+The optional method-cache and async/reactive scenarios use the same CacheDB
+version as the provider starter and generated repositories. The sample declares
+cachedb-reactor as an optional dependency at ${cachedb.version}; it does not add
+WebFlux, an independent Reactor version, a scheduler, or another executor.
+
+The API is disabled outside the demo profile. After the provider's database and
+Redis quick start, run this complete command from this sample directory with
+Java 21. No extra method-cache feature flags are needed:
+
+~~~shell
+mvn -B -ntp spring-boot:run "-Dspring-boot.run.profiles=demo"
+~~~
+
+The demo profile enables sample.cache-api.enabled and
+cachedb.spring-cache.enabled. Both quotes and nulls are tenant-scoped with
+4096-byte value limits. Quotes use a five-minute Redis TTL and a 256-entry,
+1 MiB, ten-second L1; nulls cache null values for 30 seconds without L1.
+Admission is bounded to 128 operations, 1024 load keys and 4096 waiters.
+Each provider uses its own demo-methods-mssql prefix; use a separate
+SAMPLE_METHOD_CACHE_PREFIX for each independent deployment/database.
+These are demo limits, not a production sizing recommendation.
+
+Keep datasource/Redis/worker settings from the quick start. External services
+use DB_URL, DB_USERNAME, DB_PASSWORD and REDIS_URI. The default demo credentials
+are demo-supplier, demo-shop-a and demo-shop-b; override them together on server
+and client with SAMPLE_CONTROLS_SUPPLIER_TOKEN, SAMPLE_CONTROLS_TENANT_A_TOKEN
+and SAMPLE_CONTROLS_TENANT_B_TOKEN. Do not expose demo write tools publicly.
+ControlsAccess maps verified credentials to shop-a/shop-b; a request tenant ID
+or causal token is not authorization. Demo defaults are not production
+credentials. Without demo, both new API feature gates remain off.
+
+[CacheApiConfiguration](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiConfiguration.java)
+enables annotation interception and requires tenant-scoped quotes/nulls caches.
+It fails startup rather than substituting an in-memory manager or an unbounded
+executor. A runtime-owned async gate and regenerated repository bindings are
+required. An application CachingConfigurer is not overwritten: the sample's
+MethodCacheService explicitly selects cacheDbKeyGenerator and cacheDbCacheManager.
+
+### Method Results, Not Entity Persistence
+
+[MethodCacheService](src/main/java/com/example/cachedb/sample/cacheapi/MethodCacheService.java)
+computes a bounded String containing tenant/SKU/branch and a new identifier.
+It intentionally performs no SQL lookup. A repeated result shows method caching,
+not SQL freshness or an inventory reservation. Its annotations are actual code:
+
+~~~java
+@CacheConfig(cacheManager = "cacheDbCacheManager", keyGenerator = "cacheDbKeyGenerator")
+public class MethodCacheService {
+    @Cacheable(cacheNames = "quotes", sync = true)
+    public String quote(String sku, int branch) { return calculate(sku, branch); }
+    @CachePut(cacheNames = "quotes")
+    public String refresh(String sku, int branch) { return calculate(sku, branch); }
+}
+~~~
+
+The complete class contains the calculation, nullable lookup and eviction methods.
+The two native arguments use the typed length-framed key generator; refresh has
+the same arguments and therefore updates the same entry. No arbitrary toString,
+Java serialization or reflective SimpleKey extraction is used. A valid L1 hit
+performs zero Redis I/O; peer visibility follows invalidation processing, not the
+remote write's return. TTL does not make an undetected network partition
+linearizable. Disable L1 when those stronger semantics are required.
+
+All paths below are under /api/examples/v019. Use a tenant credential for cache
+and stock routes, and the supplier credential for offer routes:
+
+| Method and Path | Contract |
+| --- | --- |
+| GET /cache/quotes/{sku}?branch=7 | Cached String wrapped with server-selected tenant; 200 |
+| POST /cache/quotes/{sku}/refresh?branch=7 | Recompute and @CachePut the same key; 200 |
+| DELETE /cache/quotes/{sku}?branch=7 | Evict exactly one logical key; 204 |
+| DELETE /cache/quotes | Clear only the authenticated tenant via generation bump; 204 |
+| GET /cache/nullable/MISSING-ITEM | Cache an explicit null, returned as value:null; 200 |
+| PUT /async/offers/{id} | Actual WriteReceipt mapped to 202; source commit is not confirmed |
+| GET /async/offers/{id} | Redis-only async hot lookup; a miss is 409, not a source read |
+| GET /async/offers/{id}/source | Explicit asynchronous source read; absent row is 404 |
+| GET /reactive/stock/{id} | Cold Reactor hot lookup with authenticated subscriber context |
+| GET /reactive/stock?ids=1,2 | Bounded Reactor list, 1..32 positive IDs |
+
+SKUs are 1..32 uppercase letters/digits/underscore/hyphen; branches are 0..999.
+Command bodies are capped at 4 KiB before JSON decoding, including chunked
+requests (413); query strings are capped at 4096 characters (414).
+Body validation also bounds offer data and values. The default codec stores scalar
+method values, not arbitrary POJOs.
+
+### Receipts and Reactor Context
+
+[CacheApiOperations](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiOperations.java)
+uses SupplierOfferRepository.asyncWithReceipt(). It preserves the real receipt
+entity, ID, namespace-derived causal token and positive version. A 202 response
+means Redis acceptance and always reports sqlDurabilityConfirmed:false.
+Observe the explicit source route separately; do not attach a Redis causal token
+to it as proof of source durability. No write is automatically retried.
+
+ReactiveEntityRepositoryFactory receives the existing stock repository's async
+adapter. Stock publishers are cold: each subscription starts fresh bounded work.
+CacheApiOperations.stock/stocks supply CacheReactorContext.TENANT and
+CAUSAL_TOKEN. The tenant comes only from ControlsAccess. Existing causal
+requirements are merged before being transferred to subscriber context;
+ambient worker/admin context is not inherited. Spring MVC receives a composed
+future via toFuture(), without block(), get(), join() or a WebFlux dependency.
+
+Use the existing PUT /api/examples/v018/stock/{id} command to create a tenant stock
+row, then send its X-CacheDB-Causal receipt header to the reactive stock read.
+The body is stockId, warehouse, status and availableUnits. A minimal async offer
+body is:
+
+~~~json
+{"supplier":"cache-api","status":"ACTIVE","unitPrice":12.3400,"availableUnits":7}
+~~~
+
+Method-cache routes reject any nonempty X-CacheDB-Causal requirement with 409
+before invoking the method, even for a hot L1 value. They do not pretend to
+provide entity RYOW. Async/reactive entity reads retain entity-version guards.
+Missing credentials are 401, wrong roles or foreign tenant ownership are 403,
+invalid bounded inputs are 400, and async admission rejection is 429 with
+Retry-After. A three-second response deadline yields 504; driver work may still
+complete and retains its physical admission capacity. Cancellation/timeout is
+not rollback. Keep finite Redis/JDBC/pool timeouts and source deadlines. Size runtime admission
+against CPU, memory and pool capacity. TTL bounds lifetime, not Redis bytes;
+configure maxmemory and upstream request/new-key rate limits.
+
+@CachePut and default @CacheEvict are not source authorization guards.
+The controller validates the authenticated scope before invocation; the sample's
+evictions use beforeInvocation=true. Neither this nor a cache clear makes source
+work transactional. Do not swallow tenant/causal/codec failures.
+
+### Runnable Postman Flow
+
+The existing [sample collection](postman/cache-database-mssql-sample.postman_collection.json)
+contains the 23-request folder "07 Method Cache and Async". Run that folder
+after startup; provide credentials matching the server. The folder is opt-in:
+set cacheApiEnabled=true to send it. Acceptance runs must also set
+cacheApiCertification=true: a disabled feature then fails instead of skipping.
+Outside acceptance mode the disabled folder is skipped, which is not successful
+execution. Acceptance requires all 23 request names to have real responses
+and passing, non-skipped assertions in the JSON report; a zero exit code alone
+does not establish that the folder ran. Use a runner supporting
+[pm.execution.skipRequest](https://learning.postman.com/v11/docs/tests-and-scripts/write-scripts/postman-sandbox-reference/pm-execution).
+
+~~~shell
+newman run postman/cache-database-mssql-sample.postman_collection.json \
+  --folder "07 Method Cache and Async" \
+  --env-var cacheApiEnabled=true \
+  --env-var cacheApiCertification=true \
+  --env-var baseUrl=http://127.0.0.1:8092 \
+  --env-var cacheSupplierToken=demo-supplier \
+  --env-var cacheTenantAToken=demo-shop-a \
+  --env-var cacheTenantBToken=demo-shop-b \
+  --timeout-request 5000 --timeout-script 25000 \
+  --reporters cli,json \
+  --reporter-json-export ../target/sample-api-reports/cache-api-mssql.json
+~~~
+
+The flow allocates distinct demo IDs, checks hit/refresh/key eviction/generation
+clear/null/tenant separation, verifies an actual async receipt and observes the
+source independently. Reactive single and bounded-list reads use authenticated
+tenant context and the stock receipt token. Notification waits are bounded;
+source observation allows at most 40 probes within 20 seconds. Failed readiness
+or durability remains a failure, not a success inferred from 202. These examples
+are not cross-pod linearizability, physical zero-network or performance proof.
+
+For the complete business flow, including all 61 existing requests and all
+23 method-cache/async requests, run this against an already started disposable
+demo. This runner starts no infrastructure and requires no Java/Maven command:
+
+~~~shell
+pwsh -NoProfile -File scripts/test-v019-postman.ps1 -BaseUrl http://127.0.0.1:8092 -ConfirmDisposableDemo
+~~~
+
+The runner always enables cacheApiEnabled and cacheApiCertification. It checks
+all 84 distinct responses, request/script/assertion failures and skipped or
+missing assertions, including the final bounded-poll assertions. A missing
+feature or skipped folder fails; HTTP 202 does not prove source persistence.
+Catalog and 0.18 controls retain their separate 23- and 40-request contracts.
+Use test-catalog-postman.ps1 only for its documented owned disposable setup;
+it also runs this full business check. Real external-service qualification can
+invoke test-v019-postman.ps1 directly against a running demo.
+
+Reports use a fresh target/v019-postman run directory. Keep reports private:
+they include demo request/response data. Provided bearer credentials are
+redacted from exported reports, and the temporary environment file is removed.
+Never point this destructive example flow at production data.
+
+## Version and Read Transport
+
+This sample uses matching 0.19.0 provider, BOM, processor and plugin artifacts.
+Use the same version for cachedb-reactor and cachedb-spring-data. Install or obtain
+that complete artifact set before starting the application; mixing older generated
+bindings with newer runtime modules is not supported.
+
+Redis point-read coalescing is **opt-in in these samples**, including demo.
+The sample explicitly sets
+cachedb.redis.read-coalescing.enabled=${SAMPLE_READ_COALESCING_ENABLED:false}.
+This matches the library default; it is not a claim that enabling coalescing
+improves every workload or has been performance-qualified for your deployment.
+Disabled merging does not disable bounded native asynchronous reads.
+
+Start with the documented demo command and the default false setting. To evaluate
+merging separately, set SAMPLE_READ_COALESCING_ENABLED=true before starting the
+same application. Compare throughput, p99 latency, CPU and retained memory at both
+one caller and representative concurrent load; keep Redis topology, payloads,
+connection limits and CPU limits identical. A functional Postman result does not
+qualify performance. Revert the flag when measured regressions exceed your budget.
+Never compensate by removing queue, reply-byte, timeout or ownership limits.
+
+The demo profile enables the documented cache/range API settings. Without demo,
+sample.cache-api.enabled and sample.range-data.enabled default to false.
 
 ## Read and Write Controls in 0.18.1
 
@@ -12,9 +657,10 @@ and tenant-scoped warehouse batches, partitions, projections and causal reads.
 The new demo-only API has its own identity mapping; existing REST contracts stay
 unchanged. Complete Java sources, expected results and Postman requests are below.
 
-The sample is a SQL Server consumer: it resolves the published BOM, processor,
-starter, and doctor plugin at the same version. Java 21 is required; no framework
-checkout is needed. For the consistency and upgrade rules, read the framework
+This SQL Server consumer requires the complete approved BOM, processor,
+starter and doctor plugin at the same version. Once available, no framework
+checkout is needed; Java 21 is required. For consistency and upgrade rules, read
+the framework
 [bounded controls guide](https://github.com/esasmer-dou/cache-database/blob/main/docs/hot-path-controls.md).
 
 Follow the existing quick start and seed/warm steps first. Then use this flow:
@@ -95,16 +741,16 @@ Limits are 100 identities, 4 MiB and 2000 stream fields. Cluster requires one
 hash-tag scope; bounded tenant admission cannot be bypassed with atomic batches.
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.18.1](https://img.shields.io/badge/CacheDB-0.18.1-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1)
+[![CacheDB 0.19.0 documentation](https://img.shields.io/badge/CacheDB-0.19.0_docs-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases)
 
 A production-oriented Spring Boot REST API that demonstrates CacheDB with Redis
 8 and SQL Server. The sample is intentionally explicit: operational routes use
 a bounded Redis active data set, durable history stays in SQL Server, and
 growing lists use projections instead of full aggregates.
 
-> This sample uses CacheDB `0.18.1`. The public CacheDB Maven repository
-> resolves its immutable packages without a
-> GitHub token or a local framework source checkout.
+> This sample uses CacheDB `0.19.0`. Obtain the complete matching artifact set
+> from your configured Maven repository or approved package source. Availability
+> of an earlier release does not establish availability of the 0.19.0 artifacts.
 
 After the quick start, you will have proved one complete production-shaped
 route: seed durable SQL Server rows, read the bounded archive route, warm the
@@ -112,10 +758,10 @@ matching Redis projection, read the active route, and inspect coverage and
 durability signals. The sample does not hide a SQL Server query behind a Redis
 miss.
 
-## CacheDB 0.18.1 Upgrade
+## CacheDB 0.19.0 Upgrade
 
 The sample POM aligns the BOM, provider starter, annotation processor and doctor
-plugin at `0.18.1`. Rebuild the sample to regenerate its bindings.
+plugin at `0.19.0`. Rebuild the sample to regenerate its bindings.
 The POM also sets `jedis.version=5.2.0`; the Spring Boot parent would otherwise
 select an older driver that lacks the required pipeline API.
 
@@ -127,14 +773,15 @@ select an older driver that lacks the required pipeline API.
 - Use `Boolean` for nullable SQL booleans; primitive `boolean` rejects SQL NULL.
 - Atomic catalog imports and indexed snapshot pages have explicit endpoints. Redis Cluster distribution remains an optional framework infrastructure capability; local Compose uses standalone Redis.
 
-Read the [release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.18.1.md)
+Read the [0.19.0 release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.19.0.md),
+[upgrade guide](https://github.com/esasmer-dou/cache-database/blob/main/docs/upgrading-to-0.19.md)
 and [bounded operation contracts](https://github.com/esasmer-dou/cache-database/blob/main/docs/bounded-runtime-operations.md)
 before adding those APIs. Package availability does not certify your application's production topology.
 
 ## Column Safety
 
 The existing sample entities stay deliberately narrow. Provider-aware limits are active
-through the 0.18.1 dependency; no additional cache policy or business-table change
+through the 0.19.0 dependency; no additional cache policy or business-table change
 is required. A wider Redis payload is not permission to create a wider SQL table.
 
 | Surface | Default count limit |
@@ -290,7 +937,7 @@ sources as part of the sample build.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.18.1</cachedb.version>
+<cachedb.version>0.19.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -373,15 +1020,17 @@ lists, so the public CacheDB repository appears in both sections:
 ```
 
 `repositories` resolves the BOM, starters, and libraries.
-`pluginRepositories` resolves `cachedb-maven-plugin`. The endpoint is public;
-no Maven `settings.xml`, username, or token is required.
+`pluginRepositories` resolves `cachedb-maven-plugin`. The public endpoint requires
+no credentials, but its configuration does not establish availability of 0.19.0.
+Use the complete approved artifact set from your configured package source.
 
 ## Quick Start
 
-### 1. Resolve the published CacheDB package
+### 1. Resolve the matching CacheDB artifact set
 
-Validate the sample directly. Maven resolves the published BOM,
-starter, annotation processor and doctor plugin anonymously from that package:
+After the complete approved 0.19.0 artifact set is available, validate the sample
+directly. Maven must resolve the matching BOM, starter, annotation processor and
+doctor plugin from your configured repository; publication is not asserted here:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -1023,7 +1672,7 @@ never copy placeholder evidence and mark it as passed.
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | `/api/demo/seed` or `/api/warm/**` returns `404` | Application was not started with the `demo` profile | Set `SPRING_PROFILES_ACTIVE=demo` and restart |
-| CacheDB artifacts return `404` | The requested version is not published or the public repository URL is missing | Use a released stable version and declare `https://esasmer-dou.github.io/cache-database/maven2` in both repository sections |
+| CacheDB artifacts return `404` | The requested version is not published or the repository configuration is missing | Obtain the complete approved matching artifact set. To use an existing release, select its matching sample source tag; do not only downgrade the dependency. |
 | Dependencies resolve but `cachedb-maven-plugin` does not | `pluginRepositories` is absent | Add the same public CacheDB URL under `pluginRepositories` |
 | `production-certification` fails | Route evidence is missing, stale, or belongs to another commit/environment | Read the generated report, regenerate real staging evidence, and rerun the profile |
 | Active route returns `503` while archive returns rows | Redis route has not been warmed, its coverage expired, or the scope differs | Run dry-run, warm the exact route/scope, poll to `COMPLETED`, then inspect coverage |
@@ -1047,9 +1696,9 @@ never copy placeholder evidence and mark it as passed.
 <!-- BEGIN COMPILED FEATURE EXAMPLES -->
 ## CacheDB 0.18: Running Scenarios
 
-This section uses real classes in this sample, not pseudocode. Start with the
-existing Quick Start and `demo` profile. Maven downloads CacheDB **0.18.1**
-without building the framework. Run the Postman collection
+This section uses real classes in this sample, not pseudocode. Obtain matching
+CacheDB **0.19.0** artifacts first, then use the existing Quick Start and `demo`
+profile. Run the Postman collection
 `postman/cache-database-mssql-v018.postman_collection.json` in its saved order.
 
 ### 1. Setup, Identity and Data Flow
@@ -1727,10 +2376,10 @@ The framework's 50 ms codec gate is not a guarantee for these REST/SQL requests.
 
 ## Declarative Catalog Scenarios
 
-These scenarios use **CacheDB 0.18.1**. Existing commerce,
+These scenarios use **CacheDB 0.19.0**. Existing commerce,
 support, logistics and archive routes are unchanged. Unlike a release-note link,
-the classes below are actual sample sources, compiled and tested for all three
-providers. Each complete Java block belongs at the path printed above it.
+the classes below are actual sample sources. Each complete Java block matches
+the file at the path printed above it.
 
 ### What Changed in 0.15
 
@@ -1937,10 +2586,10 @@ public class CatalogConfiguration {
 
 The sample explicitly pins Gson **2.13.2**, because the Spring Boot parent can
 otherwise select an older Gson without `Strictness`. The POM includes
-`cachedb-json`, the annotation dependency and the 0.18.1 processor. Do not remove
+`cachedb-json`, the annotation dependency and the 0.19.0 processor. Do not remove
 the Gson override or mix framework versions.
 
-With the 0.18.1 BOM and annotation processor already configured, these are the
+With the 0.19.0 BOM and annotation processor already configured, these are the
 additional runtime dependencies used by the compiled sample:
 
 ```xml
@@ -2486,8 +3135,9 @@ Run all **23 requests** in order; no demo seed is required after schema setup.
 They assert import durability (retrying only the identical delivery if the
 initial bounded wait returns pending), identical replay, changed-payload rejection,
 snapshot publication, Unicode/decimal data, single-generation reads, pagination
-and invalid-input responses. The existing 61-request business collection remains
-separate. Neither collection asserts a 50 ms REST SLA.
+and invalid-input responses. The separate business collection preserves its
+61-request legacy flow and adds 23 method-cache/async requests (84 total).
+Neither collection asserts a 50 ms REST SLA.
 
 ```powershell
 npx --yes newman@6.2.1 run postman/cache-database-mssql-catalog.postman_collection.json --env-var baseUrl=$base
@@ -2499,16 +3149,17 @@ remains a framework infrastructure capability: the local Compose recipe uses
 standalone Redis and does not claim a Cluster/HA topology test. All JSON/role
 changes are explicit opt-ins, not transparent ORM fallback.
 
-For an isolated command-line run, install Node.js/npm and PowerShell 7, build the
+For an isolated command-line run, install Node.js/npm and PowerShell 7.3+, build the
 JAR, then run `./scripts/test-catalog-postman.ps1`. It starts disposable provider
-fixtures and the JAR on a free local port, executes the saved collection with
-Newman, exports JSON/JUnit reports under `target/catalog-postman`, and removes
+fixtures and the JAR on a free local port, executes catalog (23), controls (40)
+and business (84) collections with Newman, exports JSON/JUnit reports under
+`target/catalog-postman` and `target/v019-postman`, and removes
 only its own test project and volumes. Never point this script at production.
 Pass `-SplitRoles` to bootstrap the local schema, stop the bootstrap JVM, and run
 the same collection against one API container plus **two worker containers**.
 The sample CI uses this mode; container logs are included in the test evidence.
 
-The separate 61-request business collection automatically polls the saved job
+The 61-request legacy part of the business collection automatically polls the saved job
 status request after each accepted background command, then resumes its original
 sequence. Polling stops after 30 seconds or 150 attempts. Every business response
 has an HTTP assertion; a failed job stops the flow instead of racing the next
@@ -2516,3 +3167,191 @@ read. For the HTTP load recipe, explicitly refresh the catalog immediately befor
 the run: after `warn-age`, `STALE_WARNING` is an intentional freshness signal,
 not a missing row or a reason to fetch SQL implicitly.
 <!-- END COMPILED FEATURE EXAMPLES -->
+
+## 0.19 sample qualification boundary
+
+<!-- BEGIN V019 PENDING COVERAGE -->
+Release checks are governed by CI for the exact release commit and evidence bound to the
+source, SDK and sample artifacts. See the [0.19.0 release notes](https://github.com/esasmer-dou/cache-database/blob/main/docs/releases/v0.19.0.md#release-evidence-authority).
+The links below identify implementation and verification entry points, not successful execution.
+The baseline matrix and each feature scope require their own matching evidence; one feature
+receipt does not certify the complete sample, application onboarding or release.
+
+| Feature | Qualification authority | Existing source and test proof | Independent Postman runner |
+| --- | --- | --- | --- |
+| spring-data-bulk-delete | Release-commit CI / artifact-bound evidence | [AuditNoteController](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java), [AuditExternalIT](src/test/java/com/example/cachedb/sample/audit/AuditExternalIT.java), [DerivedDeleteRangeExternalIT](src/test/java/com/example/cachedb/sample/rangedata/DerivedDeleteRangeExternalIT.java) | [42 audit requests](scripts/test-audit-postman.ps1) |
+| field-encryption | Release-commit CI / artifact-bound evidence | [EncryptedNoteController](src/encryption/java/com/example/cachedb/sample/encryption/EncryptedNoteController.java), [EncryptedNoteContractTest](src/encryption-test/java/com/example/cachedb/sample/encryption/EncryptedNoteContractTest.java), [EncryptedNoteExternalIT](src/encryption-test/java/com/example/cachedb/sample/encryption/EncryptedNoteExternalIT.java) | [10 encryption requests](scripts/test-encryption-postman.ps1) |
+| retention | Release-commit CI / artifact-bound evidence | [AuditNoteController.sweep](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java), [AuditExternalIT](src/test/java/com/example/cachedb/sample/audit/AuditExternalIT.java), [AuditHttpContractTest](src/test/java/com/example/cachedb/sample/audit/AuditHttpContractTest.java) | [Same 42 audit requests, run once](scripts/test-audit-postman.ps1) |
+| tenant-purge | Release-commit CI / artifact-bound evidence | [TenantPurgeRuntime](src/purge/java/com/example/cachedb/purge/TenantPurgeRuntime.java), [TenantPurgeOptInTest](src/purge-test/java/com/example/cachedb/purge/TenantPurgeOptInTest.java), [TenantPurgeContractTest](src/purge-test/java/com/example/cachedb/purge/TenantPurgeContractTest.java), [TenantPurgeExternalIT](src/purge-test/java/com/example/cachedb/purge/TenantPurgeExternalIT.java) | [8 requests / 36 assertions](scripts/test-tenant-purge-postman.ps1) |
+
+The audit route rejects zero selection budget; the range-derived external test
+checks positive finite selection and exact-cap refusal. Neither Redis acceptance
+nor a retention sweep response proves SQL durability/source erasure. Encrypted
+notes are REDIS_ONLY with intentional SQL plaintext, not protected-source
+onboarding. The separate purge companion is fresh-only INITIAL, not restart/HA
+or backup-erasure proof. Its SQL test and standalone launch need different fresh
+schemas with canonical migrations applied by the application, not preapplied.
+
+Run only in the parent-admitted K8s cohort under its existing exclusive lock,
+original deadlines, one CPU/APC1 and 512 MiB heap. Parent supplies a byte-qualified
+final SDK/cache, settings/tool pins and fresh owned provider fixtures. No local
+execution or automatic online fallback is authorized. External SQL/Redis URLs
+must contain `.<CACHEDB_TEST_NAMESPACE>.svc.cluster.local`; credentials/keys stay
+in private remote environment/Secret mounts. Supply `CACHEDB_TEST_DATASOURCE_URL`,
+`CACHEDB_TEST_DATASOURCE_USERNAME`, `CACHEDB_TEST_DATASOURCE_PASSWORD` and
+`CACHEDB_TEST_REDIS_URI`; a missing fixture or skipped test is not PASS.
+
+Use three distinct target-free copies of THIS provider sample, pointed to by
+`AUDIT_WORK`, `ENCRYPTION_WORK`, `PURGE_WORK`. Do not reuse an encrypted target
+directory for purge. `SDK_REPO`, `QUALIFIED_CPU` and both Maven settings paths
+below are qualified parent inputs. Each lane needs its own unchanged admission
+window before launch; 900 s is a ceiling, not permission to extend a fixture.
+
+```bash
+export MAVEN_OPTS="-Xms64m -Xmx512m -XX:ActiveProcessorCount=1"
+common=(-o -B -ntp -C -s "$SETTINGS" -gs "$GLOBAL_SETTINGS" "-Dmaven.repo.local=$SDK_REPO"
+  -DskipTests=false -Dmaven.test.skip=false -Dmaven.test.failure.ignore=false
+  -DfailIfNoTests=true -Dsurefire.failIfNoSpecifiedTests=true -Dfailsafe.failIfNoSpecifiedTests=true
+  -Dsurefire.rerunFailingTestsCount=0 -Dfailsafe.rerunFailingTestsCount=0
+  -DforkCount=1 -DreuseForks=true -Djunit.jupiter.execution.parallel.enabled=false
+  '-DargLine=-Xms64m -Xmx512m -XX:ActiveProcessorCount=1')
+timeout --signal=TERM --kill-after=10s 900s taskset -c "$QUALIFIED_CPU" mvn "${common[@]}" -f "$AUDIT_WORK/pom.xml" -Pprovider-integration -Dtest=AuditContractTest,AuditHttpContractTest -Dit.test=AuditExternalIT,DerivedDeleteRangeExternalIT verify
+timeout --signal=TERM --kill-after=10s 900s taskset -c "$QUALIFIED_CPU" mvn "${common[@]}" -f "$ENCRYPTION_WORK/pom.xml" -Pencrypted-demo,provider-integration -Dtest=EncryptedNoteContractTest -Dit.test=EncryptedNoteExternalIT verify
+timeout --signal=TERM --kill-after=10s 900s taskset -c "$QUALIFIED_CPU" mvn "${common[@]}" -f "$PURGE_WORK/pom.xml" -Ptenant-purge-demo,provider-integration -Dtest=TenantPurgeOptInTest,TenantPurgeContractTest -Dit.test=TenantPurgeExternalIT verify
+```
+
+Stop at the first failed command; no automatic rerun. Exact per-provider roster:
+audit 8 contract + 6 HTTP contract + 5 external + 2 derived-delete = 21;
+encryption 5 contract + 2 external = 7; purge 7 opt-in + 11 contract + 1 external
+= 19. Across three providers: 141 cases in 27 suites, zero failures/errors/skips/
+flaky/reruns. Retain exact method membership, XML, exits, final SDK/source/cache
+hashes and preservation evidence; counts alone are insufficient.
+
+After separately admitted packaged-app startup, use the existing runners once:
+```bash
+export npm_config_offline=true
+timeout --signal=TERM --kill-after=10s 900s pwsh -NoProfile -File "$AUDIT_WORK/scripts/test-audit-postman.ps1" -BaseUrl "$AUDIT_BASE_URL" -ConfirmDisposableDemo
+timeout --signal=TERM --kill-after=10s 900s pwsh -NoProfile -File "$ENCRYPTION_WORK/scripts/test-encryption-postman.ps1" -BaseUrl "$ENCRYPTION_BASE_URL" -ConfirmDisposableDemo
+timeout --signal=TERM --kill-after=10s 900s pwsh -NoProfile -File "$PURGE_WORK/scripts/test-tenant-purge-postman.ps1" -BaseUrl "$PURGE_BASE_URL" -RunId "$SAMPLE_PURGE_RUN_ID" -ConfirmDisposableDemo
+```
+Parent provisions the qualified offline Newman 6.2.1 cache and matching private
+app credentials. The audit and encryption wrappers must not acquire packages
+online. There are 60 distinct requests per provider, 180 total; audit covers bulk
+and retention together, not twice. Keep the independent 834 HTTP gate unchanged.
+These 180 four-feature requests are not the historical 180-request main-route gate.
+Use the exact release-commit CI and matching artifact-bound reports to determine results.
+Evaluate baseline, feature and release scopes separately; missing or skipped required evidence
+is not PASS. Historical candidate results do not automatically qualify changed artifacts.
+<!-- END V019 PENDING COVERAGE -->
+
+## Opt-in native tenant purge (F3)
+
+This opt-in companion has an independent qualification scope, governed by exact
+release-commit CI and artifact-bound evidence. It does not certify the baseline,
+full sample, real-application onboarding or release. The commands below require an
+approved isolated Kubernetes fixture, sequential execution, Java 21+, one CPU and
+512 MiB test heap. Use the hash-qualified matching `0.19.0` SDK/private Maven cache
+via `SDK_REPO`; offline mode must fail rather than fall back to an older public SDK.
+
+The `tenant-purge-demo` Maven profile adds only `src/purge` and `src/purge-test`.
+Its separate `TenantPurgeApplication` does not scan the legacy global encrypted
+notes. `TenantPurgeRow` has generated native declarations, Long IDs 1..8,
+tenant ownership and REDIS_AND_SOURCE encryption using the existing key provider
+pattern. This is CLIENT_ONLY / REDIS_ONLY with L1 disabled and a real two-root
+approved roster, native namespace bootstrap, INITIAL enrollment and seal.
+
+A fresh run seeds exactly eight SQL rows: owned IDs 1..7 and foreign ID 8.
+Only IDs 1..2 enter the INITIAL hot window; 3..7 remain cold SQL rows.
+The facade uses `includeSource=true`, not cache invalidation disguised as purge.
+The HTTP delivery callback holds the native read barrier through response flush.
+Cold row delivery returns 409 (no admitted Redis owner), never an implicit SQL read.
+Successful purge retains SQL and Redis CLOSED generation/security metadata.
+There is no reopen endpoint or automatic reopen; reopening requires the separately
+reviewed explicit administrative lifecycle. Startup is fresh-only, not a crash-resume demo.
+
+For the separate supported administrative flow, see [explicit EMPTY reopening](../docs/tenant-data-protection.md#explicit-empty-reopening).
+EMPTY does not restore erased ID ownership. New Long IDs require an exclusive domain
+provisioned during INITIAL and a later, non-overlapping range through
+[`reserveAndAdmitFreshRange`](../docs/tenant-protection-components.md#prepare-a-bounded-new-record-range).
+[`refillVersionRange`](../docs/tenant-protection-components.md#refill-write-versions-explicitly)
+replenishes write versions, not record IDs. Neither operation is an HTTP endpoint in this companion.
+
+**Disposable SQL Server fixture:** Use a precreated disposable database/schema with CREATE TABLE, schema ALTER and CRUD/metadata access on its objects. The fixture DBA must enable ALLOW_SNAPSHOT_ISOLATION ON before launch; the sample does not change database settings.
+The application runs the seven canonical JDBC migrations from
+`com/reactor/cachedb/jdbc/migrations/mssql/`, V014 then V019 through
+V019_5, followed by `src/purge/resources/schema-purge.sql`.
+They are not idempotent: use a new empty dedicated schema for each external test
+and another for a standalone/Postman launch. Do not preapply them or point at a
+legacy/shared schema. Redis must be an approved standalone Redis 7+ private DB0
+fixture with F3 Functions/Lua/transaction permissions; no FLUSH, Cluster, TLS or
+credential-bearing Redis URI is supported by this bounded companion.
+
+**External tests:** privately supply `CACHEDB_TEST_NAMESPACE` (`cachedb-...`),
+`CACHEDB_TEST_DATASOURCE_URL`, `CACHEDB_TEST_DATASOURCE_USERNAME`,
+`CACHEDB_TEST_DATASOURCE_PASSWORD`, `CACHEDB_TEST_REDIS_URI`.
+Both fixture URLs must contain `.<namespace>.svc.cluster.local`.
+The test creates its own run/admin/encryption values without printing them.
+From this sample directory:
+```sh
+mvn -o -Dmaven.repo.local="$SDK_REPO" \
+  -Ptenant-purge-demo,provider-integration \
+  -Dtest=TenantPurgeOptInTest,TenantPurgeContractTest -Dit.test=TenantPurgeExternalIT \
+  -Dsurefire.failIfNoSpecifiedTests=true -Dfailsafe.failIfNoSpecifiedTests=true \
+  -DfailIfNoTests=true -DforkCount=1 -DreuseForks=true \
+  '-DargLine=-Xmx512m -XX:ActiveProcessorCount=1' verify
+```
+Require all seven `TenantPurgeOptInTest` methods, all ten `TenantPurgeContractTest` methods and
+`TenantPurgeExternalIT.nativeInitialHttpPurgeRemovesHotAndColdAndPreservesForeignState`
+to execute with zero failures/errors/skips (18 per provider, 54 across all three).
+Retain XML, Maven exit codes and current SDK/source hashes; missing fixtures/skips are not PASS.
+
+**Standalone HTTP/Postman:** use a different fresh schema and private environment:
+The Postman wrapper additionally requires Linux and exactly
+`CACHEDB_TEST_NAMESPACE=cachedb-v019-validation`. Set `CACHEDB_TEST_DATASOURCE_URL`
+to the application's actual private SQL URL (`SAMPLE_PURGE_SQL_URL`), beginning with
+`jdbc:sqlserver://mssql.cachedb-v019-validation.svc.cluster.local:1433;`.
+Set `CACHEDB_TEST_REDIS_URI` and `SAMPLE_PURGE_REDIS_URI` to
+`redis://redis.cachedb-v019-validation.svc.cluster.local:6379/0`.
+These are required wrapper inputs; the HTTP `BaseUrl` may still be loopback.
+Provide the application's private inputs:
+`SAMPLE_PURGE_SQL_URL`, `SAMPLE_PURGE_SQL_USERNAME`, `SAMPLE_PURGE_SQL_PASSWORD`,
+`SAMPLE_PURGE_REDIS_URI` (the Service URI above, no credentials),
+`SAMPLE_PURGE_RUN_ID` (32 lowercase hex), `SAMPLE_PURGE_ADMIN_TOKEN`
+(32..128 URL-safe characters), `SAMPLE_PURGE_CONFIRM=CREATE_FRESH_PURGE_DEMO`,
+`SAMPLE_ENCRYPTION_AES_KEY` and `SAMPLE_ENCRYPTION_HMAC_KEY` (private Base64
+32-byte keys). Optional `SAMPLE_PURGE_BIND_ADDRESS` defaults to loopback;
+`SAMPLE_PURGE_HTTP_PORT` defaults to 8080. Never place secrets in CLI arguments/logs.
+
+**Authenticated Redis:** keep the fixture URI credential-free. Inject
+`CACHEDB_TEST_REDIS_PASSWORD` into the TEST process and
+`SAMPLE_PURGE_REDIS_PASSWORD` into the purge application through the Kubernetes
+Secret environment, not command arguments. Both use Redis's default ACL user.
+`ExternalSampleFixtures` and `TenantPurgeRuntime` pass the password to their
+clients; reserved characters are encoded only when a client needs a URI. For the
+normal application, `REDIS_URI` remains its existing connection setting. Omitting
+the optional password variables preserves standalone no-auth demo behavior; do
+not disable authentication on a shared or production Redis to run the sample.
+
+```sh
+mvn -o -Dmaven.repo.local="$SDK_REPO" -Ptenant-purge-demo -DskipTests package
+java -XX:ActiveProcessorCount=1 -Xmx512m -jar target/sample-cache-database-mssql-0.19.0.jar --spring.config.name=application-purge
+# In a second shell in the same locked K8s cohort; approved offline Newman 6.2.1 cache required:
+pwsh -NoProfile -File scripts/test-tenant-purge-postman.ps1 -BaseUrl http://127.0.0.1:8080 -RunId "$SAMPLE_PURGE_RUN_ID" -ConfirmDisposableDemo
+```
+The fixed API root is `/api/examples/v019/tenant-purge`: GET `/status`,
+GET `/rows/1`.. `/rows/7`, POST `/purge`. It requires
+`Authorization: Bearer <private-token>` and `X-Purge-Run: <run>`.
+The only mutation body is
+`{"confirmation":"ERASE_OWNED_ROWS","operationId":"<canonical-UUID>"}`.
+The wrapper generates one operation ID, performs exactly eight requests/36
+assertions with one purge POST, disables redirects and has no retries or polling.
+It deletes its private environment file; retain only redacted logs/JUnit.
+`POSTMAN_ONLY_PASS` is not full sample qualification.
+
+Assertions preserve the real foreign encrypted SQL row and an actual encrypted
+foreign Redis sentinel outside the enrolled namespace. The sentinel is not a
+separately enrolled foreign runtime. No crash, HA, backup erasure or Cluster proof
+is claimed. The companion manifest is
+`tools/samples/v019-tenant-purge-scenarios.json`. Evaluate it and the original
+20-scenario baseline matrix independently using release-commit CI and matching
+artifact-bound evidence; feature evidence does not certify the complete baseline or release.

@@ -14,6 +14,23 @@ public interface RedisClientOperations extends AutoCloseable {
         return false;
     }
 
+    record GuardedSetMembers(boolean degraded, List<String> members) {
+        public GuardedSetMembers {
+            members = List.copyOf(members);
+            if (degraded && !members.isEmpty())
+                throw new IllegalArgumentException("Degraded candidate fetch cannot contain members");
+        }
+    }
+
+    /** Empty means unsupported; a present result distinguishes degraded from healthy-empty. */
+    default Optional<GuardedSetMembers> guardedSetMembers(
+            String degradedKey, String membershipKey, int maxMembers) {
+        return Optional.empty();
+    }
+
+    /** Finite per-node pool capacity; unknown custom clients use a conservative two. */
+    default int physicalPoolCapacity() { return 2; }
+
     default Object serverInfo(String section, String routingKey) {
         return commands().sendCommand(redis.clients.jedis.Protocol.Command.INFO, section);
     }
@@ -96,32 +113,126 @@ public interface RedisClientOperations extends AutoCloseable {
     /** One read-only server call per bounded common-slot batch; numeric arithmetic stays in Java. */
     default Optional<IndexAggregateBatch> aggregateIndexBatch(List<String> entities, List<String> tombstones,
             List<String> indexMetadata, String field, boolean countOnly) {
-        int size = entities.size();
-        if (size < 1 || size > 512 || tombstones.size() != size || indexMetadata.size() != size)
-            throw new IllegalArgumentException("Index aggregation requires 1..512 aligned identities");
+        return aggregateIndexBatch(entities, tombstones, indexMetadata, null, null, field, countOnly);
+    }
+
+    /** Ownership, liveness and tombstones are checked in the same read-only script. */
+    default Optional<IndexAggregateBatch> aggregateIndexBatch(List<String> entities, List<String> tombstones,
+            List<String> indexMetadata, List<String> ownerKeys, String tenant, String field, boolean countOnly) {
+        var command = indexAggregateCommand(entities, tombstones, indexMetadata, ownerKeys, tenant, field, countOnly);
+        try { requireSameSlot(command.keys()); }
+        catch (IllegalArgumentException crossSlot) { return Optional.empty(); }
+        return parseIndexAggregateResponse(eval(command.script(), command.keys(), command.arguments()), entities.size(), countOnly);
+    }
+
+    record IndexReadKeys(List<String> entities, List<String> tombstones, List<String> indexMetadata, List<String> owners) {}
+    record IndexReadCommand(String script, List<String> keys, List<String> arguments) {}
+
+    /** Explicit opt-in: existing adapters keep their tenant-scoped COUNT(*) phase contract. */
+    default boolean supportsUnownedIndexCounts() { return false; }
+
+    /** Optional COUNT(*) phase; opted-in null tenant requires null owners. Each window retains its snapshot boundary. */
+    default java.util.OptionalLong aggregateIndexCounts(int candidates,
+            java.util.function.IntFunction<IndexReadKeys> windows, String tenant) {
+        return java.util.OptionalLong.empty();
+    }
+
+    /** Optional bounded facet phase; absence means retry the original sequential windows in full. */
+    default Optional<List<FacetIndexBatch>> facetIndexBatches(int candidates,
+            java.util.function.IntFunction<IndexReadKeys> windows, String tenant, String groupField, String valueField) {
+        return Optional.empty();
+    }
+
+    record FacetIndexCounts(Map<String, Long> counts, List<Integer> nullCandidates) {
+        public FacetIndexCounts { counts = Map.copyOf(counts); nullCandidates = List.copyOf(nullCandidates); }
+    }
+
+    /** Optional COUNT(*) histogram; sentinel positions still require live payload disambiguation. */
+    default Optional<List<FacetIndexCounts>> facetIndexCounts(int candidates,
+            java.util.function.IntFunction<IndexReadKeys> windows, String tenant, String groupField) {
+        return Optional.empty();
+    }
+
+    enum FacetPhaseDecline { UNSUPPORTED, EVAL_COMMAND_DENIED, SOFT_BYTE_BUDGET }
+
+    record FacetPhaseResult<T>(Optional<List<T>> batches, FacetPhaseDecline decline) {
+        public FacetPhaseResult {
+            Objects.requireNonNull(batches, "batches");
+            if (batches.isPresent() == (decline != null))
+                throw new IllegalArgumentException("Facet phase requires either batches or a decline reason");
+            batches = batches.map(List::copyOf);
+        }
+        public static <T> FacetPhaseResult<T> available(List<T> batches) {
+            return new FacetPhaseResult<>(Optional.of(batches), null);
+        }
+        public static <T> FacetPhaseResult<T> declined(FacetPhaseDecline reason) {
+            return new FacetPhaseResult<>(Optional.empty(), Objects.requireNonNull(reason, "reason"));
+        }
+        public boolean skipRowsPhase() {
+            return decline == FacetPhaseDecline.EVAL_COMMAND_DENIED || decline == FacetPhaseDecline.SOFT_BYTE_BUDGET;
+        }
+    }
+
+    /** Legacy adapters keep their Optional override and original ROWS fallback behavior. */
+    default FacetPhaseResult<FacetIndexCounts> facetIndexCountsPhase(int candidates,
+            java.util.function.IntFunction<IndexReadKeys> windows, String tenant, String groupField) {
+        var batches = facetIndexCounts(candidates, windows, tenant, groupField);
+        return batches.isPresent() ? FacetPhaseResult.available(batches.get())
+                : FacetPhaseResult.declined(FacetPhaseDecline.UNSUPPORTED);
+    }
+
+    static IndexReadCommand indexAggregateCommand(List<String> entities, List<String> tombstones,
+            List<String> indexMetadata, List<String> ownerKeys, String tenant, String field, boolean countOnly) {
         if (field != null && field.length() > 4096) throw new IllegalArgumentException("Aggregate field exceeds 4096 characters");
         boolean hasField = field != null && !field.isBlank() && !field.equals("*");
         if (!countOnly && !hasField) throw new IllegalArgumentException("Numeric aggregation requires a field");
-        var keys = new ArrayList<String>(size * 3);
-        keys.addAll(entities); keys.addAll(tombstones); if (hasField) keys.addAll(indexMetadata);
-        long keyBytes = 0;
-        for (String key : keys) {
-            if (key == null || key.length() > 16_384) throw new IllegalArgumentException("Invalid aggregate key");
-            keyBytes += 2L * key.length();
-            if (keyBytes > 16L * 1024 * 1024) throw new IllegalArgumentException("Aggregate key byte budget exceeded");
-        }
-        if (clustered()) try { requireSameSlot(keys); }
-        catch (IllegalArgumentException crossSlot) { return Optional.empty(); }
-        Object response = eval("""
+        var keys = indexBatchKeys(entities, tombstones, indexMetadata, ownerKeys, tenant, hasField);
+        int size = entities.size();
+        return new IndexReadCommand("""
                 local n=tonumber(ARGV[3]); local count=0; local values={}; local bytes=0; local nulls={}
+                local owned=ARGV[4]=='1'; local ownerOffset=2*n
+                if ARGV[1]~='' then ownerOffset=3*n end
+                if ARGV[2]=='1' and ARGV[1]=='' then
+                  local tenant=ARGV[5]; local tenantLength=#tenant
+                  -- Atomic batch-wide liveness proof avoids two Lua command dispatches per row.
+                  local live=redis.call('EXISTS',unpack(KEYS,1,n))==n and redis.call('EXISTS',unpack(KEYS,n+1,2*n))==0
+                  if live then
+                    if not owned then return {n,values,nulls} end
+                  end
+                  for i=1,n do
+                    local allowed=live or (redis.call('EXISTS',KEYS[i])==1 and redis.call('EXISTS',KEYS[n+i])==0)
+                    if allowed and owned then
+                      local key=KEYS[ownerOffset+i]
+                      -- The inclusive end reads one extra byte, so a longer tenant prefix cannot match.
+                      local observed=redis.pcall('GETRANGE',key,0,tenantLength)
+                      allowed=observed==tenant
+                      if not allowed and type(observed)=='table' and observed.err then
+                        if not redis.acl_check_cmd or redis.acl_check_cmd('GETRANGE',key,0,tenantLength) then
+                          return observed
+                        end
+                        allowed=redis.call('STRLEN',key)==tenantLength and redis.call('GET',key)==tenant
+                      end
+                    end
+                    if allowed then count=count+1 end
+                  end
+                  return {count,values,nulls}
+                end
                 for i=1,n do
-                  if redis.call('EXISTS',KEYS[i])==1 and redis.call('EXISTS',KEYS[n+i])==0 then
+                  local allowed=redis.call('EXISTS',KEYS[i])==1 and redis.call('EXISTS',KEYS[n+i])==0
+                  if allowed and owned then
+                    local key=KEYS[ownerOffset+i]
+                    allowed=redis.call('STRLEN',key)==#ARGV[5] and redis.call('GET',key)==ARGV[5]
+                  end
+                  if allowed then
                     local value=false
                     if ARGV[1]~='' then
-                      value=redis.call('HGET',KEYS[2*n+i],ARGV[1])
-                      if not value then return redis.error_reply('Incomplete aggregate index metadata; rebuild indexes') end
-                      bytes=bytes+#value
+                      local key=KEYS[2*n+i]; local length=redis.call('HSTRLEN',key,ARGV[1])
+                      if length==0 and redis.call('HEXISTS',key,ARGV[1])==0 then
+                        return redis.error_reply('Incomplete aggregate index metadata; rebuild indexes')
+                      end
+                      bytes=bytes+length
                       if bytes>16777216 then return redis.error_reply('Aggregate byte budget exceeded') end
+                      value=redis.call('HGET',key,ARGV[1])
                     end
                     if ARGV[2]=='0' or ARGV[1]=='' or value~='__NULL__' then
                       count=count+1
@@ -133,13 +244,197 @@ public interface RedisClientOperations extends AutoCloseable {
                   end
                 end
                 return {count,values,nulls}
-                """, keys, List.of(hasField ? field : "", countOnly ? "1" : "0",Integer.toString(size)));
-        var result = (List<?>) response;
-        var values = new ArrayList<String>();
-        for (Object value : (List<?>) result.get(1)) values.add(value.toString());
-        var nulls = new ArrayList<Integer>();
-        for (Object index : (List<?>) result.get(2)) nulls.add(((Number) index).intValue());
-        return Optional.of(new IndexAggregateBatch(((Number) result.get(0)).longValue(), List.copyOf(values), List.copyOf(nulls)));
+                """, keys, List.of(hasField ? field : "", countOnly ? "1" : "0", Integer.toString(size),
+                        ownerKeys == null ? "0" : "1", tenant == null ? "" : tenant));
+    }
+
+    static Optional<IndexAggregateBatch> parseIndexAggregateResponse(Object response, int size, boolean countOnly) {
+        if (!(response instanceof List<?> result) || result.size() != 3
+                || !(result.get(0) instanceof Number total) || total.longValue() < 0 || total.longValue() > size
+                || total.longValue() != total.doubleValue()
+                || !(result.get(1) instanceof List<?> rawValues) || rawValues.size() > total.longValue()
+                || !(result.get(2) instanceof List<?> rawNulls) || rawNulls.size() > size)
+            throw new IllegalStateException("Invalid aggregate batch response");
+        var values = new ArrayList<String>(rawValues.size());
+        long bytes = 0;
+        for (Object value : rawValues) {
+            if (!(value instanceof String text)) throw new IllegalStateException("Invalid aggregate batch value");
+            bytes += 2L * text.length();
+            if (bytes > 16L * 1024 * 1024) throw new IllegalStateException("Aggregate byte budget exceeded");
+            values.add(text);
+        }
+        var nulls = new ArrayList<Integer>(rawNulls.size());
+        int previous = -1;
+        for (Object index : rawNulls) {
+            int position = indexBatchPosition(index, size, previous);
+            nulls.add(position); previous = position;
+        }
+        if (countOnly && !values.isEmpty() || !countOnly && !nulls.isEmpty()
+                || total.longValue() + nulls.size() > size)
+            throw new IllegalStateException("Invalid aggregate batch counts");
+        return Optional.of(new IndexAggregateBatch(total.longValue(), List.copyOf(values), List.copyOf(nulls)));
+    }
+
+    record FacetIndexRow(int candidate, String groupRaw, String valueRaw) {}
+    record FacetIndexBatch(List<FacetIndexRow> rows) {
+        public FacetIndexBatch { rows = List.copyOf(rows); }
+    }
+
+    /** Compact raw pairs plus original positions; null valueRaw means no value field was requested. */
+    default Optional<FacetIndexBatch> facetIndexBatch(List<String> entities, List<String> tombstones,
+            List<String> indexMetadata, List<String> ownerKeys, String tenant, String groupField, String valueField) {
+        var command = facetIndexCommand(entities, tombstones, indexMetadata, ownerKeys, tenant, groupField, valueField, 0);
+        try { requireSameSlot(command.keys()); }
+        catch (IllegalArgumentException crossSlot) { return Optional.empty(); }
+        return parseFacetIndexResponse(eval(command.script(), command.keys(), command.arguments()),
+                entities.size(), valueField, 16L * 1024 * 1024);
+    }
+
+    static IndexReadCommand facetIndexCommand(List<String> entities, List<String> tombstones,
+            List<String> indexMetadata, List<String> ownerKeys, String tenant, String groupField, String valueField,
+            long phaseBudget) {
+        return facetIndexCommand(entities, tombstones, indexMetadata, ownerKeys, tenant, groupField, valueField, phaseBudget, false);
+    }
+
+    static IndexReadCommand facetIndexCommand(List<String> entities, List<String> tombstones,
+            List<String> indexMetadata, List<String> ownerKeys, String tenant, String groupField, String valueField,
+            long phaseBudget, boolean compactCounts) {
+        if (compactCounts && valueField != null) throw new IllegalArgumentException("Compact facets require COUNT(*)");
+        requireIndexBatchField(groupField);
+        if (valueField != null) requireIndexBatchField(valueField);
+        if (phaseBudget < 0 || phaseBudget > 16L * 1024 * 1024)
+            throw new IllegalArgumentException("Invalid facet phase budget");
+        var keys = indexBatchKeys(entities, tombstones, indexMetadata, ownerKeys, tenant, true);
+        var arguments = new ArrayList<>(List.of(groupField, valueField == null ? "" : valueField,
+                Integer.toString(entities.size()), ownerKeys == null ? "0" : "1", tenant == null ? "" : tenant));
+        if (phaseBudget != 0) arguments.add(Long.toString(phaseBudget));
+        if (compactCounts) {
+            if (phaseBudget == 0) throw new IllegalArgumentException("Compact facets require a bounded phase");
+            arguments.add("1");
+        }
+        return new IndexReadCommand(RedisFacetIndexScripts.script(compactCounts), keys, arguments);
+    }
+
+    static FacetIndexCounts parseFacetIndexCounts(Object response, int size, long maxBytes) {
+        if (!(response instanceof List<?> result) || result.size() != 2
+                || !(result.get(0) instanceof List<?> pairs) || pairs.size() > Math.min(size, 256)
+                || !(result.get(1) instanceof List<?> rawNulls) || rawNulls.size() > size)
+            throw new IllegalStateException("Invalid facet count response");
+        var counts = new LinkedHashMap<String, Long>();
+        long total = 0, bytes = 0;
+        for (Object entry : pairs) {
+            if (!(entry instanceof List<?> pair) || pair.size() != 2 || !(pair.get(0) instanceof String group)
+                    || group.equals("__NULL__") || group.length() > 4096 || !(pair.get(1) instanceof Long count)
+                    || count < 1 || count > size || counts.putIfAbsent(group, count) != null)
+                throw new IllegalStateException("Invalid facet count group");
+            total += count;
+            bytes += count * (2L * group.length() + 16);
+            if (total + rawNulls.size() > size || bytes > maxBytes)
+                throw new IllegalStateException("Facet count budget exceeded");
+        }
+        var nulls = new ArrayList<Integer>(rawNulls.size());
+        int previous = -1;
+        for (Object index : rawNulls) {
+            previous = indexBatchPosition(index, size, previous);
+            nulls.add(previous);
+        }
+        return new FacetIndexCounts(counts, nulls);
+    }
+
+    static Optional<FacetIndexBatch> parseFacetIndexResponse(Object response, int size, String valueField, long maxBytes) {
+        if (!(response instanceof List<?> result) || result.size() != 2
+                || !(result.get(0) instanceof List<?> positions) || positions.size() > size
+                || !(result.get(1) instanceof List<?> pairs) || positions.size() != pairs.size())
+            throw new IllegalStateException("Invalid facet batch response");
+        var rows = new ArrayList<FacetIndexRow>(positions.size());
+        int previous = -1; long bytes = 0;
+        for (int i = 0; i < positions.size(); i++) {
+            int position = indexBatchPosition(positions.get(i), size, previous); previous = position;
+            if (!(pairs.get(i) instanceof List<?> pair) || pair.size() != 2 || !(pair.get(0) instanceof String group)
+                    || valueField != null && !(pair.get(1) instanceof String)
+                    || valueField == null && pair.get(1) != null && !Boolean.FALSE.equals(pair.get(1)))
+                throw new IllegalStateException("Invalid facet batch pair");
+            String value = valueField == null ? null : (String) pair.get(1);
+            bytes += 2L * group.length() + (value == null ? 0 : 2L * value.length());
+            if (bytes > maxBytes) throw new IllegalStateException("Facet byte budget exceeded");
+            rows.add(new FacetIndexRow(position, group, value));
+        }
+        return Optional.of(new FacetIndexBatch(rows));
+    }
+
+    /** Sentinel re-read: admission and payload fetch share atomic owner/live/tombstone checks. */
+    default Optional<List<String>> liveIndexPayloadBatch(List<String> entities, List<String> tombstones,
+            List<String> ownerKeys, String tenant) {
+        var keys = indexBatchKeys(entities, tombstones, entities, ownerKeys, tenant, false);
+        try { requireSameSlot(keys); }
+        catch (IllegalArgumentException crossSlot) { return Optional.empty(); }
+        Object response = eval("""
+                local n=tonumber(ARGV[1]); local bytes=0; local result={}
+                for i=1,n do
+                  local allowed=redis.call('EXISTS',KEYS[i])==1 and redis.call('EXISTS',KEYS[n+i])==0
+                  if allowed and ARGV[2]=='1' then
+                    local key=KEYS[2*n+i]
+                    allowed=redis.call('STRLEN',key)==#ARGV[3] and redis.call('GET',key)==ARGV[3]
+                  end
+                  local value=false
+                  if allowed then
+                    bytes=bytes+redis.call('STRLEN',KEYS[i])
+                    if bytes>16777216 then return redis.error_reply('Payload read byte budget exceeded') end
+                    value=redis.call('GET',KEYS[i])
+                  end
+                  table.insert(result,value)
+                end
+                return result
+                """, keys, List.of(Integer.toString(entities.size()), ownerKeys == null ? "0" : "1",
+                        tenant == null ? "" : tenant));
+        if (!(response instanceof List<?> result) || result.size() != entities.size())
+            throw new IllegalStateException("Invalid live payload batch response");
+        var payloads = new ArrayList<String>(result.size()); long bytes = 0;
+        for (Object value : result) {
+            if (value != null && !Boolean.FALSE.equals(value) && !(value instanceof String))
+                throw new IllegalStateException("Invalid live payload batch value");
+            String payload = value instanceof String text ? text : null;
+            bytes += payload == null ? 0 : 2L * payload.length();
+            if (bytes > 16L * 1024 * 1024) throw new IllegalStateException("Payload read byte budget exceeded");
+            payloads.add(payload);
+        }
+        return Optional.of(Collections.unmodifiableList(payloads));
+    }
+
+    private static void requireIndexBatchField(String field) {
+        if (field == null || field.isBlank() || field.length() > 4096)
+            throw new IllegalArgumentException("Index batch field requires 1..4096 characters");
+    }
+
+    private static int indexBatchPosition(Object value, int size, int previous) {
+        if (!(value instanceof Number number) || number.longValue() <= previous || number.longValue() >= size
+                || number.longValue() != number.doubleValue())
+            throw new IllegalStateException("Invalid index batch candidate position");
+        return number.intValue();
+    }
+
+    private static List<String> indexBatchKeys(List<String> entities, List<String> tombstones,
+            List<String> metadata, List<String> owners, String tenant, boolean includeMetadata) {
+        Objects.requireNonNull(entities, "entities"); Objects.requireNonNull(tombstones, "tombstones");
+        Objects.requireNonNull(metadata, "indexMetadata");
+        int size = entities.size();
+        if (size < 1 || size > 512 || tombstones.size() != size || metadata.size() != size
+                || owners != null && owners.size() != size)
+            throw new IllegalArgumentException("Index batch requires 1..512 aligned identities");
+        if ((owners == null) != (tenant == null) || tenant != null && (tenant.isBlank() || tenant.length() > 4096))
+            throw new IllegalArgumentException("Owner keys require a tenant of 1..4096 characters");
+        var keys = new ArrayList<String>(size * (2 + (includeMetadata ? 1 : 0) + (owners == null ? 0 : 1)));
+        keys.addAll(entities); keys.addAll(tombstones);
+        if (includeMetadata) keys.addAll(metadata);
+        if (owners != null) keys.addAll(owners);
+        // Three bytes per UTF-16 unit bounds UTF-8 without allocating an encoded copy.
+        long bytes = 3L * (8192 + (tenant == null ? 0 : tenant.length()));
+        for (String key : keys) {
+            if (key == null || key.length() > 16_384) throw new IllegalArgumentException("Invalid index batch key");
+            bytes += 3L * key.length();
+            if (bytes > 16L * 1024 * 1024) throw new IllegalArgumentException("Index batch key byte budget exceeded");
+        }
+        return keys;
     }
 
     /** Empty means unsupported topology/shape, not an empty result. Both prefixes include the trailing colon. */
@@ -304,17 +599,20 @@ public interface RedisClientOperations extends AutoCloseable {
 
     default Object eval(String script, List<String> keys, List<String> arguments) {
         requireSameSlot(keys);
-        return commands().eval(script, keys, arguments);
+        try { return commands().eval(script, keys, arguments); }
+        catch (RuntimeException failure) { RedisTopologyChangeSource.failure(this, failure); throw failure; }
     }
 
     default Object eval(String script, int keyCount, String... arguments) {
         requireSameSlot(Arrays.asList(arguments).subList(0, keyCount));
-        return commands().eval(script, keyCount, arguments);
+        try { return commands().eval(script, keyCount, arguments); }
+        catch (RuntimeException failure) { RedisTopologyChangeSource.failure(this, failure); throw failure; }
     }
 
     default Object fcall(String function, List<String> keys, List<String> arguments) {
         requireSameSlot(keys);
-        return commands().fcall(function, keys, arguments);
+        try { return commands().fcall(function, keys, arguments); }
+        catch (RuntimeException failure) { RedisTopologyChangeSource.failure(this, failure); throw failure; }
     }
 
     default void requireSameSlot(Collection<String> keys) {
@@ -345,4 +643,147 @@ public interface RedisClientOperations extends AutoCloseable {
     default void close() {
         commands().close();
     }
+}
+
+/** Canonical facet scripts, assembled once without adding interface constants or per-request copies. */
+final class RedisFacetIndexScripts {
+    private static final String PREFIX = """
+            local redis=redis; local call=redis.call; local pcall=redis.pcall; local aclCheck=redis.acl_check_cmd; local unpack=unpack
+            local errorReply=redis.error_reply; local insert=table.insert
+            local n=tonumber(ARGV[3]); local groupField=ARGV[1]; local valueField=ARGV[2]
+            local owned=ARGV[4]=='1'; local tenant=ARGV[5]; local tenantLength=#tenant
+            local tombOffset=n; local metadataOffset=2*n; local ownerOffset=3*n
+            local bytes=0; local budget=ARGV[6] and tonumber(ARGV[6]); local exceeded=false
+            if ARGV[6] and (not budget or budget<1 or budget>16777216 or budget~=math.floor(budget)) then
+              return errorReply('Invalid facet phase budget')
+            end
+            local allLive=false
+            if aclCheck then
+              -- Probe the exact vectors first; permission is not a cached command capability.
+              -- Only denial of this exact command/key slice restores the original row error order.
+              -- An error from a permitted vector must propagate without row fallback.
+              local entities=pcall('EXISTS',unpack(KEYS,1,n))
+              if type(entities)=='table' and entities.err then
+                if aclCheck('EXISTS',unpack(KEYS,1,n)) then return entities end
+              elseif entities==n then
+                local tombstones=pcall('EXISTS',unpack(KEYS,n+1,2*n))
+                if type(tombstones)=='table' and tombstones.err then
+                  if aclCheck('EXISTS',unpack(KEYS,n+1,2*n)) then return tombstones end
+                else allLive=tombstones==0 end
+              end
+            end
+            local ownerValues=false; local ownerPositions=false
+            if allLive and owned then
+              local qualified=false
+              for i=1,n do
+                local key=KEYS[ownerOffset+i]
+                if redis.call('STRLEN',key)==tenantLength then
+                  if qualified then
+                    qualified[#qualified+1]=key; ownerPositions[i]=#qualified
+                  end
+                elseif not qualified then
+                  -- Preserve the checked prefix without repeating STRLEN or allocating on the all-match path.
+                  qualified={}; ownerPositions={}
+                  for j=1,i-1 do qualified[j]=KEYS[ownerOffset+j]; ownerPositions[j]=j end
+                end
+              end
+              -- Length checks preserve WRONGTYPE and avoid materializing oversized owners.
+              local ownerCount=qualified and #qualified or n
+              if ownerCount>0 then
+                local observed=false
+                if redis.acl_check_cmd then
+                  if qualified then observed=redis.pcall('MGET',unpack(qualified))
+                  else observed=pcall('MGET',unpack(KEYS,ownerOffset+1,ownerOffset+n)) end
+                  if observed.err then
+                    if qualified then
+                      if redis.acl_check_cmd('MGET',unpack(qualified)) then return observed end
+                    elseif aclCheck('MGET',unpack(KEYS,ownerOffset+1,ownerOffset+n)) then return observed end
+                    observed=false
+                  end
+                end
+                if observed then ownerValues=observed
+                else
+                  ownerValues=qualified or {}
+                  for i=1,ownerCount do
+                    local key=qualified and qualified[i] or KEYS[ownerOffset+i]
+                    ownerValues[i]=redis.call('GET',key)
+                  end
+                end
+              else ownerValues={} end
+            end
+            """;
+
+    private static final String ADMITTED_GROUP = """
+            for i=1,n do
+              local allowed=allLive or call('EXISTS',KEYS[i])==1 and call('EXISTS',KEYS[tombOffset+i])==0
+              if allowed and owned then
+                if allLive then
+                  local position=i
+                  if ownerPositions then position=ownerPositions[i] end
+                  allowed=position and ownerValues[position]==tenant
+                else
+                  local key=KEYS[ownerOffset+i]
+                  allowed=call('STRLEN',key)==tenantLength and call('GET',key)==tenant
+                end
+              end
+              if allowed then
+                local key=KEYS[metadataOffset+i]; local gl=call('HSTRLEN',key,groupField)
+                if gl==0 and call('HEXISTS',key,groupField)==0 then
+                  return errorReply('Incomplete facet index metadata; rebuild indexes')
+                end
+            """;
+
+    private static final String COMPACT = PREFIX + """
+            local pairs={}; local counts={}; local nulls={}; local groups=0
+            """ + ADMITTED_GROUP + """
+                bytes=bytes+gl
+                if bytes>16777216 then return errorReply('Facet byte budget exceeded') end
+                if budget and bytes>budget and not exceeded then
+                  exceeded=true; pairs={}; counts=false; nulls=false
+                end
+                local group=call('HGET',key,groupField)
+                if not exceeded then
+                  if group=='__NULL__' then insert(nulls,i-1)
+                  else
+                    local current=counts[group]
+                    if not current then
+                      groups=groups+1
+                      if groups>256 then return redis.error_reply('Facet group limit exceeded: max 256') end
+                      current=0
+                    end
+                    counts[group]=current+1
+                  end
+                end
+              end
+            end
+            if exceeded then return {'cachedb-facet-phase-budget-v1',n,budget} end
+            for group,count in next,counts do insert(pairs,{group,count}) end
+            return {pairs,nulls}
+            """;
+
+    private static final String ROWS = PREFIX + """
+            local pairs={}; local positions={}
+            """ + ADMITTED_GROUP + """
+                local vl=0
+                if valueField~='' then
+                  vl=call('HSTRLEN',key,valueField)
+                  if vl==0 and call('HEXISTS',key,valueField)==0 then
+                    return errorReply('Incomplete facet index metadata; rebuild indexes')
+                  end
+                end
+                bytes=bytes+gl+vl
+                if bytes>16777216 then return errorReply('Facet byte budget exceeded') end
+                if budget and bytes>budget and not exceeded then exceeded=true; positions={}; pairs={} end
+                local group=redis.call('HGET',key,groupField); local value=false
+                if valueField~='' then value=call('HGET',key,valueField) end
+                if not exceeded then insert(positions,i-1); insert(pairs,{group,value}) end
+              end
+            end
+            if exceeded then return {'cachedb-facet-phase-budget-v1',n,budget} end
+            return {positions,pairs}
+            """;
+
+    static String script(boolean compact) { return compact ? COMPACT : ROWS; }
+
+    private RedisFacetIndexScripts() {}
 }

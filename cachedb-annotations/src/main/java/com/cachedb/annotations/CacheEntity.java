@@ -10,6 +10,8 @@ import java.lang.annotation.Target;
 public @interface CacheEntity {
     String table();
     String redisNamespace() default "";
+    /** Opt in only after durable generation/version-recovery protocol migration and indexed tenant validation. */
+    boolean tenantPurgeEnabled() default false;
     Class<?> relationLoader() default Void.class;
     Class<?> pageLoader() default Void.class;
     /** Explicit index contract; the wildcard preserves historical all-column indexes. */

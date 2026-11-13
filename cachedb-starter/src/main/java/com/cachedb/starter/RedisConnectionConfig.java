@@ -31,8 +31,14 @@ public record RedisConnectionConfig(
     public static final String DEFAULT_PREFIX = "cachedb.redis";
 
     public JedisPooled createClient() {
+        return createClient(true);
+    }
+
+    /** Fair admission prevents fast virtual callers from repeatedly overtaking pool waiters. */
+    public JedisPooled createClient(boolean fair) {
         URI redisUri = URI.create(uri);
         GenericObjectPoolConfig<Connection> poolConfig = new GenericObjectPoolConfig<>();
+        poolConfig.setFairness(fair);
         poolConfig.setMaxTotal(poolMaxTotal);
         poolConfig.setMaxIdle(poolMaxIdle);
         poolConfig.setMinIdle(poolMinIdle);

@@ -17,6 +17,7 @@ function Read-Collection {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Missing Postman collection: $path"
     }
+    if ((Get-Item -LiteralPath $path).Length -gt 1048576) { throw "Oversized Postman collection: $path" }
     try {
         return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     } catch {
@@ -27,8 +28,11 @@ function Read-Collection {
 function Get-Requests {
     param(
         [object[]] $Items,
-        [string] $Folder = ""
+        [string] $Folder = "",
+        [int] $Depth = 0
     )
+
+    if ($Depth -gt 8) { throw 'Postman nesting exceeds eight levels.' }
 
     $requests = [System.Collections.Generic.List[object]]::new()
     foreach ($item in @($Items)) {
@@ -48,11 +52,12 @@ function Get-Requests {
             })
         }
         if ($null -ne $childrenProperty) {
-            foreach ($nested in @(Get-Requests -Items @($childrenProperty.Value) -Folder $path)) {
+            foreach ($nested in @(Get-Requests -Items @($childrenProperty.Value) -Folder $path -Depth ($Depth + 1))) {
                 $requests.Add($nested)
             }
         }
     }
+    if ($requests.Count -gt 256) { throw 'Postman collection exceeds 256 requests.' }
     return $requests.ToArray()
 }
 
@@ -78,6 +83,22 @@ function Assert-CollectionContract {
     }
 
     $requests = @(Get-Requests -Items @($Collection.item))
+    $optional = @($Collection.item | Where-Object { $_.name -ceq '07 Method Cache and Async' })
+    if ($optional.Count -ne 1 -or $requests.Count -ne 84) {
+        throw "$Provider requires 84 business requests: 61 legacy plus 23 method-cache/async."
+    }
+    $new = @(Get-Requests -Items @($optional[0].item))
+    $legacy = @(Get-Requests -Items @($Collection.item | Where-Object { $_.name -cne '07 Method Cache and Async' }))
+    if ($new.Count -ne 23 -or $legacy.Count -ne 61) { throw "$Provider request groups are incomplete." }
+    foreach ($request in $new) {
+        if (!(($request.Event.script.exec -join [char]10).Contains('pm.test'))) {
+            throw "$Provider request lacks assertions: $($request.Name)"
+        }
+    }
+    $gate = $optional[0].event.script.exec -join [char]10
+    foreach ($needle in @('cacheApiEnabled', 'cacheApiCertification', 'throw new Error')) {
+        if (!$gate.Contains($needle)) { throw "$Provider feature gate lacks $needle" }
+    }
     $duplicateNames = @($requests | Group-Object Name | Where-Object Count -gt 1)
     if ($duplicateNames.Count -gt 0) {
         throw "$Provider collection contains duplicate request names: $($duplicateNames.Name -join ', ')"
@@ -176,6 +197,38 @@ if ($catalogContracts.postgresql -cne $catalogContracts.mssql -or
     $catalogContracts.postgresql -cne $catalogContracts.oracle) {
     throw 'Provider catalog Postman contracts differ.'
 }
+$rangeContracts = @{}
+foreach ($provider in @('postgresql', 'mssql', 'oracle')) {
+    $path = "sample-cache-database-$provider/postman/cache-database-$provider-range-data.postman_collection.json"
+    $range = Read-Collection -RelativePath $path
+    $requests = @(Get-Requests -Items @($range.item))
+    if ($requests.Count -ne 37 -or @($requests.Name | Sort-Object -Unique).Count -ne 37) {
+        throw "$provider requires all 37 distinct range/keyset and Spring Data requests."
+    }
+    if ($range.info.schema -ne 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json') {
+        throw 'Range/data collections require schema v2.1.0.'
+    }
+    $port = @{postgresql=8091;mssql=8092;oracle=8093}[$provider]
+    $base = @($range.variable | Where-Object key -eq 'baseUrl')
+    if ($base.Count -ne 1 -or $base[0].value -cne "http://127.0.0.1:$port") {
+        throw 'Range/data base URL differs from the provider demo port.'
+    }
+    $gate = @($range.event.script.exec) -join [char]10
+    foreach ($needle in @('rangeDataEnabled','rangeDataCertification','throw new Error')) {
+        if (!$gate.Contains($needle)) { throw "Missing range/data certification gate: $needle" }
+    }
+    foreach ($request in $requests) {
+        $scripts = @($request.Event.script.exec) -join [char]10
+        if ($scripts -notmatch "pm\.test\('HTTP [1-5][0-9]{2}'") {
+            throw "Range/data request lacks its exact HTTP assertion: $($request.Name)"
+        }
+    }
+    $rangeContracts[$provider] = ($range.item | ConvertTo-Json -Depth 32 -Compress) + $gate
+}
+if ($rangeContracts.postgresql -cne $rangeContracts.mssql -or $rangeContracts.postgresql -cne $rangeContracts.oracle) {
+    throw 'Provider range/data request, body, authentication or assertion contracts differ.'
+}
+
 & (Join-Path $repoRoot 'tools/samples/sync-business-collection-flow.ps1') -Check
 
 $summary = @"
@@ -184,10 +237,13 @@ $summary = @"
 - PostgreSQL requests: $($postgresqlRequests.Count)
 - MSSQL requests: $($mssqlRequests.Count)
 - Oracle requests: $($oracleRequests.Count)
+- Business groups per provider: 61 legacy + 23 method-cache/async = 84
+- Optional certification gate: present (structural only, execution is separate)
 - Required bounded warm routes: 15
 - Provider request contract parity: passed
 - Warm-before-hot ordering: passed
 - Job completion assertion: passed
+- Range/data requests per provider: 37 (structural; execution is separate)
 - Catalog requests per provider: 23
 - Catalog assertion presence and provider parity: passed (structural; live runs are separate)
 "@
@@ -198,5 +254,5 @@ if (-not (Test-Path -LiteralPath $summaryDirectory)) {
 }
 [System.IO.File]::WriteAllText($summaryFullPath, $summary.Trim() + "`n", [System.Text.UTF8Encoding]::new($false))
 
-Write-Host "Validated $($postgresqlRequests.Count) business requests and 23 catalog requests for each provider."
+Write-Host "Validated $($postgresqlRequests.Count) business requests (61 legacy + 23 method-cache/async), 23 catalog and 37 range/data requests for each provider."
 Write-Host "Summary: $summaryFullPath"

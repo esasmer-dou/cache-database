@@ -458,10 +458,46 @@ class WriteFenceProvidersIntegrationTest {
         final String provider;
         final String table = "wf_" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
         final HikariDataSource source;
+        final AutoCloseable sourceOwner;
         final DefaultEntityRegistry registry = new DefaultEntityRegistry(ResourceLimits.defaults());
 
         Fixture(String provider) throws Exception {
             this.provider = provider;
+            if (Boolean.getBoolean("cachedb.initial.isolatedSql")) {
+                var sandbox = new com.reactor.cachedb.jdbc.InitialSqlSandbox(provider);
+                source = sandbox.dataSource();
+                sourceOwner = sandbox;
+            } else {
+                source = legacySource(provider);
+                sourceOwner = source;
+            }
+            try {
+                source.setMaximumPoolSize(4);
+                String text = "mssql".equals(provider) ? "NVARCHAR(120)" : "VARCHAR(120)";
+                try (var connection = source.getConnection();
+                        var statement = connection.createStatement()) {
+                    statement.execute(
+                            "CREATE TABLE "
+                                    + table
+                                    + " (id "
+                                    + text
+                                    + " PRIMARY KEY, value_text "
+                                    + text
+                                    + " CHECK (value_text <> 'reject'), entity_version "
+                                    + ("oracle".equals(provider) ? "NUMBER(19)" : "BIGINT")
+                                    + ")");
+                }
+            } catch (Exception | Error failure) {
+                try {
+                    sourceOwner.close();
+                } catch (Exception | Error cleanup) {
+                    if (cleanup != failure) failure.addSuppressed(cleanup);
+                }
+                throw failure;
+            }
+        }
+
+        private static HikariDataSource legacySource(String provider) {
             HikariConfig config = new HikariConfig();
             String url =
                     switch (provider) {
@@ -490,21 +526,7 @@ class WriteFenceProvidersIntegrationTest {
             config.setMaximumPoolSize(4);
             config.setMinimumIdle(0);
             config.setConnectionTimeout(10000);
-            source = new HikariDataSource(config);
-            String text = "mssql".equals(provider) ? "NVARCHAR(120)" : "VARCHAR(120)";
-            try (var connection = source.getConnection();
-                    var statement = connection.createStatement()) {
-                statement.execute(
-                        "CREATE TABLE "
-                                + table
-                                + " (id "
-                                + text
-                                + " PRIMARY KEY, value_text "
-                                + text
-                                + " CHECK (value_text <> 'reject'), entity_version "
-                                + ("oracle".equals(provider) ? "NUMBER(19)" : "BIGINT")
-                                + ")");
-            }
+            return new HikariDataSource(config);
         }
 
         WriteBehindFlusher flusher() {
@@ -589,7 +611,7 @@ class WriteFenceProvidersIntegrationTest {
 
         @Override
         public void close() throws Exception {
-            try (source;
+            try (sourceOwner;
                     var connection = source.getConnection();
                     var statement = connection.createStatement()) {
                 statement.execute("DROP TABLE " + table);

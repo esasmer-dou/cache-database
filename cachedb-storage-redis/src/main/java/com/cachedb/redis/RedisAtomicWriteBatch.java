@@ -16,22 +16,70 @@ import java.util.*;
 
 /** A single stream envelope cannot be split across consumers or retries. */
 public final class RedisAtomicWriteBatch implements CacheWriteBatch {
+    private java.util.function.BooleanSupplier nearInvalidationPublisher = () -> true;
+    public RedisAtomicWriteBatch withNearInvalidationPublisher(java.util.function.BooleanSupplier publisher) {
+        if (!items.isEmpty()) throw new IllegalStateException("Configure invalidation before adding operations");
+        nearInvalidationPublisher = Objects.requireNonNull(publisher, "publisher"); return this;
+    }
     private static final int MAX_ITEMS = 100;
     private static final long MAX_BYTES = 4L * 1024 * 1024;
     private static final String APPLY =
             """
+local function invalidIdentity() return redis.error_reply('Invalid batch replay identity') end
+local function hex(value) return #value==64 and not string.find(value,'[^0-9a-f]') end
+local function decimal(value,maximum,positive)
+  return value and #value>0 and #value<=#maximum and not string.find(value,'[^0-9]')
+    and (#value==1 or string.sub(value,1,1)~='0') and (not positive or value~='0')
+    and (#value<#maximum or value<=maximum)
+end
+local function streamId(value)
+  if not value or #value>41 then return false end
+  local ms,seq=string.match(value,'^(%d+)%-(%d+)$')
+  return decimal(ms,'18446744073709551615',false) and decimal(seq,'18446744073709551615',false)
+    and value~='0-0'
+end
+local legacy,logical=ARGV[1],nil
+if #legacy==133 and string.sub(legacy,1,4)=='~L2:' and string.sub(legacy,69,69)==':' then
+  legacy,logical=string.sub(legacy,5,68),string.sub(legacy,70,133)
+  if not hex(legacy) or not hex(logical) then return invalidIdentity() end
+elseif not hex(legacy) and not (#legacy==47 and string.sub(legacy,1,4)=='~I1:') then
+  return invalidIdentity()
+end
+local count=tonumber(ARGV[2])
+if not count or count<1 or count>100 or count~=math.floor(count) then return invalidIdentity() end
+-- Bound persisted metadata BEFORE materializing it, including corrupted receipts.
+if redis.call('HSTRLEN',KEYS[2],'fingerprint')>64
+  or redis.call('HSTRLEN',KEYS[2],'logicalFingerprint')>64 then return invalidIdentity() end
 local prior=redis.call('HGET',KEYS[2],'fingerprint')
+local priorLogical=redis.call('HGET',KEYS[2],'logicalFingerprint')
+if priorLogical and (not prior or not hex(priorLogical) or not hex(prior)) then return invalidIdentity() end
 if prior then
-  if prior ~= ARGV[1] then return redis.error_reply('Batch id reused with different operations') end
-  local result={redis.call('HGET',KEYS[2],'stream')}
-  for i=1,tonumber(ARGV[2]) do table.insert(result,redis.call('HGET',KEYS[2],'v'..i)) end
+  if not hex(prior) and not (#prior==47 and string.sub(prior,1,4)=='~I1:') then return invalidIdentity() end
+  local same=logical and priorLogical and logical==priorLogical or (not logical or not priorLogical) and legacy==prior
+  if not same then return redis.error_reply('Batch id reused with different operations') end
+  if redis.call('HLEN',KEYS[2])~=count+2+(priorLogical and 1 or 0)
+    or redis.call('HSTRLEN',KEYS[2],'stream')>41 then return invalidIdentity() end
+  for i=1,count do
+    local length=redis.call('HSTRLEN',KEYS[2],'v'..i)
+    if length<1 or length>16 then return invalidIdentity() end
+  end
+  local stream=redis.call('HGET',KEYS[2],'stream')
+  if not streamId(stream) then return invalidIdentity() end
+  local result={stream}
+  for i=1,count do
+    local version=redis.call('HGET',KEYS[2],'v'..i)
+    if not decimal(version,'9007199254740991',true) then return invalidIdentity() end
+    table.insert(result,version)
+  end
   return result
 end
+if redis.call('HLEN',KEYS[2])~=0 then return invalidIdentity() end
 local streamType=redis.call('TYPE',KEYS[1]).ok
 if streamType ~= 'none' and streamType ~= 'stream' then return redis.error_reply('Invalid batch stream type') end
 if tonumber(ARGV[3]) > 0 and redis.call('XLEN',KEYS[1]) >= tonumber(ARGV[3]) then
   return redis.error_reply('Write-behind batch backlog limit exceeded') end
-local count=tonumber(ARGV[2])
+local protectedBatch=string.sub(ARGV[1],1,4)=='~I1:'
+local itemWidth=protectedBatch and 12 or 11
 local pos=5
 local items={}
 for i=1,count do
@@ -44,6 +92,10 @@ for i=1,count do
     local kind=redis.call('TYPE',KEYS[base+j]).ok
     if kind ~= 'none' and kind ~= 'string' then return redis.error_reply('Invalid entity key type') end
   end
+  if ARGV[pos+9] == '1' or redis.call('EXISTS',KEYS[base+5]) == 1 then
+    local degradation=redis.call('TYPE',KEYS[base+4]).ok
+    if degradation ~= 'none' and degradation ~= 'string' then return redis.error_reply('Invalid index degradation key type') end
+  end
   local hot=redis.call('TYPE',KEYS[base+3]).ok
   if hot ~= 'none' and hot ~= 'zset' then return redis.error_reply('Invalid hot set type') end
   local limit=tonumber(ARGV[pos+7])
@@ -52,12 +104,12 @@ for i=1,count do
   local tenant=ARGV[pos+10]
   if tenant~='' then
     local owner=redis.call('GET',KEYS[base+6])
-    if (owner and owner~=tenant) or (not owner and ARGV[pos+3]=='DELETE') then
+    if (owner and owner~=tenant) or (not owner and (ARGV[pos+3]=='DELETE' or (protectedBatch and ARGV[pos+11]=='1'))) then
       return redis.error_reply('ERR TENANT_MISMATCH')
     end
   end
   table.insert(items,{base,ARGV[pos],ARGV[pos+1],ARGV[pos+3],ARGV[pos+4],ARGV[pos+5],ARGV[pos+6],ARGV[pos+7],ARGV[pos+8],ARGV[pos+9],tenant})
-  pos=pos+11
+  pos=pos+itemWidth
 end
 local views={}
 local viewCount=tonumber(ARGV[pos]) pos=pos+1
@@ -66,6 +118,10 @@ for i=1,viewCount do
   for j=0,1 do
     local kind=redis.call('TYPE',KEYS[base+j]).ok
     if kind ~= 'none' and kind ~= 'string' then return redis.error_reply('Invalid projection key type') end
+  end
+  if ARGV[pos+5] == '1' or redis.call('EXISTS',KEYS[base+3]) == 1 then
+    local degradation=redis.call('TYPE',KEYS[base+2]).ok
+    if degradation ~= 'none' and degradation ~= 'string' then return redis.error_reply('Invalid projection degradation key type') end
   end
   table.insert(views,{base,ARGV[pos+1],ARGV[pos+2],ARGV[pos+3],ARGV[pos+4],ARGV[pos+5]}) pos=pos+6
 end
@@ -81,14 +137,25 @@ if channel ~= '' then
     end
   end
 end
+-- Invalidate index publication before the first payload write; Lua errors do not roll writes back.
+for _,item in ipairs(items) do
+  local base=item[1]
+  if item[10] == '1' or redis.call('EXISTS',KEYS[base+5]) == 1 then redis.call('SET',KEYS[base+4],'atomic-batch') end
+end
+for _,view in ipairs(views) do
+  local base=view[1]
+  if view[6] == '1' or redis.call('EXISTS',KEYS[base+3]) == 1 then redis.call('SET',KEYS[base+2],'atomic-batch') end
+end
 local result={}
 for i,item in ipairs(items) do
   local base=item[1]
   if item[11]~='' then redis.call('SET',KEYS[base+6],item[11]) end
   local version=redis.call('INCR',KEYS[base+1])
+  -- Lua tostring may use scientific notation even for exact, safe integer versions.
+  local versionText=string.format('%.0f',version)
   if item[4] == 'DELETE' then
     redis.call('DEL',KEYS[base])
-    redis.call('SET',KEYS[base+2],tostring(version))
+    redis.call('SET',KEYS[base+2],versionText)
     redis.call('ZREM',KEYS[base+3],item[2])
   else
     redis.call('DEL',KEYS[base+2])
@@ -106,11 +173,10 @@ for i,item in ipairs(items) do
       end
     else redis.call('DEL',KEYS[base]) redis.call('ZREM',KEYS[base+3],item[2]) end
   end
-  if item[10] == '1' or redis.call('EXISTS',KEYS[base+5]) == 1 then redis.call('SET',KEYS[base+4],'atomic-batch') end
-  table.insert(fields,'b'..(i-1)..':version') table.insert(fields,tostring(version))
-  table.insert(fields,'b'..(i-1)..':col:'..item[7]) table.insert(fields,tostring(version))
-  table.insert(result,tostring(version))
-  redis.call('HSET',KEYS[2],'v'..i,tostring(version))
+  table.insert(fields,'b'..(i-1)..':version') table.insert(fields,versionText)
+  table.insert(fields,'b'..(i-1)..':col:'..item[7]) table.insert(fields,versionText)
+  table.insert(result,versionText)
+  redis.call('HSET',KEYS[2],'v'..i,versionText)
 end
 for _,view in ipairs(views) do
   local base=view[1]
@@ -120,7 +186,6 @@ for _,view in ipairs(views) do
     redis.call('SET',KEYS[base],view[2]) redis.call('DEL',KEYS[base+1])
     if tonumber(view[4]) > 0 then redis.call('EXPIRE',KEYS[base],view[4]) end
   end
-  if view[6] == '1' or redis.call('EXISTS',KEYS[base+3]) == 1 then redis.call('SET',KEYS[base+2],'atomic-batch') end
 end
 local stream=redis.call('XADD',KEYS[1],'*',unpack(fields))
 if channel ~= '' then
@@ -128,7 +193,8 @@ if channel ~= '' then
     if string.match(fields[i], '^b%d+:nearInvalidation$') then redis.call('PUBLISH',channel,fields[i+1]) end
   end
 end
-redis.call('HSET',KEYS[2],'fingerprint',ARGV[1],'stream',stream)
+if logical then redis.call('HSET',KEYS[2],'fingerprint',legacy,'stream',stream,'logicalFingerprint',logical)
+else redis.call('HSET',KEYS[2],'fingerprint',legacy,'stream',stream) end
 redis.call('EXPIRE',KEYS[2],86400)
 table.insert(result,1,stream)
 return result
@@ -143,7 +209,8 @@ return result
             Map<String, String> projections,
             OperationType type,
             long expected,
-            String tenant) {}
+            String tenant,
+            String intentToken) {}
 
     private final RedisClientOperations redis;
     private final EntityRegistry registry;
@@ -155,6 +222,7 @@ return result
     private final List<Item> items = new ArrayList<>();
     private final Set<String> identities = new HashSet<>();
     private boolean committed;
+    private boolean encryptionRejected;
     private int maxColumns = 256;
     private boolean queryIndexesEnabled = true;
     private com.reactor.cachedb.core.trace.TraceContextPropagator trace = com.reactor.cachedb.core.trace.TraceContexts.threadLocal();
@@ -210,8 +278,12 @@ return result
 
     @SuppressWarnings("unchecked")
     private EntityBinding<Object, Object> binding(Class<?> type) {
+        if (encryptionRejected) throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(
+                com.reactor.cachedb.core.crypto.CacheEncryptionException.Code.INTENT_KEY_UNAVAILABLE);
         for (var binding : registry.all())
             if (binding.metadata().entityType() == type) {
+                com.reactor.cachedb.core.protection.TenantProtectionGate.requireLegacy(binding.metadata());
+                com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(binding.metadata(), binding.codec());
                 requireTenant(binding.metadata());
                 return (EntityBinding<Object, Object>) binding;
             }
@@ -226,70 +298,115 @@ return result
         Objects.requireNonNull(entity, "entity");
         if (expectedVersion < -1) throw new IllegalArgumentException("Invalid expected version");
         var binding = binding(entity.getClass());
-        try { com.reactor.cachedb.core.tenant.TenantAccess.verify(binding.metadata(), entity); }
-        catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) { throw new IllegalStateException("Atomic batch tenant mismatch", denied); }
-        Object id =
-                Objects.requireNonNull(
-                        binding.metadata().idAccessor().apply(entity), "Entity ID is required");
-        var columns = new LinkedHashMap<String, String>();
-        var admission = new LinkedHashMap<>(binding.codec().toColumns(entity));
-        admission.forEach((k, v) -> columns.put(k, v == null ? null : v.toString()));
-        add(
-                new Item(
-                        binding,
-                        id,
-                        binding.codec().toRedisValue(entity),
-                        columns,
-                        admission,
-                        projectionPayloads(binding, entity, id),
-                        OperationType.UPSERT,
-                        expectedVersion, requireTenant(binding.metadata())));
-        return this;
+        try {
+            try { com.reactor.cachedb.core.tenant.TenantAccess.verify(binding.metadata(), entity); }
+            catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException denied) { throw new IllegalStateException("Atomic batch tenant mismatch", denied); }
+            Object id =
+                    Objects.requireNonNull(
+                            binding.metadata().idAccessor().apply(entity), "Entity ID is required");
+            var columns = new LinkedHashMap<String, String>();
+            var admission = new LinkedHashMap<>(binding.codec().toColumns(entity));
+            String intent = protectedBinding(binding) ? intentToken(binding.codec().encryptionIntentToken(entity,
+                    new HashSet<>(binding.metadata().columns()))) : null;
+            (protectedBinding(binding) ? binding.codec().toQueuedColumns(entity) : admission)
+                    .forEach((k, v) -> columns.put(k, v == null ? null : v.toString()));
+            add(
+                    new Item(
+                            binding,
+                            id,
+                            binding.codec().toRedisValue(entity),
+                            columns,
+                            admission,
+                            projectionPayloads(binding, entity, id),
+                            OperationType.UPSERT,
+                            expectedVersion, requireTenant(binding.metadata()), intent));
+            return this;
+        } catch (RuntimeException failure) {
+            if (protectedBinding(binding)) {
+                encryptionRejected = true;
+                if (failure instanceof com.reactor.cachedb.core.crypto.CacheEncryptionException safe)
+                    throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(safe.code());
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+            }
+            throw failure;
+        }
     }
 
     public <T, ID> CacheWriteBatch delete(Class<T> type, ID id) {
         var binding = binding(type);
-        Objects.requireNonNull(id, "id");
-        var projections = new LinkedHashMap<String, String>();
-        for (var view : registry.projections(binding.metadata().entityName()))
-            projections.put(view.projection().name(), "");
-        add(
-                new Item(
-                        binding,
-                        id,
-                        "",
-                        new LinkedHashMap<>(),
-                        Map.of(),
-                        projections,
-                        OperationType.DELETE,
-                        -1, requireTenant(binding.metadata())));
-        return this;
+        try {
+            Objects.requireNonNull(id, "id");
+            String intent = protectedBinding(binding) ? intentToken(binding.codec().encryptionIntentFingerprint(
+                    List.of("delete-v1", com.reactor.cachedb.core.crypto.EncryptedCodecSupport.rowId(id.toString()), requireTenant(binding.metadata())))) : null;
+            var projections = new LinkedHashMap<String, String>();
+            for (var view : registry.projections(binding.metadata().entityName()))
+                projections.put(view.projection().name(), "");
+            add(
+                    new Item(
+                            binding,
+                            id,
+                            "",
+                            new LinkedHashMap<>(),
+                            Map.of(),
+                            projections,
+                            OperationType.DELETE,
+                            -1, requireTenant(binding.metadata()), intent));
+            return this;
+        } catch (RuntimeException failure) {
+            if (protectedBinding(binding)) {
+                encryptionRejected = true;
+                if (failure instanceof com.reactor.cachedb.core.crypto.CacheEncryptionException safe)
+                    throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(safe.code());
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+            }
+            throw failure;
+        }
     }
 
     public <T, ID> CacheWriteBatch patch(Class<T> type, ID id, Map<String, Object> updates) {
         var binding = binding(type); var metadata = binding.metadata();
-        Objects.requireNonNull(id, "id");
-        if (updates == null || updates.isEmpty() || updates.size() > maxColumns)
-            throw new IllegalArgumentException("Atomic PATCH requires a bounded nonempty column set");
-        for (String column : updates.keySet()) if (!metadata.columns().contains(column)
-                || column.equals(metadata.idColumn()) || column.equals(metadata.versionColumn())
-                || column.equals(metadata.tenantFieldName())
-                || column.equals(metadata.deletedColumn())) throw new IllegalArgumentException("Invalid PATCH column: " + column);
-        var delta = binding.codec().normalizePatchColumns(updates);
-        var values = redis.mget(keys.entityKey(metadata.redisNamespace(), id),
-                keys.versionKey(metadata.redisNamespace(), id), keys.tombstoneKey(metadata.redisNamespace(), id));
-        if (values.get(0) == null || values.get(1) == null || values.get(2) != null)
-            throw new IllegalStateException("Atomic PATCH requires a complete hot, versioned, nondeleted entity");
-        Object previous = binding.codec().fromRedisValue(values.get(0));
-        com.reactor.cachedb.core.tenant.TenantAccess.verify(metadata, previous);
-        var full = new LinkedHashMap<>(binding.codec().toColumns(previous));
-        full.putAll(delta);
-        Object entity = binding.codec().fromColumns(full);
-        var columns = new LinkedHashMap<String, String>();
-        delta.forEach((column, value) -> columns.put(column, value == null ? null : value.toString()));
-        add(new Item(binding, id, binding.codec().toRedisValue(entity), columns, full,
-                projectionPayloads(binding, entity, id), OperationType.PATCH, Long.parseLong(values.get(1)), requireTenant(metadata)));
-        return this;
+        try {
+            Objects.requireNonNull(id, "id");
+            if (updates == null || updates.isEmpty() || updates.size() > maxColumns)
+                throw new IllegalArgumentException("Atomic PATCH requires a bounded nonempty column set");
+            for (String column : updates.keySet()) if (!metadata.columns().contains(column)
+                    || column.equals(metadata.idColumn()) || column.equals(metadata.versionColumn())
+                    || column.equals(metadata.tenantFieldName())
+                    || column.equals(metadata.deletedColumn())) throw new IllegalArgumentException("Invalid PATCH column");
+            if (protectedBinding(binding)) {
+                intentToken(binding.codec().encryptionIntentFingerprint(List.of("availability-v1")));
+                for (var update : updates.entrySet())
+                    if (update.getValue() instanceof PatchDeltaSpec
+                            && metadata.encryptedColumns().containsKey(update.getKey()))
+                        throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+            }
+            var delta = binding.codec().normalizePatchColumns(updates);
+            var values = redis.mget(keys.entityKey(metadata.redisNamespace(), id),
+                    keys.versionKey(metadata.redisNamespace(), id), keys.tombstoneKey(metadata.redisNamespace(), id));
+            if (values.get(0) == null || values.get(1) == null || values.get(2) != null)
+                throw new IllegalStateException("Atomic PATCH requires a complete hot, versioned, nondeleted entity");
+            Object previous = binding.codec().fromRedisValue(values.get(0));
+            com.reactor.cachedb.core.tenant.TenantAccess.verify(metadata, previous);
+            var full = new LinkedHashMap<>(binding.codec().toColumns(previous));
+            full.putAll(delta);
+            Object entity = binding.codec().fromLogicalColumns(full);
+            var columns = new LinkedHashMap<String, String>();
+            String intent = protectedBinding(binding)
+                    ? intentToken(binding.codec().encryptionIntentToken(entity, new HashSet<>(delta.keySet()))) : null;
+            (protectedBinding(binding) ? binding.codec().toQueuedColumns(entity, delta) : delta).forEach((column, value) ->
+                    columns.put(column, value == null ? null : value.toString()));
+            add(new Item(binding, id, binding.codec().toRedisValue(entity), columns, full,
+                    projectionPayloads(binding, entity, id), OperationType.PATCH, Long.parseLong(values.get(1)), requireTenant(metadata), intent));
+            return this;
+        } catch (RuntimeException failure) {
+            if (protectedBinding(binding)) {
+                encryptionRejected = true;
+                if (failure instanceof com.reactor.cachedb.core.crypto.CacheEncryptionException safe)
+                    throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(safe.code());
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+            }
+            throw failure;
+        }
     }
 
     private void add(Item item) {
@@ -297,7 +414,7 @@ return result
         if (route != null && route.tenantQuota().bounded())
             throw new IllegalStateException(
                     "Atomic batches cannot bypass a bounded tenant admission contract");
-        if (item.columns.size() + 2 > maxColumns)
+        if (item.columns.size() + 2 > maxColumns + (protectedBinding(item.binding) ? 2 : 0))
             throw new IllegalArgumentException("Atomic write exceeds the configured column limit");
         if (committed) throw new IllegalStateException("Batch already committed");
         if (items.size() >= MAX_ITEMS)
@@ -336,6 +453,8 @@ return result
             var item = tenantItems.get(i); String owner = owners.get(i);
             if (owner != null && !owner.equals(item.tenant) || owner == null && item.type == OperationType.DELETE)
                 throw new IllegalStateException("Atomic batch tenant mismatch");
+            if (owner == null && hasProtectedItems())
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
             if (owner == null) unknown.computeIfAbsent(item.binding, ignored -> new ArrayList<>()).add(item);
         }
         for (var group : unknown.entrySet()) {
@@ -374,6 +493,8 @@ return result
     }
 
     public CacheWriteBatchReceipt commit() {
+        if (encryptionRejected) throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(
+                com.reactor.cachedb.core.crypto.CacheEncryptionException.Code.INTENT_KEY_UNAVAILABLE);
         var route = com.reactor.cachedb.core.route.RouteCacheContext.currentContract();
         if (route != null && route.tenantQuota().bounded())
             throw new IllegalStateException("Atomic batches cannot bypass a bounded tenant admission contract");
@@ -381,8 +502,11 @@ return result
             throw new IllegalStateException("Empty or committed batch");
         if (!config.enabled())
             throw new IllegalStateException("Atomic batch requires write-behind");
-        verifyTenantItems();
-        if (producer != null) producer.applyBackpressure();
+        boolean protectedBatch = hasProtectedItems();
+        if (!protectedBatch) {
+            verifyTenantItems();
+            if (producer != null) producer.applyBackpressure();
+        }
         List<String> redisKeys = new ArrayList<>();
         String batchStream = keys.writeStreamKey(config.activeStreamKey(), items.get(0).binding.metadata().redisNamespace());
         redisKeys.add(batchStream);
@@ -397,7 +521,7 @@ return result
                                                 ? guardrail.writeBehindBacklogHardLimit()
                                                 : 0),
                                 Long.toString(System.currentTimeMillis())));
-        var mapper = new RedisWriteOperationMapper();
+        var mapper = new RedisWriteOperationMapper(trace, registry);
         var traceMetadata = com.reactor.cachedb.core.trace.TraceContexts.boundedCopy(trace.capture());
         Map<String, String> fields = new LinkedHashMap<>();
         if (!traceMetadata.isEmpty()) fields.put("traceMetadata", com.reactor.cachedb.core.trace.TraceMetadataCodec.encode(traceMetadata));
@@ -412,6 +536,7 @@ return result
         fields.put("createdAt", Instant.now().toString());
         fields.put("transactionGroupId", batchId);
         fields.put("batchCount", Integer.toString(items.size()));
+        boolean publishInvalidations = nearInvalidationPublisher.getAsBoolean();
         List<String> viewArguments = new ArrayList<>();
         int viewCount = 0;
         for (int i = 0; i < items.size(); i++) {
@@ -431,7 +556,7 @@ return result
                             : producer.effectiveCachePolicy(item.binding.cachePolicy());
             if (!policy.nearCachePolicy().enabled() && metadata.nearCachePolicy().enabled())
                 policy = policy.withNearCachePolicy(metadata.nearCachePolicy());
-            if (policy.nearCachePolicy().enabled()) {
+            if (policy.nearCachePolicy().enabled() && publishInvalidations) {
                 fields.put("nearInvalidationChannel", keys.nearInvalidationChannel());
                 fields.put("b" + i + ":nearInvalidation", RedisNearCacheCoordinator.message(ns, item.id));
             }
@@ -452,7 +577,9 @@ return result
                             Integer.toString(policy.hotEntityLimit()),
                             payloadKey.substring(
                                     0, payloadKey.length() - item.id.toString().length()),
-                            queryIndexesEnabled || !metadata.partitionedSortIndexes().isEmpty() ? "1" : "0", item.tenant));
+                            queryIndexesEnabled || !metadata.partitionedSortIndexes().isEmpty()
+                                    || !metadata.compositeSortColumns().isEmpty() ? "1" : "0", item.tenant));
+            if (protectedBatch) arguments.add(item.tenant.isEmpty() ? "0" : "1");
             for (var view : item.projections.entrySet()) {
                 String viewNamespace = ns + ":projection:" + view.getKey();
                 int base = redisKeys.size() + 1;
@@ -529,7 +656,18 @@ return result
         long bytes = 0;
         for (String argument : arguments) bytes += argument.getBytes(StandardCharsets.UTF_8).length;
         if (bytes > MAX_BYTES) throw new IllegalArgumentException("Atomic batch exceeds 4 MiB");
-        arguments.set(0, fingerprint(redisKeys, arguments, streamFieldsStart));
+        if (protectedBatch) arguments.set(0, protectedFingerprint(redisKeys));
+        else {
+            // Keep the old wire hash byte-for-byte for old scripts/callers and old receipts.
+            String legacy = fingerprint(redisKeys, arguments, streamFieldsStart);
+            arguments.set(0, "~L2:" + legacy + ":" + logicalFingerprint(redisKeys));
+        }
+        if (bytes > MAX_BYTES - arguments.get(0).getBytes(StandardCharsets.UTF_8).length)
+            throw new IllegalArgumentException("Atomic batch exceeds 4 MiB");
+        if (protectedBatch) {
+            verifyTenantItems();
+            if (producer != null) producer.applyBackpressure();
+        }
         if (redis.clustered()) {
             try { redis.requireSameSlot(redisKeys); }
             catch (IllegalArgumentException crossSlot) {
@@ -537,15 +675,25 @@ return result
             }
         }
         List<?> reply;
-        try { reply = (List<?>) redis.eval(APPLY, redisKeys, arguments); }
+        try {
+            Object raw = redis.eval(APPLY, redisKeys, arguments);
+            if (!(raw instanceof List<?> values) || values.size() != items.size() + 1
+                    || !validStreamId(receiptScalar(values.getFirst(), true)))
+                throw new IllegalStateException("Invalid batch receipt response");
+            reply = values;
+        }
         catch (redis.clients.jedis.exceptions.JedisDataException denied) {
             if (denied.getMessage() != null && denied.getMessage().contains("TENANT_MISMATCH"))
                 throw new IllegalStateException("Atomic batch tenant mismatch", denied);
             throw denied;
         }
         List<Long> versions = new ArrayList<>();
-        for (int i = 1; i < reply.size(); i++)
-            versions.add(Long.parseLong(reply.get(i).toString()));
+        for (int i = 1; i < reply.size(); i++) {
+            String version = receiptScalar(reply.get(i), false);
+            if (!decimal(version, "9007199254740991", true))
+                throw new IllegalStateException("Invalid batch receipt response");
+            versions.add(Long.parseLong(version));
+        }
         committed = true;
         List<WriteDependency> dependencies = new ArrayList<>();
         for (int i = 0; i < items.size(); i++) {
@@ -556,7 +704,134 @@ return result
                             item.id.toString(),
                             versions.get(i)));
         }
-        return new CacheWriteBatchReceipt(batchId, reply.get(0).toString(), versions, dependencies);
+        return new CacheWriteBatchReceipt(batchId, receiptScalar(reply.getFirst(), true), versions, dependencies);
+    }
+
+    private static String receiptScalar(Object value, boolean stream) {
+        if (value instanceof String text) return text;
+        if (stream && value != null && value.getClass() == redis.clients.jedis.StreamEntryID.class)
+            return value.toString();
+        if (!stream && (value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long)) return value.toString();
+        throw new IllegalStateException("Invalid batch receipt response");
+    }
+
+    private static boolean decimal(String value, String maximum, boolean positive) {
+        int length = value.length();
+        if (length == 0 || length > maximum.length() || length > 1 && value.charAt(0) == '0'
+                || positive && value.equals("0")) return false;
+        for (int i = 0; i < length; i++)
+            if (value.charAt(i) < '0' || value.charAt(i) > '9') return false;
+        return length < maximum.length() || value.compareTo(maximum) <= 0;
+    }
+
+    private static boolean validStreamId(String value) {
+        if (value.length() > 41 || value.equals("0-0")) return false;
+        int separator = value.indexOf('-');
+        return separator > 0 && decimal(value.substring(0, separator), "18446744073709551615", false)
+                && decimal(value.substring(separator + 1), "18446744073709551615", false);
+    }
+
+    private static boolean protectedBinding(EntityBinding<?, ?> binding) {
+        return com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(binding.metadata());
+    }
+
+    private boolean hasProtectedItems() { return items.stream().anyMatch(item -> protectedBinding(item.binding)); }
+
+    private static String intentToken(String token) {
+        if (token == null || token.length() != 47 || !token.startsWith("~I1:"))
+            throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(
+                    com.reactor.cachedb.core.crypto.CacheEncryptionException.Code.INTENT_KEY_UNAVAILABLE);
+        for (int i = 4; i < token.length(); i++) {
+            char c = token.charAt(i);
+            if (!(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_'))
+                throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(
+                        com.reactor.cachedb.core.crypto.CacheEncryptionException.Code.INTENT_KEY_UNAVAILABLE);
+        }
+        if ("AEIMQUYcgkosw048".indexOf(token.charAt(46)) < 0)
+            throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(
+                    com.reactor.cachedb.core.crypto.CacheEncryptionException.Code.INTENT_KEY_UNAVAILABLE);
+        return token;
+    }
+
+    private String protectedFingerprint(List<String> redisKeys) {
+        var parts = new ArrayList<String>();
+        parts.add("atomic-business-v1"); parts.add(batchId);
+        parts.add(Integer.toString(redisKeys.size())); parts.addAll(redisKeys);
+        EntityCodec<Object> signingCodec = null;
+        for (Item item : items) {
+            var metadata = item.binding.metadata();
+            parts.add("member"); parts.add(item.type.name());
+            parts.add(metadata.entityName()); parts.add(metadata.tableName()); parts.add(metadata.redisNamespace());
+            parts.add(metadata.idColumn()); parts.add(metadata.versionColumn()); parts.add(metadata.deletedColumn());
+            parts.add(metadata.activeMarkerValue()); parts.add(metadata.deletedMarkerValue());
+            parts.add(item.id.toString()); parts.add(item.tenant);
+            // PATCH's hot read/CAS version is derived state, not the caller's assignment intent.
+            parts.add(item.type == OperationType.PATCH ? "hot-patch" : Long.toString(item.expected));
+            if (protectedBinding(item.binding)) {
+                if (signingCodec == null) signingCodec = item.binding.codec();
+                parts.add("protected"); parts.add(intentToken(item.intentToken));
+            } else {
+                parts.add("logical");
+                if (item.type == OperationType.UPSERT) parts.add(item.payload);
+                var columns = new TreeMap<>(item.columns);
+                parts.add(Integer.toString(columns.size()));
+                for (var entry : columns.entrySet()) { parts.add(entry.getKey()); parts.add(entry.getValue()); }
+            }
+            parts.add(Integer.toString(item.projections.size()));
+            for (var projection : new TreeMap<>(item.projections).entrySet()) {
+                parts.add(projection.getKey());
+                if (item.type == OperationType.UPSERT) parts.add(projection.getValue());
+            }
+        }
+        if (signingCodec == null) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.unbound();
+        return intentToken(signingCodec.encryptionIntentFingerprint(parts));
+    }
+
+    private String logicalFingerprint(List<String> redisKeys) {
+        try {
+            var hash = MessageDigest.getInstance("SHA-256");
+            frame(hash, "cachedb-batch-logical-v2");
+            frame(hash, redisKeys.get(0)); frame(hash, redisKeys.get(1));
+            frame(hash, Integer.toString(items.size()));
+            int member = 0, projectionOffset = 2 + items.size() * 7;
+            for (Item item : items) {
+                var metadata = item.binding.metadata();
+                frame(hash, "member");
+                for (int k = 0; k < 7; k++) frame(hash, redisKeys.get(2 + member * 7 + k));
+                member++;
+                frame(hash, metadata.entityName()); frame(hash, metadata.tableName());
+                frame(hash, metadata.redisNamespace()); frame(hash, metadata.idColumn());
+                frame(hash, metadata.versionColumn()); frame(hash, metadata.deletedColumn());
+                frame(hash, metadata.activeMarkerValue()); frame(hash, metadata.deletedMarkerValue());
+                frame(hash, item.id.toString()); frame(hash, item.tenant); frame(hash, item.type.name());
+                frame(hash, item.type == OperationType.PATCH ? "hot-patch" : Long.toString(item.expected));
+                if (item.type == OperationType.UPSERT) frame(hash, item.payload);
+                var columns = new TreeMap<>(item.columns);
+                frame(hash, Integer.toString(columns.size()));
+                for (var column : columns.entrySet()) { frame(hash, column.getKey()); frame(hash, column.getValue()); }
+                var projections = new TreeMap<String, Integer>();
+                for (String name : item.projections.keySet()) { projections.put(name, projectionOffset); projectionOffset += 4; }
+                frame(hash, Integer.toString(projections.size()));
+                for (var projection : projections.entrySet()) {
+                    frame(hash, projection.getKey());
+                    if (item.type == OperationType.UPSERT) frame(hash, item.projections.get(projection.getKey()));
+                    for (int k = 0; k < 4; k++) frame(hash, redisKeys.get(projection.getValue() + k));
+                }
+            }
+            return HexFormat.of().formatHex(hash.digest());
+        } catch (NoSuchAlgorithmException failure) {
+            throw new IllegalStateException(failure);
+        }
+    }
+
+    /** A negative length represents null; embedded NULs cannot alias field boundaries. */
+    private static void frame(MessageDigest hash, String value) {
+        byte[] bytes = value == null ? null : value.getBytes(StandardCharsets.UTF_8);
+        int length = bytes == null ? -1 : bytes.length;
+        hash.update((byte) (length >>> 24)); hash.update((byte) (length >>> 16));
+        hash.update((byte) (length >>> 8)); hash.update((byte) length);
+        if (bytes != null) hash.update(bytes);
     }
 
     private static String fingerprint(List<String> keys, List<String> args, int streamFieldsStart) {

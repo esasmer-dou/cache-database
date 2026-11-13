@@ -1,0 +1,45 @@
+spring:
+  datasource:
+    url: ${SAMPLE_PURGE_SQL_URL}
+    username: ${SAMPLE_PURGE_SQL_USERNAME}
+    password: ${SAMPLE_PURGE_SQL_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 4
+      minimum-idle: 0
+      connection-timeout: 5000
+      data-source-properties:
+        connectTimeout: 5
+        socketTimeout: 5
+  sql:
+    init:
+      mode: always
+      continue-on-error: false
+      schema-locations:
+        - classpath:com/reactor/cachedb/jdbc/migrations/postgres/V014__durable_write_fence.sql
+        - classpath:com/reactor/cachedb/jdbc/migrations/postgres/V019__tenant_protection.sql
+        - classpath:com/reactor/cachedb/jdbc/migrations/postgres/V019_1__purge_facade.sql
+        - classpath:com/reactor/cachedb/jdbc/migrations/postgres/V019_2__purge_list_scan_kind.sql
+        - classpath:com/reactor/cachedb/jdbc/migrations/postgres/V019_3__source_owner_onboarding.sql
+        - classpath:com/reactor/cachedb/jdbc/migrations/postgres/V019_4__initial_source_bootstrap.sql
+        - classpath:com/reactor/cachedb/jdbc/migrations/postgres/V019_5__namespace_bootstrap_once.sql
+        - classpath:schema-purge.sql
+server:
+  address: ${SAMPLE_PURGE_BIND_ADDRESS:127.0.0.1}
+  port: ${SAMPLE_PURGE_HTTP_PORT:8080}
+  max-http-request-header-size: 2KB
+  tomcat:
+    threads:
+      max: 8
+      min-spare: 1
+    max-connections: 32
+    accept-count: 8
+    connection-timeout: 5s
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+logging:
+  level:
+    root: ERROR
+    com.zaxxer.hikari: OFF

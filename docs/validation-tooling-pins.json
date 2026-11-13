@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "purpose": "Sample validation tooling; not application or release qualification evidence",
+  "platform": "linux-x64",
+  "node": {
+    "version": "24.22.1",
+    "archive": "node-v24.22.1-linux-x64.tar.gz",
+    "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.gz",
+    "checksumsUrl": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
+    "sha256": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c"
+  },
+  "newman": {
+    "version": "6.2.1",
+    "archive": "newman-6.2.1.tgz",
+    "url": "https://registry.npmjs.org/newman/-/newman-6.2.1.tgz",
+    "metadataUrl": "https://registry.npmjs.org/newman/6.2.1",
+    "integrity": "sha512-Zq8Sr5GFF+OXs5yIbyglLMKMh1WNMjYVV0yZaSBZ+DIgQOIWcxT8QTfbrl/YUGrLyT4rjpu+yZ/Z+kozw79GEA=="
+  }
+}

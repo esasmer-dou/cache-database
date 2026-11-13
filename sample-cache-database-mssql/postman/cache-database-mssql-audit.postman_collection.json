@@ -1,0 +1,1653 @@
+{
+  "info": {
+    "name": "CacheDB mssql bounded audit notes",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Destructive disposable-demo flow: resets sixteen fixed supplier-only audit rows. EVICT_CACHE preserves SQL; DELETE accepts write-behind, not SQL erasure."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8092"
+    },
+    {
+      "key": "auditApiEnabled",
+      "value": "false"
+    },
+    {
+      "key": "auditApiCertification",
+      "value": "false"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (pm.variables.get('auditApiEnabled') !== 'true' || pm.variables.get('auditApiCertification') !== 'true') { throw new Error('Set auditApiEnabled=true and auditApiCertification=true; all audit requests must execute.'); }"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Baseline delete 1",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/1/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-delete-1\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-delete-1', function () {",
+              "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"baseline-delete-1\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-1'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline delete 2",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/2/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-delete-2\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-delete-2', function () {",
+              "pm.expect(j.slot).to.eql(2); pm.expect(j.note).to.eql(\"baseline-delete-2\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-2'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline delete 3",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/3/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-delete-3\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-delete-3', function () {",
+              "pm.expect(j.slot).to.eql(3); pm.expect(j.note).to.eql(\"baseline-delete-3\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-3'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline delete 4",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/4/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-delete-4\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-delete-4', function () {",
+              "pm.expect(j.slot).to.eql(4); pm.expect(j.note).to.eql(\"baseline-delete-4\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-4'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline delete 5",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/5/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-delete-5\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-delete-5', function () {",
+              "pm.expect(j.slot).to.eql(5); pm.expect(j.note).to.eql(\"baseline-delete-5\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-5'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline delete 6",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/6/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-delete-6\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-delete-6', function () {",
+              "pm.expect(j.slot).to.eql(6); pm.expect(j.note).to.eql(\"baseline-delete-6\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-6'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline delete 7",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/7/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-delete-7\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-delete-7', function () {",
+              "pm.expect(j.slot).to.eql(7); pm.expect(j.note).to.eql(\"baseline-delete-7\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-7'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline delete 8",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/8/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-delete-8\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-delete-8', function () {",
+              "pm.expect(j.slot).to.eql(8); pm.expect(j.note).to.eql(\"baseline-delete-8\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-8'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline evict 1",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/1/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-evict-1\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-evict-1', function () {",
+              "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"baseline-evict-1\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-1'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline evict 2",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/2/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-evict-2\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-evict-2', function () {",
+              "pm.expect(j.slot).to.eql(2); pm.expect(j.note).to.eql(\"baseline-evict-2\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-2'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline evict 3",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/3/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-evict-3\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-evict-3', function () {",
+              "pm.expect(j.slot).to.eql(3); pm.expect(j.note).to.eql(\"baseline-evict-3\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-3'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline evict 4",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/4/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-evict-4\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-evict-4', function () {",
+              "pm.expect(j.slot).to.eql(4); pm.expect(j.note).to.eql(\"baseline-evict-4\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-4'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline evict 5",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/5/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-evict-5\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-evict-5', function () {",
+              "pm.expect(j.slot).to.eql(5); pm.expect(j.note).to.eql(\"baseline-evict-5\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-5'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline evict 6",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/6/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-evict-6\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-evict-6', function () {",
+              "pm.expect(j.slot).to.eql(6); pm.expect(j.note).to.eql(\"baseline-evict-6\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-6'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline evict 7",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/7/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-evict-7\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-evict-7', function () {",
+              "pm.expect(j.slot).to.eql(7); pm.expect(j.note).to.eql(\"baseline-evict-7\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-7'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Baseline evict 8",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/8/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"baseline-evict-8\",\"expired\":false}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract baseline-evict-8', function () {",
+              "pm.expect(j.slot).to.eql(8); pm.expect(j.note).to.eql(\"baseline-evict-8\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-8'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Expire delete 1",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/1/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"sil-ğışöüİ-1\",\"expired\":true}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract expire-delete-1', function () {",
+              "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"sil-ğışöüİ-1\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-1'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "pm.expect(j.state).to.eql('EXPIRED');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Expire delete 2",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/2/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"sil-ğışöüİ-2\",\"expired\":true}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract expire-delete-2', function () {",
+              "pm.expect(j.slot).to.eql(2); pm.expect(j.note).to.eql(\"sil-ğışöüİ-2\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-2'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "pm.expect(j.state).to.eql('EXPIRED');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data rejects zero query budget",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/spring-data"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 409', function () { pm.response.to.have.status(409); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract spring-delete', function () {",
+              "pm.expect(j.error).to.eql('AUDIT_DERIVED_DELETE_ZERO_QUERY_BUDGET');",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.retrySafe).to.eql(false);",
+              "pm.expect(j).not.to.have.property('outcomeUnknown');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Rejected derived delete keeps expired note",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract spring-hot-preserved', function () {",
+              "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql('sil-ğışöüİ-1'); pm.expect(j.state).to.eql('EXPIRED');",
+              "pm.expect(j.origin).to.eql('HOT'); pm.expect(j.receipt).to.eql(null);",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(false);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Derived delete keeps active note",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/3"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract spring-active', function () {",
+              "pm.expect(j.slot).to.eql(3); pm.expect(j.note).to.eql(\"baseline-delete-3\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.origin).to.eql(\"HOT\");",
+              "pm.expect(j.receipt).to.eql(null);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Expire delete 4",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/4/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"bulk-4\",\"expired\":true}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract expire-delete-4', function () {",
+              "pm.expect(j.slot).to.eql(4); pm.expect(j.note).to.eql(\"bulk-4\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-4'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "pm.expect(j.state).to.eql('EXPIRED');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Expire delete 5",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/5/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"bulk-5\",\"expired\":true}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract expire-delete-5', function () {",
+              "pm.expect(j.slot).to.eql(5); pm.expect(j.note).to.eql(\"bulk-5\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-5'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "pm.expect(j.state).to.eql('EXPIRED');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Native bulk returns actual receipts",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/bulk",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"slots\":[1,2,4,5]}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract bulk-delete', function () {",
+              "pm.expect(j.api).to.eql('NATIVE_BULK'); pm.expect(j.phase).to.eql('COMPLETE'); pm.expect(j.selected).to.eql(['audit-1','audit-2','audit-4','audit-5']);",
+              "pm.expect(j.receiptAvailability).to.eql('ACTUAL_WRITE_RECEIPTS'); pm.expect(j.accepted.length).to.eql(4);",
+              "pm.expect(j.accepted.map(r=>r.id).sort()).to.eql(['audit-1','audit-2','audit-4','audit-5']);",
+              "j.accepted.forEach(r=>{pm.expect(r.operation).to.eql('DELETE');pm.expect(r.version).to.match(/^[1-9][0-9]{0,18}$/);pm.expect(typeof r.acceptedAt).to.eql('string');});",
+              "pm.expect(j.rejected).to.eql([]); pm.expect(j.uncertain).to.eql([]); pm.expect(j.cleanupPending).to.eql([]); pm.expect(j.notAttempted).to.eql(0);",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.retrySafe).to.eql(false);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Bulk deleted hot note is absent",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/4"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 404', function () { pm.response.to.have.status(404); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Expire evict 1",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/1/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"kalıcı-SQL-ğışöüİ\",\"expired\":true}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract expire-evict-1', function () {",
+              "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"kalıcı-SQL-ğışöüİ\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-1'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "pm.expect(j.state).to.eql('EXPIRED');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Evict indexed expired cache payload",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/sweep",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"maxRows\":8}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract evict-sweep', function () {",
+              "pm.expect(j.action).to.eql('EVICT_CACHE'); pm.expect(j.examined).to.eql(1); pm.expect(j.evicted).to.eql(1);",
+              "pm.expect(j.indexCleaned).to.eql(1); pm.expect(j.deleteAccepted).to.eql(0); pm.expect(j.skipped).to.eql(0);",
+              "pm.expect(j.indexedResidentOnly).to.eql(true); pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.sourceErasureConfirmed).to.eql(false);",
+              "pm.expect(j.exhausted).to.eql(true); pm.expect(typeof j.cutoff).to.eql('number'); pm.expect(typeof j.finishedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Evicted note is not hot",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 404', function () { pm.response.to.have.status(404); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Eviction retains SQL note",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/1/source"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract evict-source-kept', function () {",
+              "pm.expect(j.slot).to.eql(1); pm.expect(j.note).to.eql(\"kalıcı-SQL-ğışöüİ\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.origin).to.eql(\"SOURCE_OBSERVED\");",
+              "pm.expect(j.receipt).to.eql(null);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Eviction keeps active hot note",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/2"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract evict-active', function () {",
+              "pm.expect(j.slot).to.eql(2); pm.expect(j.note).to.eql(\"baseline-evict-2\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.origin).to.eql(\"HOT\");",
+              "pm.expect(j.receipt).to.eql(null);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Expire delete 6",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/6/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"retention-6\",\"expired\":true}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract expire-delete-6', function () {",
+              "pm.expect(j.slot).to.eql(6); pm.expect(j.note).to.eql(\"retention-6\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(true); pm.expect(j.origin).to.eql(\"SOURCE_VERIFIED\");",
+              "pm.expect(j.receipt.id).to.eql('audit-6'); pm.expect(j.receipt.operation).to.eql('UPSERT');",
+              "pm.expect(j.receipt.version).to.match(/^[1-9][0-9]{0,18}$/); pm.expect(typeof j.receipt.acceptedAt).to.eql('string');",
+              "pm.expect(j.state).to.eql('EXPIRED');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Delete indexed expired note via write-behind",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/sweep",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"maxRows\":8}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract delete-sweep', function () {",
+              "pm.expect(j.action).to.eql('DELETE'); pm.expect(j.examined).to.eql(1); pm.expect(j.evicted).to.eql(0);",
+              "pm.expect(j.indexCleaned).to.eql(1); pm.expect(j.deleteAccepted).to.eql(1); pm.expect(j.skipped).to.eql(0);",
+              "pm.expect(j.indexedResidentOnly).to.eql(true); pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.sourceErasureConfirmed).to.eql(false);",
+              "pm.expect(j.exhausted).to.eql(true); pm.expect(typeof j.cutoff).to.eql('number'); pm.expect(typeof j.finishedAt).to.eql('string');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Retention deleted hot note is absent",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/6"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 404', function () { pm.response.to.have.status(404); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Retention keeps active hot note",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/7"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract delete-active', function () {",
+              "pm.expect(j.slot).to.eql(7); pm.expect(j.note).to.eql(\"baseline-delete-7\");",
+              "pm.expect(j.sqlDurabilityConfirmed).to.eql(false); pm.expect(j.origin).to.eql(\"HOT\");",
+              "pm.expect(j.receipt).to.eql(null);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tenant A cannot inspect global source",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/1/source"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 403', function () { pm.response.to.have.status(403); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tenant B cannot sweep global notes",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantBToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/sweep",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"maxRows\":1}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 403', function () { pm.response.to.have.status(403); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Missing supplier identity is rejected",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 401', function () { pm.response.to.have.status(401); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Causal query requirement is rejected",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "X-CacheDB-Causal",
+            "value": "required"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/spring-data"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 409', function () { pm.response.to.have.status(409); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Slot nine is rejected",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/evict/9",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"invalid slot\",\"expired\":true}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract slot-bound', function () {",
+              "pm.expect(j.error).to.eql('Invalid bounded audit input');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sweep bound nine is rejected",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/sweep",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"maxRows\":9}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract sweep-bound', function () {",
+              "pm.expect(j.error).to.eql('Invalid bounded audit input');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Duplicate bulk slots are rejected",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/delete/bulk",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"slots\":[1,1]}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract duplicate-bound', function () {",
+              "pm.expect(j.error).to.eql('Invalid bounded audit input');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Unsupported policy is rejected",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/audit-notes/purge/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
+              "const j = pm.response.json();",
+              "pm.test('Contract policy-bound', function () {",
+              "pm.expect(j.error).to.eql('Invalid bounded audit input');",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

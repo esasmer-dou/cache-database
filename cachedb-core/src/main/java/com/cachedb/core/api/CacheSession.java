@@ -17,6 +17,33 @@ import java.util.Collection;
 import java.util.Objects;
 
 public interface CacheSession {
+    /** The runtime supplies one lifecycle-owned gate; no implicit static executor is created. */
+    default com.reactor.cachedb.core.async.CacheAsyncExecutor asyncExecutor() {
+        throw new UnsupportedOperationException("No runtime-owned async executor configured");
+    }
+
+    default <T, ID> AsyncEntityRepository<T, ID> asyncEntityRepository(
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
+        return asyncEntityRepository(metadata, codec, asyncExecutor());
+    }
+
+    default <T, ID> AsyncEntityRepository<T, ID> asyncEntityRepository(
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec,
+            com.reactor.cachedb.core.async.CacheAsyncExecutor executor) {
+        return repository(metadata, codec).async(executor);
+    }
+
+    default <T, ID> AsyncEntityRepository<T, ID> asyncEntityRepository(
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy policy) {
+        return repository(metadata, codec, policy).async(asyncExecutor());
+    }
+
+    default <T, ID> AsyncEntityRepository<T, ID> asyncEntityRepository(
+            EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy policy,
+            com.reactor.cachedb.core.async.CacheAsyncExecutor executor) {
+        return repository(metadata, codec, policy).async(executor);
+    }
+
     default boolean isDurable(WriteReceipt<?, ?> receipt) {
         throw new UnsupportedOperationException(
                 "Durability tracking is not supported by this CacheSession");
@@ -83,6 +110,15 @@ public interface CacheSession {
 
     <T, ID> EntityRepository<T, ID> repository(
             EntityMetadata<T, ID> metadata, EntityCodec<T> codec, CachePolicy cachePolicy);
+
+    default <T, ID> EntityCodec<T> runtimeCodec(EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
+        return codec;
+    }
+
+    default <T, ID> com.reactor.cachedb.core.model.SourceMapping<T> sourceMapping(EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {
+        return com.reactor.cachedb.core.model.SourceMapping.entity(metadata, runtimeCodec(metadata, codec));
+    }
 
     default <T, ID> SourceRepository<T, ID> sourceRepository(
             EntityMetadata<T, ID> metadata, EntityCodec<T> codec) {

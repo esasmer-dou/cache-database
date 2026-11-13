@@ -1,0 +1,91 @@
+# OPTIONAL: install manually in the approved PRIVATE nonfork repository only.
+# Never enable this template in the public repository. No producer or publication step.
+name: Private-Owned Sample Runtime Import
+on:
+  workflow_dispatch:
+    inputs:
+      artifactId:
+        description: Approved own-repository producer artifact ID at source commit S
+        required: true
+        type: string
+      archiveSha256:
+        description: Independently approved artifact ZIP SHA256
+        required: true
+        type: string
+      receiptSha256:
+        description: Independently approved root receipt.json SHA256
+        required: true
+        type: string
+      sourceEquivalencePath:
+        description: Optional approved receipt-relative documentation qualification path; supply all four qualification fields together
+        required: false
+        type: string
+      sourceEquivalenceSha256:
+        description: Independently approved documentation qualification SHA256
+        required: false
+        type: string
+      toolingOverlayPath:
+        description: Optional approved receipt-relative exact tooling qualification path
+        required: false
+        type: string
+      toolingOverlaySha256:
+        description: Independently approved exact tooling qualification SHA256
+        required: false
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      APPROVED_PRIVATE_REPOSITORY: ${{ vars.CACHEDB_PRIVATE_REPOSITORY }}
+      APPROVED_PRIVATE_REPOSITORY_ID: ${{ vars.CACHEDB_PRIVATE_REPOSITORY_ID }}
+      PUBLIC_SOURCE_REPOSITORY: ${{ vars.CACHEDB_PUBLIC_SOURCE_REPOSITORY }}
+      PUBLIC_SOURCE_REPOSITORY_ID: ${{ vars.CACHEDB_PUBLIC_SOURCE_REPOSITORY_ID }}
+      APPROVED_SOURCE_SHA: ${{ vars.CACHEDB_APPROVED_SOURCE_SHA }}
+    steps:
+      - name: Checkout private workflow commit D
+        uses: actions/checkout@v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          path: private-control
+          persist-credentials: false
+      - name: Admit manual private context before source checkout
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PRIVATE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:GITHUB_REPOSITORY -cne $env:APPROVED_PRIVATE_REPOSITORY -or
+              $env:GITHUB_REPOSITORY_ID -cne $env:APPROVED_PRIVATE_REPOSITORY_ID -or
+              $env:APPROVED_SOURCE_SHA -cnotmatch '^[a-f0-9]{40}$' -or
+              $env:PUBLIC_SOURCE_REPOSITORY -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}$' -or
+              $env:PUBLIC_SOURCE_REPOSITORY.Split('/')[1] -in @('.', '..')) {
+            throw 'Approved manual private context and pinned public source required.'
+          }
+      - name: Checkout approved public source S without changing GITHUB_SHA
+        uses: actions/checkout@v6.0.3
+        with:
+          repository: ${{ vars.CACHEDB_PUBLIC_SOURCE_REPOSITORY }}
+          ref: ${{ vars.CACHEDB_APPROVED_SOURCE_SHA }}
+          path: public-source
+          persist-credentials: false
+      - name: Import and verify own private evidence
+        timeout-minutes: 7
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PRIVATE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SAMPLE_ARTIFACT_ID: ${{ inputs.artifactId }}
+          SAMPLE_ARTIFACT_SHA256: ${{ inputs.archiveSha256 }}
+          SAMPLE_RECEIPT_SHA256: ${{ inputs.receiptSha256 }}
+          SAMPLE_DOC_PATH: ${{ inputs.sourceEquivalencePath }}
+          SAMPLE_DOC_PIN: ${{ inputs.sourceEquivalenceSha256 }}
+          SAMPLE_TOOL_PATH: ${{ inputs.toolingOverlayPath }}
+          SAMPLE_TOOL_PIN: ${{ inputs.toolingOverlaySha256 }}
+        run: ./private-control/tools/ci/import-v019-private-owned-runtime.ps1 -SourceRoot ./public-source -ControlRoot ./private-control
+      # Deliberately no upload-artifact, public summary, producer, PAT or secret fallback.

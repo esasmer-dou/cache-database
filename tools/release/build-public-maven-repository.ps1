@@ -35,6 +35,7 @@ if ((Test-Path $outputRoot) -and -not $PreserveExisting) {
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 New-Item -ItemType File -Path (Join-Path $outputRoot ".nojekyll") -Force | Out-Null
 
+# Explicit public allowlist: benchmark and SDK acceptance tools are never exported.
 $artifactModules = @(
     "cachedb-annotations",
     "cachedb-processor",
@@ -47,6 +48,8 @@ $artifactModules = @(
     "cachedb-storage-oracle",
     "cachedb-starter",
     "cachedb-spring-boot-starter",
+    "cachedb-reactor",
+    "cachedb-spring-data",
     "cachedb-spring-boot-starter-postgres",
     "cachedb-spring-boot-starter-mssql",
     "cachedb-spring-boot-starter-oracle",
@@ -153,4 +156,4 @@ $index = @"
 Set-Content -LiteralPath (Join-Path $outputRoot "index.html") -Value $index -NoNewline
 
 Write-Host "Public Maven repository prepared: $outputRoot"
-Write-Host "Anonymous repository URL: https://esasmer-dou.github.io/cache-database/maven2"
+Write-Host "Intended publication URL (not deployed by this script): https://esasmer-dou.github.io/cache-database/maven2"

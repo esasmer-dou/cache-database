@@ -121,13 +121,19 @@ public final class RedisCacheIdGenerator implements CacheIdGenerator {
                 String sequenceName,
                 int allocationSize) {
             while (true) {
-                long candidate = next.getAndIncrement();
-                if (candidate <= end) {
-                    return candidate;
+                // Read the published bound first; never reserve outside the current block.
+                long limit = end;
+                long candidate = next.get();
+                if (candidate > 0 && candidate <= limit) {
+                    if (next.compareAndSet(candidate, candidate + 1L)) {
+                        return candidate;
+                    }
+                    continue;
                 }
                 allocationLock.lock();
                 try {
-                    if (next.get() - 1L <= end) {
+                    long available = next.get();
+                    if (available > 0 && available <= end) {
                         continue;
                     }
                     long allocatedEnd =

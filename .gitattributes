@@ -1,0 +1,4 @@
+# Preserve byte hashes of recorded diagnostic evidence across Windows/Linux checkouts.
+tools/benchmarks/baseline/v0.18.1-virtual-liveness/* -text
+# Preserve the exact legacy Lua fixture digest on Windows and Linux.
+cachedb-storage-redis/src/test/resources/functions/cachedb-functions-v0181-3a212461.lua -text

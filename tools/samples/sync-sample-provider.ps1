@@ -44,6 +44,50 @@ function Get-IntegrationContractBody {
     return $content.Substring($contractStart).Replace("`r`n", "`n")
 }
 
+function Convert-ProviderBoundJava {
+    param(
+        [string] $Content,
+        [string] $RelativePath,
+        [ValidateSet("postgresql", "mssql", "oracle")] [string] $FromProvider,
+        [ValidateSet("postgresql", "mssql", "oracle")] [string] $ToProvider
+    )
+
+    $purgeContract = "src/purge-test/java/com/example/cachedb/purge/TenantPurgeContractTest.java"
+    $purgeRuntime = "src/purge/java/com/example/cachedb/purge/TenantPurgeRuntime.java"
+    $path = $RelativePath.Replace([char]92, [char]47)
+    if ($path -cnotin @($purgeContract, $purgeRuntime)) { return $Content }
+    $dialects = @{ postgresql = "postgres"; mssql = "mssql"; oracle = "oracle" }
+    # Only explicit provider bindings may differ; all other bytes remain exact.
+    $bindings = if ($path -ceq $purgeRuntime) {
+        $constants = @{ postgresql = "POSTGRES"; mssql = "MSSQL"; oracle = "ORACLE" }
+        @(@{
+            Pattern = 'private static final JdbcTenantPurgeDialect DIALECT = JdbcTenantPurgeDialect\.(?:POSTGRES|MSSQL|ORACLE);'
+            From = 'private static final JdbcTenantPurgeDialect DIALECT = JdbcTenantPurgeDialect.' + $constants[$FromProvider] + ';'
+            To = 'private static final JdbcTenantPurgeDialect DIALECT = JdbcTenantPurgeDialect.' + $constants[$ToProvider] + ';'
+        })
+    } else { @(
+        @{
+            Pattern = '"cache-database-(?:postgresql|mssql|oracle)-tenant-purge\.postman_collection\.json"'
+            From = '"cache-database-' + $FromProvider + '-tenant-purge.postman_collection.json"'
+            To = '"cache-database-' + $ToProvider + '-tenant-purge.postman_collection.json"'
+        },
+        @{
+            Pattern = '"com/reactor/cachedb/jdbc/migrations/(?:postgres|mssql|oracle)/"'
+            From = '"com/reactor/cachedb/jdbc/migrations/' + $dialects[$FromProvider] + '/"'
+            To = '"com/reactor/cachedb/jdbc/migrations/' + $dialects[$ToProvider] + '/"'
+        }
+    ) }
+    foreach ($binding in $bindings) {
+        $occurrences = [regex]::Matches($Content, $binding.Pattern)
+        if ($occurrences.Count -ne 1 -or
+            -not [string]::Equals($occurrences[0].Value, $binding.From, [StringComparison]::Ordinal)) {
+            throw "Expected one exact $FromProvider purge binding in $RelativePath."
+        }
+        $Content = $Content.Replace($binding.From, $binding.To)
+    }
+    return $Content
+}
+
 $canonicalFiles = @(Get-ProviderNeutralJavaFiles -Root $canonicalRoot)
 $providerDisplayName = switch ($TargetProvider) {
     "mssql" { "MSSQL" }
@@ -59,9 +103,20 @@ foreach ($file in $canonicalFiles) {
             $differences.Add("Missing in $providerDisplayName sample: $($file.RelativePath)")
             continue
         }
-        $canonicalHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
-        $targetHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash
-        if ($canonicalHash -ne $targetHash) {
+        if ($file.RelativePath.Replace([char]92, [char]47) -cin @(
+            "src/purge-test/java/com/example/cachedb/purge/TenantPurgeContractTest.java",
+            "src/purge/java/com/example/cachedb/purge/TenantPurgeRuntime.java")) {
+            $canonicalContent = Convert-ProviderBoundJava -Content (Get-Content -LiteralPath $file.FullName -Raw) `
+                -RelativePath $file.RelativePath -FromProvider postgresql -ToProvider postgresql
+            $targetContent = Convert-ProviderBoundJava -Content (Get-Content -LiteralPath $targetPath -Raw) `
+                -RelativePath $file.RelativePath -FromProvider $TargetProvider -ToProvider postgresql
+            $same = [string]::Equals($canonicalContent, $targetContent, [StringComparison]::Ordinal)
+        } else {
+            $canonicalHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+            $targetHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash
+            $same = $canonicalHash -eq $targetHash
+        }
+        if (-not $same) {
             $differences.Add("Different provider-neutral file: $($file.RelativePath)")
         }
         continue
@@ -70,7 +125,15 @@ foreach ($file in $canonicalFiles) {
     if (-not (Test-Path -LiteralPath $targetDirectory)) {
         New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
     }
-    Copy-Item -LiteralPath $file.FullName -Destination $targetPath -Force
+    if ($file.RelativePath.Replace([char]92, [char]47) -cin @(
+        "src/purge-test/java/com/example/cachedb/purge/TenantPurgeContractTest.java",
+        "src/purge/java/com/example/cachedb/purge/TenantPurgeRuntime.java")) {
+        $targetContent = Convert-ProviderBoundJava -Content (Get-Content -LiteralPath $file.FullName -Raw) `
+            -RelativePath $file.RelativePath -FromProvider postgresql -ToProvider $TargetProvider
+        [IO.File]::WriteAllText($targetPath, $targetContent, [Text.UTF8Encoding]::new($false))
+    } else {
+        Copy-Item -LiteralPath $file.FullName -Destination $targetPath -Force
+    }
 }
 
 foreach ($targetFile in @(Get-ProviderNeutralJavaFiles -Root $targetRoot)) {

@@ -1,0 +1,359 @@
+{
+  "info": {
+    "name": "CacheDB mssql Encrypted Notes",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8092"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (pm.environment.get('encryptionApiEnabled') !== 'true') {",
+          "  throw new Error('Set encryptionApiEnabled=true for the explicitly started encrypted demo; certification cannot skip this collection.');",
+          "}",
+          "if (pm.environment.get('encryptionApiCertification') !== 'true') {",
+          "  throw new Error('encryptionApiCertification=true is required; disabled or skipped requests cannot certify encryption.');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Write Encrypted Note",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/1",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"Türkçe alan: ğışöüİ\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202',()=>pm.response.to.have.status(202));",
+              "pm.test('Accepted logical note, not SQL durability',()=>{const b=pm.response.json();pm.expect(b.note).to.eql('Türkçe alan: ğışöüİ');pm.expect(b.sqlDurabilityConfirmed).to.eql(false);pm.expect(b.version).to.match(/^[1-9][0-9]*$/);});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Read Decrypted Redis Note",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200',()=>pm.response.to.have.status(200));",
+              "pm.test('Redis hit decrypts the original Unicode note',()=>pm.expect(pm.response.json().note).to.eql('Türkçe alan: ğışöüİ'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Confirm Explicit Source Roundtrip",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/1/source-roundtrip",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"SQL original text: ğışöüİ\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200',()=>pm.response.to.have.status(200));",
+              "pm.test('Source roundtrip explicitly confirms SQL',()=>{const b=pm.response.json();pm.expect(b.note).to.eql('SQL original text: ğışöüİ');pm.expect(b.sqlDurabilityConfirmed).to.eql(true);});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Read Updated Encrypted Note",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200',()=>pm.response.to.have.status(200));",
+              "pm.test('Updated Redis value decrypts',()=>pm.expect(pm.response.json().note).to.eql('SQL original text: ğışöüİ'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reject Tenant A Reading Global Supplier Note",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 403',()=>pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reject Tenant B Writing Global Supplier Note",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantBToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/1",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"must not be written\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 403',()=>pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reject Missing Supplier Identity",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 401',()=>pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reject Ninth Slot",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/9",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"bounded\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400',()=>pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reject Oversized Logical Note",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/1",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"note\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400',()=>pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reject Unsupported Causal Requirement",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}"
+          },
+          {
+            "key": "X-CacheDB-Causal",
+            "value": "required"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/encryption/notes/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 409',()=>pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

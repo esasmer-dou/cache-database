@@ -19,6 +19,7 @@ import redis.clients.jedis.params.SetParams;
 
 /** Framework-owned bounded snapshot preparation, coordination and generation publication. */
 public final class SnapshotJobs implements SnapshotOperations, SmartLifecycle, AutoCloseable {
+    private final java.util.concurrent.locks.ReentrantLock lifecycleLock = new java.util.concurrent.locks.ReentrantLock();
     private static final Logger LOG = LoggerFactory.getLogger(SnapshotJobs.class);
     private static final String RENEW =
             "if redis.call('GET',KEYS[1]) == ARGV[1] then return"
@@ -76,43 +77,48 @@ return 1
     private com.reactor.cachedb.starter.CacheDatabase changeDatabase;
 
     /** SQL-backed snapshots observe committed changes, never a producer's not-yet-durable receipt. */
-    public synchronized SnapshotJobs withDatabase(com.reactor.cachedb.starter.CacheDatabase database) {
-        if (running || changeRegistration != null) throw new IllegalStateException("Configure the dirty bridge before start");
-        changeDatabase = Objects.requireNonNull(database);
-        Map<String, List<DirtyTarget>> targets = new LinkedHashMap<>();
-        for (Job job : jobs.values()) for (SnapshotDirtyBinding binding : job.plan.autoDirtyBindings()) {
-            if (job.plan.rootScope() == null)
-                throw new IllegalArgumentException("Auto-dirty requires an explicit scopedBy/rootScope for " + job.plan.name());
-            if (database.entityRegistry().find(binding.entityName()).isEmpty())
-                throw new IllegalArgumentException("Unknown auto-dirty entity: " + binding.entityName());
-            targets.computeIfAbsent(binding.entityName(), ignored -> new ArrayList<>()).add(new DirtyTarget(job, binding));
-        }
-        if (!targets.isEmpty()) changeRegistration = database.onDurableEntityChange(operation -> {
-            if (closed) return;
-            for (DirtyTarget target : targets.getOrDefault(operation.entityName(), List.of())) {
-                Job job = target.job();
-                if (!job.settings.enabled()) continue;
-                try {
-                    String id;
-                    if (target.binding().rootEntity()) id = operation.id();
-                    else {
-                        // A partial/delete event cannot reconstruct a complete child or its previous parent.
-                        // Keep reconciliation authoritative rather than guessing a root ID or issuing N point loads.
-                        job.forceFull.set(true);
-                        var entity = database.entityRegistry().find(operation.entityName()).orElseThrow();
-                        if (operation.type() != com.reactor.cachedb.core.model.OperationType.UPSERT
-                                || !operation.columns().keySet().containsAll(entity.metadata().columns())) continue;
-                        Object changed = entity.codec().fromColumns(new LinkedHashMap<>(operation.columns()));
-                        id = target.binding().rootIdExtractor().apply(changed);
-                    }
-                    queueDirtyRoot(job, id);
-                } catch (RuntimeException failure) {
-                    job.forceFull.set(true);
-                    LOG.warn("Auto-dirty mapping requires reconciliation: plan={}", job.plan.name());
-                }
+    public SnapshotJobs withDatabase(com.reactor.cachedb.starter.CacheDatabase database) {
+        lifecycleLock.lock();
+        try {
+            if (running || changeRegistration != null) throw new IllegalStateException("Configure the dirty bridge before start");
+            changeDatabase = Objects.requireNonNull(database);
+            Map<String, List<DirtyTarget>> targets = new LinkedHashMap<>();
+            for (Job job : jobs.values()) for (SnapshotDirtyBinding binding : job.plan.autoDirtyBindings()) {
+                if (job.plan.rootScope() == null)
+                    throw new IllegalArgumentException("Auto-dirty requires an explicit scopedBy/rootScope for " + job.plan.name());
+                if (database.entityRegistry().find(binding.entityName()).isEmpty())
+                    throw new IllegalArgumentException("Unknown auto-dirty entity: " + binding.entityName());
+                targets.computeIfAbsent(binding.entityName(), ignored -> new ArrayList<>()).add(new DirtyTarget(job, binding));
             }
-        });
-        return this;
+            if (!targets.isEmpty()) changeRegistration = database.onDurableEntityChange(operation -> {
+                if (closed) return;
+                for (DirtyTarget target : targets.getOrDefault(operation.entityName(), List.of())) {
+                    Job job = target.job();
+                    if (!job.settings.enabled()) continue;
+                    try {
+                        String id;
+                        if (target.binding().rootEntity()) id = operation.id();
+                        else {
+                            // A partial/delete event cannot reconstruct a complete child or its previous parent.
+                            // Keep reconciliation authoritative rather than guessing a root ID or issuing N point loads.
+                            job.forceFull.set(true);
+                            var entity = database.entityRegistry().find(operation.entityName()).orElseThrow();
+                            if (operation.type() != com.reactor.cachedb.core.model.OperationType.UPSERT
+                                    || !operation.columns().keySet().containsAll(entity.metadata().columns())) continue;
+                            Object changed = entity.codec().fromColumns(new LinkedHashMap<>(operation.columns()));
+                            id = target.binding().rootIdExtractor().apply(changed);
+                        }
+                        queueDirtyRoot(job, id);
+                    } catch (RuntimeException failure) {
+                        job.forceFull.set(true);
+                        LOG.warn("Auto-dirty mapping requires reconciliation: plan={}", job.plan.name());
+                    }
+                }
+            });
+            return this;
+        } finally {
+            lifecycleLock.unlock();
+        }
     }
 
     private record DirtyTarget(Job job, SnapshotDirtyBinding binding) {}
@@ -259,15 +265,20 @@ return 1
         }
     }
 
-    private synchronized ScheduledExecutorService heartbeat() {
-        if (closed) throw new IllegalStateException("Snapshot jobs are closed");
-        if (heartbeat == null) heartbeat = Executors.newScheduledThreadPool(
-                Math.max(1, Math.min(4, jobs.size())), task -> {
-                    Thread thread = new Thread(task, "cachedb-snapshot-lease");
-                    thread.setDaemon(true);
-                    return thread;
-                });
-        return heartbeat;
+    private ScheduledExecutorService heartbeat() {
+        lifecycleLock.lock();
+        try {
+            if (closed) throw new IllegalStateException("Snapshot jobs are closed");
+            if (heartbeat == null) heartbeat = Executors.newScheduledThreadPool(
+                    Math.max(1, Math.min(4, jobs.size())), task -> {
+                        Thread thread = new Thread(task, "cachedb-snapshot-lease");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+            return heartbeat;
+        } finally {
+            lifecycleLock.unlock();
+        }
     }
 
     public SnapshotRepository repository(String name) {
@@ -344,10 +355,13 @@ return 1
 
     private SnapshotRefreshResult refresh(String name, boolean manual, List<String> rootIds) {
         Job job = job(name);
-        synchronized (job) {
+        job.lock.lock();
+        try {
             if (closed) throw new IllegalStateException("Snapshot jobs are closed");
             if (!job.busy.compareAndSet(false, true)) return SnapshotRefreshResult.skipped("BUSY");
             job.worker = Thread.currentThread();
+        } finally {
+            job.lock.unlock();
         }
         String owner = UUID.randomUUID().toString();
         String generation = UUID.randomUUID().toString();
@@ -385,9 +399,12 @@ return 1
                     LOG.warn("Snapshot lease release failed: job={}", name);
                 }
             }
-            synchronized (job) {
+            job.lock.lock();
+            try {
                 job.worker = null;
                 job.busy.set(false);
+            } finally {
+                job.lock.unlock();
             }
         }
     }
@@ -401,7 +418,7 @@ return 1
             List<String> rootIds) {
         AtomicBoolean lost = new AtomicBoolean();
         Thread worker = Thread.currentThread();
-        Object guard = new Object();
+        var guard = new java.util.concurrent.locks.ReentrantLock();
         AtomicBoolean active = new AtomicBoolean(true);
         long renewMillis = Math.max(250, job.settings.leaseDuration().toMillis() / 3);
         var renewal =
@@ -427,11 +444,14 @@ return 1
                             } catch (RuntimeException failure) {
                                 failed = true;
                             }
-                            synchronized (guard) {
+                            guard.lock();
+                            try {
                                 if (active.get() && failed) {
                                     lost.set(true);
                                     worker.interrupt();
                                 }
+                            } finally {
+                                guard.unlock();
                             }
                         },
                         renewMillis,
@@ -528,8 +548,11 @@ return 1
         } catch (IOException failure) {
             throw new UncheckedIOException("Snapshot temporary storage failed", failure);
         } finally {
-            synchronized (guard) {
+            guard.lock();
+            try {
                 active.set(false);
+            } finally {
+                guard.unlock();
             }
             renewal.cancel(false);
             if (lost.get()) Thread.interrupted();
@@ -582,7 +605,8 @@ return 1
                     job.plan.name(),
                     spool.bytes(),
                     warningCount);
-        while (submitted < spool.entries().size()) {
+        // Empty generations also need owner-checked format metadata before publication.
+        do {
             check.run();
             int count = 0;
             long bytes = 0;
@@ -599,7 +623,7 @@ return 1
             if (!Long.valueOf(count).equals(accepted))
                 throw new IllegalStateException("Snapshot stage ownership lost");
             submitted += count;
-        }
+        } while (submitted < spool.entries().size());
         return submitted;
     }
 
@@ -624,7 +648,7 @@ return 1
     }
 
     private Set<String> availableContent(Job job, List<SnapshotSpool.Entry> entries) {
-        if (!job.plan.contentReuse()) return Set.of();
+        if (!job.plan.contentReuse() || entries.isEmpty()) return Set.of();
         Map<String, redis.clients.jedis.Response<Boolean>> responses = new LinkedHashMap<>();
         try (var pipeline = redis.pipeline()) {
             for (var entry : entries) {
@@ -746,39 +770,44 @@ return 1
     }
 
     @Override
-    public synchronized void start() {
-        if (!schedulingEnabled) return;
-        if (changeDatabase == null && jobs.values().stream().anyMatch(job -> !job.plan.autoDirtyBindings().isEmpty()))
-            throw new IllegalStateException("Auto-dirty plans require withDatabase or Spring auto-configuration");
-        if (closed) throw new IllegalStateException("Snapshot jobs are closed");
-        if (running) return;
-        if (jobs.values().stream().anyMatch(job -> job.settings.enabled()))
-            scheduler = Executors.newScheduledThreadPool(Math.max(1, Math.min(4, jobs.size())), task -> {
-                Thread thread = new Thread(task, "cachedb-snapshot-schedule");
-                thread.setDaemon(true);
-                return thread;
-            });
-        running = true;
-        for (Job job : jobs.values())
-            if (job.settings.enabled()) {
-                schedules.add(
-                        scheduler.scheduleWithFixedDelay(
-                                () -> {
-                                    boolean forced = job.forceFull.getAndSet(false);
-                                    try {
-                                        var result = refresh(job.plan.name(), forced);
-                                        if (forced && !"COMPLETED".equals(result.status())) job.forceFull.set(true);
-                                    } catch (RuntimeException ignored) {
-                                        if (forced) job.forceFull.set(true);
-                                    }
-                                },
-                                0,
-                                job.settings.interval().toMillis(),
-                                TimeUnit.MILLISECONDS));
-                if (!job.plan.autoDirtyBindings().isEmpty() || !job.settings.dirtyFlushInterval().isZero()
-                        || job.settings.dirtyFlushThreshold() > 0)
-                    schedules.add(scheduler.scheduleWithFixedDelay(() -> dirtyTick(job), 250, 250, TimeUnit.MILLISECONDS));
-            }
+    public void start() {
+        lifecycleLock.lock();
+        try {
+            if (!schedulingEnabled) return;
+            if (changeDatabase == null && jobs.values().stream().anyMatch(job -> !job.plan.autoDirtyBindings().isEmpty()))
+                throw new IllegalStateException("Auto-dirty plans require withDatabase or Spring auto-configuration");
+            if (closed) throw new IllegalStateException("Snapshot jobs are closed");
+            if (running) return;
+            if (jobs.values().stream().anyMatch(job -> job.settings.enabled()))
+                scheduler = Executors.newScheduledThreadPool(Math.max(1, Math.min(4, jobs.size())), task -> {
+                    Thread thread = new Thread(task, "cachedb-snapshot-schedule");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+            running = true;
+            for (Job job : jobs.values())
+                if (job.settings.enabled()) {
+                    schedules.add(
+                            scheduler.scheduleWithFixedDelay(
+                                    () -> {
+                                        boolean forced = job.forceFull.getAndSet(false);
+                                        try {
+                                            var result = refresh(job.plan.name(), forced);
+                                            if (forced && !"COMPLETED".equals(result.status())) job.forceFull.set(true);
+                                        } catch (RuntimeException ignored) {
+                                            if (forced) job.forceFull.set(true);
+                                        }
+                                    },
+                                    0,
+                                    job.settings.interval().toMillis(),
+                                    TimeUnit.MILLISECONDS));
+                    if (!job.plan.autoDirtyBindings().isEmpty() || !job.settings.dirtyFlushInterval().isZero()
+                            || job.settings.dirtyFlushThreshold() > 0)
+                        schedules.add(scheduler.scheduleWithFixedDelay(() -> dirtyTick(job), 250, 250, TimeUnit.MILLISECONDS));
+                }
+        } finally {
+            lifecycleLock.unlock();
+        }
     }
 
     @Override
@@ -797,21 +826,31 @@ return 1
     }
 
     @Override
-    public synchronized void close() {
-        closed = true;
-        running = false;
-        if (changeRegistration != null) try { changeRegistration.close(); }
-        catch (Exception failure) { LOG.warn("Snapshot dirty bridge close failed"); }
-        for (Job job : jobs.values())
-            synchronized (job) {
-                if (job.worker != null) job.worker.interrupt();
+    public void close() {
+        lifecycleLock.lock();
+        try {
+            closed = true;
+            running = false;
+            if (changeRegistration != null) try { changeRegistration.close(); }
+            catch (Exception failure) { LOG.warn("Snapshot dirty bridge close failed"); }
+            for (Job job : jobs.values()) {
+                job.lock.lock();
+                try {
+                    if (job.worker != null) job.worker.interrupt();
+                } finally {
+                    job.lock.unlock();
+                }
             }
-        for (var future : schedules) future.cancel(true);
-        if (scheduler != null) scheduler.shutdownNow();
-        if (heartbeat != null) heartbeat.shutdownNow();
+            for (var future : schedules) future.cancel(true);
+            if (scheduler != null) scheduler.shutdownNow();
+            if (heartbeat != null) heartbeat.shutdownNow();
+        } finally {
+            lifecycleLock.unlock();
+        }
     }
 
     private static final class Job {
+        private final java.util.concurrent.locks.ReentrantLock lock = new java.util.concurrent.locks.ReentrantLock();
         final Set<String> changedRoots = java.util.concurrent.ConcurrentHashMap.newKeySet();
         final java.util.concurrent.atomic.AtomicInteger queuedRoots = new java.util.concurrent.atomic.AtomicInteger();
         final AtomicBoolean forceFull = new AtomicBoolean();
@@ -826,11 +865,15 @@ return 1
 
         JsonArrayCodec<?> codec(ObjectMapper mapper) {
             var value = codec;
-            if (value == null)
-                synchronized (this) {
+            if (value == null) {
+                lock.lock();
+                try {
                     value = codec;
                     if (value == null) codec = value = plan.jsonCodec() != null ? plan.jsonCodec() : new JacksonJsonArrayCodec<>(mapper, plan.valueType());
+                } finally {
+                    lock.unlock();
                 }
+            }
             return value;
         }
 

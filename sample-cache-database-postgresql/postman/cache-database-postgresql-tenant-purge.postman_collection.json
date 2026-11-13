@@ -1,0 +1,285 @@
+{
+  "info": {
+    "name": "CacheDB postgresql Tenant Purge - Isolated Native INITIAL",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED. Disposable schema only. One explicit purge POST; no retries, poll loops or reopen. Run through the companion wrapper with redirects disabled. Foreign Redis evidence is an encrypted sentinel, not a separately enrolled foreign runtime."
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const base = pm.environment.get('baseUrl');",
+          "if (typeof base !== 'string' || !/^http:\\/\\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/.test(base)) { throw new Error('Explicit private disposable HTTP origin required'); }",
+          "if (!/^[0-9a-f]{32}$/.test(pm.environment.get('purgeRunId') || '')) { throw new Error('Fresh run ID required'); }",
+          "if (!/^[A-Za-z0-9_-]{32,128}$/.test(pm.environment.get('purgeAdminToken') || '')) { throw new Error('Bounded admin token required'); }",
+          "if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pm.environment.get('purgeOperationId') || '')) { throw new Error('Explicit operation UUID required'); }"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('No redirects', function () { pm.expect(pm.response.code >= 300 && pm.response.code < 400).to.eql(false); pm.expect(pm.response.headers.has('Location')).to.eql(false); });",
+          "pm.test('No credential output', function () { const token = pm.environment.get('purgeAdminToken'); pm.expect(typeof token === 'string' && !pm.response.text().includes(token)).to.eql(true); });"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Anonymous Status",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Purge-Run",
+            "value": "{{purgeRunId}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/tenant-purge/status"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Exact HTTP 401', function () { pm.response.to.have.status(401); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Invalid Bearer Status",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Purge-Run",
+            "value": "{{purgeRunId}}"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer invalid-sample-token"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/tenant-purge/status"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Exact HTTP 403', function () { pm.response.to.have.status(403); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Native INITIAL Status",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Purge-Run",
+            "value": "{{purgeRunId}}"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{purgeAdminToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/tenant-purge/status"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Exact HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const value = pm.response.json();",
+              "pm.test('Actual two-root INITIAL state', function () { pm.expect(value.actualRoots).to.eql(2); pm.expect(value.phase).to.eql('ACTIVE'); pm.expect(value.sqlGate).to.eql('OPEN'); pm.expect(value.redisGate).to.eql('OPEN'); pm.expect(value.sqlGeneration).to.eql(1); pm.expect(value.redisGeneration).to.eql(1); });",
+              "pm.test('Bounded owned SQL and hot state', function () { pm.expect(value.ownedSqlRows).to.eql(7); pm.expect(value.hotOwnedRows).to.eql(2); pm.expect(value.coldAbsentFromRedis).to.eql(true); });",
+              "pm.test('Foreign SQL and encrypted Redis sentinel preserved', function () { pm.expect(value.foreignSqlPreserved).to.eql(true); pm.expect(value.foreignRedisPreserved).to.eql(true); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Owned Hot Row",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Purge-Run",
+            "value": "{{purgeRunId}}"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{purgeAdminToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/tenant-purge/rows/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Exact HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Owned hot row delivered', function () { const row = pm.response.json(); pm.expect(row.id).to.eql(1); pm.expect(row.present).to.eql(true); pm.expect(Object.keys(row).sort()).to.eql(['id', 'present']); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Owned Cold Row Fails Closed",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Purge-Run",
+            "value": "{{purgeRunId}}"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{purgeAdminToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/tenant-purge/rows/3"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Exact HTTP 409', function () { pm.response.to.have.status(409); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Purge Owned Tenant Including Source",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Purge-Run",
+            "value": "{{purgeRunId}}"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{purgeAdminToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/tenant-purge/purge",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"confirmation\":\"ERASE_OWNED_ROWS\",\"operationId\":\"{{purgeOperationId}}\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Exact HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const value = pm.response.json();",
+              "pm.test('Actual two-root CLOSED state', function () { pm.expect(value.actualRoots).to.eql(2); pm.expect(value.phase).to.eql('COMPLETE'); pm.expect(value.sqlGate).to.eql('CLOSED'); pm.expect(value.redisGate).to.eql('CLOSED'); pm.expect(value.sqlGeneration).to.eql(1); pm.expect(value.redisGeneration).to.eql(1); });",
+              "pm.test('Bounded owned SQL and hot state', function () { pm.expect(value.ownedSqlRows).to.eql(0); pm.expect(value.hotOwnedRows).to.eql(0); pm.expect(value.coldAbsentFromRedis).to.eql(true); });",
+              "pm.test('Foreign SQL and encrypted Redis sentinel preserved', function () { pm.expect(value.foreignSqlPreserved).to.eql(true); pm.expect(value.foreignRedisPreserved).to.eql(true); });",
+              "pm.test('Include-source purge retains security metadata', function () { pm.expect(value.purgedSqlRows).to.eql(7); pm.expect(value.securityMetadataRetained).to.eql(true); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 Retained CLOSED Status",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Purge-Run",
+            "value": "{{purgeRunId}}"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{purgeAdminToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/tenant-purge/status"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Exact HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const value = pm.response.json();",
+              "pm.test('Actual two-root CLOSED state', function () { pm.expect(value.actualRoots).to.eql(2); pm.expect(value.phase).to.eql('COMPLETE'); pm.expect(value.sqlGate).to.eql('CLOSED'); pm.expect(value.redisGate).to.eql('CLOSED'); pm.expect(value.sqlGeneration).to.eql(1); pm.expect(value.redisGeneration).to.eql(1); });",
+              "pm.test('Bounded owned SQL and hot state', function () { pm.expect(value.ownedSqlRows).to.eql(0); pm.expect(value.hotOwnedRows).to.eql(0); pm.expect(value.coldAbsentFromRedis).to.eql(true); });",
+              "pm.test('Foreign SQL and encrypted Redis sentinel preserved', function () { pm.expect(value.foreignSqlPreserved).to.eql(true); pm.expect(value.foreignRedisPreserved).to.eql(true); });",
+              "pm.test('Include-source purge retains security metadata', function () { pm.expect(value.purgedSqlRows).to.eql(7); pm.expect(value.securityMetadataRetained).to.eql(true); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 Closed Delivery Rejected",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Purge-Run",
+            "value": "{{purgeRunId}}"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{purgeAdminToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/tenant-purge/rows/1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Exact HTTP 409', function () { pm.response.to.have.status(409); });"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

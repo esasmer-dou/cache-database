@@ -7,11 +7,13 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'A stable semantic version is required.' }
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+# Explicit public allowlist: benchmark and SDK acceptance tools are never imported.
 $modules = @(
     'cachedb-annotations', 'cachedb-processor', 'cachedb-core', 'cachedb-json',
     'cachedb-storage-redis', 'cachedb-storage-jdbc', 'cachedb-storage-postgres',
     'cachedb-storage-mssql', 'cachedb-storage-oracle', 'cachedb-starter',
-    'cachedb-spring-boot-starter', 'cachedb-spring-boot-starter-postgres',
+    'cachedb-spring-boot-starter', 'cachedb-reactor', 'cachedb-spring-data',
+    'cachedb-spring-boot-starter-postgres',
     'cachedb-spring-boot-starter-mssql', 'cachedb-spring-boot-starter-oracle',
     'cachedb-spring-boot-starter-admin', 'cachedb-spring-boot-test',
     'cachedb-maven-plugin', 'cachedb-migration-recipes', 'cachedb-examples'
@@ -59,5 +61,5 @@ try {
             try { $input.CopyTo($output) } finally { $output.Dispose() }
         } finally { $input.Dispose() }
     }
-    Write-Host "Imported 57 JARs and 21 matching POMs for $Version without rebuilding."
+    Write-Host "Imported $($modules.Count * 3) JARs and $($modules.Count + 2) matching POMs for $Version without rebuilding."
 } finally { $archive.Dispose() }

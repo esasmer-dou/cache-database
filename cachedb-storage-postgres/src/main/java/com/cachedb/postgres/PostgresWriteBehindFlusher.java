@@ -61,42 +61,55 @@ public final class PostgresWriteBehindFlusher extends AbstractJdbcWriteBehindFlu
 
     @Override
     public void flush(QueuedWriteOperation operation) throws SQLException {
-        if (operation.atomicBatch()) {
-            flushAtomicBatch(operation.batchOperations());
-            return;
-        }
-        long startedAt = System.nanoTime();
         try {
-            flushAtomicBatch(List.of(operation));
-        } finally {
-            recordPostgresWrite(startedAt, operation.observationTag());
+            if (operation.atomicBatch()) {
+                flushAtomicBatch(operation.batchOperations());
+                return;
+            }
+            long startedAt = System.nanoTime();
+            try {
+                flushAtomicBatch(List.of(operation));
+            } finally {
+                recordPostgresWrite(startedAt, operation.observationTag());
+            }
+        } catch (SQLException unsafe) {
+            throw safeSqlFailure(List.of(operation), unsafe);
         }
     }
 
     @Override
     public void flushBatch(List<QueuedWriteOperation> operations) throws SQLException {
-        long startedAt = System.nanoTime();
         try {
-            flushBatchInternal(operations);
-        } finally {
-            if (!operations.isEmpty()) {
-                recordPostgresWrite(startedAt, dominantObservationTag(operations));
+            long startedAt = System.nanoTime();
+            try {
+                flushBatchInternal(operations);
+            } finally {
+                if (!operations.isEmpty()) {
+                    recordPostgresWrite(startedAt, dominantObservationTag(operations));
+                }
             }
+        } catch (SQLException unsafe) {
+            throw safeSqlFailure(operations, unsafe);
         }
     }
 
     @Override
     public void flushAtomicBatch(List<QueuedWriteOperation> operations) throws SQLException {
-        if (operations.isEmpty()) return;
-        writeFence.initialize();
-        try (Connection connection = dataSource.getConnection()) {
-            inTransaction(connection, operations, null, null, accepted -> {
-                for (var operation : accepted) {
-                    if (operation.type() == OperationType.DELETE) delete(connection, operation);
-                    else if (operation.type() == OperationType.PATCH) patch(connection, operation);
-                    else upsert(connection, operation);
-                }
-            });
+        try {
+            if (operations.isEmpty()) return;
+            var prepared = prepareWrites(operations);
+            initializeWriteFence(prepared);
+            try (Connection connection = dataSource.getConnection()) {
+                inTransaction(connection, prepared, null, null, accepted -> {
+                    for (var operation : accepted) {
+                        if (operation.type() == OperationType.DELETE) delete(connection, operation);
+                        else if (operation.type() == OperationType.PATCH) patch(connection, operation);
+                        else upsert(connection, operation);
+                    }
+                });
+            }
+        } catch (SQLException unsafe) {
+            throw safeSqlFailure(operations, unsafe);
         }
     }
 
@@ -109,9 +122,10 @@ public final class PostgresWriteBehindFlusher extends AbstractJdbcWriteBehindFlu
             flush(batchOperations.get(0));
             return;
         }
-        writeFence.initialize();
+        var prepared = prepareWrites(batchOperations);
+        initializeWriteFence(prepared);
         try (Connection connection = dataSource.getConnection()) {
-            inTransaction(connection, batchOperations, null, null, accepted -> {
+            inTransaction(connection, prepared, null, null, accepted -> {
                 if (hasPatch) {
                     int index = 0;
                     while (index < accepted.size()) {

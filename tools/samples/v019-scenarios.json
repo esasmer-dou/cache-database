@@ -1,0 +1,2989 @@
+{
+  "schema": 1,
+  "optInCompanions": [
+    {
+      "feature": "tenant-purge",
+      "manifest": "tools/samples/v019-tenant-purge-scenarios.json",
+      "status": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED",
+      "baseline": { "complete": false },
+      "runtimeEvidence": null
+    }
+  ],
+  "providers": [
+    "postgresql",
+    "mssql",
+    "oracle"
+  ],
+  "cacheFolder": "07 Method Cache and Async",
+  "requiredFeatures": [
+    "spring-cache",
+    "async",
+    "reactive",
+    "range-keyset",
+    "spring-data",
+    "spring-data-bulk-delete",
+    "field-encryption",
+    "retention",
+    "tenant-purge"
+  ],
+  "nativeRequirements": {
+    "spring-cache": [
+      {
+        "file": "cachedb-spring-boot-starter/src/main/java/com/cachedb/spring/boot/cache/CacheDbCacheManager.java",
+        "type": "CacheDbCacheManager",
+        "method": "getCache"
+      }
+    ],
+    "async": [
+      {
+        "file": "cachedb-core/src/main/java/com/cachedb/core/repository/AsyncCacheDbRepository.java",
+        "type": "AsyncCacheDbRepository",
+        "method": "saveAsync",
+        "arity": 1
+      }
+    ],
+    "reactive": [
+      {
+        "file": "cachedb-reactor/src/main/java/com/cachedb/reactor/ReactiveEntityRepository.java",
+        "type": "ReactiveEntityRepository",
+        "method": "findHotById"
+      }
+    ],
+    "range-keyset": [
+      {
+        "file": "cachedb-storage-redis/src/main/java/com/cachedb/redis/RedisEntityRepository.java",
+        "type": "RedisEntityRepository",
+        "method": "queryRedisLongLexicalWindow"
+      },
+      {
+        "file": "cachedb-core/src/main/java/com/cachedb/core/api/RedisLexicalWindowRepository.java",
+        "type": "RedisLexicalWindowRepository",
+        "method": "readLong"
+      },
+      {
+        "file": "cachedb-core/src/main/java/com/cachedb/core/crypto/EncryptedStorageChecks.java",
+        "type": "EncryptedStorageChecks",
+        "method": "validateQuery",
+        "arity": 2
+      }
+    ],
+    "spring-data": [
+      {
+        "file": "cachedb-spring-data/src/main/java/com/cachedb/spring/data/CacheDbSpringDataRepository.java",
+        "type": "CacheDbSpringDataRepository",
+        "baseTypes": [
+          "ListCrudRepository",
+          "ListPagingAndSortingRepository"
+        ]
+      },
+      {
+        "file": "cachedb-spring-data/src/main/java/com/cachedb/spring/data/AbstractCacheDbSpringDataRepository.java",
+        "type": "AbstractCacheDbSpringDataRepository",
+        "method": "window"
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "method-quote",
+      "feature": "spring-cache",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "quote",
+      "verb": "GET",
+      "route": "/api/examples/v019/cache/quotes/{sku}",
+      "calls": [
+        "access.tenant",
+        "cache.quote"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "actualAnnotationsHitRefreshEvictClearNullAndTenantIsolation"
+      },
+      "flows": [
+        {
+          "file": "cacheapi/CacheApiController.java",
+          "method": "cached",
+          "calls": [
+            "CacheCausalContext.hasRequirements",
+            "CacheTenantContext.withTenant",
+            "work.get"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "method-refresh",
+      "feature": "spring-cache",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "refresh",
+      "verb": "POST",
+      "route": "/api/examples/v019/cache/quotes/{sku}/refresh",
+      "calls": [
+        "access.tenant",
+        "cache.refresh"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "actualAnnotationsHitRefreshEvictClearNullAndTenantIsolation"
+      }
+    },
+    {
+      "id": "method-evict",
+      "feature": "spring-cache",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "evict",
+      "verb": "DELETE",
+      "route": "/api/examples/v019/cache/quotes/{sku}",
+      "calls": [
+        "access.tenant",
+        "cache.evict"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "actualAnnotationsHitRefreshEvictClearNullAndTenantIsolation"
+      }
+    },
+    {
+      "id": "method-clear",
+      "feature": "spring-cache",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "clear",
+      "verb": "DELETE",
+      "route": "/api/examples/v019/cache/quotes",
+      "calls": [
+        "access.tenant",
+        "cache.clear"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "actualAnnotationsHitRefreshEvictClearNullAndTenantIsolation"
+      }
+    },
+    {
+      "id": "method-null",
+      "feature": "spring-cache",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "nullable",
+      "verb": "GET",
+      "route": "/api/examples/v019/cache/nullable/{sku}",
+      "calls": [
+        "access.tenant",
+        "cache.nullable"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "actualAnnotationsHitRefreshEvictClearNullAndTenantIsolation"
+      }
+    },
+    {
+      "id": "offer-save",
+      "feature": "async",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "save",
+      "verb": "PUT",
+      "route": "/api/examples/v019/async/offers/{id}",
+      "calls": [
+        "access.supplier",
+        "operations.save"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "asyncReceiptsSourceDurabilityAndReactiveTenantCausalReadsRemainDistinct"
+      },
+      "flows": [
+        {
+          "file": "cacheapi/CacheApiOperations.java",
+          "method": "save",
+          "calls": [
+            "offers.saveAsync"
+          ]
+        },
+        {
+          "file": "cacheapi/CacheApiController.java",
+          "method": "accepted",
+          "calls": [
+            "CacheCausalContext.withReceipt",
+            "CacheCausalContext.encodeToken"
+          ]
+        }
+      ],
+      "dto": "OfferInput"
+    },
+    {
+      "id": "offer-hot",
+      "feature": "async",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "hot",
+      "verb": "GET",
+      "route": "/api/examples/v019/async/offers/{id}",
+      "calls": [
+        "access.supplier",
+        "operations.hot"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "asyncReceiptsSourceDurabilityAndReactiveTenantCausalReadsRemainDistinct"
+      },
+      "flows": [
+        {
+          "file": "cacheapi/CacheApiOperations.java",
+          "method": "hot",
+          "calls": [
+            "offers.findHotByIdAsync"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "offer-source",
+      "feature": "async",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "source",
+      "verb": "GET",
+      "route": "/api/examples/v019/async/offers/{id}/source",
+      "calls": [
+        "access.supplier",
+        "operations.source"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "asyncReceiptsSourceDurabilityAndReactiveTenantCausalReadsRemainDistinct"
+      },
+      "flows": [
+        {
+          "file": "cacheapi/CacheApiOperations.java",
+          "method": "source",
+          "calls": [
+            "offers.findSourceByIdAsync"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stock-write",
+      "feature": "reactive",
+      "controller": "controls/ControlsController.java",
+      "method": "stockPut",
+      "verb": "PUT",
+      "route": "/api/examples/v018/stock/{id}",
+      "calls": [
+        "access.tenant",
+        "store.saveStock"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "asyncReceiptsSourceDurabilityAndReactiveTenantCausalReadsRemainDistinct"
+      },
+      "dto": "StockInput"
+    },
+    {
+      "id": "stock-one",
+      "feature": "reactive",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "stock",
+      "verb": "GET",
+      "route": "/api/examples/v019/reactive/stock/{id}",
+      "calls": [
+        "access.tenant",
+        "operations.stock"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "asyncReceiptsSourceDurabilityAndReactiveTenantCausalReadsRemainDistinct"
+      },
+      "flows": [
+        {
+          "file": "cacheapi/CacheApiOperations.java",
+          "method": "stock",
+          "calls": [
+            "stock.findHotById"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stock-list",
+      "feature": "reactive",
+      "controller": "cacheapi/CacheApiController.java",
+      "method": "stocks",
+      "verb": "GET",
+      "route": "/api/examples/v019/reactive/stock",
+      "calls": [
+        "access.tenant",
+        "operations.stocks"
+      ],
+      "test": {
+        "file": "cacheapi/CacheApiExternalIT.java",
+        "method": "asyncReceiptsSourceDurabilityAndReactiveTenantCausalReadsRemainDistinct"
+      },
+      "flows": [
+        {
+          "file": "cacheapi/CacheApiOperations.java",
+          "method": "stocks",
+          "calls": [
+            "stock.findAll"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "range-save",
+      "feature": "spring-data",
+      "controller": "rangedata/RangeDataController.java",
+      "method": "save",
+      "verb": "PUT",
+      "route": "/api/examples/v019/range-data/{run}/rows/{slot}",
+      "calls": [
+        "guard.call",
+        "data.save",
+        "RangeDataGuard.id"
+      ],
+      "test": {
+        "file": "rangedata/RangeDataExternalIT.java",
+        "method": "httpUsesVerifiedTenantExactLongStringsBoundsAndRealProviderWriteBehind"
+      },
+      "flows": [
+        {
+          "file": "rangedata/RangeDataGuard.java",
+          "method": "call",
+          "calls": [
+            "access.tenant",
+            "CacheCausalContext.hasRequirements",
+            "operation.apply"
+          ]
+        }
+      ],
+      "dto": "Input"
+    },
+    {
+      "id": "range-point",
+      "feature": "spring-data",
+      "controller": "rangedata/RangeDataController.java",
+      "method": "read",
+      "verb": "GET",
+      "route": "/api/examples/v019/range-data/{run}/rows/{slot}",
+      "calls": [
+        "guard.call",
+        "data.findById"
+      ],
+      "test": {
+        "file": "rangedata/RangeDataExternalIT.java",
+        "method": "httpUsesVerifiedTenantExactLongStringsBoundsAndRealProviderWriteBehind"
+      }
+    },
+    {
+      "id": "range-delete",
+      "feature": "spring-data",
+      "controller": "rangedata/RangeDataController.java",
+      "method": "delete",
+      "verb": "DELETE",
+      "route": "/api/examples/v019/range-data/{run}/rows/{slot}",
+      "calls": [
+        "guard.call",
+        "data.deleteById"
+      ],
+      "test": {
+        "file": "rangedata/RangeDataExternalIT.java",
+        "method": "springDataCrudPageSliceWindowAndSortMatchActualNativeRepository"
+      }
+    },
+    {
+      "id": "range-window",
+      "feature": "range-keyset",
+      "controller": "rangedata/RangeDataController.java",
+      "method": "nativeRange",
+      "verb": "GET",
+      "route": "/api/examples/v019/range-data/{run}/native",
+      "calls": [
+        "guard.call",
+        "routes.ascending",
+        "routes.descending"
+      ],
+      "test": {
+        "file": "rangedata/RangeDataExternalIT.java",
+        "method": "generatedLongRangeMatchesNativeRowsAcrossTiesUnsafeLongsAndBothDirections"
+      },
+      "flows": [
+        {
+          "file": "rangedata/RangeDataConfiguration.java",
+          "method": "rangeRoutes",
+          "calls": [
+            "database.repository",
+            "nativeRepository.rebuildCompositeIndexesFenced"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "range-seek",
+      "feature": "range-keyset",
+      "controller": "rangedata/RangeDataController.java",
+      "method": "nativeSeek",
+      "verb": "GET",
+      "route": "/api/examples/v019/range-data/{run}/native/seek",
+      "calls": [
+        "guard.call",
+        "routes.seek"
+      ],
+      "test": {
+        "file": "rangedata/RangeDataExternalIT.java",
+        "method": "generatedLongRangeMatchesNativeRowsAcrossTiesUnsafeLongsAndBothDirections"
+      }
+    },
+    {
+      "id": "data-page",
+      "feature": "spring-data",
+      "controller": "rangedata/RangeDataController.java",
+      "method": "page",
+      "verb": "GET",
+      "route": "/api/examples/v019/range-data/{run}/data/page",
+      "calls": [
+        "guard.call",
+        "data.findByRunIdAndStatus",
+        "pageable"
+      ],
+      "test": {
+        "file": "rangedata/RangeDataExternalIT.java",
+        "method": "springDataCrudPageSliceWindowAndSortMatchActualNativeRepository"
+      }
+    },
+    {
+      "id": "data-slice",
+      "feature": "spring-data",
+      "controller": "rangedata/RangeDataController.java",
+      "method": "slice",
+      "verb": "GET",
+      "route": "/api/examples/v019/range-data/{run}/data/slice",
+      "calls": [
+        "guard.call",
+        "data.readByRunIdAndStatus",
+        "pageable"
+      ],
+      "test": {
+        "file": "rangedata/RangeDataExternalIT.java",
+        "method": "springDataCrudPageSliceWindowAndSortMatchActualNativeRepository"
+      }
+    },
+    {
+      "id": "data-window",
+      "feature": "spring-data",
+      "controller": "rangedata/RangeDataController.java",
+      "method": "window",
+      "verb": "GET",
+      "route": "/api/examples/v019/range-data/{run}/data/window",
+      "calls": [
+        "guard.call",
+        "data.readByRunIdAndStatusOrderByRankValueAscRowIdAsc",
+        "ScrollPosition.of"
+      ],
+      "test": {
+        "file": "rangedata/RangeDataExternalIT.java",
+        "method": "springDataCrudPageSliceWindowAndSortMatchActualNativeRepository"
+      }
+    },
+    {
+      "id": "data-stats",
+      "feature": "spring-data",
+      "controller": "rangedata/RangeDataController.java",
+      "method": "stats",
+      "verb": "GET",
+      "route": "/api/examples/v019/range-data/{run}/data/stats",
+      "calls": [
+        "guard.call",
+        "data.countByRunIdAndStatus",
+        "data.existsByRunIdAndStatus"
+      ],
+      "test": {
+        "file": "rangedata/RangeDataExternalIT.java",
+        "method": "springDataCrudPageSliceWindowAndSortMatchActualNativeRepository"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "scenario": "method-clear",
+      "status": 204,
+      "contract": {
+        "name": "Cache API - Start and Clear Tenant A",
+        "request": {
+          "method": "DELETE",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+          "pm.test('Tenant A logical clear', () => pm.response.to.have.status(204));"
+        ],
+        "prerequest": [
+          "for (const key of ['cacheTenantAToken', 'cacheTenantBToken', 'cacheSupplierToken']) {",
+          "  if (!pm.variables.get(key)) throw new Error('Set credential variable ' + key);",
+          "}",
+          "const id = Date.now() * 1000 + Math.floor(Math.random() * 400);",
+          "pm.collectionVariables.set('cacheOfferId', String(id));",
+          "pm.collectionVariables.set('cacheStockA', String(id + 1));",
+          "pm.collectionVariables.set('cacheStockB', String(id + 2));",
+          "pm.collectionVariables.set('cacheSku', 'SKU-' + String(id));",
+          "for (const name of ['Read Refreshed Quote', 'Tenant A Survives Tenant B Clear', 'Read After Key Eviction', 'Read After Generation Clear']) pm.collectionVariables.unset('cacheWait:Cache API - ' + name);"
+        ]
+      }
+    },
+    {
+      "scenario": "method-clear",
+      "status": 204,
+      "contract": {
+        "name": "Cache API - Clear Tenant B",
+        "request": {
+          "method": "DELETE",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+          "pm.test('Tenant B logical clear', () => pm.response.to.have.status(204));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-quote",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Read Tenant A Quote",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "const row = pm.response.json();",
+          "pm.test('Server-selected tenant A', () => pm.expect(row.tenant).to.eql('shop-a'));",
+          "pm.test('Computed scalar value', () => pm.expect(row.value).to.be.a('string'));",
+          "pm.collectionVariables.set('cacheFirstQuote', row.value);"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-quote",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Read Tenant A Cache Hit",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Same method arguments share the value', () => pm.expect(pm.response.json().value).to.eql(pm.collectionVariables.get('cacheFirstQuote')));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-quote",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Read Tenant B Isolated Quote",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "const row = pm.response.json();",
+          "pm.test('Server-selected tenant B', () => pm.expect(row.tenant).to.eql('shop-b'));",
+          "pm.test('No cross-tenant cache value', () => pm.expect(row.value).not.to.eql(pm.collectionVariables.get('cacheFirstQuote')));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-refresh",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Refresh Tenant A Quote",
+        "request": {
+          "method": "POST",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}/refresh?branch=7",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "const row = pm.response.json();",
+          "pm.test('Refresh computes a new method result', () => pm.expect(row.value).not.to.eql(pm.collectionVariables.get('cacheFirstQuote')));",
+          "pm.collectionVariables.set('cacheRefreshedQuote', row.value);"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-quote",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Read Refreshed Quote",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "const row = pm.response.json();",
+          "const matches = row.value === pm.collectionVariables.get('cacheRefreshedQuote');",
+          "const key = 'cacheWait:' + pm.info.requestName;",
+          "let state = pm.collectionVariables.get(key);",
+          "state = state ? JSON.parse(state) : {tries:0, deadline:Date.now()+10000};",
+          "if (!matches && ++state.tries < 40 && Date.now() < state.deadline) {",
+          "  pm.collectionVariables.set(key, JSON.stringify(state));",
+          "  pm.execution.setNextRequest(pm.info.requestName);",
+          "  setTimeout(() => {}, 100);",
+          "} else {",
+          "  pm.collectionVariables.unset(key);",
+          "  pm.test('Notification-visible method result', () => pm.expect(matches).to.eql(true));",
+          "}"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-clear",
+      "status": 204,
+      "contract": {
+        "name": "Cache API - Clear Only Tenant B",
+        "request": {
+          "method": "DELETE",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+          "pm.test('Clear is tenant scoped', () => pm.response.to.have.status(204));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-quote",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Tenant A Survives Tenant B Clear",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "const row = pm.response.json();",
+          "const matches = row.value === pm.collectionVariables.get('cacheRefreshedQuote');",
+          "const key = 'cacheWait:' + pm.info.requestName;",
+          "let state = pm.collectionVariables.get(key);",
+          "state = state ? JSON.parse(state) : {tries:0, deadline:Date.now()+10000};",
+          "if (!matches && ++state.tries < 40 && Date.now() < state.deadline) {",
+          "  pm.collectionVariables.set(key, JSON.stringify(state));",
+          "  pm.execution.setNextRequest(pm.info.requestName);",
+          "  setTimeout(() => {}, 100);",
+          "} else {",
+          "  pm.collectionVariables.unset(key);",
+          "  pm.test('Notification-visible method result', () => pm.expect(matches).to.eql(true));",
+          "}"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-evict",
+      "status": 204,
+      "contract": {
+        "name": "Cache API - Evict One Tenant A Quote",
+        "request": {
+          "method": "DELETE",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+          "pm.test('One logical key evicted', () => pm.response.to.have.status(204));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-quote",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Read After Key Eviction",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "const row = pm.response.json();",
+          "const matches = row.value !== pm.collectionVariables.get('cacheRefreshedQuote');",
+          "const key = 'cacheWait:' + pm.info.requestName;",
+          "let state = pm.collectionVariables.get(key);",
+          "state = state ? JSON.parse(state) : {tries:0, deadline:Date.now()+10000};",
+          "if (!matches && ++state.tries < 40 && Date.now() < state.deadline) {",
+          "  pm.collectionVariables.set(key, JSON.stringify(state));",
+          "  pm.execution.setNextRequest(pm.info.requestName);",
+          "  setTimeout(() => {}, 100);",
+          "} else {",
+          "  pm.collectionVariables.unset(key);",
+          "  pm.test('Notification-visible method result', () => pm.expect(matches).to.eql(true));",
+          "  if (matches) pm.collectionVariables.set('cacheAfterEviction', row.value);",
+          "}"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-clear",
+      "status": 204,
+      "contract": {
+        "name": "Cache API - Clear Tenant A Generation",
+        "request": {
+          "method": "DELETE",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+          "pm.test('Generation clear accepted', () => pm.response.to.have.status(204));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-quote",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Read After Generation Clear",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "const row = pm.response.json();",
+          "const matches = row.value !== pm.collectionVariables.get('cacheAfterEviction');",
+          "const key = 'cacheWait:' + pm.info.requestName;",
+          "let state = pm.collectionVariables.get(key);",
+          "state = state ? JSON.parse(state) : {tries:0, deadline:Date.now()+10000};",
+          "if (!matches && ++state.tries < 40 && Date.now() < state.deadline) {",
+          "  pm.collectionVariables.set(key, JSON.stringify(state));",
+          "  pm.execution.setNextRequest(pm.info.requestName);",
+          "  setTimeout(() => {}, 100);",
+          "} else {",
+          "  pm.collectionVariables.unset(key);",
+          "  pm.test('Notification-visible method result', () => pm.expect(matches).to.eql(true));",
+          "}"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-null",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Read Nullable Method",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/cache/nullable/MISSING-ITEM",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Null is a cached value, not a missing route', () => pm.expect(pm.response.json().value).to.eql(null));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "method-null",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Read Cached Null",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/cache/nullable/MISSING-ITEM",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Null is a cached value, not a missing route', () => pm.expect(pm.response.json().value).to.eql(null));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "offer-save",
+      "status": 202,
+      "contract": {
+        "name": "Cache API - Async Save With Actual Receipt",
+        "request": {
+          "method": "PUT",
+          "url": "{{baseUrl}}/api/examples/v019/async/offers/{{cacheOfferId}}",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheSupplierToken}}"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": {
+            "mode": "raw",
+            "raw": "{\"supplier\":\"cache-api\",\"status\":\"ACTIVE\",\"unitPrice\":12.3400,\"availableUnits\":7}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+          "const receipt = pm.response.json();",
+          "pm.test('Redis acceptance, not SQL commit', () => {",
+          "  pm.response.to.have.status(202);",
+          "  pm.expect(receipt.redisAccepted).to.eql(true);",
+          "  pm.expect(receipt.sqlDurabilityConfirmed).to.eql(false);",
+          "  pm.expect(receipt.version).to.be.above(0);",
+          "  pm.expect(String(receipt.id)).to.eql(pm.collectionVariables.get('cacheOfferId'));",
+          "  pm.expect(receipt.entity.availableUnits).to.eql(7);",
+          "  pm.expect(receipt.causalToken).to.eql(pm.response.headers.get('X-CacheDB-Causal'));",
+          "});",
+          "pm.collectionVariables.set('cacheOfferCausal', receipt.causalToken);"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "offer-hot",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Async Hot Read With Causal Token",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/async/offers/{{cacheOfferId}}",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheSupplierToken}}"
+            },
+            {
+              "key": "X-CacheDB-Causal",
+              "value": "{{cacheOfferCausal}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "const row = pm.response.json();",
+          "pm.test('Redis accepted value is visible', () => { pm.expect(String(row.offerId)).to.eql(pm.collectionVariables.get('cacheOfferId')); pm.expect(row.availableUnits).to.eql(7); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "offer-source",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Explicit Async Source Read",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/async/offers/{{cacheOfferId}}/source",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheSupplierToken}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Source row independently observed', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().availableUnits).to.eql(7); });"
+        ],
+        "prerequest": [
+          "const url = pm.variables.replaceIn('{{baseUrl}}/api/examples/v019/async/offers/{{cacheOfferId}}/source');",
+          "const deadline = Date.now() + 20000; let attempts = 0;",
+          "function waitForSource() {",
+          "  if (++attempts > 40 || Date.now() >= deadline) throw new Error('Source durability observation deadline exceeded');",
+          "  pm.sendRequest({method:'GET', url, header:{Authorization:'Bearer ' + pm.variables.get('cacheSupplierToken')}}, (error, response) => {",
+          "    if (error) throw error;",
+          "    if (response.code === 200) return;",
+          "    if (response.code !== 404) throw new Error('Unexpected source status ' + response.code);",
+          "    setTimeout(waitForSource, 500);",
+          "  });",
+          "}",
+          "waitForSource();"
+        ]
+      }
+    },
+    {
+      "scenario": "stock-write",
+      "status": 202,
+      "contract": {
+        "name": "Cache API - Seed Tenant A Stock With Receipt",
+        "request": {
+          "method": "PUT",
+          "url": "{{baseUrl}}/api/examples/v018/stock/{{cacheStockA}}",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": {
+            "mode": "raw",
+            "raw": "{\"stockId\":{{cacheStockA}},\"warehouse\":\"API\",\"status\":\"AVAILABLE\",\"availableUnits\":9}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+          "pm.test('Existing stock command accepted', () => pm.response.to.have.status(202));",
+          "pm.collectionVariables.set('cacheStockACausal', pm.response.headers.get('X-CacheDB-Causal'));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "stock-one",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Reactive Tenant A Causal Read",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/reactive/stock/{{cacheStockA}}",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            },
+            {
+              "key": "X-CacheDB-Causal",
+              "value": "{{cacheStockACausal}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Reactive subscriber receives only tenant A data', () => {",
+          "  pm.expect(pm.response.json().tenantId).to.eql('shop-a');",
+          "  pm.expect(pm.response.json().availableUnits).to.eql(9);",
+          "});"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "stock-write",
+      "status": 202,
+      "contract": {
+        "name": "Cache API - Seed Tenant B Stock With Receipt",
+        "request": {
+          "method": "PUT",
+          "url": "{{baseUrl}}/api/examples/v018/stock/{{cacheStockB}}",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": {
+            "mode": "raw",
+            "raw": "{\"stockId\":{{cacheStockB}},\"warehouse\":\"API\",\"status\":\"AVAILABLE\",\"availableUnits\":4}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+          "pm.test('Existing stock command accepted', () => pm.response.to.have.status(202));",
+          "pm.collectionVariables.set('cacheStockBCausal', pm.response.headers.get('X-CacheDB-Causal'));"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "stock-one",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Reactive Tenant B Causal Read",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/reactive/stock/{{cacheStockB}}",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}"
+            },
+            {
+              "key": "X-CacheDB-Causal",
+              "value": "{{cacheStockBCausal}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Reactive subscriber receives only tenant B data', () => {",
+          "  pm.expect(pm.response.json().tenantId).to.eql('shop-b');",
+          "  pm.expect(pm.response.json().availableUnits).to.eql(4);",
+          "});"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "stock-list",
+      "status": 200,
+      "contract": {
+        "name": "Cache API - Reactive Bounded Stock List",
+        "request": {
+          "method": "GET",
+          "url": "{{baseUrl}}/api/examples/v019/reactive/stock?ids={{cacheStockA}}",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}"
+            },
+            {
+              "key": "X-CacheDB-Causal",
+              "value": "{{cacheStockACausal}}"
+            }
+          ]
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "const rows = pm.response.json();",
+          "pm.test('Finite tenant-scoped list', () => { pm.expect(rows).to.have.lengthOf(1); pm.expect(rows[0].tenantId).to.eql('shop-a'); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-save",
+      "status": 202,
+      "contract": {
+        "name": "Range Data - Save Tenant A a",
+        "request": {
+          "method": "PUT",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a",
+          "body": {
+            "mode": "raw",
+            "raw": "{\"rank\":\"9007199254740992\",\"status\":\"OPEN\"}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+          "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('9007199254740992'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+        ],
+        "prerequest": [
+          "pm.collectionVariables.set('rangeRun', pm.variables.replaceIn('{{$randomUUID}}').replace(/-/g, ''));",
+          "['rangeCursor','dataCursor'].forEach(k => pm.collectionVariables.unset(k));"
+        ]
+      }
+    },
+    {
+      "scenario": "range-save",
+      "status": 202,
+      "contract": {
+        "name": "Range Data - Save Tenant A b",
+        "request": {
+          "method": "PUT",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/b",
+          "body": {
+            "mode": "raw",
+            "raw": "{\"rank\":\"9007199254740992\",\"status\":\"OPEN\"}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+          "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('9007199254740992'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-save",
+      "status": 202,
+      "contract": {
+        "name": "Range Data - Save Tenant A a0",
+        "request": {
+          "method": "PUT",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a0",
+          "body": {
+            "mode": "raw",
+            "raw": "{\"rank\":\"9007199254740993\",\"status\":\"OPEN\"}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+          "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('9007199254740993'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-save",
+      "status": 202,
+      "contract": {
+        "name": "Range Data - Save Tenant A d",
+        "request": {
+          "method": "PUT",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/d",
+          "body": {
+            "mode": "raw",
+            "raw": "{\"rank\":\"9223372036854775807\",\"status\":\"OPEN\"}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+          "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('9223372036854775807'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-save",
+      "status": 202,
+      "contract": {
+        "name": "Range Data - Save Tenant A closed",
+        "request": {
+          "method": "PUT",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/closed",
+          "body": {
+            "mode": "raw",
+            "raw": "{\"rank\":\"0\",\"status\":\"CLOSED\"}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+          "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('0'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-save",
+      "status": 202,
+      "contract": {
+        "name": "Range Data - Save Tenant B a",
+        "request": {
+          "method": "PUT",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}",
+              "type": "text"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a",
+          "body": {
+            "mode": "raw",
+            "raw": "{\"rank\":\"7\",\"status\":\"OPEN\"}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+          "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('7'); pm.expect(b.row.tenant).to.eql('shop-b'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 200,
+      "contract": {
+        "name": "Range Data - Native Composite Range Keyset First",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=2"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"b\"]); });",
+          "pm.test('Long values and residency contract', function () { const b=pm.response.json(); pm.expect(b.items.map(r=>r.rank)).to.eql(['9007199254740992','9007199254740992']); pm.expect(b.sourceCoverageConfirmed).to.be.a('boolean'); pm.expect(b.nextCursor).to.be.a('string').and.not.empty; });",
+          "pm.collectionVariables.set('rangeCursor', pm.response.json().nextCursor);"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 200,
+      "contract": {
+        "name": "Range Data - Native Lexical Continuation",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=2&cursor={{rangeCursor}}"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a0\",\"d\"]); });",
+          "pm.test('Exact full-width Long continuation', function () { const b=pm.response.json(); pm.expect(b.items.map(r=>r.rank)).to.eql(['9007199254740993','9223372036854775807']); pm.expect(b.nextCursor).to.eql(null); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 200,
+      "contract": {
+        "name": "Range Data - Native Descending Range",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=2&descending=true"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"d\",\"a0\"]); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-seek",
+      "status": 200,
+      "contract": {
+        "name": "Range Data - Native Paired Raw Seek",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native/seek?afterRank=9007199254740992&afterSlot=a&limit=2"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"b\",\"a0\"]); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 200,
+      "contract": {
+        "name": "Range Data - Native Typed Bounds",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?minimum=9007199254740993&maximum=9223372036854775807&limit=32"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a0\",\"d\"]); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-page",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Page First With Sort And Count",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/page?limit=2"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"b\"]); });",
+          "pm.test('Page total and continuation', function () { const b=pm.response.json(); pm.expect(b.total).to.eql(4); pm.expect(b.number).to.eql(0); pm.expect(b.hasNext).to.eql(true); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-page",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Page Second",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/page?page=1&limit=2"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a0\",\"d\"]); });",
+          "pm.test('Last page', function () { const b=pm.response.json(); pm.expect(b.total).to.eql(4); pm.expect(b.hasNext).to.eql(false); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-slice",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Slice Without Total",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/slice?limit=2"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"b\"]); });",
+          "pm.test('Slice lookahead without total', function () { const b=pm.response.json(); pm.expect(b.hasNext).to.eql(true); pm.expect(b).not.to.have.property('total'); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-window",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Typed Keyset Window First",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/window?limit=2"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"b\"]); });",
+          "pm.test('Typed Window continuation', function () { const b=pm.response.json(); pm.expect(b.hasNext).to.eql(true); pm.expect(b.nextCursor).to.be.a('string').and.not.empty; });",
+          "pm.collectionVariables.set('dataCursor', pm.response.json().nextCursor);"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-window",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Typed Keyset Window Next",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/window?limit=2&cursor={{dataCursor}}"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a0\",\"d\"]); });",
+          "pm.test('Typed Window end', function () { const b=pm.response.json(); pm.expect(b.hasNext).to.eql(false); pm.expect(b.nextCursor).to.eql(null); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-stats",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Count And Exists Tenant A",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/stats"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Tenant A count and exists', function () { pm.expect(pm.response.json()).to.eql({count:4,exists:true}); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-stats",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Count And Exists Tenant B",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/stats"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Tenant B count and exists', function () { pm.expect(pm.response.json()).to.eql({count:1,exists:true}); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-point",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Point Read Tenant A",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Tenant A exact native Long', function () { const b=pm.response.json(); pm.expect(b.tenant).to.eql('shop-a'); pm.expect(b.rank).to.eql('9007199254740992'); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-point",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Point Read Tenant B",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Tenant B independent same slot', function () { const b=pm.response.json(); pm.expect(b.tenant).to.eql('shop-b'); pm.expect(b.rank).to.eql('7'); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 400,
+      "contract": {
+        "name": "Range Data - Reject Cross Tenant Cursor",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?cursor={{rangeCursor}}"
+        },
+        "test": [
+          "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 400,
+      "contract": {
+        "name": "Range Data - Reject Changed Bounds Cursor",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?minimum=1&cursor={{rangeCursor}}"
+        },
+        "test": [
+          "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 400,
+      "contract": {
+        "name": "Range Data - Reject Changed Direction Cursor",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?descending=true&cursor={{rangeCursor}}"
+        },
+        "test": [
+          "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-window",
+      "status": 400,
+      "contract": {
+        "name": "Spring Data - Reject Native Cursor",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/window?cursor={{rangeCursor}}"
+        },
+        "test": [
+          "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 400,
+      "contract": {
+        "name": "Range Data - Reject Typed Data Cursor",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?cursor={{dataCursor}}"
+        },
+        "test": [
+          "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 401,
+      "contract": {
+        "name": "Range Data - Reject Missing Authentication",
+        "request": {
+          "method": "GET",
+          "header": [],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native"
+        },
+        "test": [
+          "pm.test('HTTP 401', function () { pm.response.to.have.status(401); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 403,
+      "contract": {
+        "name": "Range Data - Reject Supplier As Tenant",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheSupplierToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native"
+        },
+        "test": [
+          "pm.test('HTTP 403', function () { pm.response.to.have.status(403); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 409,
+      "contract": {
+        "name": "Range Data - Reject Nonempty Causal Query",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            },
+            {
+              "key": "X-CacheDB-Causal",
+              "value": "required",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native"
+        },
+        "test": [
+          "pm.test('HTTP 409', function () { pm.response.to.have.status(409); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 400,
+      "contract": {
+        "name": "Range Data - Reject Excessive Limit",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=33"
+        },
+        "test": [
+          "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-page",
+      "status": 400,
+      "contract": {
+        "name": "Spring Data - Reject Deep Offset",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/page?page=129&limit=2"
+        },
+        "test": [
+          "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-save",
+      "status": 400,
+      "contract": {
+        "name": "Range Data - Reject Long Overflow",
+        "request": {
+          "method": "PUT",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/invalid",
+          "body": {
+            "mode": "raw",
+            "raw": "{\"rank\":\"9223372036854775808\",\"status\":\"OPEN\"}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-save",
+      "status": 413,
+      "contract": {
+        "name": "Range Data - Reject Oversized Body",
+        "request": {
+          "method": "PUT",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/invalid",
+          "body": {
+            "mode": "raw",
+            "raw": "{\"rank\":\"42\",\"status\":\"OPEN\",\"padding\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          }
+        },
+        "test": [
+          "pm.test('HTTP 413', function () { pm.response.to.have.status(413); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-delete",
+      "status": 204,
+      "contract": {
+        "name": "Spring Data - Delete One Row",
+        "request": {
+          "method": "DELETE",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/b"
+        },
+        "test": [
+          "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-window",
+      "status": 200,
+      "contract": {
+        "name": "Range Data - Native After Point Delete",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=32"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"a0\",\"d\"]); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-stats",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Count After Point Delete",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/stats"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Deletion changes only Tenant A open rows', function () { pm.expect(pm.response.json()).to.eql({count:3,exists:true}); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "data-stats",
+      "status": 200,
+      "contract": {
+        "name": "Spring Data - Tenant B Survives Delete",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantBToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/stats"
+        },
+        "test": [
+          "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('Tenant B unchanged', function () { pm.expect(pm.response.json()).to.eql({count:1,exists:true}); });"
+        ],
+        "prerequest": []
+      }
+    },
+    {
+      "scenario": "range-point",
+      "status": 404,
+      "contract": {
+        "name": "Spring Data - Deleted Point Is Missing",
+        "request": {
+          "method": "GET",
+          "header": [
+            {
+              "key": "Authorization",
+              "value": "Bearer {{cacheTenantAToken}}",
+              "type": "text"
+            }
+          ],
+          "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/b"
+        },
+        "test": [
+          "pm.test('HTTP 404', function () { pm.response.to.have.status(404); });"
+        ],
+        "prerequest": []
+      }
+    }
+  ],
+  "legacy": [
+    {
+      "name": "Ready",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/actuator/health/readiness"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Seed Demo Data",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/demo/seed?customers=20&ordersPerCustomer=40&linesPerOrder=4"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Latest Background Job Status (repeat until COMPLETED)",
+      "request": {
+        "method": "GET",
+        "description": "The runner polls this saved request after each accepted background job, for at most 30 seconds and 150 attempts. It then resumes the original sequence. Failed jobs stop the flow.",
+        "url": "{{baseUrl}}/api/warm/jobs/{{warmJobId}}"
+      },
+      "test": [
+        "pm.test('Job status is available', () => pm.response.to.have.status(200));",
+        "const body = pm.response.json();",
+        "const count = Number(pm.collectionVariables.get('businessPolls') || 0) + 1;",
+        "pm.collectionVariables.set('businessPolls', count);",
+        "if (!['COMPLETED','FAILED','CANCELLED'].includes(body.status) && count < 150 && Date.now() < Number(pm.collectionVariables.get('businessDeadline'))) {",
+        "  setTimeout(() => pm.execution.setNextRequest(pm.info.requestName), 200);",
+        "} else {",
+        "  pm.test('Job completed before a hot read', () => pm.expect(body.status).to.eql('COMPLETED'));",
+        "  const next = pm.collectionVariables.get('businessResume');",
+        "  pm.collectionVariables.unset('businessResume');",
+        "  pm.execution.setNextRequest(body.status === 'COMPLETED' && next ? next : null);",
+        "}"
+      ],
+      "prerequest": []
+    },
+    {
+      "name": "Current Tuning Summary",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/tuning"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Route Tuning Profiles",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/tuning/profiles"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Scheduled Warm Status (local pod)",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/warm/schedules"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Active Customers",
+      "request": {
+        "method": "POST",
+        "description": "Submit this job, then use Latest Background Job Status until it is COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/customers/active?limit=100"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Active Customers",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/customers/active?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Customer Detail With Order Preview",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/customers/{{customerId}}?orderPreview=5"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Customer Orders Dry Run",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/warm/orders/customer/{{customerId}}?limit=100&dryRun=true"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Customer Orders Projection",
+      "request": {
+        "method": "POST",
+        "description": "Submit this job, then use Latest Background Job Status until it is COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/orders/customer/{{customerId}}?limit=100&projectionOnly=true"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Customer Order Timeline Projection",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/customers/{{customerId}}/orders?limit=20"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Customer Orders Entity",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/warm/orders/customer/{{customerId}}?limit=100&projectionOnly=false"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Order Lines",
+      "request": {
+        "method": "POST",
+        "description": "Submit this job, then use Latest Background Job Status until it is COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/orders/{{orderId}}/lines?limit=100"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Order Detail With Line Preview",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/orders/{{orderId}}?linePreview=5"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm High Value Orders",
+      "request": {
+        "method": "POST",
+        "description": "Submit this job, then use Latest Background Job Status until it is COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/orders/high-value?minimumAmount=500&limit=100"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "High Value Orders Projection",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/orders/high-value?minimumAmount=500&limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Highlighted Orders For Commerce Dashboard",
+      "request": {
+        "method": "POST",
+        "description": "Prepares the ranked order component used by the commerce dashboard. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/orders/highlighted?minimumPriorityScore=60&limit=100"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Archive Orders From SQL",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/orders/archive?customerId={{customerId}}&limit=20"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Create Customer",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerId\": 999,\n  \"taxNumber\": \"TAX-999999\",\n  \"customerType\": \"CORPORATE\",\n  \"segment\": \"VIP\",\n  \"status\": \"ACTIVE\"\n}"
+        },
+        "url": "{{baseUrl}}/api/customers"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Create Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": 999001,\n  \"customerId\": 999,\n  \"orderAmount\": 850.50,\n  \"currencyCode\": \"USD\",\n  \"orderType\": \"EXPRESS\",\n  \"status\": \"NEW\",\n  \"lineCount\": 0\n}"
+        },
+        "url": "{{baseUrl}}/api/orders"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Update Order Status",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"PAID\"\n}"
+        },
+        "url": "{{baseUrl}}/api/orders/999001/status"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Delete Order",
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/api/orders/999001"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Active Products Projection",
+      "request": {
+        "method": "POST",
+        "description": "Prepares the category-scoped active product projection. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/products/active?category=electronics&limit=100&projectionOnly=true"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Active Products Projection",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/products/active?category=electronics&limit=20"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Low Stock Products",
+      "request": {
+        "method": "POST",
+        "description": "Prepares the low-stock route used by operations reads and dashboards. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/products/low-stock?limit=100"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Low Stock Products Projection",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/products/low-stock?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Product Detail From Active Set",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/products/{{productId}}"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Inactive Product Archive From SQL",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/products/archive?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Replace Absolute Stock Values (0.16)",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"stock\": 20, \"reserved\": 2}"
+        },
+        "url": "{{baseUrl}}/api/products/{{productId}}/stock-values"
+      },
+      "test": [
+        "pm.test('Redis accepted the patch', () => pm.response.to.have.status(202));",
+        "pm.test('Partial update, not a full-row replacement', () => pm.expect(pm.response.json().operation).to.eql('PATCH'));",
+        "pm.test('Acceptance is versioned', () => pm.expect(pm.response.json().version).to.be.above(0));"
+      ],
+      "prerequest": []
+    },
+    {
+      "name": "Reject Incomplete Absolute Stock Values",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"stock\": 20}"
+        },
+        "url": "{{baseUrl}}/api/products/{{productId}}/stock-values"
+      },
+      "test": [
+        "pm.test('Both absolute values are required', () => pm.response.to.have.status(400));"
+      ],
+      "prerequest": []
+    },
+    {
+      "name": "Update Product Stock",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"stockQuantity\": 6,\n  \"reservedQuantity\": 1\n}"
+        },
+        "url": "{{baseUrl}}/api/products/{{productId}}/stock"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Open Tickets",
+      "request": {
+        "method": "POST",
+        "description": "Prepares the open-ticket route used by support and the commerce dashboard. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/tickets/open?limit=50"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Open Tickets",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/tickets/open?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Ticket Detail From Active Set",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/tickets/{{ticketId}}"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Create Support Ticket",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ticketId\": 9999,\n  \"customerId\": 1,\n  \"priority\": \"HIGH\",\n  \"status\": \"OPEN\",\n  \"subject\": \"Payment review needed\"\n}"
+        },
+        "url": "{{baseUrl}}/api/tickets"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Escalate Support Ticket",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"ESCALATED\",\n  \"priority\": \"HIGH\"\n}"
+        },
+        "url": "{{baseUrl}}/api/tickets/9999/status"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Active Shipments Projection",
+      "request": {
+        "method": "POST",
+        "description": "Prepares the active shipment projection. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/shipments/active?limit=100&projectionOnly=true"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Active Shipments Projection",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/shipments/active?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Shipment Exceptions",
+      "request": {
+        "method": "POST",
+        "description": "Prepares delayed and exception shipments for the list and operations dashboard. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/shipments/exceptions?limit=100"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Shipment Exceptions Projection",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/shipments/exceptions?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Customer Shipments",
+      "request": {
+        "method": "POST",
+        "description": "Prepares the customer-scoped shipment window. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/shipments/customer/{{customerId}}?limit=100"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Customer Shipments Projection",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/shipments/customer/{{customerId}}?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Shipment Events",
+      "request": {
+        "method": "POST",
+        "description": "Prepares the selected shipment event timeline. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/shipments/{{shipmentId}}/events?limit=100"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Shipment Detail With Event Preview",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/shipments/{{shipmentId}}?eventPreview=5"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Shipment Events",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/shipments/{{shipmentId}}/events?limit=20"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Delivered Shipment Archive From SQL",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/shipments/archive?customerId={{customerId}}&limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Create Shipment",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"shipmentId\": 999901,\n  \"customerId\": 1,\n  \"trackingNumber\": \"TRK-999901\",\n  \"carrierCode\": \"DHL\",\n  \"shipmentStatus\": \"IN_TRANSIT\",\n  \"currentCity\": \"Istanbul\"\n}"
+        },
+        "url": "{{baseUrl}}/api/shipments"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Add Shipment Event",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": 99990101,\n  \"eventType\": \"DELAY\",\n  \"eventCity\": \"Ankara\",\n  \"severity\": \"WARN\",\n  \"description\": \"Delay reported by carrier\"\n}"
+        },
+        "url": "{{baseUrl}}/api/shipments/999901/events"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Update Shipment Status",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"shipmentStatus\": \"DELAYED\",\n  \"currentCity\": \"Ankara\"\n}"
+        },
+        "url": "{{baseUrl}}/api/shipments/999901/status"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Live Report Jobs",
+      "request": {
+        "method": "POST",
+        "description": "Prepares live report jobs for operations reads and dashboards. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/reports/live?limit=50"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Live Report Jobs",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/reports/jobs/live?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Report Jobs By Type",
+      "request": {
+        "method": "POST",
+        "description": "Prepares the report-type scoped window. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/reports/type/ORDER_SUMMARY?limit=50"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Report Jobs By Type",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/reports/jobs/type/ORDER_SUMMARY?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Create Report Job",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"reportJobId\": 999,\n  \"reportType\": \"ORDER_SUMMARY\",\n  \"status\": \"QUEUED\",\n  \"requestedBy\": \"ops@example.com\"\n}"
+        },
+        "url": "{{baseUrl}}/api/reports/jobs"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Complete Report Job",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"COMPLETED\",\n  \"rowCount\": 12500\n}"
+        },
+        "url": "{{baseUrl}}/api/reports/jobs/999/status"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Warm Security Audit Events",
+      "request": {
+        "method": "POST",
+        "description": "Prepares the bounded security audit active set. Poll the latest job to COMPLETED.",
+        "url": "{{baseUrl}}/api/warm/audit/security?limit=50"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Security Audit Events From Active Set",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/reports/audit/security?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Audit Archive From SQL",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/reports/audit/archive?entityName=CustomerEntity&entityId={{customerId}}&limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Commerce Dashboard",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/dashboard/commerce?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    },
+    {
+      "name": "Operations Dashboard",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/dashboard/operations?limit=25"
+      },
+      "test": [],
+      "prerequest": []
+    }
+  ],
+  "cacheGate": [
+    "if (String(pm.variables.get('cacheApiEnabled')).toLowerCase() !== 'true') {",
+    "  if (String(pm.variables.get('cacheApiCertification')).toLowerCase() === 'true') {",
+    "    throw new Error('Cache API acceptance requires cacheApiEnabled=true; requests must not be skipped');",
+    "  }",
+    "  if (typeof pm.execution.skipRequest !== 'function') throw new Error('Use a runner supporting pm.execution.skipRequest');",
+    "  pm.execution.skipRequest();",
+    "}"
+  ],
+  "rangeGate": [
+    "const enabled = String(pm.variables.get('rangeDataEnabled')) === 'true';",
+    "const required = String(pm.variables.get('rangeDataCertification')) === 'true';",
+    "if (!enabled && required) { throw new Error('rangeDataEnabled=true is required for certification'); }",
+    "if (!enabled) { pm.execution.skipRequest(); }"
+  ],
+  "cacheAnnotations": {
+    "quote": "@Cacheable(cacheNames = \"quotes\", sync = true)",
+    "refresh": "@CachePut(cacheNames = \"quotes\")",
+    "evict": "@CacheEvict(cacheNames = \"quotes\", beforeInvocation = true)",
+    "clear": "@CacheEvict(cacheNames = \"quotes\", allEntries = true, beforeInvocation = true)",
+    "nullable": "@Cacheable(cacheNames = \"nulls\", sync = true)"
+  },
+  "demoRequired": {
+    "sample.cache-api.enabled": "true",
+    "sample.range-data.enabled": "true",
+    "cachedb.spring-cache.enabled": "true",
+    "cachedb.spring-cache.caches.quotes.tenant-scoped": "true",
+    "cachedb.spring-cache.caches.quotes.ttl": "5m",
+    "cachedb.spring-cache.caches.quotes.max-value-bytes": "4096",
+    "cachedb.spring-cache.caches.quotes.near-cache.max-entries": "256",
+    "cachedb.spring-cache.caches.quotes.near-cache.max-bytes": "1048576",
+    "cachedb.spring-cache.caches.nulls.tenant-scoped": "true",
+    "cachedb.spring-cache.caches.nulls.allow-null-values": "true",
+    "cachedb.registration.entities.RangeDataRow.hot-entity-limit": "512",
+    "cachedb.registration.entities.RangeDataRow.entity-ttl-seconds": "1800"
+  },
+  "deferredFeatures": [
+    {
+      "id": "spring-data-bulk-delete",
+      "status": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED",
+      "runtimeEvidence": null,
+      "dependency": "Run the bounded audit/derived-delete lane and independent audit Postman collection against the final SDK. The audit route deliberately rejects zero selection budget; positive finite selection is covered by DerivedDeleteRangeExternalIT, not by pretending that rejection is a successful delete.",
+      "sourceCoverage": {
+        "methods": [
+          { "file": "src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java", "method": "springData", "calls": ["AuditNoteRules.verify", "stores.delete().entityQueryCapacity", "stores.data().deleteByState"] },
+          { "file": "src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java", "method": "bulk", "calls": ["AuditNoteRules.verify", "AuditNoteRules.ids", "stores.delete().bulkDelete"] }
+        ],
+        "tests": [
+          { "file": "src/test/java/com/example/cachedb/sample/audit/AuditExternalIT.java", "methods": ["derivedDeleteRejectsZeroQueryBudgetWithoutMutatingAnyRows", "actualBulkHttpReceiptsConfirmOnlyRedisUntilMatchingSqlMarkersAreAwaited"] },
+          { "file": "src/test/java/com/example/cachedb/sample/rangedata/DerivedDeleteRangeExternalIT.java", "methods": ["generatedDeleteSelectsCompletePositiveBudgetMatchesAndPreservesOtherScopes", "exactCapacitySelectionRejectsAmbiguousCompletenessBeforeAnyDelete"] }
+        ],
+        "postman": { "collection": "postman/cache-database-{provider}-audit.postman_collection.json", "runner": "scripts/test-audit-postman.ps1", "requestCount": 42, "requests": ["Spring Data rejects zero query budget", "Native bulk returns actual receipts"] },
+        "lane": "audit-derived-delete",
+        "scope": "Ordinary unencrypted audit notes; accepted Redis receipts are not SQL durability. Positive-budget generated selection and exact-cap refusal have independent real-provider tests."
+      }
+    },
+    {
+      "id": "field-encryption",
+      "status": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED",
+      "runtimeEvidence": null,
+      "dependency": "Run encrypted-demo contract/external tests and its independent Postman collection against the final SDK. REDIS_ONLY sample notes intentionally retain SQL plaintext; this is not protected-source onboarding or a general REDIS_AND_SOURCE qualification.",
+      "sourceCoverage": {
+        "methods": [
+          { "file": "src/encryption/java/com/example/cachedb/sample/encryption/EncryptedNoteController.java", "method": "verify", "calls": ["access.supplier", "CacheCausalContext.hasRequirements", "CacheTenantContext.currentTenant"] }
+        ],
+        "tests": [
+          { "file": "src/encryption-test/java/com/example/cachedb/sample/encryption/EncryptedNoteExternalIT.java", "methods": ["actualRedisCiphertextAndProviderSqlPlaintextRoundTripThroughTheBoundRuntime", "actualHttpUsesSupplierIdentityAndExplicitBoundedSourceConfirmation"] }
+        ],
+        "postman": { "collection": "postman/cache-database-{provider}-encryption.postman_collection.json", "runner": "scripts/test-encryption-postman.ps1", "requestCount": 10, "requests": ["Write Encrypted Note", "Read Decrypted Redis Note", "Confirm Explicit Source Roundtrip", "Reject Tenant A Reading Global Supplier Note", "Reject Unsupported Causal Requirement"] },
+        "lane": "encrypted-notes",
+        "scope": "REDIS_ONLY: actual Redis ciphertext plus codec round-trip and intentional SQL plaintext. HTTP responses alone do not prove encryption at rest."
+      }
+    },
+    {
+      "id": "retention",
+      "status": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED",
+      "runtimeEvidence": null,
+      "dependency": "Run the shared audit/derived-delete lane once and its independent audit Postman collection against the final SDK. Keep EVICT_CACHE and DELETE/write-behind outcomes distinct; neither sweep response proves source erasure.",
+      "sourceCoverage": {
+        "methods": [
+          { "file": "src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java", "method": "sweep", "calls": ["AuditNoteRules.verify", "AuditNoteRules.maxRows", "CacheTenantContext.administrative", "stores.sweeper().sweepOnce"] }
+        ],
+        "tests": [
+          { "file": "src/test/java/com/example/cachedb/sample/audit/AuditExternalIT.java", "methods": ["evictSweepsOnlyIndexedExpiredPayloadAndRetainsDurableSql", "deleteSweepEnqueuesNormalWriteBehindWithoutClaimingSourceErasure"] },
+          { "file": "src/test/java/com/example/cachedb/sample/audit/AuditHttpContractTest.java", "methods": ["retentionErrorNeverBecomesZeroDeleteSuccessOrSqlConfirmation"] }
+        ],
+        "postman": { "collection": "postman/cache-database-{provider}-audit.postman_collection.json", "runner": "scripts/test-audit-postman.ps1", "requestCount": 42, "requests": ["Evict indexed expired cache payload", "Delete indexed expired note via write-behind"] },
+        "lane": "audit-derived-delete",
+        "scope": "Indexed resident ordinary notes only; bounded administrative sweep restores caller context. No encrypted-note retention, backup erasure or arbitrary source scan."
+      }
+    },
+    {
+      "id": "tenant-purge",
+      "status": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED",
+      "runtimeEvidence": null,
+      "dependency": "Run all 7 opt-in, 11 contract and 1 external tests per provider, then the standalone 8-request/36-assertion collection on a different fresh schema. Companion source declarations are not runtime evidence; see tools/samples/v019-tenant-purge-scenarios.json.",
+      "sourceCoverage": {
+        "methods": [
+          { "file": "src/purge/java/com/example/cachedb/purge/TenantPurgeRuntime.java", "method": "purge", "calls": ["requireControl", "CacheTenantContext.administrative", "facade.purgeTenant", "facade.abandon"] },
+          { "file": "src/purge/java/com/example/cachedb/purge/TenantPurgeRuntime.java", "method": "deliver", "calls": ["requireControl", "primary.deliver"] }
+        ],
+        "tests": [
+          { "file": "src/purge-test/java/com/example/cachedb/purge/TenantPurgeContractTest.java", "methods": ["initializationDiagnosticsExposeOnlyFixedStageAndSafeErrorCodes", "fixedEntityUsesGeneratedTenantEncryptedNativeMapping", "confirmedPurgeUsesOneExplicitOperationWithoutRetryOrRedirect", "deliveryFlushRemainsInsideNativeCallback", "httpRejectsRunBodyAndIdEscapesBeforePurge"] },
+          { "file": "src/purge-test/java/com/example/cachedb/purge/TenantPurgeExternalIT.java", "methods": ["nativeInitialHttpPurgeRemovesHotAndColdAndPreservesForeignState"] }
+        ],
+        "postman": { "collection": "postman/cache-database-{provider}-tenant-purge.postman_collection.json", "runner": "scripts/test-tenant-purge-postman.ps1", "requestCount": 8, "requests": ["03 Native INITIAL Status", "06 Purge Owned Tenant Including Source", "07 Retained CLOSED Status", "08 Closed Delivery Rejected"] },
+        "lane": "tenant-purge",
+        "scope": "Separate fresh-only F3 INITIAL application with includeSource=true, retained CLOSED metadata and actual foreign SQL/Redis preservation; no reopen, restart/crash, HA, Cluster or backup-erasure claim."
+      }
+    }
+  ],
+  "qualificationLanes": [
+    {
+      "id": "audit-derived-delete",
+      "profiles": "provider-integration",
+      "surefire": "AuditContractTest,AuditHttpContractTest",
+      "failsafe": "AuditExternalIT,DerivedDeleteRangeExternalIT",
+      "maximumSecondsPerProvider": 900,
+      "suites": [
+        { "file": "src/test/java/com/example/cachedb/sample/audit/AuditContractTest.java", "cases": 8 },
+        { "file": "src/test/java/com/example/cachedb/sample/audit/AuditHttpContractTest.java", "cases": 6 },
+        { "file": "src/test/java/com/example/cachedb/sample/audit/AuditExternalIT.java", "cases": 5 },
+        { "file": "src/test/java/com/example/cachedb/sample/rangedata/DerivedDeleteRangeExternalIT.java", "cases": 2 }
+      ]
+    },
+    {
+      "id": "encrypted-notes",
+      "profiles": "encrypted-demo,provider-integration",
+      "surefire": "EncryptedNoteContractTest",
+      "failsafe": "EncryptedNoteExternalIT",
+      "maximumSecondsPerProvider": 900,
+      "suites": [
+        { "file": "src/encryption-test/java/com/example/cachedb/sample/encryption/EncryptedNoteContractTest.java", "cases": 5 },
+        { "file": "src/encryption-test/java/com/example/cachedb/sample/encryption/EncryptedNoteExternalIT.java", "cases": 2 }
+      ]
+    },
+    {
+      "id": "tenant-purge",
+      "profiles": "tenant-purge-demo,provider-integration",
+      "surefire": "TenantPurgeOptInTest,TenantPurgeContractTest",
+      "failsafe": "TenantPurgeExternalIT",
+      "maximumSecondsPerProvider": 900,
+      "suites": [
+        { "file": "src/purge-test/java/com/example/cachedb/purge/TenantPurgeOptInTest.java", "cases": 7 },
+        { "file": "src/purge-test/java/com/example/cachedb/purge/TenantPurgeContractTest.java", "cases": 11 },
+        { "file": "src/purge-test/java/com/example/cachedb/purge/TenantPurgeExternalIT.java", "cases": 1 }
+      ]
+    }
+  ]
+}

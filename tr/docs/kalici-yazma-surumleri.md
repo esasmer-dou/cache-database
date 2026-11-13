@@ -83,6 +83,22 @@ büyük/küçük harf, aksan veya sondaki boşluk farklarını ayrı Redis kimli
 kullanmayın. Sayısal kimlikleri veya standart biçimde UUID metinlerini tercih edin.
 Yazma hedefi synonym değil, fiziksel tablo olmalıdır.
 
+### SQL Server Hash Parametreleri
+
+Teknik `fence_key`, `CHAR(64)` türünde saklanan 64 karakterlik bir ASCII hash'tir.
+SQL Server sorgularında yalnızca bu anahtarın bağlı parametreleri `CHAR(64)` türüne
+çevrilir. Böylece JDBC'nin Unicode parametresi, indeksli kolonun dönüştürülmesine
+neden olmaz. Bu kural ilk kayıt oluşturma, kilitli seçim ve sürüm güncelleme için
+geçerlidir. İş kimlikleri veya `identity_value` dönüştürülmez; şema, Unicode
+bağlama, kilitler, transaction ve yeniden deneme davranışı değiştirilmez.
+Geçici çözüm olarak bütün bağlantılarda `sendStringParametersAsUnicode=false`
+kullanmayın; iş verisinin Unicode davranışı korunmalıdır.
+
+Uygulamanızın collation'ı ve yükü altında gerçek sorgu planını ve kilit beklemelerini
+inceleyin. İndeksli kolondaki `CONVERT_IMPLICIT`, kalıcı geçmiş büyüdükçe seçici bir
+aramayı tam taramaya çevirebilir. Gerçekten geniş bir seçim için planlayıcının tarama
+seçmesi ayrı bir durumdur; her sorguya zorunlu indeks ipucu eklenmez.
+
 ## Saklama Ve Kurtarma
 
 Bu tabloyu truncate etmeyin, TTL ile temizlemeyin ve iş satırı silindi diye

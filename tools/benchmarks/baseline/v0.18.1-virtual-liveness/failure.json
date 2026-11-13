@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "result": "LEGACY_VIRTUAL_BASELINE_UNAVAILABLE",
+  "baselineTag": "v0.18.1",
+  "baselineCommit": "3a212461fd835c783cf84d3c6b656b375df40a19",
+  "runtimeSourcesUnmodified": true,
+  "baselineJarSha256": "4e399aa690f7f1c3df8f54824914f599bf21c91c9370395f504d573d5f1aeab6",
+  "candidateJarSha256": "b7c2d07969b5b30438b6ed14cf62c150c5679e2719b6b714009d430908da3c05",
+  "recordedAtUtc": "2026-10-27T13:02:20Z",
+  "operatorAttestedStallSeconds": 600,
+  "workerCount": 1000,
+  "activeProcessorCount": 1,
+  "heapBytes": 536870912,
+  "poolMaxTotal": 32,
+  "poolFairness": true,
+  "guardrailsEnabled": true,
+  "javaRuntime": "Temurin HotSpot 21.0.7+6-LTS",
+  "redisVersion": "8.2.1",
+  "network": "Redis and benchmark client share a pod; loopback transport",
+  "failureType": "PINNED_GUARDRAIL_STALL",
+  "intervention": "Fork terminated with SIGTERM after thread dumps; exit 143 is the intervention, not a spontaneous crash",
+  "threadDump": {
+    "file": "threads.json",
+    "sha256": "919263c428b72249f746f98f5ce0e559a1e88c4c96f1ba7878aa1c593b4eff6a"
+  },
+  "runLog": {
+    "file": "failure-output.txt",
+    "sha256": "4bd7ecc889a050234344d0abe2f74f3c6761c746624460e8382d513b3bf4690a"
+  },
+  "limitations": [
+    "The no-progress interval is an operator observation, not an automated deadlock graph proof",
+    "Thread dumps establish carrier pinning in RedisProducerGuard while waiting for the connection pool",
+    "Attach diagnostics and intervention invalidate this attempt as a numeric performance measurement",
+    "No throughput or latency delta is assigned to the unavailable legacy virtual-worker case",
+    "The candidate must complete its full virtual-worker JMH matrix; other comparable cases retain numeric regression gates"
+  ]
+}

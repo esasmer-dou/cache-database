@@ -13,7 +13,7 @@ yönlendiren bir çözüm değildir.
 | Alan | Sözleşme |
 | --- | --- |
 | Veritabanı | Oracle Database 19c veya üzeri; CI, Oracle Database Free 23 kullanır |
-| Java | Java 17 veya üzeri; örnek ve CI Java 21 kullanır |
+| Java | Kütüphane, örnek uygulama ve CI için Java 21+ (LTS) |
 | Sürücü | Oracle starter ile gelen `com.oracle.database.jdbc:ojdbc17` |
 | JDBC adresi | `jdbc:oracle:thin:@//sunucu:1521/servis` biçimindeki Thin servis adı |
 | Kimlik | Redis komutu kabul etmeden önce üretilir |

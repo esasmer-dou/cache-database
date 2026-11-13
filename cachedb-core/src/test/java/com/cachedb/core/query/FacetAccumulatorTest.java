@@ -6,6 +6,26 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class FacetAccumulatorTest {
+    @Test void weightedCountsRetainOrderingNullGroupsAndCandidateLimits() {
+        var facets = new FacetAccumulator();
+        facets.addCount("z", 510);
+        facets.addCount("a", 5);
+        facets.addCount("z", 2);
+        facets.addCount(null, 3);
+        assertEquals(List.of("a", "z"), List.copyOf(facets.result().keySet()));
+        assertEquals(512, facets.result().get("z").count());
+        assertEquals(BigDecimal.ZERO, facets.result().get("z").sum());
+        assertTrue(facets.result().get("z").average().isEmpty());
+        assertThrows(IllegalStateException.class, () -> facets.addCount("z", 0));
+        assertThrows(IllegalStateException.class, () -> facets.addCount("z", -1));
+        assertThrows(IllegalStateException.class, () -> facets.addCount("z", Long.MAX_VALUE));
+        facets.addCount("z", 99_480);
+        assertThrows(IllegalStateException.class, () -> facets.add("z", null, false));
+        var groups = new FacetAccumulator();
+        for (int i = 0; i < 256; i++) groups.addCount("g" + i, 1);
+        assertThrows(IllegalStateException.class, () -> groups.addCount("overflow", 1));
+        assertThrows(IllegalArgumentException.class, () -> new FacetAccumulator().addCount("x".repeat(4097), 1));
+    }
     @Test void legacyConstructorAndEqualityRetainTheirOriginalContract() {
         var values = new AggregateResult.Accumulator(); values.add(java.math.BigDecimal.ONE); values.add(null); values.add(java.math.BigDecimal.ZERO); values.add(java.math.BigDecimal.ZERO);
         var computed = values.result();

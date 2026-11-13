@@ -13,14 +13,14 @@
 
     <groupId>com.example.cachedb</groupId>
     <artifactId>sample-cache-database-mssql</artifactId>
-    <version>0.18.1</version>
+    <version>0.19.0</version>
     <name>sample-cache-database-mssql</name>
     <description>CacheDB REST API sample using Redis and Microsoft SQL Server</description>
 
     <properties>
         <java.version>21</java.version>
         <cachedb.groupId>com.reactor.cachedb</cachedb.groupId>
-        <cachedb.version>0.18.1</cachedb.version>
+        <cachedb.version>0.19.0</cachedb.version>
         <jedis.version>5.2.0</jedis.version>
         <gson.version>2.13.2</gson.version>
         <testcontainers.version>2.0.5</testcontainers.version>
@@ -61,6 +61,18 @@
     </dependencyManagement>
 
     <dependencies>
+        <dependency>
+            <groupId>${cachedb.groupId}</groupId>
+            <artifactId>cachedb-spring-data</artifactId>
+            <version>${cachedb.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>${cachedb.groupId}</groupId>
+            <artifactId>cachedb-reactor</artifactId>
+            <version>${cachedb.version}</version>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>${cachedb.groupId}</groupId>
             <artifactId>cachedb-json</artifactId>
@@ -208,6 +220,63 @@
                                 <goals>
                                     <goal>certify</goal>
                                 </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>encrypted-demo</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.2</version>
+                        <executions>
+                            <execution>
+                                <id>encrypted-demo-source</id><phase>generate-sources</phase><goals><goal>add-source</goal></goals>
+                                <configuration><sources><source>src/encryption/java</source></sources></configuration>
+                            </execution>
+                            <execution>
+                                <id>encrypted-demo-tests</id><phase>generate-test-sources</phase><goals><goal>add-test-source</goal></goals>
+                                <configuration><sources><source>src/encryption-test/java</source></sources></configuration>
+                            </execution>
+                            <execution>
+                                <id>encrypted-demo-resources</id><phase>generate-resources</phase><goals><goal>add-resource</goal></goals>
+                                <configuration><resources><resource><directory>src/encryption/resources</directory></resource></resources></configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>tenant-purge-demo</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-maven-plugin</artifactId>
+                        <configuration><mainClass>com.example.cachedb.purge.TenantPurgeApplication</mainClass></configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.2</version>
+                        <executions>
+                            <execution>
+                                <id>purge-demo-source</id><phase>generate-sources</phase><goals><goal>add-source</goal></goals>
+                                <configuration><sources><source>src/purge/java</source></sources></configuration>
+                            </execution>
+                            <execution>
+                                <id>purge-demo-tests</id><phase>generate-test-sources</phase><goals><goal>add-test-source</goal></goals>
+                                <configuration><sources><source>src/purge-test/java</source></sources></configuration>
+                            </execution>
+                            <execution>
+                                <id>purge-demo-resources</id><phase>generate-resources</phase><goals><goal>add-resource</goal></goals>
+                                <configuration><resources><resource><directory>src/purge/resources</directory></resource></resources></configuration>
                             </execution>
                         </executions>
                     </plugin>

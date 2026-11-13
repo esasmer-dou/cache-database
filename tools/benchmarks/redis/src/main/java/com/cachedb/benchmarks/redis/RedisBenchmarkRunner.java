@@ -37,8 +37,10 @@ public final class RedisBenchmarkRunner {
                 "-Djmh.executor.class=" + VirtualBenchmarkExecutor.class.getName()));
         var options = new OptionsBuilder().include(RedisRepositoryBenchmark.class.getName() + "\\." + name + "$")
                 .threads(threads).forks(3).warmupIterations(5).measurementIterations(5)
-                .addProfiler("gc").shouldFailOnError(true)
+                .shouldFailOnError(true)
                 .jvmArgsAppend(arguments.toArray(String[]::new));
+        if (virtual) options.addProfiler(JmhSampleCompactionProfiler.class);
+        options.addProfiler("gc");
         // JMH 1.37 CUSTOM executors do not yield in iteration rendezvous spins.
         // Disable that optional spin rendezvous for oversubscribed virtual workers;
         // pre-setup/teardown barriers and the five timed iterations remain intact.

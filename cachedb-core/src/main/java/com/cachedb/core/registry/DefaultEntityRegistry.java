@@ -21,17 +21,37 @@ import java.util.Map;
 import java.util.Optional;
 
 public final class DefaultEntityRegistry implements EntityRegistry {
+    private final java.util.concurrent.locks.ReentrantLock registryLock = new java.util.concurrent.locks.ReentrantLock();
 
     private final ResourceLimits resourceLimits;
+    private final com.reactor.cachedb.core.crypto.CacheKeyProvider keyProvider;
     private final Map<String, EntityBinding<?, ?>> bindings = new LinkedHashMap<>();
+    private final Map<String,EntityBinding<?,?>> protectedBindings=new LinkedHashMap<>();
+    @Override public Collection<EntityBinding<?,?>> tenantProtectedBindings(){
+        registryLock.lock();
+        try{return protectedBindings.isEmpty()?java.util.List.of():java.util.List.copyOf(protectedBindings.values());}
+        finally{registryLock.unlock();}
+    }
+    private void protectionBinding(EntityBinding<?,?> binding){
+        if(binding.metadata().tenantPurgeEnabled()){
+            if(!protectedBindings.containsKey(binding.metadata().entityName())&&protectedBindings.size()>=10000)
+                throw new IllegalStateException("Protection registry exceeds bounded validation");
+            protectedBindings.put(binding.metadata().entityName(),binding);
+        }else protectedBindings.remove(binding.metadata().entityName());
+    }
     private final Map<String, Map<String, EntityProjectionBinding<?, ?, ?>>> projectionBindings = new LinkedHashMap<>();
 
     public DefaultEntityRegistry(ResourceLimits resourceLimits) {
-        this.resourceLimits = resourceLimits;
+        this(resourceLimits, null);
+    }
+
+    public DefaultEntityRegistry(ResourceLimits resourceLimits, com.reactor.cachedb.core.crypto.CacheKeyProvider keyProvider) {
+        this.resourceLimits = java.util.Objects.requireNonNull(resourceLimits);
+        this.keyProvider = keyProvider;
     }
 
     @Override
-    public synchronized <T, ID> EntityBinding<T, ID> register(
+    public <T, ID> EntityBinding<T, ID> register(
             EntityMetadata<T, ID> metadata,
             EntityCodec<T> codec,
             CachePolicy cachePolicy,
@@ -42,7 +62,7 @@ public final class DefaultEntityRegistry implements EntityRegistry {
     }
 
     @Override
-    public synchronized <T, ID> EntityBinding<T, ID> register(
+    public <T, ID> EntityBinding<T, ID> register(
             EntityMetadata<T, ID> metadata,
             EntityCodec<T> codec,
             CachePolicy cachePolicy,
@@ -51,62 +71,82 @@ public final class DefaultEntityRegistry implements EntityRegistry {
             EntityByIdLoader<T, ID> byIdLoader,
             EntityQueryLoader<T> queryLoader
     ) {
-        EntityBinding<?, ?> existing = bindings.get(metadata.entityName());
-        int threshold = cachePolicy == null ? metadata.compressionThresholdBytes()
-                : Math.max(metadata.compressionThresholdBytes(), cachePolicy.compressionThresholdBytes());
-        if (codec != null) codec = com.reactor.cachedb.core.codec.PayloadEntityCodec.wrap(codec, metadata, threshold);
-        RelationBatchLoader<T> safeLoader = relationBatchLoader == null ? new NoOpRelationBatchLoader<>() : relationBatchLoader;
-        EntityPageLoader<T> safePageLoader = pageLoader == null ? new NoOpEntityPageLoader<>() : pageLoader;
-        EntityByIdLoader<T, ID> safeByIdLoader = byIdLoader == null ? new NoOpEntityByIdLoader<>() : byIdLoader;
-        EntityQueryLoader<T> safeQueryLoader = queryLoader == null ? new NoOpEntityQueryLoader<>() : queryLoader;
-        if (existing != null) {
-            @SuppressWarnings("unchecked")
-            EntityBinding<T, ID> casted = (EntityBinding<T, ID>) existing;
-            CachePolicy resolvedPolicy = cachePolicy != null ? cachePolicy : casted.cachePolicy();
-            RelationBatchLoader<T> resolvedLoader = selectRelationBatchLoader(casted.relationBatchLoader(), safeLoader);
-            EntityPageLoader<T> resolvedPageLoader = selectPageLoader(casted.pageLoader(), safePageLoader);
-            EntityByIdLoader<T, ID> resolvedByIdLoader = selectByIdLoader(casted.byIdLoader(), safeByIdLoader);
-            EntityQueryLoader<T> resolvedQueryLoader = selectQueryLoader(casted.queryLoader(), safeQueryLoader);
-            EntityBinding<T, ID> updated = new EntityBinding<>(
+        codec = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.bind(metadata, codec, keyProvider);
+        registryLock.lock();
+        try {
+            EntityBinding<?, ?> existing = bindings.get(metadata.entityName());
+            int threshold = cachePolicy == null ? metadata.compressionThresholdBytes()
+                    : Math.max(metadata.compressionThresholdBytes(), cachePolicy.compressionThresholdBytes());
+            if (codec != null) codec = com.reactor.cachedb.core.codec.PayloadEntityCodec.wrap(codec, metadata, threshold);
+            RelationBatchLoader<T> safeLoader = relationBatchLoader == null ? new NoOpRelationBatchLoader<>() : relationBatchLoader;
+            EntityPageLoader<T> safePageLoader = pageLoader == null ? new NoOpEntityPageLoader<>() : pageLoader;
+            EntityByIdLoader<T, ID> safeByIdLoader = byIdLoader == null ? new NoOpEntityByIdLoader<>() : byIdLoader;
+            EntityQueryLoader<T> safeQueryLoader = queryLoader == null ? new NoOpEntityQueryLoader<>() : queryLoader;
+            if (existing != null) {
+                @SuppressWarnings("unchecked")
+                EntityBinding<T, ID> casted = (EntityBinding<T, ID>) existing;
+                if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata)
+                        || com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(casted.metadata()))
+                    com.reactor.cachedb.core.crypto.EncryptedStorageChecks.sameMapping(metadata, casted.metadata());
+                CachePolicy resolvedPolicy = cachePolicy != null ? cachePolicy : casted.cachePolicy();
+                RelationBatchLoader<T> resolvedLoader = selectRelationBatchLoader(casted.relationBatchLoader(), safeLoader);
+                EntityPageLoader<T> resolvedPageLoader = selectPageLoader(casted.pageLoader(), safePageLoader);
+                EntityByIdLoader<T, ID> resolvedByIdLoader = selectByIdLoader(casted.byIdLoader(), safeByIdLoader);
+                EntityQueryLoader<T> resolvedQueryLoader = selectQueryLoader(casted.queryLoader(), safeQueryLoader);
+                EntityBinding<T, ID> updated = new EntityBinding<>(
+                        metadata,
+                        codec,
+                        resolvedPolicy,
+                        resolvedLoader,
+                        resolvedPageLoader,
+                        resolvedByIdLoader,
+                        resolvedQueryLoader
+                );
+                protectionBinding(updated);
+                bindings.put(metadata.entityName(), updated);
+                return updated;
+            }
+            if (bindings.size() >= resourceLimits.maxRegisteredEntities()) {
+                throw new IllegalStateException("Maximum registered entity limit exceeded: " + resourceLimits.maxRegisteredEntities());
+            }
+            EntityBinding<T, ID> binding = new EntityBinding<>(
                     metadata,
                     codec,
-                    resolvedPolicy,
-                    resolvedLoader,
-                    resolvedPageLoader,
-                    resolvedByIdLoader,
-                    resolvedQueryLoader
+                    cachePolicy,
+                    safeLoader,
+                    safePageLoader,
+                    safeByIdLoader,
+                    safeQueryLoader
             );
-            bindings.put(metadata.entityName(), updated);
-            return updated;
+            protectionBinding(binding);
+            bindings.put(metadata.entityName(), binding);
+            return binding;
+        } finally {
+            registryLock.unlock();
         }
-        if (bindings.size() >= resourceLimits.maxRegisteredEntities()) {
-            throw new IllegalStateException("Maximum registered entity limit exceeded: " + resourceLimits.maxRegisteredEntities());
-        }
-        EntityBinding<T, ID> binding = new EntityBinding<>(
-                metadata,
-                codec,
-                cachePolicy,
-                safeLoader,
-                safePageLoader,
-                safeByIdLoader,
-                safeQueryLoader
-        );
-        bindings.put(metadata.entityName(), binding);
-        return binding;
     }
 
     @Override
-    public synchronized <T, ID, P> EntityProjectionBinding<T, P, ID> registerProjection(
+    public <T, ID, P> EntityProjectionBinding<T, P, ID> registerProjection(
             EntityMetadata<T, ID> metadata,
             EntityProjection<T, P, ID> projection
     ) {
-        Map<String, EntityProjectionBinding<?, ?, ?>> entityProjections = projectionBindings.computeIfAbsent(
-                metadata.entityName(),
-                key -> new LinkedHashMap<>()
-        );
-        EntityProjectionBinding<T, P, ID> binding = new EntityProjectionBinding<>(metadata.entityName(), projection);
-        entityProjections.put(projection.name(), binding);
-        return binding;
+        registryLock.lock();
+        try {
+            var registered = bindings.get(metadata.entityName());
+            if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata)
+                    || registered != null && com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(registered.metadata()))
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.unbound();
+            Map<String, EntityProjectionBinding<?, ?, ?>> entityProjections = projectionBindings.computeIfAbsent(
+                    metadata.entityName(),
+                    key -> new LinkedHashMap<>()
+            );
+            EntityProjectionBinding<T, P, ID> binding = new EntityProjectionBinding<>(metadata.entityName(), projection);
+            entityProjections.put(projection.name(), binding);
+            return binding;
+        } finally {
+            registryLock.unlock();
+        }
     }
 
     private <T> RelationBatchLoader<T> selectRelationBatchLoader(
@@ -150,30 +190,50 @@ public final class DefaultEntityRegistry implements EntityRegistry {
     }
 
     @Override
-    public synchronized Optional<EntityBinding<?, ?>> find(String entityName) {
-        return Optional.ofNullable(bindings.get(entityName));
-    }
-
-    @Override
-    public synchronized Optional<EntityProjectionBinding<?, ?, ?>> findProjection(String entityName, String projectionName) {
-        Map<String, EntityProjectionBinding<?, ?, ?>> entityProjections = projectionBindings.get(entityName);
-        if (entityProjections == null) {
-            return Optional.empty();
+    public Optional<EntityBinding<?, ?>> find(String entityName) {
+        registryLock.lock();
+        try {
+            return Optional.ofNullable(bindings.get(entityName));
+        } finally {
+            registryLock.unlock();
         }
-        return Optional.ofNullable(entityProjections.get(projectionName));
     }
 
     @Override
-    public synchronized Collection<EntityProjectionBinding<?, ?, ?>> projections(String entityName) {
-        Map<String, EntityProjectionBinding<?, ?, ?>> entityProjections = projectionBindings.get(entityName);
-        if (entityProjections == null || entityProjections.isEmpty()) {
-            return java.util.List.of();
+    public Optional<EntityProjectionBinding<?, ?, ?>> findProjection(String entityName, String projectionName) {
+        registryLock.lock();
+        try {
+            Map<String, EntityProjectionBinding<?, ?, ?>> entityProjections = projectionBindings.get(entityName);
+            if (entityProjections == null) {
+                return Optional.empty();
+            }
+            return Optional.ofNullable(entityProjections.get(projectionName));
+        } finally {
+            registryLock.unlock();
         }
-        return java.util.List.copyOf(entityProjections.values());
     }
 
     @Override
-    public synchronized Collection<EntityBinding<?, ?>> all() {
-        return java.util.List.copyOf(bindings.values());
+    public Collection<EntityProjectionBinding<?, ?, ?>> projections(String entityName) {
+        registryLock.lock();
+        try {
+            Map<String, EntityProjectionBinding<?, ?, ?>> entityProjections = projectionBindings.get(entityName);
+            if (entityProjections == null || entityProjections.isEmpty()) {
+                return java.util.List.of();
+            }
+            return java.util.List.copyOf(entityProjections.values());
+        } finally {
+            registryLock.unlock();
+        }
+    }
+
+    @Override
+    public Collection<EntityBinding<?, ?>> all() {
+        registryLock.lock();
+        try {
+            return java.util.List.copyOf(bindings.values());
+        } finally {
+            registryLock.unlock();
+        }
     }
 }

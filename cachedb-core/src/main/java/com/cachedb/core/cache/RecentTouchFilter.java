@@ -32,5 +32,10 @@ public final class RecentTouchFilter {
         if (previous != null && previous.id.equals(id)) slots.compareAndSet(slot, previous, null);
     }
 
+    /** Bounded local maintenance reset; does not mutate Redis or bypass read admission. */
+    public void clear() {
+        for (int index = 0; index < slots.length(); index++) slots.set(index, null);
+    }
+
     private record Touch(Object id, long atNanos) {}
 }

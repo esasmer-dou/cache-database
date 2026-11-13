@@ -4,8 +4,8 @@
 
 Bu özellikler, açıkça seçilmiş ve sınırlandırılmış aktif veriyi Redis üzerinden
 okumayı kolaylaştırır. Her SQL sorgusunu kendiliğinden önbelleğe almaz; veritabanının
-tüm geçmişini toplam hesaplarına katmaz. Kütüphane Java 17 uyumluluğunu korur;
-derleme ortamı ve örnek uygulamalar Java 21 kullanır.
+tüm geçmişini toplam hesaplarına katmaz. Kütüphane, derleme ortamı ve örnek
+uygulamalar Java 21+ (LTS) gerektirir. Java 17 kullanan uygulamalar 0.18.x sürümünde kalmalıdır.
 
 ## Ürün Stoğu: Tekrarlanan Okumalar
 
@@ -202,12 +202,12 @@ FK, unique constraint, trigger ve iş sırası kuralları uygunsa entity üzerin
 sırası bu modda da korunur. Farklı satırların veya tabloların transaction bağımlılıklarını
 gizlemek için bu ayarı açmayın.
 
-Soft TTL yenilemesi her coordinator'ın kendi kaynaklarını kullanır: en fazla iki
-daemon thread, 256 kuyruk girdisi ve 258 rezervasyon. Thread'ler ilk yenilemede
-oluşturulur. `close()` kuyruktaki işleri iptal eder, çalışan işleri keser ve en
-fazla iki saniye bekler; sonraki yenileme çağrıları çalıştırılmaz. Java, interrupt
-isteğini yok sayan uygulama kodunu zorla durduramaz; Redis/I/O zaman aşımları
-sonlu kalmalıdır. Runtime'lar ortak statik havuz veya bütçe kullanmaz.
+0.19.0'da soft TTL yenilemesi, coordinator'a ait ve gerektiğinde açılan sanal thread'lerle yürür.
+Toplam 258 rezervasyon ve aynı anda en fazla iki I/O callback'i vardır. Aynı kimlik için yenilemeler
+birleştirilir; aşırı yükte çağıran bekletilmeden istek reddedilir. `close()` işleri keser ve en fazla
+iki saniye bekler. Kesilmeye uymayan callback'ler için sonlu I/O süreleri gerekir.
+Bkz. [sanal thread sözleşmeleri](sanal-thread-hazirligi.md).
 
-Tenant aggregate ve facet Lua optimizasyonu **0.19.0'a ertelendi**.
-0.18.1 bu sorgular için mevcut sınırlı ve doğru pipeline yolunu korur.
+0.19.0, uygun aynı slotlu indeks sorgularında sınırlı kiracılı aggregate/facet Lua yollarını sunar;
+diğer sorgular doğru pipeline yolunu korur. Bkz. [uygunluk ve yalıtım](redis-aggregation.md).
+>=2x işlem hacmi kapısı AÇIKTIR; kodun ve işlevsel testlerin bulunması performans sonucu değildir.

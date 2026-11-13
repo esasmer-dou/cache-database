@@ -1,8 +1,674 @@
 # CacheDB SQL Server Örneği
 
-> CacheDB 0.18.1: [sürüm ve indirmeler](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1) | [herkese açık Maven deposu](https://esasmer-dou.github.io/cache-database/maven2). Maven ile indirmek için GitHub token'ı veya framework kaynak kodunu derlemek gerekmez.
+> Bu örnek CacheDB 0.19.0 paketlerini aynı sürümde gerektirir. [Yayımlanan sürümler](https://github.com/esasmer-dou/cache-database/releases) | [Maven deposu](https://esasmer-dou.github.io/cache-database/maven2). Başlamadan önce gereken tüm paketlerin kullanılabilir olduğunu doğrulayın.
 
 [English](README.md) | Türkçe
+
+> **Sürüm belgeleri: 0.19.0. Java 21+ gereklidir.** Gerçek paket erişimi ve sağlama toplamları için sürüm sayfası yetkilidir.
+> Kabulün yetkili kaynağı bu README değil, tam sürüm commit'inin CI sonuçları ve pakete bağlı kanıttır.
+> Paketleri ve örnek proje tag'ini eşleştirin; yalnız bağımlılık sürümünü değiştirmek bu API'leri eski sürüme taşımaz.
+> `FrameworkPackage != universalGA`: uygulama yolları, koruma geçişi, HA ve geri yükleme ayrı doğrulama gerektirir.
+
+[Buradan başla](#buradan-başla) | [Hızlı başlangıç](#hızlı-başlangıç) | [API kataloğu](#api-kataloğu) |
+[Senaryoya göre ayarlar](#kullanım-senaryosuna-göre-ayar) | [Postman](#postman)
+
+## Sınırlı Denetim Notları: Toplu Silme ve Saklama Süresi
+
+Şifrelenmemiş ordinary entity örnekleri, süresi dolmuş denetim notlarının sınırlı temizliğini
+ve iki ayrı saklama politikasını gösterir. Yalnızca geçici veritabanı/Redis alanında yapay notlar
+kullanın. Supplier kimliği politika başına sekiz sabit yuvayı yönetir; toplam SQL satır sayısı
+on altıdır. Kiracı kimlikleri bu notları okuyamaz, yazamaz veya süpüremez. Bu örnek kiracıya ait
+şifreli depolama ya da purge değildir.
+
+### Tek Demo Başlatma Komutu
+
+Sağlayıcının mevcut veritabanı ve Redis servislerini başlatıp aynı sürümdeki CacheDB paketlerini
+çözümledikten sonra bu örneğin dizininde çalıştırın:
+
+```powershell
+mvn -B -ntp clean spring-boot:run "-Dspring-boot.run.profiles=demo"
+```
+
+Yalnızca `application-demo.yml`, `sample.audit-api.enabled=true` ayarını, `schema-audit.sql`
+şemasını ve sekiz satırlık iki sıcak kümeyi etkinleştirir. Normal başlangıçta endpoint kapalıdır.
+Şifreli örnek derlemesinin `demo,encryption` başlangıcı da bu şemayı içerir.
+Okuma birleştirme bağımsız bir opt-in ayarıdır; bu örnek onu etkinleştirmez.
+Varsayılan demo token'ları yalnızca yerel gösterim içindir, üretim kimlik doğrulaması değildir.
+Mevcut `SAMPLE_CONTROLS_*` ayarlarını kullanın; demo yazma araçlarını internete açmayın.
+
+### Doğrudan Çalıştırılabilir İstekler
+
+`expired` zorunludur. Sunucu ACTIVE/bugün veya EXPIRED/iki UTC gün önce değerlerini seçer.
+İstemci keyfî kimlik, kiracı, tarih, tablo ya da saklama eylemi seçemez.
+Not; 1..512 UTF-8 bayt, geçerli Unicode içermeli ve NUL içermemelidir.
+
+```powershell
+$base = 'http://127.0.0.1:8092'
+$headers = @{ Authorization = 'Bearer demo-supplier' }
+$body = '{"note":"Süresi dolmuş yapay denetim notu: ğışöüİ","expired":true}'
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/delete/1/source-roundtrip" -Headers $headers -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body))
+try {
+    Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/delete/spring-data" -Headers $headers
+    throw 'Beklenen sıfır sorgu bütçesi reddi dönmedi.'
+} catch {
+    if ($null -eq $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 409) { throw }
+}
+$slots = '{"slots":[1]}'
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/delete/bulk" -Headers $headers -ContentType 'application/json' -Body $slots
+```
+
+`PUT /api/examples/v019/audit-notes/{policy}/{slot}` aynı not gövdesini alır ve gerçek UPSERT
+receipt'iyle 202 döndürür; ön planda SQL kalıcılığını doğrulamaz. source-roundtrip rotası ise
+receipt'in kalıcılık işaretini en fazla beş saniye bekler ve mantıksal kaynak satırını denetleyerek
+200 döndürür. 504, kabul edilmiş ama doğrulanmamış yazmadır; geri alma değildir. Eşzamanlı yazma
+gözlemden önce satırı değiştirebilir; 409 otomatik RYOW anlamına gelmez.
+
+Bu demoda sekiz satırlık sıcak küme ve on satırlık genel headroom ayarı, tam entity sorgusu için
+sıfır etkin bütçe bırakır. `POST /delete/spring-data`, `AUDIT_DERIVED_DELETE_ZERO_QUERY_BUDGET`
+hatasıyla HTTP 409 döndürür; sorgu veya silme başlatılmaz. Bütçeyi büyütmeden, bilinen 1..8 yuva
+için `POST /delete/bulk` kullanın. Sıfır bütçe, bilinmeyen veya sınırsız bütçe demek değildir.
+
+Üretilmiş türetilmiş silmenin pozitif bütçeli örneği,
+[DerivedDeleteRangeExternalIT](src/test/java/com/example/cachedb/sample/rangedata/DerivedDeleteRangeExternalIT.java)
+içindedir: `RangeDataRepository.deleteByRunIdAndStatus`, mevcut `RangeDataRow` üzerinde
+run/status ve doğrulanmış kiracı kapsamındaki
+eşleşmeler silinir; diğer durumlar, çalışmalar ve kiracılar korunur. Bütçeye tam ulaşan seçimde
+eşleşme kümesinin tamamlığı kanıtlanamaz; hiçbir silme yapılmadan istek reddedilir.
+Pozitif sonuçtaki entity listesi receipt veya SQL silme sayısı değildir. İşlem transaction
+ya da eşzamanlı yazarlara karşı atomik koşul yeniden denetimi sağlamaz.
+
+`POST /delete/bulk`, birbirinden farklı 1..8 yuva alır ve native sınırlı toplu silmenin gerçek
+DELETE receipt'lerini döndürür. Başarılı 202 yanıtında da `sqlDurabilityConfirmed=false` kalır.
+İki silme rotasında da kısmi hata HTTP 409'dur: gerçek `phase`, `accepted` receipt'leri,
+`rejected`, `uncertain`, `cleanupPending` ve `notAttempted` alanları korunur.
+Cleanup-pending kimlikleri accepted ile örtüşebilir. Seri tekil silmeye dönüş veya otomatik
+mutasyon tekrarı yapılmaz. Belirsiz sonucu ve receipt sürümünü uzlaştırmadan yeniden denemeyin;
+iptal ya da taşıma hatası geri alma değildir.
+
+### EVICT_CACHE ve DELETE Farkı
+
+```powershell
+$evictBody = '{"note":"Keep this synthetic SQL audit note","expired":true}'
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/evict/1/source-roundtrip" -Headers $headers -ContentType 'application/json' -Body $evictBody
+$pass = '{"maxRows":8}'
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/evict/sweep" -Headers $headers -ContentType 'application/json' -Body $pass
+Invoke-RestMethod -Method Get -Uri "$base/api/examples/v019/audit-notes/evict/1/source" -Headers $headers
+Invoke-RestMethod -Method Post -Uri "$base/api/examples/v019/audit-notes/delete/sweep" -Headers $headers -ContentType 'application/json' -Body $pass
+```
+
+SOURCE saklama türündeki iki `@CacheRetention` anotasyonu bir günlük politikalar için metadata
+üretir: `EvictAuditNote`, EVICT_CACHE; `DeleteAuditNote`, DELETE kullanır. Sunucu iki politika
+adını sabit entity sınıflarına eşler. Gerçek `RetentionSweeper.sweepOnce` çağrısı yalnızca supplier
+yetkisi doğrulandıktan sonra açılan geçici administrative scope içinde çalışır.
+
+EVICT_CACHE, indeksli önbellek payload'ını ve üyeliklerini kaldırır; SQL'i, kuyruktaki yazmaları
+ve kalıcı sürümleri silmez. Sıcak GET 404 döndürürken açık `/{policy}/{slot}/source` rotası SQL
+notunu döndürebilir. Bu demoda read-through kapalıdır. Başka uygulamalarda admission politikası
+saklama süresini de uygulamıyorsa SQL satırı yeniden önbelleğe alınabilir. Receipt içermeyen kaynak
+gözlemi kalıcılık doğrulaması değildir.
+
+DELETE, normal sürüm çiti uygulanmış write-behind silmesini kuyruğa alır. `deleteAccepted`,
+yalnızca Redis kabul sayısıdır; SQL commit'i veya tekil receipt kalıcılığı değildir. Süpürme yanıtı
+`examined`, `evicted`, `indexCleaned`, `deleteAccepted`, `skipped` ve `exhausted` alanlarını
+ayırır. Her zaman `indexedResidentOnly=true`, `sqlDurabilityConfirmed=false` ve
+`sourceErasureConfirmed=false` döner. Sıcak kümenin sıralı indeksi soğuk SQL geçmişinin tamamını
+bulamaz. Hiçbir eylem yedeklerden silinmeyi, genel cache sahipliğini, tüm kiracı kişisel verilerinin
+silinmesini veya purge'ü belgelemez. Purge REST endpoint'i yoktur.
+
+Sınırlar: sekiz etkin istek, chunked gövde dahil 2 KiB body, sekiz süpürme adayı, 512 komut anahtarı
+ve 64 KiB mutasyon komutu bütçesi. Native lease/sürüm/snapshot denetimleri, producer guardrail'leri,
+yapılandırılmış trace/peer invalidation yayıncısı ve gerçek yerel L1 store korunur. Bir tur erken
+bitebilir; `exhausted` eşzamanlı veya tüm geçmişi kapsayan snapshot değildir. Native 30 saniyelik
+admission bütçesi evrensel I/O timeout'u değildir; sonlu istemci havuzu/socket ve HTTP süre sınırları
+gereklidir. BUSY, 429; depolama/lease hatası, `outcomeUnknown=true` ile 503 döndürür. Hata sıfır
+silme başarısına çevrilmez. Sınırlı operasyonel backoff kullanın; mutasyonları körlemesine tekrarlamayın.
+Boş olmayan causal header veya etkin causal/tenant/admin scope varsa istek fail-closed reddedilir.
+
+### Kayıtlı Sözleşmeler ve Testler
+
+<!-- BEGIN AUDIT API MATRIX -->
+| Senaryo | Java Metodu | Kayıtlı İstek |
+| --- | --- | --- |
+| Açık receipt ve SQL doğrulaması | [AuditNoteController.sourceRoundtrip](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Expire delete 1 |
+| Spring Data sıfır sorgu bütçesi reddi | [AuditNoteController.springData](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Spring Data rejects zero query budget |
+| Native sınırlı receipt grubu | [AuditNoteController.bulk](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Native bulk returns actual receipts |
+| Yalnız önbelleğe uygulanan saklama süresi | [AuditNoteController.sweep](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Evict indexed expired cache payload |
+| Write-behind üzerinden saklama süresi | [AuditNoteController.sweep](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java) | Delete indexed expired note via write-behind |
+| Supplier, kiracı ve nedensellik sınırı | [AuditNoteRules.verify](src/main/java/com/example/cachedb/sample/audit/AuditNoteRules.java) | Tenant A cannot inspect global source |
+<!-- END AUDIT API MATRIX -->
+
+Bağımsız [audit koleksiyonu](postman/cache-database-mssql-audit.postman_collection.json) 42
+istek içerir. İlk on altı istek yalnızca on altı sabit yapay satırın üzerine yazar; saklanan gerçek
+iş verilerine karşı veya başka bir yazarla eşzamanlı çalıştırmayın.
+`auditApiEnabled=true` ve `auditApiCertification=true` birlikte zorunludur. Eksik gate, atlanan
+istek, eksik assertion veya gerçek yürütme hatası sertifikasyonu reddeder.
+
+```powershell
+./scripts/test-audit-postman.ps1 -BaseUrl http://127.0.0.1:8092 -ConfirmDisposableDemo
+mvn -B -ntp test "-Dtest=AuditContractTest,AuditHttpContractTest"
+mvn -B -ntp test "-Dtest=AuditExternalIT"
+```
+
+Dış ortam testi mevcut özel `CACHEDB_TEST_NAMESPACE` sağlayıcı fixture'larını gerektirir; testin
+atlanmadan yürütülmesini şart koşun. Sıfır bütçe reddi, bilinen kimliklerle toplu silme, gerçek receipt
+işaretleri ve iki saklama eylemi denetlenir. `DerivedDeleteRangeExternalIT`, pozitif bütçeli
+üretilmiş silmeyi ve tam kapasitede mutasyondan önce reddi gerçek Redis/SQL üzerinde denetler. Kontrollü unit/MVC hataları, HTTP hata
+enjeksiyon rotası eklemeden kısmi sonuç eşlemesini doğrular. Önceki iş akışı (61+23), range/data
+(37) ve encryption (10) koleksiyonlarını ve bağımsız gate'lerini koruyun.
+[Yapısal denetleyici](../tools/ci/check-v019-audit-scenarios.mjs), kaynak metotlarını, EN/TR
+kılavuzlarını ve kayıtlı istek sözleşmelerini denetler; runtime yeterliliği kanıtı değildir.
+
+
+## Şifreli Tedarikçi Notları
+
+Bu isteğe bağlı, yalıtılmış demo; gerçek üretilmiş alan codec'lerini ve Spring Boot
+CacheKeyProvider bean'ini kullanır. Varsayılan derlemeye dahil değildir: açıkça
+sağlanan anahtarlar olmadan şifreli metadata discovery'ye girmemelidir.
+encrypted-demo Maven profili src/encryption/java, src/encryption-test/java ve
+src/encryption/resources dizinlerini ekler. Profil değiştirirken clean kullanın;
+eski üretilmiş sınıfların hedef dizinde kalmasına izin vermeyin.
+
+Yalnızca doğrulanmış tedarikçi kimliği bu **genel kapsamlı** notlara erişebilir.
+Kiracı kimlikleri reddedilir. Bu, kiracı kişisel verilerinin sahipliğini oluşturma
+örneği değildir. Sunucunun belirlediği tam sekiz kimlik, 1..512 UTF-8 byte not sınırı (boş/NUL notlar reddedilir),
+2 KiB istek gövdesi, eş zamanlı sekiz istek ve 300 saniyelik Redis TTL sınırı vardır.
+Listeleme, istemcinin seçtiği namespace, kör arama, retention işi veya purge API'si yoktur.
+
+### Açık Anahtarlarla Tek Başlangıç
+
+Önce bu sağlayıcının mevcut, silinebilir veritabanı/Redis kurulumunu tamamlayın.
+Şifreli Redis verisi veya kuyruk kaydı kaldığı sürece yeniden başlatmalarda aynı
+anahtarları koruyun. Mevcut namespace üzerinde anahtarları yeniden üretmeyin.
+Java/YAML içinde varsayılan anahtar yoktur; aşağıdaki bağımsız rastgele demo
+anahtarları, canlı ortam anahtar yönetimi yerine geçmez.
+
+~~~powershell
+function New-DemoKey {
+    $bytes = [byte[]]::new(32)
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    [Convert]::ToBase64String($bytes)
+}
+$env:SAMPLE_ENCRYPTION_AES_KEY = New-DemoKey
+$env:SAMPLE_ENCRYPTION_HMAC_KEY = New-DemoKey
+mvn -B -ntp -Pencrypted-demo clean spring-boot:run "-Dspring-boot.run.profiles=demo,encryption"
+~~~
+
+Komutu bu örneğin dizininde çalıştırın. Normal derleme değişmez. encrypted-demo ile
+üretilmiş paket, demo/encryption profilleri ile geçerli anahtarları gerektirir;
+bu paketi canlı ortam uygulaması olarak dağıtmayın. Demo kimliklerini dışarı açmayın.
+
+Şifreleme dahil tüm entegrasyon testlerini çalıştırmak için yukarıdaki iki anahtarı
+aynı terminal oturumunda tutun ve test kılavuzundaki silinebilir sağlayıcı ortamını
+hazırlayın. Maven profili Java kaynaklarını ekler; Spring çalışma zamanı profilini
+etkinleştirmez. Bu tanımları içeren her test uygulaması, yalnızca `demo` profilini
+açan mevcut testler de dahil, `encryption` profiline ihtiyaç duyar:
+
+~~~powershell
+$previousInclude = $env:SPRING_PROFILES_INCLUDE
+try {
+    $env:SPRING_PROFILES_INCLUDE = 'encryption'
+    mvn -B -ntp -Pprovider-integration,encrypted-demo clean verify
+    if ($LASTEXITCODE -ne 0) { throw 'Entegrasyon testleri başarısız oldu' }
+} finally {
+    $env:SPRING_PROFILES_INCLUDE = $previousInclude
+}
+~~~
+
+Bu Maven koşusunda `SAMPLE_SCHEDULED_WARM_ENABLED=false` ayarını tüm testlere
+uygulamayın: normal entegrasyon testi, zamanlanmış işin kaydını da doğrular.
+Gereken testler zamanlamayı kendi ayarlarıyla kapatır. Anahtar eksikse uygulama
+başlamamalıdır; şifreli alanlar sessizce düz metne dönüştürülmemelidir.
+
+~~~powershell
+$base = 'http://127.0.0.1:8092'
+$headers = @{ Authorization = 'Bearer demo-supplier' }
+$body = @{ note = 'Türkçe alan: ğışöüİ' } | ConvertTo-Json
+Invoke-RestMethod "$base/api/examples/v019/encryption/notes/1" -Method Put -Headers $headers -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body))
+Invoke-RestMethod "$base/api/examples/v019/encryption/notes/1" -Headers $headers
+Invoke-RestMethod "$base/api/examples/v019/encryption/notes/1/source-roundtrip" -Method Post -Headers $headers -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body))
+pwsh -NoProfile -File scripts/test-encryption-postman.ps1 -BaseUrl $base -ConfirmDisposableDemo
+~~~
+
+PUT, sqlDurabilityConfirmed=false ile 202 döndürür: Redis kabulü SQL kalıcılığı
+değildir. GET, yalnızca Redis'teki tekil kaydı çözer; kaydın bulunamaması SQL'de
+olmadığını göstermez. source-roundtrip açıkça yazar, o receipt'in kalıcılığını en
+fazla beş saniye bekler ve kaynağı kimliğiyle okur. Yalnızca mantıksal satır
+eşleşirse confirmed=true döndürür. 504, yazmanın kabul edildiği fakat henüz
+doğrulanmadığı anlamına gelir; eş zamanlı kaynak değişikliği 409 üretir. İkisi de
+körü körüne tekrar deneme talimatı değildir. Dolu nedensellik gereksinimleri reddedilir.
+
+REDIS_ONLY, işaretli notu Redis payload'larında ve kuyruk yazmalarında şifreler;
+SQL'e ise **orijinal düz metni** yazar. TLS, disk şifrelemesi, JDBC loglarının
+gizlenmesi ve yedekleme kontrolleri ayrı sorumluluklardır. Dış servis entegrasyon
+testi gerçek Redis ciphertext'ini ve sağlayıcının gerçek SQL değerini inceler;
+yalnızca REST yanıtı, depolamanın şifreli olduğunu kanıtlamaz. REDIS_AND_SOURCE veya
+Oracle CLOB desteği iddia edilmez.
+
+| Senaryo | REST | Gerçek Metot | Kayıtlı İstek |
+| --- | --- | --- | --- |
+| encrypted-save | PUT /api/examples/v019/encryption/notes/{slot} | [EncryptedNoteController.save](src/encryption/java/com/example/cachedb/sample/encryption/EncryptedNoteController.java) | 4 |
+| encrypted-hot | GET /api/examples/v019/encryption/notes/{slot} | [EncryptedNoteController.hot](src/encryption/java/com/example/cachedb/sample/encryption/EncryptedNoteController.java) | 5 |
+| encrypted-source | POST /api/examples/v019/encryption/notes/{slot}/source-roundtrip | [EncryptedNoteController.sourceRoundtrip](src/encryption/java/com/example/cachedb/sample/encryption/EncryptedNoteController.java) | 1 |
+
+Ayrı postman/cache-database-mssql-encryption.postman_collection.json dosyası,
+encryptionApiEnabled=true ve encryptionApiCertification=true ister. Runner ikisini
+de ayarlar; eksik, atlanan veya başarısız istek/assertion kabul edilmez.
+Mevcut 84 business ve 37 range/data isteği korunur. Yalnızca sentetik notlar
+kullanın: Postman raporları çözülmüş istek/yanıt verisi içerir ve özel tutulmalıdır.
+Şifreli not yolları toplu silme, saklama kurallarını uygulama, kiracı verilerini silme
+(purge) veya kiracı sahipliğini oluşturma işlemlerini kapsamaz. Üstteki ayrı,
+şifrelenmemiş denetim notu örneği sınırlı toplu silme ve saklama kurallarını gösterir;
+şifreli notların sözleşmesini genişletmez.
+
+## Aralık ve Spring Data API'leri (0.19)
+
+Bu örnekler, ${cachedb.version} değerinde eşleşen CacheDB 0.19 core, processor,
+Redis storage, starter ve isteğe bağlı cachedb-spring-data paketlerini gerektirir.
+[RangeRoutes](src/main/java/com/example/cachedb/sample/rangedata/RangeRoutes.java)
+ve [RangeDataRepository](src/main/java/com/example/cachedb/sample/rangedata/RangeDataRepository.java)
+derleme sırasında üretilir. Reflection tabanlı repository proxy'si veya SQL'e
+örtük geçiş yoktur.
+
+Sağlayıcının veritabanı ve Redis hızlı başlangıcını tamamladıktan sonra,
+bu örneğin dizininde tek komutla uygulamayı başlatın:
+
+~~~shell
+mvn -B -ntp spring-boot:run "-Dspring-boot.run.profiles=demo"
+~~~
+
+Yalnızca demo profili sample.range-data.enabled ayarını açar ve
+schema-range-data.sql dosyasını çalıştırır. Metot önbelleği/asenkron ayarları
+korunur. Demo olmadan, sample.range-data.enabled verilse bile yeni REST yolları
+ve repository bean'leri oluşturulmaz. Sunucuda başka özellik bayrağı gerekmez.
+ControlsAccess, doğrulanan kimlikleri shop-a/shop-b kiracılarına eşler;
+tedarikçi kimliği bu tenant yollarını kullanamaz. Demo kimliklerini ve yazma
+araçlarını güvenilmeyen ağlara açmayın.
+
+### Tam Long Değeriyle Yazma ve Okuma
+
+Aşağıdaki gövde gerçek API sözleşmesidir. rank, JSON sayısı değil ondalık
+**metindir**: JavaScript her işaretli Long değerini tam olarak temsil edemez.
+Sunucu satır kimliğini doğrulanmış tenant, run ve slot değerlerinden oluşturur;
+istek gövdesi tenant seçmez. Yalnızca OPEN/CLOSED durumları kabul edilir.
+
+~~~powershell
+$base = 'http://127.0.0.1:8092'
+$headers = @{ Authorization = 'Bearer demo-shop-a' }
+$run = [Guid]::NewGuid().ToString('N')
+$url = "$base/api/examples/v019/range-data/$run"
+Invoke-RestMethod "$url/rows/a" -Method Put -Headers $headers -ContentType application/json -Body '{"rank":"9007199254740992","status":"OPEN"}'
+Invoke-RestMethod "$url/rows/c" -Method Put -Headers $headers -ContentType application/json -Body '{"rank":"9007199254740993","status":"OPEN"}'
+$first = Invoke-RestMethod "$url/native?limit=1" -Headers $headers
+$first.items
+$next = [Uri]::EscapeDataString($first.nextCursor)
+Invoke-RestMethod "$url/native?limit=1&cursor=$next" -Headers $headers
+Invoke-RestMethod "$url/native/seek?afterRank=9007199254740992&afterSlot=a&limit=2" -Headers $headers
+Invoke-RestMethod "$url/data/page?limit=2" -Headers $headers
+Invoke-RestMethod "$url/data/slice?limit=1" -Headers $headers
+$window = Invoke-RestMethod "$url/data/window?limit=1" -Headers $headers
+$next = [Uri]::EscapeDataString($window.nextCursor)
+Invoke-RestMethod "$url/data/window?limit=1&cursor=$next" -Headers $headers
+Invoke-RestMethod "$url/data/stats" -Headers $headers
+~~~
+
+PUT, row ve sqlDurabilityConfirmed:false içeren 202 döndürür. Spring Data save,
+WriteReceipt döndürmediği için bu yollar sürüm veya causal token uydurmaz.
+Redis kabulü SQL commit'i değildir; işleyici hatasında veri görünürken kalıcılık
+bekleyebilir. Yazmalar otomatik tekrarlanmaz. Aynı PUT aynı mantıksal satırı
+hedefler; ancak yeni yazma/sürüm üretir, tam bir kez teslim receipt'i sağlamaz.
+
+### Sorgu Sözleşmeleri
+
+Bütün yollar /api/examples/v019/range-data/{run} altındadır:
+
+| Metot ve Yol | Gerçek API ve Sonuç |
+| --- | --- |
+| PUT /rows/{slot} | Spring Data save; 202, sunucunun oluşturduğu kimlik/tenant |
+| GET /rows/{slot} | Spring Data findById; 200 veya Redis'te yoksa 404 |
+| DELETE /rows/{slot} | Spring Data deleteById; 204, SQL silme onayı değildir |
+| GET /native?minimum=0&maximum=9223372036854775807&limit=2 | Üretilen Long bileşik aralık; yalnızca OPEN |
+| GET /native?descending=true&cursor=... | Azalan rank ve işaretsiz Redis UTF-8 kimlik sırası |
+| GET /native/seek?afterRank=42&afterSlot=a&limit=2 | Artan yönde eşlenmiş Long/kimlik devamı |
+| GET /data/page?page=0&limit=2 | rankValue ASC,rowId ASC ile PageRequest; satırlar ve ayrı sayım |
+| GET /data/slice?page=0&limit=2 | Toplam sayım yapmayan, bir sonraki satıra bakan Slice |
+| GET /data/window?limit=2&cursor=... | Spring Data tipli keyset ScrollPosition/Window |
+| GET /data/stats | Türetilen count ve exists; birbirinden bağımsız iki sorgu |
+
+Üretilen native rota queryRedisLongLexicalWindow çağırır; sürüm-4 cursor ile
+işaretli Long aralığının tamamını korur. Hızlı skor devamı, doğrulanmış Long53
+indeksi ve native yazıcı fence'i gerektirir. Kanıt eksikse veya güvenli değilse
+**tam ve sınırlı Redis materyalizasyonu** kullanılır; SQL'e veya yuvarlatılmış
+double cursor'a geçilmez. Örnekte HTTP üzerinden yönetimsel indeks yenileme
+yolu yoktur. Demo başlangıcı, yalnızca sample-range-rows namespace'i için
+yetkili cooperative fence altında indeksleri yeniden kurar; doğrulama başarısızsa
+uygulama açılmaz. Bu bakım Redis anahtarlarını tarayabilir; her açılışta yalnızca
+yalıtılmış ve küçük demo Redis'inde çalıştırın. Eski protokolde yazıcı bırakmayın.
+İstek rotaları strict kalır; bozulmuş indekste tam tarama yapmak yerine hata verir.
+
+Native ve Spring Data cursor'ları farklı sözleşmelerdir; birbirinin yerine
+kullanılmaz. Spring Data yolu yalnızca adaptörün $cachedb:cursor konumunu geri
+kurar; istemciden keyfî sıralama anahtarları almaz. Native devamda tenant, run,
+sınırlar ve yönü; Spring Data devamında tenant ve run değerlerini koruyun.
+Sözleşmesi değiştirilmiş tekrarlar reddedilir. ASCII satır kimlikleri bu
+örnekte artan eşitlik sırasını karşılaştırılabilir yapar; Redis bayt sırası ile
+Java metin sırasının her koşulda aynı olduğu iddia edilmez.
+
+Sonuçlar kaynak verinin tamamını değil Redis'te bulunan kümeyi anlatır.
+Native sourceCoverageConfirmed mevcut kapsam bilgisini bildirir; yazmalar bu
+bilgiyi kendiliğinden tam olarak işaretlemez. Page toplamı ile count/exists farklı
+anları görebilir. Keyset sayfalama snapshot yalıtımı değildir. Cursor'ın gerisine
+eklenen kayıtlar yeniden ziyaret edilmez; sıralama alanını değiştiren yazmalar
+atlama veya tekrara yol açabilir. TTL/kapasite tahliyesi satırları kaldırabilir.
+Değişiklik sonrasında devam etmek geçmiş görünümü yeniden oluşturmaz.
+
+### Sınırlar ve Hata Davranışı
+
+run, 1..32 küçük ASCII harf/rakam; slot, 1..8 karakterdir. rank aralığı
+-9223372036854775808..9223372036854775807'dir. Yanıt sınırı 1..32, Page/Slice
+offset sınırı 128'dir. Chunked istekler dahil gövde JSON çözülmeden önce 2 KiB,
+yol 512, query string 12288, cursor metni 8192 karakterle sınırlıdır.
+Demo entity politikası Redis'teki satırları 512 ile, entity TTL'ini 1800 saniye,
+sayfa TTL'ini beş saniye ile sınırlar. Bunlar toplam Redis baytı veya bütün
+metadata için kota değildir. Geçici veri, Redis maxmemory ve üst katmanda
+istek/yeni anahtar hız sınırı kullanın.
+
+Her JVM, bekleme kuyruğu olmadan en fazla 32 etkin aralık/veri işlemi kabul eder.
+Kimlik doğrulama gövde okunmadan önce yapılır. Ayrı 32 istekli filter kapısı,
+gövde çözümlemesini de sınırlar ve istek bitene kadar kapasiteyi tutar.
+Mevcut sonlu Redis/JDBC/havuz zaman aşımları geçerlidir; ek executor oluşturulmaz.
+Üst katmanda toplam istek/gövde okuma süresini sınırlayın; yalnızca bayt sınırı,
+yavaş yüklemeleri engellemez.
+Kimlik doğrulama hatası 401, yanlış rol/tenant sahipliği 403, geçersiz girdi veya
+cursor 400, büyük gövde 413, uzun URI 414, kapasite reddi 429'dur.
+Kullanılamayan native sorgu/bütçe durumu 409 olur; sürücü hataları başarıya çevrilmez.
+İstemcinin zaman aşımı, kabul edilmiş yazmayı iptal etmez veya geri almaz.
+
+Bütün bu yollar boş olmayan X-CacheDB-Causal başlığını ve mevcut causal bağlamını
+repository erişiminden önce 409 ile reddeder. Sorgu RYOW garantisi vermez.
+Kimlik eşleştirmesi yetkilendirmedir; gövdeye tenant yazmak değildir.
+Bu aralık/veri yolları şifreleme, saklama kuralları veya kiracı verilerini silme API'si
+sunmaz. Üstteki denetim notu ve şifreli not örnekleri ayrı sözleşmelere sahiptir.
+Varsayılan range/data yollarında kiracı silme REST yolu yoktur. Aşağıdaki ayrı,
+açıkça etkinleştirilen F3 eşlikçisi kendi sınırlı purge HTTP API'sini sunar.
+
+### Postman ve Sağlayıcı Testleri
+
+[Aralık/veri koleksiyonunu](postman/cache-database-mssql-range-data.postman_collection.json)
+içe aktarın. rangeDataEnabled=true ve rangeDataCertification=true ayarlayın.
+Beklenen 4xx cevapları dahil 37 isteğin tamamı gerçek cevap almalı ve kaydedilen
+bütün doğrulamaları çalıştırmalıdır. Kabul modunda kapalı özellik atlanmaz,
+hata verir. Kabul dışında kapalı koleksiyonu atlamak başarı sayılmaz.
+
+~~~powershell
+pwsh -NoProfile -File scripts/test-range-data-postman.ps1 -BaseUrl http://127.0.0.1:8092 -ConfirmDisposableDemo
+~~~
+
+Çalıştırıcı iki bayrağı da açar; sabitlenmiş Newman kullanır, raporlardaki bearer
+kimliklerini gizler ve 37 kayıtlı isteğin tamamını denetler.
+test-v019-postman.ps1 önce mevcut 84 iş isteğini, ardından ayrı koleksiyonu
+çalıştırır. Eski 61+23 akışını değiştirmez veya kısaltmaz. Koleksiyonlar yalnızca
+geçici demo verisine yazmalıdır.
+
+RangeDataExternalIT, üretilen rotaları ve Spring Data işlemlerini gerçek
+RedisEntityRepository ve bağımsız beklenen kayıtlarla karşılaştırır. Tam Long
+değerleri, eşitlikler, azalan sıra, silinen devam satırı, tenant/cursor/causal
+reddi ve gerçek sağlayıcıda JDBC write-behind değerinin tamlığı kapsanır.
+Harici servis testleri mevcut yalıtılmış CACHEDB_TEST_NAMESPACE ile datasource/
+Redis değişkenlerini gerektirir; alternatif konteyner başlatmaz.
+
+<!-- BEGIN CACHE API MATRIX -->
+### REST, Kod ve İstek Matrisi
+
+Her satır gerçek controller metoduna ve kaydedilmiş istek sayısına bağlanır.
+Bu tablo çalışma zamanı veya performans kabulü değildir.
+
+| Senaryo | REST | Java | İstek Sayısı |
+| --- | --- | --- | --- |
+| method-quote | GET /api/examples/v019/cache/quotes/{sku} | [CacheApiController.quote](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 7 |
+| method-refresh | POST /api/examples/v019/cache/quotes/{sku}/refresh | [CacheApiController.refresh](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| method-evict | DELETE /api/examples/v019/cache/quotes/{sku} | [CacheApiController.evict](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| method-clear | DELETE /api/examples/v019/cache/quotes | [CacheApiController.clear](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 4 |
+| method-null | GET /api/examples/v019/cache/nullable/{sku} | [CacheApiController.nullable](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 2 |
+| offer-save | PUT /api/examples/v019/async/offers/{id} | [CacheApiController.save](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| offer-hot | GET /api/examples/v019/async/offers/{id} | [CacheApiController.hot](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| offer-source | GET /api/examples/v019/async/offers/{id}/source | [CacheApiController.source](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| stock-write | PUT /api/examples/v018/stock/{id} | [ControlsController.stockPut](src/main/java/com/example/cachedb/sample/controls/ControlsController.java) | 2 |
+| stock-one | GET /api/examples/v019/reactive/stock/{id} | [CacheApiController.stock](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 2 |
+| stock-list | GET /api/examples/v019/reactive/stock | [CacheApiController.stocks](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java) | 1 |
+| range-save | PUT /api/examples/v019/range-data/{run}/rows/{slot} | [RangeDataController.save](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 8 |
+| range-point | GET /api/examples/v019/range-data/{run}/rows/{slot} | [RangeDataController.read](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 3 |
+| range-delete | DELETE /api/examples/v019/range-data/{run}/rows/{slot} | [RangeDataController.delete](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 1 |
+| range-window | GET /api/examples/v019/range-data/{run}/native | [RangeDataController.nativeRange](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 13 |
+| range-seek | GET /api/examples/v019/range-data/{run}/native/seek | [RangeDataController.nativeSeek](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 1 |
+| data-page | GET /api/examples/v019/range-data/{run}/data/page | [RangeDataController.page](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 3 |
+| data-slice | GET /api/examples/v019/range-data/{run}/data/slice | [RangeDataController.slice](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 1 |
+| data-window | GET /api/examples/v019/range-data/{run}/data/window | [RangeDataController.window](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 3 |
+| data-stats | GET /api/examples/v019/range-data/{run}/data/stats | [RangeDataController.stats](src/main/java/com/example/cachedb/sample/rangedata/RangeDataController.java) | 4 |
+<!-- END CACHE API MATRIX -->
+
+## Metot Önbelleği ve Asenkron API'ler (0.19)
+
+İsteğe bağlı metot önbelleği ve asenkron/reactive senaryoları, sağlayıcı starter'ı
+ve üretilen repository sınıflarıyla aynı CacheDB sürümünü kullanır. Örnekte
+cachedb-reactor bağımlılığı ${cachedb.version} ile optional olarak tanımlıdır.
+WebFlux, bağımsız bir Reactor sürümü, scheduler veya ikinci executor eklenmez.
+
+API, demo profili dışında varsayılan olarak kapalıdır. Sağlayıcının veritabanı
+ve Redis hızlı başlangıcını tamamladıktan sonra, Java 21 ile bu örneğin
+dizininde aşağıdaki tam komutu çalıştırın. Ek metot önbelleği bayrağı gerekmez:
+
+~~~shell
+mvn -B -ntp spring-boot:run "-Dspring-boot.run.profiles=demo"
+~~~
+
+Demo profili sample.cache-api.enabled ve cachedb.spring-cache.enabled
+özelliklerini açar. quotes ve nulls önbellekleri tenant kapsamındadır;
+değer sınırları 4096 bayttır. quotes için Redis TTL'i beş dakika, L1 sınırı
+256 kayıt, 1 MiB ve on saniyedir. nulls, null değerlerini L1 olmadan
+30 saniye saklar. Kabul sınırları 128 işlem, 1024 yükleme anahtarı ve
+4096 bekleyen çağrıdır. Her sağlayıcı demo-methods-mssql önekini kullanır;
+bağımsız her dağıtım/veritabanı için ayrı SAMPLE_METHOD_CACHE_PREFIX seçin.
+Bunlar demo sınırlarıdır; üretim kapasitesi önerisi değildir.
+
+Hızlı başlangıçtaki veritabanı, Redis ve worker ayarlarını koruyun.
+Harici servisler DB_URL, DB_USERNAME, DB_PASSWORD ve REDIS_URI değişkenlerini
+kullanır. Varsayılan demo kimlikleri demo-supplier, demo-shop-a ve demo-shop-b'dir.
+SAMPLE_CONTROLS_SUPPLIER_TOKEN, SAMPLE_CONTROLS_TENANT_A_TOKEN ve
+SAMPLE_CONTROLS_TENANT_B_TOKEN ile değiştirdiğinizde istemciyi de aynı
+değerlerle ayarlayın. Demo yazma araçlarını herkese açık erişime açmayın.
+ControlsAccess doğrulanan kimlikleri shop-a/shop-b tenant'larına eşler.
+İstekteki tenant kimliği veya causal token yetkilendirme değildir.
+Demo varsayılanları üretim kimlik bilgisi olarak kullanılmamalıdır.
+Demo olmadan yeni API'lerin iki özellik kapısı da kapalı kalır.
+
+[CacheApiConfiguration](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiConfiguration.java)
+annotation desteğini açar ve quotes/nulls önbelleklerinin tenant kapsamında
+olmasını zorunlu tutar. Bellek içi manager veya sınırsız executor kullanmak yerine
+uyumsuz yapılandırmada başlangıcı durdurur. Runtime'ın sahip olduğu async gate
+ve yeniden üretilmiş repository binding'leri gerekir. Uygulamanın
+CachingConfigurer bean'i değiştirilmez; MethodCacheService açıkça
+cacheDbKeyGenerator ve cacheDbCacheManager seçer.
+
+### Entity Kalıcılığından Ayrı Metot Sonuçları
+
+[MethodCacheService](src/main/java/com/example/cachedb/sample/cacheapi/MethodCacheService.java)
+tenant/SKU/şube ve yeni bir belirteç içeren, boyutu sınırlı String hesaplar.
+Bu işlem SQL sorgusu yapmaz. Sonucun tekrar gelmesi metot önbelleğini gösterir;
+SQL güncelliği veya stok rezervasyonu garantisi değildir. Aşağıdaki annotation'lar
+gerçek sınıftandır:
+
+~~~java
+@CacheConfig(cacheManager = "cacheDbCacheManager", keyGenerator = "cacheDbKeyGenerator")
+public class MethodCacheService {
+    @Cacheable(cacheNames = "quotes", sync = true)
+    public String quote(String sku, int branch) { return calculate(sku, branch); }
+    @CachePut(cacheNames = "quotes")
+    public String refresh(String sku, int branch) { return calculate(sku, branch); }
+}
+~~~
+
+Tam sınıfta hesaplama, null döndürebilen okuma ve geçersizleştirme metotları da
+bulunur. İki argüman tipli, tam uzunluk çerçeveli anahtar üreticisini kullanır;
+refresh aynı argümanlarla aynı kaydı günceller. Keyfî toString, Java nesne
+serileştirmesi veya reflection ile SimpleKey parametresi okuma yoktur.
+Geçerli L1 isabeti sıfır Redis I/O yapar. Diğer replikadaki görünürlük, uzaktaki
+yazmanın dönüşüyle değil geçersizleştirme bildiriminin işlenmesiyle oluşur.
+TTL, tespit edilmemiş ağ kopmasında doğrusal tutarlılık sağlamaz. Daha güçlü
+garanti gerektiğinde L1'i kapatın.
+
+Aşağıdaki bütün yollar /api/examples/v019 altındadır. Önbellek ve stok
+yollarında tenant kimliğini, teklif yollarında tedarikçi kimliğini kullanın:
+
+| Metot ve Yol | Sözleşme |
+| --- | --- |
+| GET /cache/quotes/{sku}?branch=7 | Sunucunun seçtiği tenant ile önbellekteki String; 200 |
+| POST /cache/quotes/{sku}/refresh?branch=7 | Yeniden hesaplama ve aynı anahtara @CachePut; 200 |
+| DELETE /cache/quotes/{sku}?branch=7 | Yalnızca bir mantıksal anahtarı çıkarır; 204 |
+| DELETE /cache/quotes | Nesil artırarak yalnızca doğrulanmış tenant'ı temizler; 204 |
+| GET /cache/nullable/MISSING-ITEM | Açık null değeri önbelleğe alır, value:null döner; 200 |
+| PUT /async/offers/{id} | Gerçek WriteReceipt ile 202; kaynak commit'i doğrulanmaz |
+| GET /async/offers/{id} | Yalnızca Redis'ten async sıcak okuma; kaçırma 409'dur |
+| GET /async/offers/{id}/source | Açık asenkron kaynak okuması; bulunmayan satır 404'tür |
+| GET /reactive/stock/{id} | Doğrulanmış abone bağlamıyla soğuk Reactor sıcak okuması |
+| GET /reactive/stock?ids=1,2 | Sınırlı Reactor listesi; 1..32 pozitif kimlik |
+
+SKU, 1..32 büyük harf/rakam/alt çizgi/tire; şube ise 0..999 aralığındadır.
+Komut gövdeleri, chunked istekler dahil, JSON çözülmeden önce 4 KiB ile
+sınırlanır (413). Query string en fazla 4096 karakterdir (414).
+Gövde doğrulaması ayrıca teklif verilerini ve değerleri sınırlar. Varsayılan codec
+skaler metot değerlerini saklar; keyfî POJO'ları serileştirmez.
+
+### Receipt ve Reactor Bağlamı
+
+[CacheApiOperations](src/main/java/com/example/cachedb/sample/cacheapi/CacheApiOperations.java),
+SupplierOfferRepository.asyncWithReceipt() kullanır. Gerçek receipt içindeki
+entity, kimlik, namespace'ten türetilmiş causal token ve pozitif sürüm korunur.
+202 yalnızca Redis kabulüdür; sqlDurabilityConfirmed her zaman false döner.
+Kaynak kalıcılığını ayrı source yoluyla gözleyin. Redis causal token'ını SQL
+kalıcılığı kanıtı olarak bu yola göndermeyin. Yazmalar otomatik tekrarlanmaz.
+
+ReactiveEntityRepositoryFactory mevcut stok repository'sinin async
+bağdaştırıcısını alır. Publisher'lar soğuktur; her abonelik yeni ve sınırlı
+iş başlatır. CacheApiOperations.stock/stocks, CacheReactorContext.TENANT ve
+CAUSAL_TOKEN değerlerini sağlar. Tenant yalnızca ControlsAccess üzerinden gelir.
+Mevcut nedensellik gereksinimleri abone bağlamına aktarılmadan önce birleştirilir;
+worker veya administrative bağlam kendiliğinden taşınmaz. Spring MVC,
+toFuture() ile oluşturulan future'ı alır; block(), get(), join() veya WebFlux
+bağımlılığı kullanılmaz.
+
+Tenant stok satırı oluşturmak için mevcut PUT /api/examples/v018/stock/{id}
+komutunu kullanın. Dönen X-CacheDB-Causal receipt başlığını reactive stok
+okumasına gönderin. Gövde stockId, warehouse, status ve availableUnits içerir.
+En küçük async teklif gövdesi şöyledir:
+
+~~~json
+{"supplier":"cache-api","status":"ACTIVE","unitPrice":12.3400,"availableUnits":7}
+~~~
+
+Metot önbelleği yolları, sıcak L1 değeri olsa bile, boş olmayan
+X-CacheDB-Causal gereksinimini metot çağrısından önce 409 ile reddeder.
+Entity RYOW sağladığını varsaymaz. Async/reactive entity okumaları sürüm
+korumalarını sürdürür. Eksik kimlik bilgisi 401, yanlış rol veya başka tenant'ın
+verisine erişim 403, geçersiz sınırlı girdi 400'dür. Async kabul reddi
+Retry-After başlığıyla 429 döner. Üç saniyelik cevap süresi aşılınca 504 döner;
+sürücü işlemi devam edebilir ve fiziksel işlem kapasitesini tutar.
+İptal/zaman aşımı rollback değildir. Redis/JDBC/havuz zaman aşımlarını ve kaynak
+işlem sürelerini ayrıca sınırlandırın. Runtime kabul sınırını CPU, bellek ve havuz
+kapasitesine göre seçin. TTL toplam Redis baytını değil yaşam süresini sınırlar;
+maxmemory ve üst katmanda istek/yeni anahtar hızı sınırları uygulayın.
+
+@CachePut ve varsayılan @CacheEvict kaynak yetkilendirmesi değildir.
+Controller doğrulanmış kapsamı çağrıdan önce denetler; örneğin eviction
+işlemleri beforeInvocation=true kullanır. Bu davranış veya önbellek temizliği
+kaynak işini transaction yapmaz. Tenant/causal/codec hatalarını yutmayın.
+
+### Çalıştırılabilir Postman Akışı
+
+Mevcut [örnek koleksiyonu](postman/cache-database-mssql-sample.postman_collection.json),
+23 istekli "07 Method Cache and Async" klasörünü içerir. Uygulama başladıktan sonra
+bu klasörü çalıştırın; sunucuyla eşleşen kimlik bilgilerini sağlayın. Klasörü
+göndermek için cacheApiEnabled=true ayarlayın. Kabul çalıştırmalarında ayrıca
+cacheApiCertification=true zorunludur; kapalı özellik atlanmak yerine hata verir.
+Kabul modu dışında kapalı klasör atlanır; bu, çalıştırma başarısı değildir.
+Kabul için 23 isteğin tamamı JSON raporunda gerçek cevap ve başarılı,
+atlanmamış doğrulama içermelidir. Tek başına sıfır çıkış kodu klasörün
+çalıştığını kanıtlamaz.
+[pm.execution.skipRequest](https://learning.postman.com/v11/docs/tests-and-scripts/write-scripts/postman-sandbox-reference/pm-execution)
+destekleyen bir çalıştırıcı kullanın.
+
+~~~shell
+newman run postman/cache-database-mssql-sample.postman_collection.json \
+  --folder "07 Method Cache and Async" \
+  --env-var cacheApiEnabled=true \
+  --env-var cacheApiCertification=true \
+  --env-var baseUrl=http://127.0.0.1:8092 \
+  --env-var cacheSupplierToken=demo-supplier \
+  --env-var cacheTenantAToken=demo-shop-a \
+  --env-var cacheTenantBToken=demo-shop-b \
+  --timeout-request 5000 --timeout-script 25000 \
+  --reporters cli,json \
+  --reporter-json-export ../target/sample-api-reports/cache-api-mssql.json
+~~~
+
+Akış farklı demo kimlikleri ayırır; isabet/yenileme/tek anahtar çıkarma/nesil
+temizliği/null/tenant ayrımını denetler. Gerçek async receipt doğrulanır;
+kaynak ayrıca gözlenir. Reactive tekil ve sınırlı liste okumaları doğrulanmış
+tenant bağlamını ve stok receipt token'ını kullanır. Bildirim beklemeleri
+sınırlıdır; kaynak gözlemi 20 saniye içinde en fazla 40 denemeye izin verir.
+Hazır olmama veya kalıcılığın gözlenememesi, 202'den başarı çıkarılarak gizlenmez.
+Bu örnekler pod'lar arası doğrusal tutarlılık, fiziksel sıfır ağ veya performans
+kanıtı değildir.
+
+Mevcut 61 isteğin ve 23 metot önbelleği/asenkron isteğinin tamamını kapsayan
+iş akışını, önceden başlatılmış ve verileri silinebilir bir demo üzerinde
+aşağıdaki komutla çalıştırın. Bu çalıştırıcı altyapı başlatmaz;
+Java/Maven komutu gerektirmez:
+
+~~~shell
+pwsh -NoProfile -File scripts/test-v019-postman.ps1 -BaseUrl http://127.0.0.1:8092 -ConfirmDisposableDemo
+~~~
+
+Çalıştırıcı cacheApiEnabled ve cacheApiCertification değerlerini her zaman açar.
+84 farklı isteğin cevabını, istek/betik/doğrulama hatalarını ve atlanan veya
+eksik doğrulamaları denetler. Sınırlı bekleme döngülerinin son doğrulamaları da
+zorunludur. Eksik özellik veya atlanan klasör hata verir; HTTP 202, kaynak
+kalıcılığı kanıtı değildir. Katalog ve 0.18 denetimleri ayrı 23 ve 40 istekli
+sözleşmelerini korur. test-catalog-postman.ps1 yalnızca belgelenmiş, kendisine
+ait geçici altyapı kurulumu için kullanılmalıdır; tam iş akışını da çalıştırır.
+Hazır harici servisler için test-v019-postman.ps1 çalışan demoya doğrudan
+yöneltilebilir.
+
+Raporlar her seferinde yeni bir target/v019-postman dizinine yazılır.
+Demo istek/cevap verilerini içerdiğinden raporları özel tutun.
+Sağlanan bearer kimlik bilgileri raporlarda maskelenir; geçici ortam dosyası
+silinir. Veri değiştiren bu örnek akışı üretim verileri üzerinde çalıştırmayın.
+
+## Sürüm ve Okuma Taşıması
+
+Bu örnek; sağlayıcı, BOM, processor ve plugin için eşleşen 0.19.0 paketlerini
+kullanır. cachedb-reactor ve cachedb-spring-data sürümlerini de aynı tutun.
+Uygulamayı başlatmadan önce bu paket kümesinin tamamını edinin veya kurun.
+Eski üretilmiş binding'ler ile yeni runtime modüllerini karıştırmayın.
+
+Redis nokta okumalarını birleştirme, demo dahil **bu örneklerde isteğe bağlıdır**.
+Örnek açıkça
+cachedb.redis.read-coalescing.enabled=${SAMPLE_READ_COALESCING_ENABLED:false}
+ayarını kullanır. Bu, kütüphanenin varsayılanıyla aynıdır; birleştirmenin her
+iş yükünü hızlandırdığı veya dağıtımınız için performans kabulünden geçtiği
+anlamına gelmez. Birleştirmeyi kapatmak, sınırlı native asenkron okumaları kapatmaz.
+
+Önce belgelenen demo komutunu ve false varsayılanını kullanın. Birleştirmeyi ayrı
+değerlendirmek için aynı uygulamayı başlatmadan önce
+SAMPLE_READ_COALESCING_ENABLED=true ayarlayın. Hem tek çağıranda hem temsilî eş
+zamanlı yükte throughput, p99 gecikmesi, CPU ve tutulan belleği karşılaştırın;
+Redis topolojisi, veri boyutu, bağlantı ve CPU sınırları aynı kalmalıdır.
+İşlevsel Postman sonucu performans kabulü değildir. Ölçülen gerileme bütçenizi
+aşıyorsa bayrağı geri alın. Kuyruk, yanıt baytı, zaman aşımı veya sahiplik
+sınırlarını kaldırarak sonucu düzeltmeye çalışmayın.
+
+Demo profili belgelenen önbellek/aralık API ayarlarını açar. Demo dışında
+sample.cache-api.enabled ve sample.range-data.enabled varsayılan olarak false'tur.
 
 ## 0.18.1 ile Okuma ve Yazma Kontrolleri
 
@@ -13,9 +679,9 @@ ve minimum sürüm okumasını kapsar. Yeni demo API'si ayrı kimlik eşleştirm
 mevcut REST sözleşmeleri değişmez. Tam Java kaynakları, beklenen sonuçlar ve
 Postman istekleri aşağıdadır.
 
-Bu örnek SQL Server kullanır. BOM, processor, starter ve doctor eklentisini aynı
-sürümden indirir. Java 21 gerekir; framework kaynak kodunu indirip derlemek
-gerekmez. Geçiş ve tutarlılık sınırları için
+Bu SQL Server örneği, aynı sürümdeki onaylı BOM, processor, starter ve doctor
+paketlerinin tamamını gerektirir. Paketler erişilebilir olduğunda framework
+kaynak kodunu indirip derlemek gerekmez. Java 21 gerekir. Geçiş ve tutarlılık için
 [kontrol rehberini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/aktif-veri-performans-kontrolleri.md)
 inceleyin.
 
@@ -100,7 +766,7 @@ Sınırlar 100 kimlik, 4 MiB ve 2000 kuyruk alanıdır. Cluster aynı hash-tag k
 ister; sınırlı tenant kabul kuralları atomik işlemle atlanamaz.
 
 [![Consumer build](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml/badge.svg?branch=main)](https://github.com/esasmer-dou/sample-cache-database-mssql/actions/workflows/consumer-build.yml)
-[![CacheDB 0.18.1](https://img.shields.io/badge/CacheDB-0.18.1-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases/tag/v0.18.1)
+[![CacheDB 0.19.0 documentation](https://img.shields.io/badge/CacheDB-0.19.0_docs-0b7285.svg)](https://github.com/esasmer-dou/cache-database/releases)
 
 Bu proje, CacheDB'nin Redis 8 ve SQL Server ile nasıl kullanılacağını gösteren
 bir Spring Boot REST API örneğidir. Canlı ortamda verilmesi gereken kararları
@@ -108,9 +774,9 @@ açıkça gösterir: operasyonel yollar Redis'teki sınırlı aktif veri setini
 kullanır, kalıcı geçmiş SQL Server'da tutulur, büyüyen listeler ise bütün nesne
 ağacı yerine projection üzerinden okunur.
 
-> Bu örnek CacheDB `0.18.1` sürümünü kullanır. Paketler herkese açık Maven
-> deposundan alınır; GitHub token'ı veya
-> yerel framework kaynak kodu gerekmez.
+> Bu örnek CacheDB `0.19.0` sürümünü kullanır. Eşleşen paketlerin tamamını
+> yapılandırılmış Maven deposundan veya kurumunuzun onaylı paket kaynağından
+> edinin. Önceki bir sürümün mevcut olması, 0.19.0 paketlerinin hazır olduğunu göstermez.
 
 Hızlı başlangıcı tamamladığında canlı ortama benzeyen tek bir yolu baştan sona
 doğrulamış olacaksın: kalıcı SQL Server verisini oluşturacak, sınırlı arşiv
@@ -118,10 +784,10 @@ yolunu okuyacak, karşılık gelen Redis projection'ını hazırlayacak, aktif y
 çağıracak ve kapsam ile kalıcılık sinyallerini inceleyeceksin. Redis'te kayıt
 bulunmaması arka planda gizli bir SQL Server sorgusu başlatmaz.
 
-## CacheDB 0.18.1 Sürümüne Geçiş
+## CacheDB 0.19.0 Sürümüne Geçiş
 
 Örnek POM; BOM, sağlayıcı starter'ı, annotation processor ve doctor plugin'ini
-`0.18.1` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
+`0.19.0` ile eşitler. Binding'lerin yeniden üretilmesi için örnek projeyi derleyin.
 POM ayrıca `jedis.version=5.2.0` ayarını içerir. Bu ayar olmadan Spring Boot parent,
 gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 
@@ -133,13 +799,14 @@ gerekli pipeline API'sini içermeyen eski sürücüyü seçebilir.
 - SQL kolonunuz NULL alabiliyorsa `Boolean` kullanın; primitive `boolean`, SQL NULL değerini reddeder.
 - Atomik katalog aktarımı ve indeksli snapshot sayfaları açık endpoint'lerle gösterilir. Redis Cluster dağılımı isteğe bağlı framework altyapısıdır; yerel Compose tek Redis kullanır.
 
-Bu API'leri eklemeden önce [sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.18.1.md)
+Bu API'leri eklemeden önce [0.19.0 sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.19.0.md),
+[geçiş rehberini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/upgrading-to-0.19.md)
 ve [sınırlı çalışma sözleşmelerini](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/sinirli-calisma-islemleri.md)
 okuyun. Paketin kullanılabilir olması, uygulamanızın canlı ortam topolojisini doğrulamaz.
 
 ## Kolon Güvenliği
 
-Örnek uygulamadaki entity'ler bilerek dar tutulur. Sağlayıcıya göre belirlenen kontroller, 0.18.1 bağımlılığı
+Örnek uygulamadaki entity'ler bilerek dar tutulur. Sağlayıcıya göre belirlenen kontroller, 0.19.0 bağımlılığı
 ile devrededir; ek cache politikası veya iş tablosu değişikliği gerekmez.
 Redis'te daha geniş veri kabul edilmesi, SQL tablosunun sınırını kaldırmaz.
 
@@ -298,7 +965,7 @@ framework kaynak kodunu kendi içinde derlemez.
 ```xml
 <properties>
     <java.version>21</java.version>
-<cachedb.version>0.18.1</cachedb.version>
+<cachedb.version>0.19.0</cachedb.version>
 <jedis.version>5.2.0</jedis.version>
 </properties>
 
@@ -382,15 +1049,17 @@ bölümde de tanımlanır:
 ```
 
 `repositories`; BOM, starter ve kütüphaneleri çözümler.
-`pluginRepositories` ise `cachedb-maven-plugin` eklentisini çözümler. Adres
-herkese açıktır; Maven `settings.xml`, kullanıcı adı veya token gerekmez.
+`pluginRepositories` ise `cachedb-maven-plugin` eklentisini çözümler. Herkese açık
+adres kimlik bilgisi istemez; bu ayar 0.19.0 paketlerinin mevcut olduğunu kanıtlamaz.
+Yapılandırdığınız paket kaynağından onaylı ve eşleşen paket setinin tamamını edinin.
 
 ## Hızlı Başlangıç
 
-### 1. Yayımlanmış CacheDB paketini çözümle
+### 1. Eşleşen CacheDB paket setini çözümle
 
-Örnek projeyi doğrudan doğrulayın. Maven; BOM, starter,
-annotation processor ve doctor plugin'ini bu paketten kimlik bilgisi istemeden alır:
+Onaylı 0.19.0 paket setinin tamamı erişilebilir olduğunda örnek projeyi doğrulayın.
+Maven; eşleşen BOM, starter, annotation processor ve doctor plugin'ini
+yapılandırılmış depodan çözümlemelidir; burada yayımlanmış oldukları iddia edilmez:
 
 ```powershell
 mvn -U -DskipTests validate
@@ -1050,7 +1719,7 @@ kullan. Örnek kanıtları başarılı gibi işaretleme.
 | Belirti | Olası neden | Çözüm |
 | --- | --- | --- |
 | `/api/demo/seed` veya `/api/warm/**` için `404` | Uygulama `demo` profili olmadan açıldı | `SPRING_PROFILES_ACTIVE=demo` tanımlayıp yeniden başlat |
-| CacheDB artifact'leri için `404` alınıyor | İstenen sürüm yayımlanmamış veya genel Maven deposu eksik | Yayımlanmış kararlı sürümü kullan ve iki repository bölümüne de `https://esasmer-dou.github.io/cache-database/maven2` adresini ekle |
+| CacheDB artifact'leri için `404` alınıyor | İstenen sürüm yayımlanmamış veya depo ayarı eksik | Onaylı ve eşleşen paket setinin tamamını edinin. Mevcut bir sürümü kullanmak için onunla eşleşen örnek kaynak tag'ini seçin; yalnız bağımlılık sürümünü düşürmeyin. |
 | Bağımlılıklar çözülüyor ancak `cachedb-maven-plugin` bulunamıyor | `pluginRepositories` tanımı yok | Aynı genel CacheDB adresini `pluginRepositories` altına ekle |
 | `production-certification` başarısız oluyor | Rota kanıtı eksik, eski veya başka commit/ortama ait | Üretilen raporu oku, gerçek staging kanıtını yenile ve profili yeniden çalıştır |
 | Aktif route `503` döndürüyor, arşiv route'u satır getiriyor | Redis route'u hazırlanmadı, coverage süresi doldu veya kapsam farklı | Dry-run yap, aynı route/scope'u hazırla, `COMPLETED` durumunu bekle ve coverage kaydını incele |
@@ -1075,8 +1744,8 @@ kullan. Örnek kanıtları başarılı gibi işaretleme.
 ## CacheDB 0.18: Çalışan Senaryolar
 
 Bu bölümdeki sınıflar örnek projede gerçekten bulunur; taslak kod değildir.
-Önce mevcut Hızlı Başlangıç adımlarını `demo` profiliyle tamamlayın. Maven,
-framework kaynak kodunu derlemeden **CacheDB 0.18.1** paketlerini indirir.
+Önce eşleşen **CacheDB 0.19.0** paketlerini edinin; ardından mevcut Hızlı
+Başlangıç adımlarını `demo` profiliyle tamamlayın.
 `postman/cache-database-mssql-v018.postman_collection.json` koleksiyonunu
 kayıtlı sırasıyla çalıştırın.
 
@@ -1768,10 +2437,9 @@ istekleri için süre garantisi değildir.
 
 ## Bildirimsel Katalog Senaryoları
 
-Bu senaryolar **CacheDB 0.18.1** sürümünü kullanır. Mevcut sipariş,
-destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar yalnızca anlatım
-için yazılmış taslaklar değildir; üç sağlayıcıda da derlenen ve test edilen
-örnek kaynak kodlarıdır. Her tam Java bloğunu, üstünde belirtilen dosyaya yerleştirin.
+Bu senaryolar **CacheDB 0.19.0** sürümünü kullanır. Mevcut sipariş,
+destek, lojistik ve arşiv yolları değişmez. Aşağıdaki sınıflar gerçek örnek
+kaynak kodlarıdır; kod blokları üstlerinde belirtilen dosyalarla eşleşir.
 
 ### 0.15 ile Gelen Kolaylıklar
 
@@ -1988,10 +2656,10 @@ public class CatalogConfiguration {
 
 Örneğin POM dosyasında Gson **2.13.2** açıkça sabitlenmiştir. Aksi hâlde Spring
 Boot parent, gerekli `Strictness` sınıfını içermeyen eski Gson sürümünü seçebilir.
-POM'da `cachedb-json`, annotation bağımlılığı ve 0.18.1 processor birlikte bulunur.
+POM'da `cachedb-json`, annotation bağımlılığı ve 0.19.0 processor birlikte bulunur.
 Gson sürüm ayarını kaldırmayın; farklı framework sürümlerini karıştırmayın.
 
-0.18.1 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
+0.19.0 BOM ve annotation processor ayarları mevcutsa, derlenen örneğin ek çalışma
 zamanı bağımlılıkları şunlardır:
 
 ```xml
@@ -2545,8 +3213,9 @@ aktarın. **23 isteği** sırayla çalıştırın; şema kurulmuşsa demo seed g
 Akış; ilk süre sınırlı bekleme yeterli değilse yalnızca aynı teslimatı tekrar
 göndererek SQL kalıcılığını, aynı receipt ile tekrarı, değişen içeriğin reddini,
 snapshot yayınını, Türkçe metin/ondalık sayıyı, tek nesilden okumayı, sayfalamayı
-ve geçersiz girdi yanıtlarını doğrular. Mevcut 61 istekli iş senaryosu koleksiyonu
-ayrı kalır. İki koleksiyon da REST için 50 ms SLA'sı iddia etmez.
+ve geçersiz girdi yanıtlarını doğrular. Ayrı iş senaryosu koleksiyonu eski
+61 isteği korur ve 23 metot önbelleği/asenkron isteği ekler; toplam 84 istektir.
+İki koleksiyon da REST için 50 ms SLA'sı iddia etmez.
 
 ```powershell
 npx --yes newman@6.2.1 run postman/cache-database-mssql-catalog.postman_collection.json --env-var baseUrl=$base
@@ -2558,17 +3227,18 @@ framework altyapı yeteneğidir; yerel Compose tek Redis kullanır ve Cluster/HA
 topolojisini doğruladığını iddia etmez. JSON ve rol seçimleri açıktır; ORM'nin
 kendiliğinden SQL'e geçmesi gibi bir davranış eklenmez.
 
-Yalıtılmış komut satırı testi için Node.js/npm ve PowerShell 7 kurulu olmalıdır.
+Yalıtılmış komut satırı testi için Node.js/npm ve PowerShell 7.3+ kurulu olmalıdır.
 JAR'ı derledikten sonra `./scripts/test-catalog-postman.ps1` çalıştırın. Araç;
-geçici sağlayıcı altyapısını ve boş yerel portta JAR'ı başlatır, kaydedilmiş
-koleksiyonu Newman ile çalıştırır, JSON/JUnit raporlarını `target/catalog-postman`
-altına yazar ve yalnızca kendi test projesini/volume'larını kaldırır.
+geçici sağlayıcı altyapısını ve boş yerel portta JAR'ı başlatır; katalog (23),
+denetim (40) ve iş akışı (84) koleksiyonlarını Newman ile çalıştırır.
+JSON/JUnit raporlarını `target/catalog-postman` ve `target/v019-postman` altına
+yazar; yalnızca kendi test projesini/volume'larını kaldırır.
 Bu aracı üretim veritabanına bağlamayın.
 `-SplitRoles` seçeneği, yerel şemayı hazırlayıp hazırlık JVM'ini durdurur; aynı
 koleksiyonu bir API konteyneri ve **iki worker konteyneri** üzerinde çalıştırır.
 Örneklerin CI hattı bu modu kullanır; konteyner logları test kanıtına eklenir.
 
-Ayrı sunulan 61 istekli iş senaryoları koleksiyonu, kabul edilen her arka plan
+İş senaryosu koleksiyonunun eski 61 istekli bölümü, kabul edilen her arka plan
 işinden sonra kayıtlı durum isteğini otomatik sorgular ve tamamlanınca sıradaki
 isteğe geçer. Bekleme en fazla 30 saniye veya 150 denemedir. Her yanıtın HTTP
 kodu doğrulanır; başarısız işten sonra okumaya devam edilmez. HTTP yük kontrolünden
@@ -2576,3 +3246,196 @@ hemen önce katalog açıkça yenilenmelidir. `warn-age` süresinden sonra gör�
 `STALE_WARNING`, verinin yaşıyla ilgili bilinçli bir uyarıdır; kaydın bulunamadığı
 veya sistemin kendiliğinden SQL'e geçmesi gerektiği anlamına gelmez.
 <!-- END COMPILED FEATURE EXAMPLES -->
+
+## 0.19 örnek kabulünün sınırı
+
+<!-- BEGIN V019 PENDING COVERAGE -->
+Sürüm kontrollerinin yetkili kaynağı, tam sürüm commit'inin CI sonuçları ve kaynak, SDK ve örnek
+paketlerine bağlı kanıttır. [0.19.0 sürüm notlarını](https://github.com/esasmer-dou/cache-database/blob/main/tr/docs/releases/v0.19.0.md#sürüm-kanıtının-yetkili-kaynağı) inceleyin.
+Aşağıdaki bağlar uygulama ve doğrulama girişlerini gösterir; başarılı çalışma sonucu değildir.
+Ana matris ve her özellik kapsamı kendi eşleşen kanıtını gerektirir; tek özellik kanıtı tüm
+örneği, uygulamanın koruma geçişini veya sürümü doğrulamaz.
+
+| Özellik | Doğrulamanın yetkili kaynağı | Mevcut kaynak ve test kanıtı | Bağımsız Postman runner |
+| --- | --- | --- | --- |
+| spring-data-bulk-delete | Sürüm commit CI / pakete bağlı kanıt | [AuditNoteController](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java), [AuditExternalIT](src/test/java/com/example/cachedb/sample/audit/AuditExternalIT.java), [DerivedDeleteRangeExternalIT](src/test/java/com/example/cachedb/sample/rangedata/DerivedDeleteRangeExternalIT.java) | [42 audit isteği](scripts/test-audit-postman.ps1) |
+| field-encryption | Sürüm commit CI / pakete bağlı kanıt | [EncryptedNoteController](src/encryption/java/com/example/cachedb/sample/encryption/EncryptedNoteController.java), [EncryptedNoteContractTest](src/encryption-test/java/com/example/cachedb/sample/encryption/EncryptedNoteContractTest.java), [EncryptedNoteExternalIT](src/encryption-test/java/com/example/cachedb/sample/encryption/EncryptedNoteExternalIT.java) | [10 şifreleme isteği](scripts/test-encryption-postman.ps1) |
+| retention | Sürüm commit CI / pakete bağlı kanıt | [AuditNoteController.sweep](src/main/java/com/example/cachedb/sample/audit/AuditNoteController.java), [AuditExternalIT](src/test/java/com/example/cachedb/sample/audit/AuditExternalIT.java), [AuditHttpContractTest](src/test/java/com/example/cachedb/sample/audit/AuditHttpContractTest.java) | [Aynı 42 audit isteği, bir kez](scripts/test-audit-postman.ps1) |
+| tenant-purge | Sürüm commit CI / pakete bağlı kanıt | [TenantPurgeRuntime](src/purge/java/com/example/cachedb/purge/TenantPurgeRuntime.java), [TenantPurgeOptInTest](src/purge-test/java/com/example/cachedb/purge/TenantPurgeOptInTest.java), [TenantPurgeContractTest](src/purge-test/java/com/example/cachedb/purge/TenantPurgeContractTest.java), [TenantPurgeExternalIT](src/purge-test/java/com/example/cachedb/purge/TenantPurgeExternalIT.java) | [8 istek / 36 assertion](scripts/test-tenant-purge-postman.ps1) |
+
+Audit yolu sıfır seçim bütçesini reddeder; pozitif sınırlı seçim ve tam kapasitede
+mutasyondan önce ret, ayrı range-derived dış testindedir. Redis kabulü veya sweep
+yanıtı SQL dayanıklılığı/kaynak silinmesi kanıtı değildir. Şifreli notlar SQL'de
+bilinçli açık metin tutan REDIS_ONLY örneğidir; korumalı kaynak onboarding kanıtı
+değildir. Ayrı purge eşlikçisi yalnızca taze INITIAL gösterir; restart/HA veya
+yedek silme kanıtlamaz. Purge dış testi ve ayrı uygulama için farklı boş şemalar
+gerekir. Kanonik migration'ları uygulama çalıştırır; önceden uygulamayın.
+
+Yalnızca parent'ın kabul ettiği K8s kohortunda, mevcut ortak kilit, özgün süreler,
+tek CPU/APC1 ve 512 MiB heap ile çalıştırın. Byte-doğrulanmış final SDK/önbellek,
+settings/araç pinleri ve sahipliği belirli geçici fixture parent girdisidir.
+Yerel çalıştırma veya otomatik online fallback yoktur. Dış SQL/Redis URL'leri
+`.<CACHEDB_TEST_NAMESPACE>.svc.cluster.local` içermelidir. Sır/anahtarlar uzak
+özel ortamda/Secret mount'ta kalır. `CACHEDB_TEST_DATASOURCE_URL`,
+`CACHEDB_TEST_DATASOURCE_USERNAME`, `CACHEDB_TEST_DATASOURCE_PASSWORD` ve
+`CACHEDB_TEST_REDIS_URI` gerekir. Eksik fixture veya skip PASS değildir.
+
+BU sağlayıcının üç ayrı, target içermeyen kopyasını `AUDIT_WORK`,
+`ENCRYPTION_WORK`, `PURGE_WORK` olarak hazırlayın. Şifreleme target'ını purge
+için kullanmayın. `SDK_REPO`, `QUALIFIED_CPU` ve iki Maven settings yolu
+parent tarafından doğrulanır. Her lane başlamadan kendi özgün admission süresine
+sığmalıdır; 900 saniyelik tavan fixture süresini uzatma izni değildir.
+
+```bash
+export MAVEN_OPTS="-Xms64m -Xmx512m -XX:ActiveProcessorCount=1"
+common=(-o -B -ntp -C -s "$SETTINGS" -gs "$GLOBAL_SETTINGS" "-Dmaven.repo.local=$SDK_REPO"
+  -DskipTests=false -Dmaven.test.skip=false -Dmaven.test.failure.ignore=false
+  -DfailIfNoTests=true -Dsurefire.failIfNoSpecifiedTests=true -Dfailsafe.failIfNoSpecifiedTests=true
+  -Dsurefire.rerunFailingTestsCount=0 -Dfailsafe.rerunFailingTestsCount=0
+  -DforkCount=1 -DreuseForks=true -Djunit.jupiter.execution.parallel.enabled=false
+  '-DargLine=-Xms64m -Xmx512m -XX:ActiveProcessorCount=1')
+timeout --signal=TERM --kill-after=10s 900s taskset -c "$QUALIFIED_CPU" mvn "${common[@]}" -f "$AUDIT_WORK/pom.xml" -Pprovider-integration -Dtest=AuditContractTest,AuditHttpContractTest -Dit.test=AuditExternalIT,DerivedDeleteRangeExternalIT verify
+timeout --signal=TERM --kill-after=10s 900s taskset -c "$QUALIFIED_CPU" mvn "${common[@]}" -f "$ENCRYPTION_WORK/pom.xml" -Pencrypted-demo,provider-integration -Dtest=EncryptedNoteContractTest -Dit.test=EncryptedNoteExternalIT verify
+timeout --signal=TERM --kill-after=10s 900s taskset -c "$QUALIFIED_CPU" mvn "${common[@]}" -f "$PURGE_WORK/pom.xml" -Ptenant-purge-demo,provider-integration -Dtest=TenantPurgeOptInTest,TenantPurgeContractTest -Dit.test=TenantPurgeExternalIT verify
+```
+
+İlk başarısız komutta durun; otomatik tekrar yoktur. Sağlayıcı başına tam roster:
+audit 8 contract + 6 HTTP contract + 5 external + 2 derived-delete = 21;
+şifreleme 5 contract + 2 external = 7; purge 7 opt-in + 11 contract + 1 external
+= 19. Üç sağlayıcıda 27 suite / 141 case gerekir; failure/error/skip/flaky/rerun
+sıfır olmalıdır. Tam metot üyeliğini, XML ve exit'leri, final SDK/kaynak/önbellek
+hash'lerini ve preservation kanıtını saklayın; yalnızca sayı yeterli değildir.
+
+Paketlenmiş uygulamalar ayrı admission ile başladıktan sonra mevcut runner'ları
+birer kez çalıştırın:
+```bash
+export npm_config_offline=true
+timeout --signal=TERM --kill-after=10s 900s pwsh -NoProfile -File "$AUDIT_WORK/scripts/test-audit-postman.ps1" -BaseUrl "$AUDIT_BASE_URL" -ConfirmDisposableDemo
+timeout --signal=TERM --kill-after=10s 900s pwsh -NoProfile -File "$ENCRYPTION_WORK/scripts/test-encryption-postman.ps1" -BaseUrl "$ENCRYPTION_BASE_URL" -ConfirmDisposableDemo
+timeout --signal=TERM --kill-after=10s 900s pwsh -NoProfile -File "$PURGE_WORK/scripts/test-tenant-purge-postman.ps1" -BaseUrl "$PURGE_BASE_URL" -RunId "$SAMPLE_PURGE_RUN_ID" -ConfirmDisposableDemo
+```
+Parent doğrulanmış offline Newman 6.2.1 önbelleğini ve uygulamayla eşleşen özel
+kimlik bilgilerini sağlar. Audit/şifreleme wrapper'ları online paket edinmemelidir.
+Sağlayıcı başına 60 farklı istek, toplam 180 istek vardır. Bulk ve retention aynı
+audit koşusunu paylaşır; iki kez saymayın. Ayrı 834 HTTP kontrolü değişmez.
+Bu 180 dört-özellik isteği, tarihsel 180 istekli ana rota kapısı değildir.
+Sonuçları tam sürüm commit'inin CI kayıtları ve eşleşen pakete bağlı raporlarla belirleyin.
+Ana matris, özellik ve sürüm kapsamlarını ayrı değerlendirin; eksik veya atlanmış zorunlu kanıt
+PASS değildir. Geçmiş aday sonuçları değişmiş paketleri kendiliğinden doğrulamaz.
+<!-- END V019 PENDING COVERAGE -->
+
+## İsteğe bağlı yerel tenant temizleme (F3)
+
+Bu isteğe bağlı eşlikçinin bağımsız doğrulama kapsamını, tam sürüm commit'inin CI
+sonuçları ve pakete bağlı kanıt belirler. Ana matrisi, tüm örneği, gerçek uygulamanın
+koruma geçişini veya sürümü doğrulamaz. Aşağıdaki komutlar onaylı ve yalıtılmış
+Kubernetes fixture'ı, sıralı çalışma, Java 21+, tek CPU ve 512 MiB test heap gerektirir.
+`SDK_REPO`, hash ile doğrulanmış eşleşen `0.19.0` SDK'sını içeren özel Maven önbelleği
+olmalıdır; offline çözümleme başarısız olursa eski public SDK'ya dönmeyin.
+
+`tenant-purge-demo` Maven profili yalnızca `src/purge` ve `src/purge-test`
+dizinlerini ekler. Ayrı `TenantPurgeApplication`, eski global şifreli notları
+taramaz ve onlara tenant eklemez. `TenantPurgeRow`, üretilen native bildirimleri,
+Long 1..8 kimlikleri, tenant sahipliği ve mevcut anahtar sağlayıcı düzeniyle
+REDIS_AND_SOURCE şifrelemeyi kullanır. CLIENT_ONLY / REDIS_ONLY çalışır; L1
+kapalıdır. İki gerçek root, onaylı roster, native namespace bootstrap,
+INITIAL enrollment ve seal protokolüne katılır.
+
+Yeni koşu tam sekiz SQL satırı oluşturur: sahip olunan 1..7 ve yabancı tenant'a
+ait 8. INITIAL yalnızca 1..2'yi Redis'e alır; 3..7 gerçek soğuk SQL satırlarıdır.
+Facade `includeSource=true` kullanır; yalnızca önbellek silmeyi purge diye sunmaz.
+HTTP teslim callback'i, native okuma bariyerini yanıtın flush işlemi bitene kadar
+tutar. Redis owner kaydı olmayan soğuk satırın HTTP okuması 409 döner; gizli SQL
+fallback yoktur. Başarılı purge, SQL ve Redis CLOSED generation/güvenlik
+metadata'sını korur. Otomatik açma veya reopen endpoint'i yoktur; yeniden açma
+ayrıca incelenmiş açık idari yaşam döngüsü gerektirir. Başlatma yalnızca taze
+fixture içindir; uygulamanın crash-resume kanıtı değildir.
+
+Ayrı yönetim akışı için [açık onayla EMPTY yeniden açma](../tr/docs/tenant-veri-koruma.md) sözleşmesine bakın.
+EMPTY, silinen kimliklerin sahipliğini geri getirmez. Yeni Long kimlikler için INITIAL
+sırasında yalnız bu ad alanına ayrılmış bir kimlik aralığı tanımlanmalı; ardından
+[`reserveAndAdmitFreshRange`](../tr/docs/tenant-protection-components.md) ile daha ilerideki,
+çakışmayan bir aralık hazırlanmalıdır. Aynı rehberdeki `refillVersionRange` ise kayıt
+kimliklerini değil, yazma sürümlerini yeniler. Bu iki işlem örneğin HTTP API'sinde sunulmaz.
+
+**Geçici SQL Server fixture:** Önceden oluşturulmuş ayrı bir geçici veritabanı/şema kullanın: CREATE TABLE, şemada ALTER, kendi nesnelerinde CRUD ve metadata erişimi gerekir. Fixture DBA'sı başlatmadan önce ALLOW_SNAPSHOT_ISOLATION ON ayarını açmalıdır; örnek veritabanı ayarlarını değiştirmez.
+Uygulama `com/reactor/cachedb/jdbc/migrations/mssql/` altındaki yedi
+kanonik JDBC migration'ını (V014, ardından V019..V019_5) ve sonra
+`src/purge/resources/schema-purge.sql` dosyasını çalıştırır.
+Bu adımlar idempotent değildir. Her dış test ve ayrı HTTP/Postman başlatması için
+farklı boş şema kullanın; migration'ları önceden uygulamayın, eski/ortak şemayı
+seçmeyin. Redis, F3 Functions/Lua/transaction yetkileri olan onaylı özel
+standalone Redis 7+ DB0 fixture olmalıdır. FLUSH yoktur; Cluster, TLS ve
+kimlik bilgisi içeren Redis URI bu sınırlı örnekte desteklenmez.
+
+**Dış test ortamı:** `CACHEDB_TEST_NAMESPACE` (`cachedb-...`),
+`CACHEDB_TEST_DATASOURCE_URL`, `CACHEDB_TEST_DATASOURCE_USERNAME`,
+`CACHEDB_TEST_DATASOURCE_PASSWORD`, `CACHEDB_TEST_REDIS_URI` değerlerini
+özel ortamdan sağlayın. İki URL de `.<namespace>.svc.cluster.local` içermelidir.
+Test kendi run/admin/şifreleme değerlerini üretir, yazdırmaz.
+Bu örnek proje dizininde:
+```sh
+mvn -o -Dmaven.repo.local="$SDK_REPO" \
+  -Ptenant-purge-demo,provider-integration \
+  -Dtest=TenantPurgeOptInTest,TenantPurgeContractTest -Dit.test=TenantPurgeExternalIT \
+  -Dsurefire.failIfNoSpecifiedTests=true -Dfailsafe.failIfNoSpecifiedTests=true \
+  -DfailIfNoTests=true -DforkCount=1 -DreuseForks=true \
+  '-DargLine=-Xmx512m -XX:ActiveProcessorCount=1' verify
+```
+Yedi `TenantPurgeOptInTest` metodu, on `TenantPurgeContractTest` metodu ve
+`TenantPurgeExternalIT.nativeInitialHttpPurgeRemovesHotAndColdAndPreservesForeignState`
+sıfır hata/başarısızlık/skip ile çalışmalıdır: sağlayıcı başına 18, toplam 54.
+XML, Maven çıkış kodları ve güncel kaynak/SDK hash'lerini saklayın.
+Eksik fixture veya atlanan test PASS değildir.
+
+**Ayrı HTTP/Postman çalıştırması:** yeni şema ve özel ortam değişkenleri gerekir:
+Postman betiği ayrıca Linux ve tam olarak
+`CACHEDB_TEST_NAMESPACE=cachedb-v019-validation` ister. `CACHEDB_TEST_DATASOURCE_URL`,
+uygulamanın kullandığı gerçek özel SQL URL'si (`SAMPLE_PURGE_SQL_URL`) olmalı ve
+`jdbc:sqlserver://mssql.cachedb-v019-validation.svc.cluster.local:1433;` ile başlamalıdır.
+`CACHEDB_TEST_REDIS_URI` ve `SAMPLE_PURGE_REDIS_URI` değerleri
+`redis://redis.cachedb-v019-validation.svc.cluster.local:6379/0` olmalıdır.
+Bunlar betiğin zorunlu girdileridir; HTTP `BaseUrl` adresi yine loopback olabilir.
+Uygulamanın özel girdilerini sağlayın:
+`SAMPLE_PURGE_SQL_URL`, `SAMPLE_PURGE_SQL_USERNAME`, `SAMPLE_PURGE_SQL_PASSWORD`,
+`SAMPLE_PURGE_REDIS_URI` (yukarıdaki Service URI'si, kimlik bilgisi olmadan),
+`SAMPLE_PURGE_RUN_ID` (32 küçük hex), `SAMPLE_PURGE_ADMIN_TOKEN`
+(32..128 URL-safe karakter), `SAMPLE_PURGE_CONFIRM=CREATE_FRESH_PURGE_DEMO`,
+`SAMPLE_ENCRYPTION_AES_KEY` ve `SAMPLE_ENCRYPTION_HMAC_KEY` (özel, Base64
+32 bayt anahtarlar). İsteğe bağlı `SAMPLE_PURGE_BIND_ADDRESS` varsayılanı
+loopback, `SAMPLE_PURGE_HTTP_PORT` varsayılanı 8080'dir.
+Sırları komut satırına veya loglara koymayın.
+
+**Parolalı Redis bağlantısı:** test adresinin içine kullanıcı adı veya parola
+yazmayın. TEST sürecine `CACHEDB_TEST_REDIS_PASSWORD`, purge uygulamasına ise
+`SAMPLE_PURGE_REDIS_PASSWORD` değerini Kubernetes Secret üzerinden ortam
+değişkeni olarak verin; komut satırı argümanı kullanmayın. Her iki bağlantı da
+Redis'in varsayılan ACL kullanıcısını kullanır. `ExternalSampleFixtures` ve
+`TenantPurgeRuntime` parolayı istemcilere iletir; özel karakterler yalnızca
+istemci bir URI gerektirdiğinde kodlanır. Normal uygulamada bağlantı ayarı yine
+`REDIS_URI` üzerinden yapılır. İsteğe bağlı parola değişkenleri verilmezse
+bağımsız, parolasız demo kullanımı korunur. Örneği çalıştırmak için paylaşılan
+veya üretimdeki Redis'in kimlik doğrulamasını kapatmayın.
+
+```sh
+mvn -o -Dmaven.repo.local="$SDK_REPO" -Ptenant-purge-demo -DskipTests package
+java -XX:ActiveProcessorCount=1 -Xmx512m -jar target/sample-cache-database-mssql-0.19.0.jar --spring.config.name=application-purge
+# Aynı kilitli K8s kohortunda ikinci kabuk; onaylı offline Newman 6.2.1 önbelleği gerekir:
+pwsh -NoProfile -File scripts/test-tenant-purge-postman.ps1 -BaseUrl http://127.0.0.1:8080 -RunId "$SAMPLE_PURGE_RUN_ID" -ConfirmDisposableDemo
+```
+Sabit API kökü `/api/examples/v019/tenant-purge`: GET `/status`,
+GET `/rows/1`.. `/rows/7`, POST `/purge`.
+`Authorization: Bearer <özel-token>` ve `X-Purge-Run: <run>` zorunludur.
+Tek mutasyon gövdesi:
+`{"confirmation":"ERASE_OWNED_ROWS","operationId":"<canonical-UUID>"}`.
+Wrapper tek operasyon kimliği üretir; sekiz istek/36 assertion ve tek purge POST
+çalıştırır. Redirect, retry veya polling yoktur. Özel environment dosyasını siler;
+yalnızca sırları ayıklanmış log/JUnit çıktısını saklayın.
+`POSTMAN_ONLY_PASS`, örneğin bütünü için yeterlilik değildir.
+
+Gerçek yabancı şifreli SQL satırı ve kayıtlı namespace dışındaki gerçek şifreli
+Redis sentinel korunarak doğrulanır. Sentinel, ayrı enrollment yapılmış yabancı
+runtime değildir. Crash, HA, yedek silme veya Cluster kanıtı iddia edilmez.
+Eşlikçi manifest `tools/samples/v019-tenant-purge-scenarios.json` dosyasıdır.
+Bu kapsamı ve mevcut 20 senaryolu ana matrisi, sürüm commit'inin CI sonuçları ve
+eşleşen pakete bağlı kanıtla bağımsız değerlendirin; özellik kanıtı tüm ana matrisi veya sürümü doğrulamaz.

@@ -14,6 +14,12 @@ public @interface CacheRouteQuery {
     CachePredicate[] predicates() default {};
     CacheSeek[] seek() default {};
 
+    /** Opt-in Redis score/UTF-8-ID ordering; incompatible with typed/source cursor contracts. */
+    boolean redisLexicalIdTie() default false;
+
+    /** Name of the composite index with a declared sortBy; required with redisLexicalIdTie. */
+    String redisCompositeIndex() default "";
+
     /**
      * Confirms that predicates split across multiple groups are intentionally
      * ORed. Keeping this false makes an accidental group change a compile-time

@@ -70,6 +70,59 @@ class RedisCacheIdGeneratorTest {
     }
 
     @Test
+    @org.junit.jupiter.api.Timeout(60)
+    void concurrentVirtualThreadsNeverClaimOutsidePublishedBlocks() throws Exception {
+        try (JedisPooled jedis = jedis();
+                ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor()) {
+            int[] allocationSizes = {1, 2, 3, 64};
+            for (int allocationSize : allocationSizes) {
+                String prefix = "cachedb:test:ids:boundary:" + UUID.randomUUID();
+                RedisCacheIdGenerator first = new RedisCacheIdGenerator(jedis, prefix);
+                RedisCacheIdGenerator second = new RedisCacheIdGenerator(jedis, prefix);
+                Set<Long> ids = ConcurrentHashMap.newKeySet();
+                var start = new java.util.concurrent.CyclicBarrier(16);
+                List<Callable<Void>> tasks = new ArrayList<>();
+                for (int task = 0; task < 16; task++) {
+                    RedisCacheIdGenerator generator = task % 2 == 0 ? first : second;
+                    tasks.add(() -> {
+                        start.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                        for (int index = 0; index < 500; index++) {
+                            int requestedSize = allocationSize == 64 ? allocationSizes[index & 3] : allocationSize;
+                            long id = generator.nextSequence("orders", requestedSize);
+                            assertTrue(id > 0);
+                            assertTrue(ids.add(id), "Duplicate sequence allocation");
+                        }
+                        return null;
+                    });
+                }
+                for (var future : workers.invokeAll(tasks, 30, java.util.concurrent.TimeUnit.SECONDS)) {
+                    future.get();
+                }
+                assertEquals(8_000, ids.size());
+                long reservedEnd = Long.parseLong(jedis.get(prefix + ":orders"));
+                assertTrue(reservedEnd >= ids.stream().mapToLong(Long::longValue).max().orElseThrow());
+                assertTrue(reservedEnd - ids.size() < 2L * allocationSize);
+            }
+        }
+    }
+
+    @Test
+    void exhaustedPositiveSequenceFailsWithoutWrappingOrChangingRedisCounter() {
+        try (JedisPooled jedis = jedis()) {
+            String prefix = "cachedb:test:ids:exhausted:" + UUID.randomUUID();
+            RedisCacheIdGenerator generator = new RedisCacheIdGenerator(jedis, prefix);
+            jedis.set(prefix + ":orders", Long.toString(Long.MAX_VALUE - 2L));
+            assertEquals(Long.MAX_VALUE - 1L, generator.nextSequence("orders", 2));
+            assertEquals(Long.MAX_VALUE, generator.nextSequence("orders", 2));
+            for (int attempt = 0; attempt < 3; attempt++) {
+                assertThrows(redis.clients.jedis.exceptions.JedisDataException.class,
+                        () -> generator.nextSequence("orders", 2));
+                assertEquals(Long.toString(Long.MAX_VALUE), jedis.get(prefix + ":orders"));
+            }
+        }
+    }
+
+    @Test
     void createsMonotonicUlidsAndRejectsUnsafeSequenceInput() {
         try (JedisPooled jedis = jedis()) {
             RedisCacheIdGenerator generator = new RedisCacheIdGenerator(jedis, "cachedb:test:ulid");

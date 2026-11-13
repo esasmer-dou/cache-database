@@ -314,36 +314,31 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         waitForFutures(futures);
     }
 
+    private PendingEntry stampedEntry(StreamEntry entry,Map<String,String> body,List<StreamEntryID> ackIds,boolean compacted,String source) {
+        var envelope=mapper.fromStampedBody(body);
+        return new PendingEntry(entry,envelope.operation(),ackIds,compacted,source,envelope);
+    }
     private List<PendingEntry> rawEntries(String sourceStreamKey, List<StreamEntry> entries) {
         List<PendingEntry> candidates = new ArrayList<>(entries.size());
         for (StreamEntry entry : entries) {
             candidates.add(
-                    new PendingEntry(
-                            entry,
-                            mapper.fromBody(entry.getFields()),
-                            List.of(entry.getID()),
-                            false,
-                            sourceStreamKey));
+                    stampedEntry(entry,entry.getFields(),List.of(entry.getID()),false,sourceStreamKey));
         }
         return candidates;
     }
 
     private List<PendingEntry> resolveCompactionEntries(
             String sourceStreamKey, List<StreamEntry> entries) {
-        LinkedHashMap<EntityKey, CompactionTokenGroup> tokenGroups = new LinkedHashMap<>();
+        LinkedHashMap<CompactionGenerationKey, CompactionTokenGroup> tokenGroups = new LinkedHashMap<>();
         ArrayList<PendingEntry> atomic = new ArrayList<>();
         for (StreamEntry entry : entries) {
             if (entry.getFields().containsKey("batchCount")
                     || "PATCH".equals(entry.getFields().get("type"))) {
                 atomic.add(
-                        new PendingEntry(
-                                entry,
-                                mapper.fromBody(entry.getFields()),
-                                List.of(entry.getID()),
-                                false,
-                                sourceStreamKey));
+                        stampedEntry(entry,entry.getFields(),List.of(entry.getID()),false,sourceStreamKey));
                 continue;
             }
+            mapper.validateGenerationNotice(entry.getFields());
             String namespace = entry.getFields().get("namespace");
             String id = entry.getFields().get("id");
             if (namespace == null || id == null) {
@@ -351,7 +346,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 continue;
             }
             tokenGroups.compute(
-                    EntityKey.of(namespace, id),
+                    CompactionGenerationKey.of(namespace,id,entry.getFields()),
                     (ignored, currentGroup) ->
                             currentGroup == null
                                     ? CompactionTokenGroup.initial(entry, namespace, id)
@@ -437,7 +432,20 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
     private PendingEntry resolveCompactionEntry(
             String sourceStreamKey, CompactionTokenGroup tokenGroup, Map<String, String> body) {
+        if(body!=null && !body.isEmpty()){
+            if(!java.util.Objects.equals(tokenGroup.namespace(),body.get("namespace"))
+                    || !java.util.Objects.equals(tokenGroup.id(),body.get("id")))
+                throw new com.reactor.cachedb.core.protection.ProtectionException(
+                        com.reactor.cachedb.core.protection.ProtectionException.Code.GENERATION_MISMATCH);
+            for(String field:java.util.List.of("tenantGeneration","tenantToken","generationScope"))
+                if(!java.util.Objects.equals(tokenGroup.entry().getFields().get(field),body.get(field)))
+                    throw new com.reactor.cachedb.core.protection.ProtectionException(
+                            com.reactor.cachedb.core.protection.ProtectionException.Code.GENERATION_MISMATCH);
+        }
         if (body == null || body.isEmpty()) {
+            if(tokenGroup.entry().getFields().containsKey("tenantGeneration"))
+                throw new com.reactor.cachedb.core.protection.ProtectionException(
+                        com.reactor.cachedb.core.protection.ProtectionException.Code.MIGRATION_REQUIRED);
             throw new IllegalStateException(
                     "Durable compaction payload is missing for namespace="
                             + tokenGroup.namespace()
@@ -446,12 +454,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                             + ", stream="
                             + sourceStreamKey);
         }
-        return new PendingEntry(
-                tokenGroup.entry(),
-                mapper.fromBody(body),
-                tokenGroup.ackIds(),
-                true,
-                sourceStreamKey);
+        return stampedEntry(tokenGroup.entry(),body,tokenGroup.ackIds(),true,sourceStreamKey);
     }
 
     private int compactionPayloadFetchChunkSize(int entryCount) {
@@ -504,6 +507,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private List<PendingEntry> coalesceEntries(List<PendingEntry> entries) {
+        if(entries.stream().anyMatch(e->e.generationEnvelope().protectedEnvelope()))return entries;
         // A delta needs its predecessor even when a newer delta is already accepted.
         if (entries.stream().anyMatch(entry -> entry.operation().type()
                 == com.reactor.cachedb.core.model.OperationType.PATCH)) return coalesceUnversionedPatches(entries);
@@ -522,6 +526,7 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private List<PendingEntry> coalesceUnversionedPatches(List<PendingEntry> entries) {
+        if(entries.stream().anyMatch(e->e.generationEnvelope().protectedEnvelope()))return entries;
         var result = new ArrayList<PendingEntry>(entries.size());
         for (var entry : entries) {
             PendingEntry previous = result.isEmpty() ? null : result.get(result.size() - 1);
@@ -562,6 +567,13 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private boolean flushChunk(List<PendingEntry> chunk) {
+        try(var generations=com.reactor.cachedb.core.protection.TenantWriteStampContext.restore(
+                chunk.stream().map(PendingEntry::generationEnvelope).toList())){
+            return flushStampedChunk(chunk);
+        }
+    }
+
+    private boolean flushStampedChunk(List<PendingEntry> chunk) {
         if (chunk.size() == 1) {
             processOperationWithRetry(chunk.get(0));
             return true;
@@ -578,7 +590,8 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             flushedCount.addAndGet(chunk.size());
             return true;
         } catch (SQLException | RuntimeException exception) {
-            captureError(exception);
+            captureError(com.reactor.cachedb.core.crypto.EncryptedQueuedWrites.safeFailure(
+                    operations.stream().anyMatch(mapper::protectedOperation), exception));
             return false;
         }
     }
@@ -647,6 +660,13 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private void processOperationWithRetry(PendingEntry pendingEntry) {
+        try(var generations=com.reactor.cachedb.core.protection.TenantWriteStampContext.restore(
+                java.util.List.of(pendingEntry.generationEnvelope()))){
+            processStampedOperationWithRetry(pendingEntry);
+        }
+    }
+
+    private void processStampedOperationWithRetry(PendingEntry pendingEntry) {
         WriteRetryPolicy retryPolicy = resolveRetryPolicy(pendingEntry.operation());
         if (!config.batchStaleCheckEnabled() && isStale(pendingEntry.operation())) {
             acknowledgeOrDefer(pendingEntry);
@@ -662,12 +682,14 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 flushedCount.incrementAndGet();
                 return;
             } catch (SQLException | RuntimeException exception) {
-                captureError(exception);
+                Exception safe = mapper.safeFailure(pendingEntry.operation(), exception);
+                captureError(safe);
+                if (safe instanceof com.reactor.cachedb.core.crypto.CacheEncryptionException) attempts = retryPolicy.maxRetries();
                 attempts++;
                 retriedCount.incrementAndGet();
                 if (attempts > retryPolicy.maxRetries()) {
                     publishDeadLetter(
-                            pendingEntry.entry(), pendingEntry.operation(), exception, attempts);
+                            pendingEntry.entry(), pendingEntry.operation(), safe, attempts);
                     acknowledgeOrDefer(pendingEntry);
                     return;
                 }
@@ -789,6 +811,17 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private void markDurable(List<PendingEntry> entries) {
+        if(entries.stream().anyMatch(e->e.generationEnvelope().protectedEnvelope())){
+            var advanced=RedisGuardedDurability.advance(jedis,keyStrategy,entries.stream().map(PendingEntry::generationEnvelope).toList());
+            for(var entry:entries) {
+                var members=entry.operation().atomicBatch()?entry.operation().batchOperations():List.of(entry.operation());
+                for(var operation:members){
+                    if(entry.generationEnvelope().generation(operation)==null)markDurable(operation);
+                    else if(advanced.contains(com.reactor.cachedb.core.protection.QueuedGenerationEnvelope.identity(operation)))durableListener.accept(operation);
+                }
+            }
+            return;
+        }
         Map<String, List<QueuedWriteOperation>> namespaces = new LinkedHashMap<>();
         for (PendingEntry entry : entries) namespaces.computeIfAbsent(entry.operation().redisNamespace(), ignored -> new ArrayList<>()).add(entry.operation());
         for (var group : namespaces.entrySet()) {
@@ -804,6 +837,11 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     private void markDurable(QueuedWriteOperation operation) {
         if (operation.atomicBatch()) {
             for (var member : operation.batchOperations()) markDurable(member);
+        }
+        var stamp=com.reactor.cachedb.core.protection.TenantWriteStampContext.current(operation);
+        if(stamp!=null){
+            if(RedisGuardedDurability.advanceOne(jedis,keyStrategy,operation,stamp)>0 && !operation.atomicBatch())durableListener.accept(operation);
+            return;
         }
         durabilityTracker.advance(operation.redisNamespace(), operation.id(), operation.version());
         if (!operation.atomicBatch()) durableListener.accept(operation);
@@ -833,7 +871,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             return;
         }
         if (pendingEntry.compacted()) {
-            completeCompaction(pendingEntry.operation());
+            try(var original=com.reactor.cachedb.core.protection.TenantWriteStampContext.restore(
+                    List.of(pendingEntry.generationEnvelope()))){
+                completeCompaction(pendingEntry.operation());
+            }
         }
         StreamEntryID[] ackIds = pendingEntry.ackIds().toArray(StreamEntryID[]::new);
         jedis.commands().xack(pendingEntry.sourceStreamKey(), config.activeConsumerGroup(), ackIds);
@@ -850,7 +891,10 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                 continue;
             }
             if (pendingEntry.compacted()) {
-                completeCompaction(pendingEntry.operation());
+                try(var original=com.reactor.cachedb.core.protection.TenantWriteStampContext.restore(
+                        List.of(pendingEntry.generationEnvelope()))){
+                    completeCompaction(pendingEntry.operation());
+                }
             }
             ackIdsByStream
                     .computeIfAbsent(pendingEntry.sourceStreamKey(), ignored -> new ArrayList<>())
@@ -869,6 +913,11 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
     }
 
     private void completeCompaction(QueuedWriteOperation operation) {
+        var generation=com.reactor.cachedb.core.protection.TenantWriteStampContext.current(operation);
+        if(generation!=null){
+            RedisGuardedCompaction.complete(jedis,keyStrategy,config,operation,generation);
+            return;
+        }
         String pendingKey =
                 keyStrategy.compactionPendingKey(operation.redisNamespace(), operation.id());
         String payloadKey =
@@ -1167,11 +1216,13 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
 
     private void publishDeadLetter(
             StreamEntry entry, QueuedWriteOperation operation, Exception exception, int attempts) {
+        boolean protectedWrite = mapper.protectedOperation(operation);
+        exception = com.reactor.cachedb.core.crypto.EncryptedQueuedWrites.safeFailure(protectedWrite, exception);
         Map<String, String> fields = new java.util.LinkedHashMap<>(mapper.toBody(operation));
-        for (Map.Entry<String, String> entryField : entry.getFields().entrySet()) {
+        if (!protectedWrite) for (Map.Entry<String, String> entryField : entry.getFields().entrySet()) {
             fields.putIfAbsent(entryField.getKey(), entryField.getValue());
         }
-        WriteFailureDetails failureDetails = FailureClassifyingFlusher.classify(flusher, exception);
+        WriteFailureDetails failureDetails = mapper.classifyFailure(operation, flusher, exception);
         fields.put("deadLetterReason", exception.getClass().getName());
         fields.put(
                 "deadLetterMessage", exception.getMessage() == null ? "" : exception.getMessage());
@@ -1182,11 +1233,9 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
         fields.put("deadLetterRootType", failureDetails.errorType());
         fields.put("deadLetterAttempts", String.valueOf(attempts));
         fields.put("deadLetterEntity", operation.entityName());
-        jedis.commands()
-                .xadd(
-                        config.deadLetterStreamKey(),
-                        redis.clients.jedis.params.XAddParams.xAddParams(),
-                        fields);
+        var envelope=RedisQueuedGenerationCodec.decode(operation,fields);
+        if(envelope.protectedEnvelope())RedisQueueGenerationFence.publish(jedis,config.deadLetterStreamKey(),fields,envelope);
+        else jedis.commands().xadd(config.deadLetterStreamKey(),redis.clients.jedis.params.XAddParams.xAddParams(),fields);
         if (config.deadLetterMaxLength() > 0) {
             jedis.commands()
                     .xtrim(config.deadLetterStreamKey(), config.deadLetterMaxLength(), true);
@@ -1275,7 +1324,13 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
             QueuedWriteOperation operation,
             List<StreamEntryID> ackIds,
             boolean compacted,
-            String sourceStreamKey) {
+            String sourceStreamKey,
+            com.reactor.cachedb.core.protection.QueuedGenerationEnvelope generationEnvelope) {
+        private PendingEntry(StreamEntry entry,QueuedWriteOperation operation,List<StreamEntryID> ackIds,
+                boolean compacted,String sourceStreamKey) {
+            this(entry,operation,ackIds,compacted,sourceStreamKey,
+                    new com.reactor.cachedb.core.protection.QueuedGenerationEnvelope(operation,java.util.Map.of()));
+        }
         private PendingEntry merge(PendingEntry newerEntry) {
             ArrayList<StreamEntryID> mergedAckIds =
                     new ArrayList<>(ackIds.size() + newerEntry.ackIds().size());
@@ -1287,14 +1342,20 @@ public final class RedisWriteBehindWorker implements AutoCloseable {
                         newerEntry.operation(),
                         List.copyOf(mergedAckIds),
                         compacted || newerEntry.compacted(),
-                        newerEntry.sourceStreamKey());
+                        newerEntry.sourceStreamKey(),newerEntry.generationEnvelope());
             }
             return new PendingEntry(
                     entry(),
                     operation(),
                     List.copyOf(mergedAckIds),
                     compacted || newerEntry.compacted(),
-                    sourceStreamKey());
+                    sourceStreamKey(),generationEnvelope());
+        }
+    }
+
+    private record CompactionGenerationKey(String namespace,String id,String generation,String tenant,String scope){
+        static CompactionGenerationKey of(String namespace,String id,Map<String,String> fields){
+            return new CompactionGenerationKey(namespace,id,fields.get("tenantGeneration"),fields.get("tenantToken"),fields.get("generationScope"));
         }
     }
 

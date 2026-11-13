@@ -148,19 +148,22 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
             return new DeadLetterActionResult(entryId, "replay", true, "MANUAL_REPLAY_STALE");
         }
 
-        try (var scope = trace.restore(operation.traceMetadata())) {
+        try (var generations=com.reactor.cachedb.core.protection.TenantWriteStampContext.restore(
+                java.util.List.of(mapper.fromStampedBody(deadLetterEntry.fields())));
+                var scope = trace.restore(operation.traceMetadata())) {
             flusher.flush(operation);
             var durability = new RedisDurabilityTracker(jedis, keyStrategy);
             var operations = operation.atomicBatch() ? operation.batchOperations() : java.util.List.of(operation);
             for (var member : operations) {
-                durability.advance(member.redisNamespace(), member.id(), member.version());
-                durableListener.accept(member);
+                var stamp=com.reactor.cachedb.core.protection.TenantWriteStampContext.current(member);
+                if(stamp==null){durability.advance(member.redisNamespace(),member.id(),member.version());durableListener.accept(member);}
+                else if(RedisGuardedDurability.advanceOne(jedis,keyStrategy,member,stamp)>0)durableListener.accept(member);
             }
             publishReconciliation("MANUAL_REPLAYED", failureRecord, null, 1, note);
             resolveDeadLetter(deadLetterEntry, "MANUAL_REPLAYED", note);
             return new DeadLetterActionResult(entryId, "replay", true, "MANUAL_REPLAYED");
         } catch (SQLException | RuntimeException exception) {
-            publishReconciliation("MANUAL_REPLAY_FAILED", failureRecord, exception, 1, note);
+            publishReconciliation("MANUAL_REPLAY_FAILED", failureRecord, mapper.safeFailure(operation, exception), 1, note);
             return new DeadLetterActionResult(entryId, "replay", false, "MANUAL_REPLAY_FAILED");
         }
     }
@@ -192,7 +195,8 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
     private void resolveDeadLetter(DeadLetterEntry entry, String status, String note) {
         StreamEntryID streamEntryID = new StreamEntryID(entry.entryId());
         RedisRecoveryStreams.archiveResolved(
-                jedis, config, entry.fields(), entry.entryId(), status, note);
+                jedis, config, mapper.protectedStoredFields(entry.operation(), entry.fields()), entry.entryId(), status, note,
+                mapper.fromStampedBody(entry.fields()));
         jedis.commands().xack(deadLetterStreamKey, config.consumerGroup(), streamEntryID);
         jedis.commands().xdel(deadLetterStreamKey, streamEntryID);
     }
@@ -209,7 +213,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
 
     private DeadLetterEntry toDeadLetterEntry(StreamEntry entry) {
         QueuedWriteOperation operation = mapper.fromBody(entry.getFields());
-        Map<String, String> fields = Map.copyOf(entry.getFields());
+        Map<String, String> fields = Map.copyOf(mapper.protectedStoredFields(operation, entry.getFields()));
         return new DeadLetterEntry(
                 entry.getID().toString(),
                 operation,
@@ -266,6 +270,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
             Exception replayException,
             int replayAttempts,
             String note) {
+        if (replayException != null) replayException = mapper.safeFailure(failureRecord.operation(), replayException);
         LinkedHashMap<String, String> fields = new LinkedHashMap<>();
         fields.put("status", status);
         fields.put("entity", failureRecord.operation().entityName());
@@ -288,7 +293,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
         fields.put("note", note == null ? "" : note);
         if (replayException != null) {
             WriteFailureDetails replayFailure =
-                    FailureClassifyingFlusher.classify(flusher, replayException);
+                    mapper.classifyFailure(failureRecord.operation(), flusher, replayException);
             fields.put("replayErrorType", replayException.getClass().getName());
             fields.put(
                     "replayErrorMessage",
@@ -299,7 +304,7 @@ public final class RedisDeadLetterManagement implements DeadLetterManagement {
             fields.put("replayVendorCode", String.valueOf(replayFailure.vendorCode()));
             fields.put("replayRootType", replayFailure.errorType());
         }
-        RedisRecoveryStreams.publishReconciliation(jedis, config, fields);
+        RedisRecoveryStreams.publishReconciliation(jedis, config, fields, mapper.fromStampedBody(failureRecord.originalEvent()));
     }
 
     private <T> StreamPage<T> scanDescending(

@@ -11,6 +11,7 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = [string]$rootPom.project.version
 }
 
+# Explicit public allowlist: benchmark and SDK acceptance tools are not release artifacts.
 $publicJarModules = @(
     "cachedb-annotations",
     "cachedb-processor",
@@ -23,6 +24,8 @@ $publicJarModules = @(
     "cachedb-storage-oracle",
     "cachedb-starter",
     "cachedb-spring-boot-starter",
+    "cachedb-reactor",
+    "cachedb-spring-data",
     "cachedb-spring-boot-starter-postgres",
     "cachedb-spring-boot-starter-mssql",
     "cachedb-spring-boot-starter-oracle",
@@ -149,6 +152,20 @@ foreach ($module in $publicJarModules) {
             foreach ($type in $types) {
                 if ($entries -notcontains "$prefix/$type.$extension") {
                     $invalid.Add("${module}: required 0.18 type is missing: $type.$extension")
+                }
+            }
+        }
+        if ([version]$Version -ge [version]'0.19.0' -and $suffix -ne '-javadoc.jar') {
+            $types = switch ($module) {
+                'cachedb-reactor' { @('reactor/ReactiveEntityRepository', 'reactor/ReactiveEntityRepositoryFactory', 'reactor/CacheReactorContext', 'reactor/CacheReactorAutoConfiguration') }
+                'cachedb-spring-data' { @('spring/data/CacheDbSpringDataRepository', 'spring/data/AbstractCacheDbSpringDataRepository', 'spring/data/CacheDbSpringDataOptions', 'spring/data/SpringDataQueries') }
+                default { @() }
+            }
+            $extension = if ($suffix -eq '.jar') { 'class' } else { 'java' }
+            $prefix = if ($suffix -eq '.jar') { 'com/reactor/cachedb' } else { 'com/cachedb' }
+            foreach ($type in $types) {
+                if ($entries -notcontains "$prefix/$type.$extension") {
+                    $invalid.Add("${module}: required 0.19 type is missing: $type.$extension")
                 }
             }
         }

@@ -37,6 +37,10 @@ class CacheTraceAndMetricsTest {
         var worker = mock(WriteBehindWorkerSnapshot.class);
         var collector = new StoragePerformanceCollector();
         when(database.workerSnapshot()).thenReturn(worker);
+        var near = mock(com.reactor.cachedb.redis.RedisNearCacheCoordinator.class);
+        when(database.nearCacheCoordinator()).thenReturn(near);
+        when(database.redisReadMetrics()).thenReturn(new com.reactor.cachedb.redis.RedisRepositoryReadState.Metrics(
+                new com.reactor.cachedb.redis.RedisReadRuntime.Metrics(0, 0, 0, 0), 0, 0, 0));
         when(database.storagePerformanceCollector()).thenReturn(collector);
         when(worker.flushedCount()).thenReturn(7L);
         when(worker.staleSkippedCount()).thenReturn(2L);

@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+& (Join-Path $PSScriptRoot "test-sample-provider-parity.ps1")
 $parityScript = Join-Path (Split-Path -Parent $PSScriptRoot) "samples\sync-sample-provider.ps1"
 & $parityScript -CanonicalSample $PostgresqlSample -TargetSample $MssqlSample -TargetProvider mssql -Check
 if ($LASTEXITCODE -ne 0) {

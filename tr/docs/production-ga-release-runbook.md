@@ -60,6 +60,34 @@ topolojisini kapsıyorsa zorunludur. Yerel fiziksel Data Guard hattı, temsilî
 framework kanıtı olarak raporlanabilir; PostgreSQL HA, SQL Server Always On,
 Oracle RAC veya müşteri topolojisi sertifikası değildir.
 
+## Staging HA Kanıtının Sınırı
+
+`run-staging-redis-ha-evidence.ps1` ve `run-staging-mssql-ha-evidence.ps1`,
+`ExternalFailoverWaitSeconds` ile ayrılan iki smoke aşaması çalıştırır. Canlı
+failover için bağımsız bir gözlem kanıtı toplamaz veya doğrulamazlar. Beklemenin
+pozitif ya da sıfır olması, topoloji geçişini veya bağlantı toparlanmasını kanıtlamaz.
+
+Varsayılan çağrı iki smoke aşamasını korur ancak ikisi de geçse bile HA onayını
+başarısız sonuçlandırır. Her çalıştırmanın JSON ve özetinde
+`liveFailoverVerified=false` ve `haQualified=false` yer alır. `Production GA Staging
+Evidence` workflow'u bu güvenli varsayılanı kullanır; mevcut haliyle
+`-RequireManagedStagingHa` şartını karşılayamaz. Bu hattın HA onayı verebilmesi
+için gerçek topolojiye özgü bağımsız gözlem kanıtı ve bunun doğrulayıcısı gerekir.
+Bir operatör onay kutusu veya çağıranın verdiği başarı bayrağı bu kanıtın yerine geçmez.
+
+Yalnızca HA onayı sağlamayan tanılama için iki script'ten birine
+`-ReconnectSmokeOnly` eklenebilir. Bu mod ancak iki smoke aşaması da geçerse
+başarılı olur; yine iki HA bayrağını false üretir ve yeniden bağlantı kurulduğunu
+kanıtlamaz. Bu seçeneği HA şartını denetleyen çağrılara ekleme veya smoke-only
+başarısını GA kanıtı sayma.
+
+Raporlar `target/cachedb-staging-ha-reports/` veya
+`target/cachedb-staging-mssql-ha-reports/` altındaki benzersiz `run-*` dizinlerinde
+saklanır. Önceki raporlar temizlenmez; hata halinde kısmi smoke sonuçları korunur.
+Workflow, `run-*/staging-*-ha-evidence.md` özetlerini yayımlar ve hata sonrasında
+`always()` ile artifact yüklemeyi dener. Eksik kanıt HA başarısı değildir;
+artifact aktarımının başarılı olması da HA onayı sağlamaz.
+
 ## Adım Adım GA Akışı
 
 1. `0.1.0` veya `1.0.0` gibi stabil bir sürüm hazırla. GA sürümünde `beta`,
@@ -165,6 +193,69 @@ gh workflow run maven-central-publish.yml `
   -f targetRef=main `
   -f migrationCoverageCsvPath=docs/ga-migration-coverage.csv
 ```
+
+## Kubernetes Kabul Kayıtlarının Aktarımı
+
+Kubernetes kabul testlerini onaylanmış Kubernetes namespace'i içinde çalıştırın.
+Herkese açık `Framework Readiness` iş akışı bu testlerin raporlarını doğrular;
+testleri yeniden çalıştırmaz ve dosya yüklenmesini test başarısı saymaz.
+
+`tools/ci/k8s-acceptance-contract.psd1` şu anda 52 kabul yükümlülüğü tanımlar:
+bir SDK derlemesi, tek sunucu testleri, Cluster testleri, örnek özelliklerin
+doğrulanması, üç sağlayıcının eksiksiz test kümeleri, üç olumsuz sertifikasyon
+kontrolü, on iki API karşılaştırma senaryosu ve otuz depo kontrolü. Bir özelliğin
+kısa testi, sağlayıcı testlerinin veya API karşılaştırmasının yerine geçmez.
+Performans ve HA doğrulaması ayrı kabul koşullarıdır.
+
+Paket kontrolü (`control/17`), ikinci bir derleme istemek yerine özgün
+`sdk-build` işlemine referans verebilir. Bu referans yalnızca `id`,
+`executionRef` ve `canonicalCommand` alanlarını içerir; işlem kayıtlarını
+değiştiremez. Diğer yükümlülükler ayrı işlemlerle doğrulanır. Gerçek komutu ve
+ortam kayıtlarını koruyun: standart komut kabul koşulunu tanımlar, bütün
+çalıştırma ayrıntılarını değil. Çevrimdışı derlemenin komut ve ortam kanıtları
+ayrıca onaylanmış ve sağlama toplamlarıyla korunmuş olmalıdır; dosya hash'lerinin
+eşleşmesi tek başına farklı bir komutu onaylamaz.
+
+1. Her işlemin gerçek komutunu, çalışma dizinini, günlüğünü, çıkış kodu dosyasını,
+   zaman bilgilerini ve pod UID'sini saklayın. İşlemin kullandığı kaynak SHA'sını
+   ve SDK dosya listesini kaydedin. Kaynak ve SDK dosyalarının işlem öncesi ve
+   sonrası sağlama toplamlarını koruyun. Eksik kayıtları başka bir paketin
+   sonuçlarıyla tamamlamayın; süresi dolan çalışmanın bitiş sınırını uzatmayın.
+2. `source`, `sdk`, `producer`, `runs`, `executions` ve `files` alanlarını içeren
+   açık bir `cachedb.k8s-acceptance-input/v1` envanteri sağlayın. Her dosya kaydında
+   göreli yol, bayt uzunluğu ve SHA-256 bulunmalıdır. Üretici kimliklerini gerçek,
+   korumalı iş akışından alın; örnek veya uydurma kimlik kullanmayın.
+3. Saklanan kayıtlardan yeni bir çıktı dizini oluşturun:
+
+   ```powershell
+   $inventory = './target/runtime-evidence/execution-inventory.json'
+   $pin = (Get-FileHash -LiteralPath $inventory -Algorithm SHA256).Hash.ToLowerInvariant()
+   pwsh ./tools/ci/new-k8s-acceptance-receipt.ps1 `
+     -InventoryPath $inventory `
+     -InventorySha256 $pin `
+     -EvidenceRoot ./target/runtime-evidence `
+     -OutputDirectory ./target/k8s-acceptance
+   ```
+
+   Envanter önceden hazırlanmış olmalıdır. Bu komut test çalıştırmaz ve eksik
+   kanıt üretmez. Eksik çalıştırmaları, değişen dosyaları, ortak kullanılan işlem
+   günlüklerini ve geçersiz süre sınırlarını reddeder. Özgün envanteri
+   `origin/execution-inventory.json` altında korur. Başarılı sonucu
+   `ASSEMBLED_NOT_RUNTIME_ACCEPTANCE` olur; bu, sürüm onayı değildir. Yerel
+   envanterin sağlama toplamını almak dosyayı sabitler; üreticinin kimliğini
+   doğrulamaz.
+4. Oluşturulan kayıtları onaylı özel üretici iş akışı üzerinden yayımlayın.
+   Herkese açık deponun `CACHEDB_K8S_ACCEPTANCE_ARTIFACT_ID`,
+   `CACHEDB_K8S_ACCEPTANCE_ARCHIVE_SHA256`,
+   `CACHEDB_K8S_ACCEPTANCE_RECEIPT_SHA256`,
+   `CACHEDB_K8S_ACCEPTANCE_SDK_SHA256` ve
+   `CACHEDB_K8S_ACCEPTANCE_PRODUCER_WORKFLOW` değişkenlerini gerçek değerlerle
+   ayarlayın. Depo kimliğini ve salt okunur erişim anahtarını ayrıca yapılandırın.
+5. `check-k8s-acceptance.ps1` kontrolünü korumalı, herkese açık iş akışına bırakın.
+   Bu kontrol üreticinin yetkisini, kaynak ve SDK kimliğini, zorunlu raporların
+   içeriğini doğrular. `K8S_ACCEPTANCE_VERIFIED` yalnızca bu kabul koşulunu kapatır;
+   sürüm yayımlamaz ve diğer GA koşullarını kaldırmaz. Eksik rapor, başarısız
+   işlem veya güvenilmeyen üretici varsa kabul verilmez.
 
 ## Production Kararı
 

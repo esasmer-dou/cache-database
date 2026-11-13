@@ -48,6 +48,7 @@ import redis.clients.jedis.params.SetParams;
 import redis.clients.jedis.resps.Tuple;
 
 public final class RedisQueryIndexManager<T, ID> {
+    private final java.util.concurrent.locks.ReentrantLock indexLock = new java.util.concurrent.locks.ReentrantLock();
     public enum CompositeIndexState { VERIFIED, PENDING_REBUILD, NONE }
     private final String compositeSignature;
     private volatile CompositeIndexState compositeState = CompositeIndexState.NONE;
@@ -57,38 +58,44 @@ public final class RedisQueryIndexManager<T, ID> {
     /** Signature checks are bounded to one per five seconds, except after a rebuild. */
     public CompositeIndexState compositeIndexState() {
         if (metadata.compositeExactIndexes().isEmpty()) return CompositeIndexState.NONE;
+        if (hasCompositeSortIndexes() && indexFeaturesDegraded()) return CompositeIndexState.PENDING_REBUILD;
         if (compositeCheckAt == 0 || System.nanoTime() - compositeCheckAt >= 0) checkCompositeSignature();
         return compositeState;
     }
 
-    private synchronized void checkCompositeSignature() {
-        if (compositeCheckAt != 0 && System.nanoTime() - compositeCheckAt < 0) return;
-        String namespace = metadata.redisNamespace();
-        String signatureKey = keyStrategy.compositeIndexSignatureKey(namespace);
-        String stored = jedis.commands().get(signatureKey);
-        if (!compositeSignature.equals(stored)) {
-            var keys = List.of(signatureKey, keyStrategy.indexAllKey(namespace), keyStrategy.hotSetKey(namespace));
-            boolean atomic = true;
-            try { jedis.requireSameSlot(keys); } catch (IllegalArgumentException crossSlot) { atomic = false; }
-            if (atomic) {
-                Object result = jedis.eval("""
-                        if redis.call('SCARD',KEYS[2]) == 0 and redis.call('ZCARD',KEYS[3]) == 0 then
-                          redis.call('SET',KEYS[1],ARGV[1]); return ARGV[1]
-                        end
-                        return redis.call('GET',KEYS[1])
-                        """, keys, List.of(compositeSignature));
-                stored = result instanceof String value ? value : null;
+    private void checkCompositeSignature() {
+        indexLock.lock();
+        try {
+            if (compositeCheckAt != 0 && System.nanoTime() - compositeCheckAt < 0) return;
+            String namespace = metadata.redisNamespace();
+            String signatureKey = keyStrategy.compositeIndexSignatureKey(namespace);
+            String stored = jedis.commands().get(signatureKey);
+            if (!compositeSignature.equals(stored) && !hasCompositeSortIndexes()) {
+                var keys = List.of(signatureKey, keyStrategy.indexAllKey(namespace), keyStrategy.hotSetKey(namespace));
+                boolean atomic = true;
+                try { jedis.requireSameSlot(keys); } catch (IllegalArgumentException crossSlot) { atomic = false; }
+                if (atomic) {
+                    Object result = jedis.eval("""
+                            if redis.call('SCARD',KEYS[2]) == 0 and redis.call('ZCARD',KEYS[3]) == 0 then
+                              redis.call('SET',KEYS[1],ARGV[1]); return ARGV[1]
+                            end
+                            return redis.call('GET',KEYS[1])
+                            """, keys, List.of(compositeSignature));
+                    stored = result instanceof String value ? value : null;
+                }
             }
-        }
-        compositeState = compositeSignature.equals(stored)
-                ? CompositeIndexState.VERIFIED : CompositeIndexState.PENDING_REBUILD;
-        compositeCheckAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
-        if (compositeState == CompositeIndexState.PENDING_REBUILD && !compositeWarningLogged) {
-            compositeWarningLogged = true;
-            System.getLogger(getClass().getName()).log(System.Logger.Level.WARNING,
-                    "Composite indexes pending rebuild for " + metadata.entityName() + "; stored=" + shortSignature(stored)
-                    + "; local=" + shortSignature(compositeSignature)
-                    + "; run rebuildIndexes after all writers are on the new bindings");
+            compositeState = compositeSignature.equals(stored)
+                    ? CompositeIndexState.VERIFIED : CompositeIndexState.PENDING_REBUILD;
+            compositeCheckAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            if (compositeState == CompositeIndexState.PENDING_REBUILD && !compositeWarningLogged) {
+                compositeWarningLogged = true;
+                System.getLogger(getClass().getName()).log(System.Logger.Level.WARNING,
+                        "Composite indexes pending rebuild for " + metadata.entityName() + "; stored=" + shortSignature(stored)
+                        + "; local=" + shortSignature(compositeSignature)
+                        + "; run rebuildIndexes after all writers are on the new bindings");
+            }
+        } finally {
+            indexLock.unlock();
         }
     }
 
@@ -109,6 +116,743 @@ public final class RedisQueryIndexManager<T, ID> {
         return new ArrayList<>(jedis.smembersBatch(List.of(key),config.maxMaterializedCandidateIds()).get(key));
     }
 
+    public static final int COMPOSITE_MAX_ROUNDS = 4;
+    public static final int COMPOSITE_MAX_EXAMINED_IDS = 10_000;
+    private static final long COMPOSITE_MAX_BYTES = 16L * 1024 * 1024;
+    private final java.util.concurrent.atomic.LongAdder compositeBoundedFallbacks = new java.util.concurrent.atomic.LongAdder();
+
+    public long compositeBoundedFallbacks() { return compositeBoundedFallbacks.sum(); }
+
+    public record CompositePosition(double score, String id) {
+        public CompositePosition {
+            if (!Double.isFinite(score)) throw new IllegalArgumentException("Invalid composite cursor score");
+            RedisCompositeIndexes.validateMember(id);
+            if (score == 0d) score = 0d;
+        }
+    }
+    public record CompositeRow<E>(E entity, CompositePosition position) {}
+    public record CompositeWindow<E>(List<CompositeRow<E>> rows, boolean hasMore,
+            CompositePosition continuation, int rounds, int examinedIds) {
+        public CompositeWindow { rows = List.copyOf(rows); }
+    }
+    public record CompositeLongPosition(long sortValue, String id) {
+        public CompositeLongPosition { RedisCompositeIndexes.validateMember(id); }
+    }
+    public record CompositeLongRow<E>(E entity, CompositeLongPosition position) {}
+    public record CompositeLongWindow<E>(List<CompositeLongRow<E>> rows, boolean hasMore,
+            CompositeLongPosition continuation, int rounds, int examinedIds) {
+        public CompositeLongWindow { rows = List.copyOf(rows); }
+    }
+    private record CompositeMaterialization<E>(List<E> rows, long bytes) {}
+
+    private record CompositePlan(String exactKey, String sortKey, String sortColumn,
+            String minimum, String maximum, boolean descending, QuerySpec prefixQuery, String long53Key) {}
+    private record CompositeBatch(List<CompositePosition> positions, boolean hasMore, boolean blocked) {}
+
+    /*
+     * Single-slot, read-only continuation. Fence/coverage checks and the ZSET window share one Lua call. Binary search uses Redis byte-lexical member
+     * comparisons and never requires the cursor member still to exist. Each command
+     * examines at most 64 boundary probes plus 2500 candidate IDs, not an entire tie.
+     */
+    private static final String COMPOSITE_RANGE = """
+            if redis.call('EXISTS',KEYS[3])~=0 or redis.call('HLEN',KEYS[4])~=0
+              or redis.call('EXISTS',KEYS[5])~=0 or redis.call('GET',KEYS[6])~=ARGV[9] then
+              return {-1,{}} end
+            if #KEYS==7 then
+              if redis.call('TYPE',KEYS[7]).ok~='string' or redis.call('GET',KEYS[7])~=ARGV[10] then return {-1,{}} end
+            end
+            local total=redis.call('ZCARD',KEYS[1])
+            if redis.call('SCARD',KEYS[2])~=total then return {-1,{}} end
+            local first=0
+            if ARGV[1]~='-inf' then first=redis.call('ZCOUNT',KEYS[1],'-inf','('..ARGV[1]) end
+            local last=total-1
+            if ARGV[2]~='+inf' then last=redis.call('ZCOUNT',KEYS[1],'-inf',ARGV[2])-1 end
+            local reverse=ARGV[6]=='1'
+            if ARGV[3]=='1' then
+              local score=tonumber(ARGV[4])
+              local member=ARGV[5]
+              local lo=first
+              local hi=last+1
+              local probes=0
+              while lo<hi do
+                probes=probes+1
+                if probes>64 then return redis.error_reply('Composite seek probe budget exceeded') end
+                local mid=math.floor(lo+(hi-lo)/2)
+                local tuple=redis.call('ZRANGE',KEYS[1],mid,mid,'WITHSCORES')
+                local value=tonumber(tuple[2])
+                local before=value<score or (value==score and
+                    (tuple[1]<member or (not reverse and tuple[1]==member)))
+                if before then lo=mid+1 else hi=mid end
+              end
+              if reverse then last=lo-1 else first=lo end
+            end
+            if first>last then return {0,{}} end
+            local count=tonumber(ARGV[7])
+            local available=last-first+1
+            local values
+            if reverse then
+              local start=total-1-last
+              values=redis.call('ZREVRANGE',KEYS[1],start,start+math.min(count,available)-1,'WITHSCORES')
+            else
+              values=redis.call('ZRANGE',KEYS[1],first,first+math.min(count,available)-1,'WITHSCORES')
+            end
+            local bytes=0
+            for i=1,#values do bytes=bytes+#values[i] end
+            if bytes>tonumber(ARGV[8]) then return redis.error_reply('Composite ID reply byte budget exceeded') end
+            return {available>count and 1 or 0,values}
+            """;
+
+    /**
+     * Additive repository integration point. Empty means NOT a result: discard all
+     * partial work and execute the complete legacy/fail-closed fallback. Admission
+     * must be side-effect-free; payloads are already fetched and must not be re-read.
+     */
+    public java.util.Optional<CompositeWindow<T>> resolveCompositeWindow(QuerySpec requested,
+            CompositePosition after, java.util.function.Predicate<T> admission) {
+        validateProtectedQuery(requested);
+        return resolveCompositeWindowForIndex(requested, after, admission, null);
+    }
+
+    public java.util.Optional<CompositeWindow<T>> resolveCompositeWindowForIndex(QuerySpec requested,
+            CompositePosition after, java.util.function.Predicate<T> admission, String indexName) {
+        return resolveCompositeWindowForIndex(requested, after, admission, indexName, false);
+    }
+
+    public java.util.Optional<CompositeWindow<T>> resolveCompositeWindowForIndex(QuerySpec requested,
+            CompositePosition after, java.util.function.Predicate<T> admission, String indexName, boolean requirePayloads) {
+        return resolveCompositeWindowInternal(requested, after, admission, indexName, requirePayloads, false);
+    }
+
+    private java.util.Optional<CompositeWindow<T>> resolveCompositeWindowInternal(QuerySpec requested,
+            CompositePosition after, java.util.function.Predicate<T> admission, String indexName,
+            boolean requirePayloads, boolean exactLongContinuation) {
+        java.util.Objects.requireNonNull(admission, "admission");
+        if (requested == null) return java.util.Optional.empty();
+        QuerySpec query = com.reactor.cachedb.core.tenant.TenantAccess.scoped(metadata, requested);
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace()))
+            return java.util.Optional.empty();
+        if (shouldBypassIndexes(query)) return java.util.Optional.empty();
+        CompositePlan plan = compositePlan(query, true, indexName);
+        if (plan == null || !com.reactor.cachedb.core.query.RedisLexicalScoreContract.attestableType(
+                metadata.columnTypes().get(plan.sortColumn()))) return java.util.Optional.empty();
+        // Only the v4 adapter supplies a range-checked exact Long continuation.
+        if (after != null && plan.long53Key() != null && !exactLongContinuation) return java.util.Optional.empty();
+        long targetLong = (long) query.offset() + query.limit();
+        if (targetLong >= COMPOSITE_MAX_EXAMINED_IDS || after != null && query.offset() != 0)
+            return compositeFallback();
+        int target = (int) targetLong;
+        long started = System.nanoTime();
+        String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
+        var accepted = new ArrayList<CompositeRow<T>>(target + 1);
+        int examined = 0;
+        long[] bytes = {0};
+        CompositePosition position = after;
+        for (int round = 1; round <= COMPOSITE_MAX_ROUNDS; round++) {
+            compositeDeadline(query, started);
+            int count = Math.min(2500, COMPOSITE_MAX_EXAMINED_IDS - examined);
+            count = Math.min(count, Math.max(64, (target + 1 - accepted.size()) * 2));
+            if (count < 1) return compositeFallback();
+            CompositeBatch batch = compositeBatch(plan, position, count, COMPOSITE_MAX_BYTES - bytes[0]);
+            if (batch.blocked()) return compositeFallback();
+            examined += batch.positions().size();
+            for (CompositePosition id : batch.positions()) bytes[0] += id.id().getBytes(java.nio.charset.StandardCharsets.UTF_8).length + 32L;
+            if (bytes[0] >= COMPOSITE_MAX_BYTES) return compositeFallback();
+            for (int base = 0; base < batch.positions().size(); base += 128) {
+                compositeDeadline(query, started);
+                int end = Math.min(base + 128, batch.positions().size());
+                var readKeys = new ArrayList<String>((end - base) * (tenant == null ? 2 : 3));
+                for (int i = base; i < end; i++) {
+                    String id = batch.positions().get(i).id();
+                    readKeys.add(keyStrategy.entityKey(metadata.redisNamespace(), id));
+                    readKeys.add(keyStrategy.tombstoneKey(metadata.redisNamespace(), id));
+                    if (tenant != null) readKeys.add(keyStrategy.versionKey(metadata.redisNamespace(), id) + ":tenant");
+                }
+                if (bytes[0] >= COMPOSITE_MAX_BYTES) return compositeFallback();
+                List<String> values = jedis.boundedMget(readKeys, COMPOSITE_MAX_BYTES - bytes[0]);
+                int stride = tenant == null ? 2 : 3;
+                for (String value : values) if (value != null) bytes[0] += value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                if (bytes[0] > COMPOSITE_MAX_BYTES) return compositeFallback();
+                for (int i = base; i < end; i++) {
+                    CompositePosition observed = batch.positions().get(i);
+                    int offset = (i - base) * stride;
+                    String payload = values.get(offset);
+                    position = observed;
+                    if (payload == null || values.get(offset + 1) != null) {
+                        if (requirePayloads) throw new CompositePayloadDivergenceException();
+                        continue;
+                    }
+                    if (tenant != null && !tenant.equals(values.get(offset + 2))) continue;
+                    T entity = codec.fromRedisValue(payload);
+                    if (!observed.id().equals(String.valueOf(metadata.idAccessor().apply(entity))))
+                        return compositeFallback();
+                    if (tenant != null && !tenant.equals(metadata.extractTenantId(entity))) continue;
+                    Map<String, Object> columns = codec.toColumns(entity);
+                    if (!com.reactor.cachedb.core.query.RedisLexicalScoreContract.matchesRuntimeType(
+                            metadata.columnTypes().get(plan.sortColumn()), columns.get(plan.sortColumn())))
+                        return compositeFallback();
+                    Double score = RedisScoreSupport.toScore(metadata.columnTypes(), plan.sortColumn(), columns.get(plan.sortColumn()));
+                    if (score == null || !Double.isFinite(score) || Double.compare(score == 0d ? 0d : score, observed.score()) != 0)
+                        return compositeFallback();
+                    // Widened score bounds avoid dropping values rounded to the same double.
+                    if (!queryEvaluator.matches(columns, query.rootGroup()) || !admission.test(entity)) continue;
+                    accepted.add(new CompositeRow<>(entity, observed));
+                    if (accepted.size() > target) return compositeWindow(accepted, query, true, round, examined);
+                }
+            }
+            if (!batch.hasMore()) return compositeWindow(accepted, query, false, round, examined);
+        }
+        return compositeFallback();
+    }
+
+    public static int compareCompositePositions(CompositePosition left, CompositePosition right, boolean descending) {
+        int order = Double.compare(left.score(), right.score());
+        if (order == 0) order = RedisCompositeIndexes.compareMembers(left.id(), right.id());
+        return descending ? -Integer.signum(order) : order;
+    }
+
+    /**
+     * Complete bounded fallback for an explicitly opted-in score/member cursor.
+     * Uses only prefix EQ indexes for candidate selection: range predicates are
+     * re-evaluated on payloads, avoiding double-rounded range false negatives.
+     */
+    public CompositeWindow<T> resolveCompositeWindowFallback(QuerySpec requested,
+            CompositePosition after, java.util.function.Predicate<T> admission) {
+        validateProtectedQuery(requested);
+        java.util.Objects.requireNonNull(admission, "admission");
+        QuerySpec query = com.reactor.cachedb.core.tenant.TenantAccess.scoped(metadata,
+                java.util.Objects.requireNonNull(requested, "query"));
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace()))
+            throw new IllegalStateException("Composite cursor fallback requires the repository causal-read path");
+        CompositePlan plan = compositePlan(query, false);
+        if (plan == null || !losslessCompositeScore(plan.sortColumn()) || after != null && query.offset() != 0)
+            throw new IllegalArgumentException("Composite cursor needs a lossless byte/short/int/LocalDate score; use logical sorting otherwise");
+        long started = System.nanoTime();
+        if (jedis.commands().scard(plan.exactKey()) > Math.min(QuerySpec.MAX_LIMIT, config.maxMaterializedCandidateIds()))
+            throw new IllegalStateException("Composite fallback candidate budget exceeded");
+        List<String> ids = resolveCandidateIds(plan.prefixQuery());
+        if (ids.size() > Math.min(QuerySpec.MAX_LIMIT, config.maxMaterializedCandidateIds()))
+            throw new IllegalStateException("Composite fallback candidate budget exceeded");
+        String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
+        var matches = new ArrayList<CompositeRow<T>>(Math.min(ids.size(), 10_000));
+        long bytes = 0;
+        for (int base = 0; base < ids.size(); base += 128) {
+            compositeDeadline(query, started);
+            int end = Math.min(base + 128, ids.size());
+            var readKeys = new ArrayList<String>((end - base) * (tenant == null ? 2 : 3));
+            for (int i = base; i < end; i++) {
+                readKeys.add(keyStrategy.entityKey(metadata.redisNamespace(), ids.get(i)));
+                readKeys.add(keyStrategy.tombstoneKey(metadata.redisNamespace(), ids.get(i)));
+                if (tenant != null) readKeys.add(keyStrategy.versionKey(metadata.redisNamespace(), ids.get(i)) + ":tenant");
+            }
+            if (bytes >= COMPOSITE_MAX_BYTES) throw new IllegalStateException("Composite fallback byte budget exceeded");
+            List<String> values = jedis.boundedMget(readKeys, COMPOSITE_MAX_BYTES - bytes);
+            for (String value : values) if (value != null) bytes += value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            if (bytes > COMPOSITE_MAX_BYTES) throw new IllegalStateException("Composite fallback byte budget exceeded");
+            int stride = tenant == null ? 2 : 3;
+            for (int i = base; i < end; i++) {
+                int offset = (i - base) * stride;
+                if (values.get(offset) == null || values.get(offset + 1) != null) continue;
+                if (tenant != null && !tenant.equals(values.get(offset + 2))) continue;
+                T entity = codec.fromRedisValue(values.get(offset));
+                if (!ids.get(i).equals(String.valueOf(metadata.idAccessor().apply(entity))))
+                    throw new IllegalStateException("Composite fallback payload identity mismatch");
+                if (tenant != null && !tenant.equals(metadata.extractTenantId(entity))) continue;
+                Map<String, Object> columns = codec.toColumns(entity);
+                if (!queryEvaluator.matches(columns, query.rootGroup()) || !admission.test(entity)) continue;
+                Double score = RedisScoreSupport.toScore(metadata.columnTypes(), plan.sortColumn(), columns.get(plan.sortColumn()));
+                if (score == null || !Double.isFinite(score))
+                    throw new IllegalStateException("Null/non-finite composite cursor scores are unsupported; use a non-cursor query");
+                CompositePosition position = new CompositePosition(score, ids.get(i));
+                if (after == null || compareCompositePositions(position, after, plan.descending()) > 0)
+                    matches.add(new CompositeRow<>(entity, position));
+            }
+        }
+        compositeDeadline(query, started);
+        matches.sort((left, right) -> compareCompositePositions(left.position(), right.position(), plan.descending()));
+        long end = (long) query.offset() + query.limit();
+        return compositeWindow(matches, query, matches.size() > end, 0, ids.size()).orElseThrow();
+    }
+
+    private boolean losslessCompositeScore(String column) {
+        return com.reactor.cachedb.core.query.RedisLexicalScoreContract.losslessType(metadata.columnTypes().get(column));
+    }
+
+    /** Candidate selection never applies rounded score bounds or typed-ID continuation. */
+    public java.util.Optional<List<String>> resolveCompositeRangeCandidates(QuerySpec requested) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateQuery(metadata, requested);
+        if (requested == null || metadata.compositeSortColumns().isEmpty()) return java.util.Optional.empty();
+        QuerySpec query = com.reactor.cachedb.core.tenant.TenantAccess.scoped(metadata, requested);
+        var filters = new ArrayList<QueryFilter>();
+        Map<String, Object> equalities = mandatoryCompositeEqualities(query.rootGroup(), filters, new int[1], 0);
+        QuerySpec shape = QuerySpec.allOf().limitTo(query.limit()).withQueryTimeoutSeconds(query.queryTimeoutSeconds());
+        for (var equality : equalities.entrySet()) shape = shape.and(QueryFilter.eq(equality.getKey(), equality.getValue()));
+        var names = new ArrayList<>(metadata.compositeSortColumns().keySet());
+        names.sort(java.util.Comparator.<String>comparingInt(name -> -metadata.compositeExactIndexes().get(name).size())
+                .thenComparing(java.util.Comparator.naturalOrder()));
+        for (String name : names) {
+            CompositePlan plan = compositePlan(shape, false, name);
+            if (plan == null) continue;
+            boolean relevant = filters.stream().anyMatch(filter -> filter.column().equals(plan.sortColumn())
+                    && isRangeOperator(filter.operator()))
+                    || query.sorts().stream().anyMatch(sort -> sort.column().equals(plan.sortColumn()));
+            if (relevant) return java.util.Optional.of(completeCompositeCandidates(plan, query));
+        }
+        return java.util.Optional.empty();
+    }
+
+    // OR retains only equalities shared by every branch; payload residuals retain typed seek semantics.
+    private Map<String, Object> mandatoryCompositeEqualities(QueryNode node, List<QueryFilter> filters,
+            int[] nodes, int depth) {
+        if (++nodes[0] > 128 || depth > 32)
+            throw new IllegalArgumentException("Composite predicate tree exceeds 128 nodes or depth 32");
+        if (node instanceof QueryFilter filter) {
+            filters.add(filter);
+            return filter.operator() == QueryOperator.EQ && filter.value() != null && !filter.column().contains(".")
+                    ? Map.of(filter.column(), filter.value()) : Map.of();
+        }
+        QueryGroup group = (QueryGroup) node;
+        var result = new LinkedHashMap<String, Object>();
+        boolean first = true;
+        for (var child : group.nodes()) {
+            Map<String, Object> equalities = mandatoryCompositeEqualities(child, filters, nodes, depth + 1);
+            if (group.operator() == QueryGroupOperator.AND || first) equalities.forEach(result::putIfAbsent);
+            else result.entrySet().removeIf(entry -> !java.util.Objects.equals(equalities.get(entry.getKey()), entry.getValue()));
+            first = false;
+        }
+        return result;
+    }
+
+    private List<String> completeCompositeCandidates(CompositePlan plan, QuerySpec query) {
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace()))
+            throw new IllegalStateException("Composite materialization cannot certify causal absence; use causal entity reads");
+        if (compositeIndexState() == CompositeIndexState.VERIFIED && !shouldBypassIndexes(query)
+                && !com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace())) {
+            List<String> ids = resolveCandidateIds(plan.prefixQuery());
+            if (ids.size() > Math.min(10_000, config.maxMaterializedCandidateIds()))
+                throw new IllegalStateException("Composite equality candidate budget exceeded");
+            return ids;
+        }
+        rejectStrictRouteFullScan("composite signature, migration, causal or degraded state needs bounded payload evaluation");
+        return scanAllEntityIds();
+    }
+
+    public void requireRedisLexicalContract(QuerySpec query, String indexName) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateQuery(metadata, query);
+        CompositePlan plan = compositePlan(query, false, indexName);
+        if (indexName == null || indexName.isBlank() || plan == null)
+            throw new IllegalArgumentException("Redis lexical window requires its named sortBy composite and complete AND/EQ prefix");
+        if (!losslessCompositeScore(plan.sortColumn()))
+            throw new IllegalArgumentException("Redis lexical window requires lossless byte/short/int/LocalDate scores; "
+                    + "long/float/double/BigDecimal and sub-millisecond/offset times retain logical sorting");
+        if (query.sorts().isEmpty()) throw new IllegalArgumentException("Redis lexical windows require explicit sortBy order");
+        if (query.offset() != 0) throw new IllegalArgumentException("Redis lexical windows do not accept an offset");
+    }
+
+    public void requireRedisLongLexicalContract(QuerySpec query, String indexName) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateQuery(metadata, query);
+        CompositePlan plan = compositePlan(query, false, indexName);
+        if (indexName == null || indexName.isBlank() || plan == null
+                || !com.reactor.cachedb.core.query.RedisLexicalScoreContract.long53Type(metadata.columnTypes().get(plan.sortColumn())))
+            throw new IllegalArgumentException("Redis Long lexical window requires a named Long sortBy composite and complete AND/EQ prefix");
+        if (query.sorts().isEmpty() || query.offset() != 0)
+            throw new IllegalArgumentException("Redis Long lexical windows require explicit order and no offset");
+        var filters = new ArrayList<QueryFilter>();
+        if (!compositeFilters(query.rootGroup(), filters, new int[1], 0))
+            throw new IllegalArgumentException("Redis Long lexical cursor requires a bounded AND tree");
+        for (var filter : filters) {
+            if (!indexedColumns.contains(filter.column()))
+                throw new IllegalArgumentException("Redis Long lexical predicate is not indexed: " + filter.column());
+            if (filter.column().equals(plan.sortColumn())) {
+                if (!(filter.value() instanceof Long) || filter.operator() != QueryOperator.EQ
+                        && !isRangeOperator(filter.operator()))
+                    throw new IllegalArgumentException("Redis Long lexical sort predicates require exact Long EQ/GT/GTE/LT/LTE values");
+            } else if (filter.operator() != QueryOperator.EQ)
+                throw new IllegalArgumentException("Redis Long lexical prefix/residual predicates require indexed EQ");
+        }
+    }
+
+    public String redisLongLexicalCursorContract(QuerySpec query, String indexName, String route, String scope) {
+        requireRedisLongLexicalContract(query, indexName);
+        return redisLexicalCursorContractParts(query, indexName, route, scope, true);
+    }
+
+    public String redisLexicalCursorContract(QuerySpec query, String indexName, String route, String scope) {
+        requireRedisLexicalContract(query, indexName);
+        return redisLexicalCursorContractParts(query, indexName, route, scope, false);
+    }
+
+    private String redisLexicalCursorContractParts(QuerySpec query, String indexName, String route, String scope,
+            boolean exactLong) {
+        if (route == null || route.isBlank() || route.length() > 256 || scope != null && scope.length() > 4096)
+            throw new IllegalArgumentException("Invalid lexical route/scope");
+        var filters = new ArrayList<QueryFilter>();
+        if (!compositeFilters(query.rootGroup(), filters, new int[1], 0))
+            throw new IllegalArgumentException("Redis lexical cursor requires a bounded AND tree");
+        var parts = new java.util.TreeSet<String>();
+        int values = 0, characters = 0;
+        for (var filter : filters) {
+            Object contractValue = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.indexLiteral(
+                    metadata, codec, filter.column(), filter.value());
+            String value = contractValue == null ? "null"
+                    : com.reactor.cachedb.core.repository.WindowCursor.encode(Map.of("value", contractValue));
+            var in = new ArrayList<String>();
+            for (Object item : filter.values()) {
+                if (++values > 1024) throw new IllegalArgumentException("Cursor predicate value budget exceeded");
+                Object contractItem = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.indexLiteral(
+                        metadata, codec, filter.column(), item);
+                in.add(contractItem == null ? "null" : com.reactor.cachedb.core.repository.WindowCursor.encode(Map.of("value", contractItem)));
+            }
+            Collections.sort(in);
+            String part = filter.column().length() + ":" + filter.column() + "|" + filter.operator() + "|" + value + "|" + in;
+            characters += part.length();
+            if (characters > 65_536) throw new IllegalArgumentException("Cursor predicate contract exceeds 64KiB");
+            parts.add(part);
+        }
+        try {
+            var digest = java.security.MessageDigest.getInstance("SHA-256");
+            var contract = new ArrayList<String>();
+            String wire = exactLong ? "redis-long-lex-id-v4" : "redis-score-lex-id-v3";
+            contract.add(wire); contract.add(route); contract.add(scope == null ? "global" : scope);
+            if (exactLong) contract.add("java.lang.Long:" + metadata.compositeSortColumns().get(indexName)
+                    + ":unsigned-utf8-id");
+            contract.add(metadata.redisNamespace()); contract.add(keyStrategy.entityKey(metadata.redisNamespace(), ""));
+            String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
+            contract.add(tenant == null ? "administrative-or-global" : "tenant:" + tenant);
+            contract.add(compositeSignature); contract.add(indexName);
+            for (var sort : query.sorts()) contract.add(sort.column() + ":" + sort.direction());
+            contract.addAll(parts);
+            for (String part : contract) {
+                byte[] encoded = part.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                digest.update((byte) (encoded.length >>> 24)); digest.update((byte) (encoded.length >>> 16));
+                digest.update((byte) (encoded.length >>> 8)); digest.update((byte) encoded.length); digest.update(encoded);
+            }
+            return (exactLong ? "redis-long-lex-id-v4:" : "redis-score-lex-id-v3:")
+                    + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest.digest());
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new ExceptionInInitializerError(impossible); }
+    }
+
+    /** Non-cursor score ordering has no implicit ID comparator. Explicit ID sorts stay logical. */
+    public java.util.Optional<CompositeWindow<T>> resolveCompositeQueryWindow(QuerySpec query,
+            java.util.function.Predicate<T> admission) {
+        if (query.sorts().size() > 1) return java.util.Optional.empty();
+        var names = new ArrayList<>(metadata.compositeSortColumns().keySet());
+        names.sort(java.util.Comparator.<String>comparingInt(name -> -metadata.compositeExactIndexes().get(name).size())
+                .thenComparing(java.util.Comparator.naturalOrder()));
+        for (String name : names) {
+            if (!com.reactor.cachedb.core.query.RedisLexicalScoreContract.attestableType(
+                    metadata.columnTypes().get(metadata.compositeSortColumns().get(name)))) continue;
+            CompositePlan plan = compositePlan(query, false, name);
+            if (plan != null) return resolveCompositeWindowForIndex(query, null, admission, name, true);
+        }
+        return java.util.Optional.empty();
+    }
+
+    /** Complete payload fallback, never an index-limited partial cursor page. */
+    public static final class CompositePayloadDivergenceException extends IllegalStateException {
+        CompositePayloadDivergenceException() { super("Composite index/payload divergence requires source fallback"); }
+    }
+
+    public int compositeMaterializationLimit() { return Math.min(10_000, config.maxMaterializedCandidateIds()); }
+
+    public CompositeWindow<T> resolveRedisLexicalFallback(QuerySpec query, CompositePosition after,
+            java.util.function.Predicate<T> admission, String indexName, boolean requirePayloads) {
+        requireRedisLexicalContract(query, indexName);
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace()))
+            throw new IllegalStateException("Redis lexical cursor cannot certify a causal scope; use causal entity reads");
+        var materialized = compositePayloadRows(query, compositePlan(query, false, indexName), requirePayloads);
+        return redisLexicalWindowFromRows(query, after, materialized.rows(), admission, indexName, materialized.bytes(), false);
+    }
+
+    private CompositeMaterialization<T> compositePayloadRows(QuerySpec query, CompositePlan plan, boolean requirePayloads) {
+        List<String> ids = completeCompositeCandidates(plan, query);
+        String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
+        var rows = new ArrayList<T>(Math.min(ids.size(), 10_000));
+        long bytes = 0, started = System.nanoTime();
+        for (String id : ids) {
+            RedisCompositeIndexes.validateMember(id);
+            bytes += id.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        }
+        for (int base = 0; base < ids.size(); base += 128) {
+            compositeDeadline(query, started);
+            int end = Math.min(base + 128, ids.size());
+            var keys = new ArrayList<String>((end - base) * (tenant == null ? 2 : 3));
+            for (int i = base; i < end; i++) {
+                keys.add(keyStrategy.entityKey(metadata.redisNamespace(), ids.get(i)));
+                keys.add(keyStrategy.tombstoneKey(metadata.redisNamespace(), ids.get(i)));
+                if (tenant != null) keys.add(keyStrategy.versionKey(metadata.redisNamespace(), ids.get(i)) + ":tenant");
+            }
+            if (bytes >= COMPOSITE_MAX_BYTES) throw new IllegalStateException("Composite fallback byte budget exceeded");
+            var values = jedis.boundedMget(keys, COMPOSITE_MAX_BYTES - bytes);
+            for (String value : values) if (value != null) bytes += value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            int stride = tenant == null ? 2 : 3;
+            for (int i = base; i < end; i++) {
+                int offset = (i - base) * stride;
+                if (values.get(offset) == null || values.get(offset + 1) != null) {
+                    if (requirePayloads) throw new CompositePayloadDivergenceException();
+                    continue;
+                }
+                if (tenant != null && !tenant.equals(values.get(offset + 2))) continue;
+                T row = codec.fromRedisValue(values.get(offset));
+                if (!ids.get(i).equals(String.valueOf(metadata.idAccessor().apply(row))))
+                    throw new IllegalStateException("Composite payload identity mismatch");
+                if (tenant != null && !tenant.equals(metadata.extractTenantId(row))) continue;
+                rows.add(row);
+            }
+        }
+        compositeDeadline(query, started);
+        return new CompositeMaterialization<>(rows, bytes);
+    }
+
+    public CompositeWindow<T> redisLexicalWindowFromRows(QuerySpec query, CompositePosition after, List<T> input,
+            java.util.function.Predicate<T> admission, String indexName) {
+        return redisLexicalWindowFromRows(query, after, input, admission, indexName, 0, true);
+    }
+
+    CompositeWindow<T> redisLexicalWindowFromRows(QuerySpec query, CompositePosition after, List<T> input,
+            java.util.function.Predicate<T> admission, String indexName, long initialBytes, boolean countPayloads) {
+        requireRedisLexicalContract(query, indexName);
+        if (input.size() > Math.min(10_000, config.maxMaterializedCandidateIds()))
+            throw new IllegalStateException("Composite materialized row budget exceeded");
+        CompositePlan plan = compositePlan(query, false, indexName);
+        var rows = new ArrayList<CompositeRow<T>>();
+        long bytes = initialBytes, started = System.nanoTime();
+        var identities = new java.util.HashSet<String>();
+        for (T row : input) {
+            String id = String.valueOf(metadata.idAccessor().apply(row));
+            RedisCompositeIndexes.validateMember(id);
+            if (!identities.add(id)) throw new IllegalStateException("Duplicate source identity cannot certify lexical pagination");
+            compositeDeadline(query, started);
+            if (countPayloads) {
+                bytes += id.getBytes(java.nio.charset.StandardCharsets.UTF_8).length + 32L;
+                String payload = codec.toRedisValue(row);
+                bytes += payload.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            }
+            if (bytes > COMPOSITE_MAX_BYTES) throw new IllegalStateException("Composite materialized byte budget exceeded");
+            var columns = codec.toColumns(row);
+            if (!queryEvaluator.matches(columns, query.rootGroup()) || !admission.test(row)) continue;
+            Object value = columns.get(plan.sortColumn());
+            if (!com.reactor.cachedb.core.query.RedisLexicalScoreContract.matchesRuntimeType(
+                    metadata.columnTypes().get(plan.sortColumn()), value))
+                throw new IllegalStateException("Null or mismatched runtime score type is not a lexical cursor value");
+            Double score = RedisScoreSupport.toScore(metadata.columnTypes(), plan.sortColumn(), value);
+            var position = new CompositePosition(score, String.valueOf(metadata.idAccessor().apply(row)));
+            if (after == null || compareCompositePositions(position, after, plan.descending()) > 0)
+                rows.add(new CompositeRow<>(row, position));
+        }
+        rows.sort((a, b) -> compareCompositePositions(a.position(), b.position(), plan.descending()));
+        return compositeWindow(rows, query, rows.size() > query.limit(), 0, input.size()).orElseThrow();
+    }
+
+    public java.util.Optional<CompositeLongWindow<T>> resolveRedisLongLexicalWindow(QuerySpec requested,
+            CompositeLongPosition after, java.util.function.Predicate<T> admission, String indexName, boolean requirePayloads) {
+        QuerySpec query = com.reactor.cachedb.core.tenant.TenantAccess.scoped(metadata, requested);
+        requireRedisLongLexicalContract(query, indexName);
+        if (after != null && !com.reactor.cachedb.core.query.RedisLexicalScoreContract.long53Value(after.sortValue()))
+            return java.util.Optional.empty();
+        CompositePosition scoreAfter = after == null ? null : new CompositePosition((double) after.sortValue(), after.id());
+        // The existing range Lua checks the SAME Long53 marker atomically with every ZSET window.
+        var fast = resolveCompositeWindowInternal(query, scoreAfter, admission, indexName, requirePayloads, true);
+        if (fast.isEmpty()) return java.util.Optional.empty();
+        CompositePlan plan = compositePlan(query, false, indexName);
+        var rows = new ArrayList<CompositeLongRow<T>>(fast.get().rows().size());
+        for (var row : fast.get().rows()) {
+            Object value = codec.toColumns(row.entity()).get(plan.sortColumn());
+            if (!com.reactor.cachedb.core.query.RedisLexicalScoreContract.long53Value(value)
+                    || Double.compare((double) (Long) value, row.position().score()) != 0)
+                return java.util.Optional.empty();
+            rows.add(new CompositeLongRow<>(row.entity(), new CompositeLongPosition((Long) value, row.position().id())));
+        }
+        CompositeLongPosition continuation = fast.get().hasMore() && !rows.isEmpty() ? rows.get(rows.size() - 1).position() : null;
+        return java.util.Optional.of(new CompositeLongWindow<>(rows, fast.get().hasMore(), continuation,
+                fast.get().rounds(), fast.get().examinedIds()));
+    }
+
+    public CompositeLongWindow<T> resolveRedisLongLexicalFallback(QuerySpec query, CompositeLongPosition after,
+            java.util.function.Predicate<T> admission, String indexName, boolean requirePayloads) {
+        requireRedisLongLexicalContract(query, indexName);
+        if (com.reactor.cachedb.core.causal.CacheCausalContext.hasRequirements(metadata.redisNamespace()))
+            throw new IllegalStateException("Redis Long lexical cursor cannot certify a causal scope; use causal entity reads");
+        var materialized = compositePayloadRows(query, compositePlan(query, false, indexName), requirePayloads);
+        return redisLongLexicalWindowFromRows(query, after, materialized.rows(), admission, indexName, materialized.bytes(), false);
+    }
+
+    public CompositeLongWindow<T> redisLongLexicalWindowFromRows(QuerySpec query, CompositeLongPosition after,
+            List<T> input, java.util.function.Predicate<T> admission, String indexName) {
+        return redisLongLexicalWindowFromRows(query, after, input, admission, indexName, 0, true);
+    }
+
+    CompositeLongWindow<T> redisLongLexicalWindowFromRows(QuerySpec query, CompositeLongPosition after,
+            List<T> input, java.util.function.Predicate<T> admission, String indexName, long initialBytes, boolean countPayloads) {
+        requireRedisLongLexicalContract(query, indexName);
+        if (input.size() > compositeMaterializationLimit())
+            throw new IllegalStateException("Composite materialized row budget exceeded");
+        CompositePlan plan = compositePlan(query, false, indexName);
+        var rows = new ArrayList<CompositeLongRow<T>>();
+        var identities = new java.util.HashSet<String>();
+        long bytes = initialBytes, started = System.nanoTime();
+        for (T row : input) {
+            String id = String.valueOf(metadata.idAccessor().apply(row));
+            RedisCompositeIndexes.validateMember(id);
+            if (!identities.add(id)) throw new IllegalStateException("Duplicate source identity cannot certify lexical pagination");
+            compositeDeadline(query, started);
+            if (countPayloads) bytes += id.getBytes(java.nio.charset.StandardCharsets.UTF_8).length + 32L
+                    + codec.toRedisValue(row).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            if (bytes > COMPOSITE_MAX_BYTES) throw new IllegalStateException("Composite materialized byte budget exceeded");
+            var columns = codec.toColumns(row);
+            if (!queryEvaluator.matches(columns, query.rootGroup()) || !admission.test(row)) continue;
+            if (!(columns.get(plan.sortColumn()) instanceof Long value))
+                throw new IllegalStateException("Redis Long lexical cursor requires a non-null exact Long payload value");
+            var position = new CompositeLongPosition(value, id);
+            if (after == null || compareCompositeLongPositions(position, after, plan.descending()) > 0)
+                rows.add(new CompositeLongRow<>(row, position));
+        }
+        rows.sort((a, b) -> compareCompositeLongPositions(a.position(), b.position(), plan.descending()));
+        int to = Math.min(query.limit(), rows.size());
+        boolean more = rows.size() > to;
+        List<CompositeLongRow<T>> page = List.copyOf(rows.subList(0, to));
+        CompositeLongPosition continuation = more && !page.isEmpty() ? page.get(page.size() - 1).position() : null;
+        return new CompositeLongWindow<>(page, more, continuation, 0, input.size());
+    }
+
+    private static int compareCompositeLongPositions(CompositeLongPosition a, CompositeLongPosition b, boolean descending) {
+        int order = Long.compare(a.sortValue(), b.sortValue());
+        if (order == 0) order = RedisCompositeIndexes.compareMembers(a.id(), b.id());
+        return descending ? -order : order;
+    }
+
+    private static void compositeDeadline(QuerySpec query, long started) {
+        if (query.queryTimeoutSeconds() > 0 && System.nanoTime() - started
+                >= java.util.concurrent.TimeUnit.SECONDS.toNanos(query.queryTimeoutSeconds()))
+            throw new IllegalStateException("Composite query deadline exceeded");
+    }
+
+    private java.util.Optional<CompositeWindow<T>> compositeFallback() {
+        compositeBoundedFallbacks.increment();
+        return java.util.Optional.empty();
+    }
+
+    private java.util.Optional<CompositeWindow<T>> compositeWindow(List<CompositeRow<T>> accepted,
+            QuerySpec query, boolean more, int rounds, int examined) {
+        int from = Math.min(query.offset(), accepted.size());
+        int to = Math.min(from + query.limit(), accepted.size());
+        List<CompositeRow<T>> rows = List.copyOf(accepted.subList(from, to));
+        CompositePosition continuation = more && !rows.isEmpty() ? rows.get(rows.size() - 1).position() : null;
+        return java.util.Optional.of(new CompositeWindow<>(rows, more, continuation, rounds, examined));
+    }
+
+    private CompositeBatch compositeBatch(CompositePlan plan, CompositePosition after, int count, long remainingBytes) {
+        if (remainingBytes < 1) throw new IllegalStateException("Composite read byte budget exhausted");
+        var fenceKeys = compositeFence.identityKeys();
+        List<String> keys;
+        List<String> args;
+        if (plan.long53Key() == null) {
+            keys = List.of(plan.sortKey(), plan.exactKey(), fenceKeys.get(0), fenceKeys.get(1),
+                    keyStrategy.indexDegradedKey(metadata.redisNamespace()),
+                    keyStrategy.compositeIndexSignatureKey(metadata.redisNamespace()));
+            args = List.of(plan.minimum(), plan.maximum(), after == null ? "0" : "1",
+                    after == null ? "0" : Double.toString(after.score()), after == null ? "" : after.id(),
+                    plan.descending() ? "1" : "0", Integer.toString(count), Long.toString(remainingBytes), compositeSignature);
+        } else {
+            keys = List.of(plan.sortKey(), plan.exactKey(), fenceKeys.get(0), fenceKeys.get(1),
+                    keyStrategy.indexDegradedKey(metadata.redisNamespace()),
+                    keyStrategy.compositeIndexSignatureKey(metadata.redisNamespace()), plan.long53Key());
+            args = List.of(plan.minimum(), plan.maximum(), after == null ? "0" : "1",
+                    after == null ? "0" : Double.toString(after.score()), after == null ? "" : after.id(),
+                    plan.descending() ? "1" : "0", Integer.toString(count), Long.toString(remainingBytes),
+                    compositeSignature, RedisCompositeMigrationFence.LONG53_VERIFIED);
+        }
+        jedis.requireSameSlot(keys);
+        Object response = jedis.eval(COMPOSITE_RANGE, keys, args);
+        List<?> result = (List<?>) response;
+        long status = ((Number) result.get(0)).longValue();
+        if (status == -1) return new CompositeBatch(List.of(), false, true);
+        if (status != 0 && status != 1) throw new IllegalStateException("Invalid composite window status");
+        List<?> values = (List<?>) result.get(1);
+        if (values.size() > count * 2 || values.size() % 2 != 0)
+            throw new IllegalStateException("Invalid bounded composite response");
+        var positions = new ArrayList<CompositePosition>(values.size() / 2);
+        for (int i = 0; i < values.size(); i += 2)
+            positions.add(new CompositePosition(Double.parseDouble(values.get(i + 1).toString()), values.get(i).toString()));
+        return new CompositeBatch(List.copyOf(positions), status != 0, false);
+    }
+
+    private CompositePlan compositePlan(QuerySpec query) { return compositePlan(query, true); }
+
+    private CompositePlan compositePlan(QuerySpec query, boolean requireVerified) {
+        return compositePlan(query, requireVerified, null);
+    }
+
+    private CompositePlan compositePlan(QuerySpec query, boolean requireVerified, String requiredIndex) {
+        if (!config.exactIndexEnabled() || !config.rangeIndexEnabled()
+                || metadata.compositeSortColumns().isEmpty()
+                || requireVerified && compositeIndexState() != CompositeIndexState.VERIFIED || query.sorts().size() > 2)
+            return null;
+        if (query.sorts().size() == 2 && (!query.sorts().get(1).column().equals(metadata.idColumn())
+                || query.sorts().get(0).direction() != query.sorts().get(1).direction())) return null;
+        var filters = new ArrayList<QueryFilter>();
+        if (!compositeFilters(query.rootGroup(), filters, new int[1], 0)) return null;
+        var equals = new LinkedHashMap<String, Object>();
+        for (QueryFilter filter : filters) {
+            if (filter.operator() == QueryOperator.EQ && filter.value() != null) {
+                Object previous = equals.putIfAbsent(filter.column(), filter.value());
+                if (previous != null && !previous.equals(filter.value())) return null;
+            }
+        }
+        var indexes = new ArrayList<>(metadata.compositeExactIndexes().entrySet());
+        indexes.sort(java.util.Comparator.<Map.Entry<String, List<String>>>comparingInt(index -> -index.getValue().size())
+                .thenComparing(Map.Entry::getKey));
+        for (var index : indexes) {
+            if (requiredIndex != null && !requiredIndex.equals(index.getKey())) continue;
+            String sort = metadata.compositeSortColumns().get(index.getKey());
+            if (sort == null || !equals.keySet().containsAll(index.getValue())
+                    || !query.sorts().isEmpty() && !query.sorts().get(0).column().equals(sort)) continue;
+            String tenantColumn = metadata.tenantFieldName();
+            if (tenantColumn != null && !index.getValue().contains(tenantColumn)) continue;
+            Double minimum = null, maximum = null;
+            for (QueryFilter filter : filters) {
+                if (!filter.column().equals(sort) || !isRangeOperator(filter.operator())) continue;
+                if (com.reactor.cachedb.core.query.RedisLexicalScoreContract.long53Type(metadata.columnTypes().get(sort))
+                        && !(filter.value() instanceof Long)) return null;
+                Double score = RedisScoreSupport.toScore(metadata.columnTypes(), sort, filter.value());
+                if (score == null || !Double.isFinite(score)) return null;
+                if (score == 0d) score = 0d;
+                // Do not spend the bounded window rejecting a large equal-score boundary group.
+                // Widened bounds remain mandatory for lossy/untyped filter literals.
+                if (com.reactor.cachedb.core.query.RedisLexicalScoreContract.matchesRuntimeType(
+                        metadata.columnTypes().get(sort), filter.value())) {
+                    if (filter.operator() == QueryOperator.GT) score = Math.nextUp(score);
+                    else if (filter.operator() == QueryOperator.LT) score = Math.nextDown(score);
+                }
+                switch (filter.operator()) {
+                    case GT, GTE -> minimum = minimum == null ? score : Math.max(minimum, score);
+                    case LT, LTE -> maximum = maximum == null ? score : Math.min(maximum, score);
+                    default -> { }
+                }
+            }
+            String exact = RedisCompositeIndexes.key(keyStrategy, metadata.redisNamespace(), index.getKey(), index.getValue(), equals);
+            boolean descending = !query.sorts().isEmpty()
+                    && query.sorts().get(0).direction() == com.reactor.cachedb.core.query.QuerySortDirection.DESC;
+            QuerySpec prefixQuery = QuerySpec.allOf();
+            for (String field : index.getValue()) prefixQuery = prefixQuery.and(QueryFilter.eq(field, equals.get(field)));
+            return new CompositePlan(exact, exact + ":sort", sort,
+                    minimum == null ? "-inf" : minimum.toString(), maximum == null ? "+inf" : maximum.toString(), descending, prefixQuery, long53Key(index.getKey()));
+        }
+        return null;
+    }
+
+    private boolean compositeFilters(QueryNode node, List<QueryFilter> filters, int[] count, int depth) {
+        if (++count[0] > 128 || depth > 32) return false;
+        if (node instanceof QueryFilter filter) {
+            if (filter.column().contains(".")) return false;
+            filters.add(filter);
+            return true;
+        }
+        QueryGroup group = (QueryGroup) node;
+        if (group.operator() != QueryGroupOperator.AND) return false;
+        for (QueryNode child : group.nodes()) if (!compositeFilters(child, filters, count, depth + 1)) return false;
+        return true;
+    }
+
     private static final String NULL_SENTINEL = "__NULL__";
 
     private final RedisClientOperations jedis;
@@ -120,6 +864,22 @@ public final class RedisQueryIndexManager<T, ID> {
     private final RelationConfig relationConfig;
     private final QueryEvaluator queryEvaluator;
     private final RedisProducerGuard producerGuard;
+    private record Long53Domain(String name, String column, String key) {}
+    private final List<Long53Domain> long53Domains;
+    private String long53Key(String name) {
+        for (var domain : long53Domains) if (domain.name().equals(name)) return domain.key();
+        return null;
+    }
+    private void attestLong53(Map<String, Object> columns) {
+        if (long53Domains.isEmpty()) return;
+        int unsafe = 0;
+        for (int i = 0; i < long53Domains.size(); i++)
+            if (!com.reactor.cachedb.core.query.RedisLexicalScoreContract.long53Value(columns.get(long53Domains.get(i).column())))
+                unsafe |= 1 << i;
+        compositeFence.attestLong53(unsafe);
+    }
+    private final RedisCompositeMigrationFence compositeFence;
+    private final boolean compositeSortedEnabled;
     private final Set<String> indexedColumns;
     private final Map<String, CachedEstimate> cardinalityCache = new ConcurrentHashMap<>();
     private final Map<String, CachedHistogram> histogramCache = new ConcurrentHashMap<>();
@@ -159,6 +919,8 @@ public final class RedisQueryIndexManager<T, ID> {
             RedisProducerGuard producerGuard) {
         this.jedis = jedis;
         this.metadata = metadata;
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateMetadata(metadata);
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
         this.codec = com.reactor.cachedb.core.codec.PayloadEntityCodec.wrap(codec, metadata, metadata.compressionThresholdBytes());
         this.keyStrategy = keyStrategy;
         this.entityRegistry = entityRegistry;
@@ -166,8 +928,9 @@ public final class RedisQueryIndexManager<T, ID> {
         this.relationConfig = relationConfig;
         this.queryEvaluator = queryEvaluator;
         this.producerGuard = producerGuard;
-        this.indexedColumns = config.sparseIndexMetadata()
-                ? Set.copyOf(metadata.indexedColumns()) : Set.copyOf(metadata.columns());
+        this.indexedColumns = (config.sparseIndexMetadata() ? metadata.indexedColumns() : metadata.columns()).stream()
+                .filter(column -> !metadata.encryptedColumns().containsKey(column) || metadata.encryptedColumns().get(column).blindIndex())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
         if (!metadata.columns().containsAll(indexedColumns))
             throw new IllegalArgumentException("Indexed columns must be persisted columns");
         metadata.partitionedSortIndexes().forEach((partition, sorts) -> {
@@ -175,12 +938,32 @@ public final class RedisQueryIndexManager<T, ID> {
                 throw new IllegalArgumentException("Partitioned index columns must be present in indexedColumns");
         });
         RedisCompositeIndexes.validate(metadata);
+        this.compositeSortedEnabled = !metadata.compositeSortColumns().isEmpty();
         this.compositeSignature = RedisCompositeIndexes.signature(metadata);
+        this.long53Domains = metadata.compositeSortColumns().entrySet().stream()
+                .filter(entry -> com.reactor.cachedb.core.query.RedisLexicalScoreContract.long53Type(
+                        metadata.columnTypes().get(entry.getValue())))
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> new Long53Domain(entry.getKey(), entry.getValue(),
+                        keyStrategy.compositeIndexSignatureKey(metadata.redisNamespace()) + ":long53:" + entry.getKey())).toList();
+        this.compositeFence = new RedisCompositeMigrationFence(jedis, keyStrategy, metadata.redisNamespace(),
+                long53Domains.stream().map(Long53Domain::key).toList());
         if (!metadata.compositeExactIndexes().isEmpty()) checkCompositeSignature();
         if (metadata.columns().contains(PROJECTION_TENANT_MARKER)) throw new IllegalArgumentException("Reserved projection tenant metadata column");
     }
 
+    public boolean hasCompositeSortIndexes() { return compositeSortedEnabled; }
+
+    public <V> V withCompositeMutation(java.util.function.Supplier<V> body) {
+        return hasCompositeSortIndexes() ? compositeFence.write(body) : body.get();
+    }
+
     public void reindex(T entity) {
+        if (!hasCompositeSortIndexes()) { reindexUnfenced(entity); return; }
+        withCompositeMutation(() -> { reindexUnfenced(entity); return null; });
+    }
+
+    private void reindexUnfenced(T entity) {
         try {
             reindexEntity(entity, true);
         } catch (RuntimeException exception) {
@@ -189,6 +972,11 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public void reindexBatch(Collection<T> entities) {
+        if (!hasCompositeSortIndexes()) { reindexBatchUnfenced(entities); return; }
+        withCompositeMutation(() -> { reindexBatchUnfenced(entities); return null; });
+    }
+
+    private void reindexBatchUnfenced(Collection<T> entities) {
         if (entities == null || entities.isEmpty()) {
             return;
         }
@@ -200,6 +988,11 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public void reindexBatchWithColumns(Map<ID, T> entities, Map<ID, Map<String, Object>> precomputedColumns) {
+        if (!hasCompositeSortIndexes()) { reindexBatchWithColumnsUnfenced(entities, precomputedColumns); return; }
+        withCompositeMutation(() -> { reindexBatchWithColumnsUnfenced(entities, precomputedColumns); return null; });
+    }
+
+    private void reindexBatchWithColumnsUnfenced(Map<ID, T> entities, Map<ID, Map<String, Object>> precomputedColumns) {
         if (entities == null || precomputedColumns == null || !precomputedColumns.keySet().containsAll(entities.keySet()))
             throw new IllegalArgumentException("Precomputed columns must cover every indexed entity");
         if (entities.size() > 10_000) throw new IllegalArgumentException("At most 10000 index rows per batch");
@@ -214,6 +1007,11 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public void reindexProjectionWarmBatch(Collection<T> entities) {
+        if (!hasCompositeSortIndexes()) { reindexProjectionWarmBatchUnfenced(entities); return; }
+        withCompositeMutation(() -> { reindexProjectionWarmBatchUnfenced(entities); return null; });
+    }
+
+    private void reindexProjectionWarmBatchUnfenced(Collection<T> entities) {
         if (entities == null || entities.isEmpty()) {
             return;
         }
@@ -229,66 +1027,91 @@ public final class RedisQueryIndexManager<T, ID> {
         }
     }
 
-    public synchronized QueryIndexRebuildResult rebuildFromEntityStore(boolean automatic, String note) {
-        String namespace = metadata.redisNamespace();
-        String lockKey = keyStrategy.indexRebuildLockKey(namespace);
-        if (automatic && !acquireRebuildSlot(lockKey)) {
+    public QueryIndexRebuildResult rebuildFromEntityStore(boolean automatic, String note) {
+        if (hasCompositeSortIndexes())
+            return new QueryIndexRebuildResult(metadata.entityName(), metadata.redisNamespace(), 0, 0, false,
+                    automatic, Instant.now(), "Sorted composite rebuild requires explicit cooperative migration fencing");
+        return rebuildFromEntityStoreInternal(automatic, note, null);
+    }
+
+    /** Requires every writer upgraded to the cooperative protocol; not an online legacy-writer migration. */
+    public QueryIndexRebuildResult rebuildCompositeIndexesFenced(boolean automatic, String note) {
+        if (!hasCompositeSortIndexes()) return rebuildFromEntityStore(automatic, note);
+        if (automatic && !acquireRebuildSlot(keyStrategy.indexRebuildLockKey(metadata.redisNamespace())))
+            return new QueryIndexRebuildResult(metadata.entityName(), metadata.redisNamespace(), 0, 0,
+                    !indexFeaturesDegraded(), true, Instant.now(), "Skipped fenced rebuild because cooldown is active");
+        try (var migration = compositeFence.exclusive()) {
+            return rebuildFromEntityStoreInternal(automatic, note, migration);
+        }
+    }
+
+    private QueryIndexRebuildResult rebuildFromEntityStoreInternal(boolean automatic, String note,
+            RedisCompositeMigrationFence.Migration migration) {
+        indexLock.lock();
+        try {
+            String namespace = metadata.redisNamespace();
+            String lockKey = keyStrategy.indexRebuildLockKey(namespace);
+            if (automatic && migration == null && !acquireRebuildSlot(lockKey)) {
+                return new QueryIndexRebuildResult(
+                        metadata.entityName(),
+                        namespace,
+                        0L,
+                        0L,
+                        !indexFeaturesDegraded(),
+                        true,
+                        Instant.now(),
+                        "Skipped automatic rebuild because cooldown is active");
+            }
+
+            if (migration == null) markIndexFeaturesDegraded();
+            if (migration == null) jedis.commands().del(keyStrategy.compositeIndexSignatureKey(namespace));
+            compositeState = metadata.compositeExactIndexes().isEmpty() ? CompositeIndexState.NONE : CompositeIndexState.PENDING_REBUILD;
+            compositeCheckAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            long clearedKeyCount = clearIndexKeys(lockKey);
+            long rebuiltEntityCount = 0L;
+            String cursor = "0";
+            int iterations = 0;
+            do {
+                if (++iterations > 100_000) throw new IllegalStateException("Index rebuild scan exceeds 100000 iterations; indexes remain degraded");
+                redis.clients.jedis.resps.ScanResult<String> scan =
+                        jedis.scan(
+                                cursor,
+                                new redis.clients.jedis.params.ScanParams()
+                                        .match(keyStrategy.entityPattern(namespace))
+                                        .count(Math.min(1000, Math.max(64, config.plannerStatisticsSampleSize() * 4))));
+                for (String entityKey : scan.getResult()) {
+                String id = entityKey.substring(keyStrategy.entityPattern(namespace).length() - 1);
+                    if (jedis.commands().exists(keyStrategy.tombstoneKey(namespace, id))) {
+                        continue;
+                    }
+                    String payload = jedis.commands().get(entityKey);
+                    if (payload == null || payload.isBlank()) {
+                        continue;
+                    }
+                    T entity = codec.fromRedisValue(payload);
+                    reindexEntity(entity, false);
+                    rebuiltEntityCount++;
+                }
+                cursor = scan.getCursor();
+            } while (!"0".equals(cursor));
+            if (migration == null) jedis.commands().set(keyStrategy.compositeIndexSignatureKey(namespace), compositeSignature);
+            else migration.publish(keyStrategy.compositeIndexSignatureKey(namespace), compositeSignature);
+            compositeState = metadata.compositeExactIndexes().isEmpty() ? CompositeIndexState.NONE : CompositeIndexState.VERIFIED;
+            compositeCheckAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            if (migration == null) jedis.commands().del(keyStrategy.indexDegradedKey(namespace));
+            invalidatePlannerStatistics();
             return new QueryIndexRebuildResult(
                     metadata.entityName(),
                     namespace,
-                    0L,
-                    0L,
-                    !indexFeaturesDegraded(),
+                    rebuiltEntityCount,
+                    clearedKeyCount,
                     true,
+                    automatic,
                     Instant.now(),
-                    "Skipped automatic rebuild because cooldown is active");
+                    note == null ? "" : note);
+        } finally {
+            indexLock.unlock();
         }
-
-        markIndexFeaturesDegraded();
-        jedis.commands().del(keyStrategy.compositeIndexSignatureKey(namespace));
-        compositeState = metadata.compositeExactIndexes().isEmpty() ? CompositeIndexState.NONE : CompositeIndexState.PENDING_REBUILD;
-        compositeCheckAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
-        long clearedKeyCount = clearIndexKeys(lockKey);
-        long rebuiltEntityCount = 0L;
-        String cursor = "0";
-        int iterations = 0;
-        do {
-            if (++iterations > 100_000) throw new IllegalStateException("Index rebuild scan exceeds 100000 iterations; indexes remain degraded");
-            redis.clients.jedis.resps.ScanResult<String> scan =
-                    jedis.scan(
-                            cursor,
-                            new redis.clients.jedis.params.ScanParams()
-                                    .match(keyStrategy.entityPattern(namespace))
-                                    .count(Math.min(1000, Math.max(64, config.plannerStatisticsSampleSize() * 4))));
-            for (String entityKey : scan.getResult()) {
-                String id = entityKey.substring(entityKey.lastIndexOf(':') + 1);
-                if (jedis.commands().exists(keyStrategy.tombstoneKey(namespace, id))) {
-                    continue;
-                }
-                String payload = jedis.commands().get(entityKey);
-                if (payload == null || payload.isBlank()) {
-                    continue;
-                }
-                T entity = codec.fromRedisValue(payload);
-                reindexEntity(entity, false);
-                rebuiltEntityCount++;
-            }
-            cursor = scan.getCursor();
-        } while (!"0".equals(cursor));
-        jedis.commands().set(keyStrategy.compositeIndexSignatureKey(namespace), compositeSignature);
-        compositeState = metadata.compositeExactIndexes().isEmpty() ? CompositeIndexState.NONE : CompositeIndexState.VERIFIED;
-        compositeCheckAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
-        jedis.commands().del(keyStrategy.indexDegradedKey(namespace));
-        invalidatePlannerStatistics();
-        return new QueryIndexRebuildResult(
-                metadata.entityName(),
-                namespace,
-                rebuiltEntityCount,
-                clearedKeyCount,
-                true,
-                automatic,
-                Instant.now(),
-                note == null ? "" : note);
     }
 
     private void reindexEntity(T entity, boolean respectShedding) {
@@ -317,7 +1140,10 @@ public final class RedisQueryIndexManager<T, ID> {
         List<Response<String>> owners = new ArrayList<>(ids.size());
         try (AbstractPipeline read = jedis.pipeline()) {
             for (ID id : ids) {
-                columns.add(precomputedColumns == null ? codec.toColumns(unique.get(id)) : precomputedColumns.get(id));
+                Map<String, Object> values = precomputedColumns == null || com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata)
+                        ? codec.toIndexColumns(unique.get(id)) : precomputedColumns.get(id);
+                attestLong53(values);
+                columns.add(values);
                 responses.add(read.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
                 if (projectionOwnerNamespace() != null) owners.add(read.get(keyStrategy.versionKey(projectionOwnerNamespace(),id) + ":tenant"));
             }
@@ -334,6 +1160,8 @@ public final class RedisQueryIndexManager<T, ID> {
                 if (owner == null || owner.isBlank() || owner.length() > 256) throw new IllegalStateException("Projection requires established base tenant ownership");
                 next.put(PROJECTION_TENANT_MARKER,owner);
             }
+            com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateIndexColumns(metadata, next);
+            com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateIndexColumns(metadata, responses.get(i).get());
             var plan = RedisIndexMutationPlanner.plan(responses.get(i).get(), next, !respectShedding);
             plans.add(plan);
             changed |= !plan.unchanged();
@@ -379,7 +1207,9 @@ public final class RedisQueryIndexManager<T, ID> {
             for (T entity : candidates) {
                 ID id = metadata.idAccessor().apply(entity);
                 idValues.add(String.valueOf(id));
-                entityColumns.add(codec.toColumns(entity));
+                Map<String, Object> values = codec.toIndexColumns(entity);
+                attestLong53(values);
+                entityColumns.add(values);
                 priorMetaResponses.add(
                         readPipeline.hgetAll(keyStrategy.indexMetaKey(namespace, id)));
             }
@@ -413,48 +1243,139 @@ public final class RedisQueryIndexManager<T, ID> {
         }
     }
 
+    RedisPurgeIndexLayout purgeLayout() {
+        var partitions = new LinkedHashMap<String, List<String>>();
+        for (String column : partitionedExactSortColumns())
+            partitions.put(column, partitionedSortColumns(column));
+        return new RedisPurgeIndexLayout(metadata, keyStrategy, config, partitions, compositeFence.identityKeys());
+    }
+
+    void purgeInvalidateLocalStatistics() {
+        cardinalityCache.clear();
+        histogramCache.clear();
+        learnedStatsCache.clear();
+    }
+
     public void removeById(Object id) {
+        if (!hasCompositeSortIndexes()) { removeByIdUnfenced(id); return; }
+        withCompositeMutation(() -> { removeByIdUnfenced(id); return null; });
+    }
+
+    private void removeByIdUnfenced(Object id) {
         invalidatePlannerStatistics();
         String idValue = String.valueOf(id);
-        String metaKey = keyStrategy.indexMetaKey(metadata.redisNamespace(), idValue);
-        Map<String, String> metaValues = jedis.commands().hgetAll(metaKey);
+        Map<String, String> metaValues = jedis.commands().hgetAll(keyStrategy.indexMetaKey(metadata.redisNamespace(), idValue));
         try (AbstractPipeline pipeline = jedis.pipeline()) {
-            if (metaValues != null && !metaValues.isEmpty()) {
-                for (Map.Entry<String, String> entry : metaValues.entrySet()) {
-                    if (entry.getKey().equals(PROJECTION_TENANT_MARKER)) {
-                        pipeline.srem(keyStrategy.indexExactKey(metadata.redisNamespace(),PROJECTION_TENANT_MARKER,encodeKeyPart(entry.getValue())),idValue); continue;
-                    }
-                    if (entry.getKey().startsWith(RedisCompositeIndexes.MARKER)) {
-                        pipeline.srem(entry.getValue(), idValue); continue;
-                    }
-                    if (config.exactIndexEnabled()) {
-                        pipeline.srem(
-                                keyStrategy.indexExactKey(
-                                        metadata.redisNamespace(),
-                                        entry.getKey(),
-                                        encodeKeyPart(entry.getValue())),
-                                idValue);
-                    }
-                    removeStringValueIndex(
-                            pipeline, idValue, entry.getKey(), decodeValue(entry.getValue()));
-                    pipeline.zrem(
-                            keyStrategy.indexSortKey(metadata.redisNamespace(), entry.getKey()),
-                            idValue);
-                }
-                removePartitionedSortIndexes(pipeline, idValue, metaValues);
-                pipeline.del(metaKey);
-            } else {
-                for (String column : metadata.columns()) {
-                    pipeline.zrem(
-                            keyStrategy.indexSortKey(metadata.redisNamespace(), column), idValue);
-                }
-            }
-            pipeline.srem(keyStrategy.indexAllKey(metadata.redisNamespace()), idValue);
+            appendDeleteCommands(pipeline, idValue, metaValues);
             pipeline.sync();
         }
     }
 
+    private void appendDeleteCommands(AbstractPipeline pipeline, String idValue, Map<String, String> metaValues) {
+        String metaKey = keyStrategy.indexMetaKey(metadata.redisNamespace(), idValue);
+        if (metaValues != null) {
+            com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateIndexColumns(metadata, metaValues);
+            RedisCompositeIndexes.validateSortMeta(metaValues);
+        }
+        if (metaValues != null && !metaValues.isEmpty()) {
+            for (Map.Entry<String, String> entry : metaValues.entrySet()) {
+                if (entry.getKey().equals(PROJECTION_TENANT_MARKER)) {
+                    pipeline.srem(keyStrategy.indexExactKey(metadata.redisNamespace(),PROJECTION_TENANT_MARKER,encodeKeyPart(entry.getValue())),idValue); continue;
+                }
+                if (entry.getKey().startsWith(RedisCompositeIndexes.MARKER)) {
+                    pipeline.srem(entry.getValue(), idValue); continue;
+                }
+                if (entry.getKey().startsWith(RedisCompositeIndexes.SORT_MARKER)) {
+                    pipeline.zrem(RedisCompositeIndexes.sortEntry(entry.getValue()).key(), idValue); continue;
+                }
+                if (config.exactIndexEnabled()) {
+                    pipeline.srem(
+                            keyStrategy.indexExactKey(
+                                    metadata.redisNamespace(),
+                                    entry.getKey(),
+                                    encodeKeyPart(entry.getValue())),
+                            idValue);
+                }
+                removeStringValueIndex(
+                        pipeline, idValue, entry.getKey(), decodeValue(entry.getValue()));
+                pipeline.zrem(
+                        keyStrategy.indexSortKey(metadata.redisNamespace(), entry.getKey()),
+                        idValue);
+            }
+            removePartitionedSortIndexes(pipeline, idValue, metaValues);
+            pipeline.del(metaKey);
+        } else {
+            if (!metadata.compositeSortColumns().isEmpty()) markIndexFeaturesDegraded();
+            for (String column : metadata.columns()) {
+                pipeline.zrem(
+                        keyStrategy.indexSortKey(metadata.redisNamespace(), column), idValue);
+            }
+        }
+        pipeline.srem(keyStrategy.indexAllKey(metadata.redisNamespace()), idValue);
+    }
+
+    List<List<String>> projectionUpsertCommands(T entity, Map<String,String> prior, String owner) {
+        if (!(metadata instanceof ProjectionEntityMetadata<?,?>))
+            throw new IllegalStateException("A fenced projection planner requires projection metadata");
+        return capturedUpsertCommands(entity,prior,owner);
+    }
+
+    List<List<String>> initialUpsertCommands(T entity) {
+        if (metadata instanceof ProjectionEntityMetadata<?,?> || !metadata.compositeExactIndexes().isEmpty()
+                || !metadata.compositeSortColumns().isEmpty() || !metadata.partitionedSortIndexes().isEmpty())
+            throw new com.reactor.cachedb.core.protection.ProtectionException(
+                    com.reactor.cachedb.core.protection.ProtectionException.Code.MIGRATION_REQUIRED);
+        return capturedUpsertCommands(entity,Map.of(),null);
+    }
+
+    private List<List<String>> capturedUpsertCommands(T entity,Map<String,String> prior,String owner) {
+        if (shouldShedIndexWrites()) throw new java.util.concurrent.RejectedExecutionException("Projection index writes are being shed");
+        var values = codec.toIndexColumns(entity);
+        if (values.size()>1024) throw new IllegalArgumentException("Projection has too many index values");
+        long contentBytes=0;
+        for (Object value:values.values()) {
+            if (value instanceof String text) contentBytes+=com.reactor.cachedb.core.codec.Utf8Length.of(text);
+            if (contentBytes>RedisProjectionCommandBuffer.MAX_BYTES)
+                throw new IllegalArgumentException("Projection index values exceed 16 MiB before encoding");
+            if (value instanceof java.math.BigInteger integer && integer.bitLength()>16384
+                    || value instanceof java.math.BigDecimal decimal && (decimal.precision()>4096 || Math.abs((long)decimal.scale())>4096))
+                throw new IllegalArgumentException("Projection numeric index value exceeds bounded representation");
+        }
+        attestLong53(values);
+        var next = new LinkedHashMap<String,String>();
+        for (String column : indexedColumns) next.put(column, serializeValue(values.get(column)));
+        RedisCompositeIndexes.append(keyStrategy, metadata, values, next);
+        if (projectionOwnerNamespace() != null) {
+            if (owner == null || owner.isBlank() || owner.length() > 256)
+                throw new IllegalStateException("Projection requires established base tenant ownership");
+            next.put(PROJECTION_TENANT_MARKER, owner);
+        }
+        var partitions = new LinkedHashMap<String,List<String>>();
+        if (supportsPartitionedExactSortIndexes())
+            for (String partition : partitionedExactSortColumns()) partitions.put(partition, partitionedSortColumns(partition));
+        var plan = RedisIndexMutationPlanner.plan(prior, next, true);
+        try (var buffer = new RedisProjectionCommandBuffer()) {
+            RedisIndexMutationPlanner.apply(buffer,keyStrategy,metadata,config,
+                    String.valueOf(metadata.idAccessor().apply(entity)),values,plan,partitions);
+            return buffer.commands();
+        }
+    }
+
+    List<List<String>> bulkDeleteCommands(Object id, Map<String, String> metaValues) {
+        if ((metaValues == null || metaValues.isEmpty()) && hasCompositeSortIndexes())
+            throw new IllegalStateException("Bulk delete requires verified composite metadata");
+        try (var buffer = new RedisDeleteCommandBuffer()) {
+            appendDeleteCommands(buffer, String.valueOf(id), metaValues);
+            var commands = buffer.commands();
+            RedisEncryptedBulkDeleteChecks.validateOwnedIndexCommands(metadata, keyStrategy, commands);
+            return commands;
+        }
+    }
+
+    void bulkDeleteObserved() { invalidatePlannerStatistics(); }
+
     public List<String> resolveCandidateIds(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         maybeRecoverDegradedIndexes(classifyQueryClasses(querySpec));
         if (shouldBypassIndexes(querySpec)) {
             rejectStrictRouteFullScan("query indexes are degraded or reads are being shed");
@@ -464,6 +1385,29 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public java.util.Optional<List<String>> indexOnlyCandidates(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
+        if (metadata.compositeExactIndexes().isEmpty() && metadata.compositeSortColumns().isEmpty()
+                && !com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata)) {
+            QueryNode root = querySpec.rootGroup();
+            while (root instanceof QueryGroup group && group.operator() != null && group.nodes().size() == 1)
+                root = group.nodes().getFirst();
+            boolean emptyRoot = root instanceof QueryGroup group
+                    && group.operator() == QueryGroupOperator.AND && group.nodes().isEmpty();
+            String membershipKey = emptyRoot ? keyStrategy.indexAllKey(metadata.redisNamespace()) : exactKey(root);
+            if (membershipKey != null) {
+                if (producerGuard != null
+                        && (producerGuard.shouldShedQueryIndexReads(metadata.redisNamespace(), classifyQueryClasses(querySpec))
+                        || (!emptyRoot && producerGuard.shouldShedQueryIndexReads(metadata.redisNamespace(), List.of()))))
+                    return java.util.Optional.empty();
+                var fetched = jedis.guardedSetMembers(keyStrategy.indexDegradedKey(metadata.redisNamespace()),
+                        membershipKey, config.maxMaterializedCandidateIds());
+                if (fetched.isPresent()) {
+                    if (fetched.get().degraded()) return java.util.Optional.empty();
+                    enforceCandidateLimit(fetched.get().members(), "guarded candidate set");
+                    return java.util.Optional.of(fetched.get().members());
+                }
+            }
+        }
         if (shouldBypassIndexes(querySpec)) return java.util.Optional.empty();
         if (!querySpec.rootGroup().nodes().isEmpty() && !fullyIndexed(querySpec.rootGroup()))
             return java.util.Optional.empty();
@@ -476,6 +1420,7 @@ public final class RedisQueryIndexManager<T, ID> {
 
     void validateCompositeValues(Map<String, Object> columns) {
         if (!metadata.compositeExactIndexes().isEmpty()) RedisCompositeIndexes.append(keyStrategy,metadata,columns,new LinkedHashMap<>());
+        attestLong53(columns);
     }
 
     private void rejectStrictRouteFullScan(String reason) {
@@ -493,6 +1438,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public void warm(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         maybeRecoverDegradedIndexes(classifyQueryClasses(querySpec));
         if (shouldShedPlannerLearning(querySpec) || shouldBypassIndexes(querySpec)) {
             return;
@@ -513,6 +1459,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public void observe(QuerySpec querySpec, long actualCardinality) {
+        validateProtectedQuery(querySpec);
         maybeRecoverDegradedIndexes(classifyQueryClasses(querySpec));
         if (shouldShedPlannerLearning(querySpec) || shouldBypassIndexes(querySpec)) {
             return;
@@ -524,6 +1471,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public List<String> resolveSortedIds(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         if (!supportsSortedIndexScan(querySpec)) {
             return resolveCandidateIds(querySpec);
         }
@@ -579,6 +1527,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public List<String> resolvePrimarySortedIds(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         if (!shouldUsePrimarySortedScan(querySpec) || querySpec.sorts().isEmpty()) {
             return resolveCandidateIds(querySpec);
         }
@@ -812,11 +1761,13 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public java.util.Optional<List<String>> resolveOrderedPayloads(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         return resolveOrderedPayloadWindow(querySpec)
                 .map(values -> values.stream().map(RedisClientOperations.OrderedPayload::payload).toList());
     }
 
     public java.util.Optional<List<RedisClientOperations.OrderedPayload>> resolveOrderedPayloadWindow(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         if (querySpec == null || querySpec.sorts().size() != 1 || shouldBypassIndexes(querySpec))
             return java.util.Optional.empty();
         var plan = buildPartitionedExactSortPlan(querySpec);
@@ -904,12 +1855,16 @@ public final class RedisQueryIndexManager<T, ID> {
                 keyStrategy.indexPartitionSortKey(
                         metadata.redisNamespace(),
                         filter.column(),
-                        encodeKeyPart(serializeValue(filter.value())),
+                        encodeKeyPart(serializeValue(com.reactor.cachedb.core.crypto.EncryptedStorageChecks.indexLiteral(metadata, codec, filter.column(), filter.value()))),
                         primarySort.column()));
     }
 
     public <K> Map<K, List<String>> resolvePartitionedIds(
             PartitionedQuerySpec<K> partitionedQuery) {
+        if (partitionedQuery != null) {
+            com.reactor.cachedb.core.crypto.EncryptedStorageChecks.rejectProtectedRole(metadata, partitionedQuery.partitionColumn());
+            for (var sort : partitionedQuery.sorts()) com.reactor.cachedb.core.crypto.EncryptedStorageChecks.rejectProtectedRole(metadata, sort.column());
+        }
         if (partitionedQuery == null || partitionedQuery.partitionValues().isEmpty()) {
             return Map.of();
         }
@@ -1280,6 +2235,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public QueryExplainPlan explain(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         maybeRecoverDegradedIndexes(classifyQueryClasses(querySpec));
         List<QueryExplainRelationState> relationStates = collectRelationStates(querySpec);
         List<String> warnings = collectExplainWarnings(relationStates);
@@ -1408,6 +2364,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public boolean fullyIndexed(QueryFilter filter) {
+        validateProtectedFilter(filter);
         if (shouldBypassIndexes()) {
             return false;
         }
@@ -1439,6 +2396,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public boolean supportsSortedIndexScan(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         maybeRecoverDegradedIndexes(classifyQueryClasses(querySpec));
         if (shouldBypassIndexes(querySpec)) {
             return false;
@@ -1451,6 +2409,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public boolean shouldUsePrimarySortedScan(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         if (buildPartitionedExactSortPlan(querySpec) != null) {
             return true;
         }
@@ -1459,11 +2418,13 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public boolean resolvesCompleteSortOrder(QuerySpec querySpec, int candidateCount) {
+        validateProtectedQuery(querySpec);
         return canUseCandidateScoreSort(querySpec)
                 && candidateCount <= maxCandidateScoreSortSize(querySpec);
     }
 
     public SortPlan chooseSortPlan(QuerySpec querySpec) {
+        validateProtectedQuery(querySpec);
         maybeRecoverDegradedIndexes(classifyQueryClasses(querySpec));
         if (querySpec.sorts().isEmpty()) {
             return new SortPlan("NONE", 0, false);
@@ -1498,6 +2459,7 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     public QueryCardinalityEstimate estimate(QueryFilter filter) {
+        validateProtectedFilter(filter);
         return estimateFilter(filter);
     }
 
@@ -1640,7 +2602,7 @@ public final class RedisQueryIndexManager<T, ID> {
                 || !config.exactIndexEnabled() || !indexedColumns.contains(filter.column())
                 || filter.column().contains(".")) return null;
         return keyStrategy.indexExactKey(metadata.redisNamespace(), filter.column(),
-                encodeKeyPart(serializeValue(filter.value())));
+                encodeKeyPart(serializeValue(com.reactor.cachedb.core.crypto.EncryptedStorageChecks.indexLiteral(metadata, codec, filter.column(), filter.value()))));
     }
 
     private Resolution resolveOrGroup(QueryGroup group) {
@@ -1659,6 +2621,8 @@ public final class RedisQueryIndexManager<T, ID> {
     }
 
     private String describeFilter(QueryFilter filter) {
+        if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.descriptor(metadata, filter.column()) != null)
+            return filter.column() + " EQ " + com.reactor.cachedb.core.crypto.EncryptedStorageChecks.indexLiteral(metadata, codec, filter.column(), filter.value());
         if (filter.operator() == QueryOperator.IN) {
             return filter.column() + " IN " + filter.values();
         }
@@ -1729,7 +2693,31 @@ public final class RedisQueryIndexManager<T, ID> {
                 : indexedSorts ? "IN_MEMORY_SORT_WITH_RANGE_INDEX_AVAILABLE" : "IN_MEMORY_SORT";
     }
 
+    private void validateProtectedFilter(QueryFilter filter) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateFilter(metadata, filter);
+        if (filter != null) rejectEncryptedRelationPath(filter.column());
+    }
+
+    private void rejectEncryptedRelationPath(String column) {
+        if (column == null || !column.contains(".")) return;
+        String relationName = column.substring(0, column.indexOf('.'));
+        if (entityRegistry != null) for (var relation : metadata.relations()) if (relation.name().equals(relationName)) {
+            var target = entityRegistry.find(relation.targetEntity());
+            if (target.isPresent() && com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(target.get().metadata()))
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+        }
+    }
+
+    private void validateProtectedQuery(QuerySpec query) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateQuery(metadata, query);
+        if (query != null) {
+            for (var filter : query.filters()) validateProtectedFilter(filter);
+            for (var sort : query.sorts()) rejectEncryptedRelationPath(sort.column());
+        }
+    }
+
     private Set<String> membersForExact(String column, Object value) {
+        value = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.indexLiteral(metadata, codec, column, value);
         if (!config.exactIndexEnabled()) {
             return null;
         }
@@ -2293,9 +3281,11 @@ public final class RedisQueryIndexManager<T, ID> {
     private String encodeKeyPart(String value) { return RedisIndexKeySpace.encodeKeyPart(value); }
 
     private void indexStringValue(AbstractPipeline pipeline, String id, String column, String value) {
+        if (metadata.encryptedColumns().containsKey(column)) return;
         RedisIndexMutationPlanner.stringValue(pipeline,keyStrategy,metadata.redisNamespace(),config,id,column,value,true);
     }
     private void removeStringValueIndex(AbstractPipeline pipeline, String id, String column, String value) {
+        if (metadata.encryptedColumns().containsKey(column)) return;
         RedisIndexMutationPlanner.stringValue(pipeline,keyStrategy,metadata.redisNamespace(),config,id,column,value,false);
     }
 
@@ -2413,6 +3403,7 @@ public final class RedisQueryIndexManager<T, ID> {
     private String toSnakeCase(String value) { return RedisIndexKeySpace.toSnakeCase(value); }
 
     private boolean supportsScoreOrdering(String column) {
+        if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.descriptor(metadata, column) != null) return false;
         if (!indexedColumns.contains(column)) return false;
         String declaredType = metadata.columnTypes().get(column);
         if (declaredType == null || declaredType.isBlank()) {
@@ -2517,7 +3508,7 @@ public final class RedisQueryIndexManager<T, ID> {
                                     keyStrategy.indexExactKey(
                                             metadata.redisNamespace(),
                                             filter.column(),
-                                            encodeKeyPart(serializeValue(filter.value()))));
+                                            encodeKeyPart(serializeValue(com.reactor.cachedb.core.crypto.EncryptedStorageChecks.indexLiteral(metadata, codec, filter.column(), filter.value())))));
                     case IN ->
                             filter.values().stream()
                                     .mapToLong(
@@ -2540,8 +3531,7 @@ public final class RedisQueryIndexManager<T, ID> {
                                                             metadata.redisNamespace(),
                                                             filter.column(),
                                                             encodeKeyPart(
-                                                                    serializeValue(
-                                                                            filter.value())))));
+                                                                    serializeValue(com.reactor.cachedb.core.crypto.EncryptedStorageChecks.indexLiteral(metadata, codec, filter.column(), filter.value()))))));
                     case CONTAINS -> cardinalityOfContains(filter);
                     case STARTS_WITH ->
                             cardinalityOfSet(
@@ -2921,7 +3911,9 @@ public final class RedisQueryIndexManager<T, ID> {
                                     .match(keyStrategy.indexPattern(metadata.redisNamespace()))
                                     .count(256));
             for (String key : scan.getResult()) {
-                if (lockKey.equals(key) || keyStrategy.indexDegradedKey(metadata.redisNamespace()).equals(key)) {
+                if (lockKey.equals(key) || compositeFence.reserved(key)
+                        || keyStrategy.compositeIndexSignatureKey(metadata.redisNamespace()).equals(key)
+                        || keyStrategy.indexDegradedKey(metadata.redisNamespace()).equals(key)) {
                     continue;
                 }
                 clearedCount += jedis.commands().del(key);
@@ -2935,7 +3927,11 @@ public final class RedisQueryIndexManager<T, ID> {
         LinkedHashSet<String> ids = new LinkedHashSet<>();
         String cursor = "0";
         String prefix = keyStrategy.entityPattern(metadata.redisNamespace()).replace("*", "");
+        int iterations = 0;
+        long idBytes = 0;
         do {
+            if (hasCompositeSortIndexes() && ++iterations > 128)
+                throw new IllegalStateException("Bounded entity fallback exceeds 128 scan rounds");
             redis.clients.jedis.resps.ScanResult<String> scan =
                     jedis.scan(
                             cursor,
@@ -2944,7 +3940,13 @@ public final class RedisQueryIndexManager<T, ID> {
                                     .count(Math.max(64, config.plannerStatisticsSampleSize() * 4)));
             for (String key : scan.getResult()) {
                 if (key.startsWith(prefix)) {
-                    ids.add(key.substring(prefix.length()));
+                    String id = key.substring(prefix.length());
+                    if (hasCompositeSortIndexes()) RedisCompositeIndexes.validateMember(id);
+                    if (ids.add(id) && hasCompositeSortIndexes())
+                        idBytes += id.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                    if (hasCompositeSortIndexes() && (ids.size() > Math.min(10_000, config.maxMaterializedCandidateIds())
+                            || idBytes > COMPOSITE_MAX_BYTES))
+                        throw new IllegalStateException("Bounded entity fallback capacity exceeded");
                     enforceCandidateLimit(ids, "degraded entity key scan");
                 }
             }

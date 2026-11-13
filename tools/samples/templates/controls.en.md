@@ -1,8 +1,8 @@
 ## CacheDB 0.18: Running Scenarios
 
-This section uses real classes in this sample, not pseudocode. Start with the
-existing Quick Start and `demo` profile. Maven downloads CacheDB **0.18.1**
-without building the framework. Run the Postman collection
+This section uses real classes in this sample, not pseudocode. Obtain matching
+CacheDB **0.19.0** artifacts first, then use the existing Quick Start and `demo`
+profile. Run the Postman collection
 `postman/cache-database-{{PROVIDER}}-v018.postman_collection.json` in its saved order.
 
 ### 1. Setup, Identity and Data Flow

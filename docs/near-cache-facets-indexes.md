@@ -3,8 +3,8 @@
 [Türkçe](../tr/docs/yakin-onbellek-facet-bilesik-indeksler.md)
 
 These controls keep bounded operational reads in Redis. They do not transparently
-cache arbitrary SQL or extend aggregates to database history. Library bytecode
-remains Java 17 compatible; build and sample applications use Java 21.
+cache arbitrary SQL or extend aggregates to database history. The library, build
+and sample applications require Java 21+ (LTS). Java 17 applications stay on 0.18.x.
 
 ## Product Stock: Fast Repeated Reads
 
@@ -189,11 +189,11 @@ across distinct IDs. Default behavior preserves order. Same-key UPSERT/PATCH/DEL
 chains retain causal barriers even after opt-in. Do not enable this to hide
 transaction dependencies between different rows or tables.
 
-Soft-TTL refresh workers are lazy and coordinator-owned: at most two daemon
-threads, 256 queued tasks and 258 reservations. `close()` cancels queued work,
-interrupts workers and waits up to two seconds; later refresh calls are ignored.
-Java cannot forcibly terminate application tasks that ignore interruption;
-retain finite Redis/I/O timeouts. No static executor or budget spans runtimes.
+In 0.19.0, soft-TTL refresh uses lazy, coordinator-owned virtual threads with 258 total reservations
+and at most two active I/O callbacks. Duplicate identities share one refresh; overload is rejected
+without blocking the caller. `close()` interrupts work and waits at most two seconds. Non-cooperative
+callbacks still require finite I/O deadlines. See [virtual-thread contracts](virtual-thread-readiness.md).
 
-Tenant aggregate and facet Lua optimization is **Deferred to 0.19.0**. These
-routes retain the bounded, correct pipeline implementation in 0.18.1.
+0.19.0 provides bounded tenant aggregate/facet Lua paths for eligible same-slot indexed queries;
+other shapes retain the correct pipeline fallback. See [eligibility and isolation](redis-aggregation.md).
+The >=2x throughput gate remains OPEN; implementation and functional tests are not a performance result.

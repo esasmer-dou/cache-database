@@ -8,16 +8,22 @@ param(
     [string]$PostgresUser,
     [Parameter(Mandatory = $true)]
     [string]$PostgresPassword,
-    [int]$ExternalFailoverWaitSeconds = 120
+    [ValidateRange(0, 2147483647)]
+    [int]$ExternalFailoverWaitSeconds = 120,
+    [switch]$ReconnectSmokeOnly
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$reportsDir = Join-Path (Join-Path $repoRoot "target") "cachedb-staging-ha-reports"
-$beforeDir = Join-Path $reportsDir "before-external-failover"
-$afterDir = Join-Path $reportsDir "after-external-failover"
+$reportsRoot = Join-Path (Join-Path $repoRoot "target") "cachedb-staging-ha-reports"
+$runId = "run-$([DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))-$([guid]::NewGuid().ToString('N'))"
+$reportsDir = Join-Path $reportsRoot $runId
+$beforeDir = Join-Path $reportsDir "before-wait"
+$afterDir = Join-Path $reportsDir "after-wait"
+$summaryPath = Join-Path $reportsDir "staging-redis-ha-evidence.md"
+$jsonPath = Join-Path $reportsDir "staging-redis-ha-evidence.json"
 
 function Assert-NonBlank {
     param(
@@ -31,6 +37,7 @@ function Assert-NonBlank {
 
 function Run-CoordinationSmoke {
     param([string]$OutputDirectory)
+    $global:LASTEXITCODE = 0
     & (Join-Path $PSScriptRoot "run-multi-instance-coordination-evidence.ps1") `
         -MavenExecutable $MavenExecutable `
         -RedisUri $RedisUri `
@@ -38,6 +45,29 @@ function Run-CoordinationSmoke {
         -PostgresUser $PostgresUser `
         -PostgresPassword $PostgresPassword `
         -ReportsDir $OutputDirectory
+    $smokeSucceeded = $?
+    if (-not $smokeSucceeded -or $global:LASTEXITCODE -ne 0) {
+        throw "Redis coordination smoke failed with exit code $global:LASTEXITCODE."
+    }
+}
+
+function Write-StagingEvidence {
+    $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+    @(
+        "# Staging Redis Smoke Evidence",
+        "",
+        "- Run: $runId",
+        "- Mode: $($evidence.executionMode)",
+        "- Status: $($evidence.status)",
+        "- External failover wait: $ExternalFailoverWaitSeconds second(s)",
+        "- Before-wait coordination smoke: $($evidence.beforeSmoke)",
+        "- After-wait coordination smoke: $($evidence.afterSmoke)",
+        "- liveFailoverVerified=false",
+        "- haQualified=false",
+        "",
+        "Only the recorded smoke outcomes are established. An elapsed wait does not prove failover or connection recovery.",
+        "No independent live-failover witness is collected or validated by this runner. HA remains NOT QUALIFIED."
+    ) | Set-Content -LiteralPath $summaryPath -Encoding UTF8
 }
 
 Assert-NonBlank -Name "RedisUri" -Value $RedisUri
@@ -45,39 +75,65 @@ Assert-NonBlank -Name "PostgresUrl" -Value $PostgresUrl
 Assert-NonBlank -Name "PostgresUser" -Value $PostgresUser
 Assert-NonBlank -Name "PostgresPassword" -Value $PostgresPassword
 
-if (Test-Path $reportsDir) {
-    Remove-Item -Recurse -Force $reportsDir
+New-Item -ItemType Directory -Path $reportsRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $reportsDir | Out-Null
+$evidence = [ordered]@{
+    schemaVersion = 1
+    provider = "redis"
+    runId = $runId
+    executionMode = $(if ($ReconnectSmokeOnly) { "reconnect-smoke-only" } else { "ha-qualification" })
+    status = "running"
+    startedAtUtc = [DateTimeOffset]::UtcNow.ToString("O")
+    completedAtUtc = $null
+    externalFailoverWaitSeconds = $ExternalFailoverWaitSeconds
+    beforeSmoke = "not-run"
+    afterSmoke = "not-run"
+    smokeChecksPassed = $false
+    liveFailoverVerified = $false
+    haQualified = $false
+    qualificationReason = "No independent live-failover witness is collected or validated by this runner."
+    failurePhase = $null
 }
-New-Item -ItemType Directory -Path $beforeDir -Force | Out-Null
-New-Item -ItemType Directory -Path $afterDir -Force | Out-Null
+Write-StagingEvidence
+Write-Host "Run reports: $reportsDir"
 
-Write-Host "Running pre-failover staging coordination smoke..."
-Run-CoordinationSmoke -OutputDirectory $beforeDir
+$phase = "beforeSmoke"
+try {
+    Write-Host "Running before-wait staging coordination smoke..."
+    $evidence.beforeSmoke = "running"
+    Run-CoordinationSmoke -OutputDirectory $beforeDir
+    $evidence.beforeSmoke = "passed"
 
-if ($ExternalFailoverWaitSeconds -gt 0) {
-    Write-Host "Waiting $ExternalFailoverWaitSeconds second(s) for an externally triggered Redis HA failover."
-    Write-Host "Trigger failover in the managed Redis tier now. This script does not mutate the managed Redis topology."
-    Start-Sleep -Seconds $ExternalFailoverWaitSeconds
-} else {
-    Write-Host "External failover wait skipped. Post-check will validate reconnect/reuse only, not a live failover."
+    $phase = "wait"
+    if ($ExternalFailoverWaitSeconds -gt 0) {
+        Write-Host "Waiting $ExternalFailoverWaitSeconds second(s) for operator activity; no failover witness is collected."
+        Start-Sleep -Seconds $ExternalFailoverWaitSeconds
+    } else {
+        Write-Host "External failover wait skipped; this does not establish reconnect or live failover."
+    }
+
+    $phase = "afterSmoke"
+    Write-Host "Running after-wait staging coordination smoke..."
+    $evidence.afterSmoke = "running"
+    Run-CoordinationSmoke -OutputDirectory $afterDir
+    $evidence.afterSmoke = "passed"
+    $evidence.smokeChecksPassed = $true
+    $evidence.status = $(if ($ReconnectSmokeOnly) { "smoke-only-passed" } else { "ha-not-qualified" })
+} catch {
+    if ($phase -ne "wait") { $evidence[$phase] = "failed" }
+    $evidence.status = "smoke-failed"
+    $evidence.failurePhase = $phase
+    throw
+} finally {
+    $evidence.completedAtUtc = [DateTimeOffset]::UtcNow.ToString("O")
+    Write-StagingEvidence
+    Write-Host "liveFailoverVerified=false"
+    Write-Host "haQualified=false"
+    Write-Host "Summary: $summaryPath"
+    Write-Host "JSON: $jsonPath"
 }
 
-Write-Host "Running post-failover staging coordination smoke..."
-Run-CoordinationSmoke -OutputDirectory $afterDir
-
-$summaryPath = Join-Path $reportsDir "staging-redis-ha-evidence.md"
-$summary = @"
-# Staging Redis HA Evidence
-
-- Redis URI: supplied via workflow secret or local parameter
-- PostgreSQL URL: supplied via workflow secret or local parameter
-- External failover wait: ``$ExternalFailoverWaitSeconds`` second(s)
-- Pre-failover coordination smoke: ``passed``
-- Post-failover coordination smoke: ``passed``
-
-This lane validates CacheDB coordination, consumer identity, leader lease, and pending-entry claim behavior against the staging Redis/PostgreSQL topology. For GA, run it while a real managed Redis failover is triggered during the wait window.
-"@
-Set-Content -Path $summaryPath -Value $summary -NoNewline
-
-Write-Host "Staging Redis HA evidence passed."
-Write-Host "Summary: $summaryPath"
+if (-not $ReconnectSmokeOnly) {
+    throw "Staging Redis HA is NOT QUALIFIED: no independent live-failover witness was validated. Reports: $reportsDir"
+}
+Write-Host "Staging Redis smoke checks passed; live failover and HA remain unverified."

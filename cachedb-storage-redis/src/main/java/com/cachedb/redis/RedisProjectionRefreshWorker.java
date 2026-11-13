@@ -206,6 +206,9 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
                     "",
                     "Projection refresh dead-letter entry is missing required fields.");
         }
+        var protectedBinding=entityRegistry.find(entityName);
+        if(protectedBinding.isPresent() && protectedBinding.get().metadata().tenantPurgeEnabled())
+            return new ProjectionRefreshReplayResult(trimmedEntryId,false,"","Original generation and projection ownership are required");
         String originalEntryId = defaultString(entry.getFields().get("originalEntryId"));
         String enqueuedEntryId =
                 queue.enqueueReplay(
@@ -347,57 +350,39 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
     private <T, ID> boolean processWithHandler(
             StreamEntry entry, ProjectionHandler<?, ?> rawHandler, String rawId, String operation) {
         ProjectionHandler<T, ID> handler = (ProjectionHandler<T, ID>) rawHandler;
-        if ("SOURCE_UPSERT".equals(operation)) {
-            long required = Long.parseLong(entry.getFields().getOrDefault("requiredVersion", "0"));
-            if (required <= 0) throw new IllegalArgumentException("Source refresh requires a durable version");
-            String namespace = handler.baseMetadata().redisNamespace();
-            var state = jedis.mget(keyStrategy.tombstoneKey(namespace, rawId),
-                    keyStrategy.versionKey(namespace, rawId), keyStrategy.durabilityKey(namespace, rawId));
-            if (state.get(0) != null) {
-                handler.runtime().delete(handler.parseId(rawId));
-                markProcessed();
-                return true;
+        com.reactor.cachedb.core.protection.TenantProtectionGate.requireLegacy(handler.baseMetadata());
+        if (!"UPSERT".equalsIgnoreCase(operation) && !"DELETE".equalsIgnoreCase(operation) && !"SOURCE_UPSERT".equals(operation))
+            throw new IllegalArgumentException("Unsupported projection refresh operation");
+        if ("SOURCE_UPSERT".equals(operation)
+                && Long.parseLong(entry.getFields().getOrDefault("requiredVersion","0"))<=0)
+            throw new IllegalArgumentException("Source refresh requires a durable version");
+        var parent=RedisProjectionMutationFence.read(jedis,keyStrategy,handler.baseMetadata(),rawId);
+        try (var scope=handler.baseMetadata().tenantFieldName()==null?null:
+                com.reactor.cachedb.core.tenant.CacheTenantContext.withTenant(parent.owner())) {
+            Object projection=null;
+            if ("SOURCE_UPSERT".equals(operation) && parent.tombstone()==null) {
+                long required=Long.parseLong(entry.getFields().getOrDefault("requiredVersion","0"));
+                if (required<=0) throw new IllegalArgumentException("Source refresh requires a durable version");
+                var durable=RedisAsyncBoundedValues.read(jedis,java.util.List.of(
+                        keyStrategy.durabilityKey(handler.baseMetadata().redisNamespace(),rawId)),19);
+                if (parseLong(durable.get(0),0)<Math.max(parent.version(),required)) return false;
+                var entityBinding=entityRegistry.find(handler.baseMetadata().entityName()).orElseThrow();
+                var source=(com.reactor.cachedb.core.page.EntityByIdLoader<T,ID>)entityBinding.byIdLoader();
+                var loaded=source.load(handler.parseId(rawId));
+                if (loaded.isPresent()) {
+                    com.reactor.cachedb.core.tenant.TenantAccess.verify(handler.baseMetadata(),loaded.get());
+                    projection=handler.binding().projection().projector().apply(loaded.get());
+                }
+            } else if (parent.tombstone()==null && parent.payload()!=null) {
+                T entity=handler.codec().fromRedisValue(parent.payload());
+                com.reactor.cachedb.core.tenant.TenantAccess.verify(handler.baseMetadata(),entity);
+                projection=handler.binding().projection().projector().apply(entity);
             }
-            long accepted = parseLong(state.get(1), 0);
-            long durable = parseLong(state.get(2), 0);
-            if (durable < Math.max(accepted, required)) return false;
-            var entityBinding = entityRegistry.find(handler.baseMetadata().entityName()).orElseThrow();
-            @SuppressWarnings("unchecked")
-            var source = (com.reactor.cachedb.core.page.EntityByIdLoader<T, ID>) entityBinding.byIdLoader();
-            var loaded = source.load(handler.parseId(rawId));
-            if (loaded.isEmpty()) handler.runtime().delete(handler.parseId(rawId));
-            else {
-                Object projected = handler.binding().projection().projector().apply(loaded.get());
-                if (projected == null) handler.runtime().delete(handler.parseId(rawId));
-                else upsertProjection(handler, projected);
-            }
-            markProcessed();
-            return true;
+            // A legacy DELETE job reconciles current state too: it must not erase a later recreation.
+            if (!((RedisProjectionRuntime<Object,ID>)handler.runtime()).reconcile(rawId,handler.baseMetadata(),parent,projection))
+                return false; // Keep the original event pending; never relabel a stale result with a newer version.
+            markProcessed();return true;
         }
-        if ("DELETE".equalsIgnoreCase(operation)) {
-            handler.runtime().delete(handler.parseId(rawId));
-            markProcessed();
-            return true;
-        }
-        List<String> values =
-                jedis.mget(
-                        keyStrategy.entityKey(handler.baseMetadata().redisNamespace(), rawId),
-                        keyStrategy.tombstoneKey(handler.baseMetadata().redisNamespace(), rawId));
-        if (values.get(1) != null || values.get(0) == null) {
-            handler.runtime().delete(handler.parseId(rawId));
-            markProcessed();
-            return true;
-        }
-        T entity = handler.codec().fromRedisValue(values.get(0));
-        Object projection = handler.binding().projection().projector().apply(entity);
-        if (projection == null) {
-            handler.runtime().delete(handler.parseId(rawId));
-            markProcessed();
-            return true;
-        }
-        upsertProjection(handler, projection);
-        markProcessed();
-        return true;
     }
 
     @SuppressWarnings("unchecked")
@@ -406,6 +391,8 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
     }
 
     private ProjectionHandler<?, ?> handler(String entityName, String projectionName) {
+        var binding=entityRegistry.find(entityName);
+        if(binding.isPresent())com.reactor.cachedb.core.protection.TenantProtectionGate.requireLegacy(binding.get().metadata());
         return handlers.computeIfAbsent(
                 entityName + "#" + projectionName,
                 ignored -> createHandler(entityName, projectionName));
@@ -453,6 +440,8 @@ public final class RedisProjectionRefreshWorker implements AutoCloseable {
     }
 
     private boolean handleProcessingFailure(StreamEntry entry, RuntimeException exception) {
+        var binding=entityRegistry.find(entry.getFields().get("entity"));
+        if(binding.isPresent() && binding.get().metadata().tenantPurgeEnabled())return false;
         captureError(exception);
         int attempt = parsePositiveInt(entry.getFields().get("attempt"), 1);
         if (!config.deadLetterEnabled()) {

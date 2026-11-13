@@ -10,6 +10,8 @@ import java.util.*;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import redis.clients.jedis.DefaultJedisClientConfig;
 import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.JedisCluster;
@@ -167,6 +169,59 @@ class SnapshotIndexDeltaRedisTest {
         assertThatThrownBy(
                         () -> repository.findPage("customer", first.nextRequest(1).orElseThrow()))
                 .hasMessageContaining("cursor expired");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void emptyFullGenerationSupportsPartialInsertAndRead(boolean contentReuse) throws Exception {
+        useContentReuse(contentReuse);
+        execute("DELETE FROM \"records\"");
+        assertThat(jobs.refresh("catalog", true).submittedRows()).isZero();
+        var repository = jobs.repository("catalog");
+        String active = redis.get(namespace + ":{snapshot:catalog}:active");
+        assertThat(active).isNotNull();
+        assertThat(repository.findById("a")).isEmpty();
+
+        execute("INSERT INTO \"records\" VALUES ('a','customer',1,'inserted')");
+        var result = jobs.refreshRoots("catalog", List.of("a"));
+        assertThat(result.status()).isEqualTo("COMPLETED");
+        assertThat(result.submittedRows()).isEqualTo(1);
+        assertThat(redis.get(namespace + ":{snapshot:catalog}:active")).isEqualTo(active);
+        assertThat(repository.findById("a").orElseThrow().payload()).isEqualTo("[\"inserted\"]");
+        assertThat(repository.findPage("customer", WindowRequest.first(10)).items())
+                .extracting(SnapshotValue::id)
+                .containsExactly("a");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void emptyFullGenerationSupportsPartialDeleteAndNoop(boolean contentReuse) throws Exception {
+        useContentReuse(contentReuse);
+        execute("DELETE FROM \"records\"");
+        assertThat(jobs.refresh("catalog", true).submittedRows()).isZero();
+        var repository = jobs.repository("catalog");
+        String active = redis.get(namespace + ":{snapshot:catalog}:active");
+        assertThat(active).isNotNull();
+
+        for (int attempt = 0; attempt < 2; attempt++) {
+            var result = jobs.refreshRoots("catalog", List.of("missing"));
+            assertThat(result.status()).isEqualTo("COMPLETED");
+            assertThat(result.loadedRows()).isEqualTo(1);
+            assertThat(result.submittedRows()).isZero();
+            assertThat(redis.get(namespace + ":{snapshot:catalog}:active")).isEqualTo(active);
+            assertThat(repository.findById("missing")).isEmpty();
+            assertThat(repository.findPage("customer", WindowRequest.first(10)).items()).isEmpty();
+        }
+    }
+
+    private void useContentReuse(boolean contentReuse) {
+        jobs.close();
+        var configured = new SnapshotPlan<>(
+                plan.name(), plan.roots(), plan.id(), plan.sources(), plan.valueType(),
+                plan.projection(), plan.indexSpec(), plan.rootScope(), contentReuse);
+        jobs = new SnapshotJobs(
+                sql, redis, new ObjectMapper(), Clock.systemUTC(), namespace,
+                List.of(configured), Map.of());
     }
 
     @Test void unicodeIdentifiersAndPartitionsProduceReusableBoundedCursors() throws Exception {

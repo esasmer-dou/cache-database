@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       gaRelease:
-        description: Run production GA preflight before publishing
+        description: Additionally require full Production GA evidence; stable 0.19+ source/workflow gates are always mandatory
         required: true
         default: "false"
       releaseTag:
-        description: Stable GA tag to verify when gaRelease is true; defaults to the workflow ref name
+        description: Stable publication tag; defaults to the workflow ref name and must match checked-out source
         required: false
         default: ""
       targetRef:
@@ -45,11 +45,16 @@ jobs:
           server-username: CENTRAL_USERNAME
           server-password: CENTRAL_PASSWORD
 
-      - name: Block GA publish unless readiness gates are green
-        if: ${{ inputs.gaRelease == 'true' }}
+      - name: Require stable publication source and workflow evidence
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLICATION_TAG: ${{ inputs.releaseTag }}
+          PUBLICATION_REF: ${{ github.ref_name }}
+          PUBLICATION_REPOSITORY: ${{ github.repository }}
+          PUBLICATION_TARGET: ${{ inputs.targetRef }}
+          PUBLICATION_COVERAGE: ${{ inputs.migrationCoverageCsvPath }}
+          PUBLICATION_FULL_GA: ${{ inputs.gaRelease }}
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -62,25 +67,55 @@ jobs:
           STAGING_MSSQL_USER: ${{ secrets.STAGING_MSSQL_USER }}
           STAGING_MSSQL_PASSWORD: ${{ secrets.STAGING_MSSQL_PASSWORD }}
         run: |
-          $releaseTag = "${{ inputs.releaseTag }}"
-          if ([string]::IsNullOrWhiteSpace($releaseTag)) {
-            $releaseTag = "${{ github.ref_name }}"
+          $ErrorActionPreference = 'Stop'
+          [xml]$pom = Get-Content -LiteralPath pom.xml -Raw
+          $version = [string]$pom.project.version
+          $stable = $version -match '^\d+\.\d+\.\d+$'
+          if (!$stable -and $env:PUBLICATION_FULL_GA -ne 'true') {
+            Write-Host 'Non-stable coordinates: stable release gate does not apply.'
+            return
           }
-          $targetRef = "${{ inputs.targetRef }}"
+          $releaseTag = $env:PUBLICATION_TAG
+          if ([string]::IsNullOrWhiteSpace($releaseTag)) {
+            $releaseTag = $env:PUBLICATION_REF
+          }
+          if ($releaseTag -notmatch '^v\d+\.\d+\.\d+$' -or $version -cne $releaseTag.Substring(1)) {
+            throw 'Stable publication requires the matching immutable release tag, not an arbitrary branch.'
+          }
+          $tagSha = git rev-parse --verify "refs/tags/$releaseTag^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'Publication tag does not exist.' }
+          $head = git rev-parse --verify HEAD
+          if ($LASTEXITCODE -ne 0 -or $head -ne $tagSha) { throw 'Publication HEAD differs from the release tag.' }
+          $dirty = git status --porcelain --untracked-files=all
+          if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Publication source must be clean.' }
+          # Old immutable releases cannot acquire new checker APIs or historical workflow requirements.
+          $legacy = [version]$version -lt [version]'0.19.0'
+          if ($legacy -and $env:PUBLICATION_FULL_GA -ne 'true') {
+            Write-Host 'Verified immutable pre-0.19 source; preserving legacy publication requirements.'
+            return
+          }
+          $targetRef = $env:PUBLICATION_TARGET
           if ([string]::IsNullOrWhiteSpace($targetRef)) {
             $targetRef = "main"
           }
-          ./tools/ci/check-ga-release-readiness.ps1 `
-            -Repository "${{ github.repository }}" `
-            -TargetRef $targetRef `
-            -ReleaseTag $releaseTag `
-            -CoverageCsvPath "${{ inputs.migrationCoverageCsvPath }}" `
-            -SummaryPath ./target/ga-release-readiness-summary.md `
-            -RequireMavenCentralPublish `
-            -SkipMavenCentralPublishCheck
+          $arguments = @{
+            Repository = $env:PUBLICATION_REPOSITORY
+            TargetRef = $targetRef
+            ReleaseTag = $releaseTag
+            CoverageCsvPath = $env:PUBLICATION_COVERAGE
+            SummaryPath = './target/ga-release-readiness-summary.md'
+            RequireMavenCentralPublish = $true
+          }
+          if ($legacy) {
+            $arguments.SkipMavenCentralPublishCheck = $true
+          } else {
+            $arguments.PrePublication = $true
+            $arguments.EvidenceScope = if ($env:PUBLICATION_FULL_GA -eq 'true') { 'ProductionGA' } else { 'FrameworkPackage' }
+          }
+          ./tools/ci/check-ga-release-readiness.ps1 @arguments
 
       - name: Publish GA preflight summary
-        if: ${{ always() && inputs.gaRelease == 'true' }}
+        if: always()
         shell: pwsh
         run: |
           if (Test-Path ./target/ga-release-readiness-summary.md) {
@@ -88,7 +123,7 @@ jobs:
           }
 
       - name: Upload GA preflight summary
-        if: ${{ always() && inputs.gaRelease == 'true' }}
+        if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
           name: ga-release-preflight

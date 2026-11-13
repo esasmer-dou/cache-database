@@ -2,10 +2,10 @@
 
 ## Declarative Catalog Scenarios
 
-These scenarios use **CacheDB 0.18.1**. Existing commerce,
+These scenarios use **CacheDB 0.19.0**. Existing commerce,
 support, logistics and archive routes are unchanged. Unlike a release-note link,
-the classes below are actual sample sources, compiled and tested for all three
-providers. Each complete Java block belongs at the path printed above it.
+the classes below are actual sample sources. Each complete Java block matches
+the file at the path printed above it.
 
 ### What Changed in 0.15
 
@@ -112,10 +112,10 @@ puts low-stock items first; equal quantities use the textual product ID order.
 
 The sample explicitly pins Gson **2.13.2**, because the Spring Boot parent can
 otherwise select an older Gson without `Strictness`. The POM includes
-`cachedb-json`, the annotation dependency and the 0.18.1 processor. Do not remove
+`cachedb-json`, the annotation dependency and the 0.19.0 processor. Do not remove
 the Gson override or mix framework versions.
 
-With the 0.18.1 BOM and annotation processor already configured, these are the
+With the 0.19.0 BOM and annotation processor already configured, these are the
 additional runtime dependencies used by the compiled sample:
 
 ```xml
@@ -326,8 +326,9 @@ Run all **23 requests** in order; no demo seed is required after schema setup.
 They assert import durability (retrying only the identical delivery if the
 initial bounded wait returns pending), identical replay, changed-payload rejection,
 snapshot publication, Unicode/decimal data, single-generation reads, pagination
-and invalid-input responses. The existing 61-request business collection remains
-separate. Neither collection asserts a 50 ms REST SLA.
+and invalid-input responses. The separate business collection preserves its
+61-request legacy flow and adds 23 method-cache/async requests (84 total).
+Neither collection asserts a 50 ms REST SLA.
 
 ```powershell
 npx --yes newman@6.2.1 run postman/cache-database-{{PROVIDER}}-catalog.postman_collection.json --env-var baseUrl=$base
@@ -339,16 +340,17 @@ remains a framework infrastructure capability: the local Compose recipe uses
 standalone Redis and does not claim a Cluster/HA topology test. All JSON/role
 changes are explicit opt-ins, not transparent ORM fallback.
 
-For an isolated command-line run, install Node.js/npm and PowerShell 7, build the
+For an isolated command-line run, install Node.js/npm and PowerShell 7.3+, build the
 JAR, then run `./scripts/test-catalog-postman.ps1`. It starts disposable provider
-fixtures and the JAR on a free local port, executes the saved collection with
-Newman, exports JSON/JUnit reports under `target/catalog-postman`, and removes
+fixtures and the JAR on a free local port, executes catalog (23), controls (40)
+and business (84) collections with Newman, exports JSON/JUnit reports under
+`target/catalog-postman` and `target/v019-postman`, and removes
 only its own test project and volumes. Never point this script at production.
 Pass `-SplitRoles` to bootstrap the local schema, stop the bootstrap JVM, and run
 the same collection against one API container plus **two worker containers**.
 The sample CI uses this mode; container logs are included in the test evidence.
 
-The separate 61-request business collection automatically polls the saved job
+The 61-request legacy part of the business collection automatically polls the saved job
 status request after each accepted background command, then resumes its original
 sequence. Polling stops after 30 seconds or 150 attempts. Every business response
 has an HTTP assertion; a failed job stops the flow instead of racing the next

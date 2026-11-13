@@ -5,6 +5,7 @@ import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheDeleteCommand;
 import com.reactor.cachedb.annotations.CacheDomain;
 import com.reactor.cachedb.annotations.CacheEntity;
+import com.reactor.cachedb.annotations.CacheEncrypted;
 import com.reactor.cachedb.annotations.CacheFetchPreset;
 import com.reactor.cachedb.annotations.CacheGeneratedId;
 import com.reactor.cachedb.annotations.CacheId;
@@ -48,7 +49,9 @@ import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import javax.tools.StandardLocation;
 
-@SupportedAnnotationTypes("com.reactor.cachedb.annotations.CacheEntity")
+@SupportedAnnotationTypes({"com.reactor.cachedb.annotations.CacheEntity",
+        "com.reactor.cachedb.annotations.CacheEncrypted", "com.reactor.cachedb.annotations.CacheProjectionRecord",
+        "com.reactor.cachedb.annotations.CacheRetention"})
 public final class CacheEntityProcessor extends AbstractProcessor {
 
     private static final String CACHE_DATABASE_TYPE = "com.reactor.cachedb.starter.CacheDatabase";
@@ -102,6 +105,11 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             return true;
         }
         Map<String, List<EntityModel>> roundPackageEntityModels = new LinkedHashMap<>();
+        if (!validateEncryptedTargets(roundEnv)) return false;
+        for (Element element : roundEnv.getElementsAnnotatedWith(com.reactor.cachedb.annotations.CacheRetention.class)) {
+            if (element.getAnnotation(CacheEntity.class) == null)
+                messager.printMessage(Diagnostic.Kind.ERROR, "@CacheRetention requires @CacheEntity", element);
+        }
         for (Element element : roundEnv.getElementsAnnotatedWith(CacheEntity.class)) {
             if (element.getKind() != ElementKind.CLASS && element.getKind() != ElementKind.RECORD) {
                 messager.printMessage(Diagnostic.Kind.ERROR, "@CacheEntity can only be used on classes or records", element);
@@ -130,7 +138,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
             }
             generatedRegistrarClassNames.add(entry.getKey() + ".GeneratedCacheBindingsRegistrar");
         }
-        return true;
+        return false; // Do not claim projection annotations used by the sibling processor.
     }
 
     private EntityModel buildEntityModel(TypeElement typeElement) {
@@ -296,7 +304,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 if (columnName == null) return null;
                 FieldModel fieldModel = new FieldModel(
                         component.getSimpleName().toString(), component.asType().toString(), columnName,
-                        cacheId != null, isEnumType(component), extractCodecTypeName(cacheCodec)
+                        cacheId != null, isEnumType(component), extractCodecTypeName(cacheCodec), encryption(component)
                 );
                 if (!isSupportedType(fieldModel.typeName(), fieldModel.enumType(), fieldModel.codecTypeName() != null)) {
                     messager.printMessage(Diagnostic.Kind.ERROR,
@@ -379,7 +387,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                     columnName,
                     cacheId != null,
                     isEnumType(field),
-                    extractCodecTypeName(cacheCodec)
+                    extractCodecTypeName(cacheCodec), encryption(field)
             );
 
             if (!isSupportedType(fieldModel.typeName(), fieldModel.enumType(), fieldModel.codecTypeName() != null)) {
@@ -437,7 +445,12 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
         java.util.Set<String> indexedColumns = new java.util.LinkedHashSet<>();
         Map<String, List<String>> compositeIndexes;
-        try { compositeIndexes = compositeIndexes(typeElement, persistedFields); }
+        Map<String, String> compositeSortColumns;
+        try {
+            compositeIndexes = compositeIndexes(typeElement, persistedFields);
+            if (!validateEncryptedCompositeColumns(typeElement, persistedFields, compositeIndexes)) return null;
+            compositeSortColumns = compositeSortColumns(typeElement, persistedFields);
+        }
         catch (IllegalArgumentException invalid) {
             messager.printMessage(Diagnostic.Kind.ERROR, invalid.getMessage(), typeElement); return null;
         }
@@ -459,6 +472,11 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         }
 
         compositeIndexes.values().forEach(indexedColumns::addAll);
+        indexedColumns.addAll(compositeSortColumns.values());
+        if (!validateEncryption(typeElement, persistedFields, idField, versionColumn, deletedColumn, indexedColumns,
+                compositeIndexes, compositeSortColumns, partitionedSortIndexes, projections, namedQueries)) return null;
+        if (!validateProtectionMetadata(typeElement, persistedFields, indexedColumns, cacheEntity.tenantPurgeEnabled()))
+            return null;
         LoaderModel relationLoader = resolveLoaderModel(typeElement, relationLoaderTypeName, RELATION_BATCH_LOADER_TYPE, "relationLoader");
         if (relationLoaderTypeName != null && relationLoader == null) {
             return null;
@@ -664,6 +682,9 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 return null;
             }
             String partitionColumn = persistedColumn(mappedField);
+            if (mappedField.getAnnotation(CacheEncrypted.class) != null) {
+                encryptionError(relationField, "encrypted mappedBy relation keys are forbidden"); return null;
+            }
             if (partitionColumn == null) {
                 messager.printMessage(
                         Diagnostic.Kind.ERROR,
@@ -829,6 +850,11 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 return null;
             }
             sorts.add(new RelationSortModel(column, parts.length == 2 && "DESC".equalsIgnoreCase(parts[1])));
+            for (Element member : targetType.getEnclosedElements())
+                if (member instanceof VariableElement candidate && member.getAnnotation(CacheEncrypted.class) != null
+                        && column.equals(persistedColumn(candidate))) {
+                    encryptionError(relationField, "encrypted relation sort fields are forbidden"); return null;
+                }
         }
         return List.copyOf(sorts);
     }
@@ -1693,7 +1719,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    public static final com.reactor.cachedb.core.model.SourceMapping<").append(entityName)
                 .append("> SOURCE = com.reactor.cachedb.core.model.SourceMapping.entity(METADATA, CODEC);\n\n");
         for (FieldModel field : model.persistedFields()) {
-            if (field.codecTypeName() != null) {
+            if (field.codecTypeName() != null && !hasEncryption(model)) {
                 builder.append("    private static final ").append(field.codecTypeName()).append(" ")
                         .append(field.fieldName().toUpperCase()).append("_CODEC = new ")
                         .append(field.codecTypeName()).append("();\n");
@@ -1705,7 +1731,15 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    private ").append(model.bindingName()).append("() {\n");
         builder.append("    }\n\n");
 
+        builder.append("    public static com.reactor.cachedb.core.model.SourceMapping<").append(entityName)
+                .append("> sourceMapping(CacheSession session) { return session.sourceMapping(METADATA, CODEC); }\n");
         renderWithIdHelper(builder, model);
+        if (hasEncryption(model)) {
+            builder.append("    public static EntityCodec<").append(entityName)
+                    .append("> codec(com.reactor.cachedb.core.crypto.CacheKeyProvider provider) { return CODEC.bindEncryption(provider); }\n")
+                    .append("    public static com.reactor.cachedb.core.model.SourceMapping<").append(entityName)
+                    .append("> source(com.reactor.cachedb.core.crypto.CacheKeyProvider provider) { return com.reactor.cachedb.core.model.SourceMapping.entity(METADATA, codec(provider)); }\n");
+        }
         builder.append('\n');
 
         renderTypedColumns(builder, model);
@@ -2161,8 +2195,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         return lower != 'a' && lower != 'e' && lower != 'i' && lower != 'o' && lower != 'u';
     }
 
-    private void renderMetadata(StringBuilder builder, EntityModel model) {
-        var element = processingEnv.getElementUtils().getTypeElement(model.packageName() + "." + model.simpleName());
+    private java.util.Set<String> tenantFieldNames(TypeElement element) {
         var tenantNames = new java.util.LinkedHashSet<String>();
         if (element != null) for (var member : element.getEnclosedElements()) {
             if (member.getAnnotation(com.reactor.cachedb.annotations.CacheTenantId.class) == null) continue;
@@ -2171,8 +2204,53 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 name = Character.toLowerCase(name.charAt(3)) + name.substring(4);
             tenantNames.add(name);
         }
-        FieldModel tenant = tenantNames.size() == 1 ? model.persistedFields().stream()
+        return tenantNames;
+    }
+
+    private FieldModel tenantField(java.util.Set<String> tenantNames, List<FieldModel> fields) {
+        return tenantNames.size() == 1 ? fields.stream()
                 .filter(field -> tenantNames.contains(field.fieldName())).findFirst().orElse(null) : null;
+    }
+
+    private FieldModel retentionField(TypeElement element, List<FieldModel> fields) {
+        var retention = element.getAnnotation(com.reactor.cachedb.annotations.CacheRetention.class);
+        if (retention == null) return null;
+        return fields.stream().filter(field -> retention.field().equals(field.fieldName())
+                || retention.field().equals(field.columnName())).findFirst().orElse(null);
+    }
+
+    private boolean validateProtectionMetadata(TypeElement element, List<FieldModel> fields,
+            java.util.Set<String> indexes, boolean purge) {
+        if (purge) {
+            var tenant = tenantField(tenantFieldNames(element), fields);
+            if (tenant == null || tenant.idField() || !tenant.typeName().equals("java.lang.String")
+                    || !indexes.contains(tenant.columnName())) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "tenantPurgeEnabled requires exactly one persisted indexed non-ID String @CacheTenantId", element);
+                return false;
+            }
+        }
+        var retention = element.getAnnotation(com.reactor.cachedb.annotations.CacheRetention.class);
+        if (retention == null) return true;
+        FieldModel field = retentionField(element, fields);
+        if (field == null || !indexes.contains(field.columnName()) || field.codecTypeName() != null
+                || !java.util.Set.of("java.time.LocalDate", "java.time.Instant", "java.time.LocalDateTime",
+                        "java.time.OffsetDateTime").contains(field.typeName())) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@CacheRetention requires a persisted indexed temporal field (LocalDate, Instant, LocalDateTime or OffsetDateTime)", element);
+            return false;
+        }
+        if (retention.days() < 1 || retention.days() > 36_500) {
+            messager.printMessage(Diagnostic.Kind.ERROR, "@CacheRetention.days must be between 1 and 36500", element);
+            return false;
+        }
+        return true;
+    }
+
+    private void renderMetadata(StringBuilder builder, EntityModel model) {
+        var element = processingEnv.getElementUtils().getTypeElement(model.packageName() + "." + model.simpleName());
+        var tenantNames = tenantFieldNames(element);
+        FieldModel tenant = tenantField(tenantNames, model.persistedFields());
         if (!tenantNames.isEmpty() && (tenant == null || !tenant.typeName().equals("java.lang.String") || tenant.idField()))
             messager.printMessage(Diagnostic.Kind.ERROR, "@CacheTenantId requires exactly one persisted non-ID String field", element);
         var schema = element == null ? null : element.getAnnotation(com.reactor.cachedb.annotations.CacheSchemaVersion.class);
@@ -2197,6 +2275,19 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         if (near != null) builder.append("        public com.reactor.cachedb.core.cache.NearCachePolicy nearCachePolicy() { return NEAR_POLICY; }\n");
         if (element != null) {
             var indexes = compositeIndexes(element, model.persistedFields());
+            var compositeSorts = compositeSortColumns(element, model.persistedFields());
+            if (!compositeSorts.isEmpty()) {
+                builder.append("        public java.util.Map<String, String> compositeSortColumns() { return COMPOSITE_SORTS; }\n")
+                        .append("        private static final java.util.Map<String, String> COMPOSITE_SORTS = java.util.Map.ofEntries(");
+                boolean firstSort = true;
+                for (var sort : compositeSorts.entrySet()) {
+                    if (!firstSort) builder.append(", ");
+                    firstSort = false;
+                    builder.append("java.util.Map.entry(").append(javaStringLiteral(sort.getKey())).append(", ")
+                            .append(javaStringLiteral(sort.getValue())).append(")");
+                }
+                builder.append(");\n");
+            }
             if (!indexes.isEmpty()) {
                 builder.append("        public java.util.Map<String, java.util.List<String>> compositeExactIndexes() { return COMPOSITE_INDEXES; }\n")
                         .append("        private static final java.util.Map<String, java.util.List<String>> COMPOSITE_INDEXES = java.util.Map.ofEntries(");
@@ -2215,10 +2306,26 @@ public final class CacheEntityProcessor extends AbstractProcessor {
                 .append(" entity) { return ").append(accessExpression(model, tenant)).append("; }\n");
         var declaration = element == null ? null : element.getAnnotation(CacheEntity.class);
         if (declaration != null) {
+            if (declaration.tenantPurgeEnabled())
+                builder.append("        public boolean tenantPurgeEnabled() { return true; }\n");
             if (declaration.compressionThresholdBytes() < 0 || declaration.compressionThresholdBytes() > 16 * 1024 * 1024)
                 messager.printMessage(Diagnostic.Kind.ERROR, "Invalid compressionThresholdBytes", element);
             builder.append("        public int compressionThresholdBytes() { return ")
                     .append(declaration.compressionThresholdBytes()).append("; }\n");
+        }
+        var retention = element == null ? null : element.getAnnotation(com.reactor.cachedb.annotations.CacheRetention.class);
+        if (retention != null) {
+            FieldModel field = retentionField(element, model.persistedFields());
+            String policy = "com.reactor.cachedb.core.retention.RetentionPolicy";
+            builder.append("        private static final java.util.Optional<").append(policy)
+                    .append("> RETENTION_POLICY = java.util.Optional.of(new ").append(policy).append("(")
+                    .append(javaStringLiteral(field.columnName())).append(", ").append(retention.days()).append(", ")
+                    .append(policy).append(".Action.").append(retention.action().name()).append(", ")
+                    .append(policy).append(".ScoreUnit.")
+                    .append(field.typeName().equals("java.time.LocalDate") ? "EPOCH_DAY" : "EPOCH_MILLIS")
+                    .append("));\n")
+                    .append("        public java.util.Optional<").append(policy)
+                    .append("> retentionPolicy() { return RETENTION_POLICY; }\n");
         }
         if (schema != null) {
             builder.append("        public int schemaVersion() { return ").append(schema.version()).append("; }\n")
@@ -2285,11 +2392,27 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         appendQuotedList(builder, List.copyOf(indexed));
         builder.append(");\n");
         builder.append("        private static final Map<String, String> COLUMN_TYPES = createColumnTypes();\n");
+        if (hasEncryption(model)) {
+            builder.append("        public Map<String, com.reactor.cachedb.core.crypto.EncryptedColumnDescriptor> encryptedColumns() { return ENCRYPTED; }\n")
+                    .append("        private static final Map<String, com.reactor.cachedb.core.crypto.EncryptedColumnDescriptor> ENCRYPTED = Map.ofEntries(");
+            boolean firstEncrypted = true;
+            for (FieldModel field : model.persistedFields()) if (field.encryption() != null) {
+                if (!firstEncrypted) builder.append(", ");
+                firstEncrypted = false;
+                builder.append("Map.entry(").append(javaStringLiteral(field.columnName()))
+                        .append(", new com.reactor.cachedb.core.crypto.EncryptedColumnDescriptor(")
+                        .append(javaStringLiteral(field.encryption().keyRing()))
+                        .append(", com.reactor.cachedb.core.crypto.EncryptedColumnDescriptor.Scope.")
+                        .append(field.encryption().scope()).append(", ").append(field.encryption().blindIndex()).append("))");
+            }
+            builder.append(");\n");
+        }
         builder.append("        private static Map<String, String> createColumnTypes() {\n");
         builder.append("            LinkedHashMap<String, String> columnTypes = new LinkedHashMap<>();\n");
         for (FieldModel field : model.persistedFields()) {
             builder.append("            columnTypes.put(").append(javaStringLiteral(field.columnName())).append(", ")
-                    .append(javaStringLiteral(columnTypeName(field))).append(");\n");
+                    .append(javaStringLiteral(field.encryption() != null && field.encryption().scope().equals("REDIS_AND_SOURCE")
+                            ? "java.lang.String" : columnTypeName(field))).append(");\n");
         }
         builder.append("            return java.util.Collections.unmodifiableMap(columnTypes);\n");
         builder.append("        }\n\n");
@@ -2333,7 +2456,466 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("    }\n");
     }
 
+    private EncryptionModel encryption(Element element) {
+        CacheEncrypted annotation = element.getAnnotation(CacheEncrypted.class);
+        return annotation == null ? null : new EncryptionModel(annotation.keyRing(), annotation.scope().name(), annotation.blindIndex());
+    }
+
+    private boolean hasEncryption(EntityModel model) {
+        return model.persistedFields().stream().anyMatch(field -> field.encryption() != null);
+    }
+
+    private boolean encryptionError(Element element, String message) {
+        messager.printMessage(Diagnostic.Kind.ERROR, "F-3 encryption: " + message, element);
+        return false;
+    }
+
+    private boolean validateEncryptedTargets(RoundEnvironment round) {
+        boolean valid = true;
+        for (Element member : round.getElementsAnnotatedWith(CacheEncrypted.class)) {
+            if (!(member.getEnclosingElement() instanceof TypeElement owner) || owner.getAnnotation(CacheEntity.class) == null) {
+                valid = encryptionError(member, "@CacheEncrypted requires an enclosing @CacheEntity"); continue;
+            }
+            if (owner.getKind() == ElementKind.RECORD) {
+                var component = owner.getRecordComponents().stream()
+                        .filter(value -> value.getSimpleName().contentEquals(member.getSimpleName())).findFirst().orElse(null);
+                if (component == null || encryption(component) == null || !encryption(component).equals(encryption(member))) {
+                    valid = encryptionError(member, "annotate the persisted record component, not an accessor or static field");
+                }
+                continue;
+            }
+            if (member.getKind() != ElementKind.FIELD || member.getModifiers().contains(Modifier.STATIC)
+                    || member.getAnnotation(CacheColumn.class) == null && member.getAnnotation(CacheId.class) == null
+                    && member.getAnnotation(CacheVersion.class) == null && member.getAnnotation(CacheSoftDelete.class) == null) {
+                valid = encryptionError(member, "@CacheEncrypted supports persisted instance fields, not accessors or transient fields");
+            }
+        }
+        for (Element projection : round.getElementsAnnotatedWith(com.reactor.cachedb.annotations.CacheProjectionRecord.class)) {
+            TypeMirror source;
+            try {
+                TypeElement sourceType = processingEnv.getElementUtils().getTypeElement(projection.getAnnotation(
+                        com.reactor.cachedb.annotations.CacheProjectionRecord.class).source().getCanonicalName());
+                source = sourceType == null ? null : sourceType.asType();
+            } catch (MirroredTypeException mirror) { source = mirror.getTypeMirror(); }
+            Element owner = source == null ? null : processingEnv.getTypeUtils().asElement(source);
+            if (owner instanceof TypeElement type && type.getEnclosedElements().stream().anyMatch(value -> encryption(value) != null)) {
+                valid = encryptionError(projection, "projections of encrypted entities require an explicitly protected projection codec and are unsupported");
+            }
+        }
+        return valid;
+    }
+
+    private boolean validateEncryption(TypeElement owner, List<FieldModel> fields, FieldModel id,
+            String version, String deleted, Set<String> indexed, Map<String, List<String>> composites,
+            Map<String, String> compositeSorts, Map<String, List<String>> partitions,
+            List<ProjectionModel> projections, List<NamedQueryModel> namedQueries) {
+        long encrypted = fields.stream().filter(field -> field.encryption() != null).count();
+        if (encrypted == 0) return true;
+        String namespace = owner.getAnnotation(CacheEntity.class).redisNamespace();
+        if (namespace.isBlank()) namespace = owner.getSimpleName().toString();
+        if (namespace.length() > 1024) return encryptionError(owner, "encrypted namespace exceeds its fixed AAD budget");
+        var physicalColumns = fields.stream().map(FieldModel::columnName).collect(java.util.stream.Collectors.toSet());
+        if (version != null && !version.isBlank()) physicalColumns.add(version);
+        if (deleted != null && !deleted.isBlank()) physicalColumns.add(deleted);
+        if (encrypted > 32 || physicalColumns.size() > 128)
+            return encryptionError(owner, "at most 32 encrypted and 128 physical columns including framework columns are supported");
+        if (id.codecTypeName() != null) return encryptionError(owner, "custom ID codecs are unsupported for encrypted entities");
+        if (!projections.isEmpty() || !namedQueries.isEmpty()) return encryptionError(owner,
+                "opaque projection and named-query factories are unsupported for encrypted entities; use validated repository queries");
+        for (FieldModel field : fields) {
+            EncryptionModel protection = field.encryption();
+            boolean tenant = owner.getEnclosedElements().stream().anyMatch(member -> {
+                String name = member.getSimpleName().toString();
+                if (member.getKind() == ElementKind.METHOD && name.startsWith("get") && name.length() > 3)
+                    name = Character.toLowerCase(name.charAt(3)) + name.substring(4);
+                return member.getAnnotation(com.reactor.cachedb.annotations.CacheTenantId.class) != null && name.equals(field.fieldName());
+            });
+            if (tenant && field.codecTypeName() != null) return encryptionError(owner, "custom tenant codecs are unsupported for encrypted entities");
+            if (protection == null) continue;
+            if (field.idField() || tenant || field.columnName().equals(version) || field.columnName().equals(deleted))
+                return encryptionError(owner, "ID, tenant, version and soft-delete columns cannot be encrypted");
+            if (!protection.keyRing().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+                return encryptionError(owner, "invalid key-ring name");
+            if (field.typeName().contains("<") || field.typeName().contains("[")
+                    || field.codecTypeName() != null && boxedTypeName(field.typeName()).equals(field.typeName())
+                    && processingEnv.getElementUtils().getTypeElement(field.typeName()) == null)
+                return encryptionError(owner, "encrypted generic, array and type-variable fields are unsupported");
+            if (!protection.blindIndex() && indexed.contains(field.columnName()))
+                return encryptionError(owner, "encrypted columns cannot be indexed without blindIndex=true; replace wildcard indexedColumns explicitly");
+            if (composites.values().stream().anyMatch(columns -> columns.contains(field.columnName()))
+                    || compositeSorts.containsValue(field.columnName()) || partitions.containsKey(field.columnName())
+                    || partitions.values().stream().anyMatch(columns -> columns.contains(field.columnName())))
+                return encryptionError(owner, "encrypted columns cannot be composite prefixes/sorts or partition keys/sorts, even with a blind index");
+            if (protection.blindIndex()) indexed.add(field.columnName());
+        }
+        return true;
+    }
+
+    private FieldModel encryptedTenant(EntityModel model) {
+        TypeElement type = processingEnv.getElementUtils().getTypeElement(model.packageName() + "." + model.simpleName());
+        for (Element member : type.getEnclosedElements()) {
+            if (member.getAnnotation(com.reactor.cachedb.annotations.CacheTenantId.class) == null) continue;
+            String name = member.getSimpleName().toString();
+            if (member.getKind() == ElementKind.METHOD && name.startsWith("get") && name.length() > 3)
+                name = Character.toLowerCase(name.charAt(3)) + name.substring(4);
+            for (FieldModel field : model.persistedFields()) if (field.fieldName().equals(name)) return field;
+        }
+        return null;
+    }
+
+    private boolean validateEncryptedCompositeColumns(TypeElement owner, List<FieldModel> fields, Map<String,List<String>> composites) {
+        for (FieldModel field : fields) if (field.encryption() != null) {
+            if (composites.values().stream().anyMatch(columns -> columns.contains(field.columnName())))
+                return encryptionError(owner, "encrypted composite prefixes are forbidden");
+            for (var index : owner.getAnnotationsByType(com.reactor.cachedb.annotations.CacheCompositeIndex.class))
+                if (index.sortBy().equals(field.fieldName()) || index.sortBy().equals(field.columnName()))
+                    return encryptionError(owner, "encrypted composite sort columns are forbidden");
+        }
+        return true;
+    }
+
+    private void encryptedStart(StringBuilder out, String signature) {
+        out.append("        public ").append(signature).append(" {\n            requireEncryption();\n            try {\n");
+    }
+
+    private void encryptedEnd(StringBuilder out) {
+        out.append("            } catch (com.reactor.cachedb.core.crypto.CacheEncryptionException failure) { throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(failure.code()); }\n")
+                .append("            catch (RuntimeException failure) { throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue(); }\n        }\n");
+    }
+
+    private void encryptedContext(StringBuilder out, EntityModel model, String source) {
+        FieldModel id = model.idField(), tenant = encryptedTenant(model);
+        if (!source.equals("entity")) {
+            String raw = source.equals("redis") ? "value" + model.persistedFields().indexOf(id)
+                    : "columnValue(columns, " + javaStringLiteral(id.columnName()) + ")";
+            out.append("                ").append(id.typeName()).append(" aadIdValue = ")
+                    .append(source.equals("redis") ? fromStringExpression(raw, id) : fromColumnExpression(raw, id)).append(";\n");
+        }
+        out.append("                String rowId = com.reactor.cachedb.core.crypto.EncryptedCodecSupport.rowId(")
+                .append(toStringExpression(source.equals("entity") ? accessExpression(model, id) : "aadIdValue", id)).append(");\n");
+        out.append("                String namespace = ");
+        if (tenant == null) out.append(javaStringLiteral(model.redisNamespace()));
+        else {
+            String raw = source.equals("entity") ? accessExpression(model, tenant) : source.equals("redis")
+                    ? "value" + model.persistedFields().indexOf(tenant)
+                    : "(String) columnValue(columns, " + javaStringLiteral(tenant.columnName()) + ")";
+            out.append("com.reactor.cachedb.core.crypto.EncryptedCodecSupport.tenantNamespace(")
+                    .append(javaStringLiteral(model.redisNamespace())).append(", ").append(raw).append(")");
+        }
+        out.append(";\n");
+    }
+
+    private String encryptedExpression(EntityModel model, FieldModel field, String raw, boolean decrypt) {
+        return "encryption." + (decrypt ? "decrypt" : "encrypt") + "(" + javaStringLiteral(field.encryption().keyRing())
+                + ", namespace, rowId, " + javaStringLiteral(field.columnName()) + ", " + raw + ")";
+    }
+
+    private void encryptedHydrate(StringBuilder out, EntityModel model, boolean redis, boolean logical) {
+        for (int index = 0; index < model.persistedFields().size(); index++) {
+            FieldModel field = model.persistedFields().get(index);
+            if (field.encryption() == null || !redis && (logical || !field.encryption().scope().equals("REDIS_AND_SOURCE"))) continue;
+            String raw = redis ? "value" + index : "com.reactor.cachedb.core.crypto.EncryptedCodecSupport.sourceEnvelope(columnValue(columns, "
+                    + javaStringLiteral(field.columnName()) + "))";
+            out.append("                String clear").append(index).append(" = ").append(encryptedExpression(model, field, raw, true)).append(";\n");
+        }
+        if (model.recordType()) out.append("                return new ").append(model.simpleName()).append("(\n");
+        else out.append("                ").append(model.simpleName()).append(" entity = new ").append(model.simpleName()).append("();\n");
+        for (int index = 0; index < model.persistedFields().size(); index++) {
+            FieldModel field = model.persistedFields().get(index);
+            String raw = redis ? "value" + index : "columnValue(columns, " + javaStringLiteral(field.columnName()) + ")";
+            String expression;
+            if (field.encryption() != null && (redis || !logical && field.encryption().scope().equals("REDIS_AND_SOURCE"))) {
+                expression = fromStringExpression("clear" + index, field);
+            } else expression = redis ? fromStringExpression(raw, field) : fromColumnExpression(raw, field);
+            if (model.recordType()) out.append("                    ").append(expression)
+                    .append(index == model.persistedFields().size() - 1 ? "\n                );\n" : ",\n");
+            else out.append("                entity.").append(field.fieldName()).append(" = ").append(expression).append(";\n");
+        }
+        if (!model.recordType()) out.append("                return entity;\n");
+    }
+
+    private void renderEncryptedCodec(StringBuilder out, EntityModel model) {
+        String entity = model.simpleName();
+        out.append("    private static final class Codec implements EntityCodec<").append(entity).append("> {\n")
+                .append("        private final com.reactor.cachedb.core.crypto.JcaFieldEncryption encryption;\n");
+        for (FieldModel field : model.persistedFields()) if (field.codecTypeName() != null)
+            out.append("        private final ").append(field.codecTypeName()).append(' ').append(field.fieldName().toUpperCase()).append("_CODEC;\n");
+        out.append("        private Codec() { encryption = null;\n");
+        for (FieldModel field : model.persistedFields()) if (field.codecTypeName() != null)
+            out.append("            ").append(field.fieldName().toUpperCase()).append("_CODEC = null;\n");
+        out.append("        }\n        private Codec(com.reactor.cachedb.core.crypto.CacheKeyProvider provider) {\n            try {\n")
+                .append("                encryption = com.reactor.cachedb.core.crypto.EncryptedCodecSupport.bind(provider, java.util.Set.of(");
+        appendQuotedList(out, model.persistedFields().stream().filter(field -> field.encryption() != null)
+                .map(field -> field.encryption().keyRing()).distinct().sorted().toList());
+        out.append("));\n");
+        for (FieldModel field : model.persistedFields()) if (field.codecTypeName() != null)
+            out.append("                ").append(field.fieldName().toUpperCase()).append("_CODEC = new ").append(field.codecTypeName()).append("();\n");
+        out.append("            } catch (com.reactor.cachedb.core.crypto.CacheEncryptionException failure) { throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(failure.code()); }\n")
+                .append("            catch (RuntimeException failure) { throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.unbound(); }\n        }\n")
+                .append("        private void requireEncryption() { if (encryption == null) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.unbound(); }\n")
+                .append("        public EntityCodec<").append(entity).append("> bindEncryption(com.reactor.cachedb.core.crypto.CacheKeyProvider provider) { return new Codec(provider); }\n")
+                .append("        public boolean encryptionBound() { return encryption != null; }\n")
+                .append("        public boolean encryptedMapping() { return true; }\n")
+                .append("        public boolean directColumnAccess() { return true; }\n");
+        encryptedStart(out, "String toRedisValue(" + entity + " entity)");
+        encryptedContext(out, model, "entity");
+        out.append("                StringBuilder payload = new StringBuilder();\n");
+        for (FieldModel field : model.persistedFields()) {
+            String value = toStringExpression(accessExpression(model, field), field);
+            if (field.encryption() != null) value = encryptedExpression(model, field, value, false);
+            out.append("                LengthPrefixedPayloadCodec.appendField(payload, ")
+                    .append(javaStringLiteral(field.columnName().length() + ":" + field.columnName())).append(", ").append(value).append(");\n");
+        }
+        out.append("                return payload.toString();\n");
+        encryptedEnd(out);
+        encryptedStart(out, entity + " fromRedisValue(String encoded)");
+        for (int i = 0; i < model.persistedFields().size(); i++) out.append("                String value").append(i).append(" = null;\n");
+        out.append("                boolean[] seen = new boolean[").append(model.persistedFields().size()).append("];\n")
+                .append("                var cursor = LengthPrefixedPayloadCodec.cursor(encoded);\n")
+                .append("                while (cursor.next()) {\n                    String column = cursor.name();\n                    if (column == null) continue;\n                    switch (column) {\n");
+        for (int i = 0; i < model.persistedFields().size(); i++) {
+            out.append("                        case ").append(javaStringLiteral(model.persistedFields().get(i).columnName())).append(" -> {\n")
+                    .append("                            if (seen[").append(i).append("]) throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(com.reactor.cachedb.core.crypto.CacheEncryptionException.Code.INVALID_ENVELOPE);\n")
+                    .append("                            seen[").append(i).append("] = true; value").append(i).append(" = cursor.value();\n                        }\n");
+        }
+        out.append("                        default -> { }\n                    }\n                }\n");
+        encryptedContext(out, model, "redis");
+        encryptedHydrate(out, model, true, false);
+        encryptedEnd(out);
+        encryptedStart(out, "Map<String, Object> toColumns(" + entity + " entity)");
+        encryptedContext(out, model, "entity");
+        out.append("                Map<String, Object> columns = new LinkedHashMap<>();\n");
+        for (FieldModel field : model.persistedFields()) out.append("                columns.put(")
+                .append(javaStringLiteral(field.columnName())).append(", ").append(toColumnValueExpression(model, field)).append(");\n");
+        out.append("                return columns;\n");
+        encryptedEnd(out);
+        encryptedStart(out, "Map<String, Object> toSourceColumns(" + entity + " entity)");
+        encryptedContext(out, model, "entity");
+        out.append("                Map<String, Object> columns = new LinkedHashMap<>();\n");
+        for (FieldModel field : model.persistedFields()) {
+            String value = field.encryption() != null && field.encryption().scope().equals("REDIS_AND_SOURCE")
+                    ? encryptedExpression(model, field, toStringExpression(accessExpression(model, field), field), false)
+                    : toColumnValueExpression(model, field);
+            out.append("                columns.put(").append(javaStringLiteral(field.columnName())).append(", ").append(value).append(");\n");
+        }
+        out.append("                return columns;\n");
+        encryptedEnd(out);
+        encryptedStart(out, entity + " fromColumns(Map<String, Object> columns)");
+        encryptedContext(out, model, "columns");
+        encryptedHydrate(out, model, false, false);
+        encryptedEnd(out);
+        encryptedStart(out, entity + " fromLogicalColumns(Map<String, Object> columns)");
+        encryptedContext(out, model, "columns");
+        encryptedHydrate(out, model, false, true);
+        encryptedEnd(out);
+        encryptedStart(out, "Map<String, Object> toIndexColumns(" + entity + " entity)");
+        encryptedContext(out, model, "entity");
+        out.append("                Map<String, Object> columns = new LinkedHashMap<>();\n");
+        for (FieldModel field : model.persistedFields()) {
+            if (field.encryption() != null && !field.encryption().blindIndex()) continue;
+            String value = field.encryption() == null ? toColumnValueExpression(model, field)
+                    : "encryption.blindIndex(" + javaStringLiteral(field.encryption().keyRing()) + ", "
+                    + javaStringLiteral(model.redisNamespace()) + ", " + javaStringLiteral(field.columnName())
+                    + ", " + toStringExpression(accessExpression(model, field), field) + ")";
+            out.append("                columns.put(").append(javaStringLiteral(field.columnName())).append(", ").append(value).append(");\n");
+        }
+        out.append("                return columns;\n");
+        encryptedEnd(out);
+        encryptedStart(out, "Object indexQueryValue(String column, Object value)");
+        out.append("                return switch (column) {\n");
+        for (FieldModel field : model.persistedFields()) if (field.encryption() != null) {
+            out.append("                    case ").append(javaStringLiteral(field.columnName())).append(" -> {\n");
+            if (!field.encryption().blindIndex()) out.append("                        throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.unbound();\n");
+            else {
+                String boxed = boxedTypeName(field.typeName());
+                out.append("                        if (").append(boxed.equals(field.typeName()) ? "value != null && " : "value == null || ")
+                        .append("!(value instanceof ").append(boxed).append(")) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();\n")
+                        .append("                        yield encryption.blindIndex(").append(javaStringLiteral(field.encryption().keyRing())).append(", ")
+                        .append(javaStringLiteral(model.redisNamespace())).append(", ").append(javaStringLiteral(field.columnName())).append(", ")
+                        .append(toStringExpression("((" + boxed + ") value)", field)).append(");\n");
+            }
+            out.append("                    }\n");
+        }
+        for (FieldModel field : model.persistedFields()) if (field.encryption() == null)
+            out.append("                    case ").append(javaStringLiteral(field.columnName())).append(" -> value;\n");
+        out.append("                    default -> throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();\n                };\n");
+        encryptedEnd(out);
+        encryptedStart(out, "Object entityColumnValue(" + entity + " entity, String column)");
+        out.append("                if (column == null) return null;\n                return switch (column) {\n");
+        for (FieldModel field : model.persistedFields()) out.append("                    case ")
+                .append(javaStringLiteral(field.columnName())).append(" -> ").append(toColumnValueExpression(model, field)).append(";\n");
+        out.append("                    default -> null;\n                };\n");
+        encryptedEnd(out);
+        encryptedStart(out, "Map<String, Object> normalizePatchColumns(Map<String, Object> updates)");
+        out.append("                if (updates.size() > 128) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();\n")
+                .append("                Map<String, Object> result = new LinkedHashMap<>();\n")
+                .append("                for (var entry : updates.entrySet()) {\n                    Object raw = entry.getValue();\n                    Object normalized = switch (entry.getKey()) {\n");
+        for (FieldModel field : model.persistedFields()) {
+            out.append("                        case ").append(javaStringLiteral(field.columnName())).append(" -> {\n");
+            if (!boxedTypeName(field.typeName()).equals(field.typeName()))
+                out.append("                            if (raw == null) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();\n");
+            out.append("                            ").append(field.typeName()).append(" value = ").append(fromColumnExpression("raw", field)).append(";\n")
+                    .append("                            yield ").append(logicalLocalColumn(field, "value")).append(";\n                        }\n");
+        }
+        out.append("                        default -> throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();\n")
+                .append("                    };\n                    result.put(entry.getKey(), normalized);\n                }\n                return result;\n");
+        encryptedEnd(out);
+        renderEncryptedIntentCodec(out, model);
+        renderEncryptedQueueCodec(out, model);
+        out.append("    }\n");
+    }
+
+    private String logicalLocalColumn(FieldModel field, String value) {
+        if (field.codecTypeName() != null) {
+            String expression = field.fieldName().toUpperCase() + "_CODEC.toColumnValue(" + value + ")";
+            return field.encryption() != null && boxedTypeName(field.typeName()).equals(field.typeName())
+                    ? value + " == null ? null : " + expression : expression;
+        }
+        return field.enumType() ? value + " == null ? null : " + value + ".name()" : value;
+    }
+
+    private void renderEncryptedIntentCodec(StringBuilder out, EntityModel model) {
+        String ring = model.persistedFields().stream().filter(field -> field.encryption() != null)
+                .map(field -> field.encryption().keyRing()).sorted().findFirst().orElseThrow();
+        encryptedStart(out, "String encryptionIntentToken(" + model.simpleName() + " entity, java.util.Set<String> selected)");
+        encryptedContext(out, model, "entity");
+        out.append("                if (selected == null || selected.isEmpty() || !METADATA.columns().containsAll(selected)) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();\n")
+                .append("                var parts = new java.util.ArrayList<String>();\n")
+                .append("                parts.add(namespace); parts.add(rowId);\n");
+        for (FieldModel field : model.persistedFields().stream().sorted(java.util.Comparator.comparing(FieldModel::columnName)).toList()) {
+            String protection = field.encryption() == null ? "logical" : field.encryption().keyRing() + ":" + field.encryption().scope();
+            out.append("                if (selected.contains(").append(javaStringLiteral(field.columnName())).append(")) {\n")
+                    .append("                    parts.add(").append(javaStringLiteral(field.columnName())).append(");\n")
+                    .append("                    parts.add(").append(javaStringLiteral(field.typeName())).append(");\n")
+                    .append("                    parts.add(").append(javaStringLiteral(protection)).append(");\n")
+                    .append("                    parts.add(").append(toStringExpression(accessExpression(model, field), field)).append(");\n                }\n");
+        }
+        out.append("                return encryption.intentMac(").append(javaStringLiteral(ring)).append(", ")
+                .append(javaStringLiteral(model.redisNamespace())).append(", \"row\", parts);\n");
+        encryptedEnd(out);
+        encryptedStart(out, "String encryptionIntentFingerprint(java.util.List<String> parts)");
+        out.append("                return encryption.intentMac(").append(javaStringLiteral(ring)).append(", ")
+                .append(javaStringLiteral(model.redisNamespace())).append(", \"atomic\", parts);\n");
+        encryptedEnd(out);
+    }
+
+    private void renderEncryptedQueueCodec(StringBuilder out, EntityModel model) {
+        String entity = model.simpleName();
+        String support = "com.reactor.cachedb.core.crypto.EncryptedCodecSupport";
+        out.append("        public Map<String, Object> toQueuedColumns(").append(entity)
+                .append(" entity) { return toQueuedColumns(entity, toColumns(entity)); }\n");
+        encryptedStart(out, "Map<String, Object> toQueuedColumns(" + entity + " entity, Map<String, Object> assignments)");
+        encryptedContext(out, model, "entity");
+        out.append("                if (assignments.isEmpty() || assignments.size() > 128) throw ").append(support).append(".invalidValue();\n")
+                .append("                Map<String, Object> queued = new LinkedHashMap<>();\n")
+                .append("                for (var entry : assignments.entrySet()) {\n                    Object raw = entry.getValue();\n")
+                .append("                    if (raw instanceof com.reactor.cachedb.core.model.PatchDeltaSpec) throw ").append(support).append(".invalidValue();\n")
+                .append("                    Object stored = switch (entry.getKey()) {\n");
+        for (FieldModel field : model.persistedFields()) {
+            out.append("                        case ").append(javaStringLiteral(field.columnName())).append(" -> {\n")
+                    .append("                            if (!java.util.Objects.equals(raw, ").append(toColumnValueExpression(model, field))
+                    .append(")) throw ").append(support).append(".invalidValue();\n")
+                    .append("                            yield ").append(field.encryption() == null ? "raw"
+                            : encryptedExpression(model, field, toStringExpression(accessExpression(model, field), field), false)).append(";\n                        }\n");
+        }
+        out.append("                        default -> throw ").append(support).append(".invalidValue();\n")
+                .append("                    };\n                    queued.put(entry.getKey(), stored);\n                }\n")
+                .append("                queued.put(").append(support).append(".QUEUE_FORMAT, ").append(support).append(".QUEUE_VERSION);\n");
+        FieldModel tenant = encryptedTenant(model);
+        if (tenant != null) out.append("                queued.put(").append(support).append(".QUEUE_TENANT, \"~T1:\" + ")
+                .append(accessExpression(model, tenant)).append(");\n");
+        out.append("                return queued;\n");
+        encryptedEnd(out);
+        encryptedStart(out, "Map<String, Object> toQueuedPatchColumns(String id, String verifiedTenant, Map<String, Object> assignments)");
+        out.append("                if (assignments == null || assignments.isEmpty() || assignments.size() > 128) throw ").append(support).append(".invalidValue();\n")
+                .append("                ").append(model.idField().typeName()).append(" aadIdValue = ")
+                .append(fromStringExpression("id", model.idField())).append(";\n")
+                .append("                String rowId = ").append(support).append(".rowId(")
+                .append(toStringExpression("aadIdValue", model.idField())).append(");\n")
+                .append("                if (!rowId.equals(id)) throw ").append(support).append(".invalidValue();\n");
+        if (tenant == null) out.append("                if (verifiedTenant != null) throw ").append(support).append(".invalidValue();\n")
+                .append("                String namespace = ").append(javaStringLiteral(model.redisNamespace())).append(";\n");
+        else out.append("                String namespace = ").append(support).append(".tenantNamespace(")
+                .append(javaStringLiteral(model.redisNamespace())).append(", verifiedTenant);\n");
+        out.append("                Map<String, Object> queued = new LinkedHashMap<>();\n")
+                .append("                for (var entry : assignments.entrySet()) {\n                    Object raw = entry.getValue();\n")
+                .append("                    if (raw instanceof com.reactor.cachedb.core.model.PatchDeltaSpec) throw ").append(support).append(".invalidValue();\n")
+                .append("                    Object stored = switch (entry.getKey()) {\n");
+        for (FieldModel field : model.persistedFields()) {
+            if (field == model.idField() || field == tenant || field.columnName().equals(model.versionColumn())
+                    || field.columnName().equals(model.deletedColumn())) continue;
+            out.append("                        case ").append(javaStringLiteral(field.columnName())).append(" -> {\n");
+            if (!boxedTypeName(field.typeName()).equals(field.typeName()))
+                out.append("                            if (raw == null) throw ").append(support).append(".invalidValue();\n");
+            out.append("                            ").append(field.typeName()).append(" value = ").append(fromColumnExpression("raw", field)).append(";\n")
+                    .append("                            yield ").append(field.encryption() == null ? logicalLocalColumn(field, "value")
+                            : encryptedExpression(model, field, toStringExpression("value", field), false)).append(";\n                        }\n");
+        }
+        out.append("                        default -> throw ").append(support).append(".invalidValue();\n")
+                .append("                    };\n                    queued.put(entry.getKey(), stored);\n                }\n")
+                .append("                queued.put(").append(support).append(".QUEUE_FORMAT, ").append(support).append(".QUEUE_VERSION);\n");
+        if (tenant != null) out.append("                queued.put(").append(support).append(".QUEUE_TENANT, \"~T1:\" + verifiedTenant);\n");
+        out.append("                return queued;\n");
+        encryptedEnd(out);
+        encryptedStart(out, "Map<String, String> sourceColumnsFromQueued(String id, Map<String, String> queued)");
+        out.append("                if (queued.size() > 130 || !").append(support).append(".QUEUE_VERSION.equals(queued.get(")
+                .append(support).append(".QUEUE_FORMAT))) throw ").append(support).append(".invalidValue();\n")
+                .append("                ").append(model.idField().typeName()).append(" aadIdValue = ")
+                .append(fromStringExpression("id", model.idField())).append(";\n")
+                .append("                String rowId = ").append(support).append(".rowId(")
+                .append(toStringExpression("aadIdValue", model.idField())).append(");\n")
+                .append("                if (!rowId.equals(id)) throw ").append(support).append(".invalidValue();\n")
+                .append("                if (queued.containsKey(").append(javaStringLiteral(model.idField().columnName()))
+                .append(") && !rowId.equals(queued.get(").append(javaStringLiteral(model.idField().columnName()))
+                .append("))) throw ").append(support).append(".invalidValue();\n");
+        if (tenant == null) out.append("                if (queued.containsKey(").append(support)
+                .append(".QUEUE_TENANT)) throw ").append(support).append(".invalidValue();\n")
+                .append("                String namespace = ").append(javaStringLiteral(model.redisNamespace())).append(";\n");
+        else out.append("                String tenant = ").append(support).append(".queuedTenant(queued.get(")
+                .append(support).append(".QUEUE_TENANT));\n")
+                .append("                String namespace = ").append(support).append(".tenantNamespace(")
+                .append(javaStringLiteral(model.redisNamespace())).append(", tenant);\n")
+                .append("                if (queued.containsKey(").append(javaStringLiteral(tenant.columnName()))
+                .append(") && !tenant.equals(queued.get(").append(javaStringLiteral(tenant.columnName()))
+                .append("))) throw ").append(support).append(".invalidValue();\n");
+        out.append("                Map<String, String> source = new LinkedHashMap<>();\n")
+                .append("                for (var entry : queued.entrySet()) {\n")
+                .append("                    if (entry.getKey().equals(").append(support).append(".QUEUE_FORMAT) || entry.getKey().equals(")
+                .append(support).append(".QUEUE_TENANT)) continue;\n")
+                .append("                    String raw = entry.getValue();\n                    String stored = switch (entry.getKey()) {\n");
+        for (FieldModel field : model.persistedFields()) {
+            out.append("                        case ").append(javaStringLiteral(field.columnName())).append(" -> {\n");
+            if (field.encryption() == null) out.append("                            yield raw;\n");
+            else {
+                out.append("                            String clear = ").append(encryptedExpression(model, field, "raw", true)).append(";\n")
+                        .append("                            ").append(field.typeName()).append(" value = ").append(fromStringExpression("clear", field)).append(";\n");
+                if (field.encryption().scope().equals("REDIS_AND_SOURCE")) out.append("                            yield raw;\n");
+                else out.append("                            Object sql = ").append(logicalLocalColumn(field, "value"))
+                        .append(";\n                            yield sql == null ? null : String.valueOf(sql);\n");
+            }
+            out.append("                        }\n");
+        }
+        if (model.versionColumn() != null && !model.versionColumn().isBlank()
+                && model.persistedFields().stream().noneMatch(field -> field.columnName().equals(model.versionColumn())))
+            out.append("                        case ").append(javaStringLiteral(model.versionColumn())).append(" -> {\n")
+                    .append("                            if (raw == null || !Long.toString(Long.parseLong(raw)).equals(raw) || Long.parseLong(raw) < 1) throw ")
+                    .append(support).append(".invalidValue();\n                            yield raw;\n                        }\n");
+        if (model.deletedColumn() != null && !model.deletedColumn().isBlank()
+                && model.persistedFields().stream().noneMatch(field -> field.columnName().equals(model.deletedColumn())))
+            out.append("                        case ").append(javaStringLiteral(model.deletedColumn())).append(" -> {\n")
+                    .append("                            if (!").append(javaStringLiteral(model.activeMarkerValue())).append(".equals(raw)) throw ")
+                    .append(support).append(".invalidValue();\n                            yield raw;\n                        }\n");
+        out.append("                        default -> throw ").append(support).append(".invalidValue();\n")
+                .append("                    };\n                    source.put(entry.getKey(), stored);\n                }\n")
+                .append("                if (source.isEmpty()) throw ").append(support).append(".invalidValue();\n                return source;\n");
+        encryptedEnd(out);
+    }
+
     private void renderCodec(StringBuilder builder, EntityModel model) {
+        if (hasEncryption(model)) {
+            renderEncryptedCodec(builder, model);
+            return;
+        }
         if (!model.recordType() && model.persistedFields().size() > 256) {
             renderWideCodec(builder, model);
             return;
@@ -3207,7 +3789,7 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         builder.append("                synchronized (this) {\n");
         builder.append("                    resolved = sourceRepository;\n");
         builder.append("                    if (resolved == null) {\n");
-        builder.append("                        resolved = cacheSession.sourceRepository(METADATA, CODEC);\n");
+        builder.append("                        resolved = cacheSession.sourceRepository(METADATA, cacheSession.runtimeCodec(METADATA, CODEC));\n");
         builder.append("                        sourceRepository = resolved;\n");
         builder.append("                    }\n");
         builder.append("                }\n");
@@ -3589,6 +4171,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
     private String toStringExpression(String accessor, FieldModel field) {
         if (field.codecTypeName() != null) {
+            if (field.encryption() != null && boxedTypeName(field.typeName()).equals(field.typeName()))
+                return accessor + " == null ? null : " + field.fieldName().toUpperCase() + "_CODEC.encode(" + accessor + ")";
             return field.fieldName().toUpperCase() + "_CODEC.encode(" + accessor + ")";
         }
         if (field.enumType()) {
@@ -3609,6 +4193,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
 
     private String fromStringExpression(String source, FieldModel field) {
         if (field.codecTypeName() != null) {
+            if (field.encryption() != null && boxedTypeName(field.typeName()).equals(field.typeName()))
+                return source + " == null ? null : " + field.fieldName().toUpperCase() + "_CODEC.decode(" + source + ")";
             return field.fieldName().toUpperCase() + "_CODEC.decode(" + source + ")";
         }
         if (field.enumType()) {
@@ -3678,6 +4264,8 @@ public final class CacheEntityProcessor extends AbstractProcessor {
     private String toColumnValueExpression(EntityModel model, FieldModel field) {
         String access = accessExpression(model, field);
         if (field.codecTypeName() != null) {
+            if (field.encryption() != null && boxedTypeName(field.typeName()).equals(field.typeName()))
+                return access + " == null ? null : " + field.fieldName().toUpperCase() + "_CODEC.toColumnValue(" + access + ")";
             return field.fieldName().toUpperCase() + "_CODEC.toColumnValue(" + access + ")";
         }
         if (field.enumType()) {
@@ -3754,8 +4342,9 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         var annotations = element.getAnnotationsByType(com.reactor.cachedb.annotations.CacheCompositeIndex.class);
         if (annotations.length > 32) throw new IllegalArgumentException("At most 32 composite indexes per entity");
         for (var annotation : annotations) {
-            if (annotation.columns().length < 2 || annotation.columns().length > 4)
-                throw new IllegalArgumentException("Composite index requires 2..4 distinct columns");
+            int minimumPrefix = annotation.sortBy().isEmpty() ? 2 : 1;
+            if (annotation.columns().length < minimumPrefix || annotation.columns().length > 4)
+                throw new IllegalArgumentException("Composite index requires " + minimumPrefix + "..4 distinct prefix columns");
             var columns = new java.util.ArrayList<String>();
             for (String declared : annotation.columns()) {
                 var field = fields.stream().filter(value -> value.columnName().equals(declared) || value.fieldName().equals(declared)).findFirst().orElse(null);
@@ -3769,15 +4358,46 @@ public final class CacheEntityProcessor extends AbstractProcessor {
         return result;
     }
 
+    private Map<String, String> compositeSortColumns(TypeElement element, List<FieldModel> fields) {
+        compositeIndexes(element, fields);
+        var result = new java.util.LinkedHashMap<String, String>();
+        for (var annotation : element.getAnnotationsByType(com.reactor.cachedb.annotations.CacheCompositeIndex.class)) {
+            if (annotation.sortBy().isEmpty()) continue;
+            var sort = fields.stream().filter(field -> field.fieldName().equals(annotation.sortBy())
+                    || field.columnName().equals(annotation.sortBy())).findFirst().orElse(null);
+            if (sort == null) throw new IllegalArgumentException("Unknown composite sortBy: " + annotation.sortBy());
+            var prefix = new java.util.ArrayList<String>();
+            for (String declared : annotation.columns()) {
+                prefix.add(fields.stream().filter(field -> field.fieldName().equals(declared)
+                        || field.columnName().equals(declared)).findFirst().orElseThrow().columnName());
+            }
+            if (prefix.contains(sort.columnName()))
+                throw new IllegalArgumentException("Composite sortBy must not be a prefix column");
+            if (sort.codecTypeName() != null || !java.util.Set.of(
+                    "int", "java.lang.Integer", "long", "java.lang.Long",
+                    "double", "java.lang.Double", "float", "java.lang.Float",
+                    "short", "java.lang.Short", "byte", "java.lang.Byte",
+                    "java.time.Instant", "java.time.LocalDate", "java.time.LocalDateTime",
+                    "java.time.OffsetDateTime").contains(sort.typeName()))
+                throw new IllegalArgumentException("Unsupported composite sortBy type: " + sort.typeName());
+            String name = annotation.name().isBlank() ? String.join("_", prefix) : annotation.name();
+            result.put(name, sort.columnName());
+        }
+        return result;
+    }
+
     private record FieldModel(
             String fieldName,
             String typeName,
             String columnName,
             boolean idField,
             boolean enumType,
-            String codecTypeName
+            String codecTypeName,
+            EncryptionModel encryption
     ) {
     }
+
+    private record EncryptionModel(String keyRing, String scope, boolean blindIndex) {}
 
     private record RelationModel(
             String name,

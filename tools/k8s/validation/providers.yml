@@ -224,8 +224,8 @@ spec:
               valueFrom:
                 secretKeyRef: {name: fixture-auth, key: password}
           resources:
-            requests: {cpu: 100m, memory: 1Gi, ephemeral-storage: 256Mi}
-            limits: {cpu: "1", memory: 3Gi, ephemeral-storage: 4Gi}
+            requests: {cpu: 100m, memory: 1Gi, ephemeral-storage: 4Gi}
+            limits: {cpu: "1", memory: 3Gi, ephemeral-storage: 12Gi}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: ["ALL"]}
@@ -241,6 +241,7 @@ spec:
             - {name: tmp, mountPath: /tmp}
       volumes:
         - name: data
-          emptyDir: {sizeLimit: 3Gi}
+          # The initialized database plus provider fixtures exceeds 3Gi.
+          emptyDir: {sizeLimit: 8Gi}
         - name: tmp
           emptyDir: {sizeLimit: 256Mi}

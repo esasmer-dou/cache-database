@@ -6,6 +6,38 @@ Use this gate in every application that sends production traffic to CacheDB.
 It turns route coverage, parity, memory, failover, canary, and rollback from a
 checklist into a failing Maven build contract.
 
+## Sample Validation Tooling Integrity
+
+The sample API checks use Node.js 24.22.1 for Linux x64 and Newman 6.2.1.
+These are validation tools, not CacheDB Java runtime dependencies. Their
+[machine-readable pins](validation-tooling-pins.json) identify exact archive
+bytes, not merely version labels:
+
+- Node archive: `node-v24.22.1-linux-x64.tar.gz`, SHA-256 `eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c`.
+- Newman archive: `newman-6.2.1.tgz`, integrity `sha512-Zq8Sr5GFF+OXs5yIbyglLMKMh1WNMjYVV0yZaSBZ+DIgQOIWcxT8QTfbrl/YUGrLyT4rjpu+yZ/Z+kozw79GEA==`.
+
+Use a disposable tooling directory. Verify the downloaded bytes before
+extracting or executing them; do not disable TLS or checksum verification.
+The upstream references are the [Node checksum manifest](https://nodejs.org/dist/v24.22.1/SHASUMS256.txt)
+and [versioned Newman package metadata](https://registry.npmjs.org/newman/6.2.1).
+
+```bash
+set -eu
+curl --fail --location --proto '=https' --tlsv1.2 -o node-v24.22.1-linux-x64.tar.gz https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.gz
+printf '%s  %s\n' eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c node-v24.22.1-linux-x64.tar.gz | sha256sum --check -
+tar -xzf node-v24.22.1-linux-x64.tar.gz
+curl --fail --location --proto '=https' --tlsv1.2 -o newman-6.2.1.tgz https://registry.npmjs.org/newman/-/newman-6.2.1.tgz
+./node-v24.22.1-linux-x64/bin/node -e 'const fs=require("node:fs"),crypto=require("node:crypto");const expected="sha512-Zq8Sr5GFF+OXs5yIbyglLMKMh1WNMjYVV0yZaSBZ+DIgQOIWcxT8QTfbrl/YUGrLyT4rjpu+yZ/Z+kozw79GEA==";const actual="sha512-"+crypto.createHash("sha512").update(fs.readFileSync("newman-6.2.1.tgz")).digest("base64");if(actual!==expected)throw new Error("Newman integrity mismatch");console.log("Newman archive integrity verified");'
+```
+
+A Newman package pin alone does not freeze its transitive dependencies. Keep
+the installation's `package-lock.json`, record its SHA-256 with the evidence,
+and reuse it with `npm ci --ignore-scripts --no-audit --no-fund` rather than
+silently resolving a different dependency graph. Integrity verification is not
+a dependency security assessment or proof that API tests passed. Provider
+tests, actual HTTP assertions, zero-skip checks and the complete release
+coverage gate remain separate requirements.
+
 ## 1. Add The Maven Gate
 
 The CacheDB BOM already defines the plugin version. Add this profile to the

@@ -155,6 +155,17 @@ public final class ReadShapeGuardrails {
         return limit.active() ? limit.rows() : 0;
     }
 
+    /** Unlike effectiveEntityQueryLimit, preserves active zero versus unrestricted. */
+    public static com.reactor.cachedb.core.api.EntityQueryCapacity entityQueryCapacity(
+            CachePolicy cachePolicy, ReadShapeGuardrailConfig config) {
+        if (!enabled(config) || !config.rejectEntityQueryOverLimit())
+            return com.reactor.cachedb.core.api.EntityQueryCapacity.unrestricted();
+        Limit limit = entityQueryLimit(cachePolicy, config);
+        return limit.active()
+                ? com.reactor.cachedb.core.api.EntityQueryCapacity.finite(limit.rows())
+                : com.reactor.cachedb.core.api.EntityQueryCapacity.unrestricted();
+    }
+
     private static boolean enabled(ReadShapeGuardrailConfig config) {
         return config != null && config.enabled();
     }

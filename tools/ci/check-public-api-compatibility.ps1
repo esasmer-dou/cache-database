@@ -3,6 +3,7 @@ param(
     [switch]$RequireExact,
     [string]$BaselinePath = "tools/ci/public-api-baseline.txt",
     [string]$OutputPath = "target/public-api-signature.txt",
+    # Explicit SDK library allowlist, excluding benchmark and acceptance-tool APIs.
     [string[]]$Modules = @(
         "cachedb-annotations",
         "cachedb-core",
@@ -15,6 +16,8 @@ param(
         "cachedb-storage-oracle",
         "cachedb-starter",
         "cachedb-spring-boot-starter",
+        "cachedb-reactor",
+        "cachedb-spring-data",
         "cachedb-spring-boot-starter-postgres",
         "cachedb-spring-boot-starter-mssql",
         "cachedb-spring-boot-starter-oracle",
@@ -163,21 +166,27 @@ function Get-ApiBlocks([string]$Text) {
             if ($normalized.StartsWith('public class com.reactor.cachedb.jdbc.JdbcEntitySourceLoader<')) {
                 $normalized = $normalized.Replace(', com.reactor.cachedb.core.page.EntityOwnershipLoader<ID>', '')
             }
+            # The lexical-window SPI is additive; both pre-existing interfaces stay mandatory.
+            if ($normalized.StartsWith('public class com.reactor.cachedb.redis.RedisEntityRepository<')) {
+                $normalized = $normalized.Replace(', com.reactor.cachedb.core.api.RedisLexicalWindowRepository<T>', '')
+            }
             [void]$blocks[$current].Add($normalized)
         }
     }
     return $blocks
 }
-$before = Get-ApiBlocks $expected
-$after = Get-ApiBlocks $actual
-$missing = [System.Collections.Generic.List[string]]::new()
-foreach ($name in $before.Keys) {
-    foreach ($member in $before[$name]) {
-        if (-not $after.ContainsKey($name) -or -not $after[$name].Contains($member)) {
-            $missing.Add("$name :: $member")
+function Get-MissingApiMembers([string]$Expected, [string]$Actual) {
+    $before = Get-ApiBlocks $Expected
+    $after = Get-ApiBlocks $Actual
+    foreach ($name in $before.Keys) {
+        foreach ($member in $before[$name]) {
+            if (-not $after.ContainsKey($name) -or -not $after[$name].Contains($member)) {
+                "$name :: $member"
+            }
         }
     }
 }
+$missing = @(Get-MissingApiMembers $expected $actual)
 if ($missing.Count -gt 0 -or ($RequireExact -and $expected -ne $actual)) {
     $missing | ForEach-Object { Write-Host "Removed or changed: $_" }
     Write-Host "Public API signature changed."

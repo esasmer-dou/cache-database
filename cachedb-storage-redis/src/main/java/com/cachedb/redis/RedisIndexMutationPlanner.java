@@ -10,8 +10,20 @@ final class RedisIndexMutationPlanner {
     static void apply(AbstractPipeline pipeline, RedisKeyStrategy keys, EntityMetadata<?, ?> metadata,
             QueryIndexConfig config, String id, Map<String,Object> columns, Plan plan,
             Map<String,List<String>> partitions) {
+        plan = RedisCompositeIndexes.applySortDiff(pipeline, id, plan,
+                config.exactIndexEnabled() && config.rangeIndexEnabled());
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateIndexColumns(metadata, columns);
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateIndexColumns(metadata, plan.prior());
         String namespace = metadata.redisNamespace();
         for (String column : plan.changed()) {
+            if (metadata.encryptedColumns().containsKey(column)) {
+                if (!metadata.encryptedColumns().get(column).blindIndex()) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+                if (plan.prior().containsKey(column) && config.exactIndexEnabled())
+                    pipeline.srem(keys.indexExactKey(namespace, column, RedisIndexKeySpace.encodeKeyPart(plan.prior().get(column))), id);
+                if (plan.next().containsKey(column) && config.exactIndexEnabled())
+                    pipeline.sadd(keys.indexExactKey(namespace, column, RedisIndexKeySpace.encodeKeyPart(plan.next().get(column))), id);
+                continue;
+            }
             if (column.equals(RedisQueryIndexManager.PROJECTION_TENANT_MARKER)) {
                 String prior = plan.prior().get(column), next = plan.next().get(column);
                 if (prior != null) pipeline.srem(keys.indexExactKey(namespace,column,RedisIndexKeySpace.encodeKeyPart(prior)),id);
@@ -62,19 +74,27 @@ final class RedisIndexMutationPlanner {
 
     static void stringValue(AbstractPipeline pipeline, RedisKeyStrategy keys, String namespace,
             QueryIndexConfig config, String id, String column, String value, boolean add) {
+        stringKeys(keys, namespace, config, column, value, key -> {
+            if (add) pipeline.sadd(key, id); else pipeline.srem(key, id);
+        });
+    }
+
+    /** Shared pure key expansion for ordinary diffs and fenced purge; never parse stored key suffixes. */
+    static void stringKeys(RedisKeyStrategy keys, String namespace, QueryIndexConfig config,
+            String column, String value, java.util.function.Consumer<String> consumer) {
         if (value == null) return;
         String normalized = RedisIndexKeySpace.normalizeText(value);
         if (config.prefixIndexEnabled() && !normalized.isBlank()) {
             int length = Math.min(config.prefixMaxLength(),normalized.length());
             for (int i=1; i<=length; i++) {
                 String key = keys.indexPrefixKey(namespace,column,RedisIndexKeySpace.encodeKeyPart(normalized.substring(0,i)));
-                if (add) pipeline.sadd(key,id); else pipeline.srem(key,id);
+                consumer.accept(key);
             }
         }
         if (config.textIndexEnabled()) {
             for (String token : RedisIndexKeySpace.tokenize(value,config)) {
                 String key = keys.indexTokenKey(namespace,column,RedisIndexKeySpace.encodeKeyPart(token));
-                if (add) pipeline.sadd(key,id); else pipeline.srem(key,id);
+                consumer.accept(key);
             }
         }
     }

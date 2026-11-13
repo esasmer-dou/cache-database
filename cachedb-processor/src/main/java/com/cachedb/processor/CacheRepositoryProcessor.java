@@ -2,6 +2,7 @@ package com.reactor.cachedb.processor;
 
 import com.reactor.cachedb.annotations.CacheColumn;
 import com.reactor.cachedb.annotations.CacheCommand;
+import com.reactor.cachedb.annotations.CacheEntity;
 import com.reactor.cachedb.annotations.CacheGeneratedId;
 import com.reactor.cachedb.annotations.CacheId;
 import com.reactor.cachedb.annotations.CacheLookup;
@@ -74,6 +75,11 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             }
             String qualifiedName = repository.getQualifiedName().toString();
             if (!generated.add(qualifiedName)) {
+                continue;
+            }
+            if (new RepositoryTypeResolver(processingEnv).findSupertype(repository.asType(),
+                    "com.reactor.cachedb.spring.data.CacheDbSpringDataRepository") != null) {
+                new SpringDataRepositoryGenerator(processingEnv, springBeanOwners).generate(repository);
                 continue;
             }
             RepositoryModel model = buildModel(repository);
@@ -149,6 +155,10 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 continue;
             }
             String methodName = method.getSimpleName().toString();
+            if (entityModel.fields().values().stream().anyMatch(field -> field.encryption() != null)
+                    && method.getAnnotation(SourceSql.class) != null) {
+                error(method, "F-3 encryption: opaque @SourceSql is unsupported for encrypted entities"); return null;
+            }
             if (!abstractMethodNames.add(methodName)) {
                 error(method, "Overloaded abstract repository methods are not supported; use a distinct method name");
                 return null;
@@ -237,6 +247,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 return null;
             }
             if (route.projection() != null) {
+                if (entityModel.fields().values().stream().anyMatch(field -> field.encryption() != null)) {
+                    error(method, "F-3 encryption: encrypted entity projections require a protected codec and are unsupported"); return null;
+                }
                 projections.putIfAbsent(route.projection().typeName(), route.projection());
             }
             routeMethods.put(methodName, route);
@@ -474,6 +487,13 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         var annotation = method.getAnnotation(com.reactor.cachedb.annotations.CacheAggregate.class);
         String function = annotation == null ? "COUNT" : annotation.function().name();
         String field = annotation == null ? "" : annotation.field();
+        if (!field.isBlank()) {
+            String selected = field;
+            var target = entity.fields().values().stream().filter(value -> value.javaName().equals(selected) || value.columnName().equals(selected)).findFirst().orElse(null);
+            if (target != null && target.encryption() != null) {
+                error(method, "F-3 encryption: encrypted aggregate fields are forbidden, including COUNT(field)"); return null;
+            }
+        }
         if (!function.equals("COUNT")) {
             String declared = field;
             var target = entity.fields().values().stream().filter(f -> f.javaName().equals(declared) || f.columnName().equals(declared)).findFirst().orElse(null);
@@ -497,6 +517,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 error(method, "Unknown aggregate predicate or incompatible parameter type: " + predicate); return null;
             }
             bindings.put(target.columnName(), parameter);
+            if (!encryptedEquality(method, target, CachePredicate.Operator.EQ)) return null;
         }
         String result = method.getReturnType().toString();
         boolean valid = result.equals("com.reactor.cachedb.core.query.AggregateResult")
@@ -511,10 +532,13 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         var annotation = method.getAnnotation(com.reactor.cachedb.annotations.CacheFacet.class);
         var group = entity.fields().values().stream().filter(f -> f.javaName().equals(annotation.groupBy()) || f.columnName().equals(annotation.groupBy())).findFirst().orElse(null);
         if (group == null) { error(method, "Facet group must name an indexed entity field"); return null; }
+        if (group.encryption() != null) { error(method, "F-3 encryption: encrypted facet groups are forbidden"); return null; }
         var entityElement = processingEnv.getElementUtils().getTypeElement(entity.typeName());
         var index = entityElement.getAnnotation(com.reactor.cachedb.annotations.CacheEntity.class);
         boolean compositeColumn = java.util.Arrays.stream(entityElement.getAnnotationsByType(com.reactor.cachedb.annotations.CacheCompositeIndex.class))
-                .flatMap(value -> java.util.Arrays.stream(value.columns())).anyMatch(value -> value.equals(group.javaName()) || value.equals(group.columnName()));
+                .flatMap(value -> java.util.stream.Stream.concat(java.util.Arrays.stream(value.columns()),
+                        java.util.stream.Stream.of(value.sortBy())))
+                .anyMatch(value -> value.equals(group.javaName()) || value.equals(group.columnName()));
         if (!compositeColumn && java.util.Arrays.stream(index.indexedColumns()).noneMatch(value -> value.equals("*") || value.equals(group.javaName()) || value.equals(group.columnName()))) {
             error(method, "Facet group must be an indexed entity field"); return null;
         }
@@ -523,6 +547,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             String name = field;
             var target = entity.fields().values().stream().filter(f -> f.javaName().equals(name) || f.columnName().equals(name)).findFirst().orElse(null);
             if (target == null) { error(method, "Unknown facet aggregate field"); return null; }
+            if (target.encryption() != null) { error(method, "F-3 encryption: encrypted facet aggregate fields are forbidden"); return null; }
             if (!function.equals("COUNT") && !Set.of("java.lang.Integer", "java.lang.Long", "java.lang.Short", "java.lang.Byte", "java.lang.Float", "java.lang.Double", "java.math.BigDecimal", "java.math.BigInteger").contains(boxed(target.type()).toString())) {
                 error(method, "Numeric facet requires a numeric field"); return null;
             }
@@ -547,6 +572,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                         (Character.toUpperCase(f.javaName().charAt(0)) + f.javaName().substring(1)).equals(property)).findFirst().orElse(null);
                 if (target == null || !boxed(target.type()).toString().equals("java.lang.Boolean")) { error(method, "Invalid boolean facet predicate"); return null; }
                 constants.add("com.reactor.cachedb.core.query.QueryFilter.eq(" + quote(target.columnName()) + ", " + constantTrue + ")");
+                if (!encryptedEquality(method, target, CachePredicate.Operator.EQ)) return null;
             } else variablePredicates.add(predicate);
         }
         if (variablePredicates.size() != params.size()) { error(method, "Facet parameters must match ByFieldAndField predicates"); return null; }
@@ -559,6 +585,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 error(method, "Invalid facet predicate: " + predicate); return null;
             }
             if (bindings.putIfAbsent(target.columnName(), param) != null) { error(method, "Duplicate facet predicate column"); return null; }
+            if (!encryptedEquality(method, target, CachePredicate.Operator.EQ)) return null;
         }
         return new FacetMethod(name, result, List.copyOf(params.values()), function, field, group.columnName(), bindings, List.copyOf(constants));
     }
@@ -597,6 +624,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             }
             if (delta != null) {
                 String type = boxed(field.type()).toString();
+                if (field.encryption() != null) { error(parameter, "F-3 encryption: arithmetic deltas on encrypted fields are forbidden"); return null; }
                 if (delta.min() > delta.max() || !Set.of("java.lang.Integer", "java.lang.Long", "java.lang.Double", "java.math.BigDecimal").contains(type)) {
                     error(parameter, "@CacheDelta needs int, long, double or BigDecimal and min <= max"); return null;
                 }
@@ -895,7 +923,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         if (generatedId != null && generated == null) {
             return null;
         }
-        return new FieldModel(element.getSimpleName().toString(), column, type, cacheId != null, generated);
+        return new FieldModel(element.getSimpleName().toString(), column, type, cacheId != null, generated,
+                element.getAnnotation(com.reactor.cachedb.annotations.CacheEncrypted.class));
     }
 
     private GeneratedIdModel resolveGeneratedId(Element element, TypeMirror type, CacheGeneratedId annotation) {
@@ -970,6 +999,10 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         LinkedHashMap<String, ParameterModel> parameters = parameters(method);
         QueryModel queryModel = resolveQuery(method, query, parameters, entity);
         if (queryModel == null) return null;
+        if (!queryModel.redisCompositeIndex().isEmpty() && (kind != RouteKind.HOT || projection != null)) {
+            error(method, "Redis lexical seek is supported only for entity @HotRoute methods, not source/projection routes");
+            return null;
+        }
         String coverageScopeParameter = hotRoute == null ? "" : hotRoute.coverageScopeParameter().trim();
         if (!coverageScopeParameter.isEmpty() && !parameters.containsKey(coverageScopeParameter)) {
             error(method, "coverageScopeParameter does not name a method parameter: " + coverageScopeParameter);
@@ -1083,6 +1116,19 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         return true;
     }
 
+    private boolean encryptedEquality(Element method, FieldModel field, CachePredicate.Operator operator) {
+        var protection = field.encryption();
+        if (protection == null) return true;
+        if (!protection.blindIndex() || operator != CachePredicate.Operator.EQ) {
+            error(method, "F-3 encryption: encrypted predicates require blindIndex=true and EQ only"); return false;
+        }
+        if (method.getAnnotation(SourceRoute.class) != null
+                && protection.scope() == com.reactor.cachedb.annotations.EncryptionScope.REDIS_AND_SOURCE) {
+            error(method, "F-3 encryption: randomized encrypted SQL columns cannot implement source predicates"); return false;
+        }
+        return true;
+    }
+
     private QueryModel resolveQuery(
             ExecutableElement method,
             CacheRouteQuery annotation,
@@ -1101,6 +1147,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 return null;
             }
             String parameter = predicate.parameter().trim();
+            if (!encryptedEquality(method, field, predicate.operator())) return null;
             List<String> constants = List.of(predicate.constants());
             if (parameter.isEmpty() && constants.isEmpty()) {
                 ParameterModel inferred = parameters.get(field.javaName());
@@ -1145,7 +1192,96 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                     predicate.constantType()
             ));
         }
-        if (annotation.seek().length > 0) {
+        String redisIndex = annotation.redisCompositeIndex().trim();
+        String redisScoreParameter = "";
+        String redisIdParameter = "";
+        if (annotation.redisLexicalIdTie() != !redisIndex.isEmpty()) {
+            error(method, "redisLexicalIdTie=true and an explicit redisCompositeIndex name must be declared together");
+            return null;
+        }
+        if (annotation.redisLexicalIdTie()) {
+            var declarations = entity.type().getAnnotationsByType(com.reactor.cachedb.annotations.CacheCompositeIndex.class);
+            var index = java.util.Arrays.stream(declarations).filter(item -> item.name().equals(redisIndex)).findFirst().orElse(null);
+            if (index == null || index.sortBy().isBlank()) {
+                error(method, "Redis lexical seek requires a named @CacheCompositeIndex with sortBy: " + redisIndex);
+                return null;
+            }
+            FieldModel score = entity.fields().values().stream()
+                    .filter(field -> field.javaName().equals(index.sortBy()) || field.columnName().equals(index.sortBy()))
+                    .findFirst().orElse(null);
+            if (score == null || !com.reactor.cachedb.core.query.RedisLexicalScoreContract.attestableType(score.typeName())) {
+                error(method, "Redis lexical seek requires a lossless score type: byte/short/int/LocalDate or exact Long v4; "
+                        + "float/double/BigDecimal and sub-millisecond/offset time types require logical bounded sorting");
+                return null;
+            }
+            CacheOrder[] orders = annotation.orderBy();
+            if (orders.length < 1 || orders.length > 2 || !orders[0].field().equals(score.javaName())
+                    || orders.length == 2 && (!orders[1].field().equals(entity.idField().javaName())
+                    || orders[1].direction() != orders[0].direction())) {
+                error(method, "Redis lexical seek requires sortBy followed optionally by the ID in the same direction");
+                return null;
+            }
+            if (groups.size() > 1 || !groups.isEmpty() && !groups.containsKey(0) || annotation.explicitDisjunction()) {
+                error(method, "Redis lexical seek requires one bounded AND predicate group (0), never OR");
+                return null;
+            }
+            var predicates = groups.getOrDefault(0, List.of());
+            for (String column : index.columns()) {
+                FieldModel prefix = entity.fields().values().stream()
+                        .filter(field -> field.javaName().equals(column) || field.columnName().equals(column)).findFirst().orElse(null);
+                if (prefix == null || predicates.stream().noneMatch(item -> item.field().equals(prefix)
+                        && item.operator() == CachePredicate.Operator.EQ)) {
+                    error(method, "Redis lexical seek requires EQ for every composite prefix column: " + column);
+                    return null;
+                }
+            }
+            var indexed = new java.util.HashSet<String>();
+            for (String field : entity.type().getAnnotation(CacheEntity.class).indexedColumns()) indexed.add(field);
+            if (indexed.contains("*")) for (FieldModel field : entity.fields().values()) {
+                indexed.add(field.javaName()); indexed.add(field.columnName());
+            }
+            indexed.addAll(List.of(index.columns()));
+            indexed.add(score.javaName()); indexed.add(score.columnName());
+            indexed.add(entity.idField().javaName()); indexed.add(entity.idField().columnName());
+            for (var predicate : predicates) {
+                if (!indexed.contains(predicate.field().javaName()) && !indexed.contains(predicate.field().columnName())) {
+                    error(method, "Redis lexical seek predicate is not indexed: " + predicate.field().javaName());
+                    return null;
+                }
+                if (predicate.operator() != CachePredicate.Operator.EQ
+                        && (!predicate.field().equals(score) || predicate.operator() != CachePredicate.Operator.GT
+                        && predicate.operator() != CachePredicate.Operator.GTE && predicate.operator() != CachePredicate.Operator.LT
+                        && predicate.operator() != CachePredicate.Operator.LTE)) {
+                    error(method, "Redis lexical seek supports EQ predicates and typed ranges on sortBy only: "
+                            + predicate.field().javaName() + "/" + predicate.operator());
+                    return null;
+                }
+            }
+            var seeks = annotation.seek();
+            if (seeks.length != 0 && seeks.length != 2) {
+                error(method, "Redis lexical @CacheSeek requires exactly score and ID components, or a WindowRequest cursor");
+                return null;
+            }
+            if (seeks.length == 2) {
+                boolean longScore = com.reactor.cachedb.core.query.RedisLexicalScoreContract.long53Type(score.typeName());
+                String scoreParameterType = longScore ? "java.lang.Long" : "java.lang.Double";
+                var a = parameters.get(seeks[0].param());
+                var b = parameters.get(seeks[1].param());
+                var direction = orders[0].direction() == CacheOrder.Direction.DESC
+                        ? CachePredicate.Operator.LT : CachePredicate.Operator.GT;
+                if (!seeks[0].field().equals(score.javaName()) || !seeks[1].field().equals(entity.idField().javaName())
+                        || a == null || b == null || a.equals(b) || !a.typeName().equals(scoreParameterType)
+                        || !b.typeName().equals("java.lang.String") || seeks[0].direction() != direction
+                        || seeks[1].direction() != direction) {
+                    error(method, "Redis lexical @CacheSeek needs nullable " + (longScore ? "Long value" : "Double score")
+                            + " and String ID parameters in sortBy/ID order with GT/ASC or LT/DESC; "
+                            + "typed-ID parameters are not interchangeable");
+                    return null;
+                }
+                redisScoreParameter = a.name(); redisIdParameter = b.name();
+            }
+        }
+        if (!annotation.redisLexicalIdTie() && annotation.seek().length > 0) {
             var seeks = annotation.seek();
             if (seeks.length > 4 || groups.size() > 1 || !groups.isEmpty() && !groups.containsKey(0)) {
                 error(method, "@CacheSeek supports at most four fields and one shared predicate group (0)");
@@ -1158,6 +1294,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 var seek = seeks[i];
                 FieldModel field = entity.fields().get(seek.field());
                 ParameterModel parameter = parameters.get(seek.param());
+                if (field != null && field.encryption() != null) { error(method, "F-3 encryption: encrypted seek fields are forbidden"); return null; }
                 CacheOrder[] orders = annotation.orderBy();
                 boolean descendingTie = orders.length > 0 && orders[orders.length - 1].direction() == CacheOrder.Direction.DESC;
                 boolean idTie = i == orders.length && seek.field().equals(entity.idField().javaName())
@@ -1204,6 +1341,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 return null;
             }
             sorts.add(new SortModel(field, order.direction()));
+            if (field.encryption() != null) { error(method, "F-3 encryption: encrypted order fields are forbidden"); return null; }
         }
         if (!sortedFields.contains(entity.idField().javaName())) {
             CacheOrder.Direction tieBreakerDirection = sorts.isEmpty()
@@ -1274,6 +1412,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 .forEach(consumedParameters::add));
         if (!limitParameter.isEmpty()) consumedParameters.add(limitParameter);
         if (!windowParameter.isEmpty()) consumedParameters.add(windowParameter);
+        if (!redisScoreParameter.isEmpty()) consumedParameters.add(redisScoreParameter);
+        if (!redisIdParameter.isEmpty()) consumedParameters.add(redisIdParameter);
         if (!consumedParameters.equals(parameters.keySet())) {
             LinkedHashSet<String> unused = new LinkedHashSet<>(parameters.keySet());
             unused.removeAll(consumedParameters);
@@ -1288,7 +1428,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 List.copyOf(sorts),
                 limitParameter,
                 windowParameter,
-                Math.max(1, annotation.fixedLimit())
+                Math.max(1, annotation.fixedLimit()),
+                redisIndex, redisScoreParameter, redisIdParameter
         );
     }
 
@@ -1564,10 +1705,13 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         out.append("    private final com.reactor.cachedb.core.api.CacheSession cacheDatabase;\n");
         out.append("    private final com.reactor.cachedb.core.api.EntityRepository<")
                 .append(entity.typeName()).append(", ").append(entity.idField().typeName()).append("> hotRepository;\n");
-        out.append("    private final com.reactor.cachedb.core.api.SourceRepository<")
+        out.append("    private final java.util.concurrent.locks.ReentrantLock sourceBindingLock = new java.util.concurrent.locks.ReentrantLock();\n");
+        out.append("    private volatile com.reactor.cachedb.core.api.SourceRepository<")
                 .append(entity.typeName()).append(", ").append(entity.idField().typeName()).append("> sourceRepository;\n");
-        out.append("    private final com.reactor.cachedb.core.repository.SourceSqlRepository<")
-                .append(entity.typeName()).append("> sourceSqlRepository;\n");
+        if (!model.sourceSqlMethods().isEmpty()) {
+            out.append("    private volatile com.reactor.cachedb.core.repository.SourceSqlRepository<")
+                    .append(entity.typeName()).append("> sourceSqlRepository;\n");
+        }
         for (ProjectionModel projection : model.projections()) {
             out.append("    private final com.reactor.cachedb.core.projection.EntityProjection<")
                     .append(entity.typeName()).append(", ").append(projection.typeName()).append(", ")
@@ -1583,10 +1727,6 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         out.append("    public ").append(implementationName).append("(com.reactor.cachedb.core.api.CacheSession cacheDatabase) {\n");
         out.append("        this.cacheDatabase = java.util.Objects.requireNonNull(cacheDatabase, \"cacheDatabase\");\n");
         out.append("        this.hotRepository = ").append(entity.bindingTypeName()).append(".repository(cacheDatabase);\n");
-        out.append("        this.sourceRepository = cacheDatabase.sourceRepository(")
-                .append(entity.bindingTypeName()).append(".METADATA, ").append(entity.bindingTypeName()).append(".CODEC);\n");
-        out.append("        this.sourceSqlRepository = cacheDatabase.sourceSqlRepository(")
-                .append(entity.bindingTypeName()).append(".CODEC);\n");
         for (ProjectionModel projection : model.projections()) {
             out.append("        this.").append(projection.fieldName()).append(" = ")
                     .append(projection.generatedTypeName()).append(".PROJECTION;\n");
@@ -1597,7 +1737,9 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         }
         out.append("    }\n\n");
 
+        renderSourceBindings(out, model);
         renderBaseMethods(out, model);
+        out.append("    @Override public com.reactor.cachedb.core.async.CacheAsyncExecutor asyncExecutor() { return hotRepository.asyncExecutor(); }\n");
         for (LookupMethod lookup : model.lookupMethods()) {
             renderLookupMethod(out, lookup);
         }
@@ -1735,6 +1877,34 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         out.append("    }\n\n");
     }
 
+    private void renderSourceBindings(StringBuilder out, RepositoryModel model) {
+        var entity = model.entity();
+        String sourceType = "com.reactor.cachedb.core.api.SourceRepository<" + entity.typeName()
+                + ", " + entity.idField().typeName() + ">";
+        renderSourceBinding(out, sourceType, "sourceRepository", "cacheDatabase.sourceRepository("
+                + entity.bindingTypeName() + ".METADATA, " + entity.bindingTypeName() + ".CODEC)");
+        if (!model.sourceSqlMethods().isEmpty()) {
+            renderSourceBinding(out, "com.reactor.cachedb.core.repository.SourceSqlRepository<" + entity.typeName() + ">",
+                    "sourceSqlRepository", "cacheDatabase.sourceSqlRepository(" + entity.bindingTypeName() + ".CODEC)");
+        }
+    }
+
+    private void renderSourceBinding(StringBuilder out, String type, String field, String factory) {
+        out.append("    private ").append(type).append(" cachedb$").append(field).append("() {\n")
+                .append("        var resolved = ").append(field).append(";\n")
+                .append("        if (resolved != null) return resolved;\n")
+                .append("        sourceBindingLock.lock();\n")
+                .append("        try {\n")
+                .append("            resolved = ").append(field).append(";\n")
+                .append("            if (resolved == null) {\n")
+                .append("                resolved = java.util.Objects.requireNonNull(").append(factory).append(", \"source binding\");\n")
+                .append("                ").append(field).append(" = resolved;\n")
+                .append("            }\n")
+                .append("            return resolved;\n")
+                .append("        } finally { sourceBindingLock.unlock(); }\n")
+                .append("    }\n\n");
+    }
+
     private void renderSourceSqlMethod(StringBuilder out, RepositoryModel model, SourceSqlMethod method) {
         out.append("    @Override\n    public ").append(method.returnType()).append(' ').append(method.name()).append('(')
                 .append(renderParameters(method.parameters())).append(") {\n");
@@ -1751,7 +1921,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 .append(quote(method.sql())).append(", ").append(bindings).append(", ")
                 .append(method.maxRows()).append(", ").append(method.queryTimeoutSeconds()).append(");\n")
                 .append("        java.util.List<").append(model.entity().typeName())
-                .append("> cachedb$sourceRows = sourceSqlRepository.query(cachedb$query);\n");
+                .append("> cachedb$sourceRows = cachedb$sourceSqlRepository().query(cachedb$query);\n");
         if (method.projection() == null) {
             out.append("        return new com.reactor.cachedb.core.repository.SourceWindow<>(cachedb$sourceRows, null);\n");
         } else {
@@ -1778,7 +1948,7 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
                 .append(entity.bindingTypeName()).append(".METADATA.redisNamespace(), java.lang.String.valueOf(id), ")
                 .append("versioned.version()));\n    }\n\n");
         out.append("    @Override\n    public java.util.Optional<").append(entityType).append("> findSourceById(")
-                .append(idType).append(" id) {\n        return sourceRepository.findById(id);\n    }\n\n");
+                .append(idType).append(" id) {\n        return cachedb$sourceRepository().findById(id);\n    }\n\n");
         out.append("    @Override\n    public com.reactor.cachedb.core.model.WriteReceipt<").append(entityType).append(", ")
                 .append(idType).append("> save(").append(entityType).append(" entity) {\n")
                 .append("        return hotRepository.saveWithReceipt(ensureGeneratedId(entity));\n    }\n\n");
@@ -1857,7 +2027,28 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         String rawType = route.projection() == null ? model.entity().typeName() : route.projection().typeName();
         String repository = route.kind() == RouteKind.HOT && route.projection() != null
                 ? route.projection().repositoryFieldName()
-                : (route.kind() == RouteKind.HOT ? "hotRepository" : "sourceRepository");
+                : (route.kind() == RouteKind.HOT ? "hotRepository" : "cachedb$sourceRepository()");
+        if (!route.query().redisCompositeIndex().isEmpty()) {
+            boolean longScore = com.reactor.cachedb.core.query.RedisLexicalScoreContract.long53Type(
+                    route.query().sorts().get(0).field().typeName());
+            String afterScore = route.query().redisScoreParameter().isEmpty() ? "null" : route.query().redisScoreParameter();
+            String afterId = route.query().redisIdParameter().isEmpty() ? "null" : route.query().redisIdParameter();
+            out.append("        com.reactor.cachedb.core.repository.CursorPage<").append(rawType).append("> cachedb$page = ")
+                    .append("com.reactor.cachedb.core.route.RouteCacheContext.supplyWithContract(")
+                    .append(contractConstant(route)).append(", () -> com.reactor.cachedb.core.api.RedisLexicalWindowRepository.")
+                    .append(longScore ? "readLong(" : "read(")
+                    .append(repository).append(", cachedb$query, cachedb$window, ")
+                    .append(quote(route.query().redisCompositeIndex())).append(", ").append(quote(route.routeName())).append(", ")
+                    .append(scopeExpression(route.coverageScopeParameter())).append(", ").append(afterScore).append(", ")
+                    .append(afterId).append("));\n");
+            out.append("        com.reactor.cachedb.core.route.RouteCoverage cachedb$coverage = cacheDatabase.routeCoverage(")
+                    .append(quote(route.routeName())).append(", ").append(scopeExpression(route.coverageScopeParameter()))
+                    .append(", java.time.Duration.ofSeconds(").append(route.maxStalenessSeconds()).append("L));\n");
+            out.append("        return new com.reactor.cachedb.core.repository.HotWindow<>(cachedb$page.items(), ")
+                    .append("cachedb$page.nextCursor(), cachedb$coverage)")
+                    .append(route.pageReturn() ? ".completePage()" : "").append(";\n    }\n\n");
+            return;
+        }
         if (route.kind() == RouteKind.HOT) {
             out.append("        java.util.List<").append(rawType).append("> cachedb$rows = ")
                     .append("com.reactor.cachedb.core.route.RouteCacheContext.supplyWithContract(")
@@ -1874,10 +2065,10 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         } else {
             if (route.projection() == null) {
                 out.append("        java.util.List<").append(rawType)
-                        .append("> cachedb$rows = sourceRepository.query(cachedb$query);\n");
+                        .append("> cachedb$rows = cachedb$sourceRepository().query(cachedb$query);\n");
             } else {
                 out.append("        java.util.List<").append(model.entity().typeName())
-                        .append("> cachedb$sourceRows = sourceRepository.query(cachedb$query);\n");
+                        .append("> cachedb$sourceRows = cachedb$sourceRepository().query(cachedb$query);\n");
                 renderSourceProjectionMapping(out, model, route.projection(), "cachedb$sourceRows");
             }
             out.append("        return com.reactor.cachedb.core.query.KeysetPagination.sourceWindow(cachedb$rows, cachedb$window, sorts")
@@ -1919,10 +2110,15 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
         if (route.queryTimeoutSeconds() > 0) {
             out.append(".withQueryTimeoutSeconds(").append(route.queryTimeoutSeconds()).append(')');
         }
-        out.append(";\n")
-                .append("        return com.reactor.cachedb.core.query.KeysetPagination.apply(base, window, sorts")
-                .append(suffix).append("(), ").append(quote(route.routeName())).append(", ")
-                .append(scopeExpression(route.coverageScopeParameter())).append(");\n    }\n\n");
+        out.append(";\n");
+        if (!route.query().redisCompositeIndex().isEmpty()) {
+            out.append("        return base.orderBy(sorts").append(suffix)
+                    .append("().toArray(com.reactor.cachedb.core.query.QuerySort[]::new)).limitTo(window.limit());\n    }\n\n");
+        } else {
+            out.append("        return com.reactor.cachedb.core.query.KeysetPagination.apply(base, window, sorts")
+                    .append(suffix).append("(), ").append(quote(route.routeName())).append(", ")
+                    .append(scopeExpression(route.coverageScopeParameter())).append(");\n    }\n\n");
+        }
         out.append("    private java.util.List<com.reactor.cachedb.core.query.QuerySort> sorts").append(suffix).append("() {\n")
                 .append("        return ").append(sortsConstant(route)).append(";\n    }\n\n");
     }
@@ -2455,7 +2651,8 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             String columnName,
             TypeMirror type,
             boolean id,
-            GeneratedIdModel generatedId
+            GeneratedIdModel generatedId,
+            com.reactor.cachedb.annotations.CacheEncrypted encryption
     ) {
         String typeName() { return type.toString(); }
     }
@@ -2496,7 +2693,10 @@ public final class CacheRepositoryProcessor extends AbstractProcessor {
             List<SortModel> sorts,
             String limitParameter,
             String windowParameter,
-            int fixedLimit
+            int fixedLimit,
+            String redisCompositeIndex,
+            String redisScoreParameter,
+            String redisIdParameter
     ) {
     }
 

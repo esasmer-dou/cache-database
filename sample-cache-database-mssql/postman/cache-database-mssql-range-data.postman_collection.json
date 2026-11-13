@@ -1,0 +1,1127 @@
+{
+  "info": {
+    "name": "CacheDB mssql Range and Spring Data",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Disposable demo: exact signed Long range/keyset, Spring Data CRUD/Page/Slice/Window, verified tenant and causal rejection. Redis-resident results, not a source snapshot."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8092"
+    },
+    {
+      "key": "rangeDataEnabled",
+      "value": "false"
+    },
+    {
+      "key": "rangeDataCertification",
+      "value": "false"
+    },
+    {
+      "key": "cacheSupplierToken",
+      "value": "demo-supplier"
+    },
+    {
+      "key": "cacheTenantAToken",
+      "value": "demo-shop-a"
+    },
+    {
+      "key": "cacheTenantBToken",
+      "value": "demo-shop-b"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const enabled = String(pm.variables.get('rangeDataEnabled')) === 'true';",
+          "const required = String(pm.variables.get('rangeDataCertification')) === 'true';",
+          "if (!enabled && required) { throw new Error('rangeDataEnabled=true is required for certification'); }",
+          "if (!enabled) { pm.execution.skipRequest(); }"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Range Data - Save Tenant A a",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"rank\":\"9007199254740992\",\"status\":\"OPEN\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.collectionVariables.set('rangeRun', pm.variables.replaceIn('{{$randomUUID}}').replace(/-/g, ''));",
+              "['rangeCursor','dataCursor'].forEach(k => pm.collectionVariables.unset(k));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+              "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('9007199254740992'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Save Tenant A b",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/b",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"rank\":\"9007199254740992\",\"status\":\"OPEN\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+              "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('9007199254740992'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Save Tenant A a0",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a0",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"rank\":\"9007199254740993\",\"status\":\"OPEN\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+              "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('9007199254740993'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Save Tenant A d",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/d",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"rank\":\"9223372036854775807\",\"status\":\"OPEN\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+              "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('9223372036854775807'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Save Tenant A closed",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/closed",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"rank\":\"0\",\"status\":\"CLOSED\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+              "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('0'); pm.expect(b.row.tenant).to.eql('shop-a'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Save Tenant B a",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantBToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"rank\":\"7\",\"status\":\"OPEN\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+              "pm.test('Exact accepted row without SQL promise', function () { const b=pm.response.json(); pm.expect(b.row.rank).to.eql('7'); pm.expect(b.row.tenant).to.eql('shop-b'); pm.expect(b.sqlDurabilityConfirmed).to.eql(false); pm.expect(pm.response.headers.has('X-CacheDB-Causal')).to.eql(false); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Native Composite Range Keyset First",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=2"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"b\"]); });",
+              "pm.test('Long values and residency contract', function () { const b=pm.response.json(); pm.expect(b.items.map(r=>r.rank)).to.eql(['9007199254740992','9007199254740992']); pm.expect(b.sourceCoverageConfirmed).to.be.a('boolean'); pm.expect(b.nextCursor).to.be.a('string').and.not.empty; });",
+              "pm.collectionVariables.set('rangeCursor', pm.response.json().nextCursor);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Native Lexical Continuation",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=2&cursor={{rangeCursor}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a0\",\"d\"]); });",
+              "pm.test('Exact full-width Long continuation', function () { const b=pm.response.json(); pm.expect(b.items.map(r=>r.rank)).to.eql(['9007199254740993','9223372036854775807']); pm.expect(b.nextCursor).to.eql(null); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Native Descending Range",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=2&descending=true"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"d\",\"a0\"]); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Native Paired Raw Seek",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native/seek?afterRank=9007199254740992&afterSlot=a&limit=2"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"b\",\"a0\"]); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Native Typed Bounds",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?minimum=9007199254740993&maximum=9223372036854775807&limit=32"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a0\",\"d\"]); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Page First With Sort And Count",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/page?limit=2"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"b\"]); });",
+              "pm.test('Page total and continuation', function () { const b=pm.response.json(); pm.expect(b.total).to.eql(4); pm.expect(b.number).to.eql(0); pm.expect(b.hasNext).to.eql(true); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Page Second",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/page?page=1&limit=2"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a0\",\"d\"]); });",
+              "pm.test('Last page', function () { const b=pm.response.json(); pm.expect(b.total).to.eql(4); pm.expect(b.hasNext).to.eql(false); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Slice Without Total",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/slice?limit=2"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"b\"]); });",
+              "pm.test('Slice lookahead without total', function () { const b=pm.response.json(); pm.expect(b.hasNext).to.eql(true); pm.expect(b).not.to.have.property('total'); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Typed Keyset Window First",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/window?limit=2"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"b\"]); });",
+              "pm.test('Typed Window continuation', function () { const b=pm.response.json(); pm.expect(b.hasNext).to.eql(true); pm.expect(b.nextCursor).to.be.a('string').and.not.empty; });",
+              "pm.collectionVariables.set('dataCursor', pm.response.json().nextCursor);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Typed Keyset Window Next",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/window?limit=2&cursor={{dataCursor}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a0\",\"d\"]); });",
+              "pm.test('Typed Window end', function () { const b=pm.response.json(); pm.expect(b.hasNext).to.eql(false); pm.expect(b.nextCursor).to.eql(null); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Count And Exists Tenant A",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/stats"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Tenant A count and exists', function () { pm.expect(pm.response.json()).to.eql({count:4,exists:true}); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Count And Exists Tenant B",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantBToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/stats"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Tenant B count and exists', function () { pm.expect(pm.response.json()).to.eql({count:1,exists:true}); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Point Read Tenant A",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Tenant A exact native Long', function () { const b=pm.response.json(); pm.expect(b.tenant).to.eql('shop-a'); pm.expect(b.rank).to.eql('9007199254740992'); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Point Read Tenant B",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantBToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/a"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Tenant B independent same slot', function () { const b=pm.response.json(); pm.expect(b.tenant).to.eql('shop-b'); pm.expect(b.rank).to.eql('7'); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Cross Tenant Cursor",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantBToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?cursor={{rangeCursor}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Changed Bounds Cursor",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?minimum=1&cursor={{rangeCursor}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Changed Direction Cursor",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?descending=true&cursor={{rangeCursor}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Reject Native Cursor",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/window?cursor={{rangeCursor}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Typed Data Cursor",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?cursor={{dataCursor}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Missing Authentication",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 401', function () { pm.response.to.have.status(401); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Supplier As Tenant",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheSupplierToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 403', function () { pm.response.to.have.status(403); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Nonempty Causal Query",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          },
+          {
+            "key": "X-CacheDB-Causal",
+            "value": "required",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 409', function () { pm.response.to.have.status(409); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Excessive Limit",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=33"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Reject Deep Offset",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/page?page=129&limit=2"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Long Overflow",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/invalid",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"rank\":\"9223372036854775808\",\"status\":\"OPEN\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Reject Oversized Body",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/invalid",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"rank\":\"42\",\"status\":\"OPEN\",\"padding\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 413', function () { pm.response.to.have.status(413); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Delete One Row",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/b"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range Data - Native After Point Delete",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/native?limit=32"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Exact ordered slots', function () { pm.expect(pm.response.json().items.map(r => r.slot)).to.eql([\"a\",\"a0\",\"d\"]); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Count After Point Delete",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/stats"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Deletion changes only Tenant A open rows', function () { pm.expect(pm.response.json()).to.eql({count:3,exists:true}); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Tenant B Survives Delete",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantBToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/data/stats"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Tenant B unchanged', function () { pm.expect(pm.response.json()).to.eql({count:1,exists:true}); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spring Data - Deleted Point Is Missing",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{cacheTenantAToken}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/api/examples/v019/range-data/{{rangeRun}}/rows/b"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 404', function () { pm.response.to.have.status(404); });"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

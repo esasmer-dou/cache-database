@@ -7,11 +7,61 @@ import redis.clients.jedis.resps.ScanResult;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-public final class JedisClusterOperations implements RedisClientOperations {
+public final class JedisClusterOperations implements RedisClientOperations, RedisTrackingConnectionProvider, RedisTopologyChangeSource {
     private final JedisCluster client;
+    private final java.util.concurrent.CopyOnWriteArrayList<Runnable> topologyListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final java.util.concurrent.Semaphore topologyListenerBudget = new java.util.concurrent.Semaphore(64);
+
+    @Override public AutoCloseable onTopologyChange(Runnable listener) {
+        Objects.requireNonNull(listener, "listener");
+        if (!topologyListenerBudget.tryAcquire()) throw new IllegalStateException("Topology listener budget exceeded");
+        topologyListeners.add(listener);
+        var removed = new java.util.concurrent.atomic.AtomicBoolean();
+        return () -> {
+            if (removed.compareAndSet(false, true)) {
+                topologyListeners.remove(listener); topologyListenerBudget.release();
+            }
+        };
+    }
+    @Override public void topologyChanged() {
+        for (Runnable listener : topologyListeners) {
+            try { listener.run(); }
+            catch (RuntimeException failure) {
+                System.getLogger(getClass().getName()).log(System.Logger.Level.WARNING,
+                        "Topology notification failed (" + failure.getClass().getSimpleName() + ")");
+            }
+        }
+    }
 
     public JedisClusterOperations(JedisCluster client) {
         this.client = Objects.requireNonNull(client, "client");
+    }
+
+    @Override public int physicalPoolCapacity() {
+        var pools = client.getClusterNodes().values();
+        if (pools.isEmpty()) return 2;
+        int minimum = Integer.MAX_VALUE;
+        for (var pool : pools) {
+            int maximum = pool.getMaxTotal();
+            if (maximum <= 0) throw new IllegalStateException("Point reads require finite positive maxTotal on every cluster node");
+            minimum = Math.min(minimum, maximum);
+        }
+        return minimum;
+    }
+
+    @Override public boolean trackingClustered() { return true; }
+
+    @Override public List<RedisTrackingNode> trackingNodes(int maximumNodes) {
+        if (maximumNodes < 1 || maximumNodes > 64) throw new IllegalArgumentException("Node limit must be 1..64");
+        var nodes = client.getClusterNodes();
+        if (nodes.size() > maximumNodes) throw new IllegalStateException("Cluster node budget exceeded");
+        var result = new ArrayList<RedisTrackingNode>();
+        for (var entry : nodes.entrySet()) {
+            if (result.size() >= maximumNodes) throw new IllegalStateException("Cluster node budget exceeded");
+            result.add(new RedisTrackingNode(entry.getKey(), entry.getValue().getFactory()));
+        }
+        result.sort(java.util.Comparator.comparing(RedisTrackingNode::key));
+        return List.copyOf(result);
     }
 
     public JedisCluster commands() {
@@ -97,7 +147,9 @@ public final class JedisClusterOperations implements RedisClientOperations {
                             s -> new ArrayList<>())
                     .add(i);
         for (var indices : groups.values()) {
-            var group = client.mget(indices.stream().map(i -> keys[i]).toArray(String[]::new));
+            List<String> group;
+            try { group = client.mget(indices.stream().map(i -> keys[i]).toArray(String[]::new)); }
+            catch (RuntimeException failure) { RedisTopologyChangeSource.failure(this, failure); throw failure; }
             for (int i = 0; i < indices.size(); i++) values.set(indices.get(i), group.get(i));
         }
         return values;

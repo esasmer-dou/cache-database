@@ -1,10 +1,8 @@
 name: CacheDB Consumer Build
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  # EmaTech runtime evidence is canonical; this legacy workflow is manual-only.
+  # Do not dispatch this workflow to replay already-passed scopes.
   workflow_dispatch:
 
 permissions:

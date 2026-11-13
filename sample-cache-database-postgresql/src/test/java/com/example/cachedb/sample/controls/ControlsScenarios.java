@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.example.cachedb.sample.domain.SupplierOffer;
 import com.example.cachedb.sample.domain.SupplierOfferCacheBinding;
 import com.reactor.cachedb.core.cache.NearCachePolicy;
+import com.reactor.cachedb.core.config.NearCacheInvalidationMode;
 import com.reactor.cachedb.redis.*;
 import com.reactor.cachedb.starter.CacheDatabase;
 import java.math.BigDecimal;
@@ -109,21 +110,61 @@ public final class ControlsScenarios {
     }
 
     public static void nearCache(TestRestTemplate http, String base, String redisUri, CacheDatabase database) throws Exception {
+        nearCache(http, base, redisUri, database, NearCacheInvalidationMode.SERVER_TRACKING);
+    }
+
+    public static void nearCache(TestRestTemplate http, String base, String redisUri, CacheDatabase database,
+            NearCacheInvalidationMode expectedMode) throws Exception {
         transport(http);
         String path = base + "/api/examples/v018";
+        var invalidation = database.nearCacheCoordinator();
+        var metadata = SupplierOfferCacheBinding.METADATA;
+        var store = invalidation.register(metadata.redisNamespace(), metadata.nearCachePolicy());
+        await(invalidation::connected);
+        assertEquals(expectedMode, invalidation.invalidationMode(), invalidation.invalidationFailure());
+        if (expectedMode == NearCacheInvalidationMode.SERVER_TRACKING) assertTrue(invalidation.trackingReady());
+        long initialNotifications = invalidation.invalidationsReceived();
         put(http, path, 9500001, "swr", "ACTIVE", "1.0000", 6);
-        for (int i = 0; i < 3; i++)
-            assertEquals(6, number(object(call(http, path + "/offers/9500001", HttpMethod.GET, "demo-supplier", null), 200).get("availableUnits")));
+        // Drain the original write notification before proving admission or injecting a missed one.
+        await(() -> invalidation.invalidationsReceived() > initialNotifications);
+        String identity = "9500001";
+        // Prove admission after the subscription handshake, not just successful Redis reads.
+        await(() -> {
+            assertEquals(6, number(object(call(http, path + "/offers/" + identity, HttpMethod.GET, "demo-supplier", null), 200).get("availableUnits")));
+            var entry = store.lookup(identity, 0);
+            return invalidation.connected() && entry != null && !entry.softExpired()
+                    && SupplierOfferCacheBinding.CODEC.fromRedisValue(entry.payload()).availableUnits() == 6;
+        });
+        var admitted = store.lookup(identity, 0);
+        assertNotNull(admitted);
+        var beforeExternal = store.capture(identity);
         try (var redis = new JedisPooled(redisUri)) {
             var keys = new RedisKeyStrategy(database.config().keyspace().keyPrefix());
-            // Fault injection only: simulate a missed invalidation, not a supported application write path.
-            redis.set(keys.entityKey("sample-supplier-offers", 9500001),
+            // Fault injection only: direct SET omits CacheDB versions, indexes, persistence and PUBLISH.
+            redis.set(keys.entityKey(metadata.redisNamespace(), 9500001),
                     SupplierOfferCacheBinding.CODEC.toRedisValue(new SupplierOffer(9500001L, "swr", "ACTIVE", new BigDecimal("1.0000"), 7)));
-            Thread.sleep(2200);
-            assertEquals(6, number(object(call(http, path + "/offers/9500001", HttpMethod.GET, "demo-supplier", null), 200).get("availableUnits")));
-            await(() -> number(object(call(http, path + "/offers/9500001", HttpMethod.GET, "demo-supplier", null), 200).get("availableUnits")) == 7);
+            if (expectedMode == NearCacheInvalidationMode.SERVER_TRACKING) {
+                await(() -> !beforeExternal.equals(store.capture(identity)));
+                assertTrue(invalidation.trackingReady(), invalidation.invalidationFailure());
+                assertNull(store.lookup(identity, 0), "Tracking must remove the old L1 entry before another HTTP read");
+                assertEquals(7, number(object(call(http, path + "/offers/" + identity, HttpMethod.GET, "demo-supplier", null), 200).get("availableUnits")));
+            } else {
+                await(admitted::softExpired);
+                assertTrue(invalidation.connected(), invalidation.invalidationFailure());
+                assertEquals(beforeExternal, store.capture(identity), "Raw SET must not pretend to publish a CacheDB notification");
+                assertTrue(System.nanoTime() < admitted.expiresAt(), "The stale read must occur before hard expiry");
+                assertSame(admitted, store.lookup(identity, 0));
+                assertEquals(6, number(object(call(http, path + "/offers/" + identity, HttpMethod.GET, "demo-supplier", null), 200).get("availableUnits")));
+            }
+            await(() -> number(object(call(http, path + "/offers/" + identity, HttpMethod.GET, "demo-supplier", null), 200).get("availableUnits")) == 7);
+            // Return to a protocol-owned write and verify its notification on both modes.
+            var beforeProtocol = store.capture(identity);
+            put(http, path, 9500001, "swr", "ACTIVE", "1.0000", 8);
+            await(() -> !beforeProtocol.equals(store.capture(identity)));
+            assertEquals(8, number(object(call(http, path + "/offers/" + identity, HttpMethod.GET, "demo-supplier", null), 200).get("availableUnits")));
             try (var coordinator = new RedisNearCacheCoordinator(JedisPooledOperations.of(redis), new RedisKeyStrategy("sample-scan-" + UUID.randomUUID()))) {
                 var cache = coordinator.register("bounded-test", new NearCachePolicy(64, 10, 1_048_576));
+                await(coordinator::connected);
                 var ids = java.util.stream.IntStream.range(0, 10000).mapToObj(i -> "key" + i)
                         .filter(id -> (id.hashCode() & Integer.MAX_VALUE) % 16 == 0).limit(40).toList();
                 for (int i = 0; i < 4; i++) cache.put(ids.get(i), "v", -1, cache.epoch());

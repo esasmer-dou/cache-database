@@ -11,6 +11,34 @@ import java.util.List;
 import java.util.Map;
 
 public final class RedisFunctionArgsMapper {
+    private java.util.function.BooleanSupplier nearInvalidationPublisher = () -> true;
+    /** Evaluated once per operation; never snapshot a connection's readiness at bootstrap. */
+    public RedisFunctionArgsMapper withNearInvalidationPublisher(java.util.function.BooleanSupplier publisher) {
+        nearInvalidationPublisher = java.util.Objects.requireNonNull(publisher, "publisher"); return this;
+    }
+    public record NearInvalidation(String channel, String message) {
+        public NearInvalidation {
+            if (channel == null || message == null || channel.length() > 1024 || message.length() > 16384
+                    || channel.isEmpty() != message.isEmpty())
+                throw new IllegalArgumentException("Invalid near-cache invalidation arguments");
+        }
+    }
+
+    /** Uses the same live supplier configured for ordinary producers; evaluated once per operation. */
+    public NearInvalidation nearInvalidation(String namespace, Object id, CachePolicy policy) {
+        java.util.Objects.requireNonNull(policy);
+        boolean publish = policy.nearCachePolicy().enabled() && nearInvalidationPublisher.getAsBoolean();
+        return publish ? new NearInvalidation(nearInvalidationChannel, RedisNearCacheCoordinator.message(namespace, id))
+                : new NearInvalidation("", "");
+    }
+
+    private boolean appendNearInvalidation(List<String> args, WriteOperation<?, ?> operation, CachePolicy policy) {
+        NearInvalidation value = nearInvalidation(operation.metadata().redisNamespace(), operation.id(), policy);
+        if (value.channel().isEmpty()) return false;
+        args.add(value.channel()); args.add(value.message());
+        return true;
+    }
+
     private String nearInvalidationChannel = "cachedb:near-invalidation";
     public RedisFunctionArgsMapper withNearInvalidationChannel(String channel) {
         nearInvalidationChannel = java.util.Objects.requireNonNull(channel); return this;
@@ -89,22 +117,16 @@ public final class RedisFunctionArgsMapper {
         }
         args.add(com.reactor.cachedb.core.trace.TraceMetadataCodec.encode(
                 operation.traceMetadata().isEmpty() ? trace.capture() : operation.traceMetadata()));
-        if (cachePolicy.nearCachePolicy().enabled()) {
-            args.add(nearInvalidationChannel);
-            args.add(RedisNearCacheCoordinator.message(operation.metadata().redisNamespace(), operation.id()));
-        }
-        addTenant(args, operation, cachePolicy.nearCachePolicy().enabled());
+        boolean publish = appendNearInvalidation(args, operation, cachePolicy);
+        addTenant(args, operation, publish);
         return args;
     }
 
     public <T, ID> List<String> deleteArgs(WriteOperation<T, ID> operation,
             RedisGuardrailConfig guardrails, WriteBehindConfig writeBehind, CachePolicy policy) {
         var args = new ArrayList<>(deleteArgs(operation, guardrails, writeBehind));
-        if (policy.nearCachePolicy().enabled()) {
-            args.add(nearInvalidationChannel);
-            args.add(RedisNearCacheCoordinator.message(operation.metadata().redisNamespace(), operation.id()));
-        }
-        addTenant(args, operation, policy.nearCachePolicy().enabled());
+        boolean publish = appendNearInvalidation(args, operation, policy);
+        addTenant(args, operation, publish);
         return args;
     }
 
@@ -149,6 +171,8 @@ public final class RedisFunctionArgsMapper {
     }
 
     private <T, ID> Map<String, Object> filteredColumns(WriteOperation<T, ID> operation) {
+        if (operation.type() != com.reactor.cachedb.core.model.OperationType.DELETE)
+            com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateQueuedColumns(operation.metadata(), operation.columns());
         Map<String, Object> filtered = new java.util.LinkedHashMap<>(operation.columns());
         filtered.remove(operation.metadata().versionColumn());
         if (operation.metadata().deletedColumn() != null) {

@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.*;
 
 /** Best-effort local mutation notifications, not CDC or an exactly-once business event log. */
 final class RedisWatchRegistry<T, ID> {
+    private final java.util.concurrent.locks.ReentrantLock registrationLock = new java.util.concurrent.locks.ReentrantLock();
     private static final long MAX_QUEUED_BYTES = 4 * 1024 * 1024;
     private static final int PARTITIONS = 4;
     private static final Dispatcher[] DISPATCHERS = new Dispatcher[PARTITIONS];
@@ -27,13 +28,18 @@ final class RedisWatchRegistry<T, ID> {
     }
     boolean active() { return !watches.isEmpty(); }
     long dropped() { return dropped.get(); }
-    synchronized CacheWatcherRegistration register(QuerySpec spec, CacheWatcherListener<T, ID> listener) {
-        Objects.requireNonNull(spec); Objects.requireNonNull(listener);
-        if (spec.offset() != 0 || !spec.sorts().isEmpty() || !spec.fetchPlan().includes().isEmpty())
-            throw new IllegalArgumentException("Watcher observes predicate membership, not sorted windows or relations");
-        if (watches.size() >= limit) throw new IllegalStateException("Watcher capacity exceeded");
-        Watch watch = new Watch(spec.rootGroup(), listener, CacheTenantContext.currentTenant().orElse(null));
-        watches.add(watch); return watch;
+    CacheWatcherRegistration register(QuerySpec spec, CacheWatcherListener<T, ID> listener) {
+        registrationLock.lock();
+        try {
+            Objects.requireNonNull(spec); Objects.requireNonNull(listener);
+            if (spec.offset() != 0 || !spec.sorts().isEmpty() || !spec.fetchPlan().includes().isEmpty())
+                throw new IllegalArgumentException("Watcher observes predicate membership, not sorted windows or relations");
+            if (watches.size() >= limit) throw new IllegalStateException("Watcher capacity exceeded");
+            Watch watch = new Watch(spec.rootGroup(), listener, CacheTenantContext.currentTenant().orElse(null));
+            watches.add(watch); return watch;
+        } finally {
+            registrationLock.unlock();
+        }
     }
     void changed(ID id, String previousPayload, String currentPayload) {
         if (!active()) return;
@@ -81,20 +87,26 @@ final class RedisWatchRegistry<T, ID> {
         public void close() { if (active.getAndSet(false)) watches.remove(this); }
     }
     private static final class Dispatcher {
+        private final java.util.concurrent.locks.ReentrantLock dispatchLock = new java.util.concurrent.locks.ReentrantLock();
         private record Task(Runnable action, long bytes) {}
         private final ArrayBlockingQueue<Task> queue = new ArrayBlockingQueue<>(256);
         private long queuedBytes;
         private boolean started;
         private final int index;
         Dispatcher(int index) { this.index = index; }
-        synchronized boolean submit(Runnable action, long bytes) {
-            if (queuedBytes + bytes > MAX_QUEUED_BYTES) return false;
-            queuedBytes += bytes;
-            if (!queue.offer(new Task(action, bytes))) { queuedBytes -= bytes; return false; }
-            if (!started) {
-                Thread worker = new Thread(this::run, "cachedb-watcher-" + index); worker.setDaemon(true); worker.start(); started = true;
+        boolean submit(Runnable action, long bytes) {
+            dispatchLock.lock();
+            try {
+                if (queuedBytes + bytes > MAX_QUEUED_BYTES) return false;
+                queuedBytes += bytes;
+                if (!queue.offer(new Task(action, bytes))) { queuedBytes -= bytes; return false; }
+                if (!started) {
+                    Thread worker = new Thread(this::run, "cachedb-watcher-" + index); worker.setDaemon(true); worker.start(); started = true;
+                }
+                return true;
+            } finally {
+                dispatchLock.unlock();
             }
-            return true;
         }
         private void run() {
             while (true) {
@@ -102,7 +114,7 @@ final class RedisWatchRegistry<T, ID> {
                     Task task = queue.take();
                     try { task.action.run(); }
                     catch (RuntimeException failure) { System.getLogger(getClass().getName()).log(System.Logger.Level.WARNING, "Watcher dispatch failed", failure); }
-                    finally { synchronized (this) { queuedBytes -= task.bytes; } }
+                    finally { dispatchLock.lock(); try { queuedBytes -= task.bytes; } finally { dispatchLock.unlock(); } }
                 } catch (InterruptedException stop) { Thread.currentThread().interrupt(); return; }
             }
         }

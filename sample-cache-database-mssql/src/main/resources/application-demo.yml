@@ -1,17 +1,69 @@
 spring:
   sql:
     init:
-      schema-locations: classpath:schema.sql,classpath:schema-controls.sql
+      schema-locations: classpath:schema.sql,classpath:schema-controls.sql,classpath:schema-range-data.sql,classpath:schema-audit.sql,optional:classpath*:schema-encryption.sql
       mode: always
 
 cachedb:
   profile: development
+  registration:
+    entities:
+      EvictAuditNote:
+        hot-entity-limit: 8
+        page-size: 8
+        entity-ttl-seconds: 1800
+        page-ttl-seconds: 5
+        hot-policy:
+          mode: COUNT_WINDOW
+      DeleteAuditNote:
+        hot-entity-limit: 8
+        page-size: 8
+        entity-ttl-seconds: 1800
+        page-ttl-seconds: 5
+        hot-policy:
+          mode: COUNT_WINDOW
+      RangeDataRow:
+        hot-entity-limit: 512
+        page-size: 32
+        entity-ttl-seconds: 1800
+        page-ttl-seconds: 5
+        hot-policy:
+          mode: COUNT_WINDOW
+  spring-cache:
+    enabled: true
+    key-prefix: ${SAMPLE_METHOD_CACHE_PREFIX:demo-methods-mssql}
+    max-concurrent-operations: 128
+    max-in-flight-keys: 1024
+    max-waiters: 4096
+    load-timeout: 30s
+    caches:
+      quotes:
+        ttl: 5m
+        tenant-scoped: true
+        allow-null-values: false
+        max-value-bytes: 4096
+        near-cache:
+          max-entries: 256
+          max-bytes: 1048576
+          ttl: 10s
+          soft-ttl: 0s
+      nulls:
+        ttl: 30s
+        tenant-scoped: true
+        allow-null-values: true
+        max-value-bytes: 4096
   admin:
     enabled: true
     http-enabled: true
     dashboard-enabled: true
 
 sample:
+  audit-api:
+    enabled: true
+  range-data:
+    enabled: true
+  cache-api:
+    enabled: true
   controls:
     supplier-token: ${SAMPLE_CONTROLS_SUPPLIER_TOKEN:demo-supplier}
     tenant-a-token: ${SAMPLE_CONTROLS_TENANT_A_TOKEN:demo-shop-a}

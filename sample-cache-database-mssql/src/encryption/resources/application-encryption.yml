@@ -1,0 +1,14 @@
+spring:
+  sql:
+    init:
+      schema-locations: classpath:schema.sql,classpath:schema-controls.sql,optional:classpath*:schema-range-data.sql,classpath:schema-encryption.sql,optional:classpath*:schema-audit.sql
+      mode: always
+
+cachedb:
+  registration:
+    entities:
+      EncryptedNote:
+        hot-entity-limit: 8
+        page-size: 8
+        entity-ttl-seconds: 300
+        page-ttl-seconds: 5

@@ -175,11 +175,42 @@ database.writeBatch("cancel-" + requestId)
 
 Register every writable entity and projection first. IDs must be assigned before
 put; the batch does not guess missing IDs or merge partial entities. Supply complete
-entities. A batch has at most 100 operations, a 4 MiB encoded command limit, bounded
+entities. A batch has at most 100 operations, a 4 MiB encoded argument-data limit, bounded
 stream fields and the configured per-operation column limit. Duplicate entity/ID
 pairs and invalid version preconditions fail before mutation. Batch IDs are stable
 idempotency keys for retries; identical retries reuse the receipt for 24 hours.
 Do not reuse an ID for different operations or assume deduplication after expiry.
+
+### Retry Identity In 0.19
+
+For new unencrypted receipts, identity follows the ordered business operations,
+entity mapping, physical destinations, assignments and explicit version conditions.
+Changes in cache admission, hot-set size, TTL, tracing or invalidation publication
+do not turn an identical retry into a different write. Internal column/projection
+registration order is canonicalized; the caller's operation order is not.
+An accepted replay returns the original receipt without another stream append,
+version increment, payload rewrite or extension of the receipt/payload TTL.
+
+For example, a catalog import accepted on one pod can be retried on another pod
+after the adaptive memory profile changes. Retain its batch ID, entities, values
+and operation order. A changed price, tenant, target mapping or expected version
+is a different operation and must not reuse that ID. PATCH retains its assignment
+intent; its internally observed hot version is still checked on first acceptance.
+PATCH construction still requires the complete hot, versioned row; deduplication
+does not add a cold-row merge or bypass that prerequisite.
+
+Old callers and receipts created without the new logical identity retain strict
+legacy matching, including policy-sensitive inputs. They are not automatically
+backfilled or rewritten: the original business intent cannot be proved from a
+stored digest. Keep old retry configuration stable during a mixed-version rollout;
+reconcile an ambiguous result rather than submitting it under a fresh batch ID.
+Encrypted batches retain their existing keyed intent and encryption contracts.
+The 100-operation and 4 MiB argument-data bounds include replay metadata. Redis key
+names and RESP framing are additional wire bytes; this is not a total heap budget.
+Stored replay stream/version fields are length-checked before reading and must have
+valid canonical formats. Corrupt or incomplete receipts fail closed without rewriting
+the receipt, incrementing versions or refreshing TTLs. Redis write permissions remain
+trusted: the receipt digest is not authentication against arbitrary storage changes.
 
 Redis applies payload/version/tombstone changes and supported registered projection
 payloads in one operation, then enqueues one indivisible envelope. Query indexes are

@@ -1,0 +1,198 @@
+name: CacheDB Paired Redis Performance Gate
+description: Existing approved fresh EmaTech pod only; controller attaches and exports, never builds or tests.
+inputs:
+  namespace:
+    description: Existing approved namespace
+    required: true
+  pod:
+    description: Existing idle benchmark pod with a fresh six-hour physical deadline
+    required: true
+  pod-uid:
+    description: Explicit independently approved existing pod UID
+    required: true
+  deadline-epoch:
+    description: Existing approved absolute UTC execution deadline, Unix seconds
+    required: true
+  container:
+    description: Existing benchmark container with JDK21, Maven, PowerShell and Python3
+    required: true
+  workspace:
+    description: Existing clean checkout matching the exact workflow SHA, below /workspace
+    required: true
+  redis:
+    description: Exclusive co-located disposable Redis, 127.0.0.1:port
+    required: true
+  baseline-jar:
+    description: Preserved original 0.18.1 benchmark JAR below /workspace, outside all target directories
+    required: true
+  baseline-sha256:
+    description: Independently recorded original baseline hash, not derived from candidate source
+    required: true
+  cpus:
+    description: Identical child JVM ActiveProcessorCount for all pairs, 1 or 2
+    required: true
+  container-cpu-limit:
+    description: Exact already-approved benchmark CPU limit and request
+    required: true
+  pod-cpu-limit:
+    description: Exact already-approved sum of benchmark and Redis CPU limits
+    required: true
+  memory-limit:
+    description: Exact already-approved benchmark memory limit, Mi/Gi and at least 2Gi
+    required: true
+outputs:
+  evidence-directory:
+    description: Local raw evidence, including failed attempts
+    value: ${{ steps.target.outputs.evidence }}
+runs:
+  using: composite
+  steps:
+    - id: target
+      name: Attach without provisioning or extending authority
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        POD: ${{ inputs.pod }}
+        APPROVED_POD_UID: ${{ inputs.pod-uid }}
+        APPROVED_DEADLINE_EPOCH: ${{ inputs.deadline-epoch }}
+        CONTAINER: ${{ inputs.container }}
+        WORK: ${{ inputs.workspace }}
+        REDIS: ${{ inputs.redis }}
+        BASELINE: ${{ inputs.baseline-jar }}
+        BASELINE_SHA: ${{ inputs.baseline-sha256 }}
+        CPUS: ${{ inputs.cpus }}
+        CONTAINER_CPU_LIMIT: ${{ inputs.container-cpu-limit }}
+        POD_CPU_LIMIT: ${{ inputs.pod-cpu-limit }}
+        MEMORY: ${{ inputs.memory-limit }}
+      run: |
+        set -euo pipefail
+        for utility in java kubectl timeout git sha256sum date; do command -v "$utility" >/dev/null; done
+        [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] && test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] && [[ "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+        [[ "$APPROVED_POD_UID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+        [[ "$APPROVED_DEADLINE_EPOCH" =~ ^[0-9]{10}$ ]]
+        [[ "${CACHEDB_CI_CAP_EPOCH:-}" =~ ^[0-9]{10}$ ]]
+        deadline=$APPROVED_DEADLINE_EPOCH
+        if test "$deadline" -gt "$CACHEDB_CI_CAP_EPOCH"; then deadline=$CACHEDB_CI_CAP_EPOCH; fi
+        # One immutable work cutoff; fifteen minutes are reserved for raw export/upload.
+        cutoff=$((deadline - 900))
+        test "$cutoff" -gt "$(date +%s)"
+        export CACHEDB_CI_WORK_CUTOFF_EPOCH="$cutoff"
+        for name in "$NS" "$POD" "$CONTAINER"; do
+          [[ "$name" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] && test "${#name}" -le 253
+        done
+        for path in "$WORK" "$BASELINE"; do
+          [[ "$path" =~ ^/workspace(/[A-Za-z0-9_.-]+)*$ ]]
+          case "$path" in */../*|*/./*|*/..|*/.) exit 2 ;; esac
+        done
+        [[ "$BASELINE_SHA" =~ ^[0-9a-f]{64}$ ]]
+        [[ "$REDIS" =~ ^127\.0\.0\.1:([1-9][0-9]{0,4})$ ]]
+        test "${BASH_REMATCH[1]}" -le 65535
+        case "$CPUS" in 1|2) ;; *) exit 2 ;; esac
+        case "$CONTAINER_CPU_LIMIT" in 1|2) ;; *) exit 2 ;; esac
+        case "$POD_CPU_LIMIT" in 2|3) ;; *) exit 2 ;; esac
+        [[ "$MEMORY" =~ ^[1-9][0-9]{0,5}(Mi|Gi)$ ]]
+        evidence="target/ci-redis-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+        test ! -e "$evidence"
+        mkdir -p "$evidence"
+        echo "evidence=$evidence" >> "$GITHUB_OUTPUT"
+        echo "cutoff=$cutoff" >> "$GITHUB_OUTPUT"
+        echo "deadline=$deadline" >> "$GITHUB_OUTPUT"
+        printf 'commit=%s\napprovedPodUid=%s\napprovedDeadlineEpoch=%s\njobCapEpoch=%s\neffectiveDeadlineEpoch=%s\nworkCutoffEpoch=%s\n' \
+          "$GITHUB_SHA" "$APPROVED_POD_UID" "$APPROVED_DEADLINE_EPOCH" "$CACHEDB_CI_CAP_EPOCH" "$deadline" "$cutoff" > "$evidence/authority.txt"
+        export RESOURCE_GUARD="$GITHUB_WORKSPACE/$evidence/resource-guard.jar"
+        bash tools/ci/prepare-ematech-resource-guard.sh
+        sha256sum --check --strict "$RESOURCE_GUARD.sha256"
+        resources=$(timeout --signal=TERM --kill-after=5s 60s kubectl --context kubernetes-admin@EmaTech \
+          --request-timeout=30s -n "$NS" get pod "$POD" -o json |
+          timeout --signal=TERM --kill-after=5s 30s java -Xmx64m -jar "$RESOURCE_GUARD" \
+            qualify --container "$CONTAINER" --redis redis --container-cpu "$CONTAINER_CPU_LIMIT" \
+            --pod-cpu "$POD_CPU_LIMIT" --child "$CPUS" --memory "$MEMORY" --fresh --github-output "$GITHUB_OUTPUT")
+        [[ "$resources" == *"\"uid\":\"$APPROVED_POD_UID\""* ]]
+        printf '%s\n' "$resources" > "$evidence/pod-resources.json"
+        image=$(timeout 30s kubectl --context kubernetes-admin@EmaTech --request-timeout=20s -n "$NS" \
+          get pod "$POD" -o 'jsonpath={.spec.containers[?(@.name=="redis")].image}')
+        test "$image" = 'redis:8.2.1-alpine3.22@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232'
+        printf '%s\n' "$image" > "$evidence/redis-image.txt"
+    - id: measure
+      name: Run unchanged paired controls and gates inside EmaTech
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        POD: ${{ inputs.pod }}
+        POD_UID: ${{ inputs.pod-uid }}
+        CONTAINER: ${{ inputs.container }}
+        WORK: ${{ inputs.workspace }}
+        REDIS: ${{ inputs.redis }}
+        BASELINE: ${{ inputs.baseline-jar }}
+        BASELINE_SHA: ${{ inputs.baseline-sha256 }}
+        CPUS: ${{ inputs.cpus }}
+        EVIDENCE: ${{ steps.target.outputs.evidence }}
+        CUTOFF: ${{ steps.target.outputs.cutoff }}
+        RESOURCES: ${{ steps.target.outputs.resources }}
+      run: |
+        set -euo pipefail
+        guard="$GITHUB_WORKSPACE/$EVIDENCE/resource-guard.jar"
+        sha256sum --check --strict "$guard.sha256"
+        timeout 60s kubectl --context kubernetes-admin@EmaTech --request-timeout=30s -n "$NS" get pod "$POD" -o json |
+          timeout 30s java -Xmx64m -jar "$guard" same --container "$CONTAINER" --redis redis --expected "$RESOURCES" > "$EVIDENCE/pod-resources-before.json"
+        left=$((CUTOFF - $(date +%s)))
+        test "$left" -gt 0
+        port=${REDIS##*:}
+        timeout --signal=TERM --kill-after=5s 60s kubectl --context kubernetes-admin@EmaTech --request-timeout=30s \
+          -n "$NS" exec "$POD" -c redis -- sh -c '
+          set -eu
+          redis-cli -e -h 127.0.0.1 -p "$1" CONFIG SET maxmemory 268435456
+          redis-cli -e -h 127.0.0.1 -p "$1" CONFIG SET maxmemory-policy noeviction
+          redis-cli -e -h 127.0.0.1 -p "$1" CONFIG GET maxmemory maxmemory-policy
+        ' sh "$port" > "$EVIDENCE/redis-config.txt" 2>&1
+        left=$((CUTOFF - $(date +%s)))
+        test "$left" -gt 0
+        timeout --signal=TERM --kill-after=15s "${left}s" \
+          kubectl --context kubernetes-admin@EmaTech --request-timeout=0 -n "$NS" exec -i "$POD" -c "$CONTAINER" -- \
+          timeout --signal=TERM --kill-after=15s "${left}s" bash -s -- \
+          "$WORK" "$GITHUB_SHA" "$BASELINE" "$BASELINE_SHA" "$CPUS" "$REDIS" \
+          "/workspace/.cachedb-ci-evidence/$EVIDENCE" "$CUTOFF" "$POD_UID" \
+          < tools/ci/run-ematech-redis-performance.sh > "$EVIDENCE/remote-launcher.log" 2>&1
+    - name: Export raw attempts without retry or cleanup
+      if: always() && steps.target.outputs.evidence != ''
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        POD: ${{ inputs.pod }}
+        POD_UID: ${{ inputs.pod-uid }}
+        CONTAINER: ${{ inputs.container }}
+        EVIDENCE: ${{ steps.target.outputs.evidence }}
+        DEADLINE: ${{ steps.target.outputs.deadline }}
+        RESOURCES: ${{ steps.target.outputs.resources }}
+      run: |
+        set -euo pipefail
+        left=$((DEADLINE - $(date +%s) - 300))
+        test "$left" -gt 0
+        guard="$GITHUB_WORKSPACE/$EVIDENCE/resource-guard.jar"
+        resource_match=true
+        if test -f "$guard" && test -n "$RESOURCES"; then
+          sha256sum --check --strict "$guard.sha256" > "$EVIDENCE/guard-after.log" 2>&1 || resource_match=false
+          timeout 60s kubectl --context kubernetes-admin@EmaTech --request-timeout=30s -n "$NS" get pod "$POD" -o json |
+            timeout 30s java -Xmx64m -jar "$guard" same --container "$CONTAINER" --redis redis \
+              --expected "$RESOURCES" > "$EVIDENCE/pod-resources-final.json" 2> "$EVIDENCE/resource-guard-final.stderr.log" || resource_match=false
+        else
+          resource_match=false
+        fi
+        # Never read files from a replacement pod; failure logs already remain on the controller.
+        test "$(timeout 30s kubectl --context kubernetes-admin@EmaTech --request-timeout=20s -n "$NS" \
+          get pod "$POD" -o 'jsonpath={.metadata.uid}')" = "$POD_UID"
+        left=$((DEADLINE - $(date +%s) - 300))
+        test "$left" -gt 0
+        if test "$left" -gt 300; then left=300; fi
+        mkdir "$EVIDENCE/raw"
+        timeout --signal=TERM --kill-after=15s "${left}s" kubectl --context kubernetes-admin@EmaTech --request-timeout=0 \
+          -n "$NS" exec "$POD" -c "$CONTAINER" -- timeout --signal=TERM --kill-after=15s "${left}s" sh -c '
+          set -eu
+          cd /workspace/.cachedb-ci-evidence
+          test -d "$1"
+          kb=$(du -sk "$1" | cut -f 1)
+          test "$kb" -le 2097152
+          tar -cf - "$1"
+        ' sh "$EVIDENCE" | tar -xf - -C "$EVIDENCE/raw"
+        test "$resource_match" = true

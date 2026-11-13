@@ -20,8 +20,32 @@ import java.util.Map;
 import java.util.Optional;
 
 public interface EntityRepository<T, ID> {
+    /** Runtime-owned gate; legacy/custom implementations may instead call async(executor). */
+    default com.reactor.cachedb.core.async.CacheAsyncExecutor asyncExecutor() {
+        throw new UnsupportedOperationException("No runtime-owned async executor; use async(executor)");
+    }
+
+    default AsyncEntityRepository<T, ID> async() {
+        return async(asyncExecutor());
+    }
+
+    /** Redis runtimes override this overload for non-parking T-1 direct enqueue. */
+    default AsyncEntityRepository<T, ID> async(com.reactor.cachedb.core.async.CacheAsyncExecutor executor) {
+        return new com.reactor.cachedb.core.async.OffloadingAsyncEntityRepository<>(this, executor);
+    }
+
     default RepositoryCapabilities capabilities() {
         return RepositoryCapabilities.none();
+    }
+
+    /**
+     * Current full-entity query row capacity, evaluated on the caller without I/O.
+     * Legacy/custom repositories default to UNKNOWN: explicit bounded queries keep their
+     * existing backend validation, but adapters must not infer unpaged completeness from it.
+     * Delegating views must preserve this contract and native query guards remain authoritative.
+     */
+    default EntityQueryCapacity entityQueryCapacity() {
+        return EntityQueryCapacity.unknown();
     }
 
     Optional<T> findById(ID id);
@@ -91,6 +115,16 @@ public interface EntityRepository<T, ID> {
     default WriteReceipt<T, ID> deleteWithReceipt(ID id) {
         throw unsupported(RepositoryCapability.DELETE_RECEIPT);
     }
+    /**
+     * Bounded non-transactional delete, at most 10000 input IDs, validated before mutation.
+     * Native implementations batch transport and recheck ownership atomically. A failure may
+     * report accepted, rejected, uncertain and cleanup-pending IDs; it is never an atomic batch.
+     * Legacy/custom repositories fail before mutation unless they explicitly implement this capability.
+     */
+    default List<WriteReceipt<T, ID>> bulkDelete(Collection<ID> ids) {
+        throw unsupported(RepositoryCapability.BULK_DELETE);
+    }
+
     EntityRepository<T, ID> withFetchPlan(FetchPlan fetchPlan);
 
     default EntityRepository<T, ID> withRelations(String... relations) {

@@ -1,41 +1,37 @@
 name: Snapshot Provider Evidence
 
 on:
+  # EmaTech runtime evidence is canonical; this legacy workflow is manual-only.
+  # Do not dispatch this workflow to replay already-passed scopes.
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "cachedb-spring-boot-starter/**"
-      - "cachedb-core/**"
-      - "cachedb-json/**"
-      - "cachedb-annotations/**"
-      - "cachedb-examples/**"
-      - "cachedb-starter/**"
-      - "cachedb-processor/**"
-      - "cachedb-storage-*/**"
-      - "cachedb-bom/**"
-      - "tools/ci/**"
-      - ".github/workflows/snapshot-provider-evidence.yml"
-      - "pom.xml"
-  push:
-    branches: [main]
-    paths:
-      - "cachedb-spring-boot-starter/**"
-      - "cachedb-core/**"
-      - "cachedb-json/**"
-      - "cachedb-annotations/**"
-      - "cachedb-examples/**"
-      - "cachedb-starter/**"
-      - "cachedb-processor/**"
-      - "cachedb-storage-*/**"
-      - "cachedb-bom/**"
-      - "tools/ci/**"
-      - ".github/workflows/snapshot-provider-evidence.yml"
-      - "pom.xml"
 
 permissions:
   contents: read
 
 jobs:
+  minimum-java-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Require an actionable minimum-Java failure before compilation
+        shell: bash
+        run: |
+          mkdir -p target
+          set +e
+          mvn -B -ntp -N validate > target/java17-enforcer.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q 'CacheDB requires Java 21 or newer' target/java17-enforcer.log
+          if grep -q 'UnsupportedClassVersionError' target/java17-enforcer.log; then
+            cat target/java17-enforcer.log
+            exit 1
+          fi
   in-memory-latency:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -120,24 +116,30 @@ jobs:
           docker compose -p cachedb-v013 -f tools/ci/docker-compose-v013.yml exec -T postgres pg_isready -U postgres
       - name: Verify Cluster routing, publication and envelope retry
         run: >-
-          mvn -B -ntp -pl cachedb-spring-boot-starter -am test
-          "-Dtest=RedisClusterOperationsTest,RedisCausalReadsTest,RedisCompositeSignatureTest,RedisNearCacheTest,CacheCausalContextTest,JdbcReorderingMetricsTest,ClusterNamespaceShardingTest,CacheRuntimeRoleTest,AtomicWriteBatchEnvelopeCleanTest,RedisAtomicWriteBatchTest,TypedSnapshotRepositoryTest,SnapshotPartitionCursorIsolationTest,SnapshotStreamingTest,SnapshotIndexDeltaRedisTest,JacksonFreeSnapshotTest,JacksonFreeSnapshotRedisTest,StreamingJsonCodecTest,JsonTokenWriterTest,InMemoryCacheRepositoryTest,JdbcPooledSequenceIdGeneratorTest"
+          mvn -B -ntp -Pvirtual-thread-readiness -pl cachedb-spring-boot-starter,cachedb-processor -am test
+          "-Dtest=RedisClusterOperationsTest,RedisCausalReadsTest,RedisReadCoalescingClusterTest,RedisReadPhysicalCapacityClusterTest,RedisServerTrackingClusterTest,NearCacheTrackingClusterWiringTest,RedisT4IndexBatchClusterTest,RedisStandaloneCountFacetPipelineRedisTest,RedisCompositeRangeClusterTest,RedisCompositeLong53Test,CacheDbCacheClusterRedisTest,RedisBulkDeleteClusterTest,EncryptedBulkDeleteClusterTest,RedisCompositeSignatureTest,RedisNearCacheTest,CacheCausalContextTest,JdbcReorderingMetricsTest,ClusterNamespaceShardingTest,CacheRuntimeRoleTest,AtomicWriteBatchEnvelopeCleanTest,RedisAtomicWriteBatchTest,TypedSnapshotRepositoryTest,SnapshotPartitionCursorIsolationTest,SnapshotStreamingTest,SnapshotIndexDeltaRedisTest,JacksonFreeSnapshotTest,JacksonFreeSnapshotRedisTest,StreamingJsonCodecTest,JsonTokenWriterTest,InMemoryCacheRepositoryTest,JdbcPooledSequenceIdGeneratorTest"
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dcachedb.snapshot.redis=true -Dcachedb.redis.cluster=true
       - name: Require the live causal Cluster contract to execute
         shell: pwsh
         run: |
+          ./tools/ci/check-full-environment-tests.ps1 -ClusterOnly -SummaryPath target/cluster-environment-tests.md
           [xml]$report = Get-Content cachedb-storage-redis/target/surefire-reports/TEST-com.reactor.cachedb.redis.RedisCausalReadsTest.xml -Raw
           $cases = @($report.SelectNodes('//testcase[@name="liveClusterReadsCoLocatedAndSplitTriplesWithoutCrossSlotCommands"]'))
           if ($cases.Count -ne 1 -or $cases[0].SelectSingleNode('skipped')) {
             throw 'Live causal Cluster contract was missing or skipped.'
           }
+          $recordings = @(Get-ChildItem -Path . -Recurse -File -Filter 'virtual-threads-*.jfr')
+          if ($recordings.Count -eq 0) { throw 'Missing Cluster virtual-thread recordings.' }
+          ./tools/ci/check-virtual-thread-pinning.ps1 -RecordingPath $recordings.FullName
       - name: Upload Cluster results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: redis-cluster-evidence
           path: |
+            **/target/virtual-threads-*.jfr
+            target/cluster-environment-tests.md
             cachedb-storage-redis/target/surefire-reports/
             cachedb-core/target/surefire-reports/
             cachedb-starter/target/surefire-reports/
@@ -194,9 +196,34 @@ jobs:
           docker exec "$CONTAINER" /opt/mssql-tools18/bin/sqlcmd
           -S localhost -U sa -P CacheDbSnapshot123 -C -b
           -Q "CREATE DATABASE cachedb_snapshot; ALTER DATABASE cachedb_snapshot SET ALLOW_SNAPSHOT_ISOLATION ON;"
+      - name: Provision explicit data-protection metadata in disposable SQL fixtures
+        env:
+          POSTGRES: ${{ job.services.postgres.id }}
+          MSSQL: ${{ job.services.mssql.id }}
+          ORACLE: ${{ job.services.oracle.id }}
+        run: |
+          set -eu
+          migrations=cachedb-storage-jdbc/src/main/resources/com/reactor/cachedb/jdbc/migrations
+          {
+            printf '%s\n' 'BEGIN;'
+            cat "$migrations/postgres/V019__tenant_protection.sql" "$migrations/postgres/V019_1__purge_facade.sql" "$migrations/postgres/V019_2__purge_list_scan_kind.sql" "$migrations/postgres/V019_3__source_owner_onboarding.sql" "$migrations/postgres/V019_4__initial_source_bootstrap.sql" "$migrations/postgres/V019_5__namespace_bootstrap_once.sql"
+            printf '%s\n' 'COMMIT;'
+          } | docker exec -i "$POSTGRES" psql -U postgres -d postgres -v ON_ERROR_STOP=1
+          {
+            printf '%s\n' 'SET XACT_ABORT ON;' 'BEGIN TRANSACTION;'
+            cat "$migrations/mssql/V019__tenant_protection.sql" "$migrations/mssql/V019_1__purge_facade.sql" "$migrations/mssql/V019_2__purge_list_scan_kind.sql" "$migrations/mssql/V019_3__source_owner_onboarding.sql" "$migrations/mssql/V019_4__initial_source_bootstrap.sql" "$migrations/mssql/V019_5__namespace_bootstrap_once.sql"
+            printf '%s\n' 'COMMIT;' 'GO'
+          } | docker exec -i "$MSSQL" /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P CacheDbSnapshot123 -d cachedb_snapshot -C -b
+          {
+            printf '%s\n' 'WHENEVER SQLERROR EXIT FAILURE' 'SET DEFINE OFF' 'SET SQLBLANKLINES ON'
+            cat "$migrations/oracle/V019__tenant_protection.sql" "$migrations/oracle/V019_1__purge_facade.sql" "$migrations/oracle/V019_2__purge_list_scan_kind.sql" "$migrations/oracle/V019_3__source_owner_onboarding.sql" "$migrations/oracle/V019_4__initial_source_bootstrap.sql" "$migrations/oracle/V019_5__namespace_bootstrap_once.sql"
+            printf '%s\n' 'EXIT SUCCESS;'
+          } | docker exec -i "$ORACLE" sqlplus -S cachedb/CacheDbOracle123@//localhost:1521/FREEPDB1
       - name: Require full reactor with live Redis and all three SQL providers
         env:
           MAVEN_OPTS: -Xmx512m
+          JAVA_TOOL_OPTIONS: -Xmx512m -XX:ActiveProcessorCount=1
           CACHEDB_SNAPSHOT_POSTGRES_URL: jdbc:postgresql://127.0.0.1:15435/postgres
           CACHEDB_SNAPSHOT_POSTGRES_USER: postgres
           CACHEDB_SNAPSHOT_POSTGRES_PASSWORD: LocalFixture_7p92_test
@@ -206,6 +233,7 @@ jobs:
           CACHEDB_SNAPSHOT_ORACLE_URL: jdbc:oracle:thin:@//127.0.0.1:15211/FREEPDB1
           CACHEDB_SNAPSHOT_ORACLE_USER: cachedb
           CACHEDB_SNAPSHOT_ORACLE_PASSWORD: CacheDbOracle123
+          CACHEDB_INITIAL_ORACLE_ADMIN_USER: system
           CACHEDB_IT_POSTGRES_URL: jdbc:postgresql://127.0.0.1:15435/postgres
           CACHEDB_IT_POSTGRES_USER: postgres
           CACHEDB_IT_POSTGRES_PASSWORD: LocalFixture_7p92_test
@@ -217,16 +245,37 @@ jobs:
           CACHEDB_IT_ORACLE_USER: cachedb
           CACHEDB_IT_ORACLE_PASSWORD: CacheDbOracle123
         run: >-
-          mvn -B -ntp clean verify
+          mvn -B -ntp -Pvirtual-thread-readiness clean install
           -Dcachedb.snapshot.providers=true -Dcachedb.snapshot.redis=true
-          -Dcachedb.snapshot.redis.port=16383
+          -Dcachedb.initial.isolatedSql=true -Dcachedb.initial.native.provider=postgres
+          -Dcachedb.snapshot.redis.host=127.0.0.1 -Dcachedb.snapshot.redis.port=16383
           -Dcachedb.it.mssql.required=true -Dcachedb.it.oracle.required=true
           -Dcachedb.test.redis.uri=redis://127.0.0.1:16383 -Dcachedb.test.redis.required=true
+      - name: Require real OpenTelemetry SDK and PostgreSQL transaction evidence
+        env:
+          MAVEN_OPTS: -Xmx512m
+          CACHEDB_SNAPSHOT_POSTGRES_URL: jdbc:postgresql://127.0.0.1:15435/postgres
+          CACHEDB_SNAPSHOT_POSTGRES_USER: postgres
+          CACHEDB_SNAPSHOT_POSTGRES_PASSWORD: LocalFixture_7p92_test
+        run: |
+          version=$(mvn -B -ntp -q help:evaluate -Dexpression=project.version -DforceStdout)
+          mvn -B -ntp -f tools/benchmarks/observation-otel/pom.xml test \
+            -Dcachedb.version="$version" -Dcachedb.snapshot.redis=true \
+            -Dcachedb.snapshot.redis.port=16383 -Dcachedb.observation.postgres=true
       - name: Reject missing or skipped release-blocking suites
         shell: pwsh
         run: |
           ./tools/ci/test-full-environment-gate.ps1
           ./tools/ci/check-full-environment-tests.ps1
+      - name: Verify pinning instrumentation detects a real blocking monitor
+        shell: pwsh
+        run: ./tools/ci/test-virtual-thread-pinning.ps1 -EvidenceDirectory ./target/pinning-controls
+      - name: Reject CacheDB pinning in completed test recordings
+        shell: pwsh
+        run: |
+          $recordings = @(Get-ChildItem -Path . -Recurse -File -Filter 'virtual-threads-*.jfr')
+          if ($recordings.Count -eq 0) { throw 'Missing virtual-thread test recordings.' }
+          ./tools/ci/check-virtual-thread-pinning.ps1 -RecordingPath $recordings.FullName
       - name: Upload provider results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -234,5 +283,10 @@ jobs:
           name: snapshot-provider-evidence
           path: |
             **/target/surefire-reports/
+            **/target/virtual-threads-*.jfr
+            **/target/f3-enrollment-jfr/
+            **/target/native-initial-proofs/
+            **/target/generated-initial-proofs/
+            target/pinning-controls/
             target/full-environment-tests.md
           if-no-files-found: error

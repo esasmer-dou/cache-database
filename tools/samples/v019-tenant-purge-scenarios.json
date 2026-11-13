@@ -1,0 +1,248 @@
+{
+  "schema": 1,
+  "feature": "tenant-purge",
+  "status": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED",
+  "evidence": "SOURCE_ONLY_NOT_RUNTIME_ACCEPTANCE",
+  "baseline": {
+    "complete": false
+  },
+  "runtimeEvidence": null,
+  "scope": {
+    "entity": "com.example.cachedb.purge.TenantPurgeRow",
+    "table": "sample_purge_rows",
+    "namespace": "sample-purge-rows",
+    "idType": "Long",
+    "maximumRows": 8,
+    "ownedIds": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "hotIds": [
+      1,
+      2
+    ],
+    "coldIds": [
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "foreignSqlId": 8,
+    "actualRoots": 2,
+    "initial": "POINT_NO_QUOTA",
+    "role": "CLIENT_ONLY",
+    "readThrough": "REDIS_ONLY",
+    "l1": false,
+    "includeSource": true,
+    "reopenEndpoint": false
+  },
+  "limits": [
+    "Foreign Redis preservation uses an actual encrypted sentinel outside the enrolled namespace, not an enrolled foreign tenant.",
+    "Uncached cold-owner HTTP reads fail closed without foreground SQL.",
+    "Fresh-only INITIAL startup does not demonstrate application restart/crash recovery, HA, Cluster or backup erasure."
+  ],
+  "providers": [
+    {
+      "provider": "postgresql",
+      "root": "sample-cache-database-postgresql",
+      "status": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED",
+      "profile": "tenant-purge-demo",
+      "sourceDirectory": "src/purge/java",
+      "testDirectory": "src/purge-test/java",
+      "configuration": "src/purge/resources/application-purge.yml",
+      "schema": "src/purge/resources/schema-purge.sql",
+      "canonicalMigrations": "com/reactor/cachedb/jdbc/migrations/postgres/",
+      "contract": {
+        "className": "com.example.cachedb.purge.TenantPurgeContractTest",
+        "methods": [
+          "fixedEntityUsesGeneratedTenantEncryptedNativeMapping",
+          "httpRejectsAnonymousInvalidAndDuplicateAuthWithoutInvokingRuntime",
+          "httpRejectsRunBodyAndIdEscapesBeforePurge",
+          "deliveryFlushRemainsInsideNativeCallback",
+          "confirmedPurgeUsesOneExplicitOperationWithoutRetryOrRedirect",
+          "postmanHasEightRequestsOneMutationAndNoRetryOrRedirect",
+          "schemaRequiresCanonicalF3MigrationsAndTenantIndexes",
+          "sdkFailureAbandonsOwnershipAndRequiresExplicitSameOperationRecovery",
+          "cleanupFailureIsSuppressedWithoutKeepingInvalidContinuation",
+          "initialSdkFailureDoesNotInventOwnershipOrRetry"
+        ]
+      },
+      "startup": {
+        "className": "com.example.cachedb.purge.TenantPurgeOptInTest",
+        "methods": [
+          "missingOptInStopsBeforeDataSourceAndSqlInitialization",
+          "wrongOptInStopsBeforeDataSourceAndSqlInitialization",
+          "missingRunStopsBeforeDataSourceAndSqlInitialization",
+          "malformedRunStopsBeforeDataSourceAndSqlInitialization",
+          "validOptInAllowsSqlInitializationOnce",
+          "applicationExplicitlyImportsEarlyGuard",
+          "directRuntimeConstructionStillRejectsInvalidOptInWithoutDataSourceAccess"
+        ]
+      },
+      "external": {
+        "className": "com.example.cachedb.purge.TenantPurgeExternalIT",
+        "methods": [
+          "nativeInitialHttpPurgeRemovesHotAndColdAndPreservesForeignState"
+        ]
+      },
+      "postman": {
+        "collection": "postman/cache-database-postgresql-tenant-purge.postman_collection.json",
+        "runner": "scripts/test-tenant-purge-postman.ps1",
+        "requests": [
+          "01 Anonymous Status",
+          "02 Invalid Bearer Status",
+          "03 Native INITIAL Status",
+          "04 Owned Hot Row",
+          "05 Owned Cold Row Fails Closed",
+          "06 Purge Owned Tenant Including Source",
+          "07 Retained CLOSED Status",
+          "08 Closed Delivery Rejected"
+        ],
+        "assertions": 36,
+        "ignoreRedirects": true,
+        "retries": false
+      },
+      "runtimeEvidence": null
+    },
+    {
+      "provider": "mssql",
+      "root": "sample-cache-database-mssql",
+      "status": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED",
+      "profile": "tenant-purge-demo",
+      "sourceDirectory": "src/purge/java",
+      "testDirectory": "src/purge-test/java",
+      "configuration": "src/purge/resources/application-purge.yml",
+      "schema": "src/purge/resources/schema-purge.sql",
+      "canonicalMigrations": "com/reactor/cachedb/jdbc/migrations/mssql/",
+      "contract": {
+        "className": "com.example.cachedb.purge.TenantPurgeContractTest",
+        "methods": [
+          "fixedEntityUsesGeneratedTenantEncryptedNativeMapping",
+          "httpRejectsAnonymousInvalidAndDuplicateAuthWithoutInvokingRuntime",
+          "httpRejectsRunBodyAndIdEscapesBeforePurge",
+          "deliveryFlushRemainsInsideNativeCallback",
+          "confirmedPurgeUsesOneExplicitOperationWithoutRetryOrRedirect",
+          "postmanHasEightRequestsOneMutationAndNoRetryOrRedirect",
+          "schemaRequiresCanonicalF3MigrationsAndTenantIndexes",
+          "sdkFailureAbandonsOwnershipAndRequiresExplicitSameOperationRecovery",
+          "cleanupFailureIsSuppressedWithoutKeepingInvalidContinuation",
+          "initialSdkFailureDoesNotInventOwnershipOrRetry"
+        ]
+      },
+      "startup": {
+        "className": "com.example.cachedb.purge.TenantPurgeOptInTest",
+        "methods": [
+          "missingOptInStopsBeforeDataSourceAndSqlInitialization",
+          "wrongOptInStopsBeforeDataSourceAndSqlInitialization",
+          "missingRunStopsBeforeDataSourceAndSqlInitialization",
+          "malformedRunStopsBeforeDataSourceAndSqlInitialization",
+          "validOptInAllowsSqlInitializationOnce",
+          "applicationExplicitlyImportsEarlyGuard",
+          "directRuntimeConstructionStillRejectsInvalidOptInWithoutDataSourceAccess"
+        ]
+      },
+      "external": {
+        "className": "com.example.cachedb.purge.TenantPurgeExternalIT",
+        "methods": [
+          "nativeInitialHttpPurgeRemovesHotAndColdAndPreservesForeignState"
+        ]
+      },
+      "postman": {
+        "collection": "postman/cache-database-mssql-tenant-purge.postman_collection.json",
+        "runner": "scripts/test-tenant-purge-postman.ps1",
+        "requests": [
+          "01 Anonymous Status",
+          "02 Invalid Bearer Status",
+          "03 Native INITIAL Status",
+          "04 Owned Hot Row",
+          "05 Owned Cold Row Fails Closed",
+          "06 Purge Owned Tenant Including Source",
+          "07 Retained CLOSED Status",
+          "08 Closed Delivery Rejected"
+        ],
+        "assertions": 36,
+        "ignoreRedirects": true,
+        "retries": false
+      },
+      "runtimeEvidence": null
+    },
+    {
+      "provider": "oracle",
+      "root": "sample-cache-database-oracle",
+      "status": "SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED",
+      "profile": "tenant-purge-demo",
+      "sourceDirectory": "src/purge/java",
+      "testDirectory": "src/purge-test/java",
+      "configuration": "src/purge/resources/application-purge.yml",
+      "schema": "src/purge/resources/schema-purge.sql",
+      "canonicalMigrations": "com/reactor/cachedb/jdbc/migrations/oracle/",
+      "contract": {
+        "className": "com.example.cachedb.purge.TenantPurgeContractTest",
+        "methods": [
+          "fixedEntityUsesGeneratedTenantEncryptedNativeMapping",
+          "httpRejectsAnonymousInvalidAndDuplicateAuthWithoutInvokingRuntime",
+          "httpRejectsRunBodyAndIdEscapesBeforePurge",
+          "deliveryFlushRemainsInsideNativeCallback",
+          "confirmedPurgeUsesOneExplicitOperationWithoutRetryOrRedirect",
+          "postmanHasEightRequestsOneMutationAndNoRetryOrRedirect",
+          "schemaRequiresCanonicalF3MigrationsAndTenantIndexes",
+          "sdkFailureAbandonsOwnershipAndRequiresExplicitSameOperationRecovery",
+          "cleanupFailureIsSuppressedWithoutKeepingInvalidContinuation",
+          "initialSdkFailureDoesNotInventOwnershipOrRetry"
+        ]
+      },
+      "startup": {
+        "className": "com.example.cachedb.purge.TenantPurgeOptInTest",
+        "methods": [
+          "missingOptInStopsBeforeDataSourceAndSqlInitialization",
+          "wrongOptInStopsBeforeDataSourceAndSqlInitialization",
+          "missingRunStopsBeforeDataSourceAndSqlInitialization",
+          "malformedRunStopsBeforeDataSourceAndSqlInitialization",
+          "validOptInAllowsSqlInitializationOnce",
+          "applicationExplicitlyImportsEarlyGuard",
+          "directRuntimeConstructionStillRejectsInvalidOptInWithoutDataSourceAccess"
+        ]
+      },
+      "external": {
+        "className": "com.example.cachedb.purge.TenantPurgeExternalIT",
+        "methods": [
+          "nativeInitialHttpPurgeRemovesHotAndColdAndPreservesForeignState"
+        ]
+      },
+      "postman": {
+        "collection": "postman/cache-database-oracle-tenant-purge.postman_collection.json",
+        "runner": "scripts/test-tenant-purge-postman.ps1",
+        "requests": [
+          "01 Anonymous Status",
+          "02 Invalid Bearer Status",
+          "03 Native INITIAL Status",
+          "04 Owned Hot Row",
+          "05 Owned Cold Row Fails Closed",
+          "06 Purge Owned Tenant Including Source",
+          "07 Retained CLOSED Status",
+          "08 Closed Delivery Rejected"
+        ],
+        "assertions": 36,
+        "ignoreRedirects": true,
+        "retries": false
+      },
+      "runtimeEvidence": null
+    }
+  ],
+  "qualification": {
+    "baselineComplete": false,
+    "required": [
+      "Current qualified F3 SDK source/artifact hashes; no old public SDK substitution.",
+      "Ten Contract methods, seven startup opt-in methods and one ExternalIT method per provider, all passing with zero skipped.",
+      "Separate eight-request/36-assertion companion Postman evidence per provider using a fresh schema/application.",
+      "Coordinator captures fixture identity/deadline, resources, source hashes, SDK hashes and raw reports."
+    ],
+    "existingMatrix": "The current checker still owns the original 20 scenarios and deferred gates; this companion is not promoted by source inspection."
+  }
+}

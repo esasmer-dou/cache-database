@@ -51,7 +51,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.locks.LockSupport;
 import java.util.stream.Collectors;
 
@@ -147,16 +146,16 @@ public final class EcommerceProductionScenarioRunner {
                     profile.name(),
                     profile.kind(),
                     scaleFactor,
-                    counters.executedOperations.get(),
-                    counters.readOperations.get(),
-                    counters.writeOperations.get(),
-                    counters.failedOperations.get(),
+                    counters.executedOperations,
+                    counters.readOperations,
+                    counters.writeOperations,
+                    counters.failedOperations,
                     counters.elapsedMillis(),
                     counters.achievedTransactionsPerSecond(),
                     counters.averageLatencyMicros(),
                     counters.p95LatencyMicros(),
                     counters.p99LatencyMicros(),
-                    counters.maxLatencyMicros.get(),
+                    counters.all.maximum,
                     drainResult.drainMillis(),
                     drainResult.completed(),
                     metrics.writeBehindStreamLength(),
@@ -181,8 +180,8 @@ public final class EcommerceProductionScenarioRunner {
                     buildNotes(profile, finalHealthStatus, degradeProfile, guardrailSnapshot.hardRejectedWriteCount())
             );
 
-            writeMarkdown(reportDirectory.resolve(reportFilePrefix + ".md"), report);
-            writeJson(reportDirectory.resolve(reportFilePrefix + ".json"), report);
+            writeMarkdown(reportDirectory.resolve(reportFilePrefix + ".md"), report, counters);
+            writeJson(reportDirectory.resolve(reportFilePrefix + ".json"), report, counters);
             ScenarioProfileChurnReport profileChurnReport = toProfileChurnReport(report, runtimeProfileEvents);
             writeProfileChurnMarkdown(reportDirectory.resolve(reportFilePrefix + "-profile-churn.md"), profileChurnReport);
             writeProfileChurnJson(reportDirectory.resolve(reportFilePrefix + "-profile-churn.json"), profileChurnReport);
@@ -418,9 +417,11 @@ public final class EcommerceProductionScenarioRunner {
                 CachePolicy.defaults()
         );
 
-        long effectiveTps = Math.max(100L, Math.round(profile.targetTransactionsPerSecond() * Math.max(0.001d, scaleFactor)));
-        long endAtNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.max(1, profile.durationSeconds()));
-        WorkerAllocation allocation = allocateWorkers(profile, effectiveTps);
+        long effectiveTps = Math.max(1L, Math.round(profile.targetTransactionsPerSecond() * Math.max(0.001d, scaleFactor)));
+        WorkerAllocation allocation = allocateWorkers(profile, effectiveTps,
+                READ_WRITE_PATH_SEPARATION_ENABLED, READ_PATH_WORKER_SHARE_OVERRIDE);
+        long startedAtNanos = System.nanoTime();
+        long endAtNanos = startedAtNanos + TimeUnit.SECONDS.toNanos(Math.max(1, profile.durationSeconds()));
 
         ScenarioCounters counters = new ScenarioCounters();
         AtomicLong cartIdSequence = new AtomicLong(1_000_000L);
@@ -428,50 +429,13 @@ public final class EcommerceProductionScenarioRunner {
         ExecutorService executorService = Executors.newFixedThreadPool(allocation.totalWorkers());
         ArrayList<Future<Void>> futures = new ArrayList<>(allocation.totalWorkers());
 
-        submitWorkers(
-                futures,
-                executorService,
-                profile,
-                WorkerMode.READ_ONLY,
-                allocation.readWorkers(),
-                allocation.readTps(),
-                endAtNanos,
-                customerRepository,
-                productRepository,
-                inventoryRepository,
-                cartRepository,
-                orderRepository,
-                () -> streamLength(jedis, keyStrategy, activeWriteBehindStreamKeys),
-                cartIdSequence,
-                orderIdSequence,
-                counters
-        );
-        submitWorkers(
-                futures,
-                executorService,
-                profile,
-                WorkerMode.WRITE_ONLY,
-                allocation.writeWorkers(),
-                allocation.writeTps(),
-                endAtNanos,
-                customerRepository,
-                productRepository,
-                inventoryRepository,
-                cartRepository,
-                orderRepository,
-                () -> streamLength(jedis, keyStrategy, activeWriteBehindStreamKeys),
-                cartIdSequence,
-                orderIdSequence,
-                counters
-        );
-        if (futures.isEmpty()) {
+        for (WorkerGroup group : allocation.groups()) {
             submitWorkers(
                     futures,
                     executorService,
                     profile,
-                    WorkerMode.MIXED,
-                    Math.max(1, profile.workerThreads()),
-                    effectiveTps,
+                    group,
+                    startedAtNanos,
                     endAtNanos,
                     customerRepository,
                     productRepository,
@@ -494,29 +458,37 @@ public final class EcommerceProductionScenarioRunner {
         return counters;
     }
 
-    private WorkerAllocation allocateWorkers(EcommerceScenarioProfile profile, long effectiveTps) {
+    static WorkerAllocation allocateWorkers(EcommerceScenarioProfile profile, long effectiveTps,
+                                           boolean separationEnabled, double readShareOverride) {
+        if (effectiveTps <= 0L || !Double.isFinite(readShareOverride)) {
+            throw new IllegalArgumentException("Positive TPS and finite read share are required");
+        }
         int totalWorkers = Math.max(1, profile.workerThreads());
-        if (!READ_WRITE_PATH_SEPARATION_ENABLED) {
-            return new WorkerAllocation(0, 0L, totalWorkers, effectiveTps);
+        if (!separationEnabled || totalWorkers == 1) {
+            return new WorkerAllocation(List.of(new WorkerGroup(WorkerMode.MIXED, totalWorkers, effectiveTps)));
         }
 
         int readWeight = profile.browsePercent() + profile.productLookupPercent();
         int writeWeight = Math.max(0, profile.totalWeight() - readWeight);
-        if (readWeight == 0 || writeWeight == 0) {
-            return new WorkerAllocation(0, 0L, totalWorkers, effectiveTps);
+        if (readWeight == 0) {
+            return new WorkerAllocation(List.of(new WorkerGroup(WorkerMode.WRITE_ONLY, totalWorkers, effectiveTps)));
+        }
+        if (writeWeight == 0) {
+            return new WorkerAllocation(List.of(new WorkerGroup(WorkerMode.READ_ONLY, totalWorkers, effectiveTps)));
+        }
+        if (effectiveTps == 1L) {
+            return new WorkerAllocation(List.of(new WorkerGroup(WorkerMode.MIXED, totalWorkers, effectiveTps)));
         }
 
-        double readShare = READ_PATH_WORKER_SHARE_OVERRIDE >= 0.0d
-                ? Math.min(0.95d, Math.max(0.05d, READ_PATH_WORKER_SHARE_OVERRIDE))
+        double readShare = readShareOverride >= 0.0d
+                ? Math.min(0.95d, Math.max(0.05d, readShareOverride))
                 : (double) readWeight / Math.max(1, profile.totalWeight());
-        int readWorkers = Math.max(1, (int) Math.round(totalWorkers * readShare));
-        int writeWorkers = Math.max(1, totalWorkers - readWorkers);
-        if (readWorkers + writeWorkers > totalWorkers) {
-            readWorkers = Math.max(1, totalWorkers - writeWorkers);
-        }
-        long readTps = Math.max(1L, Math.round(effectiveTps * readShare));
-        long writeTps = Math.max(1L, effectiveTps - readTps);
-        return new WorkerAllocation(readWorkers, readTps, writeWorkers, writeTps);
+        int readWorkers = Math.min(totalWorkers - 1, Math.max(1, (int) Math.round(totalWorkers * readShare)));
+        int writeWorkers = totalWorkers - readWorkers;
+        long readTps = Math.min(effectiveTps - 1L, Math.max(1L, Math.round(effectiveTps * readShare)));
+        return new WorkerAllocation(List.of(
+                new WorkerGroup(WorkerMode.READ_ONLY, readWorkers, readTps),
+                new WorkerGroup(WorkerMode.WRITE_ONLY, writeWorkers, effectiveTps - readTps)));
     }
 
     private int resolveCompactionShardCount(EcommerceScenarioProfile profile) {
@@ -560,9 +532,8 @@ public final class EcommerceProductionScenarioRunner {
             List<Future<Void>> futures,
             ExecutorService executorService,
             EcommerceScenarioProfile profile,
-            WorkerMode mode,
-            int workerCount,
-            long totalTps,
+            WorkerGroup group,
+            long startedAtNanos,
             long endAtNanos,
             EntityRepository<EcomCustomerEntity, Long> customerRepository,
             EntityRepository<EcomProductEntity, Long> productRepository,
@@ -574,17 +545,14 @@ public final class EcommerceProductionScenarioRunner {
             AtomicLong orderIdSequence,
             ScenarioCounters counters
     ) {
-        if (workerCount <= 0 || totalTps <= 0) {
-            return;
-        }
-        long perWorkerTps = Math.max(1L, totalTps / workerCount);
-        long nanosPerOperation = Math.max(1L, 1_000_000_000L / perWorkerTps);
-        for (int index = 0; index < workerCount; index++) {
+        long nanosPerOperation = group.nanosPerOperation();
+        for (int index = 0; index < group.workers(); index++) {
             futures.add(executorService.submit(new Worker(
                     profile,
-                    mode,
+                    group.mode(),
                     endAtNanos,
                     nanosPerOperation,
+                    startedAtNanos + group.initialDelayNanos(index),
                     customerRepository,
                     productRepository,
                     inventoryRepository,
@@ -772,10 +740,11 @@ public final class EcommerceProductionScenarioRunner {
         return inventory;
     }
 
-    private void writeMarkdown(Path path, ScenarioReport report) throws IOException {
+    private void writeMarkdown(Path path, ScenarioReport report, ScenarioCounters counters) throws IOException {
         String content = "# " + report.scenarioName() + System.lineSeparator()
                 + System.lineSeparator()
                 + "- kind: `" + report.kind() + "`" + System.lineSeparator()
+                + counters.measurementMarkdown()
                 + "- scaleFactor: `" + report.scaleFactor() + "`" + System.lineSeparator()
                 + "- executedOperations: `" + report.executedOperations() + "`" + System.lineSeparator()
                 + "- readOperations: `" + report.readOperations() + "`" + System.lineSeparator()
@@ -845,8 +814,8 @@ public final class EcommerceProductionScenarioRunner {
         Files.writeString(path, content.toString());
     }
 
-    private void writeJson(Path path, ScenarioReport report) throws IOException {
-        String json = "{"
+    private void writeJson(Path path, ScenarioReport report, ScenarioCounters counters) throws IOException {
+        String json = "{" + counters.measurementJson()
                 + "\"scenarioName\":\"" + escapeJson(report.scenarioName()) + "\","
                 + "\"kind\":\"" + report.kind().name() + "\","
                 + "\"scaleFactor\":" + report.scaleFactor() + ","
@@ -975,6 +944,7 @@ public final class EcommerceProductionScenarioRunner {
         private final WorkerMode mode;
         private final long endAtNanos;
         private final long nanosPerOperation;
+        private final long firstSlotNanos;
         private final EntityRepository<EcomCustomerEntity, Long> customerRepository;
         private final EntityRepository<EcomProductEntity, Long> productRepository;
         private final EntityRepository<EcomInventoryEntity, Long> inventoryRepository;
@@ -984,6 +954,7 @@ public final class EcommerceProductionScenarioRunner {
         private final AtomicLong cartIdSequence;
         private final AtomicLong orderIdSequence;
         private final ScenarioCounters counters;
+        private final ScenarioCounters aggregateCounters;
         private long operationSinceSample;
         private long cachedBacklog;
         private long lastBacklogSampleAtMillis;
@@ -993,6 +964,7 @@ public final class EcommerceProductionScenarioRunner {
                 WorkerMode mode,
                 long endAtNanos,
                 long nanosPerOperation,
+                long firstSlotNanos,
                 EntityRepository<EcomCustomerEntity, Long> customerRepository,
                 EntityRepository<EcomProductEntity, Long> productRepository,
                 EntityRepository<EcomInventoryEntity, Long> inventoryRepository,
@@ -1007,6 +979,7 @@ public final class EcommerceProductionScenarioRunner {
             this.mode = mode;
             this.endAtNanos = endAtNanos;
             this.nanosPerOperation = nanosPerOperation;
+            this.firstSlotNanos = firstSlotNanos;
             this.customerRepository = customerRepository;
             this.productRepository = productRepository;
             this.inventoryRepository = inventoryRepository;
@@ -1015,36 +988,42 @@ public final class EcommerceProductionScenarioRunner {
             this.writeBehindBacklogSupplier = writeBehindBacklogSupplier;
             this.cartIdSequence = cartIdSequence;
             this.orderIdSequence = orderIdSequence;
-            this.counters = counters;
+            this.aggregateCounters = counters;
+            this.counters = new ScenarioCounters();
         }
 
         @Override
         public Void call() {
             Random random = ThreadLocalRandom.current();
-            long nextSlot = System.nanoTime();
-            while (System.nanoTime() < endAtNanos) {
-                long startedAt = System.nanoTime();
-                boolean writeOperation = false;
-                try {
-                    int roll = random.nextInt(Math.max(1, profile.totalWeight()));
-                    writeOperation = executeOperation(random, roll);
-                } catch (RuntimeException exception) {
-                    counters.failedOperations.incrementAndGet();
-                } finally {
-                    long latencyMicros = TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - startedAt);
-                    counters.executedOperations.incrementAndGet();
-                    counters.totalLatencyMicros.addAndGet(latencyMicros);
-                    counters.maxLatencyMicros.accumulateAndGet(latencyMicros, Math::max);
-                    counters.latencyHistogram.record(latencyMicros);
+            long nextSlot = firstSlotNanos;
+            try {
+                while (System.nanoTime() < endAtNanos) {
+                    long startedAt = System.nanoTime();
+                    long sleepNanos = nextSlot - startedAt;
+                    if (sleepNanos > 0L) {
+                        LockSupport.parkNanos(Math.min(sleepNanos, Math.max(1L, endAtNanos - startedAt)));
+                        continue;
+                    }
+                    boolean writeOperation = false;
+                    boolean success = false;
+                    try {
+                        int roll = random.nextInt(Math.max(1, profile.totalWeight()));
+                        writeOperation = executeOperation(random, roll);
+                        success = true;
+                    } catch (RuntimeException exception) {
+                        // Failed attempts are recorded separately and never contribute to successful TPS.
+                    } finally {
+                        long latencyMicros = TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - startedAt);
+                        counters.record(success, latencyMicros,
+                                Math.max(0L, TimeUnit.NANOSECONDS.toMicros(startedAt - nextSlot)));
+                    }
+                    if (writeOperation) {
+                        applyBacklogAwareThrottle();
+                    }
+                    nextSlot += nanosPerOperation;
                 }
-                if (writeOperation) {
-                    applyBacklogAwareThrottle();
-                }
-                nextSlot += nanosPerOperation;
-                long sleepNanos = nextSlot - System.nanoTime();
-                if (sleepNanos > 0) {
-                    LockSupport.parkNanos(sleepNanos);
-                }
+            } finally {
+                aggregateCounters.merge(counters);
             }
             return null;
         }
@@ -1096,13 +1075,13 @@ public final class EcommerceProductionScenarioRunner {
             int cursor = profile.browsePercent();
             if (roll < cursor) {
                 productRepository.findPage(new PageWindow(random.nextInt(0, Math.max(1, profile.productCount() / Math.max(1, profile.pageSize()))), Math.max(10, profile.pageSize())));
-                counters.readOperations.incrementAndGet();
+                counters.readOperations++;
                 return false;
             }
             cursor += profile.productLookupPercent();
             if (roll < cursor) {
                 productRepository.findById(randomProductId(random));
-                counters.readOperations.incrementAndGet();
+                counters.readOperations++;
                 return false;
             }
             cursor += profile.cartWritePercent();
@@ -1114,7 +1093,7 @@ public final class EcommerceProductionScenarioRunner {
                 cart.quantity = random.nextInt(1, 4);
                 cart.state = "ACTIVE";
                 cartRepository.save(cart);
-                counters.writeOperations.incrementAndGet();
+                counters.writeOperations++;
                 return true;
             }
             cursor += profile.inventoryReservePercent();
@@ -1124,7 +1103,7 @@ public final class EcommerceProductionScenarioRunner {
                 inventory.availableUnits = Math.max(0L, (inventory.availableUnits == null ? 0L : inventory.availableUnits) - 1L);
                 inventory.reservedUnits = (inventory.reservedUnits == null ? 0L : inventory.reservedUnits) + 1L;
                 inventoryRepository.save(inventory);
-                counters.writeOperations.incrementAndGet();
+                counters.writeOperations++;
                 return true;
             }
             cursor += profile.checkoutPercent();
@@ -1139,7 +1118,7 @@ public final class EcommerceProductionScenarioRunner {
                 order.status = "PLACED";
                 order.campaignCode = "CMP-" + (order.customerId % 10);
                 orderRepository.save(order);
-                counters.writeOperations.incrementAndGet();
+                counters.writeOperations++;
                 return true;
             }
 
@@ -1148,7 +1127,7 @@ public final class EcommerceProductionScenarioRunner {
             customer.lastCampaignCode = "CMP-" + random.nextInt(1, 20);
             customer.segment = customerId % 2 == 0 ? "SMS_PUSH" : "PUSH";
             customerRepository.save(customer);
-            counters.writeOperations.incrementAndGet();
+            counters.writeOperations++;
             return true;
         }
 
@@ -1160,7 +1139,7 @@ public final class EcommerceProductionScenarioRunner {
             } else {
                 productRepository.findById(randomProductId(random));
             }
-            counters.readOperations.incrementAndGet();
+            counters.readOperations++;
             return false;
         }
 
@@ -1179,7 +1158,7 @@ public final class EcommerceProductionScenarioRunner {
                 cart.quantity = random.nextInt(1, 4);
                 cart.state = "ACTIVE";
                 cartRepository.save(cart);
-                counters.writeOperations.incrementAndGet();
+                counters.writeOperations++;
                 return true;
             }
             cursor += profile.inventoryReservePercent();
@@ -1189,7 +1168,7 @@ public final class EcommerceProductionScenarioRunner {
                 inventory.availableUnits = Math.max(0L, (inventory.availableUnits == null ? 0L : inventory.availableUnits) - 1L);
                 inventory.reservedUnits = (inventory.reservedUnits == null ? 0L : inventory.reservedUnits) + 1L;
                 inventoryRepository.save(inventory);
-                counters.writeOperations.incrementAndGet();
+                counters.writeOperations++;
                 return true;
             }
             cursor += profile.checkoutPercent();
@@ -1204,7 +1183,7 @@ public final class EcommerceProductionScenarioRunner {
                 order.status = "PLACED";
                 order.campaignCode = "CMP-" + (order.customerId % 10);
                 orderRepository.save(order);
-                counters.writeOperations.incrementAndGet();
+                counters.writeOperations++;
                 return true;
             }
 
@@ -1213,7 +1192,7 @@ public final class EcommerceProductionScenarioRunner {
             customer.lastCampaignCode = "CMP-" + random.nextInt(1, 20);
             customer.segment = customerId % 2 == 0 ? "SMS_PUSH" : "PUSH";
             customerRepository.save(customer);
-            counters.writeOperations.incrementAndGet();
+            counters.writeOperations++;
             return true;
         }
 
@@ -1281,98 +1260,36 @@ public final class EcommerceProductionScenarioRunner {
         }
     }
 
-    private static final class ScenarioCounters {
-        private static final long[] LATENCY_BUCKET_UPPER_BOUNDS_MICROS = new long[]{
-                50L, 100L, 250L, 500L, 1_000L, 2_500L, 5_000L, 10_000L,
-                20_000L, 50_000L, 100_000L, 250_000L, 500_000L, 1_000_000L,
-                2_000_000L, 5_000_000L
-        };
-
-        private final long startedAt = System.currentTimeMillis();
-        private final AtomicLong executedOperations = new AtomicLong();
-        private final AtomicLong readOperations = new AtomicLong();
-        private final AtomicLong writeOperations = new AtomicLong();
-        private final AtomicLong failedOperations = new AtomicLong();
-        private final AtomicLong totalLatencyMicros = new AtomicLong();
-        private final AtomicLong maxLatencyMicros = new AtomicLong();
-        private final LatencyHistogram latencyHistogram = new LatencyHistogram(LATENCY_BUCKET_UPPER_BOUNDS_MICROS);
-        private volatile long finishedAt;
-
-        private void finish() {
-            finishedAt = System.currentTimeMillis();
-        }
-
-        private long elapsedMillis() {
-            return Math.max(1L, (finishedAt == 0L ? System.currentTimeMillis() : finishedAt) - startedAt);
-        }
-
-        private long averageLatencyMicros() {
-            long executed = Math.max(1L, executedOperations.get());
-            return totalLatencyMicros.get() / executed;
-        }
-
-        private double achievedTransactionsPerSecond() {
-            return (executedOperations.get() * 1_000.0d) / elapsedMillis();
-        }
-
-        private long p95LatencyMicros() {
-            return latencyHistogram.percentileUpperBound(0.95d);
-        }
-
-        private long p99LatencyMicros() {
-            return latencyHistogram.percentileUpperBound(0.99d);
-        }
-    }
-
     private record DrainResult(long drainMillis, boolean completed) {
     }
 
-    private record WorkerAllocation(int readWorkers, long readTps, int writeWorkers, long writeTps) {
-        private int totalWorkers() {
-            return readWorkers + writeWorkers;
+    record WorkerAllocation(List<WorkerGroup> groups) {
+        int totalWorkers() {
+            return groups.stream().mapToInt(WorkerGroup::workers).sum();
         }
     }
 
-    private enum WorkerMode {
+    record WorkerGroup(WorkerMode mode, int workers, long targetTps) {
+        long nanosPerOperation() {
+            return pacingNanos(workers);
+        }
+
+        long initialDelayNanos(int workerIndex) {
+            if (workerIndex < 0 || workerIndex >= workers) throw new IllegalArgumentException("Invalid worker index");
+            return pacingNanos(workerIndex);
+        }
+
+        private long pacingNanos(int operations) {
+            // Fractional per-worker rates and staggered slots keep low TPS budgets from multiplying by worker count.
+            long numerator = TimeUnit.SECONDS.toNanos(1L) * operations;
+            return numerator / targetTps + (numerator % targetTps == 0L ? 0L : 1L);
+        }
+    }
+
+    enum WorkerMode {
         READ_ONLY,
         WRITE_ONLY,
         MIXED
     }
 
-    private static final class LatencyHistogram {
-        private final long[] upperBoundsMicros;
-        private final AtomicLongArray bucketCounts;
-        private final AtomicLong overflowCount = new AtomicLong();
-        private final AtomicLong totalCount = new AtomicLong();
-
-        private LatencyHistogram(long[] upperBoundsMicros) {
-            this.upperBoundsMicros = upperBoundsMicros;
-            this.bucketCounts = new AtomicLongArray(upperBoundsMicros.length);
-        }
-
-        private void record(long latencyMicros) {
-            totalCount.incrementAndGet();
-            for (int index = 0; index < upperBoundsMicros.length; index++) {
-                if (latencyMicros <= upperBoundsMicros[index]) {
-                    bucketCounts.incrementAndGet(index);
-                    return;
-                }
-            }
-            overflowCount.incrementAndGet();
-        }
-
-        private long percentileUpperBound(double percentile) {
-            long target = Math.max(1L, (long) Math.ceil(totalCount.get() * percentile));
-            long seen = 0L;
-            for (int index = 0; index < upperBoundsMicros.length; index++) {
-                seen += bucketCounts.get(index);
-                if (seen >= target) {
-                    return upperBoundsMicros[index];
-                }
-            }
-            return overflowCount.get() > 0L
-                    ? upperBoundsMicros[upperBoundsMicros.length - 1]
-                    : 0L;
-        }
-    }
 }

@@ -24,6 +24,21 @@ public final class CacheDatabaseBootstrap {
     private String foregroundRedisUri;
     private String backgroundRedisUri;
     private CacheDatabaseConfig config = CacheDatabaseConfig.defaults();
+    private com.reactor.cachedb.core.config.CacheRuntimeOptions runtimeOptions = com.reactor.cachedb.core.config.CacheRuntimeOptions.defaults();
+    private final ArrayList<Consumer<com.reactor.cachedb.core.config.CacheRuntimeOptions.Builder>> runtimeCustomizers = new ArrayList<>();
+
+    public CacheDatabaseBootstrap runtimeOptions(com.reactor.cachedb.core.config.CacheRuntimeOptions options) {
+        runtimeOptions = Objects.requireNonNull(options, "runtimeOptions"); return this;
+    }
+    public CacheDatabaseBootstrap customizeRuntime(Consumer<com.reactor.cachedb.core.config.CacheRuntimeOptions.Builder> customizer) {
+        runtimeCustomizers.add(Objects.requireNonNull(customizer, "customizer")); return this;
+    }
+    public com.reactor.cachedb.core.config.CacheRuntimeOptions previewRuntimeOptions() {
+        if (runtimeCustomizers.isEmpty()) return runtimeOptions;
+        var builder = runtimeOptions.toBuilder();
+        for (var customizer : List.copyOf(runtimeCustomizers)) customizer.accept(builder);
+        return builder.build();
+    }
     private final ArrayList<Consumer<CacheDatabase>> registrations = new ArrayList<>();
     private final ArrayList<Consumer<CacheDatabaseConfig.Builder>> configCustomizers =
             new ArrayList<>();
@@ -182,29 +197,30 @@ public final class CacheDatabaseBootstrap {
 
     public CacheDatabase build() {
         CacheDatabaseConfig resolvedConfig = previewConfig();
+        var resolvedRuntimeOptions = previewRuntimeOptions();
         RedisClientOperations resolvedForeground = foregroundJedis;
         RedisClientOperations resolvedBackground = backgroundJedis;
         boolean createdForeground = false;
         boolean createdBackground = false;
 
-        if (resolvedForeground == null) {
-            resolvedForeground =
-                    JedisPooledOperations.of(
-                            new JedisPooled(requireText(foregroundRedisUri, "foregroundRedisUri")));
-            createdForeground = true;
-        }
-        if (resolvedBackground == null) {
-            resolvedBackground =
-                    JedisPooledOperations.of(
-                            new JedisPooled(requireText(backgroundRedisUri, "backgroundRedisUri")));
-            createdBackground = true;
-        }
-
         CacheDatabase cacheDatabase = null;
         try {
+            if (resolvedForeground == null) {
+                resolvedForeground =
+                        JedisPooledOperations.of(
+                                BootstrapUriRedisClientFactory.create(requireText(foregroundRedisUri, "foregroundRedisUri")));
+                createdForeground = true;
+            }
+            if (resolvedBackground == null) {
+                resolvedBackground =
+                        JedisPooledOperations.of(
+                                BootstrapUriRedisClientFactory.create(requireText(backgroundRedisUri, "backgroundRedisUri")));
+                createdBackground = true;
+            }
+
             cacheDatabase =
                     new CacheDatabase(
-                            resolvedForeground, resolvedBackground, dataSource, resolvedConfig);
+                            resolvedForeground, resolvedBackground, dataSource, resolvedConfig, resolvedRuntimeOptions);
             if (createdForeground) {
                 cacheDatabase.ownResource(resolvedForeground);
             }

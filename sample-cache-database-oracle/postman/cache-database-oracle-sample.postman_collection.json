@@ -722,6 +722,772 @@
           }
         }
       ]
+    },
+    {
+      "name": "07 Method Cache and Async",
+      "description": "Tenant-scoped method cache, receipt-preserving asynchronous offers and cold Reactor stock reads. Use verified demo credentials and a disposable data set. SQL durability is checked separately from Redis acceptance.",
+      "item": [
+        {
+          "name": "Cache API - Start and Clear Tenant A",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "for (const key of ['cacheTenantAToken', 'cacheTenantBToken', 'cacheSupplierToken']) {",
+                  "  if (!pm.variables.get(key)) throw new Error('Set credential variable ' + key);",
+                  "}",
+                  "const id = Date.now() * 1000 + Math.floor(Math.random() * 400);",
+                  "pm.collectionVariables.set('cacheOfferId', String(id));",
+                  "pm.collectionVariables.set('cacheStockA', String(id + 1));",
+                  "pm.collectionVariables.set('cacheStockB', String(id + 2));",
+                  "pm.collectionVariables.set('cacheSku', 'SKU-' + String(id));",
+                  "for (const name of ['Read Refreshed Quote', 'Tenant A Survives Tenant B Clear', 'Read After Key Eviction', 'Read After Generation Clear']) pm.collectionVariables.unset('cacheWait:Cache API - ' + name);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+                  "pm.test('Tenant A logical clear', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Clear Tenant B",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantBToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+                  "pm.test('Tenant B logical clear', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Read Tenant A Quote",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const row = pm.response.json();",
+                  "pm.test('Server-selected tenant A', () => pm.expect(row.tenant).to.eql('shop-a'));",
+                  "pm.test('Computed scalar value', () => pm.expect(row.value).to.be.a('string'));",
+                  "pm.collectionVariables.set('cacheFirstQuote', row.value);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Read Tenant A Cache Hit",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Same method arguments share the value', () => pm.expect(pm.response.json().value).to.eql(pm.collectionVariables.get('cacheFirstQuote')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Read Tenant B Isolated Quote",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantBToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const row = pm.response.json();",
+                  "pm.test('Server-selected tenant B', () => pm.expect(row.tenant).to.eql('shop-b'));",
+                  "pm.test('No cross-tenant cache value', () => pm.expect(row.value).not.to.eql(pm.collectionVariables.get('cacheFirstQuote')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Refresh Tenant A Quote",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}/refresh?branch=7",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const row = pm.response.json();",
+                  "pm.test('Refresh computes a new method result', () => pm.expect(row.value).not.to.eql(pm.collectionVariables.get('cacheFirstQuote')));",
+                  "pm.collectionVariables.set('cacheRefreshedQuote', row.value);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Read Refreshed Quote",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const row = pm.response.json();",
+                  "const matches = row.value === pm.collectionVariables.get('cacheRefreshedQuote');",
+                  "const key = 'cacheWait:' + pm.info.requestName;",
+                  "let state = pm.collectionVariables.get(key);",
+                  "state = state ? JSON.parse(state) : {tries:0, deadline:Date.now()+10000};",
+                  "if (!matches && ++state.tries < 40 && Date.now() < state.deadline) {",
+                  "  pm.collectionVariables.set(key, JSON.stringify(state));",
+                  "  pm.execution.setNextRequest(pm.info.requestName);",
+                  "  setTimeout(() => {}, 100);",
+                  "} else {",
+                  "  pm.collectionVariables.unset(key);",
+                  "  pm.test('Notification-visible method result', () => pm.expect(matches).to.eql(true));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Clear Only Tenant B",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantBToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+                  "pm.test('Clear is tenant scoped', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Tenant A Survives Tenant B Clear",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const row = pm.response.json();",
+                  "const matches = row.value === pm.collectionVariables.get('cacheRefreshedQuote');",
+                  "const key = 'cacheWait:' + pm.info.requestName;",
+                  "let state = pm.collectionVariables.get(key);",
+                  "state = state ? JSON.parse(state) : {tries:0, deadline:Date.now()+10000};",
+                  "if (!matches && ++state.tries < 40 && Date.now() < state.deadline) {",
+                  "  pm.collectionVariables.set(key, JSON.stringify(state));",
+                  "  pm.execution.setNextRequest(pm.info.requestName);",
+                  "  setTimeout(() => {}, 100);",
+                  "} else {",
+                  "  pm.collectionVariables.unset(key);",
+                  "  pm.test('Notification-visible method result', () => pm.expect(matches).to.eql(true));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Evict One Tenant A Quote",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+                  "pm.test('One logical key evicted', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Read After Key Eviction",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const row = pm.response.json();",
+                  "const matches = row.value !== pm.collectionVariables.get('cacheRefreshedQuote');",
+                  "const key = 'cacheWait:' + pm.info.requestName;",
+                  "let state = pm.collectionVariables.get(key);",
+                  "state = state ? JSON.parse(state) : {tries:0, deadline:Date.now()+10000};",
+                  "if (!matches && ++state.tries < 40 && Date.now() < state.deadline) {",
+                  "  pm.collectionVariables.set(key, JSON.stringify(state));",
+                  "  pm.execution.setNextRequest(pm.info.requestName);",
+                  "  setTimeout(() => {}, 100);",
+                  "} else {",
+                  "  pm.collectionVariables.unset(key);",
+                  "  pm.test('Notification-visible method result', () => pm.expect(matches).to.eql(true));",
+                  "  if (matches) pm.collectionVariables.set('cacheAfterEviction', row.value);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Clear Tenant A Generation",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });",
+                  "pm.test('Generation clear accepted', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Read After Generation Clear",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/cache/quotes/{{cacheSku}}?branch=7",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const row = pm.response.json();",
+                  "const matches = row.value !== pm.collectionVariables.get('cacheAfterEviction');",
+                  "const key = 'cacheWait:' + pm.info.requestName;",
+                  "let state = pm.collectionVariables.get(key);",
+                  "state = state ? JSON.parse(state) : {tries:0, deadline:Date.now()+10000};",
+                  "if (!matches && ++state.tries < 40 && Date.now() < state.deadline) {",
+                  "  pm.collectionVariables.set(key, JSON.stringify(state));",
+                  "  pm.execution.setNextRequest(pm.info.requestName);",
+                  "  setTimeout(() => {}, 100);",
+                  "} else {",
+                  "  pm.collectionVariables.unset(key);",
+                  "  pm.test('Notification-visible method result', () => pm.expect(matches).to.eql(true));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Read Nullable Method",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/cache/nullable/MISSING-ITEM",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Null is a cached value, not a missing route', () => pm.expect(pm.response.json().value).to.eql(null));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Read Cached Null",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/cache/nullable/MISSING-ITEM",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Null is a cached value, not a missing route', () => pm.expect(pm.response.json().value).to.eql(null));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Async Save With Actual Receipt",
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/api/examples/v019/async/offers/{{cacheOfferId}}",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheSupplierToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"supplier\":\"cache-api\",\"status\":\"ACTIVE\",\"unitPrice\":12.3400,\"availableUnits\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+                  "const receipt = pm.response.json();",
+                  "pm.test('Redis acceptance, not SQL commit', () => {",
+                  "  pm.response.to.have.status(202);",
+                  "  pm.expect(receipt.redisAccepted).to.eql(true);",
+                  "  pm.expect(receipt.sqlDurabilityConfirmed).to.eql(false);",
+                  "  pm.expect(receipt.version).to.be.above(0);",
+                  "  pm.expect(String(receipt.id)).to.eql(pm.collectionVariables.get('cacheOfferId'));",
+                  "  pm.expect(receipt.entity.availableUnits).to.eql(7);",
+                  "  pm.expect(receipt.causalToken).to.eql(pm.response.headers.get('X-CacheDB-Causal'));",
+                  "});",
+                  "pm.collectionVariables.set('cacheOfferCausal', receipt.causalToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Async Hot Read With Causal Token",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/async/offers/{{cacheOfferId}}",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheSupplierToken}}"
+              },
+              {
+                "key": "X-CacheDB-Causal",
+                "value": "{{cacheOfferCausal}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const row = pm.response.json();",
+                  "pm.test('Redis accepted value is visible', () => { pm.expect(String(row.offerId)).to.eql(pm.collectionVariables.get('cacheOfferId')); pm.expect(row.availableUnits).to.eql(7); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Explicit Async Source Read",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/async/offers/{{cacheOfferId}}/source",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheSupplierToken}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const url = pm.variables.replaceIn('{{baseUrl}}/api/examples/v019/async/offers/{{cacheOfferId}}/source');",
+                  "const deadline = Date.now() + 20000; let attempts = 0;",
+                  "function waitForSource() {",
+                  "  if (++attempts > 40 || Date.now() >= deadline) throw new Error('Source durability observation deadline exceeded');",
+                  "  pm.sendRequest({method:'GET', url, header:{Authorization:'Bearer ' + pm.variables.get('cacheSupplierToken')}}, (error, response) => {",
+                  "    if (error) throw error;",
+                  "    if (response.code === 200) return;",
+                  "    if (response.code !== 404) throw new Error('Unexpected source status ' + response.code);",
+                  "    setTimeout(waitForSource, 500);",
+                  "  });",
+                  "}",
+                  "waitForSource();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Source row independently observed', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().availableUnits).to.eql(7); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Seed Tenant A Stock With Receipt",
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/api/examples/v018/stock/{{cacheStockA}}",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"stockId\":{{cacheStockA}},\"warehouse\":\"API\",\"status\":\"AVAILABLE\",\"availableUnits\":9}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+                  "pm.test('Existing stock command accepted', () => pm.response.to.have.status(202));",
+                  "pm.collectionVariables.set('cacheStockACausal', pm.response.headers.get('X-CacheDB-Causal'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Reactive Tenant A Causal Read",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/reactive/stock/{{cacheStockA}}",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              },
+              {
+                "key": "X-CacheDB-Causal",
+                "value": "{{cacheStockACausal}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Reactive subscriber receives only tenant A data', () => {",
+                  "  pm.expect(pm.response.json().tenantId).to.eql('shop-a');",
+                  "  pm.expect(pm.response.json().availableUnits).to.eql(9);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Seed Tenant B Stock With Receipt",
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/api/examples/v018/stock/{{cacheStockB}}",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantBToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"stockId\":{{cacheStockB}},\"warehouse\":\"API\",\"status\":\"AVAILABLE\",\"availableUnits\":4}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 202', function () { pm.response.to.have.status(202); });",
+                  "pm.test('Existing stock command accepted', () => pm.response.to.have.status(202));",
+                  "pm.collectionVariables.set('cacheStockBCausal', pm.response.headers.get('X-CacheDB-Causal'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Reactive Tenant B Causal Read",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/reactive/stock/{{cacheStockB}}",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantBToken}}"
+              },
+              {
+                "key": "X-CacheDB-Causal",
+                "value": "{{cacheStockBCausal}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Reactive subscriber receives only tenant B data', () => {",
+                  "  pm.expect(pm.response.json().tenantId).to.eql('shop-b');",
+                  "  pm.expect(pm.response.json().availableUnits).to.eql(4);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cache API - Reactive Bounded Stock List",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/examples/v019/reactive/stock?ids={{cacheStockA}}",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{cacheTenantAToken}}"
+              },
+              {
+                "key": "X-CacheDB-Causal",
+                "value": "{{cacheStockACausal}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const rows = pm.response.json();",
+                  "pm.test('Finite tenant-scoped list', () => { pm.expect(rows).to.have.lengthOf(1); pm.expect(rows[0].tenantId).to.eql('shop-a'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (String(pm.variables.get('cacheApiEnabled')).toLowerCase() !== 'true') {",
+              "  if (String(pm.variables.get('cacheApiCertification')).toLowerCase() === 'true') {",
+              "    throw new Error('Cache API acceptance requires cacheApiEnabled=true; requests must not be skipped');",
+              "  }",
+              "  if (typeof pm.execution.skipRequest !== 'function') throw new Error('Use a runner supporting pm.execution.skipRequest');",
+              "  pm.execution.skipRequest();",
+              "}"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

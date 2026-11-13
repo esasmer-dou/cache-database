@@ -25,8 +25,44 @@ public final class RedisRecoveryStreams {
             RedisClientOperations jedis,
             DeadLetterRecoveryConfig config,
             Map<String, String> fields) {
+        requireLegacyFields(fields);
         jedis.commands().xadd(config.reconciliationStreamKey(), XAddParams.xAddParams(), fields);
         trimIfConfigured(jedis, config.reconciliationStreamKey(), config.reconciliationMaxLength());
+    }
+
+    /** Reconciliation is a producer too: preserve and atomically fence every original pair. */
+    public static void publishReconciliation(RedisClientOperations jedis,DeadLetterRecoveryConfig config,
+            Map<String,String> fields,com.reactor.cachedb.core.protection.QueuedGenerationEnvelope original){
+        if(!original.protectedEnvelope()){publishReconciliation(jedis,config,fields);return;}
+        var stamped=new LinkedHashMap<>(fields);appendOriginalIdentity(stamped,original);
+        RedisQueueGenerationFence.publish(jedis,config.reconciliationStreamKey(),stamped,original);
+        // Never trim a shared stream as a side effect of a protected tenant operation.
+    }
+
+    public static void archiveResolved(RedisClientOperations jedis,DeadLetterRecoveryConfig config,
+            Map<String,String> fields,String id,String status,String note,
+            com.reactor.cachedb.core.protection.QueuedGenerationEnvelope original){
+        if(!config.archiveResolvedEntries())return;
+        if(!original.protectedEnvelope()){archiveResolved(jedis,config,fields,id,status,note);return;}
+        var stamped=new LinkedHashMap<>(fields);appendOriginalIdentity(stamped,original);
+        stamped.put("sourceEntryId",id);stamped.put("status",status);stamped.put("archivedAt",Instant.now().toString());
+        stamped.put("note",note==null?"":note);
+        RedisQueueGenerationFence.publish(jedis,config.archiveStreamKey(),stamped,original);
+    }
+
+    private static void appendOriginalIdentity(Map<String,String> fields,
+            com.reactor.cachedb.core.protection.QueuedGenerationEnvelope envelope){
+        var operation=envelope.operation();
+        var members=operation.atomicBatch()?operation.batchOperations():java.util.List.of(operation);
+        if(operation.atomicBatch())fields.put("batchCount",Integer.toString(members.size()));
+        for(int i=0;i<members.size();i++){
+            var member=members.get(i);var stamp=envelope.generation(member);
+            String prefix=operation.atomicBatch()?"b"+i+":":"";
+            fields.put(prefix+"namespace",member.redisNamespace());fields.put(prefix+"id",member.id());
+            fields.put(prefix+"entity",member.entityName());fields.put(prefix+"version",Long.toString(member.version()));
+            if(stamp!=null){fields.put(prefix+"tenantGeneration",Long.toString(stamp.value()));
+                fields.put(prefix+"tenantToken",stamp.key().tenantToken());fields.put(prefix+"generationScope",stamp.key().scopeToken());}
+        }
     }
 
     public static void archiveResolved(
@@ -50,6 +86,7 @@ public final class RedisRecoveryStreams {
         if (!config.archiveResolvedEntries()) {
             return;
         }
+        requireLegacyFields(sourceFields);
         LinkedHashMap<String, String> archiveFields = new LinkedHashMap<>(sourceFields);
         archiveFields.put("sourceEntryId", sourceEntryId);
         archiveFields.put("status", status);
@@ -93,6 +130,14 @@ public final class RedisRecoveryStreams {
                 return deleted;
             }
         }
+    }
+
+    private static void requireLegacyFields(Map<String,String> fields){
+        if(fields.size()>32768)throw new com.reactor.cachedb.core.protection.ProtectionException(
+                com.reactor.cachedb.core.protection.ProtectionException.Code.INVALID_REQUEST);
+        for(String key:fields.keySet())if(key.equals("tenantGeneration")||key.endsWith(":tenantGeneration"))
+            throw new com.reactor.cachedb.core.protection.ProtectionException(
+                    com.reactor.cachedb.core.protection.ProtectionException.Code.MIGRATION_REQUIRED);
     }
 
     private static void trimIfConfigured(JedisPooled jedis, String streamKey, long maxLength) {

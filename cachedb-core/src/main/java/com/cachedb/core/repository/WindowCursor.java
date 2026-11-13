@@ -22,6 +22,8 @@ public final class WindowCursor {
     private static final String VERSION_KEY = "cachedb_cursor_version";
     private static final String CONTRACT_KEY = "cachedb_cursor_contract";
     private static final String CONTRACT_VERSION = "2";
+    private static final String REDIS_LEXICAL_VERSION = "3-redis-score-lex-id";
+    private static final String REDIS_LONG_LEXICAL_VERSION = "4-redis-long-lex-id";
     private static final ThreadLocal<MessageDigest> SHA_256 = ThreadLocal.withInitial(WindowCursor::sha256);
 
     private WindowCursor() {
@@ -68,25 +70,43 @@ public final class WindowCursor {
         return decodePayload(token, fingerprint(expectedContract), true);
     }
 
+    private static Map<String, Object> decodePayload(String token, String expectedFingerprint, boolean requireContract) {
+        return decodePayload(token, expectedFingerprint, requireContract, CONTRACT_VERSION);
+    }
+
     private static Map<String, Object> decodePayload(
-            String token,
-            String expectedFingerprint,
-            boolean requireContract
+            String token, String expectedFingerprint, boolean requireContract, String expectedVersion
     ) {
         if (token == null || token.isBlank() || token.length() > MAX_TOKEN_LENGTH) {
             throw new IllegalArgumentException("cursor is blank or too large");
         }
         try {
-            String payload = new String(Base64.getUrlDecoder().decode(token), StandardCharsets.UTF_8);
+            byte[] bytes = Base64.getUrlDecoder().decode(token);
+            String payload;
+            if (REDIS_LEXICAL_VERSION.equals(expectedVersion) || REDIS_LONG_LEXICAL_VERSION.equals(expectedVersion)) {
+                try { payload = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString(); }
+                catch (java.nio.charset.CharacterCodingException invalid) {
+                    throw new IllegalArgumentException("Invalid Redis cursor UTF-8", invalid);
+                }
+            } else payload = new String(bytes, StandardCharsets.UTF_8);
             LinkedHashMap<String, Object> decoded = new LinkedHashMap<>();
-            Map<String, String> fields = LengthPrefixedPayloadCodec.decode(payload);
+            Map<String, String> fields;
+            if (REDIS_LONG_LEXICAL_VERSION.equals(expectedVersion)) {
+                fields = new LinkedHashMap<>();
+                var cursor = LengthPrefixedPayloadCodec.cursor(payload);
+                while (cursor.next()) {
+                    String key = cursor.name();
+                    if (fields.containsKey(key)) throw new IllegalArgumentException("Duplicate Long cursor field");
+                    fields.put(key, cursor.value());
+                }
+            } else fields = LengthPrefixedPayloadCodec.decode(payload);
             String version = fields.get(VERSION_KEY);
             String actualFingerprint = fields.get(CONTRACT_KEY);
             boolean contractPresent = version != null || actualFingerprint != null;
-            if (requireContract && (!CONTRACT_VERSION.equals(version) || actualFingerprint == null)) {
+            if (requireContract && (!expectedVersion.equals(version) || actualFingerprint == null)) {
                 throw new CursorContractMismatchException(expectedFingerprint, actualFingerprint);
             }
-            if (contractPresent && (!CONTRACT_VERSION.equals(version) || actualFingerprint == null)) {
+            if (contractPresent && (!expectedVersion.equals(version) || actualFingerprint == null)) {
                 throw new IllegalArgumentException("Unsupported CacheDB cursor contract format");
             }
             if (requireContract && !MessageDigest.isEqual(
@@ -108,6 +128,79 @@ public final class WindowCursor {
             throw failure;
         } catch (IllegalArgumentException failure) {
             throw new IllegalArgumentException("Invalid CacheDB cursor", failure);
+        }
+    }
+
+    /** Distinct wire contract; legacy typed cursors must never be reinterpreted as Redis order. */
+    public static String encodeRedisLexical(double score, String id, String contract) {
+        RedisLexicalPosition position = new RedisLexicalPosition(score, id);
+        var fields = new LinkedHashMap<String, String>();
+        fields.put(VERSION_KEY, REDIS_LEXICAL_VERSION);
+        fields.put(CONTRACT_KEY, fingerprint(contract));
+        fields.put("redis_score", encodeValue(position.score()));
+        fields.put("redis_id", encodeValue(position.id()));
+        return encodePayload(fields);
+    }
+
+    public static RedisLexicalPosition decodeRedisLexical(String token, String contract) {
+        Map<String, Object> values = decodePayload(token, fingerprint(contract), true, REDIS_LEXICAL_VERSION);
+        if (values.size() != 2 || !(values.get("redis_score") instanceof Double score)
+                || !(values.get("redis_id") instanceof String id))
+            throw new IllegalArgumentException("Redis lexical cursor requires a Double score and String ID");
+        return new RedisLexicalPosition(score, id);
+    }
+
+    /** Exact Long position; never encode a rounded Redis double as a Long continuation. */
+    public static String encodeRedisLongLexical(long sortValue, String id, String contract) {
+        RedisLongPosition position = new RedisLongPosition(sortValue, id);
+        var fields = new LinkedHashMap<String, String>();
+        fields.put(VERSION_KEY, REDIS_LONG_LEXICAL_VERSION);
+        fields.put(CONTRACT_KEY, fingerprint(contract));
+        fields.put("redis_long", encodeValue(position.sortValue()));
+        fields.put("redis_id", encodeValue(position.id()));
+        return encodePayload(fields);
+    }
+
+    public static RedisLongPosition decodeRedisLongLexical(String token, String contract) {
+        Map<String, Object> values = decodePayload(token, fingerprint(contract), true, REDIS_LONG_LEXICAL_VERSION);
+        if (values.size() != 2 || !(values.get("redis_long") instanceof Long value)
+                || !(values.get("redis_id") instanceof String id))
+            throw new IllegalArgumentException("Redis Long cursor requires an exact Long value and String ID");
+        return new RedisLongPosition(value, id);
+    }
+
+    public record RedisLongPosition(long sortValue, String id) {
+        public RedisLongPosition { requireRedisId(id); }
+    }
+
+    private static void requireRedisId(String id) {
+        if (id == null || id.isEmpty() || id.length() > 4096)
+            throw new IllegalArgumentException("Invalid Redis lexical ID");
+        for (int i = 0; i < id.length(); i++) {
+            char c = id.charAt(i);
+            if (Character.isHighSurrogate(c)) {
+                if (++i == id.length() || !Character.isLowSurrogate(id.charAt(i)))
+                    throw new IllegalArgumentException("Invalid cursor Unicode");
+            } else if (Character.isLowSurrogate(c)) throw new IllegalArgumentException("Invalid cursor Unicode");
+        }
+        if (id.getBytes(StandardCharsets.UTF_8).length > 4096)
+            throw new IllegalArgumentException("Cursor ID exceeds 4096 UTF-8 bytes");
+    }
+
+    public record RedisLexicalPosition(double score, String id) {
+        public RedisLexicalPosition {
+            if (!Double.isFinite(score) || id == null || id.isEmpty() || id.length() > 4096)
+                throw new IllegalArgumentException("Invalid Redis lexical position");
+            for (int i = 0; i < id.length(); i++) {
+                char c = id.charAt(i);
+                if (Character.isHighSurrogate(c)) {
+                    if (++i == id.length() || !Character.isLowSurrogate(id.charAt(i)))
+                        throw new IllegalArgumentException("Invalid cursor Unicode");
+                } else if (Character.isLowSurrogate(c)) throw new IllegalArgumentException("Invalid cursor Unicode");
+            }
+            if (id.getBytes(StandardCharsets.UTF_8).length > 4096)
+                throw new IllegalArgumentException("Cursor ID exceeds 4096 UTF-8 bytes");
+            if (score == 0d) score = 0d;
         }
     }
 

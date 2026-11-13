@@ -65,7 +65,17 @@ public final class JdbcEntitySourceLoader<T, ID>
             int maxRows,
             int queryTimeoutSeconds
     ) {
-        this(dataSource, metadata, codec, maxRows, queryTimeoutSeconds, JdbcQueryDialects.resolve(dataSource));
+        this(dataSource, metadata, codec, maxRows, queryTimeoutSeconds, sourceDialect(dataSource, metadata, codec));
+    }
+
+    private static JdbcQueryDialect sourceDialect(DataSource source, EntityMetadata<?, ?> metadata, EntityCodec<?> codec) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
+        try { return JdbcQueryDialects.resolve(source); }
+        catch (RuntimeException failure) {
+            if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+            throw failure;
+        }
     }
 
     public JdbcEntitySourceLoader(
@@ -79,6 +89,7 @@ public final class JdbcEntitySourceLoader<T, ID>
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.metadata = Objects.requireNonNull(metadata, "metadata");
         this.codec = Objects.requireNonNull(codec, "codec");
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.requireBound(metadata, codec);
         this.maxRows = Math.max(1, maxRows);
         if (queryTimeoutSeconds <= 0) {
             throw new IllegalArgumentException("queryTimeoutSeconds must be greater than zero");
@@ -140,7 +151,10 @@ public final class JdbcEntitySourceLoader<T, ID>
                 }
             }
             return java.util.Collections.unmodifiableMap(result);
-        } catch (SQLException failure) { throw new IllegalStateException("Tenant ownership source lookup failed", failure); }
+        } catch (SQLException failure) {
+            if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata)) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+            throw new IllegalStateException("Tenant ownership source lookup failed", failure);
+        }
     }
 
     @Override
@@ -160,7 +174,10 @@ public final class JdbcEntitySourceLoader<T, ID>
                 if (version < 0) throw new IllegalStateException("Negative source entity version");
                 return java.util.OptionalLong.of(Math.max(1, version));
             }
-        } catch (SQLException failure) { throw new IllegalStateException("Source version probe failed for " + metadata.entityName(), failure); }
+        } catch (SQLException failure) {
+            if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata)) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+            throw new IllegalStateException("Source version probe failed for " + metadata.entityName(), failure);
+        }
     }
 
     @Override
@@ -184,6 +201,12 @@ public final class JdbcEntitySourceLoader<T, ID>
 
     @Override
     public List<VersionedEntity<T>> loadVersionedQuery(QuerySpec querySpec) {
+        com.reactor.cachedb.core.crypto.EncryptedStorageChecks.validateSourceQuery(metadata, querySpec);
+        if (querySpec != null) for (var filter : querySpec.filters()) {
+            var descriptor = com.reactor.cachedb.core.crypto.EncryptedStorageChecks.descriptor(metadata, filter.column());
+            // Validate type/budget via the codec without replacing the logical JDBC parameter.
+            if (descriptor != null) codec.indexQueryValue(filter.column(), filter.value());
+        }
         QuerySpec normalized = querySpec == null ? QuerySpec.builder().limit(Math.min(maxRows, 100)).build() : querySpec;
         normalized = com.reactor.cachedb.core.tenant.TenantAccess.scoped(metadata, normalized);
         int limit = boundedLimit(normalized.limit());
@@ -235,8 +258,18 @@ public final class JdbcEntitySourceLoader<T, ID>
                 return List.copyOf(rows);
             }
         } catch (SQLException exception) {
+            if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
             throw new IllegalStateException("JDBC source load failed for " + metadata.entityName() + ": "
                     + exception.getMessage(), exception);
+        } catch (com.reactor.cachedb.core.crypto.CacheEncryptionException safe) {
+            throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(safe.code());
+        } catch (com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException safe) {
+            throw safe;
+        } catch (RuntimeException failure) {
+            if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+                throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
+            throw failure;
         }
     }
 
@@ -281,6 +314,8 @@ public final class JdbcEntitySourceLoader<T, ID>
     }
 
     private IllegalStateException invalidVersion(String versionColumn, Object value) {
+        if (com.reactor.cachedb.core.crypto.EncryptedStorageChecks.protectedEntity(metadata))
+            return new IllegalStateException("Invalid protected source version");
         return new IllegalStateException(
                 "JDBC source row has invalid version '" + value + "' in column " + versionColumn
                         + " for " + metadata.entityName()

@@ -2,9 +2,55 @@ name: Framework Readiness
 
 on:
   workflow_dispatch:
+    inputs:
+      evidenceMode:
+        description: Verify pinned Kubernetes acceptance, or separately import/upload metadata (no workloads)
+        required: true
+        default: k8s-verify
+        type: choice
+        options: [k8s-verify, public-import, private-upload]
+      sampleRuntimeArtifactId:
+        description: Approved private source mirror Actions artifact ID containing the complete real sample evidence tree with receipt.json at its root
+        required: false
+        type: string
+      sampleRuntimeArtifactSha256:
+        description: Coordinator-pinned artifact ZIP SHA256 (upload-artifact artifact-digest); required together with ID and receipt hash
+        required: false
+        type: string
+      sampleRuntimeReceiptSha256:
+        description: Coordinator-pinned SHA256 of the actual receipt.json; missing evidence remains release-blocking
+        required: false
+        type: string
+      sampleRuntimeSourceEquivalencePath:
+        description: Optional owner-approved documentation manifest path relative to the immutable receipt; requires all four qualification inputs
+        required: false
+        type: string
+      sampleRuntimeSourceEquivalenceSha256:
+        description: Independently approved documentation manifest SHA256
+        required: false
+        type: string
+      sampleRuntimeToolingOverlayPath:
+        description: Optional owner-approved version 2 tooling manifest path relative to the immutable receipt
+        required: false
+        type: string
+      sampleRuntimeToolingOverlaySha256:
+        description: Independently approved version 2 tooling manifest SHA256
+        required: false
+        type: string
+      privateEvidenceAssetId:
+        description: Private-upload only; independently approved release asset ID in this same private repository
+        required: false
+        type: string
+      privateEvidenceAssetSha256:
+        description: Private-upload only; pinned SHA256 of the complete existing evidence ZIP release asset
+        required: false
+        type: string
   pull_request:
     paths:
       - ".github/workflows/framework-readiness.yml"
+      - ".github/workflows/github-packages-publish.yml"
+      - ".github/workflows/maven-central-publish.yml"
+      - ".github/actions/cachedb-v019-performance/**"
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/pull_request_template.md"
       - "docs/**"
@@ -22,6 +68,8 @@ on:
       - "cachedb-json/**"
       - "cachedb-annotations/**"
       - "cachedb-processor/**"
+      - "cachedb-reactor/**"
+      - "cachedb-spring-data/**"
       - "cachedb-storage-redis/**"
       - "cachedb-storage-jdbc/**"
       - "cachedb-storage-postgres/**"
@@ -46,6 +94,7 @@ on:
       - "tr/cachedb-examples/**"
       - "pom.xml"
       - "tools/ci/**"
+      - "tools/release/**"
       - "tools/samples/**"
   push:
     branches:
@@ -53,6 +102,9 @@ on:
       - master
     paths:
       - ".github/workflows/framework-readiness.yml"
+      - ".github/workflows/github-packages-publish.yml"
+      - ".github/workflows/maven-central-publish.yml"
+      - ".github/actions/cachedb-v019-performance/**"
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/pull_request_template.md"
       - "docs/**"
@@ -70,6 +122,8 @@ on:
       - "cachedb-json/**"
       - "cachedb-annotations/**"
       - "cachedb-processor/**"
+      - "cachedb-reactor/**"
+      - "cachedb-spring-data/**"
       - "cachedb-storage-redis/**"
       - "cachedb-storage-jdbc/**"
       - "cachedb-storage-postgres/**"
@@ -94,180 +148,384 @@ on:
       - "tr/cachedb-examples/**"
       - "pom.xml"
       - "tools/ci/**"
+      - "tools/release/**"
       - "tools/samples/**"
 
 permissions:
   contents: read
 
 jobs:
-  framework-readiness:
+  private-evidence-upload:
+    if: github.event_name == 'workflow_dispatch' && inputs.evidenceMode == 'private-upload'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    env:
+      EVIDENCE_MODE: ${{ inputs.evidenceMode }}
+      EVENT_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      APPROVED_PRIVATE_REPOSITORY: ${{ vars.CACHEDB_EVIDENCE_REPOSITORY }}
+      APPROVED_PRIVATE_REPOSITORY_ID: ${{ vars.CACHEDB_EVIDENCE_REPOSITORY_ID }}
+      PUBLIC_SOURCE_REPOSITORY: ${{ vars.CACHEDB_PUBLIC_SOURCE_REPOSITORY }}
+      PUBLIC_SOURCE_REPOSITORY_ID: ${{ vars.CACHEDB_PUBLIC_SOURCE_REPOSITORY_ID }}
+      APPROVED_SOURCE_SHA: ${{ vars.CACHEDB_APPROVED_SOURCE_SHA }}
+      PRIVATE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      SAMPLE_ARTIFACT_ID: ${{ inputs.sampleRuntimeArtifactId }}
+      SAMPLE_ARTIFACT_SHA256: ${{ inputs.sampleRuntimeArtifactSha256 }}
+      SAMPLE_ASSET_ID: ${{ inputs.privateEvidenceAssetId }}
+      SAMPLE_ASSET_SHA256: ${{ inputs.privateEvidenceAssetSha256 }}
+      SAMPLE_RECEIPT_SHA256: ${{ inputs.sampleRuntimeReceiptSha256 }}
+      SAMPLE_DOC_PATH: ${{ inputs.sampleRuntimeSourceEquivalencePath }}
+      SAMPLE_DOC_PIN: ${{ inputs.sampleRuntimeSourceEquivalenceSha256 }}
+      SAMPLE_TOOL_PATH: ${{ inputs.sampleRuntimeToolingOverlayPath }}
+      SAMPLE_TOOL_PIN: ${{ inputs.sampleRuntimeToolingOverlaySha256 }}
+      PRIVATE_EVIDENCE_KIND: ${{ vars.CACHEDB_PRIVATE_EVIDENCE_KIND }}
+      K8S_SDK_PIN: ${{ vars.CACHEDB_K8S_ACCEPTANCE_SDK_SHA256 }}
+      K8S_EQUIVALENCE_PATH: ${{ vars.CACHEDB_K8S_SOURCE_EQUIVALENCE_PATH }}
+      K8S_EQUIVALENCE_PIN: ${{ vars.CACHEDB_K8S_SOURCE_EQUIVALENCE_SHA256 }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.3
-
-      - name: Setup Java
-        uses: actions/setup-java@v5.2.0
-        with:
-          distribution: temurin
-          java-version: "21"
-          cache: maven
-
-      - name: Validate community and release metadata
+      - name: Admit exact private manual source before checkout
         shell: pwsh
-        run: ./tools/ci/validate-framework-readiness.ps1 -SummaryPath ./target/framework-readiness-summary.md
-
-      - name: Validate Turkish docs quality
-        shell: pwsh
-        run: ./tools/ci/check-tr-docs.ps1 -SummaryPath ./target/tr-docs-quality-summary.md
-
-      - name: Validate Markdown links
-        shell: pwsh
-        run: ./tools/ci/check-markdown-links.ps1 -SummaryPath ./target/markdown-link-summary.md
-
-      - name: Validate README onboarding contracts
-        shell: pwsh
-        run: ./tools/ci/check-readme-quality.ps1 -SummaryPath ./target/readme-quality-summary.md
-
-      - name: Verify complete EN/TR sample code examples match compiled sources
-        shell: pwsh
-        run: ./tools/samples/sync-feature-guide.ps1 -Check
-
-      - name: Validate Postman onboarding flows
-        shell: pwsh
-        run: ./tools/ci/check-postman-collections.ps1 -SummaryPath ./target/postman-collection-summary.md
-
-      - name: Validate 0.18 sample capability coverage
-        shell: pwsh
-        run: ./tools/ci/check-v018-sample-coverage.ps1
-
-      - name: Validate sample provider parity
-        shell: pwsh
-        run: ./tools/ci/check-sample-provider-parity.ps1
-
-      - name: Validate declarative sample framework usage
-        shell: pwsh
-        run: ./tools/ci/check-sample-framework-usage.ps1 -SummaryPath ./target/sample-framework-usage-summary.md
-
-      - name: Validate framework architecture principles
-        shell: pwsh
-        run: ./tools/ci/check-framework-principles.ps1 -SummaryPath ./target/framework-principles-summary.md
-
-      - name: Verify architecture reflection guard rejects unsafe hot paths
-        shell: pwsh
-        run: ./tools/ci/test-framework-principles.ps1
-
-      - name: Verify OSS release packaging
-        shell: pwsh
-        run: mvn -B -P oss-release -DskipTests "-Dgpg.skip=true" package
-
-      - name: Validate release artifacts
-        shell: pwsh
-        run: ./tools/ci/check-release-artifacts.ps1
-
-      - name: Check public API compatibility
-        shell: pwsh
-        run: ./tools/ci/check-public-api-compatibility.ps1
-
-      - name: Publish readiness summary
-        shell: pwsh
+        env:
+          EVENT_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
         run: |
-          Get-Content ./target/framework-readiness-summary.md >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-          Get-Content ./target/tr-docs-quality-summary.md >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-          Get-Content ./target/markdown-link-summary.md >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-          Get-Content ./target/readme-quality-summary.md >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-          Get-Content ./target/postman-collection-summary.md >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-          Get-Content ./target/sample-framework-usage-summary.md >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-          Get-Content ./target/framework-principles-summary.md >> $env:GITHUB_STEP_SUMMARY
-
-      - name: Upload readiness artifacts
-        uses: actions/upload-artifact@v7.0.1
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:EVENT_REPOSITORY_PRIVATE -cne 'true' -or
+              !$env:APPROVED_PRIVATE_REPOSITORY -or !$env:APPROVED_PRIVATE_REPOSITORY_ID -or
+              $env:GITHUB_REPOSITORY -cne $env:APPROVED_PRIVATE_REPOSITORY -or
+              $env:GITHUB_REPOSITORY_ID -cne $env:APPROVED_PRIVATE_REPOSITORY_ID -or
+              $env:APPROVED_SOURCE_SHA -cnotmatch '^[a-f0-9]{40}$' -or
+              $env:GITHUB_SHA -cne $env:APPROVED_SOURCE_SHA -or $env:PRIVATE_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
+              $env:SAMPLE_ARTIFACT_ID -or $env:SAMPLE_ARTIFACT_SHA256) {
+            throw 'Private upload requires exact approved private dispatch at final source S, without import artifact inputs.'
+          }
+      - name: Checkout exact source S with no retained credentials
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
-          name: framework-readiness
-          path: |
-            target/framework-readiness-summary.md
-            target/tr-docs-quality-summary.md
-            target/markdown-link-summary.md
-            target/readme-quality-summary.md
-            target/postman-collection-summary.md
-            target/sample-framework-usage-summary.md
-            target/framework-principles-summary.md
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate existing pinned evidence without executing workloads
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:PRIVATE_EVIDENCE_KIND -ceq 'k8s') {
+            ./tools/ci/stage-k8s-acceptance.ps1
+          } elseif (!$env:PRIVATE_EVIDENCE_KIND -or $env:PRIVATE_EVIDENCE_KIND -ceq 'sample') {
+            ./tools/ci/stage-v019-private-evidence.ps1
+          } else {
+            throw 'Unknown private evidence kind; no evidence may be uploaded.'
+          }
+      - name: Upload only successfully qualified private evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v019-private-owned-runtime/evidence/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
-  sample-provider-integration:
+  public-evidence-import:
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.private == false && inputs.evidenceMode == 'public-import'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 8
+    permissions:
+      contents: read
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.3
-
-      - name: Setup Java
-        uses: actions/setup-java@v5.2.0
+      - name: Admit exact public metadata-only import before checkout
+        shell: pwsh
+        env:
+          EVIDENCE_MODE: ${{ inputs.evidenceMode }}
+          PRIVATE_ASSET_ID: ${{ inputs.privateEvidenceAssetId }}
+          PRIVATE_ASSET_PIN: ${{ inputs.privateEvidenceAssetSha256 }}
+          PUBLIC_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          if ($env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:EVIDENCE_MODE -cne 'public-import' -or
+              $env:PRIVATE_ASSET_ID -or $env:PRIVATE_ASSET_PIN -or $env:PUBLIC_WORKFLOW_SHA -cne $env:GITHUB_SHA) {
+            throw 'Public import requires exact manual source/workflow S without private asset inputs.'
+          }
+      - name: Checkout exact source S with no retained credentials
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
-          distribution: temurin
-          java-version: "21"
-          cache: maven
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Install CacheDB reactor artifacts
-        run: mvn -B -DskipTests install
-
-      - name: Verify PostgreSQL sample with real providers
-        working-directory: sample-cache-database-postgresql
-        run: mvn -B clean verify -Pprovider-integration
-
-      - name: Verify PostgreSQL certification fails closed without evidence
-        working-directory: sample-cache-database-postgresql
-        shell: bash
+      # The coordinator uses a private source mirror at this exact checkout commit.
+      # Its artifact contains real producer output, without a wrapping directory.
+      # This import neither runs the producer nor treats transport checks as qualification.
+      # The coordinator must use access-controlled artifact storage; never publish private
+      # child logs or reports in a public repository artifact to satisfy this gate.
+      # Raw evidence stays private in RUNNER_TEMP and is not uploaded by this workflow.
+      - name: Import pinned actual sample runtime evidence
+        id: sample-runtime
+        timeout-minutes: 5
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.CACHEDB_EVIDENCE_READ_TOKEN }}
+          EVIDENCE_REPOSITORY: ${{ vars.CACHEDB_EVIDENCE_REPOSITORY }}
+          EVIDENCE_REPOSITORY_ID: ${{ vars.CACHEDB_EVIDENCE_REPOSITORY_ID }}
+          SAMPLE_ARTIFACT_ID: ${{ inputs.sampleRuntimeArtifactId }}
+          SAMPLE_ARTIFACT_SHA256: ${{ inputs.sampleRuntimeArtifactSha256 }}
+          SAMPLE_RECEIPT_SHA256: ${{ inputs.sampleRuntimeReceiptSha256 }}
+          SAMPLE_DOC_PATH: ${{ inputs.sampleRuntimeSourceEquivalencePath }}
+          SAMPLE_DOC_PIN: ${{ inputs.sampleRuntimeSourceEquivalenceSha256 }}
+          SAMPLE_TOOL_PATH: ${{ inputs.sampleRuntimeToolingOverlayPath }}
+          SAMPLE_TOOL_PIN: ${{ inputs.sampleRuntimeToolingOverlaySha256 }}
         run: |
-          set +e
-          mvn -B -DskipTests -Pproduction-certification verify > target/certification-gate.log 2>&1
-          status=$?
-          set -e
-          test "$status" -ne 0
-          grep -q "CacheDB production certification failed" target/certification-gate.log
-          grep -q "Missing certification manifest" target/cachedb-production-certification.md
-          grep -q "Missing route coverage CSV" target/cachedb-production-certification.md
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          function Assert-SampleRuntimeInputs([string]$Event, [string]$Id, [string]$ArchivePin, [string]$ReceiptPin) {
+            if ($Event -cne 'workflow_dispatch' -or $Id -cnotmatch '^[1-9][0-9]{0,18}$' -or
+                $ArchivePin -cnotmatch '^[a-f0-9]{64}$' -or $ReceiptPin -cnotmatch '^[a-f0-9]{64}$') {
+              throw 'Actual evidence requires explicit artifact ID, artifact ZIP SHA256 and receipt SHA256 together.'
+            }
+          }
+          function Assert-SampleRuntimeSource([string]$Repository, [string]$RepositoryId, [string]$Token, [string]$SourceSha) {
+            if ($Repository -cnotmatch '^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$' -or
+                $RepositoryId -cnotmatch '^[1-9][0-9]{0,18}$' -or [string]::IsNullOrWhiteSpace($Token) -or
+                $SourceSha -cnotmatch '^[a-f0-9]{40}$') {
+              throw 'Explicit private evidence repository authority and read token required.'
+            }
+          }
+          function Assert-SampleRuntimeQualificationInputs([string]$DocPath, [string]$DocPin, [string]$ToolPath, [string]$ToolPin) {
+            $values = @($DocPath, $DocPin, $ToolPath, $ToolPin)
+            $present = @($values | Where-Object { ![string]::IsNullOrEmpty($_) }).Count
+            if (!$present) { return }
+            if ($present -ne 4 -or $DocPin -cnotmatch '^[a-f0-9]{64}$' -or $ToolPin -cnotmatch '^[a-f0-9]{64}$') {
+              throw 'Qualification requires both explicit path/SHA256 pairs.'
+            }
+            foreach ($member in @($DocPath, $ToolPath)) {
+              if ($member.Length -gt 1024 -or $member.StartsWith('/') -or $member -match '[\\:\x00-\x1f\x7f]' -or
+                  @($member.Split('/') | Where-Object { !$_ -or $_ -in @('.', '..') -or $_ -cne $_.Trim() -or $_.EndsWith('.') }).Count) {
+                throw 'Unsafe qualification manifest path.'
+              }
+            }
+          }
+          function Assert-PrivateSampleRuntimeRepository($Metadata, [string]$Repository, [string]$RepositoryId) {
+            if ([string]$Metadata.id -cne $RepositoryId -or $Metadata.full_name -cne $Repository -or
+                $Metadata.private -isnot [bool] -or !$Metadata.private -or $Metadata.visibility -cne 'private' -or
+                !$Metadata.PSObject.Properties['fork'] -or $Metadata.fork -isnot [bool] -or $Metadata.fork) {
+              throw 'Evidence repository is not the exact approved private source mirror.'
+            }
+          }
+          function Assert-SampleRuntimeArtifact($Metadata, [string]$Id, [string]$ArchivePin, [string]$RepositoryId, [string]$SourceSha) {
+            if ([string]$Metadata.id -cne $Id -or $Metadata.expired -isnot [bool] -or $Metadata.expired -or
+                ($Metadata.size_in_bytes -isnot [int] -and $Metadata.size_in_bytes -isnot [long]) -or
+                $Metadata.size_in_bytes -le 0 -or $Metadata.size_in_bytes -gt 512MB -or
+                $Metadata.digest -cne "sha256:$ArchivePin" -or
+                [string]$Metadata.workflow_run.repository_id -cne $RepositoryId -or
+                [string]$Metadata.workflow_run.head_repository_id -cne $RepositoryId -or
+                $Metadata.workflow_run.head_sha -cne $SourceSha) {
+              throw 'Artifact identity, digest, expiry, size or exact repository/source binding differs.'
+            }
+          }
+          function Assert-SampleRuntimeProducer($Run, [string]$RunId, [string]$RepositoryId, [string]$SourceSha) {
+            if ($RunId -cnotmatch '^[1-9][0-9]{0,18}$' -or
+                [string]$Run.id -cne $RunId -or [string]$Run.repository.id -cne $RepositoryId -or
+                [string]$Run.head_repository.id -cne $RepositoryId -or $Run.head_sha -cne $SourceSha -or
+                $Run.event -cne 'workflow_dispatch' -or $Run.status -cne 'completed' -or $Run.conclusion -cne 'success') {
+              throw 'Completed successful own-repository producer at approved source required.'
+            }
+          }
+          function Receive-SampleRuntimeArchive([string]$Uri, [string]$Token, [string]$Destination,
+              [ValidateSet('', 'application/octet-stream')][string]$MediaType = '') {
+            $handler = [Net.Http.HttpClientHandler]::new()
+            $handler.AllowAutoRedirect = $true
+            $handler.MaxAutomaticRedirections = 3
+            $handler.UseCookies = $false
+            # HttpClient clears Authorization on redirects; never preserve it for blob storage.
+            $client = [Net.Http.HttpClient]::new($handler)
+            $cancel = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(90))
+            $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $Uri)
+            $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $Token)
+            $request.Headers.Add('User-Agent', 'cachedb-sample-runtime-import')
+            $request.Headers.Add('X-GitHub-Api-Version', '2022-11-28')
+            if ($MediaType) { $request.Headers.Accept.ParseAdd($MediaType) }
+            $response = $stream = $file = $null
+            try {
+              $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cancel.Token).GetAwaiter().GetResult()
+              $null = $response.EnsureSuccessStatusCode()
+              if ($response.RequestMessage.RequestUri.Scheme -cne 'https' -or $response.Content.Headers.ContentLength -gt 512MB) { throw 'Archive transfer rejected.' }
+              $stream = $response.Content.ReadAsStreamAsync($cancel.Token).GetAwaiter().GetResult()
+              $file = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+              [IO.File]::SetUnixFileMode($Destination, [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite)
+              $buffer = [byte[]]::new(65536); [long]$total = 0
+              while (($read = $stream.ReadAsync($buffer, 0, $buffer.Length, $cancel.Token).GetAwaiter().GetResult()) -gt 0) {
+                $total += $read
+                if ($total -gt 512MB) { throw 'Archive transfer budget exceeded.' }
+                $file.Write($buffer, 0, $read)
+              }
+              if (!$total) { throw 'Empty archive.' }
+            } finally {
+              foreach ($resource in @($file, $stream, $response, $request, $cancel, $client, $handler)) {
+                if ($null -ne $resource) { $resource.Dispose() }
+              }
+            }
+          }
+          function Expand-SampleRuntimeArchive([string]$Archive, [string]$Destination, [string]$ArchivePin, [string]$ReceiptPin) {
+            if ((Test-Path -LiteralPath $Destination) -or (Get-Item -LiteralPath $Archive).Length -gt 512MB -or
+                (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ArchivePin) { throw 'Archive pin or fresh destination differs.' }
+            $zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+            try {
+              $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+              $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+              [long]$total = 0
+              if (!$zip.Entries.Count -or $zip.Entries.Count -gt 20000) { throw 'Archive entry budget exceeded.' }
+              foreach ($entry in $zip.Entries) {
+                $directory = $entry.FullName.EndsWith('/')
+                $name = if ($directory) { $entry.FullName.Substring(0, $entry.FullName.Length - 1) } else { $entry.FullName }
+                $mode = ($entry.ExternalAttributes -shr 16) -band 0xf000
+                if (!$name -or $name.Length -gt 1024 -or $name.Split('/').Count -gt 24 -or
+                    $name -match '[\\:\x00-\x1f\x7f]' -or @($name.Split('/') | Where-Object { $_ -in @('', '.', '..') }).Count -or
+                    !$names.Add($name) -or (($entry.ExternalAttributes -band 0x400) -ne 0) -or
+                    $mode -notin @(0, $(if ($directory) { 0x4000 } else { 0x8000 })) -or
+                    $entry.Length -lt 0 -or $entry.Length -gt 128MB -or ($directory -and $entry.Length)) { throw 'Unsafe archive member.' }
+                $total += $entry.Length
+                if ($total -gt 2GB) { throw 'Expanded evidence budget exceeded.' }
+                if (!$directory) { $null = $files.Add($name) }
+              }
+              $paths = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+              foreach ($name in $names) {
+                $parent = $name
+                while ($true) {
+                  if ($paths.ContainsKey($parent) -and $paths[$parent] -cne $parent) { throw 'Archive directory case alias.' }
+                  $paths[$parent] = $parent
+                  if ($paths.Count -gt 20000) { throw 'Expanded entry budget exceeded.' }
+                  $slash = $parent.LastIndexOf('/')
+                  if ($slash -lt 0) { break }
+                  $parent = $parent.Substring(0, $slash)
+                  if ($files.Contains($parent)) { throw 'Archive file/directory collision.' }
+                }
+              }
+              $receipts = @($zip.Entries | Where-Object FullName -CEQ 'receipt.json')
+              if ($receipts.Count -ne 1 -or $receipts[0].Length -gt 1MB) { throw 'Bounded exact root receipt.json required.' }
+              $null = [IO.Directory]::CreateDirectory($Destination)
+              [IO.File]::SetUnixFileMode($Destination, [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute)
+              $buffer = [byte[]]::new(65536)
+              foreach ($entry in $zip.Entries) {
+                if ($entry.FullName.EndsWith('/')) { continue }
+                $target = Join-Path $Destination $entry.FullName
+                $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))
+                $inputStream = $entry.Open(); $outputStream = $null
+                try {
+                  $outputStream = [IO.File]::Open($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                  [long]$copied = 0
+                  while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $copied += $read
+                    if ($copied -gt $entry.Length) { throw 'Archive member exceeds its declared bound.' }
+                    $outputStream.Write($buffer, 0, $read)
+                  }
+                  if ($copied -ne $entry.Length) { throw 'Truncated archive member.' }
+                } finally { if ($null -ne $outputStream) { $outputStream.Dispose() }; $inputStream.Dispose() }
+              }
+              $receipt = Join-Path $Destination 'receipt.json'
+              if ((Get-Item -LiteralPath $receipt).Length -gt 1MB -or
+                  (Get-FileHash -LiteralPath $receipt -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ReceiptPin) { throw 'Receipt pin differs.' }
+              return $receipt
+            } finally { $zip.Dispose() }
+          }
+          try {
+            Assert-SampleRuntimeInputs $env:GITHUB_EVENT_NAME $env:SAMPLE_ARTIFACT_ID $env:SAMPLE_ARTIFACT_SHA256 $env:SAMPLE_RECEIPT_SHA256
+            Assert-SampleRuntimeQualificationInputs $env:SAMPLE_DOC_PATH $env:SAMPLE_DOC_PIN $env:SAMPLE_TOOL_PATH $env:SAMPLE_TOOL_PIN
+            Assert-SampleRuntimeSource $env:EVIDENCE_REPOSITORY $env:EVIDENCE_REPOSITORY_ID $env:GH_TOKEN $env:GITHUB_SHA
+            $repositoryUri = "https://api.github.com/repos/$env:EVIDENCE_REPOSITORY"
+            $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+            $repository = Invoke-RestMethod -Uri $repositoryUri -Headers $headers -TimeoutSec 30 -MaximumRedirection 0
+            Assert-PrivateSampleRuntimeRepository $repository $env:EVIDENCE_REPOSITORY $env:EVIDENCE_REPOSITORY_ID
+            $uri = "$repositoryUri/actions/artifacts/$env:SAMPLE_ARTIFACT_ID"
+            $metadata = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 30 -MaximumRedirection 0
+            Assert-SampleRuntimeArtifact $metadata $env:SAMPLE_ARTIFACT_ID $env:SAMPLE_ARTIFACT_SHA256 $env:EVIDENCE_REPOSITORY_ID $env:GITHUB_SHA
+            $producerId = [string]$metadata.workflow_run.id
+            if ($producerId -cnotmatch '^[1-9][0-9]{0,18}$') { throw 'Exact numeric artifact producer required.' }
+            $producer = Invoke-RestMethod -Uri "$repositoryUri/actions/runs/$producerId" -Headers $headers -TimeoutSec 30 -MaximumRedirection 0
+            Assert-SampleRuntimeProducer $producer $producerId $env:EVIDENCE_REPOSITORY_ID $env:GITHUB_SHA
+            $archive = Join-Path $env:RUNNER_TEMP 'v019-sample-runtime.zip'
+            $destination = Join-Path $env:RUNNER_TEMP 'v019-sample-runtime'
+            Receive-SampleRuntimeArchive "$uri/zip" $env:GH_TOKEN $archive
+            $receipt = Expand-SampleRuntimeArchive $archive $destination $env:SAMPLE_ARTIFACT_SHA256 $env:SAMPLE_RECEIPT_SHA256
+            "receipt=$receipt" >> $env:GITHUB_OUTPUT
+            "sha256=$env:SAMPLE_RECEIPT_SHA256" >> $env:GITHUB_OUTPUT
+          } catch {
+            # Do not print API redirect URLs, tokens, raw reports or process/server messages.
+            throw 'Pinned actual sample evidence import failed; missing or invalid evidence is not qualified.'
+          }
 
-      - name: Verify MSSQL sample with real providers
-        working-directory: sample-cache-database-mssql
-        run: mvn -B clean verify -Pprovider-integration
-
-      - name: Verify MSSQL certification fails closed without evidence
-        working-directory: sample-cache-database-mssql
-        shell: bash
+      - name: Validate 0.19 sample capability coverage
+        shell: pwsh
+        env:
+          SAMPLE_RECEIPT_PATH: ${{ steps.sample-runtime.outputs.receipt }}
+          SAMPLE_RECEIPT_SHA256: ${{ steps.sample-runtime.outputs.sha256 }}
+          SAMPLE_DOC_PATH: ${{ inputs.sampleRuntimeSourceEquivalencePath }}
+          SAMPLE_DOC_PIN: ${{ inputs.sampleRuntimeSourceEquivalenceSha256 }}
+          SAMPLE_TOOL_PATH: ${{ inputs.sampleRuntimeToolingOverlayPath }}
+          SAMPLE_TOOL_PIN: ${{ inputs.sampleRuntimeToolingOverlaySha256 }}
         run: |
-          set +e
-          mvn -B -DskipTests -Pproduction-certification verify > target/certification-gate.log 2>&1
-          status=$?
-          set -e
-          test "$status" -ne 0
-          grep -q "CacheDB production certification failed" target/certification-gate.log
-          grep -q "Missing certification manifest" target/cachedb-production-certification.md
-          grep -q "Missing route coverage CSV" target/cachedb-production-certification.md
+          $arguments = @{ RuntimeEvidencePath = $env:SAMPLE_RECEIPT_PATH; RuntimeEvidenceSha256 = $env:SAMPLE_RECEIPT_SHA256
+            PrivateResultsPath = (Join-Path $env:RUNNER_TEMP 'v019-sample-qualification.json') }
+          if ($env:SAMPLE_DOC_PATH -or $env:SAMPLE_DOC_PIN -or $env:SAMPLE_TOOL_PATH -or $env:SAMPLE_TOOL_PIN) {
+            $arguments.SourceEquivalencePath = $env:SAMPLE_DOC_PATH
+            $arguments.SourceEquivalenceSha256 = $env:SAMPLE_DOC_PIN
+            $arguments.ExecutionToolingOverlayPath = $env:SAMPLE_TOOL_PATH
+            $arguments.ExecutionToolingOverlaySha256 = $env:SAMPLE_TOOL_PIN
+          }
+          ./tools/ci/check-v019-sample-coverage.ps1 @arguments
 
-      - name: Verify Oracle sample with real providers
-        working-directory: sample-cache-database-oracle
-        run: mvn -B clean verify -Pprovider-integration
-
-      - name: Verify Oracle certification fails closed without evidence
-        working-directory: sample-cache-database-oracle
-        shell: bash
+      - name: Publish R07 import summary
+        shell: pwsh
         run: |
-          set +e
-          mvn -B -DskipTests -Pproduction-certification verify > target/certification-gate.log 2>&1
-          status=$?
-          set -e
-          test "$status" -ne 0
-          grep -q "CacheDB production certification failed" target/certification-gate.log
-          grep -q "Missing certification manifest" target/cachedb-production-certification.md
-          grep -q "Missing route coverage CSV" target/cachedb-production-certification.md
+          'R07 retained-evidence import only; ordinary CI and release acceptance remain separate gates.' >> $env:GITHUB_STEP_SUMMARY
+          Get-Content ./target/v019-sample-coverage.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload R07 import summary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r07-evidence-import-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target/v019-sample-coverage.md
+          if-no-files-found: error
+          retention-days: 14
+
+  k8s-acceptance-verification:
+    name: K8s Acceptance Verification
+    if: github.event.repository.private == false && (github.event_name != 'workflow_dispatch' || inputs.evidenceMode == 'k8s-verify')
+    runs-on: ubuntu-latest
+    environment: k8s-acceptance
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - name: Require trusted source before private evidence access
+        shell: pwsh
+        env:
+          PUBLIC_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          if ($env:GITHUB_EVENT_NAME -cnotin @('push', 'workflow_dispatch') -or $env:PUBLIC_WORKFLOW_SHA -cne $env:GITHUB_SHA) {
+            throw 'Pull-request metadata cannot certify Kubernetes acceptance. Require trusted exact-S publication and pinned runtime evidence.'
+          }
+      - name: Checkout exact source S with no retained credentials
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify pinned Kubernetes acceptance without running workloads
+        shell: pwsh
+        env:
+          PUBLIC_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GH_TOKEN: ${{ secrets.CACHEDB_EVIDENCE_READ_TOKEN }}
+          EVIDENCE_REPOSITORY: ${{ vars.CACHEDB_EVIDENCE_REPOSITORY }}
+          EVIDENCE_REPOSITORY_ID: ${{ vars.CACHEDB_EVIDENCE_REPOSITORY_ID }}
+          K8S_ARTIFACT_ID: ${{ vars.CACHEDB_K8S_ACCEPTANCE_ARTIFACT_ID }}
+          K8S_ARCHIVE_PIN: ${{ vars.CACHEDB_K8S_ACCEPTANCE_ARCHIVE_SHA256 }}
+          K8S_RECEIPT_PIN: ${{ vars.CACHEDB_K8S_ACCEPTANCE_RECEIPT_SHA256 }}
+          K8S_SDK_PIN: ${{ vars.CACHEDB_K8S_ACCEPTANCE_SDK_SHA256 }}
+          K8S_PRODUCER_WORKFLOW: ${{ vars.CACHEDB_K8S_ACCEPTANCE_PRODUCER_WORKFLOW }}
+        run: ./tools/ci/check-k8s-acceptance.ps1
+      - name: Upload readiness artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: k8s-acceptance-verification
+          path: |
+            target/k8s-acceptance-verification.md
+          if-no-files-found: error
+          retention-days: 14

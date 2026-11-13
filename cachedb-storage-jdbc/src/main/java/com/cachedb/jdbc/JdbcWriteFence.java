@@ -245,7 +245,8 @@ public final class JdbcWriteFence {
         try (PreparedStatement update =
                 prepare(
                         connection,
-                        "UPDATE " + TABLE + " SET entity_version=?, deleted=? WHERE fence_key=?")) {
+                        "UPDATE " + TABLE + " SET entity_version=?, deleted=? WHERE fence_key="
+                                + (provider == Provider.MSSQL ? "CAST(? AS CHAR(64))" : "?"))) {
             int count = 0;
             for (Entry entry : sorted) {
                 if (!entry.changed) continue;
@@ -283,7 +284,8 @@ public final class JdbcWriteFence {
             }
             return;
         }
-        String values = String.join(",", java.util.Collections.nCopies(entries.size(), "(?,?)"));
+        String values = String.join(",", java.util.Collections.nCopies(entries.size(),
+                provider == Provider.MSSQL ? "(CAST(? AS CHAR(64)),?)" : "(?,?)"));
         String sql =
                 provider == Provider.POSTGRES
                         ? "INSERT INTO "
@@ -340,7 +342,8 @@ public final class JdbcWriteFence {
     }
 
     private void lock(Connection connection, List<Entry> entries) throws SQLException {
-        String markers = String.join(",", java.util.Collections.nCopies(entries.size(), "?"));
+        String markers = String.join(",", java.util.Collections.nCopies(entries.size(),
+                provider == Provider.MSSQL ? "CAST(? AS CHAR(64))" : "?"));
         String sql =
                 "SELECT fence_key,identity_value,entity_version,deleted FROM "
                         + TABLE
@@ -383,15 +386,14 @@ public final class JdbcWriteFence {
                 JdbcWriteBehindSupport.convertValue(
                         operation.id(), type == null ? "java.lang.String" : type);
         if (value == null) throw new SQLException("Null write identity", "CDB03");
-        String id =
-                value instanceof BigDecimal decimal
-                        ? decimal.stripTrailingZeros().toPlainString()
-                        : value.toString();
-        // Length-prefix each part; identifiers/IDs may themselves contain delimiters.
-        return scope.length() + ":" + scope + id.length() + ":" + id;
+        return canonicalIdentity(scope, value);
     }
 
     private String resolveTable(Connection connection, String table) throws SQLException {
+        return resolveTable(connection, provider, table, timeout);
+    }
+
+    private static String resolveTable(Connection connection, Provider provider, String table, int timeout) throws SQLException {
         String sql =
                 switch (provider) {
                     case POSTGRES ->
@@ -405,7 +407,8 @@ public final class JdbcWriteFence {
                             "SELECT owner,table_name FROM all_tables WHERE owner=? AND"
                                     + " table_name=?";
                 };
-        try (PreparedStatement statement = prepare(connection, sql)) {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setQueryTimeout(timeout);
             if (provider == Provider.ORACLE) {
                 String[] parts = table.split("\\.", -1);
                 if (parts.length > 2)
@@ -506,4 +509,68 @@ public final class JdbcWriteFence {
             this.identity = identity;
         }
     }
+    private static String canonicalIdentity(String scope, Object value) {
+        String id = value instanceof BigDecimal decimal ? decimal.stripTrailingZeros().toPlainString() : value.toString();
+        return scope.length() + ":" + scope + id.length() + ":" + id;
+    }
+
+    /** Read-only initial hydration proof, sharing EXACT normal-flusher physical identity encoding. */
+    public static void requireInitialRows(Connection connection, Provider provider, String table,
+            Map<?, Long> sourceVersions, int timeoutSeconds) throws SQLException {
+        if (connection.getAutoCommit() || sourceVersions.size() > 128 || timeoutSeconds < 1 || timeoutSeconds > 5)
+            throw new com.reactor.cachedb.core.protection.ProtectionException(
+                    com.reactor.cachedb.core.protection.ProtectionException.Code.INVALID_REQUEST);
+        if (sourceVersions.isEmpty()) return;
+        String scope = resolveTable(connection, provider, table, timeoutSeconds);
+        var wanted = new java.util.LinkedHashMap<String, String>();
+        var versions = new java.util.HashMap<String, Long>();
+        for (var row : sourceVersions.entrySet()) {
+            String identity = canonicalIdentity(scope, java.util.Objects.requireNonNull(row.getKey()));
+            var digest = HASH.get(); digest.reset();
+            String key = java.util.HexFormat.of().formatHex(digest.digest(identity.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            if (wanted.putIfAbsent(key, identity) != null) initialMismatch();
+            versions.put(key, row.getValue());
+        }
+        String sql = "SELECT fence_key,entity_version,deleted,identity_value FROM " + TABLE
+                + " WHERE fence_key IN (" + String.join(",", java.util.Collections.nCopies(wanted.size(),
+                        provider == Provider.MSSQL ? "CAST(? AS CHAR(64))" : "?")) + ")";
+        try (var q = connection.prepareStatement(sql)) {
+            q.setQueryTimeout(timeoutSeconds); q.setFetchSize(1); q.setMaxRows(129);
+            int p = 1; for (String key : wanted.keySet()) q.setString(p++, key);
+            try (var rows = q.executeQuery()) {
+                int count = 0;
+                while (rows.next()) {
+                    if (++count > wanted.size()) initialMismatch();
+                    String key = rows.getString(1);
+                    String expected = wanted.get(key);
+                    if (expected == null) initialMismatch();
+                    BigDecimal raw = rows.getBigDecimal(2); long version;
+                    try { if (raw == null) throw new ArithmeticException(); version = raw.longValueExact(); }
+                    catch (ArithmeticException bad) { initialMismatch(); return; }
+                    int deleted = rows.getInt(3);
+                    if (rows.wasNull() || deleted != 0 && deleted != 1) initialMismatch();
+                    String identity;
+                    try (var reader = rows.getCharacterStream(4)) {
+                        if (reader == null) { initialMismatch(); return; }
+                        var text = new StringBuilder(Math.min(2048, expected.length()));
+                        char[] buffer = new char[512];
+                        for (int n; (n = reader.read(buffer)) >= 0;) {
+                            if (n == 0 || text.length() > 2048 - n) initialMismatch();
+                            text.append(buffer, 0, n);
+                        }
+                        identity = text.toString();
+                    } catch (java.io.IOException bad) { initialMismatch(); return; }
+                    long source = versions.get(key);
+                    if (!expected.equals(identity) || version < 0
+                            || version > com.reactor.cachedb.core.protection.TenantVersionRange.MAX_VERSION
+                            || version > source || deleted == 1 && version >= source) initialMismatch();
+                }
+            }
+        }
+    }
+    private static void initialMismatch() {
+        throw new com.reactor.cachedb.core.protection.ProtectionException(
+                com.reactor.cachedb.core.protection.ProtectionException.Code.MIGRATION_REQUIRED);
+    }
+
 }

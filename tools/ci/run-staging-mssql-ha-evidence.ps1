@@ -6,16 +6,22 @@ param(
     [string]$MssqlUser,
     [Parameter(Mandatory = $true)]
     [string]$MssqlPassword,
-    [int]$ExternalFailoverWaitSeconds = 120
+    [ValidateRange(0, 2147483647)]
+    [int]$ExternalFailoverWaitSeconds = 120,
+    [switch]$ReconnectSmokeOnly
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$reportsDir = Join-Path (Join-Path $repoRoot "target") "cachedb-staging-mssql-ha-reports"
-$beforeDir = Join-Path $reportsDir "before-external-failover"
-$afterDir = Join-Path $reportsDir "after-external-failover"
+$reportsRoot = Join-Path (Join-Path $repoRoot "target") "cachedb-staging-mssql-ha-reports"
+$runId = "run-$([DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))-$([guid]::NewGuid().ToString('N'))"
+$reportsDir = Join-Path $reportsRoot $runId
+$beforeDir = Join-Path $reportsDir "before-wait"
+$afterDir = Join-Path $reportsDir "after-wait"
+$summaryPath = Join-Path $reportsDir "staging-mssql-ha-evidence.md"
+$jsonPath = Join-Path $reportsDir "staging-mssql-ha-evidence.json"
 
 function Assert-NonBlank {
     param(
@@ -29,50 +35,101 @@ function Assert-NonBlank {
 
 function Run-MssqlEvidence {
     param([string]$OutputDirectory)
+    $global:LASTEXITCODE = 0
     & (Join-Path $PSScriptRoot "run-mssql-provider-evidence.ps1") `
         -MavenExecutable $MavenExecutable `
         -MssqlUrl $MssqlUrl `
         -MssqlUser $MssqlUser `
         -MssqlPassword $MssqlPassword `
         -ReportsDir $OutputDirectory
+    $smokeSucceeded = $?
+    if (-not $smokeSucceeded -or $global:LASTEXITCODE -ne 0) {
+        throw "MSSQL provider smoke failed with exit code $global:LASTEXITCODE."
+    }
+}
+
+function Write-StagingEvidence {
+    $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+    @(
+        "# Staging MSSQL Smoke Evidence",
+        "",
+        "- Run: $runId",
+        "- Mode: $($evidence.executionMode)",
+        "- Status: $($evidence.status)",
+        "- External failover wait: $ExternalFailoverWaitSeconds second(s)",
+        "- Before-wait provider smoke: $($evidence.beforeSmoke)",
+        "- After-wait provider smoke: $($evidence.afterSmoke)",
+        "- liveFailoverVerified=false",
+        "- haQualified=false",
+        "",
+        "Only the recorded smoke outcomes are established. An elapsed wait does not prove failover or connection recovery.",
+        "No independent live-failover witness is collected or validated by this runner. HA remains NOT QUALIFIED."
+    ) | Set-Content -LiteralPath $summaryPath -Encoding UTF8
 }
 
 Assert-NonBlank -Name "MssqlUrl" -Value $MssqlUrl
 Assert-NonBlank -Name "MssqlUser" -Value $MssqlUser
 Assert-NonBlank -Name "MssqlPassword" -Value $MssqlPassword
 
-if (Test-Path $reportsDir) {
-    Remove-Item -Recurse -Force $reportsDir
+New-Item -ItemType Directory -Path $reportsRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $reportsDir | Out-Null
+$evidence = [ordered]@{
+    schemaVersion = 1
+    provider = "mssql"
+    runId = $runId
+    executionMode = $(if ($ReconnectSmokeOnly) { "reconnect-smoke-only" } else { "ha-qualification" })
+    status = "running"
+    startedAtUtc = [DateTimeOffset]::UtcNow.ToString("O")
+    completedAtUtc = $null
+    externalFailoverWaitSeconds = $ExternalFailoverWaitSeconds
+    beforeSmoke = "not-run"
+    afterSmoke = "not-run"
+    smokeChecksPassed = $false
+    liveFailoverVerified = $false
+    haQualified = $false
+    qualificationReason = "No independent live-failover witness is collected or validated by this runner."
+    failurePhase = $null
 }
-New-Item -ItemType Directory -Path $beforeDir -Force | Out-Null
-New-Item -ItemType Directory -Path $afterDir -Force | Out-Null
+Write-StagingEvidence
+Write-Host "Run reports: $reportsDir"
 
-Write-Host "Running pre-failover staging MSSQL provider evidence..."
-Run-MssqlEvidence -OutputDirectory $beforeDir
+$phase = "beforeSmoke"
+try {
+    Write-Host "Running before-wait staging MSSQL provider smoke..."
+    $evidence.beforeSmoke = "running"
+    Run-MssqlEvidence -OutputDirectory $beforeDir
+    $evidence.beforeSmoke = "passed"
 
-if ($ExternalFailoverWaitSeconds -gt 0) {
-    Write-Host "Waiting $ExternalFailoverWaitSeconds second(s) for an externally triggered SQL Server HA failover."
-    Write-Host "Trigger failover in the managed SQL Server or Always On topology now. This script does not mutate the production topology."
-    Start-Sleep -Seconds $ExternalFailoverWaitSeconds
-} else {
-    Write-Host "External failover wait skipped. Post-check will validate reconnect/reuse only, not a live HA failover."
+    $phase = "wait"
+    if ($ExternalFailoverWaitSeconds -gt 0) {
+        Write-Host "Waiting $ExternalFailoverWaitSeconds second(s) for operator activity; no failover witness is collected."
+        Start-Sleep -Seconds $ExternalFailoverWaitSeconds
+    } else {
+        Write-Host "External failover wait skipped; this does not establish reconnect or live failover."
+    }
+
+    $phase = "afterSmoke"
+    Write-Host "Running after-wait staging MSSQL provider smoke..."
+    $evidence.afterSmoke = "running"
+    Run-MssqlEvidence -OutputDirectory $afterDir
+    $evidence.afterSmoke = "passed"
+    $evidence.smokeChecksPassed = $true
+    $evidence.status = $(if ($ReconnectSmokeOnly) { "smoke-only-passed" } else { "ha-not-qualified" })
+} catch {
+    if ($phase -ne "wait") { $evidence[$phase] = "failed" }
+    $evidence.status = "smoke-failed"
+    $evidence.failurePhase = $phase
+    throw
+} finally {
+    $evidence.completedAtUtc = [DateTimeOffset]::UtcNow.ToString("O")
+    Write-StagingEvidence
+    Write-Host "liveFailoverVerified=false"
+    Write-Host "haQualified=false"
+    Write-Host "Summary: $summaryPath"
+    Write-Host "JSON: $jsonPath"
 }
 
-Write-Host "Running post-failover staging MSSQL provider evidence..."
-Run-MssqlEvidence -OutputDirectory $afterDir
-
-$summaryPath = Join-Path $reportsDir "staging-mssql-ha-evidence.md"
-$summary = @"
-# Staging MSSQL HA Evidence
-
-- MSSQL URL: supplied via workflow secret or local parameter
-- External failover wait: ``$ExternalFailoverWaitSeconds`` second(s)
-- Pre-failover provider evidence: ``passed``
-- Post-failover provider evidence: ``passed``
-
-This lane validates CacheDB MSSQL write-behind, outbox checkpointing, high-volume replay, migration SQL, and multi-pod apply behavior against a real staging SQL Server HA topology. For GA, run it while a real managed SQL Server failover or Always On failover is triggered during the wait window.
-"@
-Set-Content -Path $summaryPath -Value $summary -NoNewline
-
-Write-Host "Staging MSSQL HA evidence passed."
-Write-Host "Summary: $summaryPath"
+if (-not $ReconnectSmokeOnly) {
+    throw "Staging MSSQL HA is NOT QUALIFIED: no independent live-failover witness was validated. Reports: $reportsDir"
+}
+Write-Host "Staging MSSQL smoke checks passed; live failover and HA remain unverified."

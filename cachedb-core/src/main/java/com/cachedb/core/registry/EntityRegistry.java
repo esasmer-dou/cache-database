@@ -54,4 +54,13 @@ public interface EntityRegistry {
     Optional<EntityProjectionBinding<?, ?, ?>> findProjection(String entityName, String projectionName);
     Collection<EntityProjectionBinding<?, ?, ?>> projections(String entityName);
     Collection<EntityBinding<?, ?>> all();
+    /** Administrative opt-in bindings; custom registries must preserve the explicit 10000 bound. */
+    default Collection<EntityBinding<?,?>> tenantProtectedBindings(){
+        var result=new java.util.ArrayList<EntityBinding<?,?>>();int examined=0;
+        for(var binding:all()){
+            if(++examined>10000)throw new IllegalStateException("Protection registry exceeds bounded validation");
+            if(binding.metadata().tenantPurgeEnabled())result.add(binding);
+        }
+        return java.util.List.copyOf(result);
+    }
 }

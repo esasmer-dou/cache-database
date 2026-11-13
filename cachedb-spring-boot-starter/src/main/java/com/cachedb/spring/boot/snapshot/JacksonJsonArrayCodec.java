@@ -9,6 +9,7 @@ import java.util.*;
 
 /** Legacy mapper semantics are isolated here, not silently translated to a different engine. */
 final class JacksonJsonArrayCodec<V> implements JsonArrayCodec<V> {
+    private final java.util.concurrent.locks.ReentrantLock readerLock = new java.util.concurrent.locks.ReentrantLock();
     private final ObjectMapper mapper;
     private final Class<V> type;
     private volatile ObjectReader reader;
@@ -24,11 +25,15 @@ final class JacksonJsonArrayCodec<V> implements JsonArrayCodec<V> {
 
     JacksonJsonArrayCodec<V> prepared() {
         ObjectReader value = reader;
-        if (value == null)
-            synchronized (this) {
+        if (value == null) {
+            readerLock.lock();
+            try {
                 value = reader;
                 if (value == null) reader = value = mapper.readerForListOf(type);
+            } finally {
+                readerLock.unlock();
             }
+        }
         return this;
     }
 

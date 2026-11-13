@@ -7,6 +7,38 @@ Bu mekanizma; rota kapsamını, veri eşitliğini, bellek kullanımını, failov
 canary sonucunu ve geri dönüş planını yalnızca okunacak bir liste olmaktan
 çıkarır. Eksik kanıt varsa Maven derlemesi başarısız olur.
 
+## Örnek Doğrulama Araçlarının Bütünlüğü
+
+Örnek API denetimleri, Linux x64 için Node.js 24.22.1 ve Newman 6.2.1 kullanır.
+Bunlar doğrulama araçlarıdır; CacheDB'nin Java çalışma zamanı bağımlılıkları
+değildir. [Makine tarafından okunabilir pin kaydı](../../docs/validation-tooling-pins.json),
+yalnızca sürüm etiketini değil, arşivin tam baytlarını tanımlar:
+
+- Node arşivi: `node-v24.22.1-linux-x64.tar.gz`, SHA-256 `eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c`.
+- Newman arşivi: `newman-6.2.1.tgz`, bütünlük değeri `sha512-Zq8Sr5GFF+OXs5yIbyglLMKMh1WNMjYVV0yZaSBZ+DIgQOIWcxT8QTfbrl/YUGrLyT4rjpu+yZ/Z+kozw79GEA==`.
+
+Geçici bir araç dizini kullanın. Arşivi açmadan veya çalıştırmadan önce indirilen
+baytları doğrulayın; TLS ya da checksum denetimini kapatmayın. Kaynak başvuruları,
+[Node checksum listesi](https://nodejs.org/dist/v24.22.1/SHASUMS256.txt) ve
+[Newman'ın sürümlenmiş paket metadata'sıdır](https://registry.npmjs.org/newman/6.2.1).
+
+```bash
+set -eu
+curl --fail --location --proto '=https' --tlsv1.2 -o node-v24.22.1-linux-x64.tar.gz https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.gz
+printf '%s  %s\n' eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c node-v24.22.1-linux-x64.tar.gz | sha256sum --check -
+tar -xzf node-v24.22.1-linux-x64.tar.gz
+curl --fail --location --proto '=https' --tlsv1.2 -o newman-6.2.1.tgz https://registry.npmjs.org/newman/-/newman-6.2.1.tgz
+./node-v24.22.1-linux-x64/bin/node -e 'const fs=require("node:fs"),crypto=require("node:crypto");const expected="sha512-Zq8Sr5GFF+OXs5yIbyglLMKMh1WNMjYVV0yZaSBZ+DIgQOIWcxT8QTfbrl/YUGrLyT4rjpu+yZ/Z+kozw79GEA==";const actual="sha512-"+crypto.createHash("sha512").update(fs.readFileSync("newman-6.2.1.tgz")).digest("base64");if(actual!==expected)throw new Error("Newman integrity mismatch");console.log("Newman archive integrity verified");'
+```
+
+Yalnızca Newman paketini sabitlemek, geçişli bağımlılıklarını sabitlemez. Kurulumun
+`package-lock.json` dosyasını koruyun, SHA-256 değerini kanıtlarla birlikte kaydedin
+ve farklı bir bağımlılık grafiğini sessizce çözümlemek yerine
+`npm ci --ignore-scripts --no-audit --no-fund` kullanın. Bütünlük doğrulaması,
+bağımlılık güvenlik incelemesi veya API testlerinin geçtiğine ilişkin kanıt
+değildir. Sağlayıcı testleri, gerçek HTTP assertion'ları, sıfır atlanan test
+denetimi ve tam sürüm kapsamı kontrolü ayrı gereklilikler olarak kalır.
+
 ## 1. Maven Kontrolünü Ekle
 
 CacheDB BOM, plugin sürümünü yönetir. Aşağıdaki profili uygulamanın POM dosyasına

@@ -1,0 +1,109 @@
+# JMH version: 1.37
+# VM version: JDK 21.0.7, OpenJDK 64-Bit Server VM, 21.0.7+6-LTS
+# VM invoker: /opt/java/openjdk/bin/java
+# VM options: -Xms512m -Xmx512m -XX:ActiveProcessorCount=1 -Dcachedb.bench.redis=127.0.0.1:6379 -Djmh.executor=CUSTOM -Djmh.executor.class=com.reactor.cachedb.benchmarks.redis.VirtualBenchmarkExecutor
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 5 iterations, 3 s each
+# Measurement: 5 iterations, 3 s each
+# Timeout: 10 min per iteration
+# Threads: 1000 threads, ***WARNING: Synchronize iterations are disabled!***
+# Benchmark mode: Throughput, ops/time
+# Benchmark: com.reactor.cachedb.benchmarks.redis.RedisRepositoryBenchmark.l1MissFindByIdVirtual1000
+
+# Run progress: 0.00% complete, ETA 00:03:00
+# Fork: 1 of 3
+# Warmup Iteration   1: 0.004 ops/us
+# Warmup Iteration   2: 0.007 ops/us
+# Warmup Iteration   3: 0.019 ops/us
+# Warmup Iteration   4: 0.020 ops/us
+# Warmup Iteration   5: 0.025 ops/us
+Iteration   1: 0.022 ops/us
+                 gc.alloc.rate:      107.544 MB/sec
+                 gc.alloc.rate.norm: 5284.763 B/op
+                 gc.count:           2.000 counts
+                 gc.time:            15.000 ms
+
+Iteration   2: 0.025 ops/us
+                 gc.alloc.rate:      128.561 MB/sec
+                 gc.alloc.rate.norm: 5577.309 B/op
+                 gc.count:           3.000 counts
+                 gc.time:            22.000 ms
+
+Iteration   3: 0.025 ops/us
+                 gc.alloc.rate:      125.614 MB/sec
+                 gc.alloc.rate.norm: 5506.324 B/op
+                 gc.count:           3.000 counts
+                 gc.time:            23.000 ms
+
+Iteration   4: 0.023 ops/us
+                 gc.alloc.rate:      118.682 MB/sec
+                 gc.alloc.rate.norm: 5387.113 B/op
+                 gc.count:           3.000 counts
+                 gc.time:            24.000 ms
+
+Iteration   5: 0.025 ops/us
+                 gc.alloc.rate:      85.533 MB/sec
+                 gc.alloc.rate.norm: 4906.584 B/op
+                 gc.count:           2.000 counts
+                 gc.time:            19.000 ms
+
+
+# Run progress: 16.67% complete, ETA 00:02:46
+# Fork: 2 of 3
+# Warmup Iteration   1: 0.004 ops/us
+# Warmup Iteration   2: 0.009 ops/us
+# Warmup Iteration   3: 0.022 ops/us
+# Warmup Iteration   4: 0.024 ops/us
+# Warmup Iteration   5: 0.024 ops/us
+Iteration   1: 0.021 ops/us
+                 gc.alloc.rate:      103.744 MB/sec
+                 gc.alloc.rate.norm: 5152.241 B/op
+                 gc.count:           2.000 counts
+                 gc.time:            35.000 ms
+
+Iteration   2: 0.024 ops/us
+                 gc.alloc.rate:      121.369 MB/sec
+                 gc.alloc.rate.norm: 5340.996 B/op
+                 gc.count:           3.000 counts
+                 gc.time:            26.000 ms
+
+Iteration   3: 0.024 ops/us
+                 gc.alloc.rate:      112.816 MB/sec
+                 gc.alloc.rate.norm: 5053.791 B/op
+                 gc.count:           3.000 counts
+                 gc.time:            24.000 ms
+
+Iteration   4: 0.025 ops/us
+                 gc.alloc.rate:      110.939 MB/sec
+                 gc.alloc.rate.norm: 4698.097 B/op
+                 gc.count:           2.000 counts
+                 gc.time:            15.000 ms
+
+Iteration   5: 0.024 ops/us
+                 gc.alloc.rate:      86.529 MB/sec
+                 gc.alloc.rate.norm: 5080.385 B/op
+                 gc.count:           3.000 counts
+                 gc.time:            22.000 ms
+
+
+# Run progress: 33.33% complete, ETA 00:02:12
+# Fork: 3 of 3
+# Warmup Iteration   1: <failure: VM prematurely exited before JMH had finished with it, explicit System.exit was called?>
+<forked VM failed with exit code 143>
+<stdout last='20 lines'>
+</stdout>
+<stderr last='20 lines'>
+</stderr>
+
+Benchmark had encountered error, and fail on error was requested
+ERROR: org.openjdk.jmh.runner.RunnerException: Benchmark caught the exception
+	at org.openjdk.jmh.runner.Runner.runBenchmarks(Runner.java:572)
+	at org.openjdk.jmh.runner.Runner.internalRun(Runner.java:309)
+	at org.openjdk.jmh.runner.Runner.run(Runner.java:208)
+	at org.openjdk.jmh.Main.main(Main.java:71)
+Caused by: org.openjdk.jmh.runner.BenchmarkException: Benchmark error
+	at org.openjdk.jmh.runner.ForkedMain.hangup(ForkedMain.java:124)
+	at org.openjdk.jmh.runner.ForkedMain$HangupThread.run(ForkedMain.java:159)
+	Suppressed: java.lang.IllegalStateException: <failure: VM prematurely exited before JMH had finished with it, explicit System.exit was called?>
+		at org.openjdk.jmh.runner.ForkedMain.hangup(ForkedMain.java:113)
+		... 1 more

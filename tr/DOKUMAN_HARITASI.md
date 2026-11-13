@@ -6,6 +6,14 @@ Bu sayfa, Türkçe dokümanların giriş kapısıdır. Amaç dosya adlarını ez
 değil, kullanıcının sorduğu soruya göre doğru belgeye hızlı gitmesini
 sağlamaktır.
 
+## 0.19.0 Taslağı
+
+0.19.0 **UNRELEASED**, yani yayımlanmamış taslaktır. Performans kabul kapısı FAIL / AÇIK;
+güvenli koruma devreye alma süreci beklemededir. [Taslak sürüm notları](docs/releases/v0.19.0.md),
+[Java 21 ve açık seçimlerle geçiş](docs/upgrading-to-0.19.md),
+[sürüm geçmişi](docs/surum-gecmisi.md) ile başlayın. Paket sürümü, işlevsel test veya rehberin bulunması,
+yayımı ya da üretim kabulünü kanıtlamaz.
+
 ## İlk Kez Gelen Kullanıcı
 
 Toplu L1 okumaları, soft TTL, causal token, gruplama ve bileşik indeksler için
@@ -34,7 +42,7 @@ ayarlarının hangi mantıkla yapılacağını anlaması için yeterli olmalıd�
 | Çalışan REST API örneği nerede? | [PostgreSQL](../sample-cache-database-postgresql/README.tr.md), [SQL Server](../sample-cache-database-mssql/README.tr.md) veya [Oracle](../sample-cache-database-oracle/README.tr.md) |
 | Yeni projeye nasıl eklerim? | [Başlangıç Rehberi](docs/getting-started.md) |
 | Hızlı erişim, SQL, warm ve command route'larını nasıl tanımlarım? | [Deklaratif Repository Kullanımı](docs/deklaratif-repositoryler.md) |
-| Güncel kararlı sürümde neler değişti? | [v0.15.1 Sürüm Notları](docs/releases/v0.15.1.md) |
+| Sürüm geçmişi ve gerçek yayım sınırı nerede? | [Sürüm Geçmişi](docs/surum-gecmisi.md) |
 | Geniş entity'ler ve SQL kolon sınırları nasıl denetlenir? | [Kolon ve Alan Sınırları](docs/sema-kolon-sinirlari.md) |
 | Kaynak ve ilişki tanımları nasıl sadeleşir? | [Kaynak başvurusu](docs/snapshot-kaynak-basvurusu.md) |
 | 0.14.0 ile tipli snapshot, istemci/worker ayrımı ve altyapısız test nasıl kullanılır? | [Tipli Snapshot, Çalışma Rolleri ve Tüketici Testleri](docs/tipli-snapshot-roller-testler.md) |

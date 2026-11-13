@@ -5,6 +5,27 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class CacheCausalContextTest {
+    @Test void requirementPresenceIsNamespaceExactAndRestoredAcrossEmptyAndNestedScopes() {
+        assertFalse(CacheCausalContext.hasRequirements());
+        assertFalse(CacheCausalContext.hasRequirements("rows"));
+        assertThrows(NullPointerException.class, () -> CacheCausalContext.hasRequirements(null));
+        try (var empty = CacheCausalContext.withToken("")) {
+            assertFalse(CacheCausalContext.hasRequirements());
+            try (var first = CacheCausalContext.withMinVersion("rows:other", "1", 2)) {
+                assertTrue(CacheCausalContext.hasRequirements());
+                assertFalse(CacheCausalContext.hasRequirements("rows"));
+                try (var nested = CacheCausalContext.withMinVersion("rows", "2", 4)) {
+                    assertTrue(CacheCausalContext.hasRequirements("rows"));
+                    assertTrue(CacheCausalContext.hasRequirements("rows:other"));
+                }
+                assertFalse(CacheCausalContext.hasRequirements("rows"));
+                assertTrue(CacheCausalContext.hasRequirements());
+            }
+            assertFalse(CacheCausalContext.hasRequirements());
+        }
+        assertFalse(CacheCausalContext.hasRequirements());
+    }
+
     @Test void wrappersCaptureAllThreeTaskTypesAndRestoreWorkerStateEvenOnFailure() throws Exception {
         Runnable runnable;
         java.util.concurrent.Callable<Long> callable;

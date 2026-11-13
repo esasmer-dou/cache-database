@@ -56,6 +56,10 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
         return RepositoryCapabilities.all();
     }
 
+    @Override public EntityQueryCapacity entityQueryCapacity() {
+        return EntityQueryCapacity.unrestricted();
+    }
+
     public Optional<T> findById(ID id) {
         return findHotById(id).optional();
     }
@@ -348,6 +352,28 @@ public final class InMemoryEntityRepository<T, ID> implements EntityRepository<T
 
     public void deleteById(ID id) {
         deleteWithReceipt(id);
+    }
+
+    public List<WriteReceipt<T, ID>> bulkDelete(Collection<ID> input) {
+        Objects.requireNonNull(input, "ids");
+        if (input.size() > 10_000) throw new IllegalArgumentException("Bulk delete exceeds 10000 input IDs");
+        var unique = new LinkedHashSet<ID>(); int count = 0;
+        for (ID id : input) {
+            if (++count > 10_000) throw new IllegalArgumentException("Bulk delete exceeds 10000 input IDs");
+            unique.add(Objects.requireNonNull(id, "id"));
+        }
+        lock.lock();
+        try {
+            String tenant = com.reactor.cachedb.core.tenant.TenantAccess.active(metadata);
+            for (ID id : unique) {
+                if (tenant != null && !tenant.equals(tenantOwners.get(id)))
+                    throw new com.reactor.cachedb.core.exception.CacheTenantAccessDeniedException(metadata.entityName());
+                Math.addExact(version(id), 1);
+            }
+            var accepted = new ArrayList<WriteReceipt<T, ID>>(unique.size());
+            for (ID id : unique) accepted.add(deleteWithReceipt(id));
+            return List.copyOf(accepted);
+        } finally { lock.unlock(); }
     }
 
     public WriteReceipt<T, ID> deleteWithReceipt(ID id) {

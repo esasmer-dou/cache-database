@@ -78,6 +78,50 @@ public class RedisKeyStrategy {
         this.compactionSegment = compactionSegment;
     }
 
+    public record EntityKey(String namespace, String id) {}
+
+    /** Includes the trailing separator and honors subclasses/custom key layouts. */
+    public String entityKeyPrefix(String namespace) { return entityKey(namespace, ""); }
+
+    /** Compile once per registration generation, not for each invalidation. */
+    public java.util.Map<String, String> entityKeyPrefixes(java.util.Collection<String> namespaces) {
+        if (namespaces.size() > 256) throw new IllegalArgumentException("At most 256 tracking namespaces");
+        var prefixes = new java.util.LinkedHashMap<String, String>();
+        int examined = 0;
+        for (String namespace : namespaces) {
+            if (++examined > 256) throw new IllegalArgumentException("Tracking namespace iteration budget exceeded");
+            String prefix = entityKeyPrefix(namespace);
+            if (prefix == null || prefix.isEmpty() || prefix.length() > 4096)
+                throw new IllegalArgumentException("Invalid tracking prefix");
+            prefixes.put(namespace, prefix);
+        }
+        return java.util.Map.copyOf(prefixes);
+    }
+
+    /** Parse only registered entity prefixes; never split an ID on ':'. */
+    public java.util.Optional<EntityKey> parseEntityKey(String key, java.util.Collection<String> namespaces) {
+        return parseEntityKey(key, entityKeyPrefixes(namespaces));
+    }
+
+    /** namespacePrefixes is an immutable namespace-to-prefix snapshot from entityKeyPrefixes. */
+    public java.util.Optional<EntityKey> parseEntityKey(String key, java.util.Map<String, String> namespacePrefixes) {
+        if (key == null || key.length() > 8192) return java.util.Optional.empty();
+        if (namespacePrefixes.size() > 256) throw new IllegalArgumentException("At most 256 tracking namespaces");
+        String selected = null, namespace = null;
+        int examined = 0;
+        for (var candidate : namespacePrefixes.entrySet()) {
+            if (++examined > 256) throw new IllegalArgumentException("Tracking namespace iteration budget exceeded");
+            String prefix = candidate.getValue();
+            if (prefix == null || prefix.isEmpty() || prefix.length() > 4096)
+                throw new IllegalArgumentException("Invalid tracking prefix");
+            if (key.startsWith(prefix) && (selected == null || prefix.length() > selected.length())) {
+                selected = prefix; namespace = candidate.getKey();
+            }
+        }
+        if (selected == null || key.length() - selected.length() > 4096) return java.util.Optional.empty();
+        return java.util.Optional.of(new EntityKey(namespace, key.substring(selected.length())));
+    }
+
     public String entityKey(String namespace, Object id) {
         return keyPrefix + ":" + namespacePart(namespace) + ":" + entitySegment + ":" + id;
     }
@@ -92,6 +136,13 @@ public class RedisKeyStrategy {
                 + projectionName
                 + ":"
                 + id;
+    }
+
+    /** Independent aggregate snapshots retain the source namespace's cluster hash tag. */
+    public String countFacetReadModelKey(String namespace, String name, String scope) {
+        return namespacePrefix(namespace) + ":read-model:count-facet:" + name + ":"
+                + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+                        scope.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     public String pageKey(String namespace, int pageNumber) {

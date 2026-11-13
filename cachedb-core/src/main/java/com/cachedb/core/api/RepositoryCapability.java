@@ -10,5 +10,6 @@ public enum RepositoryCapability {
     PARTITIONED_QUERY,
     DELETE_RECEIPT,
     PROJECTION,
-    PARTIAL_UPDATE
+    PARTIAL_UPDATE,
+    BULK_DELETE
 }

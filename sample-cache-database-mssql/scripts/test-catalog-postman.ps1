@@ -5,6 +5,7 @@ $root = Split-Path -Parent $PSScriptRoot
 [xml]$pom = Get-Content (Join-Path $root 'pom.xml') -Raw
 $provider = ([string]$pom.project.artifactId).Replace('sample-cache-database-', '')
 if ($provider -notin @('postgresql', 'mssql', 'oracle')) { throw 'Unknown sample provider.' }
+$validator = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'assert-postman-execution.ps1')).Path
 $collections = @{
     catalog = (Resolve-Path -LiteralPath (Join-Path $root "postman/cache-database-$provider-catalog.postman_collection.json")).Path
     controls = (Resolve-Path -LiteralPath (Join-Path $root "postman/cache-database-$provider-v018.postman_collection.json")).Path
@@ -15,7 +16,7 @@ $jar = Join-Path $root "target/sample-cache-database-$provider-$($pom.project.ve
 $java = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME $(if ($IsWindows) {'bin/java.exe'} else {'bin/java'}) } else { (Get-Command java).Source }
 $npx = Get-Command $(if ($IsWindows) {'npx.cmd'} else {'npx'}) -ErrorAction Stop
 if (!(Test-Path $jar)) { throw 'Build the sample JAR with mvn verify first.' }
-$output = Join-Path $root 'target/catalog-postman'
+$output = Join-Path $root ("target/catalog-postman/" + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Force -Path $output
 $lease = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 $lease.Start()
@@ -98,11 +99,14 @@ try {
         --reporters cli,json,junit --reporter-json-export "$output/results.json" `
         --reporter-junit-export "$output/results.xml"
     if ($LASTEXITCODE -ne 0) { throw 'Catalog Postman assertions failed.' }
+    & $validator -CollectionPath $collections.catalog -ReportPath "$output/results.json" -Kind Catalog
     & $npx.Source --yes newman@6.2.1 run $collections.controls `
         --env-var "baseUrl=$base" --env-var "peerBaseUrl=$base" --timeout 180000 --timeout-request 10000 --timeout-script 5000 `
         --reporters cli,json,junit --reporter-json-export "$output/v018-results.json" `
         --reporter-junit-export "$output/v018-results.xml"
     if ($LASTEXITCODE -ne 0) { throw '0.18 controls Postman assertions failed.' }
+    & $validator -CollectionPath $collections.controls -ReportPath "$output/v018-results.json" -Kind Controls
+    & (Join-Path $PSScriptRoot 'test-v019-postman.ps1') -BaseUrl $base -PeerBaseUrl $base -ConfirmDisposableDemo
 } finally {
     if ($null -ne $process) {
         if (!$process.HasExited) { $process.Kill($true) }

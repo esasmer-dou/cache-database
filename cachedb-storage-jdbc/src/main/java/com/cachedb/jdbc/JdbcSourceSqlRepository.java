@@ -24,11 +24,13 @@ public final class JdbcSourceSqlRepository<T> implements SourceSqlRepository<T> 
     public JdbcSourceSqlRepository(DataSource dataSource, EntityCodec<T> codec) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.codec = Objects.requireNonNull(codec, "codec");
+        requireOpaqueSourceSupport(codec);
         this.dialect = JdbcQueryDialects.resolve(dataSource);
     }
 
     @Override
     public List<T> query(SourceSqlQuery query) {
+        requireOpaqueSourceSupport(codec);
         Objects.requireNonNull(query, "query");
         String sql = validateReadOnlySql(query.sql());
         int probeLimit = Math.min(10_001, query.maxRows() + 1);
@@ -53,8 +55,14 @@ public final class JdbcSourceSqlRepository<T> implements SourceSqlRepository<T> 
                 }
             }
         } catch (SQLException exception) {
+            if (codec.encryptionBound()) throw com.reactor.cachedb.core.crypto.EncryptedCodecSupport.invalidValue();
             throw new IllegalStateException("CacheDB source SQL failed: " + exception.getMessage(), exception);
         }
+    }
+
+    private static void requireOpaqueSourceSupport(EntityCodec<?> codec) {
+        if (codec.encryptedMapping()) throw new com.reactor.cachedb.core.crypto.CacheEncryptionException(
+                com.reactor.cachedb.core.crypto.CacheEncryptionException.Code.UNSUPPORTED_SOURCE_OPERATION);
     }
 
     static String validateReadOnlySql(String sql) {
