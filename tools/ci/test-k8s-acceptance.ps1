@@ -4,7 +4,8 @@ param(
     [string]$RepositoryRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
     [string]$EvidenceDirectory = '',
     [switch]$OriginalCellControlsOnly,
-    [switch]$OriginalCellWriterControlsOnly
+    [switch]$OriginalCellWriterControlsOnly,
+    [switch]$GuardImportControlsOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -17,9 +18,11 @@ $tokens = $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($checker, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Acceptance verifier has parse errors.' }
 # Load pure guards only; never invoke network, the workflow entry point, or product workloads.
-foreach ($definition in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]}, $true)) {
-    . ([scriptblock]::Create($definition.Extent.Text))
-}
+$guardDefinitions = $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]}, $true)
+$guardAst = [Management.Automation.Language.Parser]::ParseInput(
+    ($guardDefinitions.Extent.Text -join "`n"), $checker, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Imported acceptance guards have parse errors.' }
+. $guardAst.GetScriptBlock()
 $controls = [Collections.Generic.List[string]]::new()
 function Pass([string]$Name) { $controls.Add($Name) }
 function Reject([string]$Name, [scriptblock]$Action) {
@@ -29,6 +32,43 @@ function Reject([string]$Name, [scriptblock]$Action) {
     Pass $Name
 }
 function Clone($Value) { $Value | ConvertTo-Json -Depth 32 -Compress | ConvertFrom-Json -AsHashtable -Depth 32 }
+if ($GuardImportControlsOnly) {
+    if ([string]::IsNullOrWhiteSpace($env:KUBERNETES_SERVICE_HOST)) { throw 'Guard import controls require Kubernetes.' }
+    foreach ($name in @('Resolve-K8sMember','Assert-K8sOriginalCustody','Assert-K8sOriginalExecutionSources')) {
+        if ((Get-Command $name).ScriptBlock.File -cne $checker) { throw 'Imported guard lost its defining file.' }
+        Pass ('guard-file-context-'+$name)
+    }
+    if ((Resolve-K8sMember $EvidenceDirectory 'nested/member') -cne (Join-Path $EvidenceDirectory 'nested/member')) {
+        throw 'Declaration-level function parameters were lost.'
+    }
+    Pass 'guard-declaration-parameters-retained'
+    try {
+        Assert-K8sOriginalCustody @{originalCustody=@{prefixCustody=$true}} @{} @{} $EvidenceDirectory @{}
+        throw 'Malformed custody was admitted.'
+    } catch {
+        if ($_.ScriptStackTrace -notmatch 'k8s-prefix-original-custody\.ps1') { throw 'Custody helper was not resolved from its defining file.' }
+    }
+    Pass 'guard-dependent-custody-script-reached-without-entry-point'
+    $basePath=Join-Path $EvidenceDirectory 'baseline.sha256'
+    $actualPath=Join-Path $EvidenceDirectory 'original.sha256'
+    $member='example/src/test/java/Fixture.java'
+    [IO.File]::WriteAllText($basePath, ('a'*64)+'  '+$member+"`n")
+    [IO.File]::WriteAllText($actualPath, ('b'*64)+'  '+$member+"`n")
+    $actualPin=(Get-FileHash -LiteralPath $actualPath).Hash.ToLowerInvariant()
+    $receipt=@{source=@{manifest='baseline.sha256'};executionSources=@(@{manifest=@{path='original.sha256';sha256=$actualPin}})
+        files=@(@{path='original.sha256';sha256=$actualPin;bytes=(Get-Item $actualPath).Length})}
+    $fixturePolicy=@{ReviewedTestSources=@{$actualPin=@{$member=('b'*64)}}}
+    Assert-K8sOriginalExecutionSources $receipt $EvidenceDirectory $fixturePolicy
+    Pass 'reviewed-delta-object-key-array-compares-as-strings'
+    $fixturePolicy.ReviewedTestSources[$actualPin]['missing/src/test/java/Extra.java']='c'*64
+    Reject 'reviewed-delta-extra-key-still-rejected' { Assert-K8sOriginalExecutionSources $receipt $EvidenceDirectory $fixturePolicy }
+    $fixturePolicy.ReviewedTestSources[$actualPin].Remove($member)
+    Reject 'reviewed-delta-unapproved-change-still-rejected' { Assert-K8sOriginalExecutionSources $receipt $EvidenceDirectory $fixturePolicy }
+    [ordered]@{result='PASS';syntheticOnly=$true;actualKubernetesAcceptance=$false;controls=$controls} |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'summary.json') -Encoding utf8
+    Write-Output ('PASS '+$controls.Count+' guard import and typed-set controls; no product acceptance.')
+    return
+}
 function Invoke-OriginalCellWriterControls($Fixture) {
     $assembler = Join-Path $PSScriptRoot 'new-k8s-acceptance-receipt.ps1'
     $tokens = $errors = $null

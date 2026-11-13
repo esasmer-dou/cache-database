@@ -309,7 +309,7 @@ function Assert-K8sOriginalExecutionSources($Receipt, [string]$Root, $Policy) {
                 $actual[$path] -cne $approved[$path]) { throw 'Unreviewed original execution source delta.' }
             $null = $changes.Add($path)
         }
-        if (!$changes.SetEquals(@($approved.Keys))) { throw 'Exact reviewed fixture deltas are required.' }
+        if (!$changes.SetEquals([string[]]@($approved.Keys))) { throw 'Exact reviewed fixture deltas are required.' }
     }
 }
 

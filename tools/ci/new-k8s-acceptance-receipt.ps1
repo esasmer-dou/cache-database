@@ -76,12 +76,18 @@ function New-K8sAcceptanceReceipt {
         [hashtable]$Policy = $null
     )
     $tokens = $parseErrors = $null
+    $checkerPath = Join-Path $PSScriptRoot 'check-k8s-acceptance.ps1'
     $checker = [Management.Automation.Language.Parser]::ParseFile(
-        (Join-Path $PSScriptRoot 'check-k8s-acceptance.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $checkerPath, [ref]$tokens, [ref]$parseErrors)
     if ($parseErrors.Count) { throw 'Acceptance guards must parse.' }
-    foreach ($definition in $checker.FindAll({param($node)
+    $definitions = $checker.FindAll({param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst]
-    }, $true)) { . ([scriptblock]::Create($definition.Extent.Text)) }
+    }, $true)
+    # Retain file context and declaration-level parameters without running the workflow entry point.
+    $guards = [Management.Automation.Language.Parser]::ParseInput(
+        ($definitions.Extent.Text -join "`n"), $checkerPath, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count) { throw 'Imported acceptance guards must parse.' }
+    . $guards.GetScriptBlock()
     # Internal fixture injection only; the CLI has no policy override.
     if ($null -eq $Policy) { $Policy = Import-PowerShellDataFile (Join-Path $PSScriptRoot 'k8s-acceptance-contract.psd1') }
     Assert-K8sPin $InventorySha256
