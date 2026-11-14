@@ -334,6 +334,23 @@ if ($OriginalCellControlsOnly -or $OriginalCellWriterControlsOnly) {
     return
 }
 Invoke-OriginalCellControls
+$reportChildRoot = Join-Path $EvidenceDirectory 'sample-report-child-controls'
+$null = [IO.Directory]::CreateDirectory($reportChildRoot)
+Reject 'sample-report-native-failure-remains-failed' {
+    Invoke-K8sSampleReport -Executable ([Environment]::ProcessPath) -PrivateResults $reportChildRoot -Arguments @(
+        '-NoLogo','-NoProfile','-NonInteractive','-Command',
+        '[Console]::Out.WriteLine("retained child stdout"); [Console]::Error.WriteLine("retained child stderr"); exit 23')
+}
+$reportChild = Read-K8sJson (Join-Path $reportChildRoot 'features-process.json')
+if ($reportChild.nativeExit -ne 23 -or !$reportChild.stdoutComplete -or !$reportChild.stderrComplete -or
+    $reportChild.timedOut -or $reportChild.cleanupErrors.Count -or
+    [IO.File]::ReadAllText((Join-Path $reportChildRoot 'features-process.exit')).Trim() -cne '23' -or
+    ![IO.File]::ReadAllText((Join-Path $reportChildRoot 'features-process.stdout.log')).Contains('retained child stdout') -or
+    ![IO.File]::ReadAllText((Join-Path $reportChildRoot 'features-process.stderr.log')).Contains('retained child stderr')) {
+    throw 'Original failed sample report process evidence was not preserved.'
+}
+Pass 'sample-report-native-exit-and-both-original-streams-retained'
+
 function Assert-K8sExportChildResult([int]$ExitCode, [bool]$TimedOut, [string]$SummaryPath) {
     if ($TimedOut -or $ExitCode -ne 0) { throw 'Export child failed or exceeded the original control budget.' }
     $summary = [IO.File]::ReadAllText($SummaryPath) | ConvertFrom-Json -AsHashtable -Depth 16

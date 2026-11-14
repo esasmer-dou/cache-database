@@ -395,7 +395,7 @@ export function sampleCoverageOptions(args){
     const options={};
     for(let i=0;i<args.length;i+=2){
         check(['--root','--summary','--runtime-evidence','--runtime-evidence-sha256','--source-equivalence','--source-equivalence-sha256',
-            '--execution-tooling-overlay','--execution-tooling-overlay-sha256','--private-results'].includes(args[i]),'Unsupported option: '+args[i]);
+            '--execution-tooling-overlay','--execution-tooling-overlay-sha256','--private-results','--private-summary'].includes(args[i]),'Unsupported option: '+args[i]);
         const name=args[i].slice(2);
         check(!Object.hasOwn(options,name),'Duplicate option: '+args[i]);
         check(args[i+1]&&!args[i+1].startsWith('--'),'Expected option/value pairs');
@@ -409,6 +409,8 @@ export function sampleCoverageOptions(args){
         sourceEquivalence:options['source-equivalence']?{path:options['source-equivalence'],sha256:options['source-equivalence-sha256']}:undefined,
         executionToolingOverlay:options['execution-tooling-overlay']?{path:options['execution-tooling-overlay'],sha256:options['execution-tooling-overlay-sha256']}:undefined});
     check(!options['source-equivalence']||Boolean(options['private-results']),'Qualification requires private results');
+    check(!options['private-summary']||Boolean(options['private-results']),'Private summary requires private results');
+    check(!options['private-summary']||!options.summary,'Use either public summary or private summary');
     return options;
 }
 export function sampleCoveragePrivateResults(root,full){
@@ -431,8 +433,10 @@ function main(){
     const result=checkSampleCoverage({root,receiptPath:options['runtime-evidence'],receiptSha256:options['runtime-evidence-sha256'],
         sourceEquivalence:options['source-equivalence']?{path:options['source-equivalence'],sha256:options['source-equivalence-sha256']}:undefined,
         executionToolingOverlay:options['execution-tooling-overlay']?{path:options['execution-tooling-overlay'],sha256:options['execution-tooling-overlay-sha256']}:undefined});
-    const summary=path.resolve(root,options.summary||'target/v019-sample-coverage.md'),target=path.resolve(root,'target')+path.sep;
-    check(summary.startsWith(target),'Summary must stay below target');
+    const summary=options['private-summary']?sampleCoveragePrivateResults(root,options['private-summary']):
+        path.resolve(root,options.summary||'target/v019-sample-coverage.md'),target=path.resolve(root,'target')+path.sep;
+    check(options['private-summary']||summary.startsWith(target),'Summary must stay below target');
+    check(summary!==privateResults,'Summary and private results require different files');
     const lines=['# Sample Scenario Matrix','','This report is not full release, baseline HTTP or performance acceptance.',
         'Structural consistency: '+(result.structurallyComplete?'COVERED_STATIC':'INCOMPLETE')+'. Runtime qualification: '+
             (result.runtimeQualified?'FOUR_PENDING_FEATURES_QUALIFIED':result.runtimeErrors?'REJECTED':'NOT_INGESTED')+'.',
@@ -444,7 +448,8 @@ function main(){
     const issues=[...result.errors,...sampleCoverageRuntimeIssues(result.runtimeErrors,privateResults),...result.unresolvedNative.flatMap(r=>r.problems.map(p=>r.feature+': '+p)),
         ...result.deferred.map(r=>r.provider+'/'+r.feature+': '+r.dependency)];
     if(issues.length)lines.push('','Unresolved required evidence:','',...issues.map(e=>'- '+e));
-    fs.mkdirSync(path.dirname(summary),{recursive:true});fs.writeFileSync(summary,lines.join('\n')+'\n','utf8');
+    fs.mkdirSync(path.dirname(summary),{recursive:true});fs.writeFileSync(summary,lines.join('\n')+'\n',
+        options['private-summary']?{encoding:'utf8',flag:'wx',mode:0o600}:'utf8');
     fs.writeFileSync(privateResults||summary.replace(/\.md$/i,'')+'.json',JSON.stringify(result,null,2)+'\n',
         privateResults?{encoding:'utf8',flag:'wx',mode:0o600}:'utf8');
     if(!result.complete){process.stderr.write('Required sample matrix is incomplete; see '+summary+'\n');process.exitCode=1;}

@@ -1051,6 +1051,56 @@ function Assert-K8sFeatureBinding($FeatureHeader, $Receipt, [string]$Root) {
     }
 }
 
+function Invoke-K8sSampleReport([string]$Executable, [string[]]$Arguments, [string]$PrivateResults) {
+    $stem = Join-Path $PrivateResults 'features-process'
+    $start = [Diagnostics.ProcessStartInfo]::new($Executable)
+    $start.UseShellExecute = $false
+    $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+    foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
+    foreach ($key in @($start.Environment.Keys)) {
+        if ($key -match 'TOKEN|SECRET|PASSWORD|CREDENTIAL|^GH_|^GITHUB_') { $null = $start.Environment.Remove($key) }
+    }
+    $process = [Diagnostics.Process]::new(); $process.StartInfo = $start
+    $stdout = $stderr = $outTask = $errTask = $null
+    $started = $false; $native = $null; $failure = $null; $timedOut = $false; $drained = $false
+    $cleanupErrors = [Collections.Generic.List[string]]::new()
+    $began = [DateTimeOffset]::UtcNow.ToString('o'); $clock = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $stdout = [IO.File]::Open($stem+'.stdout.log', 'CreateNew', 'Write', 'Read')
+        $stderr = [IO.File]::Open($stem+'.stderr.log', 'CreateNew', 'Write', 'Read')
+        if (!$process.Start()) { throw 'Sample report process did not start.' }
+        $started = $true
+        $outTask = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
+        $errTask = $process.StandardError.BaseStream.CopyToAsync($stderr)
+        while (!$process.WaitForExit(100)) {
+            if ($clock.Elapsed.TotalSeconds -ge 120) { $timedOut = $true; throw 'Sample report process exceeded 120 seconds.' }
+            if ($stdout.Length + $stderr.Length -gt 64MB) { throw 'Sample report output exceeded its byte budget.' }
+        }
+        $native = $process.ExitCode
+        if ($clock.Elapsed.TotalSeconds -ge 120) { $timedOut = $true; throw 'Sample report process exceeded 120 seconds.' }
+    } catch { $failure = $_.Exception.Message }
+    finally {
+        try {
+            if ($started -and !$process.HasExited) { $process.Kill($true); $null = $process.WaitForExit(3000) }
+            if ($started -and $process.HasExited) { $native = $process.ExitCode }
+        } catch { $cleanupErrors.Add($_.Exception.Message) }
+        if ($outTask -and $errTask) {
+            try { $null = [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($outTask,$errTask), 3000) }
+            catch { $cleanupErrors.Add($_.Exception.Message) }
+            $drained = $outTask.IsCompletedSuccessfully -and $errTask.IsCompletedSuccessfully
+        }
+        if ($stdout -and $stderr -and $stdout.Length + $stderr.Length -gt 64MB -and !$failure) { $failure = 'Sample report output exceeded its byte budget.' }
+        if ($stdout) { $stdout.Dispose() }; if ($stderr) { $stderr.Dispose() }; $process.Dispose()
+        if ($null -ne $native) { [IO.File]::WriteAllText($stem+'.exit', "$native`n") }
+        [ordered]@{startedAt=$began;finishedAt=[DateTimeOffset]::UtcNow.ToString('o');processStarted=$started
+            nativeExit=$native;timedOut=$timedOut;stdoutComplete=$drained;stderrComplete=$drained;error=$failure;cleanupErrors=$cleanupErrors.ToArray()} |
+            ConvertTo-Json -Compress | Set-Content -LiteralPath ($stem+'.json') -Encoding utf8NoBOM
+    }
+    if ($failure -or $cleanupErrors.Count -or $timedOut -or !$drained -or $null -eq $native -or $native -ne 0) {
+        throw "Sample report process failed (native exit=$native); original stdout/stderr and process result: $stem"
+    }
+}
+
 function Assert-K8sReports($Receipt, [string]$Root, [string]$SourceRoot, [string]$PrivateResults, $Policy, $SourceQualification = $null) {
     foreach ($lane in @('standalone', 'cluster')) {
         $execution = Get-K8sExecution $Receipt $lane
@@ -1087,10 +1137,12 @@ function Assert-K8sReports($Receipt, [string]$Root, [string]$SourceRoot, [string
     }
     # Execute only the trusted final parser. Original source bytes are data, not executable artifact code.
     $node = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    & $node.Source (Join-Path $SourceRoot 'tools/ci/check-v019-sample-coverage.mjs') --root $featureSource `
-        --runtime-evidence $featureReceipt --runtime-evidence-sha256 (Get-FileHash -LiteralPath $featureReceipt).Hash.ToLowerInvariant() `
-        --summary (Join-Path $PrivateResults 'features.md') --private-results (Join-Path $PrivateResults 'features.json') | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Same-source sample feature runtime acceptance is incomplete.' }
+    Invoke-K8sSampleReport -Executable $node.Source -PrivateResults $PrivateResults -Arguments @(
+        (Join-Path $SourceRoot 'tools/ci/check-v019-sample-coverage.mjs'), '--root', $featureSource,
+        '--runtime-evidence', $featureReceipt, '--runtime-evidence-sha256',
+        (Get-FileHash -LiteralPath $featureReceipt).Hash.ToLowerInvariant(),
+        '--private-summary', (Join-Path $PrivateResults 'features.md'),
+        '--private-results', (Join-Path $PrivateResults 'features.json'))
     $requests = 0
     foreach ($provider in $Policy.Providers) {
         $sample = Join-Path $SourceRoot "sample-cache-database-$provider"

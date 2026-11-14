@@ -2,10 +2,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { validateSampleMatrix } from './check-v019-sample-coverage.mjs';
+import os from 'node:os';
+import { validateSampleMatrix, sampleCoverageOptions, sampleCoveragePrivateResults } from './check-v019-sample-coverage.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8').replace(/\r\n/g,'\n');
+const privateHome=fs.mkdtempSync(path.join(os.tmpdir(),'cachedb-private-report-'));
+try{
+    const checkout=path.join(privateHome,'source');fs.mkdirSync(checkout);
+    const summary=path.join(privateHome,'summary.md'),results=path.join(privateHome,'results.json');
+    assert.equal(sampleCoverageOptions(['--private-summary',summary,'--private-results',results])['private-summary'],summary);
+    assert.throws(()=>sampleCoverageOptions(['--private-summary',summary]),/requires private results/);
+    assert.throws(()=>sampleCoverageOptions(['--private-summary',summary,'--private-results',results,'--summary','target/public.md']),/either public summary/);
+    assert.equal(sampleCoveragePrivateResults(checkout,summary),summary);
+    assert.throws(()=>sampleCoveragePrivateResults(checkout,path.join(checkout,'summary.md')),/outside the checkout/);
+    fs.writeFileSync(summary,'retained original');
+    assert.throws(()=>sampleCoveragePrivateResults(checkout,summary),/fresh file/);
+    assert.equal(fs.readFileSync(summary,'utf8'),'retained original');
+    assert.match(read('tools/ci/check-k8s-acceptance.ps1'),/'--private-summary', \(Join-Path \$PrivateResults 'features\.md'\)/);
+}finally{fs.rmSync(privateHome,{recursive:true,force:true});}
 function checkProducerSummary(source){
     const match=/"--summary",\s*source\.resolve\("([^"]+)"\)\.toString\(\)/.exec(source);
     assert(match,'Runtime producer must resolve its summary against the checked source tree');
