@@ -51,12 +51,23 @@ assert(baseline.deferred.length>0&&baseline.deferred.every(row=>
     row.runtimeStatus==='SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED'&&row.runtimeEvidence===null),
     'Public documentation wording must not change internal source coverage declarations');
 const prefix='sample-cache-database-postgresql/';
+for(const guide of ['README.md','README.tr.md']){
+    const file=prefix+guide,original=read(file);
+    const archived=original.replace(/^(\| (?:spring-data-bulk-delete|field-encryption|retention|tenant-purge) \|)[^|]+\|/gm,
+        '$1 SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED |');
+    assert.notEqual(archived,original,'Archived guide fixture must change the authority column');
+    const retained=validateSampleMatrix(p=>p===file?archived:read(p));
+    assert.deepEqual(retained.errors,[],'Valid archived source documentation must remain readable');
+    assert.equal(retained.complete,false,'Archived documentation is not release acceptance');
+    assert.equal(retained.runtimeQualified,false,'Archived documentation is not runtime proof');
+    assert(retained.deferred.every(row=>row.runtimeEvidence===null));
+}
 const controller=prefix+'src/main/java/com/example/cachedb/sample/cacheapi/CacheApiController.java';
 const collection=prefix+'postman/cache-database-postgresql-sample.postman_collection.json';
 const mutations=[
-    ['old-guide-status',prefix+'README.md',s=>s.replace(
+    ['unrecognized-guide-status',prefix+'README.md',s=>s.replace(
         '| tenant-purge | Release-commit CI / artifact-bound evidence |',
-        '| tenant-purge | SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED |')],
+        '| tenant-purge | UNKNOWN_SOURCE_STATUS |')],
     ['fabricated-guide-pass',prefix+'README.md',s=>s.replace(
         '| tenant-purge | Release-commit CI / artifact-bound evidence |',
         '| tenant-purge | RUNTIME_ACCEPTED |')],

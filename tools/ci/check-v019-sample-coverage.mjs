@@ -174,7 +174,9 @@ function pendingCoverage(read,root,provider,feature,lanes,parseScript){
         const rows=section.split('\n').filter(line=>line.startsWith('| '+feature.id+' |'));
         const authority=guide==='README.tr.md'?'S\u00fcr\u00fcm commit CI / pakete ba\u011fl\u0131 kan\u0131t':
             'Release-commit CI / artifact-bound evidence';
-        check(rows.length===1&&rows[0].split('|')[2].trim()===authority&&
+        // Archived source declarations remain valid documentation, not runtime proof.
+        const declaration=rows.length===1?rows[0].split('|')[2].trim():null;
+        check(rows.length===1&&[authority,'SOURCE_IMPLEMENTED_RUNTIME_UNQUALIFIED'].includes(declaration)&&
             section.includes('('+postman.runner+')'),'Guide omits pending scope/runner: '+feature.id);
         for(const suite of proof.tests)check(section.includes('('+suite.file+')'),
             'Guide omits actual proof source: '+suite.file);
