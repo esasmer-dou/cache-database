@@ -16,13 +16,25 @@ Framework sürümü ile uygulamanın canlıya geçişi iki ayrı karardır:
 
 | Karar | Sorumlu | Gerekli sonuç |
 | --- | --- | --- |
-| Numaralandırılmış framework paketi yayımlamak | CacheDB bakım ekibi | Doğruluk, sağlayıcı, performans, doküman ve dağıtım kontrolleri aynı commit/etiket üzerinde geçer; eksik topoloji kanıtı açıkça belirtilir. Bu sonuç tam GA onayı değildir. |
+| Numaralandırılmış framework paketi yayımlamak | CacheDB bakım ekibi | Paketlenen çalışma zamanının mevcut doğruluk, sağlayıcı ve performans sonuçları incelenir; etiket/sürüm, belgeler ve paket sağlama toplamları doğrulanır. İstisnalar ve eksik topoloji kanıtı açıklanır. Bu sonuç tam GA onayı değildir. |
 | Production GA sürümünü onaylamak | CacheDB bakım ekibi | Fiziksel Data Guard kanıtı dahil, aşağıdaki framework kontrollerinin tamamı aynı değişmez etiket üzerinde geçmelidir. |
 | Bir uygulama rotasını CacheDB'ye geçirmek | Uygulama ekibi | Uygulamanın staging kanıtlarıyla `cachedb:certify` başarılı olmalıdır. |
 | Yönetilen Redis veya SQL HA topolojisi için uygunluk iddiasında bulunmak | Uygulama ve platform ekipleri | Gerçek staging topolojisinde failover tetiklenmeli ve sonuç doğrulanmalıdır. |
 
 Framework kontrollerinin geçmesi, herhangi bir uygulama için kendiliğinden rota,
 kapasite, failover, canary veya geri dönüş kanıtı oluşturmaz.
+
+## Numaralandırılmış Paketin Yayımlanması
+
+Paket yayımında, paketlenen çalışma zamanı için önceden incelenmiş test sonuçları
+kullanılır. Yalnızca yayın süreci veya belgeler değiştiğinde çalışma zamanı yeniden
+derlenmez; geçmiş başarılı testler tekrarlanmaz. Etiket, POM sürümleri, paket listesi
+ve SHA-256 sağlama toplamları doğrulanır. Paketlenen kodun commit'i ve kabul
+sınırları açıkça belirtilir. Özel depoya kayıt aktarımı ve kanonik kayıt birleştirme,
+numaralandırılmış bir paketi yayımlamanın ön koşulu değildir; isteğe bağlı tanılama
+araçlarıdır. Başarısız tanılama kayıtları değiştirilmez; paket yayımı bu kayıtları
+başarılı kabul sonucuna dönüştürmez. Aşağıdaki Production GA ve uygulamanın
+canlıya geçiş kontrolleri ayrı kalır.
 
 ## Production GA Framework Kontrolleri
 

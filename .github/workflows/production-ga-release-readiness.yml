@@ -35,9 +35,6 @@ on:
         description: Require a successful Maven Central Publish workflow for the tag
         required: true
         default: "false"
-  release:
-    types:
-      - published
 
 permissions:
   actions: read
@@ -45,7 +42,6 @@ permissions:
 
 jobs:
   ga-release-readiness:
-    if: ${{ github.event_name != 'release' || github.event.release.prerelease == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

@@ -387,6 +387,7 @@ if ($SkipRemoteWorkflowChecks) {
 } else {
     $targetSha = $releaseCommitSha
 
+    if ($EvidenceScope -eq 'ProductionGA') {
     Invoke-ReadinessCheck -Name "Framework Readiness workflow" -Check {
         $run = Get-LatestSuccessfulRun -WorkflowName "Framework Readiness" -HeadBranch $targetRefValue -HeadSha $targetSha `
             -RequiredJobNames @('K8s Acceptance Verification')
@@ -422,6 +423,10 @@ if ($SkipRemoteWorkflowChecks) {
                 }
             }
         }
+    }
+
+    } else {
+        Add-Check -Name 'Framework runtime evidence' -Status 'SKIP' -Details 'Numbered package distribution reuses reviewed artifact-bound results. Private evidence transport and a new canonical verifier run are not publication prerequisites. This check does not approve runtime or Production GA.'
     }
 
     if ($EvidenceScope -eq "ProductionGA") {

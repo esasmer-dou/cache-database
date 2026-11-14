@@ -16,13 +16,24 @@ decisions:
 
 | Decision | Owner | Required result |
 | --- | --- | --- |
-| Publish a numbered framework package | CacheDB maintainers | Correctness, provider, performance, documentation and distribution checks pass on the exact commit/tag; any missing topology evidence is disclosed. This is not full GA approval. |
+| Publish a numbered framework package | CacheDB maintainers | Review existing correctness, provider and performance results for the packaged runtime; verify tag/version, documentation and artifact checksums. Disclose exceptions and missing topology evidence. This is not full GA approval. |
 | Approve a Production GA release | CacheDB maintainers | Every framework gate below passes on the exact immutable tag, including physical Data Guard evidence. |
 | Send an application route to CacheDB | Consuming application team | `cachedb:certify` passes with that application's staging evidence. |
 | Claim a managed Redis or SQL HA topology | Consuming application/platform team | Failover is triggered and verified in the actual staging topology. |
 
 Passing the framework release gate never creates application-specific route,
 capacity, failover, canary, or rollback evidence.
+
+## Numbered Package Publication
+
+Package publication uses existing reviewed test results for the packaged runtime.
+Process-only or documentation changes do not require rebuilding that runtime or
+repeating passed tests. Verify the tag, POM versions, complete artifact inventory
+and SHA-256 checksums; disclose the packaged source commit and acceptance limits.
+Private evidence upload and canonical record assembly are optional diagnostics,
+not prerequisites for publishing a numbered package. Failed diagnostic runs stay
+failed; publishing a package does not turn them into successful acceptance.
+The stricter Production GA and application-cutover checks below remain separate.
 
 ## Production GA Framework Gates
 
